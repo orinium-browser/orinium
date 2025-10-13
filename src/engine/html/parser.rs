@@ -227,10 +227,14 @@ impl<'a> Parser<'a> {
                     has_html = true;
                     for html_child in &child.borrow().children {
                         match &html_child.borrow().node_type {
-                            NodeType::Element { tag_name, .. } if tag_name.to_lowercase() == "head" => {
+                            NodeType::Element { tag_name, .. }
+                                if tag_name.to_lowercase() == "head" =>
+                            {
                                 has_head = true;
                             }
-                            NodeType::Element { tag_name, .. } if tag_name.to_lowercase() == "body" => {
+                            NodeType::Element { tag_name, .. }
+                                if tag_name.to_lowercase() == "body" =>
+                            {
                                 has_body = true;
                             }
                             _ => {}
@@ -286,7 +290,7 @@ impl<'a> Parser<'a> {
                     children: vec![],
                     parent: Some(Rc::clone(&html_node)),
                 }));
-                html_node.borrow_mut().children.push(body_node);       
+                html_node.borrow_mut().children.push(body_node);
             }
         }
     }
