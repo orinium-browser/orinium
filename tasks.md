@@ -2,6 +2,7 @@
 
 ## 実装
 - [x] Parser の DOCTYPE宣言 補完機能
+- [ ] 文字の描画を実装
 - [x] Render pipeline の実装
 - [x] TLS通信
 

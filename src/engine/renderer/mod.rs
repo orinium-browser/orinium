@@ -1,6 +1,7 @@
 //! engine::renderer - HTML/CSSレイアウト結果から描画命令を生成する論理描画層
 
 use crate::engine::html::parser::{NodeRef, NodeType};
+use crate::engine::html::util as html_util;
 
 /// 描画命令を表す列挙型
 #[derive(Debug, Clone)]
@@ -113,7 +114,7 @@ impl Renderer {
                 let line_height = 20.0;
 
                 // ブロック要素の場合は改行
-                if self.is_block_element(tag_name) {
+                if html_util::is_block_level_element(tag_name) {
                     *current_x = 10.0;
                     *current_y += line_height;
                 }
@@ -124,7 +125,7 @@ impl Renderer {
                 }
 
                 // ブロック要素の後は改行
-                if self.is_block_element(tag_name) {
+                if html_util::is_block_level_element(tag_name) {
                     *current_x = 10.0;
                     *current_y += line_height / 2.0;
                 }
@@ -144,40 +145,7 @@ impl Renderer {
                     *current_x += text.len() as f32 * 8.0;
                 }
             }
-            NodeType::Comment(_) => {
-                // コメントは描画しない
-            }
-            NodeType::Doctype { .. } => {
-                // DOCTYPEは描画しない
-            }
+            _ => {} // その他のノードタイプを無視
         }
-    }
-
-    /// ブロック要素かどうかを判定
-    fn is_block_element(&self, tag_name: &str) -> bool {
-        matches!(
-            tag_name,
-            "div"
-                | "p"
-                | "h1"
-                | "h2"
-                | "h3"
-                | "h4"
-                | "h5"
-                | "h6"
-                | "ul"
-                | "ol"
-                | "li"
-                | "blockquote"
-                | "pre"
-                | "table"
-                | "form"
-                | "header"
-                | "footer"
-                | "section"
-                | "article"
-                | "nav"
-                | "aside"
-        )
     }
 }

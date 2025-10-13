@@ -37,25 +37,16 @@ async fn main() -> Result<()> {
 
     // レンダラーを作成して描画命令を生成
     let renderer = Renderer::new(800.0, 600.0);
-    let mut draw_commands = renderer.generate_draw_commands(&dom_tree);
-
-    // テスト用の矩形を追加（色の値を0.0〜1.0の範囲に修正）
-    draw_commands.push(DrawCommand::DrawRect {
-        x: 0.0,
-        y: 100.0,
-        width: 100.0,
-        height: 100.0,
-        color: Color { r: 0.8, g: 0.2, b: 0.2, a: 1.0 }
-    });
+    let draw_commands = renderer.generate_draw_commands(&dom_tree);
 
     log::info!("Generated {} draw commands", draw_commands.len());
-    log::info!("Generated draw commands: {:#?}", draw_commands);
+    log::info!("Generated draw commands: {draw_commands:#?}");
 
     // ウィンドウとイベントループを作成
-    let event_loop = EventLoop::<orinium_browser::platform::ui::State>::with_user_event().build()?;
+    let event_loop =
+        EventLoop::<orinium_browser::platform::ui::State>::with_user_event().build()?;
     let mut app = App::new();
 
-    // 描画命令をAppに設定
     app.set_draw_commands(draw_commands);
 
     event_loop.run_app(&mut app)?;

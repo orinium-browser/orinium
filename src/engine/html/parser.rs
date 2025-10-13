@@ -1,4 +1,5 @@
 use crate::engine::html::tokenizer::{Attribute, Token, Tokenizer};
+use crate::engine::html::util as html_util;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -82,7 +83,9 @@ impl<'a> Parser<'a> {
             if self.check_start_tag_with_invalid_nesting(&name, &parent) {
                 if let NodeType::Element { tag_name, .. } = &parent.borrow().node_type {
                     //println!("Auto-closing tag: <{}> to allow <{}> inside it.", tag_name, name);
-                    self.handle_end_tag(Token::EndTag {name: tag_name.clone()});
+                    self.handle_end_tag(Token::EndTag {
+                        name: tag_name.clone(),
+                    });
                 }
                 parent = Rc::clone(self.stack.last().unwrap());
             }
@@ -208,61 +211,16 @@ impl<'a> Parser<'a> {
             if matches!(
                 tag_name.as_str(),
                 "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
-            ) && Self::is_block_level_element(name)
+            ) && html_util::is_block_level_element(name)
             {
                 return true;
             }
         } else if let NodeType::Document = &parent.borrow().node_type {
-            if !(name == "html") {
-                todo!("Document の中に DOCTYPE宣言 以外のが来た場合の処理");
+            if name != "html" {
+                log::warn!("Document の中に DOCTYPE宣言 以外のが来た場合の処理（未実装）");
             }
         }
         false
-    }
-
-    /// is_block_level_element - タグ名が典型的なブロック要素かどうか判定する
-    ///
-    /// 注意:
-    /// - HTML5 の「デフォルトでブロック扱いされる要素」を代表例で列挙していますが、
-    ///   仕様の解釈やブラウザ依存・CSSでのdisplay変更には触れていません。
-    /// - 必要なら要素リストに追加・削除してください。
-    fn is_block_level_element(tag_name: &str) -> bool {
-        let tag = tag_name.trim().to_ascii_lowercase();
-        matches!(
-            tag.as_str(),
-            // 主要なセクショナル要素
-            "html" | "body" | "main" | "header" | "footer" | "section" | "nav" | "article" | "aside" |
-            // 見出し
-            "h1" | "h2" | "h3" | "h4" | "h5" | "h6" |
-            // テキスト／段落系
-            "p" | "pre" | "blockquote" | "address" | "hr" |
-            // グループ／レイアウト
-            "div" | "fieldset" | "legend" | "details" | "summary" | "figure" | "figcaption" |
-            // リスト／表組み
-            "ul" | "ol" | "li" | "dl" | "dt" | "dd" |
-            "table" | "thead" | "tbody" | "tfoot" | "tr" | "td" | "th" |
-            // フォーム系（多くはブロック表示される）
-            "form" | "textarea" | "output" | "meter" | "progress" |
-            // メディア・埋め込み
-            "canvas" | "video" | "audio" | "svg" | "object" | "embed" | "iframe"
-        )
-    }
-
-    fn insert_default_doctype(&mut self) {
-        let doctype_node = Rc::new(RefCell::new(Node {
-            node_type: NodeType::Doctype {
-                name: Some("html".to_string()),
-                public_id: None,
-                system_id: None,
-            },
-            children: vec![],
-            parent: None,
-        }));
-
-        // Document ノードの最初の子として追加
-        if let Some(document_node) = self.stack.get(0) {
-            document_node.borrow_mut().children.insert(0, doctype_node);
-        }
     }
 }
 
@@ -274,7 +232,11 @@ impl std::fmt::Display for Node {
 }
 
 impl Node {
-    fn fmt_dom_tree(&self, f: &mut std::fmt::Formatter, ancestors_last: &[bool]) -> std::fmt::Result {
+    fn fmt_dom_tree(
+        &self,
+        f: &mut std::fmt::Formatter,
+        ancestors_last: &[bool],
+    ) -> std::fmt::Result {
         let n = self;
 
         // ├── か └── を決める（自身の最後かどうかは ancestors_last の最後で判断）
@@ -297,7 +259,7 @@ impl Node {
         match &n.node_type {
             NodeType::Document => {
                 writeln!(f, "{prefix}{connector}Document")?;
-            },
+            }
             NodeType::Element {
                 tag_name,
                 attributes,
@@ -322,7 +284,7 @@ impl Node {
             }
             NodeType::Comment(data) => {
                 writeln!(f, "{prefix}{connector}Comment: {data:?}")?;
-            },
+            }
             NodeType::Doctype {
                 name,
                 public_id,

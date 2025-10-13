@@ -69,16 +69,14 @@ impl GpuRenderer {
 
         // デバイスとキューの作成
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: None,
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
-                    experimental_features: Default::default(),
-                    memory_hints: wgpu::MemoryHints::default(),
-                    trace: Default::default(),
-                },
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                label: None,
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+                experimental_features: Default::default(),
+                memory_hints: wgpu::MemoryHints::default(),
+                trace: Default::default(),
+            })
             .await?;
 
         // サーフェス設定
@@ -211,23 +209,23 @@ impl GpuRenderer {
                             color: color_array,
                         },
                         Vertex {
-                            position: [x2, y1, 0.0],
-                            color: color_array,
-                        },
-                        Vertex {
                             position: [x1, y2, 0.0],
                             color: color_array,
                         },
                         Vertex {
                             position: [x2, y1, 0.0],
+                            color: color_array,
+                        },
+                        Vertex {
+                            position: [x2, y1, 0.0],
+                            color: color_array,
+                        },
+                        Vertex {
+                            position: [x1, y2, 0.0],
                             color: color_array,
                         },
                         Vertex {
                             position: [x2, y2, 0.0],
-                            color: color_array,
-                        },
-                        Vertex {
-                            position: [x1, y2, 0.0],
                             color: color_array,
                         },
                     ]);
@@ -256,23 +254,23 @@ impl GpuRenderer {
                                 color: color_array,
                             },
                             Vertex {
-                                position: [x2, y1, 0.0],
-                                color: color_array,
-                            },
-                            Vertex {
                                 position: [x1, y2, 0.0],
                                 color: color_array,
                             },
                             Vertex {
                                 position: [x2, y1, 0.0],
+                                color: color_array,
+                            },
+                            Vertex {
+                                position: [x2, y1, 0.0],
+                                color: color_array,
+                            },
+                            Vertex {
+                                position: [x1, y2, 0.0],
                                 color: color_array,
                             },
                             Vertex {
                                 position: [x2, y2, 0.0],
-                                color: color_array,
-                            },
-                            Vertex {
-                                position: [x1, y2, 0.0],
                                 color: color_array,
                             },
                         ]);
@@ -292,17 +290,13 @@ impl GpuRenderer {
         log::info!("Generated {} vertices from commands", self.num_vertices);
 
         if !vertices.is_empty() {
-            self.vertex_buffer = Some(
-                self.device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Vertex Buffer"),
-                        contents: bytemuck::cast_slice(&vertices),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    }),
-            );
-            log::info!("Vertex buffer created successfully");
-        } else {
-            log::warn!("No vertices generated, vertex buffer not created");
+            self.vertex_buffer = Some(self.device.create_buffer_init(
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("Vertex Buffer"),
+                    contents: bytemuck::cast_slice(&vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                },
+            ));
         }
     }
 
