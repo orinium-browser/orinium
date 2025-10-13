@@ -140,7 +140,7 @@ impl GpuRenderer {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
+                cull_mode: None,
                 polygon_mode: wgpu::PolygonMode::Fill,
                 unclipped_depth: false,
                 conservative: false,
@@ -182,6 +182,8 @@ impl GpuRenderer {
         let width = self.size.width as f32;
         let height = self.size.height as f32;
 
+        log::info!("Generating vertices for window size: {}x{}", width, height);
+
         for command in commands {
             match command {
                 DrawCommand::DrawRect {
@@ -196,6 +198,9 @@ impl GpuRenderer {
                     let y1 = 1.0 - (y / height) * 2.0;
                     let x2 = ((x + w) / width) * 2.0 - 1.0;
                     let y2 = 1.0 - ((y + h) / height) * 2.0;
+
+                    log::info!("DrawRect: screen({}, {}, {}, {}) -> NDC({}, {}, {}, {})",
+                              x, y, w, h, x1, y1, x2, y2);
 
                     let color_array = [color.r, color.g, color.b, color.a];
 
@@ -281,8 +286,10 @@ impl GpuRenderer {
 
     /// 描画命令を更新
     pub fn update_draw_commands(&mut self, commands: &[DrawCommand]) {
+        log::info!("update_draw_commands called with {} commands", commands.len());
         let vertices = self.generate_vertices(commands);
         self.num_vertices = vertices.len() as u32;
+        log::info!("Generated {} vertices from commands", self.num_vertices);
 
         if !vertices.is_empty() {
             self.vertex_buffer = Some(
@@ -293,6 +300,9 @@ impl GpuRenderer {
                         usage: wgpu::BufferUsages::VERTEX,
                     }),
             );
+            log::info!("Vertex buffer created successfully");
+        } else {
+            log::warn!("No vertices generated, vertex buffer not created");
         }
     }
 
@@ -333,8 +343,11 @@ impl GpuRenderer {
 
             render_pass.set_pipeline(&self.render_pipeline);
             if let Some(ref vertex_buffer) = self.vertex_buffer {
+                log::info!("Drawing {} vertices", self.num_vertices);
                 render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
                 render_pass.draw(0..self.num_vertices, 0..1);
+            } else {
+                log::warn!("No vertex buffer available for rendering");
             }
         }
 
