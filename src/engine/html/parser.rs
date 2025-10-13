@@ -209,7 +209,7 @@ impl<'a> Parser<'a> {
             }
         } else if let NodeType::Document = &parent.borrow().node_type {
             if name != "html" {
-                todo!("Document の中に DOCTYPE宣言 以外のが来た場合の処理");
+                log::warn!("Document の中に DOCTYPE宣言 以外のが来た場合の処理（未実装）");
             }
         }
         false
