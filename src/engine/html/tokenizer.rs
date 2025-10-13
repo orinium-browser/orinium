@@ -164,7 +164,7 @@ impl<'a> Tokenizer<'a> {
                 self.state = TokenizerState::TagOpen
             }
             '&' => {
-                todo!(); // エスケープ処理 (未実装)
+                log::warn!("エスケープ処理（未実装）");
             }
             _ => {
                 self.buffer.push(c);
