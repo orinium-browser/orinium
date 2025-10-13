@@ -38,7 +38,6 @@ async fn main() -> Result<()> {
     // レンダラーを作成して描画命令を生成
     let renderer = Renderer::new(800.0, 600.0);
     let draw_commands = renderer.generate_draw_commands(&dom_tree);
-    //let draw_commands: Vec<DrawCommand> = vec![DrawCommand::DrawRect { x: (0f32), y: (100f32), width: (100f32), height: (100f32), color: (Color { r: (88.0), g: (88.0), b: (88.0), a: (0.5) }) }];
 
     log::info!("Generated {} draw commands", draw_commands.len());
     log::info!("Generated draw commands: {draw_commands:#?}");
