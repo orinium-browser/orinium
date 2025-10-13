@@ -55,4 +55,6 @@ cargo run --example tests parse_dom https://example.com
 ## 貢献
 [CONTRIBUTING.md](./CONTRIBUTING.md)を参照してください。
 
+アーキテクチャは[architecture.md](./docs/architecture.md)を参照してください。
+
 TODOは[tasks.md](./tasks.md)にあります。
