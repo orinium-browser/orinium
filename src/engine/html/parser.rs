@@ -75,7 +75,9 @@ impl<'a> Parser<'a> {
             if self.check_start_tag_with_invalid_nesting(&name, &parent) {
                 if let NodeType::Element { tag_name, .. } = &parent.borrow().node_type {
                     //println!("Auto-closing tag: <{}> to allow <{}> inside it.", tag_name, name);
-                    self.handle_end_tag(Token::EndTag {name: tag_name.clone()});
+                    self.handle_end_tag(Token::EndTag {
+                        name: tag_name.clone(),
+                    });
                 }
                 parent = Rc::clone(self.stack.last().unwrap());
             }
@@ -205,7 +207,7 @@ impl<'a> Parser<'a> {
                 return true;
             }
         } else if let NodeType::Document = &parent.borrow().node_type {
-            if !(name == "html") {
+            if name != "html" {
                 todo!("Document の中に DOCTYPE宣言 以外のが来た場合の処理");
             }
         }
@@ -249,7 +251,11 @@ impl std::fmt::Display for Node {
 }
 
 impl Node {
-    fn fmt_dom_tree(&self, f: &mut std::fmt::Formatter, ancestors_last: &[bool]) -> std::fmt::Result {
+    fn fmt_dom_tree(
+        &self,
+        f: &mut std::fmt::Formatter,
+        ancestors_last: &[bool],
+    ) -> std::fmt::Result {
         let n = self;
 
         // ├── か └── を決める（自身の最後かどうかは ancestors_last の最後で判断）
@@ -272,7 +278,7 @@ impl Node {
         match &n.node_type {
             NodeType::Document => {
                 writeln!(f, "{prefix}{connector}Document")?;
-            },
+            }
             NodeType::Element {
                 tag_name,
                 attributes,
@@ -297,7 +303,7 @@ impl Node {
             }
             NodeType::Comment(data) => {
                 writeln!(f, "{prefix}{connector}Comment: {data:?}")?;
-            },
+            }
             NodeType::Doctype {
                 name,
                 public_id,

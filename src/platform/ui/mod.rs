@@ -23,7 +23,10 @@ pub struct App {
 impl State {
     pub async fn new(window: Arc<Window>) -> anyhow::Result<Self> {
         let gpu_renderer = GpuRenderer::new(window.clone()).await?;
-        Ok(Self { window, gpu_renderer })
+        Ok(Self {
+            window,
+            gpu_renderer,
+        })
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {

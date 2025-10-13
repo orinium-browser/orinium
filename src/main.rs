@@ -41,10 +41,11 @@ async fn main() -> Result<()> {
     //let draw_commands: Vec<DrawCommand> = vec![DrawCommand::DrawRect { x: (0f32), y: (100f32), width: (100f32), height: (100f32), color: (Color { r: (88.0), g: (88.0), b: (88.0), a: (0.5) }) }];
 
     log::info!("Generated {} draw commands", draw_commands.len());
-    log::info!("Generated draw commands: {:#?}", draw_commands);
+    log::info!("Generated draw commands: {draw_commands:#?}");
 
     // ウィンドウとイベントループを作成
-    let event_loop = EventLoop::<orinium_browser::platform::ui::State>::with_user_event().build()?;
+    let event_loop =
+        EventLoop::<orinium_browser::platform::ui::State>::with_user_event().build()?;
     let mut app = App::new();
 
     event_loop.run_app(&mut app)?;

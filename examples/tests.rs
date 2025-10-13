@@ -1,8 +1,4 @@
-use orinium_browser::{
-    platform::ui::App,
-    platform::network::NetworkCore,
-    engine::html::parser,
-};
+use orinium_browser::{engine::html::parser, platform::network::NetworkCore, platform::ui::App};
 
 use std::env;
 use winit::event_loop::EventLoop;
@@ -10,7 +6,7 @@ use winit::event_loop::EventLoop;
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = env::args().collect::<Vec<String>>();
-    if args.len() >= 2  {
+    if args.len() >= 2 {
         match args[1].as_str() {
             "help" => {
                 println!("This is a test application for Orinium Browser development.");
@@ -33,7 +29,10 @@ async fn main() {
                     let net = NetworkCore::new().unwrap();
                     let resp = net.fetch(url).await.expect("Failed to fetch URL");
                     let html = String::from_utf8_lossy(&resp.body).to_string();
-                    println!("Fetched HTML (first 50 chars):\n{}", html.chars().take(50).collect::<String>());
+                    println!(
+                        "Fetched HTML (first 50 chars):\n{}",
+                        html.chars().take(50).collect::<String>()
+                    );
                     let mut parser = parser::Parser::new(&html);
                     let dom = parser.parse();
                     println!("DOM Tree:\n{}", dom.borrow());
