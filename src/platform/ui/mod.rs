@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::engine::renderer::DrawCommand;
 use crate::platform::renderer::gpu::GpuRenderer;
 
 #[allow(unused_imports)]
@@ -18,15 +19,13 @@ pub struct State {
 
 pub struct App {
     state: Option<State>,
+    draw_commands: Vec<DrawCommand>,
 }
 
 impl State {
     pub async fn new(window: Arc<Window>) -> anyhow::Result<Self> {
         let gpu_renderer = GpuRenderer::new(window.clone()).await?;
-        Ok(Self {
-            window,
-            gpu_renderer,
-        })
+        Ok(Self { window, gpu_renderer })
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -36,7 +35,6 @@ impl State {
 
     pub fn render(&mut self) -> anyhow::Result<()> {
         self.gpu_renderer.render()?;
-        self.window.request_redraw();
         Ok(())
     }
 
@@ -54,7 +52,17 @@ impl Default for App {
 
 impl App {
     pub fn new() -> Self {
-        Self { state: None }
+        Self {
+            state: None,
+            draw_commands: Vec::new(),
+        }
+    }
+
+    pub fn set_draw_commands(&mut self, commands: Vec<DrawCommand>) {
+        self.draw_commands = commands;
+        if let Some(state) = &mut self.state {
+            state.gpu_renderer.update_draw_commands(&self.draw_commands);
+        }
     }
 }
 
@@ -66,6 +74,17 @@ impl ApplicationHandler<State> for App {
         let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
 
         self.state = Some(pollster::block_on(State::new(window)).unwrap());
+
+        if !self.draw_commands.is_empty() {
+            log::info!("Applying {} draw commands to GPU renderer", self.draw_commands.len());
+            if let Some(state) = &mut self.state {
+                state.gpu_renderer.update_draw_commands(&self.draw_commands);
+                log::info!("Draw commands applied successfully");
+                state.window.request_redraw();
+            }
+        } else {
+            log::warn!("No draw commands to apply");
+        }
     }
 
     #[allow(unused_mut)]

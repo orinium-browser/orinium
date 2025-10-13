@@ -48,6 +48,8 @@ async fn main() -> Result<()> {
         EventLoop::<orinium_browser::platform::ui::State>::with_user_event().build()?;
     let mut app = App::new();
 
+    app.set_draw_commands(draw_commands);
+
     event_loop.run_app(&mut app)?;
 
     Ok(())

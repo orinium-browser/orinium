@@ -204,23 +204,23 @@ impl GpuRenderer {
                             color: color_array,
                         },
                         Vertex {
-                            position: [x2, y1, 0.0],
-                            color: color_array,
-                        },
-                        Vertex {
                             position: [x1, y2, 0.0],
                             color: color_array,
                         },
                         Vertex {
                             position: [x2, y1, 0.0],
+                            color: color_array,
+                        },
+                        Vertex {
+                            position: [x2, y1, 0.0],
+                            color: color_array,
+                        },
+                        Vertex {
+                            position: [x1, y2, 0.0],
                             color: color_array,
                         },
                         Vertex {
                             position: [x2, y2, 0.0],
-                            color: color_array,
-                        },
-                        Vertex {
-                            position: [x1, y2, 0.0],
                             color: color_array,
                         },
                     ]);
@@ -249,23 +249,23 @@ impl GpuRenderer {
                                 color: color_array,
                             },
                             Vertex {
-                                position: [x2, y1, 0.0],
-                                color: color_array,
-                            },
-                            Vertex {
                                 position: [x1, y2, 0.0],
                                 color: color_array,
                             },
                             Vertex {
                                 position: [x2, y1, 0.0],
+                                color: color_array,
+                            },
+                            Vertex {
+                                position: [x2, y1, 0.0],
+                                color: color_array,
+                            },
+                            Vertex {
+                                position: [x1, y2, 0.0],
                                 color: color_array,
                             },
                             Vertex {
                                 position: [x2, y2, 0.0],
-                                color: color_array,
-                            },
-                            Vertex {
-                                position: [x1, y2, 0.0],
                                 color: color_array,
                             },
                         ]);
