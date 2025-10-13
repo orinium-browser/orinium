@@ -32,6 +32,7 @@ pub type NodeRef = Rc<RefCell<Node>>;
 pub struct Parser<'a> {
     tokenizer: crate::engine::html::tokenizer::Tokenizer<'a>,
     stack: Vec<NodeRef>,
+    has_doctype: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -45,6 +46,7 @@ impl<'a> Parser<'a> {
         Self {
             tokenizer: Tokenizer::new(input),
             stack: vec![document],
+            has_doctype: false,
         }
     }
 
@@ -59,6 +61,11 @@ impl<'a> Parser<'a> {
                 Token::Comment(_) => self.handle_comment(token),
                 Token::Text(_) => self.handle_text(token),
             }
+        }
+
+        // DOCTYPEの補完
+        if !self.has_doctype {
+            self.insert_default_doctype();
         }
 
         Rc::clone(&self.stack[0])
@@ -167,6 +174,7 @@ impl<'a> Parser<'a> {
                 parent: Some(Rc::clone(&parent)),
             }));
             parent.borrow_mut().children.push(doctype_node);
+            self.has_doctype = true; // DOCTYPE宣言を発見
         }
     }
 
@@ -238,6 +246,23 @@ impl<'a> Parser<'a> {
             // メディア・埋め込み
             "canvas" | "video" | "audio" | "svg" | "object" | "embed" | "iframe"
         )
+    }
+
+    fn insert_default_doctype(&mut self) {
+        let doctype_node = Rc::new(RefCell::new(Node {
+            node_type: NodeType::Doctype {
+                name: Some("html".to_string()),
+                public_id: None,
+                system_id: None,
+            },
+            children: vec![],
+            parent: None,
+        }));
+
+        // Document ノードの最初の子として追加
+        if let Some(document_node) = self.stack.get(0) {
+            document_node.borrow_mut().children.insert(0, doctype_node);
+        }
     }
 }
 
