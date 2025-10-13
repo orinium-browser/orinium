@@ -53,9 +53,9 @@ async fn main() {
                             for (key, value) in &resp.headers {
                                 println!("{}: {}", key, value);
                             }
-                            println!("Response Body (first 100 chars):");
+                            println!("Response Body:");
                             let body_str = String::from_utf8_lossy(&resp.body);
-                            println!("{}", &body_str[..100.min(body_str.len())]);
+                            println!("{}", body_str);
                         }
                         Err(e) => {
                             eprintln!("Failed to fetch URL: {}", e);
