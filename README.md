@@ -1,4 +1,6 @@
 # Orinium Browser
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Orinas-github/Orinium-browser)
+
 **🚧 _このプロジェクトは開発段階にあり、まだブラウザとして動作するわけではありません。_**
 
 [English version → README.en.md](./README.en.md)
@@ -52,5 +54,7 @@ cargo run --example tests parse_dom https://example.com
 
 ## 貢献
 [CONTRIBUTING.md](./CONTRIBUTING.md)を参照してください。
+
+アーキテクチャは[architecture.md](./docs/architecture.md)を参照してください。
 
 TODOは[tasks.md](./tasks.md)にあります。

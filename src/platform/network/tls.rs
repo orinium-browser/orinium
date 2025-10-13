@@ -49,7 +49,7 @@ impl TlsConnection {
         let connector = TlsConnector::from(Arc::new(config));
 
         let server_name = ServerName::try_from(host.to_string())
-            .map_err(|_| anyhow::anyhow!("Invalid DNS name: {}", host))?;
+            .map_err(|_| anyhow::anyhow!("Invalid DNS name: {host}"))?;
 
         let stream =
             tokio::time::timeout(timeout, connector.connect(server_name, tcp_conn)).await??;
