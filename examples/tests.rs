@@ -15,6 +15,7 @@ async fn main() {
                 println!("create_window - Create a window and display it.");
                 println!("parse_dom [URL] - Test DOM parsing functionality.");
                 println!("fetch_url [URL] - Test network fetching functionality.");
+                println!("simple_render [URL] - Test simple rendering functionality.");
                 println!("help - Show this help message.");
             }
             "create_window" => {
@@ -52,9 +53,9 @@ async fn main() {
                             for (key, value) in &resp.headers {
                                 println!("{}: {}", key, value);
                             }
-                            println!("Response Body (first 100 chars):");
+                            println!("Response Body:");
                             let body_str = String::from_utf8_lossy(&resp.body);
-                            println!("{}", &body_str[..100.min(body_str.len())]);
+                            println!("{}", body_str);
                         }
                         Err(e) => {
                             eprintln!("Failed to fetch URL: {}", e);
@@ -62,6 +63,29 @@ async fn main() {
                     }
                 } else {
                     eprintln!("Please provide a URL for fetching test.");
+                }
+            }
+            "simple_render" => {
+                if args.len() == 3 {
+                    let url = &args[2];
+                    println!("Testing simple rendering for URL: {}", url);
+                    let net = NetworkCore::new().unwrap();
+                    let resp = net.fetch(url).await.expect("Failed to fetch URL");
+                    let html = String::from_utf8_lossy(&resp.body).to_string();
+                    let mut parser = parser::Parser::new(&html);
+                    let dom = parser.parse();
+                    let renderer = orinium_browser::engine::renderer::Renderer::new(800.0, 600.0);
+                    let draw_commands = renderer.generate_draw_commands(&dom);
+                    println!("Generated {} draw commands", draw_commands.len());
+                    println!("Draw Commands:\n{:#?}", draw_commands);
+                    // ウィンドウとイベントループを作成
+                    let event_loop =
+                        EventLoop::<orinium_browser::platform::ui::State>::with_user_event().build().unwrap();
+                    let mut app = App::new();
+                    app.set_draw_commands(draw_commands);
+                    let _ = event_loop.run_app(&mut app);
+                } else {
+                    eprintln!("Please provide a URL for simple rendering test.");
                 }
             }
             _ => {

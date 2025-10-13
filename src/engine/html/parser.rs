@@ -61,6 +61,7 @@ impl<'a> Parser<'a> {
                 Token::Text(_) => self.handle_text(token),
             }
         }
+        self.autofill_elements();
 
         Rc::clone(&self.stack[0])
     }
@@ -207,12 +208,87 @@ impl<'a> Parser<'a> {
             {
                 return true;
             }
-        } else if let NodeType::Document = &parent.borrow().node_type {
-            if name != "html" {
-                todo!("Document の中に DOCTYPE宣言 以外のが来た場合の処理");
-            }
         }
         false
+    }
+
+    /// DOCTYPE宣言、html, head, body 要素が存在しない場合に補完する
+    fn autofill_elements(&mut self) {
+        let root = Rc::clone(&self.stack[0]);
+        let mut has_doctype = false;
+        let mut has_html = false;
+        let mut has_head = false;
+        let mut has_body = false;
+
+        for child in &root.borrow().children {
+            match &child.borrow().node_type {
+                NodeType::Doctype { .. } => has_doctype = true,
+                NodeType::Element { tag_name, .. } if tag_name.to_lowercase() == "html" => {
+                    has_html = true;
+                    for html_child in &child.borrow().children {
+                        match &html_child.borrow().node_type {
+                            NodeType::Element { tag_name, .. } if tag_name.to_lowercase() == "head" => {
+                                has_head = true;
+                            }
+                            NodeType::Element { tag_name, .. } if tag_name.to_lowercase() == "body" => {
+                                has_body = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if !has_doctype {
+            let doctype_node = Rc::new(RefCell::new(Node {
+                node_type: NodeType::Doctype {
+                    name: Some("html".to_string()),
+                    public_id: None,
+                    system_id: None,
+                },
+                children: vec![],
+                parent: Some(Rc::clone(&root)),
+            }));
+            root.borrow_mut().children.insert(0, doctype_node);
+        }
+
+        if !has_html {
+            let html_node = Rc::new(RefCell::new(Node {
+                node_type: NodeType::Element {
+                    tag_name: "html".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+                parent: Some(Rc::clone(&root)),
+            }));
+            root.borrow_mut().children.push(Rc::clone(&html_node));
+
+            if !has_head {
+                let head_node = Rc::new(RefCell::new(Node {
+                    node_type: NodeType::Element {
+                        tag_name: "head".to_string(),
+                        attributes: vec![],
+                    },
+                    children: vec![],
+                    parent: Some(Rc::clone(&html_node)),
+                }));
+                html_node.borrow_mut().children.push(head_node);
+            }
+
+            if !has_body {
+                let body_node = Rc::new(RefCell::new(Node {
+                    node_type: NodeType::Element {
+                        tag_name: "body".to_string(),
+                        attributes: vec![],
+                    },
+                    children: vec![],
+                    parent: Some(Rc::clone(&html_node)),
+                }));
+                html_node.borrow_mut().children.push(body_node);       
+            }
+        }
     }
 }
 
