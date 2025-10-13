@@ -1,7 +1,7 @@
 # TODO
 
 ## 実装
-- [ ] Parser の DOCTYPE宣言 補完機能
+- [x] Parser の DOCTYPE宣言 補完機能
 - [x] Render pipeline の実装
 - [x] TLS通信
 
