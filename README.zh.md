@@ -4,7 +4,7 @@
 
 **🚧 _该项目仍在开发中，目前尚不能作为浏览器使用。_**
 
-[English](./README.en.md) / [繁體中文](./REAMDE.zh.md) / [한국어](./README.ko.md)
+[English](./README.en.md) / [日本語](./README.md) / [한국어](./README.ko.md)
 
 ## 不依赖于 Google 的独立浏览器
 本浏览器引擎的源代码**不依赖于 Google**。除 Firefox 等少数浏览器外，世界上大多数浏览器都依赖于 Google 的 Chromium。
