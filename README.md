@@ -4,7 +4,7 @@
 
 **🚧 _このプロジェクトは開発段階にあり、まだブラウザとして動作するわけではありません。_**
 
-[English](./README.en.md) / [繁体中文](./REAMDE.zh.md) / [한글](./README.ko.md)
+[English](./README.en.md) / [繁体中文](./README.zh.md) / [한글](./README.ko.md)
 
 ## Googleに依存しない、独立したブラウザ
 このブラウザエンジンのソースコードは、**Googleに依存しません**。Firefoxなどの一部のブラウザを除いて、世の中の多くのブラウザはGoogleのChromiumに依存しています。
@@ -26,3 +26,4 @@
 TODOは[tasks.md](./tasks.md)にあります。
 
 その他の開発時に目を通しておくと便利なドキュメントは[DOCS](./docs/)にあります
+
