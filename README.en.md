@@ -4,7 +4,7 @@
 
 **🚧 _This project is still under development and does not yet function as a browser._**
 
-[日本語](./README.md) / [繁體中文](./README.zh.md) / [한국어](./README.ko.md)
+[日本語](./README.md)
 
 ## An Independent Browser Free from Google
 The source code of this browser engine **does not depend on Google**.  
