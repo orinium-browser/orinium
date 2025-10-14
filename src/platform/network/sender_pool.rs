@@ -2,7 +2,6 @@
 use http_body_util::Empty;
 use hyper::body::Bytes;
 use hyper::client::conn::http1::SendRequest;
-use hyper_util::rt::TokioIo;
 use std::collections::HashMap;
 use std::sync::Arc;
 //use tokio::net::TcpStream;
@@ -15,16 +14,25 @@ pub struct HostKey {
     pub port: u16,
 }
 
-pub enum Connection {
+#[derive(Debug)]
+pub enum Sender {
     http(SendRequest<Empty<Bytes>>),
 }
 
-pub struct ConnectionPool {
-    pool: Arc<RwLock<HashMap<HostKey, Vec<Connection>>>>,
+impl Sender {
+    pub fn take_sender(self) -> SendRequest<Empty<Bytes>> {
+        match self {
+            Sender::http(s) => s,
+        }
+    }
+}
+
+pub struct SenderPool {
+    pool: Arc<RwLock<HashMap<HostKey, Vec<Sender>>>>,
     pub max_connections_per_host: usize,
 }
 
-impl ConnectionPool {
+impl SenderPool {
     pub fn new() -> Self {
         Self {
             pool: Arc::new(RwLock::new(HashMap::new())),
@@ -32,16 +40,28 @@ impl ConnectionPool {
         }
     }
 
-    pub async fn get_connection(&self, key: &HostKey) -> Option<Connection> {
+    pub async fn get_connection(&self, key: &HostKey) -> Option<Sender> {
         let mut pool = self.pool.write().await;
         pool.get_mut(key).and_then(|vec| vec.pop())
     }
 
-    pub async fn add_connection(&self, key: HostKey, conn: Connection) {
+    pub async fn add_connection(&self, key: HostKey, conn: Sender) {
         let mut pool = self.pool.write().await;
         let entry = pool.entry(key).or_insert_with(Vec::new);
         if entry.len() < self.max_connections_per_host {
             entry.push(conn);
+        }
+    }
+
+    pub async fn remove_connection(&mut self, key: &HostKey) {
+        let mut pool = self.pool.write().await;
+        if let Some(conns) = pool.get_mut(key) {
+            if !conns.is_empty() {
+                conns.pop();
+            }
+            if conns.is_empty() {
+                pool.remove(key);
+            }
         }
     }
 
