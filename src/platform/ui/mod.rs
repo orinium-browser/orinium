@@ -25,7 +25,10 @@ pub struct App {
 impl State {
     pub async fn new(window: Arc<Window>) -> anyhow::Result<Self> {
         let gpu_renderer = GpuRenderer::new(window.clone()).await?;
-        Ok(Self { window, gpu_renderer })
+        Ok(Self {
+            window,
+            gpu_renderer,
+        })
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -76,7 +79,10 @@ impl ApplicationHandler<State> for App {
         self.state = Some(pollster::block_on(State::new(window)).unwrap());
 
         if !self.draw_commands.is_empty() {
-            log::info!("Applying {} draw commands to GPU renderer", self.draw_commands.len());
+            log::info!(
+                "Applying {} draw commands to GPU renderer",
+                self.draw_commands.len()
+            );
             if let Some(state) = &mut self.state {
                 state.gpu_renderer.update_draw_commands(&self.draw_commands);
                 log::info!("Draw commands applied successfully");

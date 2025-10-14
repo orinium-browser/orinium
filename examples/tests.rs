@@ -80,7 +80,9 @@ async fn main() {
                     println!("Draw Commands:\n{:#?}", draw_commands);
                     // ウィンドウとイベントループを作成
                     let event_loop =
-                        EventLoop::<orinium_browser::platform::ui::State>::with_user_event().build().unwrap();
+                        EventLoop::<orinium_browser::platform::ui::State>::with_user_event()
+                            .build()
+                            .unwrap();
                     let mut app = App::new();
                     app.set_draw_commands(draw_commands);
                     let _ = event_loop.run_app(&mut app);
