@@ -1,4 +1,4 @@
-<h1 align="center">Orinium 브라우저</h1>
+<h1 align="center">Orinium Browser</h1>
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Orinas-github/Orinium-browser)
 
