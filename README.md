@@ -24,3 +24,5 @@
 アーキテクチャは[architecture.md](./docs/architecture.md)を参照してください。
 
 TODOは[tasks.md](./tasks.md)にあります。
+
+その他の開発時に目を通しておくと便利なドキュメントは[DOCS](./docs/)にあります
