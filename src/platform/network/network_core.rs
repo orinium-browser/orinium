@@ -29,7 +29,7 @@ impl NetworkCore {
         }
     }
 
-    pub async fn fetch_url(&self, url: &str) -> Result<Response, Box<dyn Error>> {
+    pub async fn send_request(&self, url: &str) -> Result<Response, Box<dyn Error>> {
         let url: Uri = url.parse()?;
         let host = url.host().expect("uri has no host");
         let port = url.port_u16().unwrap_or(80);
@@ -106,5 +106,9 @@ impl NetworkCore {
         };
 
         Ok(response)
+    }
+
+    pub async fn fetch_url(&self, url: &str) -> Result<Response, Box<dyn Error>> {
+        self.send_request(url).await
     }
 }
