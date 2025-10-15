@@ -86,10 +86,6 @@ impl NetworkCore {
             body,
         };
 
-        println!("Status: {}", res.status());
-        println!("Headers: {:#?}\n", res.headers());
-        println!("Done!");
-
         Ok(response)
     }
 }
