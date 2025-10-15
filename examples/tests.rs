@@ -27,8 +27,8 @@ async fn main() {
                 if args.len() == 3 {
                     let url = &args[2];
                     println!("Parsing DOM for URL: {}", url);
-                    let net = NetworkCore::new().unwrap();
-                    let resp = net.fetch(url).await.expect("Failed to fetch URL");
+                    let net = NetworkCore::new();
+                    let resp = net.fetch_url(url).await.expect("Failed to fetch URL");
                     let html = String::from_utf8_lossy(&resp.body).to_string();
                     println!(
                         "Fetched HTML (first 50 chars):\n{}",
@@ -45,8 +45,8 @@ async fn main() {
                 if args.len() == 3 {
                     let url = &args[2];
                     println!("Fetching URL: {}", url);
-                    let net = NetworkCore::new().unwrap();
-                    match net.fetch(url).await {
+                    let net = NetworkCore::new();
+                    match net.fetch_url(url).await {
                         Ok(resp) => {
                             println!("Response Reason_phrase: {}", resp.reason_phrase);
                             println!("Response Headers:");
@@ -69,8 +69,8 @@ async fn main() {
                 if args.len() == 3 {
                     let url = &args[2];
                     println!("Testing simple rendering for URL: {}", url);
-                    let net = NetworkCore::new().unwrap();
-                    let resp = net.fetch(url).await.expect("Failed to fetch URL");
+                    let net = NetworkCore::new();
+                    let resp = net.fetch_url(url).await.expect("Failed to fetch URL");
                     let html = String::from_utf8_lossy(&resp.body).to_string();
                     let mut parser = parser::Parser::new(&html);
                     let dom = parser.parse();

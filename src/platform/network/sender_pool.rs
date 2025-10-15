@@ -1,37 +1,24 @@
+//use anyhow::Result;
+use http_body_util::Empty;
+use hyper::body::Bytes;
+use hyper::client::conn::http1::SendRequest;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::platform::network::tcp::TcpConnection;
-use crate::platform::network::tls::TlsConnection;
-
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub struct HostKey {
-    pub scheme: String,
+    pub scheme: hyper::http::uri::Scheme,
     pub host: String,
     pub port: u16,
 }
 
-#[allow(clippy::large_enum_variant)]
-#[derive(Debug)]
-pub enum Connection {
-    Tcp(TcpConnection),
-    Tls(TlsConnection),
-}
-
-#[derive(Debug)]
-pub struct ConnectionPool {
-    pool: Arc<RwLock<HashMap<HostKey, Vec<Connection>>>>,
+pub struct SenderPool {
+    pool: Arc<RwLock<HashMap<HostKey, Vec<SendRequest<Empty<Bytes>>>>>>,
     pub max_connections_per_host: usize,
 }
 
-impl Default for ConnectionPool {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ConnectionPool {
+impl SenderPool {
     pub fn new() -> Self {
         Self {
             pool: Arc::new(RwLock::new(HashMap::new())),
@@ -39,16 +26,28 @@ impl ConnectionPool {
         }
     }
 
-    pub async fn get_connection(&self, key: &HostKey) -> Option<Connection> {
+    pub async fn get_connection(&self, key: &HostKey) -> Option<SendRequest<Empty<Bytes>>> {
         let mut pool = self.pool.write().await;
         pool.get_mut(key).and_then(|vec| vec.pop())
     }
 
-    pub async fn add_connection(&self, key: HostKey, conn: Connection) {
+    pub async fn add_connection(&self, key: HostKey, conn: SendRequest<Empty<Bytes>>) {
         let mut pool = self.pool.write().await;
         let entry = pool.entry(key).or_insert_with(Vec::new);
         if entry.len() < self.max_connections_per_host {
             entry.push(conn);
+        }
+    }
+
+    pub async fn remove_connection(&mut self, key: &HostKey) {
+        let mut pool = self.pool.write().await;
+        if let Some(conns) = pool.get_mut(key) {
+            if !conns.is_empty() {
+                conns.pop();
+            }
+            if conns.is_empty() {
+                pool.remove(key);
+            }
         }
     }
 
