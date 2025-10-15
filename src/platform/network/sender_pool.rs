@@ -13,21 +13,8 @@ pub struct HostKey {
     pub port: u16,
 }
 
-#[derive(Debug)]
-pub enum Sender {
-    http(SendRequest<Empty<Bytes>>),
-}
-
-impl Sender {
-    pub fn take_sender(self) -> SendRequest<Empty<Bytes>> {
-        match self {
-            Sender::http(s) => s,
-        }
-    }
-}
-
 pub struct SenderPool {
-    pool: Arc<RwLock<HashMap<HostKey, Vec<Sender>>>>,
+    pool: Arc<RwLock<HashMap<HostKey, Vec<SendRequest<Empty<Bytes>>>>>>,
     pub max_connections_per_host: usize,
 }
 
@@ -39,12 +26,12 @@ impl SenderPool {
         }
     }
 
-    pub async fn get_connection(&self, key: &HostKey) -> Option<Sender> {
+    pub async fn get_connection(&self, key: &HostKey) -> Option<SendRequest<Empty<Bytes>>> {
         let mut pool = self.pool.write().await;
         pool.get_mut(key).and_then(|vec| vec.pop())
     }
 
-    pub async fn add_connection(&self, key: HostKey, conn: Sender) {
+    pub async fn add_connection(&self, key: HostKey, conn: SendRequest<Empty<Bytes>>) {
         let mut pool = self.pool.write().await;
         let entry = pool.entry(key).or_insert_with(Vec::new);
         if entry.len() < self.max_connections_per_host {

@@ -5,10 +5,11 @@ use hyper::client::conn;
 use hyper::{Request, Uri};
 use hyper_util::rt::TokioIo;
 use std::error::Error;
-//use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::net::TcpStream;
+use tokio::sync::RwLock;
 
-//use crate::network::{sender_pool::Sender, HostKey, SenderPool};
+use crate::network::{HostKey, SenderPool};
 
 pub struct Response {
     pub status: hyper::StatusCode,
@@ -18,13 +19,13 @@ pub struct Response {
 }
 
 pub struct NetworkCore {
-    //connection_pool: Arc<Mutex<SenderPool>>,
+    sender_pool: Arc<RwLock<SenderPool>>,
 }
 
 impl NetworkCore {
     pub fn new() -> Self {
         Self {
-            //connection_pool: Arc::new(Mutex::new(SenderPool::new())),
+            sender_pool: Arc::new(RwLock::new(SenderPool::new())),
         }
     }
 
@@ -37,21 +38,32 @@ impl NetworkCore {
         let stream = TcpStream::connect(addr).await?;
         let io = TokioIo::new(stream);
 
-        /*
         let key = Arc::new(HostKey {
-            scheme: url.scheme().unwrap_or(&hyper::http::uri::Scheme::HTTP).clone(),
+            scheme: url
+                .scheme()
+                .unwrap_or(&hyper::http::uri::Scheme::HTTP)
+                .clone(),
             host: host.to_string(),
             port,
         });
-        */
 
-        // handshake
-        let (mut sender, connection) = conn::http1::handshake(io).await?;
-        tokio::spawn(async move {
-            if let Err(err) = connection.await {
-                eprintln!("Connection failed: {:?}", err);
-            }
-        });
+        let mut sender =
+            if let Some(sender) = self.sender_pool.read().await.get_connection(&key).await {
+                sender
+            } else {
+                let (sender, connection) = conn::http1::handshake(io).await?;
+
+                let key_clone = key.clone();
+                let pool_clone = self.sender_pool.clone();
+                tokio::spawn(async move {
+                    if let Err(err) = connection.await {
+                        eprintln!("Connection failed: {:?}", err);
+                        let mut pool = pool_clone.write().await;
+                        pool.remove_connection(&key_clone).await;
+                    }
+                });
+                sender
+            };
 
         let authority = url.authority().unwrap();
         let path = url.path_and_query().map(|p| p.as_str()).unwrap_or("/");
@@ -79,6 +91,13 @@ impl NetworkCore {
                 body.extend_from_slice(chunk);
             }
         }
+
+        self.sender_pool
+            .write()
+            .await
+            .add_connection((*key).clone(), sender)
+            .await;
+
         let response = Response {
             status,
             reason_phrase,
