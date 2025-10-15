@@ -11,4 +11,4 @@ pub use cookie_store::CookieStore;
 pub use hyper::http::{Request, StatusCode};
 pub use network_core::{NetworkCore, Response};
 pub use sender_pool::HostKey;
-pub use sender_pool::SenderPool;
+pub use sender_pool::{HttpSender, SenderPool};

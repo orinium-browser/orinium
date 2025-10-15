@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio::sync::RwLock;
 
-use crate::network::{HostKey, SenderPool};
+use crate::network::{HostKey, HttpSender, SenderPool};
 
 pub struct Response {
     pub status: hyper::StatusCode,
@@ -30,7 +30,11 @@ impl NetworkCore {
         }
     }
 
-    pub async fn send_request(&self, url: &str, method: Method) -> Result<Response, Box<dyn Error>> {
+    pub async fn send_request(
+        &self,
+        url: &str,
+        method: Method,
+    ) -> Result<Response, Box<dyn Error>> {
         let url: Uri = url.parse()?;
         let host = url.host().expect("uri has no host");
         let port = url.port_u16().unwrap_or(80);
@@ -53,13 +57,14 @@ impl NetworkCore {
                 sender
             } else {
                 let (sender, connection) = conn::http1::handshake(io).await?;
+                let sender = HttpSender::Http1(sender);
 
                 let key_clone = key.clone();
                 let pool_clone = self.sender_pool.clone();
                 tokio::spawn(async move {
                     if let Err(err) = connection.await {
                         eprintln!("Connection failed: {:?}", err);
-                        let mut pool = pool_clone.write().await;
+                        let pool = pool_clone.write().await;
                         pool.remove_connection(&key_clone).await;
                     }
                 });
@@ -75,7 +80,12 @@ impl NetworkCore {
             .header("Host", authority.as_str())
             .body(Empty::<Bytes>::new())?;
 
-        let mut res = sender.send_request(req).await?;
+        let mut res = match &mut sender {
+            HttpSender::Http1(s) => s.send_request(req).await?,
+            _ => {
+                return Err(anyhow::anyhow!("HTTP/2 not implemented yet").into());
+            }
+        };
 
         let status = res.status();
         let reason_phrase = status.canonical_reason().unwrap_or("").to_string();
