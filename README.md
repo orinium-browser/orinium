@@ -1,7 +1,8 @@
 <h1 align="center">Orinium Browser</h1>
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Orinas-github/Orinium-browser)
-[![](https://img.shields.io/github/license/Orinas-github/Orinium-browser)](./LICENSE)
+[![Github license](https://img.shields.io/github/license/Orinas-github/Orinium-browser)](./LICENSE)
+[![Discord server](https://img.shields.io/badge/Discord-5865F2?style=flat&logo=discord&logoColor=white)](https://discord.gg/2zYbEnMC5H)
 
 **🚧 _このプロジェクトは開発段階にあり、まだブラウザとして動作するわけではありません。_**
 
@@ -27,5 +28,6 @@
 TODOは[tasks.md](./tasks.md)にあります。
 
 その他の開発時に目を通しておくと便利なドキュメントは[DOCS](./docs/)にあります
+
 
 
