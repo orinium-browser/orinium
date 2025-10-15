@@ -1,6 +1,7 @@
 <h1 align="center">Orinium Browser</h1>
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Orinas-github/Orinium-browser)
+[![](https://img.shields.io/github/license/Orinas-github/Orinium-browser)](./LICENSE)
 
 **🚧 _このプロジェクトは開発段階にあり、まだブラウザとして動作するわけではありません。_**
 
