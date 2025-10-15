@@ -2,6 +2,7 @@ use http_body_util::BodyExt;
 use http_body_util::Empty;
 use hyper::body::Bytes;
 use hyper::client::conn;
+use hyper::Method;
 use hyper::{Request, Uri};
 use hyper_util::rt::TokioIo;
 use std::error::Error;
@@ -29,7 +30,7 @@ impl NetworkCore {
         }
     }
 
-    pub async fn send_request(&self, url: &str) -> Result<Response, Box<dyn Error>> {
+    pub async fn send_request(&self, url: &str, method: Method) -> Result<Response, Box<dyn Error>> {
         let url: Uri = url.parse()?;
         let host = url.host().expect("uri has no host");
         let port = url.port_u16().unwrap_or(80);
@@ -69,7 +70,7 @@ impl NetworkCore {
         let path = url.path_and_query().map(|p| p.as_str()).unwrap_or("/");
 
         let req = Request::builder()
-            .method("GET")
+            .method(method)
             .uri(path)
             .header("Host", authority.as_str())
             .body(Empty::<Bytes>::new())?;
@@ -109,6 +110,6 @@ impl NetworkCore {
     }
 
     pub async fn fetch_url(&self, url: &str) -> Result<Response, Box<dyn Error>> {
-        self.send_request(url).await
+        self.send_request(url, Method::GET).await
     }
 }
