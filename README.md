@@ -1,4 +1,5 @@
 <h1 align="center">Orinium Browser</h1>
+
 [English](./README.en.md)
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Orinas-github/Orinium-browser)
@@ -27,6 +28,7 @@
 TODOは[tasks.md](./tasks.md)にあります。
 
 その他の開発時に目を通しておくと便利なドキュメントは[DOCS](./docs/)にあります
+
 
 
 
