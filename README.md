@@ -5,8 +5,8 @@
 [![Discord server](https://img.shields.io/badge/Discord-5865F2?style=flat&logo=discord&logoColor=white)](https://discord.gg/2zYbEnMC5H)
 
 [English](./README.en.md)
-
-**🚧 _このプロジェクトは開発段階にあり、まだブラウザとして動作するわけではありません。_**
+> [!NOTE]
+> このプロジェクトは開発段階にあり、まだブラウザとして動作するわけではありません。
 
 ## Googleに依存しない、独立したブラウザ
 このブラウザエンジンのソースコードは、**Googleに依存しません**。Firefoxなどの一部のブラウザを除いて、世の中の多くのブラウザはGoogleのChromiumに依存しています。
@@ -28,6 +28,7 @@
 TODOは[tasks.md](./tasks.md)にあります。
 
 その他の開発時に目を通しておくと便利なドキュメントは[DOCS](./docs/)にあります
+
 
 
 
