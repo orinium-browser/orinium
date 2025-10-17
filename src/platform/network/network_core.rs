@@ -105,7 +105,10 @@ impl NetworkCore {
             .host_str()
             .ok_or_else(|| anyhow::anyhow!("Invalid host"))?
             .to_string();
-        let port = url.port_or_known_default().unwrap_or(80);
+
+        let default_port = if url.scheme() == "https" { 443 } else { 80 };
+        let port = url.port().unwrap_or(default_port);
+
         let key = HostKey {
             scheme: url.scheme().to_string(),
             host: host.clone(),
@@ -141,11 +144,18 @@ impl NetworkCore {
         // Cookie
         let cookie_header = self.cookie_store.get_cookie_header(url).await;
 
+        // パスとクエリパラメータを含める
+        let path_and_query = if let Some(query) = url.query() {
+            format!("{}?{}", url.path(), query)
+        } else {
+            url.path().to_string()
+        };
+
         // ヘッダ作成
         let mut request = format!(
             "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: keep-alive\r\nUser-Agent: {}\r\n",
             method,
-            url.path(),
+            path_and_query,
             host,
             self.config.read().await.user_agent
         );
