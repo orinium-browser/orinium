@@ -10,7 +10,7 @@ fn test_https_connection() -> Result<(), Box<dyn Error>> {
         let network_core = NetworkCore::new();
 
         let url = "https://www.google.com";
-        println!("Fetching URL: {}", url);
+        log::info!("Fetching URL: {}", url);
         let response = network_core.fetch_url(url).await?;
 
         assert!(response.status.is_success(),
@@ -18,7 +18,7 @@ fn test_https_connection() -> Result<(), Box<dyn Error>> {
 
         assert!(!response.body.is_empty(), "Response body should not be empty");
 
-        println!("HTTPS test passed successfully!");
+        log::info!("HTTPS test passed successfully!");
 
         Ok(())
     })
@@ -34,10 +34,10 @@ fn test_http_and_https_comparison() -> Result<(), Box<dyn Error>> {
         let http_url = "http://httpbin.org/get";
         let https_url = "https://httpbin.org/get";
 
-        println!("Fetching HTTP URL: {}", http_url);
+        log::info!("Fetching HTTP URL: {}", http_url);
         let http_response = network_core.fetch_url(http_url).await?;
 
-        println!("Fetching HTTPS URL: {}", https_url);
+        log::info!("Fetching HTTPS URL: {}", https_url);
         let https_response = network_core.fetch_url(https_url).await?;
 
         assert!(http_response.status.is_success(),
@@ -48,7 +48,7 @@ fn test_http_and_https_comparison() -> Result<(), Box<dyn Error>> {
         assert!(!http_response.body.is_empty(), "HTTP response body should not be empty");
         assert!(!https_response.body.is_empty(), "HTTPS response body should not be empty");
 
-        println!("HTTP vs HTTPS comparison test passed successfully!");
+        log::info!("HTTP vs HTTPS comparison test passed successfully!");
 
         Ok(())
     })
@@ -62,14 +62,14 @@ fn test_https_redirect() -> Result<(), Box<dyn Error>> {
         let network_core = NetworkCore::new();
 
         let url = "https://www.github.com";
-        println!("Fetching URL with expected redirect: {}", url);
+        log::info!("Fetching URL with expected redirect: {}", url);
 
         let response = network_core.fetch_url(url).await?;
 
         assert!(response.status.is_success() || response.status.is_redirection(),
                 "Expected success or redirection status, got: {}", response.status);
 
-        println!("HTTPS redirect test completed with status: {} ({})",
+        log::info!("HTTPS redirect test completed with status: {} ({})",
                  response.status.as_u16(), response.status.canonical_reason().unwrap_or(""));
 
         Ok(())
@@ -90,17 +90,17 @@ fn test_secure_site_certificate() -> Result<(), Box<dyn Error>> {
         ];
 
         for url in &urls {
-            println!("Testing secure connection to: {}", url);
+            log::info!("Testing secure connection to: {}", url);
             let response = network_core.fetch_url(url).await?;
 
             assert!(response.status.is_success() || response.status.is_redirection(),
                     "Failed to connect to {} with status: {}", url, response.status);
 
-            println!("Successfully connected to {} with status: {} ({})",
+            log::info!("Successfully connected to {} with status: {} ({})",
                      url, response.status.as_u16(), response.status.canonical_reason().unwrap_or(""));
         }
 
-        println!("Secure site certificate test passed for all sites!");
+        log::info!("Secure site certificate test passed for all sites!");
 
         Ok(())
     })
