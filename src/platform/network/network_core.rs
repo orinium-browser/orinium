@@ -13,6 +13,7 @@ use rustls::RootCertStore;
 use rustls::ClientConfig;
 use tokio_rustls::TlsConnector;
 use rustls_native_certs::load_native_certs;
+use tokio::time::{sleep, Duration};
 
 use crate::network::{HostKey, HttpSender, SenderPool};
 
@@ -175,6 +176,80 @@ impl NetworkCore {
     }
 
     pub async fn fetch_url(&self, url: &str) -> Result<Response, Box<dyn Error>> {
-        self.send_request(url, Method::GET).await
+        // MAX10回
+        let mut current = url.to_string();
+        let mut redirects = 0usize;
+        let max_redirects = 10usize;
+
+        let max_retries = 5usize;
+
+        loop {
+            let mut attempt = 0usize;
+            let resp = loop {
+                let r = self.send_request(&current, Method::GET).await?;
+                if r.status.is_server_error() && attempt < max_retries {
+                    attempt += 1;
+                    let backoff = 100u64.saturating_mul(1u64 << (attempt - 1));
+                    sleep(Duration::from_millis(backoff)).await;
+                    continue;
+                }
+                break r;
+            };
+
+            if resp.status.is_redirection() {
+                if redirects >= max_redirects {
+                    return Err(anyhow::anyhow!("Too many redirects").into());
+                }
+
+                // Locationさがす
+                let location = resp
+                    .headers
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case("location"))
+                    .map(|(_, v)| v.clone());
+
+                if let Some(loc) = location {
+                    let base_uri: Uri = current.parse()?;
+
+                    let next_url = if loc.starts_with("http://") || loc.starts_with("https://") {
+                        loc
+                    } else if loc.starts_with("//") {
+                        let scheme = base_uri.scheme_str().unwrap_or("https");
+                        format!("{}:{}", scheme, loc)
+                    } else if loc.starts_with('/') {
+                        let scheme = base_uri.scheme_str().unwrap_or("https");
+                        let authority = base_uri
+                            .authority()
+                            .ok_or_else(|| anyhow::anyhow!("base URI has no authority"))?
+                            .as_str();
+                        format!("{}://{}{}", scheme, authority, loc)
+                    } else {
+                        let scheme = base_uri.scheme_str().unwrap_or("https");
+                        let authority = base_uri
+                            .authority()
+                            .ok_or_else(|| anyhow::anyhow!("base URI has no authority"))?
+                            .as_str();
+                        let base_path = base_uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
+
+                        let prefix = if let Some(pos) = base_path.rfind('/') {
+                            &base_path[..=pos]
+                        } else {
+                            "/"
+                        };
+
+                        format!("{}://{}{}{}", scheme, authority, prefix, loc)
+                    };
+
+                    current = next_url;
+                    redirects += 1;
+                    continue;
+                } else {
+                    // Location ヘッダがない場合はそのまま返す
+                    return Ok(resp);
+                }
+            }
+
+            return Ok(resp);
+        }
     }
 }
