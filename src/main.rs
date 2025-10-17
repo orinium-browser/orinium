@@ -1,5 +1,5 @@
 use anyhow::Result;
-use orinium_browser::engine::renderer::{Color, DrawCommand};
+//use orinium_browser::renderer::Color;
 use std::env;
 
 use orinium_browser::engine::html::parser::Parser;
@@ -37,16 +37,8 @@ async fn main() -> Result<()> {
 
     // レンダラーを作成して描画命令を生成
     let renderer = Renderer::new(800.0, 600.0);
-    let mut draw_commands = renderer.generate_draw_commands(&dom_tree);
-
-    // テスト用の矩形を追加（色の値を0.0〜1.0の範囲に修正）
-    draw_commands.push(DrawCommand::DrawRect {
-        x: 0.0,
-        y: 100.0,
-        width: 100.0,
-        height: 100.0,
-        color: Color { r: 0.8, g: 0.2, b: 0.2, a: 1.0 }
-    });
+    let draw_commands = renderer.generate_draw_commands(&dom_tree);
+    //let draw_commands: Vec<DrawCommand> = vec![DrawCommand::DrawRect { x: (0f32), y: (100f32), width: (100f32), height: (100f32), color: (Color { r: (88.0), g: (88.0), b: (88.0), a: (0.5) }) }];
 
     log::info!("Generated {} draw commands", draw_commands.len());
     log::info!("Generated draw commands: {:#?}", draw_commands);
