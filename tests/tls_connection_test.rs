@@ -86,7 +86,7 @@ async fn test_tls_connection_non_default_port() {
 
 #[ignore] // 自動テストでは実行しない
 #[tokio::test]
-async fn test_tls_connection_badssl() {
+async fn test_tls_connection_bad_ssl() {
     // 期限切れ証明書サイトへの接続（失敗を期待）
     let result = TlsConnection::connect("expired.badssl.com", 443, Duration::from_secs(10)).await;
     assert!(result.is_err(), "期限切れ証明書の検出に失敗しました");
