@@ -61,6 +61,10 @@ impl NetworkCore {
         }
     }
 
+    async fn try_send_h3(&self, _url: &Uri, _method: Method) -> Result<Response, Box<dyn Error>> {
+        return Err(anyhow::anyhow!("HTTP/3 not implemented yet").into());
+    }
+
     pub async fn send_request(
         &self,
         url: &str,
@@ -83,6 +87,15 @@ impl NetworkCore {
             host: host.to_string(),
             port,
         });
+
+        if scheme == &hyper::http::uri::Scheme::HTTPS {
+            match self.try_send_h3(&url, method.clone()).await {
+                Ok(resp) => return Ok(resp),
+                Err(err) => {
+                    eprintln!("HTTP/3 attempt failed (or not implemented), falling back to HTTP/1: {err:?}");
+                }
+            }
+        }
 
         let mut sender =
             if let Some(sender) = self.sender_pool.read().await.get_connection(&key).await {
@@ -144,7 +157,7 @@ impl NetworkCore {
         let mut res = match &mut sender {
             HttpSender::Http1(s) => s.send_request(req).await?,
             _ => {
-                return Err(anyhow::anyhow!("HTTP/2 not implemented yet").into());
+                return Err(anyhow::anyhow!("HTTP/2/3 not implemented yet").into());
             }
         };
 

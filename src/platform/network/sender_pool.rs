@@ -5,17 +5,22 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Senderを統一的に扱う型
+pub enum HttpSender {
+    Http1(http1::SendRequest<Empty<Bytes>>),
+    Http2(http2::SendRequest<Empty<Bytes>>),
+    Http3(Http3Sender),
+}
+
+pub struct Http3Sender {
+    pub placeholder: Option<String>,
+}
+
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub struct HostKey {
     pub scheme: hyper::http::uri::Scheme,
     pub host: String,
     pub port: u16,
-}
-
-/// HTTP/1 と HTTP/2 の Sender を統一的に扱う型
-pub enum HttpSender {
-    Http1(http1::SendRequest<Empty<Bytes>>),
-    Http2(http2::SendRequest<Empty<Bytes>>),
 }
 
 pub struct SenderPool {
