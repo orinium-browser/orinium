@@ -5,15 +5,15 @@ use hyper::client::conn;
 use hyper::Method;
 use hyper::{Request, Uri};
 use hyper_util::rt::TokioIo;
+use rustls::ClientConfig;
+use rustls::RootCertStore;
+use rustls_native_certs::load_native_certs;
 use std::error::Error;
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio::sync::RwLock;
-use rustls::RootCertStore;
-use rustls::ClientConfig;
-use tokio_rustls::TlsConnector;
-use rustls_native_certs::load_native_certs;
 use tokio::time::{sleep, Duration};
+use tokio_rustls::TlsConnector;
 
 use crate::network::{HostKey, HttpSender, SenderPool};
 
@@ -78,54 +78,55 @@ impl NetworkCore {
             port,
         });
 
-        let mut sender = if let Some(sender) = self.sender_pool.read().await.get_connection(&key).await {
-            sender
-        } else {
-            if scheme == &hyper::http::uri::Scheme::HTTPS {
-                // HTTPS接続
-                let stream = TcpStream::connect(&addr).await?;
-                let tls = TlsConnector::from(self.tls_config.clone());
-                let domain = rustls::pki_types::ServerName::try_from(host)
-                    .map_err(|_| anyhow::anyhow!("Invalid DNS name"))?
-                    .to_owned();
-                let tls_stream = tls.connect(domain, stream).await?;
-                let io = TokioIo::new(tls_stream);
-
-                let (sender, connection) = conn::http1::handshake(io).await?;
-                let sender = HttpSender::Http1(sender);
-
-                let key_clone = key.clone();
-                let pool_clone = self.sender_pool.clone();
-                tokio::spawn(async move {
-                    if let Err(err) = connection.await {
-                        eprintln!("HTTPS Connection failed: {:?}", err);
-                        let pool = pool_clone.write().await;
-                        pool.remove_connection(&key_clone).await;
-                    }
-                });
-
+        let mut sender =
+            if let Some(sender) = self.sender_pool.read().await.get_connection(&key).await {
                 sender
             } else {
-                // HTTP接続
-                let stream = TcpStream::connect(&addr).await?;
-                let io = TokioIo::new(stream);
+                if scheme == &hyper::http::uri::Scheme::HTTPS {
+                    // HTTPS接続
+                    let stream = TcpStream::connect(&addr).await?;
+                    let tls = TlsConnector::from(self.tls_config.clone());
+                    let domain = rustls::pki_types::ServerName::try_from(host)
+                        .map_err(|_| anyhow::anyhow!("Invalid DNS name"))?
+                        .to_owned();
+                    let tls_stream = tls.connect(domain, stream).await?;
+                    let io = TokioIo::new(tls_stream);
 
-                let (sender, connection) = conn::http1::handshake(io).await?;
-                let sender = HttpSender::Http1(sender);
+                    let (sender, connection) = conn::http1::handshake(io).await?;
+                    let sender = HttpSender::Http1(sender);
 
-                let key_clone = key.clone();
-                let pool_clone = self.sender_pool.clone();
-                tokio::spawn(async move {
-                    if let Err(err) = connection.await {
-                        eprintln!("HTTP Connection failed: {:?}", err);
-                        let pool = pool_clone.write().await;
-                        pool.remove_connection(&key_clone).await;
-                    }
-                });
+                    let key_clone = key.clone();
+                    let pool_clone = self.sender_pool.clone();
+                    tokio::spawn(async move {
+                        if let Err(err) = connection.await {
+                            eprintln!("HTTPS Connection failed: {:?}", err);
+                            let pool = pool_clone.write().await;
+                            pool.remove_connection(&key_clone).await;
+                        }
+                    });
 
-                sender
-            }
-        };
+                    sender
+                } else {
+                    // HTTP接続
+                    let stream = TcpStream::connect(&addr).await?;
+                    let io = TokioIo::new(stream);
+
+                    let (sender, connection) = conn::http1::handshake(io).await?;
+                    let sender = HttpSender::Http1(sender);
+
+                    let key_clone = key.clone();
+                    let pool_clone = self.sender_pool.clone();
+                    tokio::spawn(async move {
+                        if let Err(err) = connection.await {
+                            eprintln!("HTTP Connection failed: {:?}", err);
+                            let pool = pool_clone.write().await;
+                            pool.remove_connection(&key_clone).await;
+                        }
+                    });
+
+                    sender
+                }
+            };
 
         let authority = url.authority().unwrap();
         let path = url.path_and_query().map(|p| p.as_str()).unwrap_or("/");
@@ -229,7 +230,8 @@ impl NetworkCore {
                             .authority()
                             .ok_or_else(|| anyhow::anyhow!("base URI has no authority"))?
                             .as_str();
-                        let base_path = base_uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
+                        let base_path =
+                            base_uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
 
                         let prefix = if let Some(pos) = base_path.rfind('/') {
                             &base_path[..=pos]
