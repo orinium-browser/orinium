@@ -14,10 +14,9 @@ env_logger = "0.10.2"
 log = "0.4"
 winit = "0.30.12"
 wgpu = "27.0.1"
-wgpu_glyph = "0.26.0"
+wgpu_text = "27.0.1"
 bytemuck = { version = "1.14", features = ["derive"] }
 url = "2.5"
-twoway = "0.2.2"
 rustls = { version = "0.22.2", default-features = false, features = ["tls12"] }
 rustls-native-certs = "0.7.0"
 tokio-rustls = "0.25.0"
@@ -26,3 +25,4 @@ http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["full"] }
 image = "0.24"
 fontdue = "0.7"
+ab_glyph = "0.2"

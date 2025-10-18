@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use image::{GrayImage, Luma};
 use wgpu::util::{DeviceExt, TextureDataOrder};
-use wgpu_glyph::ab_glyph;
+use ab_glyph;
 use fontdue::Font as FontDue;
 
 pub struct FontAtlas {
@@ -81,7 +81,8 @@ impl FontLoader {
             }
 
             let left = metrics.xmin as i32;
-            let top = metrics.height as i32;
+            // use ymin as bearing/top offset relative to baseline (allow negative values)
+            let top = metrics.ymin as i32;
             let advance = metrics.advance_width;
             glyph_bitmaps.push(GlyphBitmap { ch, img, left, top, advance });
         }
