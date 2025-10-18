@@ -14,6 +14,7 @@ async fn main() {
                 println!("Test names:");
                 println!("create_window - Create a window and display it.");
                 println!("parse_dom [URL] - Test DOM parsing functionality.");
+                println!("send_request [URL] - Test sending HTTP/HTTPS requests (without redirect etc).");
                 println!("fetch_url [URL] - Test network fetching functionality.");
                 println!("simple_render [URL] - Test simple rendering functionality.");
                 println!("help - Show this help message.");
@@ -39,6 +40,30 @@ async fn main() {
                     println!("DOM Tree:\n{}", dom.borrow());
                 } else {
                     eprintln!("Please provide a URL for DOM parsing test.");
+                }
+            }
+            "send_request" => {
+                if args.len() == 3 {
+                    let url = &args[2];
+                    println!("Sending request to URL: {}", url);
+                    let net = NetworkCore::new();
+                    match net.send_request(url, hyper::Method::GET).await {
+                        Ok(resp) => {
+                            println!("Response Status: {}", resp.status);
+                            println!("Response Headers:");
+                            for (key, value) in &resp.headers {
+                                println!("{}: {}", key, value);
+                            }
+                            println!("Response Body:");
+                            let body_str = String::from_utf8_lossy(&resp.body);
+                            println!("{}", body_str);
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to send request: {}", e);
+                        }
+                    }
+                } else {
+                    eprintln!("Please provide a URL for sending request test.");
                 }
             }
             "fetch_url" => {
@@ -98,6 +123,7 @@ async fn main() {
     } else {
         eprintln!("No arguments provided. Use help for usage information.");
     }
+    print!("\n");
 }
 
 fn run() -> anyhow::Result<()> {
