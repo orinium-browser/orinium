@@ -23,9 +23,7 @@ pub struct PackedGlyphInfo {
 }
 
 pub struct FontLoader {
-    // store loaded font bytes so they live long enough
     faces: HashMap<String, Arc<Vec<u8>>>,
-    // fontdue font cache
     fontdue_cache: HashMap<String, FontDue>,
 }
 
@@ -36,14 +34,12 @@ impl FontLoader {
 
     pub fn load_from_bytes(&mut self, id: &str, data: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         let bytes = Arc::new(data.to_vec());
-        // create fontdue Font (pass as slice from the Arc<Vec<u8>>)
         let fontdue = FontDue::from_bytes(&bytes[..], fontdue::FontSettings::default())?;
         self.fontdue_cache.insert(id.to_string(), fontdue);
         self.faces.insert(id.to_string(), bytes);
         Ok(())
     }
 
-    // Build atlas for a set of characters at a given pixel size. Returns FontAtlas and an ab_glyph::FontArc
     pub fn build_atlas(
         &mut self,
         device: &wgpu::Device,
@@ -83,10 +79,9 @@ impl FontLoader {
                     img.put_pixel(x, y, Luma([v]));
                 }
             }
-            // fontdue metrics: bitmap_left (xmin) and height. We use xmin as left bearing.
-            // fontdue::Metrics doesn't expose `ymax`; use height as an approximation for top bearing.
+
             let left = metrics.xmin as i32;
-            let top = metrics.height as i32; // approximate
+            let top = metrics.height as i32;
             let advance = metrics.advance_width;
             glyph_bitmaps.push(GlyphBitmap { ch, img, left, top, advance });
         }
@@ -95,7 +90,6 @@ impl FontLoader {
             return Err("no glyphs rasterized".into());
         }
 
-        // Simple row-based packing into a power-of-two atlas (prototype)
         let width = 1024u32;
         let height = 1024u32;
         let mut atlas_image = GrayImage::new(width, height);
@@ -124,7 +118,6 @@ impl FontLoader {
                     atlas_image.put_pixel(cursor_x + x, cursor_y + y, Luma([p]));
                 }
             }
-            // compute uv rect
             let u0 = cursor_x as f32 / width as f32;
             let v0 = cursor_y as f32 / height as f32;
             let u1 = (cursor_x + w) as f32 / width as f32;
@@ -141,8 +134,7 @@ impl FontLoader {
             row_h = row_h.max(h);
         }
 
-        // Prepare raw data with COPY_BYTES_PER_ROW_ALIGNMENT padding per row as required by wgpu
-        let unpadded_bytes_per_row = width as usize; // R8Unorm -> 1 byte per texel
+        let unpadded_bytes_per_row = width as usize;
         let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize; // usually 256
         let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
 
@@ -155,7 +147,6 @@ impl FontLoader {
                 .copy_from_slice(&atlas_raw[src_start..src_start + unpadded_bytes_per_row]);
         }
 
-        // Create texture and upload data using DeviceExt helper. Provide TextureDataOrder.
         let texture_size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
         let texture = device.create_texture_with_data(
             queue,
@@ -185,7 +176,6 @@ impl FontLoader {
             height,
         };
 
-        // Create ab_glyph FontArc from the original bytes so wgpu_glyph can use it
         let font_arc = ab_glyph::FontArc::try_from_vec((*font_bytes).clone())?;
 
         Ok((atlas, font_arc))
