@@ -103,7 +103,6 @@ fn test_https_redirect() -> Result<(), Box<dyn Error>> {
     })
 }
 
-#[ignore]
 #[test]
 fn test_secure_site_certificate() -> Result<(), Box<dyn Error>> {
     let rt = Runtime::new()?;
