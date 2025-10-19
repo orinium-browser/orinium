@@ -1,9 +1,8 @@
 # platform::renderer
 
 ### 起動フロー (Startup)
-
 1. プロセス起動
-   - コマンドラインまたはプロセスマネージャによりrendererが起動
+   - コマンドラインまたはプロセスマネージャによりrendererが起動（`GpuRenderer::new()`）
 
 2. 初期コンフィグ読み込み
    - 設定（`RendererConfig` 構造体）を読み込み。必須フィールド例: width, height, backend, enable_vsync, memory_limits。
