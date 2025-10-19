@@ -5,15 +5,15 @@ use hyper::client::conn;
 use hyper::Method;
 use hyper::{Request, Uri};
 use hyper_util::rt::TokioIo;
+use rustls::ClientConfig;
+use rustls::RootCertStore;
+use rustls_native_certs::load_native_certs;
 use std::error::Error;
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio::sync::RwLock;
-use rustls::RootCertStore;
-use rustls::ClientConfig;
-use tokio_rustls::TlsConnector;
-use rustls_native_certs::load_native_certs;
 use tokio::time::{sleep, Duration};
+use tokio_rustls::TlsConnector;
 
 use crate::network::{HostKey, HttpSender, SenderPool};
 
@@ -29,6 +29,12 @@ pub struct NetworkCore {
     tls_config: Arc<ClientConfig>,
 }
 
+impl Default for NetworkCore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NetworkCore {
     pub fn new() -> Self {
         // TLS設定を作成
@@ -37,12 +43,12 @@ impl NetworkCore {
             Ok(certs) => {
                 for cert in certs {
                     root_store.add(cert).unwrap_or_else(|e| {
-                        eprintln!("Error adding certificate: {:?}", e);
+                        eprintln!("Error adding certificate: {e:?}");
                     });
                 }
                 println!("Loaded {} certificates", root_store.len());
             }
-            Err(e) => eprintln!("Failed to load system certificates: {:?}", e),
+            Err(e) => eprintln!("Failed to load system certificates: {e:?}"),
         }
 
         let tls_config = ClientConfig::builder()
@@ -71,17 +77,17 @@ impl NetworkCore {
         };
         let port = url.port_u16().unwrap_or(default_port);
 
-        let addr = format!("{}:{}", host, port);
+        let addr = format!("{host}:{port}");
         let key = Arc::new(HostKey {
             scheme: scheme.clone(),
             host: host.to_string(),
             port,
         });
 
-        let mut sender = if let Some(sender) = self.sender_pool.read().await.get_connection(&key).await {
-            sender
-        } else {
-            if scheme == &hyper::http::uri::Scheme::HTTPS {
+        let mut sender =
+            if let Some(sender) = self.sender_pool.read().await.get_connection(&key).await {
+                sender
+            } else if scheme == &hyper::http::uri::Scheme::HTTPS {
                 // HTTPS接続
                 let stream = TcpStream::connect(&addr).await?;
                 let tls = TlsConnector::from(self.tls_config.clone());
@@ -98,7 +104,7 @@ impl NetworkCore {
                 let pool_clone = self.sender_pool.clone();
                 tokio::spawn(async move {
                     if let Err(err) = connection.await {
-                        eprintln!("HTTPS Connection failed: {:?}", err);
+                        eprintln!("HTTPS Connection failed: {err:?}");
                         let pool = pool_clone.write().await;
                         pool.remove_connection(&key_clone).await;
                     }
@@ -117,15 +123,14 @@ impl NetworkCore {
                 let pool_clone = self.sender_pool.clone();
                 tokio::spawn(async move {
                     if let Err(err) = connection.await {
-                        eprintln!("HTTP Connection failed: {:?}", err);
+                        eprintln!("HTTP Connection failed: {err:?}");
                         let pool = pool_clone.write().await;
                         pool.remove_connection(&key_clone).await;
                     }
                 });
 
                 sender
-            }
-        };
+            };
 
         let authority = url.authority().unwrap();
         let path = url.path_and_query().map(|p| p.as_str()).unwrap_or("/");
@@ -215,21 +220,22 @@ impl NetworkCore {
                         loc
                     } else if loc.starts_with("//") {
                         let scheme = base_uri.scheme_str().unwrap_or("https");
-                        format!("{}:{}", scheme, loc)
+                        format!("{scheme}:{loc}")
                     } else if loc.starts_with('/') {
                         let scheme = base_uri.scheme_str().unwrap_or("https");
                         let authority = base_uri
                             .authority()
                             .ok_or_else(|| anyhow::anyhow!("base URI has no authority"))?
                             .as_str();
-                        format!("{}://{}{}", scheme, authority, loc)
+                        format!("{scheme}://{authority}{loc}")
                     } else {
                         let scheme = base_uri.scheme_str().unwrap_or("https");
                         let authority = base_uri
                             .authority()
                             .ok_or_else(|| anyhow::anyhow!("base URI has no authority"))?
                             .as_str();
-                        let base_path = base_uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
+                        let base_path =
+                            base_uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
 
                         let prefix = if let Some(pos) = base_path.rfind('/') {
                             &base_path[..=pos]
@@ -237,7 +243,7 @@ impl NetworkCore {
                             "/"
                         };
 
-                        format!("{}://{}{}{}", scheme, authority, prefix, loc)
+                        format!("{scheme}://{authority}{prefix}{loc}")
                     };
 
                     current = next_url;

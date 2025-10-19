@@ -23,6 +23,12 @@ pub struct SenderPool {
     pub max_connections_per_host: usize,
 }
 
+impl Default for SenderPool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SenderPool {
     pub fn new() -> Self {
         Self {
