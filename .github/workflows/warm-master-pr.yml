@@ -12,6 +12,7 @@ jobs:
     env:
       AUTHOR: ${{ github.event.pull_request.user.login }}
       TITLE: ${{ github.event.pull_request.title }}
+      DISCRIPTION: ${{ github.event.pull_request.body }}
 
     steps:
       - name: Comment warning
@@ -21,9 +22,8 @@ jobs:
         # - タイトルに "sync" や "release" が含まれない
         if: >
           github.event.pull_request.base.ref == 'master' &&
-          !contains(env.AUTHOR, 'your-github-username') &&
-          !contains(env.TITLE, 'sync') &&
-          !contains(env.TITLE, 'release')
+          !contains(env.AUTHOR, '098orin') &&
+          !contains(env.DISCRIPTION, 'sync')
         uses: actions/github-script@v7
         with:
           script: |
