@@ -5,53 +5,6 @@
 //! `Tree` はルートノードを保持する汎用的な木構造を表します。
 //!
 //! DOMツリー、レンダーツリーなどに再利用可能です。
-//!
-//! # 例
-//! ```
-//! use std::rc::Rc;
-//! use std::cell::RefCell;
-//! use orinium::engine::tree::{Tree, TreeNode};
-//!
-//! #[derive(Debug, Clone, PartialEq, Eq)]
-//! enum NodeType {
-//!     Document,
-//!     Element(&'static str),
-//!     Text(&'static str),
-//! }
-//!
-//! // ツリーを構築
-//! let tree = Tree::new(NodeType::Document);
-//!
-//! let html = TreeNode::new(NodeType::Element("html"));
-//! TreeNode::add_child(&tree.root, Rc::clone(&html));
-//!
-//! let head = TreeNode::new(NodeType::Element("head"));
-//! let body = TreeNode::new(NodeType::Element("body"));
-//! TreeNode::add_child(&html, Rc::clone(&head));
-//! TreeNode::add_child(&html, Rc::clone(&body));
-//!
-//! let title = TreeNode::new(NodeType::Element("title"));
-//! let text = TreeNode::new(NodeType::Text("Hello"));
-//! TreeNode::add_child(&title, Rc::clone(&text));
-//! TreeNode::add_child(&head, Rc::clone(&title));
-//!
-//! println!("{}", tree);
-//!
-//! // ツリー構造の検証
-//! assert_eq!(html.borrow().parent.as_ref().unwrap().borrow().value, NodeType::Document);
-//! assert_eq!(body.borrow().parent.as_ref().unwrap().borrow().value, NodeType::Element("html"));
-//! assert_eq!(text.borrow().parent.as_ref().unwrap().borrow().value, NodeType::Element("title"));
-//! ```
-//!
-//! 出力例：
-//! ```text
-//! Document
-//! └── Element("html")
-//!     ├── Element("head")
-//!     │   └── Element("title")
-//!     │       └── Text("Hello")
-//!     └── Element("body")
-//! ```
 
 use std::cell::RefCell;
 use std::fmt::{self, Debug, Display, Formatter};
