@@ -62,13 +62,13 @@ impl FontLoader {
         let font_bytes = self
             .faces
             .get(font_id)
-            .ok_or_else(|| format!("font id '{}' not loaded", font_id))?
+            .ok_or_else(|| format!("font id '{font_id}' not loaded"))?
             .clone();
 
         let fontdue = self
             .fontdue_cache
             .get(font_id)
-            .ok_or_else(|| format!("fontdue font for '{}' not found", font_id))?;
+            .ok_or_else(|| format!("fontdue font for '{font_id}' not found"))?;
 
         struct GlyphBitmap {
             ch: char,
@@ -95,9 +95,9 @@ impl FontLoader {
                 }
             }
 
-            let left = metrics.xmin as i32;
+            let left = metrics.xmin;
             // use ymin as bearing/top offset relative to baseline (allow negative values)
-            let top = metrics.ymin as i32;
+            let top = metrics.ymin;
             let advance = metrics.advance_width;
             glyph_bitmaps.push(GlyphBitmap {
                 ch,
@@ -161,7 +161,7 @@ impl FontLoader {
 
         let unpadded_bytes_per_row = width as usize;
         let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize; // usually 256
-        let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
+        let padded_bytes_per_row = unpadded_bytes_per_row.div_ceil(align) * align;
 
         let atlas_raw = atlas_image.into_raw();
         let mut padded: Vec<u8> = vec![0u8; padded_bytes_per_row * height as usize];

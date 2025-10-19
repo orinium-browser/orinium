@@ -196,6 +196,7 @@ impl GpuRenderer {
         let height = self.size.height as f32;
 
         for command in commands {
+            #[allow(clippy::single_match)]
             match command {
                 DrawCommand::DrawRect {
                     x,
