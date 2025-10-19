@@ -1,8 +1,12 @@
+//! DomTreeやRenderTreeで使用する汎用ツリー構造の実装
+//! TreeNodeとTreeを提供する
+//! TreeNodeはノードの値、子ノード、親ノードを持つ
+//! Treeはルートノードを持つ
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::fmt::{self, Debug, Display, Formatter};
 
-/// 汎用ツリーのノード
+/// ツリーノード
 #[derive(Clone, PartialEq, Eq)]
 pub struct TreeNode<T> {
     pub value: T,
@@ -11,7 +15,7 @@ pub struct TreeNode<T> {
 }
 
 impl<T> TreeNode<T> {
-    /// 新しいノードを作る
+    /// 新しいノードを作成
     pub fn new(value: T) -> Rc<RefCell<Self>> {
         Rc::new(RefCell::new(TreeNode {
             value,
@@ -27,7 +31,7 @@ impl<T> TreeNode<T> {
     }
 }
 
-/// ツリー自体
+/// ツリー本体
 #[derive(Clone)]
 pub struct Tree<T> {
     pub root: Rc<RefCell<TreeNode<T>>>,
