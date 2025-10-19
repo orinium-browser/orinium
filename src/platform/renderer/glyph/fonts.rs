@@ -6,6 +6,7 @@ use wgpu::util::{DeviceExt, TextureDataOrder};
 use ab_glyph;
 use fontdue::Font as FontDue;
 
+#[allow(dead_code)]
 pub struct FontAtlas {
     pub texture: wgpu::Texture,
     pub texture_view: wgpu::TextureView,
@@ -15,6 +16,7 @@ pub struct FontAtlas {
     pub height: u32,
 }
 
+#[allow(dead_code)]
 pub struct PackedGlyphInfo {
     pub uv_rect: [f32; 4], // [u0, v0, u1, v1]
     pub size: [f32; 2],     // pixel size in atlas
@@ -22,11 +24,13 @@ pub struct PackedGlyphInfo {
     pub advance: f32,
 }
 
+#[allow(dead_code)]
 pub struct FontLoader {
     faces: HashMap<String, Arc<Vec<u8>>>,
     fontdue_cache: HashMap<String, FontDue>,
 }
 
+#[allow(dead_code)]
 impl FontLoader {
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         Ok(Self { faces: HashMap::new(), fontdue_cache: HashMap::new() })
