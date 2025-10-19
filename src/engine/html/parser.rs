@@ -1,5 +1,6 @@
 use crate::engine::html::tokenizer::{Attribute, Token, Tokenizer};
 use crate::engine::html::util as html_util;
+use crate::engine::tree::{Tree, TreeNode};
 use std::cell::RefCell;
 use std::rc::Rc;
 
