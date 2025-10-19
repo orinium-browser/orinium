@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use image::{GrayImage, Luma};
-use wgpu::util::{DeviceExt, TextureDataOrder};
 use ab_glyph;
 use fontdue::Font as FontDue;
+use image::{GrayImage, Luma};
+use wgpu::util::{DeviceExt, TextureDataOrder};
 
 #[allow(dead_code)]
 pub struct FontAtlas {
@@ -19,8 +19,8 @@ pub struct FontAtlas {
 #[allow(dead_code)]
 pub struct PackedGlyphInfo {
     pub uv_rect: [f32; 4], // [u0, v0, u1, v1]
-    pub size: [f32; 2],     // pixel size in atlas
-    pub bearing: [f32; 2],  // left, top (bearingY positive upwards)
+    pub size: [f32; 2],    // pixel size in atlas
+    pub bearing: [f32; 2], // left, top (bearingY positive upwards)
     pub advance: f32,
 }
 
@@ -33,10 +33,17 @@ pub struct FontLoader {
 #[allow(dead_code)]
 impl FontLoader {
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        Ok(Self { faces: HashMap::new(), fontdue_cache: HashMap::new() })
+        Ok(Self {
+            faces: HashMap::new(),
+            fontdue_cache: HashMap::new(),
+        })
     }
 
-    pub fn load_from_bytes(&mut self, id: &str, data: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn load_from_bytes(
+        &mut self,
+        id: &str,
+        data: &[u8],
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let bytes = Arc::new(data.to_vec());
         let fontdue = FontDue::from_bytes(&bytes[..], fontdue::FontSettings::default())?;
         self.fontdue_cache.insert(id.to_string(), fontdue);
@@ -52,11 +59,15 @@ impl FontLoader {
         pixel_size: f32,
         charset: &str,
     ) -> Result<(FontAtlas, ab_glyph::FontArc), Box<dyn std::error::Error>> {
-        let font_bytes = self.faces.get(font_id)
+        let font_bytes = self
+            .faces
+            .get(font_id)
             .ok_or_else(|| format!("font id '{}' not loaded", font_id))?
             .clone();
 
-        let fontdue = self.fontdue_cache.get(font_id)
+        let fontdue = self
+            .fontdue_cache
+            .get(font_id)
             .ok_or_else(|| format!("fontdue font for '{}' not found", font_id))?;
 
         struct GlyphBitmap {
@@ -88,7 +99,13 @@ impl FontLoader {
             // use ymin as bearing/top offset relative to baseline (allow negative values)
             let top = metrics.ymin as i32;
             let advance = metrics.advance_width;
-            glyph_bitmaps.push(GlyphBitmap { ch, img, left, top, advance });
+            glyph_bitmaps.push(GlyphBitmap {
+                ch,
+                img,
+                left,
+                top,
+                advance,
+            });
         }
 
         if glyph_bitmaps.is_empty() {
@@ -128,12 +145,15 @@ impl FontLoader {
             let u1 = (cursor_x + w) as f32 / width as f32;
             let v1 = (cursor_y + h) as f32 / height as f32;
 
-            packed_infos.insert(g.ch, PackedGlyphInfo {
-                uv_rect: [u0, v0, u1, v1],
-                size: [w as f32, h as f32],
-                bearing: [g.left as f32, g.top as f32],
-                advance: g.advance,
-            });
+            packed_infos.insert(
+                g.ch,
+                PackedGlyphInfo {
+                    uv_rect: [u0, v0, u1, v1],
+                    size: [w as f32, h as f32],
+                    bearing: [g.left as f32, g.top as f32],
+                    advance: g.advance,
+                },
+            );
 
             cursor_x += w + 1;
             row_h = row_h.max(h);
@@ -152,7 +172,11 @@ impl FontLoader {
                 .copy_from_slice(&atlas_raw[src_start..src_start + unpadded_bytes_per_row]);
         }
 
-        let texture_size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
+        let texture_size = wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        };
         let texture = device.create_texture_with_data(
             queue,
             &wgpu::TextureDescriptor {

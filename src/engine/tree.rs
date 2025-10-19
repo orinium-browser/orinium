@@ -2,9 +2,9 @@
 //! TreeNodeとTreeを提供する
 //! TreeNodeはノードの値、子ノード、親ノードを持つ
 //! Treeはルートノードを持つ
-use std::rc::Rc;
 use std::cell::RefCell;
 use std::fmt::{self, Debug, Display, Formatter};
+use std::rc::Rc;
 
 /// ツリーノード
 #[derive(Clone, PartialEq, Eq)]
@@ -44,7 +44,6 @@ impl<T> Tree<T> {
         }
     }
 }
-
 
 impl<T: Debug + Clone> Display for Tree<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {

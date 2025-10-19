@@ -4,8 +4,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::engine::html::parser::NodeType;
-use crate::engine::tree::{Tree, TreeNode};
 use crate::engine::html::util as html_util;
+use crate::engine::tree::{Tree, TreeNode};
 
 /// 描画命令を表す列挙型
 #[derive(Debug, Clone)]
@@ -91,7 +91,12 @@ impl Renderer {
         let mut current_x = 10.0;
         let mut current_y = 10.0;
 
-        self.traverse_and_generate(dom_root.clone().root, &mut commands, &mut current_x, &mut current_y);
+        self.traverse_and_generate(
+            dom_root.clone().root,
+            &mut commands,
+            &mut current_x,
+            &mut current_y,
+        );
 
         commands
     }

@@ -2,8 +2,11 @@ use crate::engine::renderer::DrawCommand;
 use anyhow::Result;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
+use wgpu_text::{
+    glyph_brush::{Section as TextSection, Text},
+    BrushBuilder, TextBrush,
+};
 use winit::window::Window;
-use wgpu_text::{glyph_brush::{Section as TextSection, Text}, BrushBuilder, TextBrush};
 
 /// GPU描画コンテキスト
 pub struct GpuRenderer {
@@ -177,7 +180,11 @@ impl GpuRenderer {
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
             if let Some(brush) = &mut self.glyph_brush {
-                brush.resize_view(self.config.width as f32, self.config.height as f32, &self.queue);
+                brush.resize_view(
+                    self.config.width as f32,
+                    self.config.height as f32,
+                    &self.queue,
+                );
             }
         }
     }
@@ -233,9 +240,7 @@ impl GpuRenderer {
                         },
                     ]);
                 }
-                _ => {
-
-                }
+                _ => {}
             }
         }
 
@@ -272,18 +277,32 @@ impl GpuRenderer {
             }
             if let Some(bytes) = font_data {
                 let font_arc = ab_glyph::FontArc::try_from_vec(bytes).unwrap();
-                let brush = BrushBuilder::using_font(font_arc).build(&self.device, self.config.width, self.config.height, self.config.format);
+                let brush = BrushBuilder::using_font(font_arc).build(
+                    &self.device,
+                    self.config.width,
+                    self.config.height,
+                    self.config.format,
+                );
                 self.glyph_brush = Some(brush);
             }
         }
 
         let mut sections: Vec<TextSection> = Vec::new();
         for command in commands {
-            if let DrawCommand::DrawText { x, y, text, font_size, color } = command {
+            if let DrawCommand::DrawText {
+                x,
+                y,
+                text,
+                font_size,
+                color,
+            } = command
+            {
                 let s = TextSection {
                     screen_position: (*x, *y),
                     bounds: (self.size.width as f32, self.size.height as f32),
-                    text: vec![Text::new(text).with_scale(*font_size).with_color([color.r, color.g, color.b, color.a])],
+                    text: vec![Text::new(text)
+                        .with_scale(*font_size)
+                        .with_color([color.r, color.g, color.b, color.a])],
                     ..TextSection::default()
                 };
                 sections.push(s);
@@ -343,7 +362,10 @@ impl GpuRenderer {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
                     depth_slice: None,
                 })],
                 depth_stencil_attachment: None,
@@ -356,6 +378,6 @@ impl GpuRenderer {
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
 
-         Ok(())
-     }
- }
+        Ok(())
+    }
+}

@@ -73,9 +73,9 @@ impl<'a> Parser<'a> {
             }
 
             let new_node = TreeNode::new(NodeType::Element {
-                        tag_name: name.clone(),
-                        attributes: attributes.clone(),
-                    });
+                tag_name: name.clone(),
+                attributes: attributes.clone(),
+            });
 
             TreeNode::add_child(&parent, new_node.clone());
             /*
@@ -159,7 +159,11 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn check_start_tag_with_invalid_nesting(&self, name: &String, parent: &Rc<RefCell<TreeNode<NodeType>>>) -> bool {
+    fn check_start_tag_with_invalid_nesting(
+        &self,
+        name: &String,
+        parent: &Rc<RefCell<TreeNode<NodeType>>>,
+    ) -> bool {
         if let NodeType::Element { tag_name, .. } = &parent.borrow().value {
             // <p> の中に <p> が来た場合、前の <p> を閉じる
             if tag_name == "p" && name == "p" {
