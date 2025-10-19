@@ -1,6 +1,6 @@
 use std::rc::Rc;
 use std::cell::RefCell;
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Debug, Display, Formatter};
 
 /// 汎用ツリーのノード
 pub struct TreeNode<T> {
@@ -40,14 +40,14 @@ impl<T> Tree<T> {
 }
 
 
-impl<T: Display + Clone> Display for Tree<T> {
+impl<T: Debug + Clone> Display for Tree<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         fmt_tree_node(&self.root, f, &[])
     }
 }
 
 /// 再帰的にツリーを表示するヘルパー関数
-fn fmt_tree_node<T: Display + Clone>(
+fn fmt_tree_node<T: Debug + Clone>(
     node: &std::rc::Rc<std::cell::RefCell<TreeNode<T>>>,
     f: &mut Formatter<'_>,
     ancestors_last: &[bool],
@@ -71,7 +71,7 @@ fn fmt_tree_node<T: Display + Clone>(
     }
 
     // ノードの表示
-    writeln!(f, "{}{}{}", prefix, connector, n.value)?;
+    writeln!(f, "{}{}{:?}", prefix, connector, n.value)?;
 
     // 子ノードを再帰
     let child_count = n.children.len();
