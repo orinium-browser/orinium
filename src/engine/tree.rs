@@ -3,6 +3,7 @@ use std::cell::RefCell;
 use std::fmt::{self, Debug, Display, Formatter};
 
 /// 汎用ツリーのノード
+#[derive(Clone, PartialEq, Eq)]
 pub struct TreeNode<T> {
     pub value: T,
     pub children: Vec<Rc<RefCell<TreeNode<T>>>>,
@@ -27,6 +28,7 @@ impl<T> TreeNode<T> {
 }
 
 /// ツリー自体
+#[derive(Clone)]
 pub struct Tree<T> {
     pub root: Rc<RefCell<TreeNode<T>>>,
 }
