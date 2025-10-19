@@ -1,0 +1,35 @@
+name: Warn if PR targets master
+
+on:
+  pull_request:
+    types: [opened, reopened, edited]
+    branches:
+      - master
+
+jobs:
+  warn:
+    runs-on: ubuntu-latest
+    env:
+      AUTHOR: ${{ github.event.pull_request.user.login }}
+      TITLE: ${{ github.event.pull_request.title }}
+      DISCRIPTION: ${{ github.event.pull_request.body }}
+
+    steps:
+      - name: Comment warning
+        # 条件:
+        # - base ブランチが master
+        # - 作者が管理者以外
+        # - タイトルに "sync" や "release" が含まれない
+        if: >
+          github.event.pull_request.base.ref == 'master' &&
+          !contains(env.AUTHOR, '098orin') &&
+          !contains(env.DISCRIPTION, 'sync')
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: "⚠️ このリポジトリでは管理者によるsyncを除いて `master` ブランチではなく `dev` ブランチに対してPRを作成してください\n\nPlease create PRs against the `dev` branch instead of `master`, except for admin syncs."
+            })

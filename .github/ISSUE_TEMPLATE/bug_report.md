@@ -28,7 +28,7 @@ If applicable, add images that show the problem.
 
 **Desktop / デスクトップ環境**
  - OS: [e.g. macOS, Windows, Linux]
- - Browser: [e.g. Orinium, Chrome]
+ - Browser: [e.g. Orinium]
  - Version: [e.g. 0.1.0]
 
 **Additional context / 補足情報**

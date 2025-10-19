@@ -5,10 +5,15 @@ use hyper::client::conn;
 use hyper::Method;
 use hyper::{Request, Uri};
 use hyper_util::rt::TokioIo;
+use rustls::ClientConfig;
+use rustls::RootCertStore;
+use rustls_native_certs::load_native_certs;
 use std::error::Error;
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio::sync::RwLock;
+use tokio::time::{sleep, Duration};
+use tokio_rustls::TlsConnector;
 
 use crate::network::{HostKey, HttpSender, SenderPool};
 
@@ -21,12 +26,38 @@ pub struct Response {
 
 pub struct NetworkCore {
     sender_pool: Arc<RwLock<SenderPool>>,
+    tls_config: Arc<ClientConfig>,
+}
+
+impl Default for NetworkCore {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl NetworkCore {
     pub fn new() -> Self {
+        // TLS設定を作成
+        let mut root_store = RootCertStore::empty();
+        match load_native_certs() {
+            Ok(certs) => {
+                for cert in certs {
+                    root_store.add(cert).unwrap_or_else(|e| {
+                        eprintln!("Error adding certificate: {e:?}");
+                    });
+                }
+                println!("Loaded {} certificates", root_store.len());
+            }
+            Err(e) => eprintln!("Failed to load system certificates: {e:?}"),
+        }
+
+        let tls_config = ClientConfig::builder()
+            .with_root_certificates(root_store)
+            .with_no_client_auth();
+
         Self {
             sender_pool: Arc::new(RwLock::new(SenderPool::new())),
+            tls_config: Arc::new(tls_config),
         }
     }
 
@@ -37,17 +68,18 @@ impl NetworkCore {
     ) -> Result<Response, Box<dyn Error>> {
         let url: Uri = url.parse()?;
         let host = url.host().expect("uri has no host");
-        let port = url.port_u16().unwrap_or(80);
-        let addr = format!("{}:{}", host, port);
 
-        let stream = TcpStream::connect(addr).await?;
-        let io = TokioIo::new(stream);
+        let scheme = url.scheme().unwrap_or(&hyper::http::uri::Scheme::HTTP);
+        let default_port = if scheme == &hyper::http::uri::Scheme::HTTPS {
+            443
+        } else {
+            80
+        };
+        let port = url.port_u16().unwrap_or(default_port);
 
+        let addr = format!("{host}:{port}");
         let key = Arc::new(HostKey {
-            scheme: url
-                .scheme()
-                .unwrap_or(&hyper::http::uri::Scheme::HTTP)
-                .clone(),
+            scheme: scheme.clone(),
             host: host.to_string(),
             port,
         });
@@ -55,7 +87,16 @@ impl NetworkCore {
         let mut sender =
             if let Some(sender) = self.sender_pool.read().await.get_connection(&key).await {
                 sender
-            } else {
+            } else if scheme == &hyper::http::uri::Scheme::HTTPS {
+                // HTTPS接続
+                let stream = TcpStream::connect(&addr).await?;
+                let tls = TlsConnector::from(self.tls_config.clone());
+                let domain = rustls::pki_types::ServerName::try_from(host)
+                    .map_err(|_| anyhow::anyhow!("Invalid DNS name"))?
+                    .to_owned();
+                let tls_stream = tls.connect(domain, stream).await?;
+                let io = TokioIo::new(tls_stream);
+
                 let (sender, connection) = conn::http1::handshake(io).await?;
                 let sender = HttpSender::Http1(sender);
 
@@ -63,11 +104,31 @@ impl NetworkCore {
                 let pool_clone = self.sender_pool.clone();
                 tokio::spawn(async move {
                     if let Err(err) = connection.await {
-                        eprintln!("Connection failed: {:?}", err);
+                        eprintln!("HTTPS Connection failed: {err:?}");
                         let pool = pool_clone.write().await;
                         pool.remove_connection(&key_clone).await;
                     }
                 });
+
+                sender
+            } else {
+                // HTTP接続
+                let stream = TcpStream::connect(&addr).await?;
+                let io = TokioIo::new(stream);
+
+                let (sender, connection) = conn::http1::handshake(io).await?;
+                let sender = HttpSender::Http1(sender);
+
+                let key_clone = key.clone();
+                let pool_clone = self.sender_pool.clone();
+                tokio::spawn(async move {
+                    if let Err(err) = connection.await {
+                        eprintln!("HTTP Connection failed: {err:?}");
+                        let pool = pool_clone.write().await;
+                        pool.remove_connection(&key_clone).await;
+                    }
+                });
+
                 sender
             };
 
@@ -120,6 +181,81 @@ impl NetworkCore {
     }
 
     pub async fn fetch_url(&self, url: &str) -> Result<Response, Box<dyn Error>> {
-        self.send_request(url, Method::GET).await
+        // MAX10回
+        let mut current = url.to_string();
+        let mut redirects = 0usize;
+        let max_redirects = 10usize;
+
+        let max_retries = 5usize;
+
+        loop {
+            let mut attempt = 0usize;
+            let resp = loop {
+                let r = self.send_request(&current, Method::GET).await?;
+                if r.status.is_server_error() && attempt < max_retries {
+                    attempt += 1;
+                    let backoff = 100u64.saturating_mul(1u64 << (attempt - 1));
+                    sleep(Duration::from_millis(backoff)).await;
+                    continue;
+                }
+                break r;
+            };
+
+            if resp.status.is_redirection() {
+                if redirects >= max_redirects {
+                    return Err(anyhow::anyhow!("Too many redirects").into());
+                }
+
+                // Locationさがす
+                let location = resp
+                    .headers
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case("location"))
+                    .map(|(_, v)| v.clone());
+
+                if let Some(loc) = location {
+                    let base_uri: Uri = current.parse()?;
+
+                    let next_url = if loc.starts_with("http://") || loc.starts_with("https://") {
+                        loc
+                    } else if loc.starts_with("//") {
+                        let scheme = base_uri.scheme_str().unwrap_or("https");
+                        format!("{scheme}:{loc}")
+                    } else if loc.starts_with('/') {
+                        let scheme = base_uri.scheme_str().unwrap_or("https");
+                        let authority = base_uri
+                            .authority()
+                            .ok_or_else(|| anyhow::anyhow!("base URI has no authority"))?
+                            .as_str();
+                        format!("{scheme}://{authority}{loc}")
+                    } else {
+                        let scheme = base_uri.scheme_str().unwrap_or("https");
+                        let authority = base_uri
+                            .authority()
+                            .ok_or_else(|| anyhow::anyhow!("base URI has no authority"))?
+                            .as_str();
+                        let base_path =
+                            base_uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
+
+                        let prefix = if let Some(pos) = base_path.rfind('/') {
+                            &base_path[..=pos]
+                        } else {
+                            "/"
+                        };
+
+                        format!("{scheme}://{authority}{prefix}{loc}")
+                    };
+
+                    current = next_url;
+                    redirects += 1;
+                    continue;
+                } else {
+                    // Location ヘッダがない場合はそのまま返す
+                    return Ok(resp);
+                }
+            }
+
+            return Ok(resp);
+        }
     }
 }
