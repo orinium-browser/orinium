@@ -20,7 +20,6 @@ pub enum NodeType {
     },
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct Node {
     pub node_type: NodeType,
