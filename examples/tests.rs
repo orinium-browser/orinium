@@ -39,7 +39,7 @@ async fn main() {
                     );
                     let mut parser = parser::Parser::new(&html);
                     let dom = parser.parse();
-                    println!("DOM Tree:\n{}", dom.borrow());
+                    println!("DOM Tree:\n{}", dom);
                 } else {
                     eprintln!("Please provide a URL for DOM parsing test.");
                 }

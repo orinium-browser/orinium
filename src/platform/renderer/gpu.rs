@@ -2,6 +2,10 @@ use crate::engine::renderer::DrawCommand;
 use anyhow::Result;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
+use wgpu_text::{
+    glyph_brush::{Section as TextSection, Text},
+    BrushBuilder, TextBrush,
+};
 use winit::window::Window;
 
 /// GPU描画コンテキスト
@@ -14,6 +18,8 @@ pub struct GpuRenderer {
     render_pipeline: wgpu::RenderPipeline,
     vertex_buffer: Option<wgpu::Buffer>,
     num_vertices: u32,
+
+    glyph_brush: Option<TextBrush<ab_glyph::FontArc>>,
 }
 
 #[repr(C)]
@@ -101,9 +107,10 @@ impl GpuRenderer {
         surface.configure(&device, &config);
 
         // シェーダーモジュールの作成
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+        // vertex/fragment for main pipeline
+        let main_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Main Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shader/main.wgsl").into()),
         });
 
         // レンダーパイプラインの作成
@@ -119,13 +126,13 @@ impl GpuRenderer {
             layout: Some(&render_pipeline_layout),
             cache: None,
             vertex: wgpu::VertexState {
-                module: &shader,
+                module: &main_shader,
                 entry_point: Some("vs_main"),
                 buffers: &[Vertex::desc()],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
+                module: &main_shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
@@ -161,6 +168,7 @@ impl GpuRenderer {
             render_pipeline,
             vertex_buffer: None,
             num_vertices: 0,
+            glyph_brush: None,
         })
     }
 
@@ -171,6 +179,13 @@ impl GpuRenderer {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
+            if let Some(brush) = &mut self.glyph_brush {
+                brush.resize_view(
+                    self.config.width as f32,
+                    self.config.height as f32,
+                    &self.queue,
+                );
+            }
         }
     }
 
@@ -181,6 +196,7 @@ impl GpuRenderer {
         let height = self.size.height as f32;
 
         for command in commands {
+            #[allow(clippy::single_match)]
             match command {
                 DrawCommand::DrawRect {
                     x,
@@ -225,52 +241,7 @@ impl GpuRenderer {
                         },
                     ]);
                 }
-                DrawCommand::DrawText {
-                    x,
-                    y,
-                    text,
-                    font_size,
-                    color,
-                } => {
-                    // 簡易的なテキスト描画（矩形で代用）
-                    let char_width = font_size * 0.6;
-                    for (i, _ch) in text.chars().enumerate() {
-                        let char_x = x + (i as f32 * char_width);
-                        let x1 = (char_x / width) * 2.0 - 1.0;
-                        let y1 = 1.0 - (y / height) * 2.0;
-                        let x2 = ((char_x + char_width) / width) * 2.0 - 1.0;
-                        let y2 = 1.0 - ((y + font_size) / height) * 2.0;
-
-                        let color_array = [color.r, color.g, color.b, color.a];
-
-                        vertices.extend_from_slice(&[
-                            Vertex {
-                                position: [x1, y1, 0.0],
-                                color: color_array,
-                            },
-                            Vertex {
-                                position: [x1, y2, 0.0],
-                                color: color_array,
-                            },
-                            Vertex {
-                                position: [x2, y1, 0.0],
-                                color: color_array,
-                            },
-                            Vertex {
-                                position: [x2, y1, 0.0],
-                                color: color_array,
-                            },
-                            Vertex {
-                                position: [x1, y2, 0.0],
-                                color: color_array,
-                            },
-                            Vertex {
-                                position: [x2, y2, 0.0],
-                                color: color_array,
-                            },
-                        ]);
-                    }
-                }
+                _ => {}
             }
         }
 
@@ -290,6 +261,57 @@ impl GpuRenderer {
                     usage: wgpu::BufferUsages::VERTEX,
                 },
             ));
+        }
+
+        if self.glyph_brush.is_none() {
+            let mut font_data: Option<Vec<u8>> = None;
+            let candidates = [
+                "C:\\Windows\\Fonts\\arial.ttf",
+                "C:\\Windows\\Fonts\\segoeui.ttf",
+                "C:\\Windows\\Fonts\\seguisym.ttf",
+            ];
+            for p in &candidates {
+                if let Ok(b) = std::fs::read(p) {
+                    font_data = Some(b);
+                    break;
+                }
+            }
+            if let Some(bytes) = font_data {
+                let font_arc = ab_glyph::FontArc::try_from_vec(bytes).unwrap();
+                let brush = BrushBuilder::using_font(font_arc).build(
+                    &self.device,
+                    self.config.width,
+                    self.config.height,
+                    self.config.format,
+                );
+                self.glyph_brush = Some(brush);
+            }
+        }
+
+        let mut sections: Vec<TextSection> = Vec::new();
+        for command in commands {
+            if let DrawCommand::DrawText {
+                x,
+                y,
+                text,
+                font_size,
+                color,
+            } = command
+            {
+                let s = TextSection {
+                    screen_position: (*x, *y),
+                    bounds: (self.size.width as f32, self.size.height as f32),
+                    text: vec![Text::new(text)
+                        .with_scale(*font_size)
+                        .with_color([color.r, color.g, color.b, color.a])],
+                    ..TextSection::default()
+                };
+                sections.push(s);
+            }
+        }
+
+        if let Some(brush) = &mut self.glyph_brush {
+            brush.queue(&self.device, &self.queue, &sections).unwrap();
         }
     }
 
@@ -333,6 +355,25 @@ impl GpuRenderer {
                 render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
                 render_pass.draw(0..self.num_vertices, 0..1);
             }
+        }
+
+        if let Some(brush) = &mut self.glyph_brush {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Text Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+            });
+            brush.draw(&mut rpass);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));

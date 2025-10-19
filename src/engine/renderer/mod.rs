@@ -1,7 +1,11 @@
 //! engine::renderer - HTML/CSSレイアウト結果から描画命令を生成する論理描画層
 
-use crate::engine::html::parser::{NodeRef, NodeType};
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use crate::engine::html::parser::NodeType;
 use crate::engine::html::util as html_util;
+use crate::engine::tree::{Tree, TreeNode};
 
 /// 描画命令を表す列挙型
 #[derive(Debug, Clone)]
@@ -82,12 +86,17 @@ impl Renderer {
     }
 
     /// DOM Treeから描画命令を生成
-    pub fn generate_draw_commands(&self, dom_root: &NodeRef) -> Vec<DrawCommand> {
+    pub fn generate_draw_commands(&self, dom_root: &Tree<NodeType>) -> Vec<DrawCommand> {
         let mut commands = Vec::new();
         let mut current_x = 10.0;
         let mut current_y = 10.0;
 
-        self.traverse_and_generate(dom_root, &mut commands, &mut current_x, &mut current_y);
+        self.traverse_and_generate(
+            dom_root.clone().root,
+            &mut commands,
+            &mut current_x,
+            &mut current_y,
+        );
 
         commands
     }
@@ -95,18 +104,18 @@ impl Renderer {
     /// DOMツリーを走査して描画命令を生成（再帰的）
     fn traverse_and_generate(
         &self,
-        node: &NodeRef,
+        node: Rc<RefCell<TreeNode<NodeType>>>,
         commands: &mut Vec<DrawCommand>,
         current_x: &mut f32,
         current_y: &mut f32,
     ) {
         let node_borrow = node.borrow();
 
-        match &node_borrow.node_type {
+        match &node_borrow.value {
             NodeType::Document => {
                 // ドキュメントノードは子要素を処理
                 for child in &node_borrow.children {
-                    self.traverse_and_generate(child, commands, current_x, current_y);
+                    self.traverse_and_generate(child.clone(), commands, current_x, current_y);
                 }
             }
             NodeType::Element { tag_name, .. } => {
@@ -114,18 +123,18 @@ impl Renderer {
                 let line_height = 20.0;
 
                 // ブロック要素の場合は改行
-                if html_util::is_block_level_element(tag_name) {
+                if html_util::is_block_level_element(tag_name.as_str()) {
                     *current_x = 10.0;
                     *current_y += line_height;
                 }
 
                 // 子要素を処理
                 for child in &node_borrow.children {
-                    self.traverse_and_generate(child, commands, current_x, current_y);
+                    self.traverse_and_generate(child.clone(), commands, current_x, current_y);
                 }
 
                 // ブロック要素の後は改行
-                if html_util::is_block_level_element(tag_name) {
+                if html_util::is_block_level_element(tag_name.as_str()) {
                     *current_x = 10.0;
                     *current_y += line_height / 2.0;
                 }
