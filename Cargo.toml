@@ -2,6 +2,7 @@
 name = "orinium_browser"
 version = "0.1.0"
 edition = "2021"
+license = "Apache-2.0"
 
 [workspace]
 resolver = "2"
@@ -16,10 +17,10 @@ winit = "0.30.12"
 wgpu = "27.0.1"
 bytemuck = { version = "1.14", features = ["derive"] }
 url = "2.5"
-twoway = "0.2.2"
 rustls = { version = "0.22.2", default-features = false, features = ["tls12"] }
 rustls-native-certs = "0.7.0"
 tokio-rustls = "0.25.0"
 hyper = { version = "1", features = ["full"] }
 http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["full"] }
+image = "0.25.8"
