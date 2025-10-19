@@ -14,7 +14,9 @@ async fn main() {
                 println!("Test names:");
                 println!("create_window - Create a window and display it.");
                 println!("parse_dom [URL] - Test DOM parsing functionality.");
-                println!("send_request [URL] - Test sending HTTP/HTTPS requests (without redirect etc).");
+                println!(
+                    "send_request [URL] - Test sending HTTP/HTTPS requests (without redirect etc)."
+                );
                 println!("fetch_url [URL] - Test network fetching functionality.");
                 println!("simple_render [URL] - Test simple rendering functionality.");
                 println!("help - Show this help message.");
