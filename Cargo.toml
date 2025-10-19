@@ -9,15 +9,15 @@ resolver = "2"
 
 [dependencies]
 anyhow = "1.0"
-tokio = { version = "1.47.1", features = ["full"] }
+tokio = { version = "1.48.0", features = ["full"] }
 pollster = "0.3"
-env_logger = "0.10.2"
-log = "0.4"
+env_logger = "0.11.8"
+log = "0.4.0"
 winit = "0.30.12"
 wgpu = "27.0.1"
 bytemuck = { version = "1.14", features = ["derive"] }
 url = "2.5"
-rustls = { version = "0.22.2", default-features = false, features = ["tls12"] }
+rustls = { version = "0.22.4", default-features = false, features = ["tls12"] }
 rustls-native-certs = "0.7.0"
 tokio-rustls = "0.25.0"
 hyper = { version = "1", features = ["full"] }
