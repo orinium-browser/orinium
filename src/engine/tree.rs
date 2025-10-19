@@ -1,7 +1,58 @@
 //! DomTreeやRenderTreeで使用する汎用ツリー構造の実装
-//! TreeNodeとTreeを提供する
-//! TreeNodeはノードの値、子ノード、親ノードを持つ
-//! Treeはルートノードを持つ
+//! 
+//! # 概要
+//! `TreeNode` はノードの値・子ノード・親ノードを持ち、  
+//! `Tree` はルートノードを保持する汎用的な木構造を表します。
+//!
+//! DOMツリー、レンダーツリーなどに再利用可能です。
+//!
+//! # 例
+//! ```
+//! use std::rc::Rc;
+//! use std::cell::RefCell;
+//! use orinium::engine::tree::{Tree, TreeNode};
+//!
+//! #[derive(Debug, Clone, PartialEq, Eq)]
+//! enum NodeType {
+//!     Document,
+//!     Element(&'static str),
+//!     Text(&'static str),
+//! }
+//!
+//! // ツリーを構築
+//! let tree = Tree::new(NodeType::Document);
+//! 
+//! let html = TreeNode::new(NodeType::Element("html"));
+//! TreeNode::add_child(&tree.root, Rc::clone(&html));
+//!
+//! let head = TreeNode::new(NodeType::Element("head"));
+//! let body = TreeNode::new(NodeType::Element("body"));
+//! TreeNode::add_child(&html, Rc::clone(&head));
+//! TreeNode::add_child(&html, Rc::clone(&body));
+//!
+//! let title = TreeNode::new(NodeType::Element("title"));
+//! let text = TreeNode::new(NodeType::Text("Hello"));
+//! TreeNode::add_child(&title, Rc::clone(&text));
+//! TreeNode::add_child(&head, Rc::clone(&title));
+//!
+//! println!("{}", tree);
+//!
+//! // ツリー構造の検証
+//! assert_eq!(html.borrow().parent.as_ref().unwrap().borrow().value, NodeType::Document);
+//! assert_eq!(body.borrow().parent.as_ref().unwrap().borrow().value, NodeType::Element("html"));
+//! assert_eq!(text.borrow().parent.as_ref().unwrap().borrow().value, NodeType::Element("title"));
+//! ```
+//!
+//! 出力例：
+//! ```text
+//! Document
+//! └── Element("html")
+//!     ├── Element("head")
+//!     │   └── Element("title")
+//!     │       └── Text("Hello")
+//!     └── Element("body")
+//! ```
+
 use std::cell::RefCell;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::rc::Rc;
@@ -59,7 +110,6 @@ fn fmt_tree_node<T: Debug + Clone>(
 ) -> fmt::Result {
     let n = node.borrow();
 
-    // ├── か └── を決める（自身の最後かどうかは ancestors_last の最後で判断）
     let is_last = *ancestors_last.last().unwrap_or(&true);
     let connector = if ancestors_last.is_empty() {
         ""
@@ -69,16 +119,13 @@ fn fmt_tree_node<T: Debug + Clone>(
         "├── "
     };
 
-    // prefix を構築
     let mut prefix = String::new();
     for &ancestor_last in &ancestors_last[..ancestors_last.len().saturating_sub(1)] {
         prefix.push_str(if ancestor_last { "    " } else { "│   " });
     }
 
-    // ノードの表示
     writeln!(f, "{}{}{:?}", prefix, connector, n.value)?;
 
-    // 子ノードを再帰
     let child_count = n.children.len();
     for (i, child) in n.children.iter().enumerate() {
         let child_is_last = i == child_count - 1;
