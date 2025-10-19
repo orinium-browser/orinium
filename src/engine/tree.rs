@@ -1,5 +1,5 @@
 //! DomTreeやRenderTreeで使用する汎用ツリー構造の実装
-//! 
+//!
 //! # 概要
 //! `TreeNode` はノードの値・子ノード・親ノードを持ち、  
 //! `Tree` はルートノードを保持する汎用的な木構造を表します。
@@ -21,7 +21,7 @@
 //!
 //! // ツリーを構築
 //! let tree = Tree::new(NodeType::Document);
-//! 
+//!
 //! let html = TreeNode::new(NodeType::Element("html"));
 //! TreeNode::add_child(&tree.root, Rc::clone(&html));
 //!
