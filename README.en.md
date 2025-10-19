@@ -24,6 +24,4 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 For the architecture, see [architecture.md](./docs/architecture.md).
 
-The TODO list is available in [tasks.md](./tasks.md).
-
 Other useful documentation for development can be found in the [DOCS](./docs/) directory.
