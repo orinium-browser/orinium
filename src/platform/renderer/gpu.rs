@@ -10,15 +10,24 @@ use winit::window::Window;
 
 /// GPU描画コンテキスト
 pub struct GpuRenderer {
+    /// GPUの描画対象
     surface: wgpu::Surface<'static>,
+    /// GPUの論理デバイス
     device: wgpu::Device,
+    /// コマンド送信用キュー
     queue: wgpu::Queue,
+    /// サーフェス設定、解像度・フォーマットなどのフレームバッファ設定
     config: wgpu::SurfaceConfiguration,
+    /// WindowSize
     size: winit::dpi::PhysicalSize<u32>,
+    /// RenderPipelin（頂点 to ピクセル）
     render_pipeline: wgpu::RenderPipeline,
+    /// 頂点バッファ
     vertex_buffer: Option<wgpu::Buffer>,
+    /// 頂点数
     num_vertices: u32,
 
+    /// テキスト描画用の描画領域とブラシ
     glyph_brush: Option<TextBrush<ab_glyph::FontArc>>,
 }
 
@@ -55,16 +64,18 @@ impl GpuRenderer {
     pub async fn new(window: Arc<Window>) -> Result<Self> {
         let size = window.inner_size();
 
+        // GPUドライバとの通信インスタンス
         // wgpuインスタンスの作成
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
             ..Default::default()
         });
 
+        // OSウィンドウとGPUの描画対象（サーフェス）を関連付ける
         // サーフェスの作成
         let surface = instance.create_surface(window.clone())?;
 
-        // アダプターの取得
+        // 利用可能なGPU（物理デバイス）アダプターの取得
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::default(),
@@ -86,6 +97,7 @@ impl GpuRenderer {
             .await?;
 
         // サーフェス設定
+        // フレームバッファ設定（解像度・フォーマットなど）
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps
             .formats
@@ -106,6 +118,7 @@ impl GpuRenderer {
         };
         surface.configure(&device, &config);
 
+        // シェーダーの読み込み
         // シェーダーモジュールの作成
         // vertex/fragment for main pipeline
         let main_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -113,7 +126,7 @@ impl GpuRenderer {
             source: wgpu::ShaderSource::Wgsl(include_str!("shader/main.wgsl").into()),
         });
 
-        // レンダーパイプラインの作成
+        // --- レンダーパイプライン（頂点→ピクセル変換のルール）の作成 ---
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
@@ -158,6 +171,7 @@ impl GpuRenderer {
             },
             multiview: None,
         });
+        // --- レンダーパイプライン作成終了 ---
 
         Ok(Self {
             surface,
@@ -250,10 +264,12 @@ impl GpuRenderer {
 
     /// 描画命令を更新
     pub fn update_draw_commands(&mut self, commands: &[DrawCommand]) {
-        let vertices = self.generate_vertices(commands);
+        let vertices = self.generate_vertices(commands);  // テキストコマンドは後で処理
         self.num_vertices = vertices.len() as u32;
 
         if !vertices.is_empty() {
+            // create_buffer_init()で頂点データをGPUのメモリにアップロード
+            // 頂点バッファの生成
             self.vertex_buffer = Some(self.device.create_buffer_init(
                 &wgpu::util::BufferInitDescriptor {
                     label: Some("Vertex Buffer"),
@@ -264,6 +280,7 @@ impl GpuRenderer {
         }
 
         if self.glyph_brush.is_none() {
+            // フォントデータの読み込み（システムフォントから適当に探す）
             let mut font_data: Option<Vec<u8>> = None;
             let candidates = [
                 "C:\\Windows\\Fonts\\arial.ttf",
@@ -276,6 +293,7 @@ impl GpuRenderer {
                     break;
                 }
             }
+
             if let Some(bytes) = font_data {
                 let font_arc = ab_glyph::FontArc::try_from_vec(bytes).unwrap();
                 let brush = BrushBuilder::using_font(font_arc).build(
@@ -288,6 +306,7 @@ impl GpuRenderer {
             }
         }
 
+        // DrawCommandからテキスト描画セクションに変換
         let mut sections: Vec<TextSection> = Vec::new();
         for command in commands {
             if let DrawCommand::DrawText {
@@ -311,6 +330,7 @@ impl GpuRenderer {
         }
 
         if let Some(brush) = &mut self.glyph_brush {
+            // テキスト描画キューに追加
             brush.queue(&self.device, &self.queue, &sections).unwrap();
         }
     }
