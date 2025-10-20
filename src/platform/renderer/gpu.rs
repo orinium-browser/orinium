@@ -264,7 +264,7 @@ impl GpuRenderer {
 
     /// 描画命令を更新
     pub fn update_draw_commands(&mut self, commands: &[DrawCommand]) {
-        let vertices = self.generate_vertices(commands);  // テキストコマンドは後で処理
+        let vertices = self.generate_vertices(commands); // テキストコマンドは後で処理
         self.num_vertices = vertices.len() as u32;
 
         if !vertices.is_empty() {
@@ -337,17 +337,20 @@ impl GpuRenderer {
 
     /// フレームを描画
     pub fn render(&mut self) -> Result<()> {
+        // 描画するフレームバッファを取得
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
+        // GPUコマンドのエンコーダーの作成
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Render Encoder"),
             });
 
+        // 描画パスの開始
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
@@ -355,6 +358,7 @@ impl GpuRenderer {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
+                        // 背景色をクリア
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: 1.0,
                             g: 1.0,
@@ -370,13 +374,16 @@ impl GpuRenderer {
                 timestamp_writes: None,
             });
 
+            // 使用するシェーダー・設定をセット
             render_pass.set_pipeline(&self.render_pipeline);
+            // 頂点バッファをセットして描画
             if let Some(ref vertex_buffer) = self.vertex_buffer {
                 render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
                 render_pass.draw(0..self.num_vertices, 0..1);
             }
         }
 
+        // テキストをレンダリング
         if let Some(brush) = &mut self.glyph_brush {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Text Render Pass"),
@@ -396,7 +403,10 @@ impl GpuRenderer {
             brush.draw(&mut rpass);
         }
 
+        // コマンドをGPUに送信
         self.queue.submit(std::iter::once(encoder.finish()));
+
+        // フレームを画面に表示
         output.present();
 
         Ok(())
