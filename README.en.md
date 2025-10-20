@@ -24,4 +24,5 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 For the architecture, see [architecture.md](./docs/architecture.md).
 
-Other useful documentation for development can be found in the [DOCS](./docs/) directory.
+Other useful documentation for development can be found in the [Docs/](./docs/) directory.
+And, most documents are classified based on their lang.
