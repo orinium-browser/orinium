@@ -32,3 +32,28 @@ event_loop.run_app(&mut app)?;
 # Oriniumで実装するもの
 ## `GpuRenderer`
 * ./src/engine/renderer
+ライフサイクル
+```rust
+App::resumed()
+ └── State::new()
+      └── GpuRenderer::new()   ← GPU初期化
+App::set_draw_commands()
+ └── GpuRenderer::update_draw_commands()
+EventLoop: RedrawRequested
+ └── State::render()
+      └── GpuRenderer::render() ← 毎フレーム描画
+EventLoop: Resized
+ └── State::resize()
+      └── GpuRenderer::resize()
+App終了
+ └── GpuRenderer が Drop されて GPUリソース解放
+
+```
+
+| フェーズ | 関数                    | 主な責任                       | 呼ばれるタイミング                |
+| ---- | -------------------------- | ------------------------------ | ------------------------------ |
+| 初期化 | `new()`                  | GPUインスタンス、パイプライン作成 | アプリ起動時 (`resumed()`)       |
+| 更新   | `update_draw_commands()` | 頂点・テキストバッファ更新        | 図形やテキスト変更時             |
+| 描画   | `render()`               | 1フレームの描画                 | 毎フレーム or `request_redraw()` |
+| リサイズ| `resize()`               | バッファとフォント領域更新      | ウィンドウサイズ変更時             |
+| 終了   | `Drop`                   | GPUメモリ自動解放               | アプリ終了時                      |
