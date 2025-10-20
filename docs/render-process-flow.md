@@ -15,7 +15,7 @@ event_loop.run_app(&mut app)?;
 2. **`run_app` を呼び出す**
    * イベントループが開始する。
    * OSからのイベントを順に処理して、`App` に渡す。
-   * `App` は `update()` や `render()` のような関数で反応する。
+   * `App` は `update()` や `render()` のような関数で受け取る。
 
 3. **アプリが閉じられるまで動き続ける**
    * ウィンドウを閉じると、`Event::LoopDestroyed` などが発生して終了。
@@ -28,5 +28,7 @@ event_loop.run_app(&mut app)?;
 | **App**       | あなたのアプリのロジック。イベントを受け取って反応する。 |
 | **run_app()** | ループを開始し、アプリを動かす。             |
 
+
 # Oriniumで実装するもの
-wip
+## `GpuRenderer`
+* ./src/engine/renderer
