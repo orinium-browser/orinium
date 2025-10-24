@@ -11,10 +11,10 @@ fn test_dom_parse() {
 <body>
     <p>This is a <b>test page</b> for DOM module debuging.</p>
     <div>
-        <p>Nested <span>span text</span></p>
+        <p>Nested <span>span glyph</span></p>
         <img src="image.png">
         <br />
-        <input type="text" value="Hello" />
+        <input type="glyph" value="Hello" />
         <p>Unclosed paragraph
     </div>
     <footer>Footer content</footer>
