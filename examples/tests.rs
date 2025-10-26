@@ -14,6 +14,7 @@ async fn main() {
                 println!("Test names:");
                 println!("create_window - Create a window and display it.");
                 println!("parse_dom [URL] - Test DOM parsing functionality.");
+                println!("tokenize_css [URL] - Test CSS tokenization functionality.");
                 println!(
                     "send_request [URL] - Test sending HTTP/HTTPS requests (without redirect etc)."
                 );
@@ -42,6 +43,26 @@ async fn main() {
                     println!("DOM Tree:\n{}", dom);
                 } else {
                     eprintln!("Please provide a URL for DOM parsing test.");
+                }
+            }
+            "tokenize_css" => {
+                if args.len() == 3 {
+                    let url = &args[2];
+                    println!("Tokenizing CSS for URL: {}", url);
+                    let net = NetworkCore::new();
+                    let resp = net.fetch_url(url).await.expect("Failed to fetch URL");
+                    let css = String::from_utf8_lossy(&resp.body).to_string();
+                    println!(
+                        "Fetched CSS (first 50 chars):\n{}",
+                        css.chars().take(50).collect::<String>()
+                    );
+                    let mut tokenizer = orinium_browser::engine::css::cssom::tokenizer::Tokenizer::new(&css);
+                    println!("CSS Tokens:");
+                    while let Some(token) = tokenizer.next_token() {
+                        println!("{:?}", token);
+                    }
+                } else {
+                    eprintln!("Please provide a URL for CSS tokenization test.");
                 }
             }
             "send_request" => {
