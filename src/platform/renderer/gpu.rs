@@ -173,6 +173,34 @@ impl GpuRenderer {
         });
         // --- レンダーパイプライン作成終了 ---
 
+        // テキスト描画用ブラシの作成
+        // フォントデータの読み込み（システムフォントから適当に探す）
+        let mut font_data: Option<Vec<u8>> = None;
+        let candidates = [
+            "C:\\Windows\\Fonts\\arial.ttf",
+            "C:\\Windows\\Fonts\\segoeui.ttf",
+            "C:\\Windows\\Fonts\\seguisym.ttf",
+        ];
+        for p in &candidates {
+            if let Ok(b) = std::fs::read(p) {
+                font_data = Some(b);
+                break;
+            }
+        }
+
+        let glyph_brush = if let Some(bytes) = font_data {
+            let font_arc = ab_glyph::FontArc::try_from_vec(bytes).unwrap();
+            let brush = BrushBuilder::using_font(font_arc).build(
+                &device,
+                config.width,
+                config.height,
+                config.format,
+            );
+            Some(brush)
+        } else {
+            None
+        };
+
         Ok(Self {
             surface,
             device,
@@ -182,7 +210,7 @@ impl GpuRenderer {
             render_pipeline,
             vertex_buffer: None,
             num_vertices: 0,
-            glyph_brush: None,
+            glyph_brush,
         })
     }
 
@@ -280,33 +308,6 @@ impl GpuRenderer {
                     usage: wgpu::BufferUsages::VERTEX,
                 },
             ));
-        }
-
-        if self.glyph_brush.is_none() {
-            // フォントデータの読み込み（システムフォントから適当に探す）
-            let mut font_data: Option<Vec<u8>> = None;
-            let candidates = [
-                "C:\\Windows\\Fonts\\arial.ttf",
-                "C:\\Windows\\Fonts\\segoeui.ttf",
-                "C:\\Windows\\Fonts\\seguisym.ttf",
-            ];
-            for p in &candidates {
-                if let Ok(b) = std::fs::read(p) {
-                    font_data = Some(b);
-                    break;
-                }
-            }
-
-            if let Some(bytes) = font_data {
-                let font_arc = ab_glyph::FontArc::try_from_vec(bytes).unwrap();
-                let brush = BrushBuilder::using_font(font_arc).build(
-                    &self.device,
-                    self.config.width,
-                    self.config.height,
-                    self.config.format,
-                );
-                self.glyph_brush = Some(brush);
-            }
         }
 
         // DrawCommandからテキスト描画セクションに変換
