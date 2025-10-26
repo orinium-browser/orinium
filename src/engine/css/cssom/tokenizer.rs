@@ -4,6 +4,7 @@ pub enum Token {
     String(String), // "Roboto"
     Number(f32),    // 1.5, 10, etc.
     Hash(String),   // #fff
+    Comment(String), // /* comment */
     Delim(char),    // { } : ; ( ) , など
     Colon,
     Semicolon,
@@ -52,6 +53,8 @@ impl<'a> Tokenizer<'a> {
         while self.pos < self.input.len() {
             let c = self.input[self.pos..].chars().next().unwrap();
             self.pos += c.len_utf8();
+
+            //println!("State: {:?}, Char: '{}'", self.state, c);
 
             match self.state {
                 TokenizerState::Data => self.state_data(c),
@@ -113,7 +116,6 @@ impl<'a> Tokenizer<'a> {
                 self.buffer.clear();
             }
             '/' if self.input[self.pos..].starts_with('*') => {
-                self.pos += 1; // skip '*'
                 self.state = TokenizerState::CommentStart;
             }
             ':' => {
@@ -209,10 +211,14 @@ impl<'a> Tokenizer<'a> {
             TokenizerState::Comment => {
                 if c == '*' {
                     self.state = TokenizerState::CommentEndDash;
+                } else {
+                    self.buffer.push(c);
                 }
             }
             TokenizerState::CommentEndDash => {
                 if c == '/' {
+                    self.current_token = Some(Token::Comment(self.buffer.clone()));
+                    self.commit_token();
                     self.state = TokenizerState::Data;
                 } else {
                     self.state = TokenizerState::Comment;
