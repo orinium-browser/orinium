@@ -1,7 +1,6 @@
 use orinium_browser::{engine::html::parser, platform::network::NetworkCore, platform::ui::App};
 
 use std::env;
-use winit::event_loop::EventLoop;
 
 #[tokio::main]
 async fn main() {
@@ -12,7 +11,6 @@ async fn main() {
                 println!("This is a test application for Orinium Browser development.");
                 println!("Usage: cargo run --example tests [NAME]\n");
                 println!("Test names:");
-                println!("create_window - Create a window and display it.");
                 println!("parse_dom [URL] - Test DOM parsing functionality.");
                 println!("tokenize_css [URL] - Test CSS tokenization functionality.");
                 println!(
@@ -21,11 +19,6 @@ async fn main() {
                 println!("fetch_url [URL] - Test network fetching functionality.");
                 println!("simple_render [URL] - Test simple rendering functionality.");
                 println!("help - Show this help message.");
-            }
-            "create_window" => {
-                if let Err(e) = run() {
-                    eprintln!("Failed to create window: {e:?}");
-                }
             }
             "parse_dom" => {
                 if args.len() == 3 {
@@ -149,12 +142,3 @@ async fn main() {
     print!("\n");
 }
 
-fn run() -> anyhow::Result<()> {
-    env_logger::init();
-
-    let event_loop = EventLoop::with_user_event().build()?;
-    let mut app = App::new();
-    event_loop.run_app(&mut app)?;
-
-    Ok(())
-}
