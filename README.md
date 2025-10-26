@@ -1,7 +1,7 @@
 <h1 align="center">Orinium Browser</h1>
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Orinas-github/Orinium-browser)
-[![Github license](https://img.shields.io/github/license/Orinas-github/Orinium-browser)](./LICENSE)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/orinium-browser/orinium)
+[![Github license](https://img.shields.io/github/license/orinium-browser/orinium)](./LICENSE)
 [![Discord server](https://img.shields.io/badge/Discord-5865F2?style=flat&logo=discord&logoColor=white)](https://discord.gg/2zYbEnMC5H)
 
 [English](./README.en.md)
