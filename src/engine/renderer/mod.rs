@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::engine::html::parser::NodeType;
+use crate::engine::html::parser::HtmlNodeType;
 use crate::engine::html::util as html_util;
 use crate::engine::tree::{Tree, TreeNode};
 
@@ -86,7 +86,7 @@ impl Renderer {
     }
 
     /// DOM Treeから描画命令を生成
-    pub fn generate_draw_commands(&self, dom_root: &Tree<NodeType>) -> Vec<DrawCommand> {
+    pub fn generate_draw_commands(&self, dom_root: &Tree<HtmlNodeType>) -> Vec<DrawCommand> {
         let mut commands = Vec::new();
         let mut current_x = 10.0;
         let mut current_y = 10.0;
@@ -104,7 +104,7 @@ impl Renderer {
     /// DOMツリーを走査して描画命令を生成（再帰的）
     fn traverse_and_generate(
         &self,
-        node: Rc<RefCell<TreeNode<NodeType>>>,
+        node: Rc<RefCell<TreeNode<HtmlNodeType>>>,
         commands: &mut Vec<DrawCommand>,
         current_x: &mut f32,
         current_y: &mut f32,
@@ -112,13 +112,13 @@ impl Renderer {
         let node_borrow = node.borrow();
 
         match &node_borrow.value {
-            NodeType::Document => {
+            HtmlNodeType::Document => {
                 // ドキュメントノードは子要素を処理
                 for child in &node_borrow.children {
                     self.traverse_and_generate(child.clone(), commands, current_x, current_y);
                 }
             }
-            NodeType::Element { tag_name, .. } => {
+            HtmlNodeType::Element { tag_name, .. } => {
                 // 要素ノードの処理
                 let line_height = 20.0;
 
@@ -139,7 +139,7 @@ impl Renderer {
                     *current_y += line_height / 2.0;
                 }
             }
-            NodeType::Text(text) => {
+            HtmlNodeType::Text(text) => {
                 // テキストノードの処理
                 if !text.trim().is_empty() {
                     commands.push(DrawCommand::DrawText {
