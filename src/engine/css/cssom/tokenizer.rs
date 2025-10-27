@@ -10,7 +10,6 @@ pub enum Token {
     Semicolon,
     Whitespace,
     AtKeyword(String), // @media, @import, etc.
-    EOF,
 }
 
 #[derive(Debug, PartialEq, Clone)]
