@@ -47,7 +47,8 @@ pub struct Tokenizer<'a> {
     buffer: String,
     state: TokenizerState,
     current_token: Option<Token>,
-    pub token: Option<Token>,
+    token: Option<Token>,
+    last_tokenized: Option<Token>,
 }
 
 impl<'a> Tokenizer<'a> {
@@ -59,7 +60,12 @@ impl<'a> Tokenizer<'a> {
             state: TokenizerState::Data,
             current_token: None,
             token: None,
+            last_tokenized: None,
         }
+    }
+
+    pub fn last_tokenized_token(&self) -> Option<&Token> {
+        self.last_tokenized.as_ref()
     }
 
     pub fn next_token(&mut self) -> Option<Token> {
@@ -79,6 +85,7 @@ impl<'a> Tokenizer<'a> {
             }
 
             if let Some(token) = self.token.take() {
+                // println!("Tokenized: {:?}", token);
                 return Some(token);
             }
         }
@@ -97,6 +104,7 @@ impl<'a> Tokenizer<'a> {
 
     fn commit_token(&mut self) {
         self.token = self.current_token.take();
+        self.last_tokenized = self.token.clone();
         self.buffer.clear();
     }
 
