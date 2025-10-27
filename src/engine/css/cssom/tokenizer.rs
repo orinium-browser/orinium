@@ -2,13 +2,13 @@
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
-    Ident(String),     // color, margin, etc.
-    String(String),    // "string" or 'string'
-    Number(f32),       // 1.5, 10, etc.
-    Function(String),  // func(
-    AtKeyword(String), // @media, @import, etc.
-    Hash(String),      // #fff
-    Dimension(f32, String),
+    Ident(String),          // color, margin, etc.
+    String(String),         // "string" or 'string'
+    Number(f32),            // 1.5, 10, etc.
+    Function(String),       // func(
+    AtKeyword(String),      // @media, @import, etc.
+    Hash(String),           // #fff
+    Dimension(f32, String), // 10px, 2em, etc.
     Percentage(f32),
     Colon,
     Semicolon,
