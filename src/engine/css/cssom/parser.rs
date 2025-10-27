@@ -202,6 +202,7 @@ mod tests {
             if let CssValue::Length(Length::Px(px)) = value {
                 assert_eq!(*px, 5.0);
             } else {
+                println!("value: {:?}", value);
                 panic!("Expected Length value");
             }
         }
