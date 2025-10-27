@@ -1,7 +1,7 @@
 use orinium_browser::{engine::html::parser, platform::network::NetworkCore, platform::ui::App};
 
-use winit::event_loop::EventLoop;
 use std::env;
+use winit::event_loop::EventLoop;
 
 #[tokio::main]
 async fn main() {
@@ -50,7 +50,8 @@ async fn main() {
                         "Fetched CSS (first 50 chars):\n{}",
                         css.chars().take(50).collect::<String>()
                     );
-                    let mut tokenizer = orinium_browser::engine::css::cssom::tokenizer::Tokenizer::new(&css);
+                    let mut tokenizer =
+                        orinium_browser::engine::css::cssom::tokenizer::Tokenizer::new(&css);
                     println!("CSS Tokens:");
                     while let Some(token) = tokenizer.next_token() {
                         println!("{:?}", token);
@@ -142,4 +143,3 @@ async fn main() {
     }
     print!("\n");
 }
-

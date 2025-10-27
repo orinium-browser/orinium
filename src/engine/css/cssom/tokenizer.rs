@@ -1,11 +1,11 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
-    Ident(String),  // color, width, etc.
-    String(String), // "Roboto"
-    Number(f32),    // 1.5, 10, etc.
-    Hash(String),   // #fff
+    Ident(String),   // color, width, etc.
+    String(String),  // "Roboto"
+    Number(f32),     // 1.5, 10, etc.
+    Hash(String),    // #fff
     Comment(String), // /* comment */
-    Delim(char),    // { } : ; ( ) , など
+    Delim(char),     // { } : ; ( ) , など
     Colon,
     Semicolon,
     Whitespace,
