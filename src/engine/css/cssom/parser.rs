@@ -53,8 +53,9 @@ impl<'a> Parser<'a> {
         while let Some(token) = self.tokenizer.next_token() {
             match token {
                 Token::Comma => {
-                    if let Some(Token::Ident(next_sel)) = self.tokenizer.next_token() {
-                        selectors.push(next_sel);
+                    self.skip_whitespace();
+                    if let Some(Token::Ident(next_sel)) = self.tokenizer.last_tokenized_token() {
+                        selectors.push(next_sel.clone());
                     }
                 }
                 Token::LeftBrace => break,
@@ -107,17 +108,22 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_value(&mut self) -> CssValue {
-        match self.tokenizer.next_token() {
-            Some(Token::Ident(s)) => CssValue::Keyword(s),
+        self.skip_whitespace();
+        match self.tokenizer.last_tokenized_token() {
+            Some(Token::Ident(s)) => CssValue::Keyword(s.to_string()),
             Some(Token::Dimension(n, unit)) => {
-                CssValue::Length(Length::from_number_and_unit(n, &unit).unwrap_or_default())
+                CssValue::Length(Length::from_number_and_unit(*n, &unit).unwrap_or_default())
             }
             Some(Token::Hash(hex)) => {
                 CssValue::Color(Color::from_hex(&hex).unwrap_or(Color::BLACK))
             }
-            Some(Token::Number(n)) => CssValue::Length(Length::Px(n)),
+            Some(Token::Number(n)) => CssValue::Length(Length::Px(*n)),
             _ => CssValue::Keyword("invalid".into()),
         }
+    }
+
+    fn skip_whitespace(&mut self) {
+        while let Some(Token::Whitespace) = self.tokenizer.next_token() {}
     }
 }
 
@@ -143,8 +149,10 @@ mod tests {
         assert!(matches!(root_ref.value, CssNodeType::Stylesheet));
 
         // 最初のルールを取得
-        let rule_rc = Rc::clone(&root_ref.children[0]);
+        let rule_rc: Rc<RefCell<TreeNode<CssNodeType>>> = Rc::clone(&root_ref.children[0]);
         drop(root_ref);
+
+        println!("Rule Node: {}", Tree::from_tree_node(Rc::clone(&rule_rc)));
 
         let rule_ref = rule_rc.borrow();
         if let CssNodeType::Rule { selectors } = &rule_ref.value {
