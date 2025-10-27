@@ -3,7 +3,7 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Ident(String),          // color, margin, etc.
-    String(String),         // "string" or 'string'
+    StringLiteral(String),         // "string" or 'string'
     Number(f32),            // 1.5, 10, etc.
     Function(String),       // func(
     AtKeyword(String),      // @media, @import, etc.
@@ -250,7 +250,7 @@ impl<'a> Tokenizer<'a> {
 
         match c {
             ch if ch == quote => {
-                self.current_token = Some(Token::String(self.buffer.clone()));
+                self.current_token = Some(Token::StringLiteral(self.buffer.clone()));
                 self.commit_token();
                 self.state = TokenizerState::Data;
             }
