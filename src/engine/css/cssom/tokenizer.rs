@@ -14,14 +14,14 @@ pub enum Token {
     Semicolon,
     Comma,
     Whitespace,
-    LeftBrace,
-    RightBrace,
-    LeftParen,
-    RightParen,
-    LeftBracket,
-    RightBracket,
-    CDO, // <!--
-    CDC, // -->
+    LeftBrace,    // {
+    RightBrace,   // }
+    LeftParen,    // (
+    RightParen,   // )
+    LeftBracket,  // [
+    RightBracket, // ]
+    CDO,          // '<' + "!--"
+    CDC,          // "--" + '>'
     Delim(char),
     Comment(String), // /* comment */
 }
