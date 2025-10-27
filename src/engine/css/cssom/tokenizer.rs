@@ -1,15 +1,29 @@
+#![allow(dead_code)]
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
-    Ident(String),   // color, width, etc.
-    String(String),  // "Roboto"
-    Number(f32),     // 1.5, 10, etc.
-    Hash(String),    // #fff
-    Comment(String), // /* comment */
-    Delim(char),     // { } : ; ( ) , など
+    Ident(String),     // color, margin, etc.
+    String(String),    // "string" or 'string'
+    Number(f32),       // 1.5, 10, etc.
+    Function(String),  // func(
+    AtKeyword(String), // @media, @import, etc.
+    Hash(String),      // #fff
+    Dimension(f32, String),
+    Percentage(f32),
     Colon,
     Semicolon,
+    Comma,
     Whitespace,
-    AtKeyword(String), // @media, @import, etc.
+    LeftBrace,
+    RightBrace,
+    LeftParen,
+    RightParen,
+    LeftBracket,
+    RightBracket,
+    CDO, // <!--
+    CDC, // -->
+    Delim(char),
+    Comment(String), // /* comment */
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -52,8 +66,6 @@ impl<'a> Tokenizer<'a> {
         while self.pos < self.input.len() {
             let c = self.input[self.pos..].chars().next().unwrap();
             self.pos += c.len_utf8();
-
-            //println!("State: {:?}, Char: '{}'", self.state, c);
 
             match self.state {
                 TokenizerState::Data => self.state_data(c),
@@ -125,8 +137,46 @@ impl<'a> Tokenizer<'a> {
                 self.current_token = Some(Token::Semicolon);
                 self.commit_token();
             }
-            c if "{}(),".contains(c) => {
-                self.current_token = Some(Token::Delim(c));
+            ',' => {
+                self.current_token = Some(Token::Comma);
+                self.commit_token();
+            }
+            '{' => {
+                self.current_token = Some(Token::LeftBrace);
+                self.commit_token();
+            }
+            '}' => {
+                self.current_token = Some(Token::RightBrace);
+                self.commit_token();
+            }
+            '(' => {
+                if let Some(Token::Ident(name)) = self.current_token.take() {
+                    self.current_token = Some(Token::Function(name));
+                } else {
+                    self.current_token = Some(Token::LeftParen);
+                }
+                self.commit_token();
+            }
+            ')' => {
+                self.current_token = Some(Token::RightParen);
+                self.commit_token();
+            }
+            '[' => {
+                self.current_token = Some(Token::LeftBracket);
+                self.commit_token();
+            }
+            ']' => {
+                self.current_token = Some(Token::RightBracket);
+                self.commit_token();
+            }
+            '<' if self.input[self.pos..].starts_with("!--") => {
+                self.pos += 3;
+                self.current_token = Some(Token::CDO);
+                self.commit_token();
+            }
+            '-' if self.input[self.pos..].starts_with("->") => {
+                self.pos += 2;
+                self.current_token = Some(Token::CDC);
                 self.commit_token();
             }
             _ => {
@@ -150,8 +200,32 @@ impl<'a> Tokenizer<'a> {
     fn state_number(&mut self, c: char) {
         if c.is_ascii_digit() || c == '.' {
             self.buffer.push(c);
+            return;
+        }
+
+        let n = self.buffer.parse::<f32>().unwrap_or(0.0);
+
+        // 単位 or %
+        if c == '%' {
+            self.current_token = Some(Token::Percentage(n));
+            self.commit_token();
+            self.state = TokenizerState::Data;
+        } else if c.is_ascii_alphabetic() {
+            let mut unit = String::new();
+            unit.push(c);
+            while self.pos < self.input.len() {
+                let next = self.input[self.pos..].chars().next().unwrap();
+                if next.is_ascii_alphabetic() {
+                    self.pos += next.len_utf8();
+                    unit.push(next);
+                } else {
+                    break;
+                }
+            }
+            self.current_token = Some(Token::Dimension(n, unit));
+            self.commit_token();
+            self.state = TokenizerState::Data;
         } else {
-            let n = self.buffer.parse::<f32>().unwrap_or(0.0);
             self.current_token = Some(Token::Number(n));
             self.commit_token();
             self.state = TokenizerState::Data;
@@ -245,7 +319,7 @@ mod tests {
             vec![
                 Token::Ident("body".into()),
                 Token::Whitespace,
-                Token::Delim('{'),
+                Token::LeftBrace,
                 Token::Whitespace,
                 Token::Ident("color".into()),
                 Token::Colon,
@@ -253,7 +327,25 @@ mod tests {
                 Token::Ident("red".into()),
                 Token::Semicolon,
                 Token::Whitespace,
-                Token::Delim('}')
+                Token::RightBrace
+            ]
+        );
+    }
+
+    #[test]
+    fn test_tokenize_dimension_and_percent() {
+        let mut t = Tokenizer::new("margin: 10px 50%;");
+        let tokens: Vec<_> = std::iter::from_fn(|| t.next_token()).collect();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Ident("margin".into()),
+                Token::Colon,
+                Token::Whitespace,
+                Token::Dimension(10.0, "px".into()),
+                Token::Whitespace,
+                Token::Percentage(50.0),
+                Token::Semicolon,
             ]
         );
     }
