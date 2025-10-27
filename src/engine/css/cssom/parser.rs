@@ -50,6 +50,12 @@ impl<'a> Parser<'a> {
 
         while let Some(token) = self.tokenizer.next_token() {
             match token {
+                Token::Colon => {
+                    if let Some(Token::Ident(pseudo)) = self.tokenizer.next_token() {
+                        selectors.push(':'.to_string());
+                        selectors.push(pseudo);
+                    }
+                }
                 Token::Comma => {
                     self.skip_whitespace();
                     if let Some(Token::Ident(next_sel)) = self.tokenizer.last_tokenized_token() {
