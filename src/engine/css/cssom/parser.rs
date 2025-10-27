@@ -62,8 +62,20 @@ impl<'a> Parser<'a> {
                         selectors.push(next_sel.clone());
                     }
                 }
+                Token::Delim('.') => {
+                    if let Some(Token::Ident(class_name)) = self.tokenizer.next_token() {
+                        selectors.push('.'.to_string());
+                        selectors.push(class_name);
+                    }
+                }
+                Token::Whitespace => selectors.push(' '.to_string()),
+                Token::Ident(name) => {
+                    if !selectors.is_empty() && selectors.last() != Some(&" ".to_string()) {
+                        selectors.push(' '.to_string());
+                    }
+                    selectors.push(name);
+                }
                 Token::LeftBrace => break,
-                Token::Whitespace => continue,
                 _ => break,
             }
         }
