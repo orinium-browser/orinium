@@ -3,7 +3,7 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Ident(String),          // color, margin, etc.
-    StringLiteral(String),         // "string" or 'string'
+    StringLiteral(String),  // "string" or 'string'
     Number(f32),            // 1.5, 10, etc.
     Function(String),       // func(
     AtKeyword(String),      // @media, @import, etc.
