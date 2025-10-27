@@ -112,9 +112,109 @@ impl<'a> Parser<'a> {
             Some(Token::Dimension(n, unit)) => {
                 CssValue::Length(Length::from_number_and_unit(n, &unit).unwrap_or_default())
             }
-            Some(Token::Hash(hex)) => CssValue::Color(Color::from_hex(&hex).unwrap_or(Color::BLACK)),
+            Some(Token::Hash(hex)) => {
+                CssValue::Color(Color::from_hex(&hex).unwrap_or(Color::BLACK))
+            }
             Some(Token::Number(n)) => CssValue::Length(Length::Px(n)),
             _ => CssValue::Keyword("invalid".into()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::css::values::{Color, Length};
+
+    #[test]
+    fn test_simple_css() {
+        let css = r#"
+            body, h1 {
+                color: #ff0000;
+                margin: 10px;
+            }
+        "#;
+
+        let mut parser = Parser::new(css);
+        let tree = parser.parse();
+
+        // ルートは Stylesheet
+        let root_ref = tree.root.borrow();
+        assert!(matches!(root_ref.value, CssNodeType::Stylesheet));
+
+        // 最初のルールを取得
+        let rule_rc = Rc::clone(&root_ref.children[0]);
+        drop(root_ref);
+
+        let rule_ref = rule_rc.borrow();
+        if let CssNodeType::Rule { selectors } = &rule_ref.value {
+            println!("Selectors: {:?}", selectors);
+            assert_eq!(selectors.len(), 2);
+            assert!(selectors.contains(&"body".to_string()));
+            assert!(selectors.contains(&"h1".to_string()));
+        } else {
+            panic!("Expected Rule node");
+        }
+
+        // 最初の宣言を取得
+        let decl_rc = Rc::clone(&rule_ref.children[0]);
+        drop(rule_ref);
+
+        let decl_ref = decl_rc.borrow();
+        if let CssNodeType::Declaration { name, value } = &decl_ref.value {
+            assert_eq!(name, "color");
+            if let CssValue::Color(c) = value {
+                assert_eq!(c, &Color::from_hex("ff0000").unwrap());
+            } else {
+                panic!("Expected Color value");
+            }
+        } else {
+            panic!("Expected Declaration node");
+        }
+    }
+
+    #[test]
+    fn test_missing_semicolon() {
+        let css = r#"
+            p {
+                margin: 5px
+                padding: 10px;
+            }
+        "#;
+
+        let mut parser = Parser::new(css);
+        let tree = parser.parse();
+
+        let root_ref = tree.root.borrow();
+        let rule_rc = Rc::clone(&root_ref.children[0]);
+        drop(root_ref);
+
+        let rule_ref = rule_rc.borrow();
+        assert_eq!(rule_ref.children.len(), 2);
+
+        let decl1_rc = Rc::clone(&rule_ref.children[0]);
+        let decl2_rc = Rc::clone(&rule_ref.children[1]);
+        drop(rule_ref);
+
+        let decl1_ref = decl1_rc.borrow();
+        if let CssNodeType::Declaration { name, value } = &decl1_ref.value {
+            assert_eq!(name, "margin");
+            if let CssValue::Length(Length::Px(px)) = value {
+                assert_eq!(*px, 5.0);
+            } else {
+                panic!("Expected Length value");
+            }
+        }
+        drop(decl1_ref);
+
+        let decl2_ref = decl2_rc.borrow();
+        if let CssNodeType::Declaration { name, value } = &decl2_ref.value {
+            assert_eq!(name, "padding");
+            if let CssValue::Length(Length::Px(px)) = value {
+                assert_eq!(*px, 10.0);
+            } else {
+                panic!("Expected Length value");
+            }
         }
     }
 }
