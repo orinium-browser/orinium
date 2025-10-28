@@ -53,11 +53,57 @@ impl<'a> Parser<'a> {
                 Token::Delim('.') | Token::Hash(_) | Token::Ident(_) | Token::Comma => {
                     self.selector_buffer.push_str(&token_to_string(&token));
                 }
-                Token::Whitespace => continue,
+                Token::Whitespace => {
+                    if self.selector_buffer.is_empty() {
+                        continue;
+                    } else {
+                        self.selector_buffer.push(' ');
+                    }
+                }
                 _ => {}
             }
         }
         self.tree.clone()
+    }
+
+    /// セレクタを収集するヘルパー関数
+    fn collect_selector(&mut self) -> Option<String> {
+        let mut selector = String::new();
+
+        let mut token = self.tokenizer.last_tokenized_token().cloned();
+
+        loop {
+            let t = match token.take() {
+                Some(t) => t, // 所有権をムーブ
+                None => match self.tokenizer.next_token() {
+                    Some(t2) => t2,
+                    None => break,
+                },
+            };
+
+            match t {
+                Token::LeftBrace => break,
+                Token::Delim('.') | Token::Hash(_) | Token::Ident(_) | Token::Comma => {
+                    selector.push_str(&token_to_string(&t));
+                }
+                Token::Whitespace => {
+                    if selector.is_empty() {
+                        // skip
+                    } else {
+                        selector.push(' ');
+                    }
+                }
+                _ => {}
+            }
+
+            token = self.tokenizer.next_token();
+        }
+
+        if selector.is_empty() {
+            None
+        } else {
+            Some(selector.trim().to_string())
+        }
     }
 
     fn parse_rule(&mut self, selectors: String) {
@@ -75,6 +121,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_declarations(&mut self) {
+        let mut retrun_flag = false;
         loop {
             match self.tokenizer.next_token() {
                 Some(Token::RightBrace) => break,
@@ -84,7 +131,11 @@ impl<'a> Parser<'a> {
                     let mut value = String::new();
                     while let Some(token) = self.tokenizer.next_token() {
                         match token {
-                            Token::Semicolon | Token::RightBrace => break,
+                            Token::Semicolon => break,
+                            Token::RightBrace => {
+                                retrun_flag = true;
+                                break;
+                            }
                             Token::Ident(s) => value.push_str(&s),
                             Token::Whitespace => value.push(' '),
                             Token::Number(n) => value.push_str(&n.to_string()),
@@ -122,11 +173,16 @@ impl<'a> Parser<'a> {
                         value: parsed_value,
                     });
                     TreeNode::add_child(self.stack.last().unwrap(), decl_node);
+
+                    if retrun_flag {
+                        return;
+                    }
                 }
                 Some(Token::Whitespace) => continue,
                 None => break,
                 _ => continue,
             }
+            println!("Parsing declarations... Current token: {:?}", self.tokenizer.last_tokenized_token());
         }
     }
 
@@ -143,10 +199,12 @@ impl<'a> Parser<'a> {
                 }
                 Token::LeftBrace => {
                     // ブロック型 → 中のルールをパース
+                    println!("Parsing at-rule block for: {}", name);
                     let node = TreeNode::new(CssNodeType::AtRule { name, params });
                     TreeNode::add_child(self.stack.last().unwrap(), node.clone());
                     self.stack.push(node.clone());
                     self.skip_whitespace();
+                    println!("At-rule block started.");
                     if let Some(selector) = self.collect_selector() {
                         self.parse_rule(selector);
                     } else {
@@ -161,43 +219,6 @@ impl<'a> Parser<'a> {
                     params.push(token_to_string(&token));
                 }
             }
-        }
-    }
-
-    /// セレクタを収集するヘルパー関数
-    fn collect_selector(&mut self) -> Option<String> {
-        let mut selector = String::new();
-        while let Some(token) = self.tokenizer.next_token() {
-            match token {
-                Token::Delim(c) if c == '.' || c == '#' => {
-                    selector.push(c);
-                    if let Some(Token::Ident(name)) = self.tokenizer.next_token() {
-                        selector.push_str(&name);
-                    }
-                }
-                Token::Ident(name) => {
-                    if !selector.is_empty() && !selector.ends_with(' ') {
-                        selector.push(' ');
-                    }
-                    selector.push_str(&name);
-                }
-                Token::Colon => {
-                    selector.push(':');
-                    if let Some(Token::Ident(pseudo)) = self.tokenizer.next_token() {
-                        selector.push_str(&pseudo);
-                    }
-                }
-                Token::Hash(s) => {
-                    selector.push('#');
-                    selector.push_str(&s);
-                }
-                _ => break,
-            }
-        }
-        if selector.is_empty() {
-            None
-        } else {
-            Some(selector.trim().to_string())
         }
     }
 
