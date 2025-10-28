@@ -50,7 +50,7 @@ impl<'a> Parser<'a> {
                 Token::AtKeyword(key) => {
                     self.parse_at_rule(key);
                 }
-                Token::Delim('.') | Token::Hash(_) | Token::Ident(_) | Token::Comma => {
+                Token::Delim(_) | Token::Hash(_) | Token::Ident(_) | Token::Comma => {
                     self.selector_buffer.push_str(&token_to_string(&token));
                 }
                 Token::Whitespace => {
@@ -83,7 +83,7 @@ impl<'a> Parser<'a> {
 
             match t {
                 Token::LeftBrace => break,
-                Token::Delim('.') | Token::Hash(_) | Token::Ident(_) | Token::Comma => {
+                Token::Delim(_) | Token::Hash(_) | Token::Ident(_) | Token::Comma => {
                     selector.push_str(&token_to_string(&t));
                 }
                 Token::Whitespace => {
