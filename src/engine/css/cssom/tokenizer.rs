@@ -7,7 +7,7 @@ pub enum Token {
     Number(f32),            // 1.5, 10, etc.
     Function(String),       // func(
     AtKeyword(String),      // @media, @import, etc.
-    Hash(String),           // #fff
+    Hash(String),           // #fff, #id, etc.
     Dimension(f32, String), // 10px, 2em, etc.
     Percentage(f32),
     Colon,
