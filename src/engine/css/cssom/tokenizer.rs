@@ -259,7 +259,7 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn state_hash(&mut self, c: char) {
-        if c.is_alphanumeric() {
+        if c.is_alphanumeric() || c == '-' {
             self.buffer.push(c);
         } else {
             self.current_token = Some(Token::Hash(self.buffer.clone()));
