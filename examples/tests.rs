@@ -14,6 +14,7 @@ async fn main() {
                 println!("Test names:");
                 println!("parse_dom [URL] - Test DOM parsing functionality.");
                 println!("parse_cssom [URL] - Test CSS parsing functionality.");
+                println!("plain_css_parse [CSS] - Test plain CSS parsing functionality.");
                 println!(
                     "send_request [URL] - Test sending HTTP/HTTPS requests (without redirect etc)."
                 );
@@ -55,6 +56,17 @@ async fn main() {
                     println!("CSSOM Tree:\n{}", cssom);
                 } else {
                     eprintln!("Please provide a URL for CSSOM parsing test.");
+                }
+            }
+            "plain_css_parse" => {
+                if args.len() == 3 {
+                    let css = &args[2];
+                    println!("Parsing plain CSS:\n{}", css);
+                    let mut parser = orinium_browser::engine::css::cssom::parser::Parser::new(css);
+                    let cssom = parser.parse();
+                    println!("CSSOM Tree:\n{}", cssom);
+                } else {
+                    eprintln!("Please provide a CSS string for plain CSS parsing test.");
                 }
             }
             "send_request" => {
