@@ -40,15 +40,17 @@ impl<'a> Parser<'a> {
     pub fn parse(&mut self) -> Tree<CssNodeType> {
         while let Some(token) = self.tokenizer.next_token() {
             match token {
-                Token::Ident(selector) => {
-                    self.selector_buffer.push_str(&selector);
-                    self.parse_rule(self.selector_buffer.clone());
+                Token::LeftBrace => {
+                    let selector = self.selector_buffer.clone();
+                    println!("Found selector start: {}", selector);
+                    self.parse_rule(selector);
                     self.selector_buffer.clear();
+                    println!("Completed parsing rule.");
                 }
                 Token::AtKeyword(key) => {
                     self.parse_at_rule(key);
                 }
-                Token::Delim('.') | Token::Delim('#') | Token::Hash(_) => {
+                Token::Delim('.') | Token::Hash(_) | Token::Ident(_) | Token::Comma => {
                     self.selector_buffer.push_str(&token_to_string(&token));
                 }
                 Token::Whitespace => continue,
@@ -58,41 +60,9 @@ impl<'a> Parser<'a> {
         self.tree.clone()
     }
 
-    fn parse_rule(&mut self, first_selector: String) {
-        println!("Parsing rule for selector: {}", first_selector);
-        let mut selectors = vec![first_selector];
-
-        while let Some(token) = self.tokenizer.next_token() {
-            match token {
-                Token::Colon => {
-                    if let Some(Token::Ident(pseudo)) = self.tokenizer.next_token() {
-                        selectors.push(':'.to_string());
-                        selectors.push(pseudo);
-                    }
-                }
-                Token::Comma => {
-                    self.skip_whitespace();
-                    if let Some(Token::Ident(next_sel)) = self.tokenizer.last_tokenized_token() {
-                        selectors.push(next_sel.clone());
-                    }
-                }
-                Token::Delim('.') => {
-                    if let Some(Token::Ident(class_name)) = self.tokenizer.next_token() {
-                        selectors.push('.'.to_string());
-                        selectors.push(class_name);
-                    }
-                }
-                Token::Whitespace => selectors.push(' '.to_string()),
-                Token::Ident(name) => {
-                    if !selectors.is_empty() && selectors.last() != Some(&" ".to_string()) {
-                        selectors.push(' '.to_string());
-                    }
-                    selectors.push(name);
-                }
-                Token::LeftBrace => break,
-                _ => break,
-            }
-        }
+    fn parse_rule(&mut self, selectors: String) {
+        println!("Parsing rule for selector: {}", selectors);
+        let selectors: Vec<String> = selectors.split(',').map(|s| s.trim().to_string()).collect();
 
         let rule_node = TreeNode::new(CssNodeType::Rule {
             selectors: selectors.clone(),
