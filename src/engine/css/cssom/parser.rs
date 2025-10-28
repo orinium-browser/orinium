@@ -8,10 +8,7 @@ use std::rc::Rc;
 pub enum CssNodeType {
     Stylesheet,
     Rule { selectors: Vec<String> },
-    AtRule {
-        name: String,
-        params: Vec<String>,
-    },
+    AtRule { name: String, params: Vec<String> },
     Declaration { name: String, value: CssValue },
 }
 
@@ -26,6 +23,7 @@ pub struct Parser<'a> {
     tokenizer: crate::engine::css::cssom::tokenizer::Tokenizer<'a>,
     tree: Tree<CssNodeType>,
     stack: Vec<Rc<RefCell<TreeNode<CssNodeType>>>>,
+    selector_buffer: String,
 }
 
 impl<'a> Parser<'a> {
@@ -35,14 +33,24 @@ impl<'a> Parser<'a> {
             tokenizer: Tokenizer::new(input),
             tree: tree.clone(),
             stack: vec![tree.root.clone()],
+            selector_buffer: String::new(),
         }
     }
 
     pub fn parse(&mut self) -> Tree<CssNodeType> {
         while let Some(token) = self.tokenizer.next_token() {
             match token {
-                Token::Ident(selector) => self.parse_rule(selector),
-                Token::AtKeyword(key) => { self.parse_at_rule(key);}
+                Token::Ident(selector) => {
+                    self.selector_buffer.push_str(&selector);
+                    self.parse_rule(self.selector_buffer.clone());
+                    self.selector_buffer.clear();
+                }
+                Token::AtKeyword(key) => {
+                    self.parse_at_rule(key);
+                }
+                Token::Delim('.') | Token::Delim('#') => {
+                    self.selector_buffer.push_str(&token_to_string(&token));
+                }
                 Token::Whitespace => continue,
                 _ => {}
             }
@@ -159,26 +167,20 @@ impl<'a> Parser<'a> {
             match &token {
                 Token::Semicolon => {
                     // セミコロンで終わる → 単一型 AtRule
-                    let node = TreeNode::new(CssNodeType::AtRule {
-                        name,
-                        params,
-                    });
+                    let node = TreeNode::new(CssNodeType::AtRule { name, params });
                     TreeNode::add_child(self.stack.last().unwrap(), node);
                     return;
                 }
                 Token::LeftBrace => {
                     // ブロック型 → 中のルールをパース
-                    let node = TreeNode::new(CssNodeType::AtRule {
-                        name,
-                        params,
-                    });
+                    let node = TreeNode::new(CssNodeType::AtRule { name, params });
                     TreeNode::add_child(self.stack.last().unwrap(), node.clone());
                     self.stack.push(node.clone());
                     self.skip_whitespace();
-                    if let Some(Token::Ident(selector)) = self.tokenizer.last_tokenized_token() {
-                        self.parse_rule(selector.to_string());
+                    if let Some(selector) = self.collect_selector() {
+                        self.parse_rule(selector);
                     } else {
-                        //panic!("Expected selector after at-rule block start");
+                        panic!("Expected selector inside at-rule block");
                     }
                     self.stack.pop();
                     return;
@@ -192,6 +194,42 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// セレクタを収集するヘルパー関数
+    fn collect_selector(&mut self) -> Option<String> {
+        let mut selector = String::new();
+        while let Some(token) = self.tokenizer.next_token() {
+            match token {
+                Token::Delim(c) if c == '.' || c == '#' => {
+                    selector.push(c);
+                    if let Some(Token::Ident(name)) = self.tokenizer.next_token() {
+                        selector.push_str(&name);
+                    }
+                }
+                Token::Ident(name) => {
+                    if !selector.is_empty() && !selector.ends_with(' ') {
+                        selector.push(' ');
+                    }
+                    selector.push_str(&name);
+                }
+                Token::Colon => {
+                    selector.push(':');
+                    if let Some(Token::Ident(pseudo)) = self.tokenizer.next_token() {
+                        selector.push_str(&pseudo);
+                    }
+                }
+                Token::Hash(s) => {
+                    selector.push('#');
+                    selector.push_str(&s);
+                }
+                _ => break,
+            }
+        }
+        if selector.is_empty() {
+            None
+        } else {
+            Some(selector.trim().to_string())
+        }
+    }
 
     fn expect_colon(&mut self) {
         match self.tokenizer.next_token() {
@@ -219,7 +257,7 @@ impl<'a> Parser<'a> {
     }
 }
 
-    /// トークンを文字列化するヘルパー関数
+/// トークンを文字列化するヘルパー関数
 fn token_to_string(token: &Token) -> String {
     match token {
         Token::Ident(s) => s.clone(),
