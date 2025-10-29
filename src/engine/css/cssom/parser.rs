@@ -26,6 +26,12 @@ pub struct Parser<'a> {
     selector_buffer: String,
 }
 
+enum MaybeSelector {
+    Selector(String),
+    NotSelector(String),
+    None,
+}
+
 impl<'a> Parser<'a> {
     pub fn new(input: &'a str) -> Self {
         let tree = Tree::new(CssNodeType::Stylesheet);
@@ -67,7 +73,7 @@ impl<'a> Parser<'a> {
     }
 
     /// セレクタを収集するヘルパー関数
-    fn collect_selector(&mut self) -> Option<String> {
+    fn collect_selector(&mut self) -> MaybeSelector {
         let mut selector = String::new();
 
         let mut token = self.tokenizer.last_tokenized_token().cloned();
@@ -84,6 +90,7 @@ impl<'a> Parser<'a> {
             match t {
                 Token::LeftBrace => break,
                 Token::Delim(_) | Token::Hash(_) | Token::Ident(_) | Token::Comma => {
+                    // セレクタの一部として追加
                     selector.push_str(&token_to_string(&t));
                 }
                 Token::Whitespace => {
@@ -93,16 +100,16 @@ impl<'a> Parser<'a> {
                         selector.push(' ');
                     }
                 }
-                _ => {}
+                _ => return MaybeSelector::NotSelector(selector.trim().to_string()), // セレクタ以外のトークンが出現した場合はそのまま返して終了
             }
 
             token = self.tokenizer.next_token();
         }
 
         if selector.is_empty() {
-            None
+            MaybeSelector::None
         } else {
-            Some(selector.trim().to_string())
+            MaybeSelector::Selector(selector.trim().to_string())
         }
     }
 
@@ -182,7 +189,10 @@ impl<'a> Parser<'a> {
                 None => break,
                 _ => continue,
             }
-            println!("Parsing declarations... Current token: {:?}", self.tokenizer.last_tokenized_token());
+            println!(
+                "Parsing declarations... Current token: {:?}",
+                self.tokenizer.last_tokenized_token()
+            );
         }
     }
 
@@ -205,8 +215,33 @@ impl<'a> Parser<'a> {
                     self.stack.push(node.clone());
                     self.skip_whitespace();
                     println!("At-rule block started.");
-                    if let Some(selector) = self.collect_selector() {
+                    let maybe_selector = self.collect_selector();
+                    if let MaybeSelector::Selector(selector) = maybe_selector {
+                        // セレクタが来た場合 → ルールとしてパース
                         self.parse_rule(selector);
+
+                    } else if let MaybeSelector::NotSelector(name) = maybe_selector {
+                        // セレクタ以外のトークンが来た場合 → 宣言としてパース
+                        // 最初のトークンを文字列化して処理
+                        let mut value = String::new();
+                        while let Some(token) = self.tokenizer.next_token() {
+                            match token {
+                                Token::Semicolon | Token::RightBrace => break,
+                                _ => {
+                                    value.push_str(&token_to_string(&token));
+                                }
+                            }                            
+                        }
+                        let parsed_value = self.parse_value(&value.trim().to_string());
+                        let decl_node = TreeNode::new(CssNodeType::Declaration {
+                            name: name.trim().to_string(),
+                            value: parsed_value,
+                        });
+                        TreeNode::add_child(self.stack.last().unwrap(), decl_node);
+
+                        // その後の宣言をパース
+                        self.parse_declarations();
+
                     } else {
                         panic!("Expected selector inside at-rule block");
                     }
@@ -249,6 +284,8 @@ impl<'a> Parser<'a> {
 }
 
 /// トークンを文字列化するヘルパー関数
+/// 例: Token::Ident("body") -> "body"
+/// コメントは無視する
 fn token_to_string(token: &Token) -> String {
     match token {
         Token::Ident(s) => s.clone(),
@@ -257,6 +294,7 @@ fn token_to_string(token: &Token) -> String {
         Token::Dimension(n, unit) => format!("{}{}", n, unit),
         Token::Percentage(n) => format!("{}%", n),
         Token::Colon => ":".into(),
+        Token::Semicolon => ";".into(),
         Token::Comma => ",".into(),
         Token::LeftParen => "(".into(),
         Token::RightParen => ")".into(),
