@@ -29,6 +29,39 @@ impl Length {
             Length::None => 0.0,
         }
     }
+
+    /// CSS文字列からLength
+    pub fn from_css(value: &str) -> Option<Length> {
+        let value = value.trim();
+        if value.eq_ignore_ascii_case("auto") {
+            return Some(Length::Auto);
+        } else if value.ends_with("px") {
+            let num_str = &value[..value.len() - 2];
+            if let Ok(num) = num_str.parse::<f32>() {
+                return Some(Length::Px(num));
+            }
+        } else if value.ends_with("em") {
+            let num_str = &value[..value.len() - 2];
+            if let Ok(num) = num_str.parse::<f32>() {
+                return Some(Length::Em(num));
+            }
+        } else if value.ends_with('%') {
+            let num_str = &value[..value.len() - 1];
+            if let Ok(num) = num_str.parse::<f32>() {
+                return Some(Length::Percent(num));
+            }
+        }
+        None
+    }
+
+    pub fn from_number_and_unit(value: f32, unit: &str) -> Option<Length> {
+        match unit {
+            "px" => Some(Length::Px(value)),
+            "em" => Some(Length::Em(value)),
+            "%" => Some(Length::Percent(value)),
+            _ => None,
+        }
+    }
 }
 
 impl Default for Length {

@@ -47,6 +47,11 @@ impl<T> Tree<T> {
             root: TreeNode::new(root_value),
         }
     }
+
+    #[cfg(debug_assertions)]
+    pub fn from_tree_node(root: Rc<RefCell<TreeNode<T>>>) -> Self {
+        Tree { root }
+    }
 }
 
 impl<T: Debug + Clone> Display for Tree<T> {

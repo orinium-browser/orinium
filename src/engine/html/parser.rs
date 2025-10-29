@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 #[derive(Debug, Clone)]
-pub enum NodeType {
+pub enum HtmlNodeType {
     Document,
     Element {
         tag_name: String,
@@ -22,13 +22,13 @@ pub enum NodeType {
 
 pub struct Parser<'a> {
     tokenizer: crate::engine::html::tokenizer::Tokenizer<'a>,
-    tree: Tree<NodeType>,
-    stack: Vec<Rc<RefCell<TreeNode<NodeType>>>>,
+    tree: Tree<HtmlNodeType>,
+    stack: Vec<Rc<RefCell<TreeNode<HtmlNodeType>>>>,
 }
 
 impl<'a> Parser<'a> {
     pub fn new(input: &'a str) -> Self {
-        let document = Tree::new(NodeType::Document);
+        let document = Tree::new(HtmlNodeType::Document);
 
         Self {
             tokenizer: Tokenizer::new(input),
@@ -37,7 +37,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse(&mut self) -> Tree<NodeType> {
+    pub fn parse(&mut self) -> Tree<HtmlNodeType> {
         while let Some(token) = self.tokenizer.next_token() {
             //println!("---");
             //println!("Processing token: {token:?}");
@@ -63,7 +63,7 @@ impl<'a> Parser<'a> {
         {
             let mut parent = Rc::clone(self.stack.last().unwrap());
             if self.check_start_tag_with_invalid_nesting(&name, &parent) {
-                if let NodeType::Element { tag_name, .. } = &parent.borrow().value {
+                if let HtmlNodeType::Element { tag_name, .. } = &parent.borrow().value {
                     //println!("Auto-closing tag: <{}> to allow <{}> inside it.", tag_name, name);
                     self.handle_end_tag(Token::EndTag {
                         name: tag_name.clone(),
@@ -72,7 +72,7 @@ impl<'a> Parser<'a> {
                 parent = Rc::clone(self.stack.last().unwrap());
             }
 
-            let new_node = TreeNode::new(NodeType::Element {
+            let new_node = TreeNode::new(HtmlNodeType::Element {
                 tag_name: name.clone(),
                 attributes: attributes.clone(),
             });
@@ -80,7 +80,7 @@ impl<'a> Parser<'a> {
             TreeNode::add_child(&parent, new_node.clone());
             /*
             let new_node = Rc::new(RefCell::new(Node {
-                value: NodeType::Element {
+                value: HtmlNodeType::Element {
                     tag_name: name,
                     attributes,
                 },
@@ -101,7 +101,7 @@ impl<'a> Parser<'a> {
     fn handle_end_tag(&mut self, token: Token) {
         if let Token::EndTag { name } = token {
             while let Some(top) = self.stack.pop() {
-                if let NodeType::Element { tag_name, .. } = &top.borrow().value {
+                if let HtmlNodeType::Element { tag_name, .. } = &top.borrow().value {
                     if tag_name == &name {
                         break;
                     }
@@ -116,7 +116,7 @@ impl<'a> Parser<'a> {
             // 親ノードが pre, textarea, script, style でない場合、空白改行を無視する
             if let Some(parent_node) = &parent.borrow().parent {
                 let parent_node_borrow = parent_node.borrow();
-                if let NodeType::Element { tag_name, .. } = &parent_node_borrow.value {
+                if let HtmlNodeType::Element { tag_name, .. } = &parent_node_borrow.value {
                     if !matches!(tag_name.as_str(), "pre" | "textarea" | "script" | "style")
                         && data.trim().is_empty()
                     {
@@ -128,7 +128,7 @@ impl<'a> Parser<'a> {
             } else if data.trim().is_empty() {
                 return;
             }
-            let text_node = TreeNode::new(NodeType::Text(data));
+            let text_node = TreeNode::new(HtmlNodeType::Text(data));
             TreeNode::add_child(&parent, text_node);
         }
     }
@@ -136,7 +136,7 @@ impl<'a> Parser<'a> {
     fn handle_comment(&mut self, token: Token) {
         if let Token::Comment(data) = token {
             let parent = Rc::clone(self.stack.last().unwrap());
-            let comment_node = TreeNode::new(NodeType::Comment(data));
+            let comment_node = TreeNode::new(HtmlNodeType::Comment(data));
             TreeNode::add_child(&parent, comment_node);
         }
     }
@@ -150,7 +150,7 @@ impl<'a> Parser<'a> {
         } = token
         {
             let parent = Rc::clone(self.stack.last().unwrap());
-            let doctype_node = TreeNode::new(NodeType::Doctype {
+            let doctype_node = TreeNode::new(HtmlNodeType::Doctype {
                 name,
                 public_id,
                 system_id,
@@ -162,9 +162,9 @@ impl<'a> Parser<'a> {
     fn check_start_tag_with_invalid_nesting(
         &self,
         name: &String,
-        parent: &Rc<RefCell<TreeNode<NodeType>>>,
+        parent: &Rc<RefCell<TreeNode<HtmlNodeType>>>,
     ) -> bool {
-        if let NodeType::Element { tag_name, .. } = &parent.borrow().value {
+        if let HtmlNodeType::Element { tag_name, .. } = &parent.borrow().value {
             // <p> の中に <p> が来た場合、前の <p> を閉じる
             if tag_name == "p" && name == "p" {
                 return true;
@@ -211,17 +211,17 @@ impl<'a> Parser<'a> {
 
         for child in &root.borrow().children {
             match &child.borrow().value {
-                NodeType::Doctype { .. } => has_doctype = true,
-                NodeType::Element { tag_name, .. } if tag_name.to_lowercase() == "html" => {
+                HtmlNodeType::Doctype { .. } => has_doctype = true,
+                HtmlNodeType::Element { tag_name, .. } if tag_name.to_lowercase() == "html" => {
                     has_html = true;
                     for html_child in &child.borrow().children {
                         match &html_child.borrow().value {
-                            NodeType::Element { tag_name, .. }
+                            HtmlNodeType::Element { tag_name, .. }
                                 if tag_name.to_lowercase() == "head" =>
                             {
                                 has_head = true;
                             }
-                            NodeType::Element { tag_name, .. }
+                            HtmlNodeType::Element { tag_name, .. }
                                 if tag_name.to_lowercase() == "body" =>
                             {
                                 has_body = true;
@@ -235,7 +235,7 @@ impl<'a> Parser<'a> {
         }
 
         if !has_doctype {
-            let doctype_node = TreeNode::new(NodeType::Doctype {
+            let doctype_node = TreeNode::new(HtmlNodeType::Doctype {
                 name: Some("html".to_string()),
                 public_id: None,
                 system_id: None,
@@ -244,14 +244,14 @@ impl<'a> Parser<'a> {
         }
 
         if !has_html {
-            let html_node = TreeNode::new(NodeType::Element {
+            let html_node = TreeNode::new(HtmlNodeType::Element {
                 tag_name: "html".to_string(),
                 attributes: vec![],
             });
             root.borrow_mut().children.push(Rc::clone(&html_node));
 
             if !has_head {
-                let head_node = TreeNode::new(NodeType::Element {
+                let head_node = TreeNode::new(HtmlNodeType::Element {
                     tag_name: "head".to_string(),
                     attributes: vec![],
                 });
@@ -259,7 +259,7 @@ impl<'a> Parser<'a> {
             }
 
             if !has_body {
-                let body_node = TreeNode::new(NodeType::Element {
+                let body_node = TreeNode::new(HtmlNodeType::Element {
                     tag_name: "body".to_string(),
                     attributes: vec![],
                 });

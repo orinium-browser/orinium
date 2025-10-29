@@ -36,6 +36,25 @@ impl Color {
         }
     }
 
+    pub fn from_hex(hex: &str) -> Option<Color> {
+        let hex = hex.trim_start_matches('#');
+        match hex.len() {
+            3 => {
+                let r = u8::from_str_radix(&hex[0..1].repeat(2), 16).ok()?;
+                let g = u8::from_str_radix(&hex[1..2].repeat(2), 16).ok()?;
+                let b = u8::from_str_radix(&hex[2..3].repeat(2), 16).ok()?;
+                Some(Color::Rgba(r, g, b, 1.0))
+            }
+            6 => {
+                let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+                let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+                let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+                Some(Color::Rgba(r, g, b, 1.0))
+            }
+            _ => None,
+        }
+    }
+
     pub fn from_hsl(h: f32, s: f32, l: f32, a: f32) -> Color {
         // （簡易実装：CSS Color Module Level 3準拠）
         let c = (1.0 - (2.0 * l - 1.0).abs()) * s;

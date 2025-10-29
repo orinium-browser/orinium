@@ -12,19 +12,15 @@ async fn main() {
                 println!("This is a test application for Orinium Browser development.");
                 println!("Usage: cargo run --example tests [NAME]\n");
                 println!("Test names:");
-                println!("create_window - Create a window and display it.");
                 println!("parse_dom [URL] - Test DOM parsing functionality.");
+                println!("parse_cssom [URL] - Test CSS parsing functionality.");
+                println!("plain_css_parse [CSS] - Test plain CSS parsing functionality.");
                 println!(
                     "send_request [URL] - Test sending HTTP/HTTPS requests (without redirect etc)."
                 );
                 println!("fetch_url [URL] - Test network fetching functionality.");
                 println!("simple_render [URL] - Test simple rendering functionality.");
                 println!("help - Show this help message.");
-            }
-            "create_window" => {
-                if let Err(e) = run() {
-                    eprintln!("Failed to create window: {e:?}");
-                }
             }
             "parse_dom" => {
                 if args.len() == 3 {
@@ -42,6 +38,35 @@ async fn main() {
                     println!("DOM Tree:\n{}", dom);
                 } else {
                     eprintln!("Please provide a URL for DOM parsing test.");
+                }
+            }
+            "parse_cssom" => {
+                if args.len() == 3 {
+                    let url = &args[2];
+                    println!("Parsing CSSOM for URL: {}", url);
+                    let net = NetworkCore::new();
+                    let resp = net.fetch_url(url).await.expect("Failed to fetch URL");
+                    let css = String::from_utf8_lossy(&resp.body).to_string();
+                    println!(
+                        "Fetched CSS (first 50 chars):\n{}",
+                        css.chars().take(50).collect::<String>()
+                    );
+                    let mut parser = orinium_browser::engine::css::cssom::parser::Parser::new(&css);
+                    let cssom = parser.parse();
+                    println!("CSSOM Tree:\n{}", cssom);
+                } else {
+                    eprintln!("Please provide a URL for CSSOM parsing test.");
+                }
+            }
+            "plain_css_parse" => {
+                if args.len() == 3 {
+                    let css = &args[2];
+                    println!("Parsing plain CSS:\n{}", css);
+                    let mut parser = orinium_browser::engine::css::cssom::parser::Parser::new(css);
+                    let cssom = parser.parse();
+                    println!("CSSOM Tree:\n{}", cssom);
+                } else {
+                    eprintln!("Please provide a CSS string for plain CSS parsing test.");
                 }
             }
             "send_request" => {
@@ -126,14 +151,4 @@ async fn main() {
         eprintln!("No arguments provided. Use help for usage information.");
     }
     print!("\n");
-}
-
-fn run() -> anyhow::Result<()> {
-    env_logger::init();
-
-    let event_loop = EventLoop::with_user_event().build()?;
-    let mut app = App::new();
-    event_loop.run_app(&mut app)?;
-
-    Ok(())
 }
