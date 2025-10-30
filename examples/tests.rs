@@ -1,10 +1,11 @@
 use orinium_browser::{engine::html::parser, platform::network::NetworkCore, platform::ui::App};
 
+use anyhow::Result;
 use std::env;
 use winit::event_loop::EventLoop;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect::<Vec<String>>();
     if args.len() >= 2 {
         match args[1].as_str() {
@@ -52,7 +53,7 @@ async fn main() {
                         css.chars().take(50).collect::<String>()
                     );
                     let mut parser = orinium_browser::engine::css::cssom::parser::Parser::new(&css);
-                    let cssom = parser.parse();
+                    let cssom = parser.parse()?;
                     println!("CSSOM Tree:\n{}", cssom);
                 } else {
                     eprintln!("Please provide a URL for CSSOM parsing test.");
@@ -63,7 +64,7 @@ async fn main() {
                     let css = &args[2];
                     println!("Parsing plain CSS:\n{}", css);
                     let mut parser = orinium_browser::engine::css::cssom::parser::Parser::new(css);
-                    let cssom = parser.parse();
+                    let cssom = parser.parse()?;
                     println!("CSSOM Tree:\n{}", cssom);
                 } else {
                     eprintln!("Please provide a CSS string for plain CSS parsing test.");
@@ -151,4 +152,6 @@ async fn main() {
         eprintln!("No arguments provided. Use help for usage information.");
     }
     print!("\n");
+
+    Ok(())
 }
