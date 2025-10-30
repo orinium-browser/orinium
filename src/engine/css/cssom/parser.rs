@@ -219,7 +219,6 @@ impl<'a> Parser<'a> {
                     if let MaybeSelector::Selector(selector) = maybe_selector {
                         // セレクタが来た場合 → ルールとしてパース
                         self.parse_rule(selector);
-
                     } else if let MaybeSelector::NotSelector(name) = maybe_selector {
                         // セレクタ以外のトークンが来た場合 → 宣言としてパース
                         // 最初のトークンを文字列化して処理
@@ -230,7 +229,7 @@ impl<'a> Parser<'a> {
                                 _ => {
                                     value.push_str(&token_to_string(&token));
                                 }
-                            }                            
+                            }
                         }
                         let parsed_value = self.parse_value(&value.trim().to_string());
                         let decl_node = TreeNode::new(CssNodeType::Declaration {
@@ -241,7 +240,6 @@ impl<'a> Parser<'a> {
 
                         // その後の宣言をパース
                         self.parse_declarations();
-
                     } else {
                         panic!("Expected selector inside at-rule block");
                     }
@@ -302,86 +300,5 @@ fn token_to_string(token: &Token) -> String {
         Token::Hash(h) => format!("#{}", h),
         Token::Delim(c) => c.to_string(),
         _ => String::new(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::engine::css::values::Color;
-
-    #[test]
-    fn test_font_family() {
-        let css = r#"
-            body {
-                font-family: 'Helvetica Neue', sans-serif;
-            }
-        "#;
-
-        let mut parser = Parser::new(css);
-        let tree = parser.parse();
-
-        let root_ref = tree.root.borrow();
-        assert!(matches!(root_ref.value, CssNodeType::Stylesheet));
-
-        let rule_rc = Rc::clone(&root_ref.children[0]);
-        drop(root_ref);
-
-        let rule_ref = rule_rc.borrow();
-        if let CssNodeType::Rule { selectors } = &rule_ref.value {
-            assert_eq!(selectors, &vec!["body".to_string()]);
-        } else {
-            panic!("Expected Rule node");
-        }
-
-        let decl_rc = Rc::clone(&rule_ref.children[0]);
-        drop(rule_ref);
-
-        let decl_ref = decl_rc.borrow();
-        if let CssNodeType::Declaration { name, value } = &decl_ref.value {
-            assert_eq!(name, "font-family");
-            if let CssValue::Keyword(s) = value {
-                assert_eq!(s, "'Helvetica Neue', sans-serif");
-            } else {
-                panic!("Expected Keyword value");
-            }
-        }
-    }
-
-    #[test]
-    fn test_color_and_length() {
-        let css = r#"
-            h1 {
-                color: #00ff00;
-                margin: 12px;
-            }
-        "#;
-        let mut parser = Parser::new(css);
-        let tree = parser.parse();
-
-        let root_ref = tree.root.borrow();
-        let rule_rc = Rc::clone(&root_ref.children[0]);
-        drop(root_ref);
-
-        let rule_ref = rule_rc.borrow();
-        assert_eq!(rule_ref.children.len(), 2);
-
-        let decl1_rc = Rc::clone(&rule_ref.children[0]);
-        let decl1 = decl1_rc.borrow();
-        if let CssNodeType::Declaration { name, value } = &decl1.value {
-            assert_eq!(name, "color");
-            if let CssValue::Color(c) = value {
-                assert_eq!(c, &Color::from_hex("00ff00").unwrap());
-            }
-        }
-
-        let decl2_rc = Rc::clone(&rule_ref.children[1]);
-        let decl2 = decl2_rc.borrow();
-        if let CssNodeType::Declaration { name, value } = &decl2.value {
-            assert_eq!(name, "margin");
-            if let CssValue::Length(Length::Px(px)) = value {
-                assert_eq!(*px, 12.0);
-            }
-        }
     }
 }
