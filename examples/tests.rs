@@ -1,4 +1,7 @@
-use orinium_browser::{engine::html::parser, platform::network::NetworkCore, platform::ui::App};
+use orinium_browser::{
+    engine::css::cssom::Parser as CssParser, engine::html::parser::Parser as HtmlParser,
+    platform::network::NetworkCore, platform::ui::App,
+};
 
 use anyhow::Result;
 use std::env;
@@ -34,7 +37,7 @@ async fn main() -> Result<()> {
                         "Fetched HTML (first 50 chars):\n{}",
                         html.chars().take(50).collect::<String>()
                     );
-                    let mut parser = parser::Parser::new(&html);
+                    let mut parser = HtmlParser::new(&html);
                     let dom = parser.parse();
                     println!("DOM Tree:\n{}", dom);
                 } else {
@@ -125,10 +128,13 @@ async fn main() -> Result<()> {
                     let net = NetworkCore::new();
                     let resp = net.fetch_url(url).await.expect("Failed to fetch URL");
                     let html = String::from_utf8_lossy(&resp.body).to_string();
-                    let mut parser = parser::Parser::new(&html);
-                    let dom = parser.parse();
+                    let mut html_parser = HtmlParser::new(&html);
+                    let dom = html_parser.parse();
+                    let css = "";
+                    let mut css_parser = CssParser::new(css);
+                    let cssom = css_parser.parse()?;
                     let renderer = orinium_browser::engine::renderer::Renderer::new(800.0, 600.0);
-                    let draw_commands = renderer.generate_draw_commands(&dom);
+                    let draw_commands = renderer.generate_draw_commands(&dom, &cssom);
                     println!("Generated {} draw commands", draw_commands.len());
                     println!("Draw Commands:\n{:#?}", draw_commands);
                     // ウィンドウとイベントループを作成

@@ -5,8 +5,7 @@ use super::color::Color;
 use super::length::Length;
 
 /// CSSのborder-styleプロパティで使われる値
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BorderStyle {
     #[default]
     None,
@@ -19,7 +18,6 @@ pub enum BorderStyle {
     Inset,
     Outset,
 }
-
 
 /// 単一の辺のborder定義（top, right, bottom, left）
 #[derive(Debug, Clone)]
