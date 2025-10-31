@@ -61,11 +61,6 @@ impl<'a> Parser<'a> {
                 Token::Delim(_) | Token::Hash(_) | Token::Ident(_) | Token::Comma => {
                     self.selector_buffer.push_str(&token_to_string(&token));
                 }
-                Token::Whitespace => {
-                    if !self.selector_buffer.is_empty() {
-                        self.selector_buffer.push(' ');
-                    }
-                }
                 _ => {}
             }
         }
