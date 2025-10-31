@@ -3,6 +3,8 @@ use orinium_browser::{
     platform::network::NetworkCore, platform::ui::App,
 };
 
+use colored::*;
+
 use anyhow::Result;
 use std::env;
 use winit::event_loop::EventLoop;
@@ -13,18 +15,24 @@ async fn main() -> Result<()> {
     if args.len() >= 2 {
         match args[1].as_str() {
             "help" => {
-                println!("This is a test application for Orinium Browser development.");
-                println!("Usage: cargo run --example tests [NAME]\n");
-                println!("Test names:");
-                println!("parse_dom [URL] - Test DOM parsing functionality.");
-                println!("parse_cssom [URL] - Test CSS parsing functionality.");
-                println!("plain_css_parse [CSS] - Test plain CSS parsing functionality.");
-                println!(
-                    "send_request [URL] - Test sending HTTP/HTTPS requests (without redirect etc)."
-                );
-                println!("fetch_url [URL] - Test network fetching functionality.");
-                println!("simple_render [URL] - Test simple rendering functionality.");
-                println!("help - Show this help message.");
+                let commands = get_commands();
+                println!("{}", "Orinium Browser Test Application".bold().underline());
+                println!("\n{}", "Usage:".bold());
+                println!("  cargo run --example tests [COMMAND] [ARGS]\n");
+
+                println!("{}", "Available Commands:".bold());
+                for (name, (description, args)) in &commands {
+                    println!(
+                        "  {:<15} {:<4} - {}",
+                        name.green().bold(),
+                        args.cyan(),
+                        description
+                    );
+                }
+
+                println!("\n{}", "Note:".bold());
+                println!("  - URLs must include the scheme (http:// or https://).");
+                println!("  - For 'plain_css_parse', the CSS string must be quoted.");
             }
             "parse_dom" => {
                 if args.len() == 3 {
@@ -160,4 +168,55 @@ async fn main() -> Result<()> {
     print!("\n");
 
     Ok(())
+}
+
+use std::collections::HashMap;
+
+fn get_commands<'a>() -> HashMap<&'a str, (&'a str, &'a str)> {
+    let mut map = HashMap::new();
+
+    map.insert(
+        "parse_dom",
+        (
+            "Fetch and parse the HTML of the given URL into a DOM tree.",
+            "[URL]",
+        ),
+    );
+    map.insert(
+        "parse_cssom",
+        (
+            "Fetch and parse the CSS of the given URL into a CSSOM tree.",
+            "[URL]",
+        ),
+    );
+    map.insert(
+        "plain_css_parse",
+        (
+            "Parse a CSS string directly into a CSSOM tree.",
+            "[CSS]",
+        ),
+    );
+    map.insert(
+        "send_request",
+        (
+            "Send a simple HTTP GET request and display the response.",
+            "[URL]",
+        ),
+    );
+    map.insert(
+        "fetch_url",
+        (
+            "Fetch a URL and display status, headers, and body.",
+            "[URL]",
+        ),
+    );
+    map.insert(
+        "simple_render",
+        (
+            "Fetch HTML from a URL, parse DOM and CSSOM, and generate draw commands.",
+            "[URL]",
+        ),
+    );
+
+    map
 }
