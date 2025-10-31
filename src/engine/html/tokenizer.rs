@@ -4,7 +4,6 @@ pub struct Attribute {
     pub value: String,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, PartialEq)]
 pub enum Token {
     Doctype {
@@ -25,7 +24,6 @@ pub enum Token {
     Text(String),
 }
 
-#[allow(dead_code)]
 #[derive(Debug, PartialEq)]
 pub enum TokenizerState {
     Data,
@@ -55,7 +53,6 @@ pub enum TokenizerState {
     BogusDoctype,
 }
 
-#[allow(dead_code)]
 pub struct Tokenizer<'a> {
     input: &'a str,
     pos: usize,
@@ -66,7 +63,6 @@ pub struct Tokenizer<'a> {
     buffer: String,
 }
 
-#[allow(dead_code)]
 impl TokenizerState {
     fn is_doctype(&self) -> bool {
         matches!(
