@@ -35,18 +35,15 @@ impl Length {
         let value = value.trim();
         if value.eq_ignore_ascii_case("auto") {
             return Some(Length::Auto);
-        } else if value.ends_with("px") {
-            let num_str = &value[..value.len() - 2];
+        } else if let Some(num_str) = value.strip_suffix("px") {
             if let Ok(num) = num_str.parse::<f32>() {
                 return Some(Length::Px(num));
             }
-        } else if value.ends_with("em") {
-            let num_str = &value[..value.len() - 2];
+        } else if let Some(num_str) = value.strip_suffix("em") {
             if let Ok(num) = num_str.parse::<f32>() {
                 return Some(Length::Em(num));
             }
-        } else if value.ends_with('%') {
-            let num_str = &value[..value.len() - 1];
+        } else if let Some(num_str) = value.strip_suffix('%') {
             if let Ok(num) = num_str.parse::<f32>() {
                 return Some(Length::Percent(num));
             }
@@ -73,9 +70,9 @@ impl Default for Length {
 impl fmt::Display for Length {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Length::Px(v) => write!(f, "{}px", v),
-            Length::Em(v) => write!(f, "{}em", v),
-            Length::Percent(v) => write!(f, "{}%", v),
+            Length::Px(v) => write!(f, "{v}px"),
+            Length::Em(v) => write!(f, "{v}em"),
+            Length::Percent(v) => write!(f, "{v}%"),
             Length::Auto => write!(f, "auto"),
             Length::None => write!(f, "none"),
         }

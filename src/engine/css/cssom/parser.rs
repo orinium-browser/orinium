@@ -175,7 +175,7 @@ impl<'a> Parser<'a> {
                 }
                 None => break,
                 Some(Token::Comment(_)) => continue,
-                Some(tok) => bail!("Unexpected token in declaration: {:?}", tok),
+                Some(tok) => bail!("Unexpected token in declaration: {tok:?}"),
             }
         }
         Ok(())
@@ -207,7 +207,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_at_rule_block(&mut self, name: String, params: Vec<String>) -> Result<()> {
-        println!("Parsing at-rule block: {} {:?}", name, params);
+        println!("Parsing at-rule block: {name} {params:?}");
         let node = TreeNode::new(CssNodeType::AtRule { name, params });
         TreeNode::add_child(self.stack.last().unwrap(), node.clone());
         self.stack.push(node.clone());
@@ -255,7 +255,7 @@ impl<'a> Parser<'a> {
     fn expect_colon(&mut self) -> Result<()> {
         match self.tokenizer.next_token() {
             Some(Token::Colon) => Ok(()),
-            Some(tok) => bail!("Expected ':' after property name, found {:?}", tok),
+            Some(tok) => bail!("Expected ':' after property name, found {tok:?}"),
             None => bail!("Unexpected end of input: expected ':'"),
         }
     }
@@ -285,17 +285,17 @@ impl<'a> Parser<'a> {
 fn token_to_string(token: &Token) -> String {
     match token {
         Token::Ident(s) => s.clone(),
-        Token::StringLiteral(s) => format!("\"{}\"", s),
+        Token::StringLiteral(s) => format!("\"{s}\""),
         Token::Number(n) => n.to_string(),
-        Token::Dimension(n, unit) => format!("{}{}", n, unit),
-        Token::Percentage(n) => format!("{}%", n),
+        Token::Dimension(n, unit) => format!("{n}{unit}"),
+        Token::Percentage(n) => format!("{n}%"),
         Token::Colon => ":".into(),
         Token::Semicolon => ";".into(),
         Token::Comma => ",".into(),
         Token::LeftParen => "(".into(),
         Token::RightParen => ")".into(),
         Token::Whitespace => " ".into(),
-        Token::Hash(h) => format!("#{}", h),
+        Token::Hash(h) => format!("#{h}"),
         Token::Delim(c) => c.to_string(),
         _ => String::new(),
     }
