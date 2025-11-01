@@ -118,10 +118,12 @@ impl<'a> Parser<'a> {
 
         let selectors: Vec<String> = selectors.split(',').map(|s| s.trim().to_string()).collect();
 
-        let rule_node = TreeNode::new(CssNodeType::Rule {
-            selectors: selectors.clone(),
-        });
-        TreeNode::add_child(self.stack.last().unwrap(), rule_node.clone());
+        let rule_node = TreeNode::add_child_value(
+            self.stack.last().unwrap(),
+            CssNodeType::Rule {
+                selectors: selectors.clone(),
+            },
+        );
 
         self.stack.push(rule_node.clone());
         self.parse_declarations()?;
@@ -159,11 +161,13 @@ impl<'a> Parser<'a> {
                     let value = value.trim().to_string();
                     let parsed_value = self.parse_value(&value)?;
 
-                    let decl_node = TreeNode::new(CssNodeType::Declaration {
-                        name,
-                        value: parsed_value,
-                    });
-                    TreeNode::add_child(self.stack.last().unwrap(), decl_node);
+                    TreeNode::add_child_value(
+                        self.stack.last().unwrap(),
+                        CssNodeType::Declaration {
+                            name,
+                            value: parsed_value,
+                        },
+                    );
 
                     if return_flag {
                         return Ok(());
@@ -188,8 +192,10 @@ impl<'a> Parser<'a> {
         while let Some(token) = self.tokenizer.next_token() {
             match &token {
                 Token::Semicolon => {
-                    let node = TreeNode::new(CssNodeType::AtRule { name, params });
-                    TreeNode::add_child(self.stack.last().unwrap(), node);
+                    TreeNode::add_child_value(
+                        self.stack.last().unwrap(),
+                        CssNodeType::AtRule { name, params },
+                    );
                     return Ok(());
                 }
                 Token::LeftBrace => {
@@ -208,8 +214,10 @@ impl<'a> Parser<'a> {
 
     fn parse_at_rule_block(&mut self, name: String, params: Vec<String>) -> Result<()> {
         println!("Parsing at-rule block: {name} {params:?}");
-        let node = TreeNode::new(CssNodeType::AtRule { name, params });
-        TreeNode::add_child(self.stack.last().unwrap(), node.clone());
+        let node = TreeNode::add_child_value(
+            self.stack.last().unwrap(),
+            CssNodeType::AtRule { name, params },
+        );
         self.stack.push(node.clone());
 
         while self.brace_depth > 0 {
@@ -242,11 +250,13 @@ impl<'a> Parser<'a> {
             }
         }
         let parsed_value = self.parse_value(&value)?;
-        let decl_node = TreeNode::new(CssNodeType::Declaration {
-            name: name.trim().to_string(),
-            value: parsed_value,
-        });
-        TreeNode::add_child(self.stack.last().unwrap(), decl_node);
+        TreeNode::add_child_value(
+            self.stack.last().unwrap(),
+            CssNodeType::Declaration {
+                name: name.trim().to_string(),
+                value: parsed_value,
+            },
+        );
 
         self.parse_declarations()?;
         Ok(())
