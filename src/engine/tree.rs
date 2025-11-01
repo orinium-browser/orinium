@@ -95,6 +95,7 @@ impl<T> Tree<T> {
         F: Fn(&T) -> U,
         U: Clone,
     {
+        #[rustfmt::skip]
         fn map_node<T, U, F>(
             node: &Rc<RefCell<TreeNode<T>>>,
             f: &F,

@@ -172,6 +172,7 @@ async fn main() -> Result<()> {
 
 use std::collections::HashMap;
 
+#[rustfmt::skip]
 fn get_commands<'a>() -> HashMap<&'a str, (&'a str, &'a str)> {
     let mut map = HashMap::new();
 
