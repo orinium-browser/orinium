@@ -1,6 +1,6 @@
 use crate::engine::html::tokenizer::{Attribute, Token, Tokenizer};
 use crate::engine::html::util as html_util;
-use crate::engine::tree::{Tree, TreeNode};
+use crate::engine::tree::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -72,24 +72,13 @@ impl<'a> Parser<'a> {
                 parent = Rc::clone(self.stack.last().unwrap());
             }
 
-            let new_node = TreeNode::new(HtmlNodeType::Element {
-                tag_name: name.clone(),
-                attributes: attributes.clone(),
-            });
-
-            TreeNode::add_child(&parent, new_node.clone());
-            /*
-            let new_node = Rc::new(RefCell::new(Node {
-                value: HtmlNodeType::Element {
-                    tag_name: name,
-                    attributes,
+            let new_node = TreeNode::add_child_value(
+                &parent,
+                HtmlNodeType::Element {
+                    tag_name: name.clone(),
+                    attributes: attributes.clone(),
                 },
-                children: vec![],
-                parent: Some(Rc::clone(&parent)),
-            }));
-
-            parent.borrow_mut().children.push(Rc::clone(&new_node));
-            */
+            );
 
             // Self-closing タグは stack に push しない
             if !self_closing {
@@ -128,16 +117,18 @@ impl<'a> Parser<'a> {
             } else if data.trim().is_empty() {
                 return;
             }
-            let text_node = TreeNode::new(HtmlNodeType::Text(data));
-            TreeNode::add_child(&parent, text_node);
+            TreeNode::add_child_value(&parent, 
+                HtmlNodeType::Text(data)
+            );
         }
     }
 
     fn handle_comment(&mut self, token: Token) {
         if let Token::Comment(data) = token {
             let parent = Rc::clone(self.stack.last().unwrap());
-            let comment_node = TreeNode::new(HtmlNodeType::Comment(data));
-            TreeNode::add_child(&parent, comment_node);
+            TreeNode::add_child_value(&parent, 
+                HtmlNodeType::Comment(data)
+            );
         }
     }
 
@@ -150,12 +141,13 @@ impl<'a> Parser<'a> {
         } = token
         {
             let parent = Rc::clone(self.stack.last().unwrap());
-            let doctype_node = TreeNode::new(HtmlNodeType::Doctype {
-                name,
-                public_id,
-                system_id,
-            });
-            TreeNode::add_child(&parent, doctype_node);
+            TreeNode::add_child_value(&parent, 
+                HtmlNodeType::Doctype {
+                    name,
+                    public_id,
+                    system_id,
+                }
+            );
         }
     }
 
@@ -251,19 +243,21 @@ impl<'a> Parser<'a> {
             root.borrow_mut().children.push(Rc::clone(&html_node));
 
             if !has_head {
-                let head_node = TreeNode::new(HtmlNodeType::Element {
-                    tag_name: "head".to_string(),
-                    attributes: vec![],
-                });
-                TreeNode::add_child(&html_node, head_node);
+                TreeNode::add_child_value(&html_node, 
+                    HtmlNodeType::Element {
+                        tag_name: "head".to_string(),
+                        attributes: vec![],
+                    }
+                );
             }
 
             if !has_body {
-                let body_node = TreeNode::new(HtmlNodeType::Element {
-                    tag_name: "body".to_string(),
-                    attributes: vec![],
-                });
-                TreeNode::add_child(&html_node, body_node);
+                TreeNode::add_child_value(&html_node, 
+                    HtmlNodeType::Element {
+                        tag_name: "body".to_string(),
+                        attributes: vec![],
+                    }
+                );
             }
         }
     }

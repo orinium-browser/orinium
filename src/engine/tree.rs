@@ -33,6 +33,13 @@ impl<T> TreeNode<T> {
         child.borrow_mut().parent = Some(Rc::clone(parent));
         parent.borrow_mut().children.push(child);
     }
+
+    /// 子ノードを作ってそのまま追加する
+    pub fn add_child_value(parent: &Rc<RefCell<Self>>, value: T) -> Rc<RefCell<Self>> {
+        let child = TreeNode::new(value);
+        TreeNode::add_child(parent, Rc::clone(&child));
+        child
+    }
 }
 
 /// ツリー本体
