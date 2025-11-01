@@ -54,10 +54,10 @@ impl<T> TreeNode<T> {
     }
 }
 
-impl<T:Debug + Clone> Display for TreeNode<T> {
+impl<T: Debug + Clone> Display for TreeNode<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         fmt_tree_node(&Rc::new(RefCell::new(self.clone())), f, &[])
-    }    
+    }
 }
 
 impl<T: Clone + Debug> Debug for TreeNode<T> {
