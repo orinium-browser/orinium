@@ -199,7 +199,7 @@ fn get_commands<'a>() -> HashMap<&'a str, (&'a str, &'a str)> {
     map.insert(
         "send_request",
         (
-            "Send a simple HTTP GET request and display the response.",
+            "Send a basic HTTP/HTTPS request (no redirect handling).",
             "[URL]",
         ),
     );
