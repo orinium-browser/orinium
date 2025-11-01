@@ -83,7 +83,7 @@ impl<'a> Tokenizer<'a> {
             }
 
             if let Some(token) = self.token.take() {
-                println!("Tokenized: {token:?}");
+                // println!("Tokenized: {token:?}");
                 return Some(token);
             }
         }
