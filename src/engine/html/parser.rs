@@ -117,18 +117,14 @@ impl<'a> Parser<'a> {
             } else if data.trim().is_empty() {
                 return;
             }
-            TreeNode::add_child_value(&parent, 
-                HtmlNodeType::Text(data)
-            );
+            TreeNode::add_child_value(&parent, HtmlNodeType::Text(data));
         }
     }
 
     fn handle_comment(&mut self, token: Token) {
         if let Token::Comment(data) = token {
             let parent = Rc::clone(self.stack.last().unwrap());
-            TreeNode::add_child_value(&parent, 
-                HtmlNodeType::Comment(data)
-            );
+            TreeNode::add_child_value(&parent, HtmlNodeType::Comment(data));
         }
     }
 
@@ -141,12 +137,13 @@ impl<'a> Parser<'a> {
         } = token
         {
             let parent = Rc::clone(self.stack.last().unwrap());
-            TreeNode::add_child_value(&parent, 
+            TreeNode::add_child_value(
+                &parent,
                 HtmlNodeType::Doctype {
                     name,
                     public_id,
                     system_id,
-                }
+                },
             );
         }
     }
@@ -243,20 +240,22 @@ impl<'a> Parser<'a> {
             root.borrow_mut().children.push(Rc::clone(&html_node));
 
             if !has_head {
-                TreeNode::add_child_value(&html_node, 
+                TreeNode::add_child_value(
+                    &html_node,
                     HtmlNodeType::Element {
                         tag_name: "head".to_string(),
                         attributes: vec![],
-                    }
+                    },
                 );
             }
 
             if !has_body {
-                TreeNode::add_child_value(&html_node, 
+                TreeNode::add_child_value(
+                    &html_node,
                     HtmlNodeType::Element {
                         tag_name: "body".to_string(),
                         attributes: vec![],
-                    }
+                    },
                 );
             }
         }
