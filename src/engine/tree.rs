@@ -54,6 +54,19 @@ impl<T> TreeNode<T> {
     }
 }
 
+impl<T:Debug + Clone> Display for TreeNode<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        fmt_tree_node(&Rc::new(RefCell::new(self.clone())), f, &[])
+    }    
+}
+
+impl<T: Clone + Debug> Debug for TreeNode<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        // Display実装を流用して文字列化
+        write!(f, "{}", self)
+    }
+}
+
 /// ツリー本体
 #[derive(Clone)]
 pub struct Tree<T> {
@@ -65,11 +78,6 @@ impl<T> Tree<T> {
         Tree {
             root: TreeNode::new(root_value),
         }
-    }
-
-    #[cfg(debug_assertions)]
-    pub fn from_tree_node(root: Rc<RefCell<TreeNode<T>>>) -> Self {
-        Tree { root }
     }
 
     /// ツリーを再帰的に走査して処理
