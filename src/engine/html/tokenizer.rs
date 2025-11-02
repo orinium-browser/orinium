@@ -284,7 +284,7 @@ impl<'a> Tokenizer<'a> {
                         if let Some(Token::Doctype { ref mut name, .. }) = self.current_token {
                             if name.is_none() {
                                 *name = Some(c.to_string());
-                            } else if let Some(ref mut n) = name {
+                            } else if let Some(n) = name {
                                 n.push(c);
                             }
                         }
@@ -312,7 +312,7 @@ impl<'a> Tokenizer<'a> {
                             ref mut public_id, ..
                         }) = self.current_token
                         {
-                            if let Some(ref mut pid) = public_id {
+                            if let Some(pid) = public_id {
                                 pid.push(c);
                             }
                         }
@@ -331,7 +331,7 @@ impl<'a> Tokenizer<'a> {
                         {
                             if system_id.is_none() {
                                 *system_id = Some(c.to_string());
-                            } else if let Some(ref mut sid) = system_id {
+                            } else if let Some(sid) = system_id {
                                 sid.push(c);
                             }
                         }

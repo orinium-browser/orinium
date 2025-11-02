@@ -85,9 +85,9 @@ impl NetworkCore {
         });
 
         let mut sender =
-            if let Some(sender) = self.sender_pool.read().await.get_connection(&key).await {
+            match self.sender_pool.read().await.get_connection(&key).await { Some(sender) => {
                 sender
-            } else if scheme == &hyper::http::uri::Scheme::HTTPS {
+            } _ => if scheme == &hyper::http::uri::Scheme::HTTPS {
                 // HTTPS接続
                 let stream = TcpStream::connect(&addr).await?;
                 let tls = TlsConnector::from(self.tls_config.clone());
@@ -130,7 +130,7 @@ impl NetworkCore {
                 });
 
                 sender
-            };
+            }};
 
         let authority = url.authority().unwrap();
         let path = url.path_and_query().map(|p| p.as_str()).unwrap_or("/");
