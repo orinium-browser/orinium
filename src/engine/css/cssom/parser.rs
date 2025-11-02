@@ -1,7 +1,7 @@
 use crate::engine::css::cssom::tokenizer::{Token, Tokenizer};
 use crate::engine::css::values::*;
 use crate::engine::tree::{Tree, TreeNode};
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -61,11 +61,6 @@ impl<'a> Parser<'a> {
                 Token::Delim(_) | Token::Hash(_) | Token::Ident(_) | Token::Comma => {
                     self.selector_buffer.push_str(&token_to_string(&token));
                 }
-                Token::Whitespace => {
-                    if !self.selector_buffer.is_empty() {
-                        self.selector_buffer.push(' ');
-                    }
-                }
                 _ => {}
             }
         }
@@ -123,10 +118,12 @@ impl<'a> Parser<'a> {
 
         let selectors: Vec<String> = selectors.split(',').map(|s| s.trim().to_string()).collect();
 
-        let rule_node = TreeNode::new(CssNodeType::Rule {
-            selectors: selectors.clone(),
-        });
-        TreeNode::add_child(self.stack.last().unwrap(), rule_node.clone());
+        let rule_node = TreeNode::add_child_value(
+            self.stack.last().unwrap(),
+            CssNodeType::Rule {
+                selectors: selectors.clone(),
+            },
+        );
 
         self.stack.push(rule_node.clone());
         self.parse_declarations()?;
@@ -164,11 +161,13 @@ impl<'a> Parser<'a> {
                     let value = value.trim().to_string();
                     let parsed_value = self.parse_value(&value)?;
 
-                    let decl_node = TreeNode::new(CssNodeType::Declaration {
-                        name,
-                        value: parsed_value,
-                    });
-                    TreeNode::add_child(self.stack.last().unwrap(), decl_node);
+                    TreeNode::add_child_value(
+                        self.stack.last().unwrap(),
+                        CssNodeType::Declaration {
+                            name,
+                            value: parsed_value,
+                        },
+                    );
 
                     if return_flag {
                         return Ok(());
@@ -180,7 +179,7 @@ impl<'a> Parser<'a> {
                 }
                 None => break,
                 Some(Token::Comment(_)) => continue,
-                Some(tok) => bail!("Unexpected token in declaration: {:?}", tok),
+                Some(tok) => bail!("Unexpected token in declaration: {tok:?}"),
             }
         }
         Ok(())
@@ -193,8 +192,10 @@ impl<'a> Parser<'a> {
         while let Some(token) = self.tokenizer.next_token() {
             match &token {
                 Token::Semicolon => {
-                    let node = TreeNode::new(CssNodeType::AtRule { name, params });
-                    TreeNode::add_child(self.stack.last().unwrap(), node);
+                    TreeNode::add_child_value(
+                        self.stack.last().unwrap(),
+                        CssNodeType::AtRule { name, params },
+                    );
                     return Ok(());
                 }
                 Token::LeftBrace => {
@@ -212,9 +213,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_at_rule_block(&mut self, name: String, params: Vec<String>) -> Result<()> {
-        println!("Parsing at-rule block: {} {:?}", name, params);
-        let node = TreeNode::new(CssNodeType::AtRule { name, params });
-        TreeNode::add_child(self.stack.last().unwrap(), node.clone());
+        println!("Parsing at-rule block: {name} {params:?}");
+        let node = TreeNode::add_child_value(
+            self.stack.last().unwrap(),
+            CssNodeType::AtRule { name, params },
+        );
         self.stack.push(node.clone());
 
         while self.brace_depth > 0 {
@@ -247,11 +250,13 @@ impl<'a> Parser<'a> {
             }
         }
         let parsed_value = self.parse_value(&value)?;
-        let decl_node = TreeNode::new(CssNodeType::Declaration {
-            name: name.trim().to_string(),
-            value: parsed_value,
-        });
-        TreeNode::add_child(self.stack.last().unwrap(), decl_node);
+        TreeNode::add_child_value(
+            self.stack.last().unwrap(),
+            CssNodeType::Declaration {
+                name: name.trim().to_string(),
+                value: parsed_value,
+            },
+        );
 
         self.parse_declarations()?;
         Ok(())
@@ -260,12 +265,12 @@ impl<'a> Parser<'a> {
     fn expect_colon(&mut self) -> Result<()> {
         match self.tokenizer.next_token() {
             Some(Token::Colon) => Ok(()),
-            Some(tok) => bail!("Expected ':' after property name, found {:?}", tok),
+            Some(tok) => bail!("Expected ':' after property name, found {tok:?}"),
             None => bail!("Unexpected end of input: expected ':'"),
         }
     }
 
-    fn parse_value(&self, css_str: &String) -> Result<CssValue> {
+    fn parse_value(&self, css_str: &str) -> Result<CssValue> {
         let css_str = css_str.trim();
         if let Some(length) = Length::from_css(css_str) {
             Ok(CssValue::Length(length))
@@ -290,17 +295,17 @@ impl<'a> Parser<'a> {
 fn token_to_string(token: &Token) -> String {
     match token {
         Token::Ident(s) => s.clone(),
-        Token::StringLiteral(s) => format!("\"{}\"", s),
+        Token::StringLiteral(s) => format!("\"{s}\""),
         Token::Number(n) => n.to_string(),
-        Token::Dimension(n, unit) => format!("{}{}", n, unit),
-        Token::Percentage(n) => format!("{}%", n),
+        Token::Dimension(n, unit) => format!("{n}{unit}"),
+        Token::Percentage(n) => format!("{n}%"),
         Token::Colon => ":".into(),
         Token::Semicolon => ";".into(),
         Token::Comma => ",".into(),
         Token::LeftParen => "(".into(),
         Token::RightParen => ")".into(),
         Token::Whitespace => " ".into(),
-        Token::Hash(h) => format!("#{}", h),
+        Token::Hash(h) => format!("#{h}"),
         Token::Delim(c) => c.to_string(),
         _ => String::new(),
     }

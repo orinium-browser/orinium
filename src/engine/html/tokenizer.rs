@@ -4,7 +4,6 @@ pub struct Attribute {
     pub value: String,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, PartialEq)]
 pub enum Token {
     Doctype {
@@ -25,7 +24,6 @@ pub enum Token {
     Text(String),
 }
 
-#[allow(dead_code)]
 #[derive(Debug, PartialEq)]
 pub enum TokenizerState {
     Data,
@@ -55,7 +53,6 @@ pub enum TokenizerState {
     BogusDoctype,
 }
 
-#[allow(dead_code)]
 pub struct Tokenizer<'a> {
     input: &'a str,
     pos: usize,
@@ -66,7 +63,6 @@ pub struct Tokenizer<'a> {
     buffer: String,
 }
 
-#[allow(dead_code)]
 impl TokenizerState {
     fn is_doctype(&self) -> bool {
         matches!(
@@ -252,10 +248,9 @@ impl<'a> Tokenizer<'a> {
             c if c.is_whitespace() => match self.state {
                 TokenizerState::Doctype => self.state = TokenizerState::DoctypeName,
                 TokenizerState::DoctypeName => {
-                    if self.input[self.pos..].to_lowercase().starts_with("public") {
-                        self.pos += 6;
-                        self.state = TokenizerState::BeforeDoctypePublicId
-                    } else if self.input[self.pos..].to_lowercase().starts_with("system") {
+                    if self.input[self.pos..].to_lowercase().starts_with("public")
+                        || self.input[self.pos..].to_lowercase().starts_with("system")
+                    {
                         self.pos += 6;
                         self.state = TokenizerState::BeforeDoctypePublicId
                     }
@@ -266,14 +261,13 @@ impl<'a> Tokenizer<'a> {
                 _ => {}
             },
             '>' => {
-                if self.state == TokenizerState::BogusDoctype {
-                    if let Some(Token::Doctype {
+                if self.state == TokenizerState::BogusDoctype
+                    && let Some(Token::Doctype {
                         ref mut force_quirks,
                         ..
                     }) = self.current_token
-                    {
-                        *force_quirks = true;
-                    }
+                {
+                    *force_quirks = true;
                 }
                 self.commit_token();
                 self.state = TokenizerState::Data;
@@ -288,7 +282,7 @@ impl<'a> Tokenizer<'a> {
                         if let Some(Token::Doctype { ref mut name, .. }) = self.current_token {
                             if name.is_none() {
                                 *name = Some(c.to_string());
-                            } else if let Some(ref mut n) = name {
+                            } else if let Some(n) = name {
                                 n.push(c);
                             }
                         }
@@ -315,10 +309,9 @@ impl<'a> Tokenizer<'a> {
                         if let Some(Token::Doctype {
                             ref mut public_id, ..
                         }) = self.current_token
+                            && let Some(pid) = public_id
                         {
-                            if let Some(ref mut pid) = public_id {
-                                pid.push(c);
-                            }
+                            pid.push(c);
                         }
                         if (self.state == TokenizerState::DoctypePublicIdWithSingleQuote
                             && c == '\'')
@@ -335,7 +328,7 @@ impl<'a> Tokenizer<'a> {
                         {
                             if system_id.is_none() {
                                 *system_id = Some(c.to_string());
-                            } else if let Some(ref mut sid) = system_id {
+                            } else if let Some(sid) = system_id {
                                 sid.push(c);
                             }
                         }
@@ -363,7 +356,7 @@ impl<'a> Tokenizer<'a> {
                 });
             }
             _ => { // 不正な文字
-                 // 壊れたトークンは無視
+                // 壊れたトークンは無視
             }
         }
     }
@@ -373,24 +366,22 @@ impl<'a> Tokenizer<'a> {
             c if c.is_whitespace() => self.state = TokenizerState::AfterAttributeName,
             '=' => self.state = TokenizerState::BeforeAttributeValue,
             '/' => {
-                if let Some(attr) = self.current_attribute.take() {
-                    if let Some(Token::StartTag {
+                if let Some(attr) = self.current_attribute.take()
+                    && let Some(Token::StartTag {
                         ref mut attributes, ..
                     }) = self.current_token
-                    {
-                        attributes.push(attr);
-                    }
+                {
+                    attributes.push(attr);
                 }
                 self.state = TokenizerState::SelfClosingStartTag;
             }
             '>' => {
-                if let Some(attr) = self.current_attribute.take() {
-                    if let Some(Token::StartTag {
+                if let Some(attr) = self.current_attribute.take()
+                    && let Some(Token::StartTag {
                         ref mut attributes, ..
                     }) = self.current_token
-                    {
-                        attributes.push(attr);
-                    }
+                {
+                    attributes.push(attr);
                 }
                 self.commit_token();
                 self.state = TokenizerState::Data;
@@ -402,7 +393,7 @@ impl<'a> Tokenizer<'a> {
                 }
             }
             _ => { // 不正な文字
-                 // 壊れたトークンは無視
+                // 壊れたトークンは無視
             }
         }
     }
@@ -414,13 +405,12 @@ impl<'a> Tokenizer<'a> {
             '\'' => self.state = TokenizerState::AttributeValueSingleQuoted,
             '>' => {
                 // 属性値がない場合は空文字列として扱う
-                if let Some(attr) = self.current_attribute.take() {
-                    if let Some(Token::StartTag {
+                if let Some(attr) = self.current_attribute.take()
+                    && let Some(Token::StartTag {
                         ref mut attributes, ..
                     }) = self.current_token
-                    {
-                        attributes.push(attr);
-                    }
+                {
+                    attributes.push(attr);
                 }
                 self.commit_token();
                 self.state = TokenizerState::Data;
@@ -438,24 +428,22 @@ impl<'a> Tokenizer<'a> {
     fn state_attribute_value_quoted(&mut self, c: char) {
         match c {
             '"' if self.state == TokenizerState::AttributeValueDoubleQuoted => {
-                if let Some(attr) = self.current_attribute.take() {
-                    if let Some(Token::StartTag {
+                if let Some(attr) = self.current_attribute.take()
+                    && let Some(Token::StartTag {
                         ref mut attributes, ..
                     }) = self.current_token
-                    {
-                        attributes.push(attr);
-                    }
+                {
+                    attributes.push(attr);
                 }
                 self.state = TokenizerState::AfterAttributeName;
             }
             '\'' if self.state == TokenizerState::AttributeValueSingleQuoted => {
-                if let Some(attr) = self.current_attribute.take() {
-                    if let Some(Token::StartTag {
+                if let Some(attr) = self.current_attribute.take()
+                    && let Some(Token::StartTag {
                         ref mut attributes, ..
                     }) = self.current_token
-                    {
-                        attributes.push(attr);
-                    }
+                {
+                    attributes.push(attr);
                 }
                 self.state = TokenizerState::AfterAttributeName;
             }
@@ -484,7 +472,7 @@ impl<'a> Tokenizer<'a> {
                 });
             }
             _ => { // 不正な文字
-                 // 壊れたトークンは無視
+                // 壊れたトークンは無視
             }
         }
     }
@@ -492,24 +480,22 @@ impl<'a> Tokenizer<'a> {
     fn state_attribute_value_unquoted(&mut self, c: char) {
         match c {
             c if c.is_whitespace() => {
-                if let Some(attr) = self.current_attribute.take() {
-                    if let Some(Token::StartTag {
+                if let Some(attr) = self.current_attribute.take()
+                    && let Some(Token::StartTag {
                         ref mut attributes, ..
                     }) = self.current_token
-                    {
-                        attributes.push(attr);
-                    }
+                {
+                    attributes.push(attr);
                 }
                 self.state = TokenizerState::BeforeAttributeName;
             }
             '>' => {
-                if let Some(attr) = self.current_attribute.take() {
-                    if let Some(Token::StartTag {
+                if let Some(attr) = self.current_attribute.take()
+                    && let Some(Token::StartTag {
                         ref mut attributes, ..
                     }) = self.current_token
-                    {
-                        attributes.push(attr);
-                    }
+                {
+                    attributes.push(attr);
                 }
                 self.commit_token();
                 self.state = TokenizerState::Data;

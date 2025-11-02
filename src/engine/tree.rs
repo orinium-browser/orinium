@@ -33,6 +33,38 @@ impl<T> TreeNode<T> {
         child.borrow_mut().parent = Some(Rc::clone(parent));
         parent.borrow_mut().children.push(child);
     }
+
+    /// 子ノードを作ってそのまま追加する
+    pub fn add_child_value(parent: &Rc<RefCell<Self>>, value: T) -> Rc<RefCell<Self>> {
+        let child = TreeNode::new(value);
+        TreeNode::add_child(parent, Rc::clone(&child));
+        child
+    }
+
+    /// 指定条件で子ノードを探索
+    pub fn find_children_by<F>(&self, predicate: F) -> Vec<Rc<RefCell<TreeNode<T>>>>
+    where
+        F: Fn(&T) -> bool,
+    {
+        self.children
+            .iter()
+            .filter(|child| predicate(&child.borrow().value))
+            .cloned()
+            .collect()
+    }
+}
+
+impl<T: Debug + Clone> Display for TreeNode<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        fmt_tree_node(&Rc::new(RefCell::new(self.clone())), f, &[])
+    }
+}
+
+impl<T: Clone + Debug> Debug for TreeNode<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        // Display実装を流用して文字列化
+        write!(f, "{}", self)
+    }
 }
 
 /// ツリー本体
@@ -48,9 +80,50 @@ impl<T> Tree<T> {
         }
     }
 
-    #[cfg(debug_assertions)]
-    pub fn from_tree_node(root: Rc<RefCell<TreeNode<T>>>) -> Self {
-        Tree { root }
+    /// ツリーを再帰的に走査して処理
+    pub fn traverse<F>(&self, f: &F)
+    where
+        F: Fn(&Rc<RefCell<TreeNode<T>>>),
+    {
+        fn visit<T, F>(node: &Rc<RefCell<TreeNode<T>>>, f: &F)
+        where
+            F: Fn(&Rc<RefCell<TreeNode<T>>>),
+        {
+            f(node);
+            for child in &node.borrow().children {
+                visit(child, f);
+            }
+        }
+        visit(&self.root, f);
+    }
+
+    /// 各ノードの値を別の型に変換して新しいツリーを作成
+    pub fn map<U, F>(&self, f: &F) -> Tree<U>
+    where
+        F: Fn(&T) -> U,
+        U: Clone,
+    {
+        #[rustfmt::skip]
+        fn map_node<T, U, F>(
+            node: &Rc<RefCell<TreeNode<T>>>,
+            f: &F,
+        ) -> Rc<RefCell<TreeNode<U>>>
+        where
+            F: Fn(&T) -> U,
+            U: Clone,
+        {
+            let n = node.borrow();
+            let new_node = TreeNode::new(f(&n.value));
+            for child in &n.children {
+                let mapped_child = map_node(child, f);
+                TreeNode::add_child(&new_node, mapped_child);
+            }
+            new_node
+        }
+
+        Tree {
+            root: map_node(&self.root, f),
+        }
     }
 }
 
