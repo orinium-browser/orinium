@@ -16,13 +16,13 @@ log = "0.4.0"
 winit = "0.30.12"
 wgpu = "27.0.1"
 wgpu_text = "27.0.1"
-fontdue = "0.7"
+fontdue = "0.9.3"
 ab_glyph = "0.2"
 bytemuck = { version = "1.14", features = ["derive"] }
 url = "2.5"
 rustls = { version = "0.22.4", default-features = false, features = ["tls12"] }
-rustls-native-certs = "0.7.0"
-tokio-rustls = "0.25.0"
+rustls-native-certs = "0.8.2"
+tokio-rustls = "0.25"
 hyper = { version = "1", features = ["full"] }
 http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["full"] }
