@@ -43,10 +43,10 @@ impl Length {
             if let Ok(num) = num_str.parse::<f32>() {
                 return Some(Length::Em(num));
             }
-        } else if let Some(num_str) = value.strip_suffix('%') {
-            if let Ok(num) = num_str.parse::<f32>() {
-                return Some(Length::Percent(num));
-            }
+        } else if let Some(num_str) = value.strip_suffix('%')
+            && let Ok(num) = num_str.parse::<f32>()
+        {
+            return Some(Length::Percent(num));
         }
         None
     }

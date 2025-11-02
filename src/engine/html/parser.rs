@@ -90,10 +90,10 @@ impl<'a> Parser<'a> {
     fn handle_end_tag(&mut self, token: Token) {
         if let Token::EndTag { name } = token {
             while let Some(top) = self.stack.pop() {
-                if let HtmlNodeType::Element { tag_name, .. } = &top.borrow().value {
-                    if tag_name == &name {
-                        break;
-                    }
+                if let HtmlNodeType::Element { tag_name, .. } = &top.borrow().value
+                    && tag_name == &name
+                {
+                    break;
                 }
             }
         }

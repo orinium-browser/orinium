@@ -262,14 +262,13 @@ impl<'a> Tokenizer<'a> {
                 _ => {}
             },
             '>' => {
-                if self.state == TokenizerState::BogusDoctype {
-                    if let Some(Token::Doctype {
+                if self.state == TokenizerState::BogusDoctype
+                    && let Some(Token::Doctype {
                         ref mut force_quirks,
                         ..
                     }) = self.current_token
-                    {
-                        *force_quirks = true;
-                    }
+                {
+                    *force_quirks = true;
                 }
                 self.commit_token();
                 self.state = TokenizerState::Data;
@@ -311,10 +310,9 @@ impl<'a> Tokenizer<'a> {
                         if let Some(Token::Doctype {
                             ref mut public_id, ..
                         }) = self.current_token
+                            && let Some(pid) = public_id
                         {
-                            if let Some(pid) = public_id {
-                                pid.push(c);
-                            }
+                            pid.push(c);
                         }
                         if (self.state == TokenizerState::DoctypePublicIdWithSingleQuote
                             && c == '\'')
@@ -369,24 +367,22 @@ impl<'a> Tokenizer<'a> {
             c if c.is_whitespace() => self.state = TokenizerState::AfterAttributeName,
             '=' => self.state = TokenizerState::BeforeAttributeValue,
             '/' => {
-                if let Some(attr) = self.current_attribute.take() {
-                    if let Some(Token::StartTag {
+                if let Some(attr) = self.current_attribute.take()
+                    && let Some(Token::StartTag {
                         ref mut attributes, ..
                     }) = self.current_token
-                    {
-                        attributes.push(attr);
-                    }
+                {
+                    attributes.push(attr);
                 }
                 self.state = TokenizerState::SelfClosingStartTag;
             }
             '>' => {
-                if let Some(attr) = self.current_attribute.take() {
-                    if let Some(Token::StartTag {
+                if let Some(attr) = self.current_attribute.take()
+                    && let Some(Token::StartTag {
                         ref mut attributes, ..
                     }) = self.current_token
-                    {
-                        attributes.push(attr);
-                    }
+                {
+                    attributes.push(attr);
                 }
                 self.commit_token();
                 self.state = TokenizerState::Data;
@@ -410,13 +406,12 @@ impl<'a> Tokenizer<'a> {
             '\'' => self.state = TokenizerState::AttributeValueSingleQuoted,
             '>' => {
                 // 属性値がない場合は空文字列として扱う
-                if let Some(attr) = self.current_attribute.take() {
-                    if let Some(Token::StartTag {
+                if let Some(attr) = self.current_attribute.take()
+                    && let Some(Token::StartTag {
                         ref mut attributes, ..
                     }) = self.current_token
-                    {
-                        attributes.push(attr);
-                    }
+                {
+                    attributes.push(attr);
                 }
                 self.commit_token();
                 self.state = TokenizerState::Data;
@@ -434,24 +429,22 @@ impl<'a> Tokenizer<'a> {
     fn state_attribute_value_quoted(&mut self, c: char) {
         match c {
             '"' if self.state == TokenizerState::AttributeValueDoubleQuoted => {
-                if let Some(attr) = self.current_attribute.take() {
-                    if let Some(Token::StartTag {
+                if let Some(attr) = self.current_attribute.take()
+                    && let Some(Token::StartTag {
                         ref mut attributes, ..
                     }) = self.current_token
-                    {
-                        attributes.push(attr);
-                    }
+                {
+                    attributes.push(attr);
                 }
                 self.state = TokenizerState::AfterAttributeName;
             }
             '\'' if self.state == TokenizerState::AttributeValueSingleQuoted => {
-                if let Some(attr) = self.current_attribute.take() {
-                    if let Some(Token::StartTag {
+                if let Some(attr) = self.current_attribute.take()
+                    && let Some(Token::StartTag {
                         ref mut attributes, ..
                     }) = self.current_token
-                    {
-                        attributes.push(attr);
-                    }
+                {
+                    attributes.push(attr);
                 }
                 self.state = TokenizerState::AfterAttributeName;
             }
@@ -488,24 +481,22 @@ impl<'a> Tokenizer<'a> {
     fn state_attribute_value_unquoted(&mut self, c: char) {
         match c {
             c if c.is_whitespace() => {
-                if let Some(attr) = self.current_attribute.take() {
-                    if let Some(Token::StartTag {
+                if let Some(attr) = self.current_attribute.take()
+                    && let Some(Token::StartTag {
                         ref mut attributes, ..
                     }) = self.current_token
-                    {
-                        attributes.push(attr);
-                    }
+                {
+                    attributes.push(attr);
                 }
                 self.state = TokenizerState::BeforeAttributeName;
             }
             '>' => {
-                if let Some(attr) = self.current_attribute.take() {
-                    if let Some(Token::StartTag {
+                if let Some(attr) = self.current_attribute.take()
+                    && let Some(Token::StartTag {
                         ref mut attributes, ..
                     }) = self.current_token
-                    {
-                        attributes.push(attr);
-                    }
+                {
+                    attributes.push(attr);
                 }
                 self.commit_token();
                 self.state = TokenizerState::Data;
