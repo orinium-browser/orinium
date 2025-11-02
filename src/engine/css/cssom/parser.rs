@@ -270,7 +270,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_value(&self, css_str: &String) -> Result<CssValue> {
+    fn parse_value(&self, css_str: &str) -> Result<CssValue> {
         let css_str = css_str.trim();
         if let Some(length) = Length::from_css(css_str) {
             Ok(CssValue::Length(length))

@@ -248,10 +248,9 @@ impl<'a> Tokenizer<'a> {
             c if c.is_whitespace() => match self.state {
                 TokenizerState::Doctype => self.state = TokenizerState::DoctypeName,
                 TokenizerState::DoctypeName => {
-                    if self.input[self.pos..].to_lowercase().starts_with("public") {
-                        self.pos += 6;
-                        self.state = TokenizerState::BeforeDoctypePublicId
-                    } else if self.input[self.pos..].to_lowercase().starts_with("system") {
+                    if self.input[self.pos..].to_lowercase().starts_with("public")
+                        || self.input[self.pos..].to_lowercase().starts_with("system")
+                    {
                         self.pos += 6;
                         self.state = TokenizerState::BeforeDoctypePublicId
                     }

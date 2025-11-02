@@ -2,7 +2,7 @@ use crate::engine::css::cssom::{CssNodeType, CssValue};
 use crate::engine::html::tokenizer::Attribute;
 use crate::engine::tree::{Tree, TreeNode};
 
-fn selector_matches(selector: &str, tag: &str, attrs: &Vec<Attribute>) -> bool {
+fn selector_matches(selector: &str, tag: &str, attrs: &[Attribute]) -> bool {
     if selector == tag {
         return true;
     }
