@@ -4,6 +4,8 @@
 [![Github license](https://img.shields.io/github/license/orinium-browser/orinium)](./LICENSE)
 [![Discord server](https://img.shields.io/badge/Discord-5865F2?style=flat&logo=discord&logoColor=white)](https://discord.gg/2zYbEnMC5H)
 
+[![dependency status](https://deps.rs/repo/github/orinium-browser/orinium/status.svg)](https://deps.rs/repo/github/orinium-browser/orinium)
+
 [English](./README.en.md)
 > [!NOTE]
 > このプロジェクトは開発段階にあり、まだブラウザとして動作するわけではありません。
