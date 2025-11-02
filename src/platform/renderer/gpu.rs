@@ -3,8 +3,8 @@ use anyhow::Result;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 use wgpu_text::{
-    glyph_brush::{Section as TextSection, Text},
     BrushBuilder, TextBrush,
+    glyph_brush::{Section as TextSection, Text},
 };
 use winit::window::Window;
 
@@ -324,9 +324,11 @@ impl GpuRenderer {
                 let s = TextSection {
                     screen_position: (*x, *y),
                     bounds: (self.size.width as f32, self.size.height as f32),
-                    text: vec![Text::new(text)
-                        .with_scale(*font_size)
-                        .with_color([color.r, color.g, color.b, color.a])],
+                    text: vec![
+                        Text::new(text)
+                            .with_scale(*font_size)
+                            .with_color([color.r, color.g, color.b, color.a]),
+                    ],
                     ..TextSection::default()
                 };
                 sections.push(s);

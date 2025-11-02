@@ -1,7 +1,7 @@
 use crate::engine::css::cssom::tokenizer::{Token, Tokenizer};
 use crate::engine::css::values::*;
 use crate::engine::tree::{Tree, TreeNode};
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use std::cell::RefCell;
 use std::rc::Rc;
 
