@@ -1,8 +1,17 @@
 //! 計算済みスタイル（ComputedStyle）
 //! CSSの継承・初期値などを反映した最終スタイル
 
+use std::rc::Rc;
+use std::cell::RefCell;
+
 use crate::engine::css::cssom::{CssNodeType, CssValue};
 use crate::engine::html::HtmlNodeType;
+
+#[derive(Debug)]
+pub struct ComputedNode {
+    pub html_node: Rc<RefCell<HtmlNodeType>>,
+    pub style: ComputedStyle,
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct ComputedStyle {
@@ -14,7 +23,7 @@ pub struct ComputedStyle {
 
 impl ComputedStyle {
     pub fn from_html(
-        node: &HtmlNodeType,
+        node: Rc<RefCell<HtmlNodeType>>,
         cssoms: &[crate::engine::tree::Tree<CssNodeType>],
     ) -> Self {
         // TODO: selectorマッチ → cascade → inheritance
