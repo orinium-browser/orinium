@@ -50,7 +50,10 @@ impl NetworkCore {
         }
         println!("Loaded {} certificates", root_store.len());
         if !errors.is_empty() {
-            eprintln!("There were {} error(s) while loading system certificates:", errors.len());
+            eprintln!(
+                "There were {} error(s) while loading system certificates:",
+                errors.len()
+            );
             for e in errors {
                 eprintln!("{e:?}");
             }
