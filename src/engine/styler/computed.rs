@@ -1,8 +1,8 @@
 //! 計算済みスタイル（ComputedStyle）
 //! CSSの継承・初期値などを反映した最終スタイル
 
-use std::rc::Rc;
 use std::cell::RefCell;
+use std::rc::Rc;
 
 use crate::engine::css::cssom::{CssNodeType, CssValue};
 use crate::engine::html::HtmlNodeType;
