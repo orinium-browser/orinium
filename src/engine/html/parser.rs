@@ -104,7 +104,8 @@ impl<'a> Parser<'a> {
             let parent = Rc::clone(self.stack.last().unwrap());
             // 親ノードが pre, textarea, script, style でない場合、空白改行を無視する
             if let Some(parent_node) = &parent.borrow().parent {
-                let parent_node_borrow = parent_node.borrow();
+                let parent_ref = parent_node.upgrade().unwrap();
+                let parent_node_borrow = parent_ref.borrow();
                 if let HtmlNodeType::Element { tag_name, .. } = &parent_node_borrow.value {
                     if !matches!(tag_name.as_str(), "pre" | "textarea" | "script" | "style")
                         && data.trim().is_empty()

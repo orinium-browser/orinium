@@ -8,14 +8,14 @@
 
 use std::cell::RefCell;
 use std::fmt::{self, Debug, Display, Formatter};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 /// ツリーノード
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct TreeNode<T> {
     pub value: T,
     pub children: Vec<Rc<RefCell<TreeNode<T>>>>,
-    pub parent: Option<Rc<RefCell<TreeNode<T>>>>,
+    pub parent: Option<Weak<RefCell<TreeNode<T>>>>,
 }
 
 impl<T> TreeNode<T> {
@@ -30,7 +30,7 @@ impl<T> TreeNode<T> {
 
     /// 子ノードを追加
     pub fn add_child(parent: &Rc<RefCell<Self>>, child: Rc<RefCell<Self>>) {
-        child.borrow_mut().parent = Some(Rc::clone(parent));
+        child.borrow_mut().parent = Some(Rc::downgrade(parent));
         parent.borrow_mut().children.push(child);
     }
 
