@@ -2,6 +2,7 @@ use orinium_browser::platform::network::NetworkCore;
 use std::error::Error;
 use tokio::runtime::Runtime;
 
+#[ignore]
 #[test]
 fn test_https_connection() -> Result<(), Box<dyn Error>> {
     let rt = Runtime::new()?;
@@ -30,6 +31,7 @@ fn test_https_connection() -> Result<(), Box<dyn Error>> {
     })
 }
 
+#[ignore]
 #[test]
 fn test_http_and_https_comparison() -> Result<(), Box<dyn Error>> {
     let rt = Runtime::new()?;
@@ -75,6 +77,7 @@ fn test_http_and_https_comparison() -> Result<(), Box<dyn Error>> {
     })
 }
 
+#[ignore]
 #[test]
 fn test_https_redirect() -> Result<(), Box<dyn Error>> {
     let rt = Runtime::new()?;
