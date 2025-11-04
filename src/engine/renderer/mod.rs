@@ -82,7 +82,7 @@ impl Renderer {
         let mut current_x = 10.0;
         let mut current_y = 10.0;
 
-        self.traverse_and_generate(
+        Renderer::traverse_and_generate(
             dom_tree.clone().root,
             &mut commands,
             &mut current_x,
@@ -94,7 +94,6 @@ impl Renderer {
 
     /// DOMツリーを走査して描画命令を生成（再帰的）
     fn traverse_and_generate(
-        &self,
         node: Rc<RefCell<TreeNode<HtmlNodeType>>>,
         commands: &mut Vec<DrawCommand>,
         current_x: &mut f32,
@@ -106,7 +105,7 @@ impl Renderer {
             HtmlNodeType::Document => {
                 // ドキュメントノードは子要素を処理
                 for child in &node_borrow.children {
-                    self.traverse_and_generate(child.clone(), commands, current_x, current_y);
+                    Renderer::traverse_and_generate(child.clone(), commands, current_x, current_y);
                 }
             }
             HtmlNodeType::Element { tag_name, .. } => {
@@ -121,7 +120,7 @@ impl Renderer {
 
                 // 子要素を処理
                 for child in &node_borrow.children {
-                    self.traverse_and_generate(child.clone(), commands, current_x, current_y);
+                    Renderer::traverse_and_generate(child.clone(), commands, current_x, current_y);
                 }
 
                 // ブロック要素の後は改行

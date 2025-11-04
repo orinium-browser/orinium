@@ -39,16 +39,24 @@ impl NetworkCore {
     pub fn new() -> Self {
         // TLS設定を作成
         let mut root_store = RootCertStore::empty();
-        match load_native_certs() {
-            Ok(certs) => {
-                for cert in certs {
-                    root_store.add(cert).unwrap_or_else(|e| {
-                        eprintln!("Error adding certificate: {e:?}");
-                    });
-                }
-                println!("Loaded {} certificates", root_store.len());
+
+        let load_result = load_native_certs();
+        let certs = load_result.certs;
+        let errors = load_result.errors;
+        for cert in certs {
+            root_store.add(cert).unwrap_or_else(|e| {
+                eprintln!("Error adding certificate: {e:?}");
+            });
+        }
+        println!("Loaded {} certificates", root_store.len());
+        if !errors.is_empty() {
+            eprintln!(
+                "There were {} error(s) while loading system certificates:",
+                errors.len()
+            );
+            for e in errors {
+                eprintln!("{e:?}");
             }
-            Err(e) => eprintln!("Failed to load system certificates: {e:?}"),
         }
 
         let tls_config = ClientConfig::builder()
