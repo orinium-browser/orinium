@@ -4,6 +4,7 @@
 [![Github license](https://img.shields.io/github/license/orinium-browser/orinium)](./LICENSE)
 [![Discord server](https://img.shields.io/badge/Discord-5865F2?style=flat&logo=discord&logoColor=white)](https://discord.gg/2zYbEnMC5H)
 
+[![Action Rust](https://github.com/orinium-browser/orinium/actions/workflows/rust.yml/badge.svg)](https://github.com/orinium-browser/orinium/actions)
 [![dependency status](https://deps.rs/repo/github/orinium-browser/orinium/status.svg)](https://deps.rs/repo/github/orinium-browser/orinium)
 
 [English](./README.en.md)
