@@ -125,6 +125,33 @@ impl<T> Tree<T> {
             root: map_node(&self.root, f),
         }
     }
+
+    pub fn map_with_node<U, F>(&self, f: &F) -> Tree<U>
+    where
+        F: Fn(&Rc<RefCell<TreeNode<T>>>) -> U,
+        U: Clone,
+    {
+        #[rustfmt::skip]
+        fn map_node<T, U, F>(
+            node: &Rc<RefCell<TreeNode<T>>>,
+            f: &F,
+        ) -> Rc<RefCell<TreeNode<U>>>
+        where
+            F: Fn(&Rc<RefCell<TreeNode<T>>>) -> U,
+            U: Clone,
+        {
+            let new_node = TreeNode::new(f(node));
+            for child in &node.borrow().children {
+                let mapped_child = map_node(child, f);
+                TreeNode::add_child(&new_node, mapped_child);
+            }
+            new_node
+        }
+
+        Tree {
+            root: map_node(&self.root, f),
+        }
+    }
 }
 
 impl<T: Debug + Clone> Display for Tree<T> {
