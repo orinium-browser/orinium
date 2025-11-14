@@ -2,8 +2,8 @@
 
 mod utils;
 
-use utils::test_dom;
 use orinium_browser::engine::styler::style_tree::Style;
+use utils::test_dom;
 
 #[test]
 fn test_dom_to_style() {
