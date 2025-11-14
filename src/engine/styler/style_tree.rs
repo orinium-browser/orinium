@@ -20,4 +20,6 @@ impl Style {
             style: None,
         })
     }
+
+    pub fn compute(&mut self) {}
 }
