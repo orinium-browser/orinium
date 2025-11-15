@@ -207,8 +207,7 @@ impl ApplicationHandler<State> for App {
             WindowEvent::CursorMoved { position, .. } => {
                 let (x, y) = (position.x as f32, position.y as f32);
 
-                // If dragging the scrollbar, update content scroll immediately
-                if self.dragging_scrollbar {
+                 if self.dragging_scrollbar {
                     let vw = state.window.inner_size().width as f32;
                     let vh = state.window.inner_size().height as f32;
                     let content_h = state.gpu_renderer.content_height();
@@ -231,7 +230,6 @@ impl ApplicationHandler<State> for App {
                     return;
                 }
 
-                // Not dragging: update hover state for scrollbar thumb
                 if let Some(state_ref) = &mut self.state {
                     let vw = state_ref.window.inner_size().width as f32;
                     let vh = state_ref.window.inner_size().height as f32;
