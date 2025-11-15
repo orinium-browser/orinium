@@ -1,10 +1,14 @@
 <h1 align="center">Orinium Browser</h1>
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Orinas-github/Orinium-browser)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/orinium-browser/orinium)
+[![Github license](https://img.shields.io/github/license/orinium-browser/orinium)](./LICENSE)
+[![Discord server](https://img.shields.io/badge/Discord-5865F2?style=flat&logo=discord&logoColor=white)](https://discord.gg/2zYbEnMC5H)
 
-**🚧 _This project is still under development and does not yet function as a browser._**
+[![dependency status](https://deps.rs/repo/github/orinium-browser/orinium/status.svg)](https://deps.rs/repo/github/orinium-browser/orinium)
 
 [日本語](./README.md)
+> [!NOTE]
+> This project is still under development and does not yet function as a browser.
 
 ## An Independent Browser Free from Google
 The source code of this browser engine **does not depend on Google**.  
@@ -24,4 +28,5 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 For the architecture, see [architecture.md](./docs/architecture.md).
 
-Other useful documentation for development can be found in the [DOCS](./docs/) directory.
+Other useful documentation for development can be found in the [Docs/](./docs/) directory.
+And, most documents are classified based on their lang.

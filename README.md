@@ -1,8 +1,11 @@
 <h1 align="center">Orinium Browser</h1>
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Orinas-github/Orinium-browser)
-[![Github license](https://img.shields.io/github/license/Orinas-github/Orinium-browser)](./LICENSE)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/orinium-browser/orinium)
+[![Github license](https://img.shields.io/github/license/orinium-browser/orinium)](./LICENSE)
 [![Discord server](https://img.shields.io/badge/Discord-5865F2?style=flat&logo=discord&logoColor=white)](https://discord.gg/2zYbEnMC5H)
+
+[![Action Rust](https://github.com/orinium-browser/orinium/actions/workflows/rust.yml/badge.svg)](https://github.com/orinium-browser/orinium/actions)
+[![dependency status](https://deps.rs/repo/github/orinium-browser/orinium/status.svg)](https://deps.rs/repo/github/orinium-browser/orinium)
 
 [English](./README.en.md)
 > [!NOTE]
@@ -25,7 +28,8 @@
 
 アーキテクチャは[architecture.md](./docs/architecture.md)を参照してください。
 
-その他の開発時に目を通しておくと便利なドキュメントは[DOCS](./docs/)にあります
+その他の開発時に目を通しておくと便利なドキュメントは[Docs/](./docs/)にあります。
+なお、一部のものを除いて、ドキュメントは言語ごとに分かれています。
 
 
 

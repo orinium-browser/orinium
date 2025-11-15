@@ -1,4 +1,6 @@
 //!HTML関連のユーティリティ関数群
+//! # util
+//! * `fn is_block_level_element(tag_name: &str) -> bool` - タグ名が典型的なブロック要素かどうか判定する
 
 /// is_block_level_element - タグ名が典型的なブロック要素かどうか判定する
 ///

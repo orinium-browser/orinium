@@ -36,10 +36,10 @@ impl Cache {
         let store = self.store.read().await;
         let key = url.as_str();
         if let Some(entry) = store.get(key) {
-            if let Some(exp) = entry.expires_at {
-                if SystemTime::now() > exp {
-                    return None;
-                }
+            if let Some(exp) = entry.expires_at
+                && SystemTime::now() > exp
+            {
+                return None;
             }
             return Some(entry.clone());
         }
@@ -53,17 +53,14 @@ impl Cache {
         if let Some((_, cc)) = headers
             .iter()
             .find(|(n, _)| n.to_lowercase() == "cache-control")
+            && let Some(pos) = cc.find("max-age=")
+            && let Ok(max_age) = cc[pos + 8..]
+                .split(|c: char| !c.is_ascii_digit())
+                .next()
+                .unwrap_or("0")
+                .parse::<u64>()
         {
-            if let Some(pos) = cc.find("max-age=") {
-                if let Ok(max_age) = cc[pos + 8..]
-                    .split(|c: char| !c.is_ascii_digit())
-                    .next()
-                    .unwrap_or("0")
-                    .parse::<u64>()
-                {
-                    expires = Some(SystemTime::now() + Duration::from_secs(max_age));
-                }
-            }
+            expires = Some(SystemTime::now() + Duration::from_secs(max_age));
         }
         store.insert(
             key,

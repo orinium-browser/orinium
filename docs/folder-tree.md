@@ -3,6 +3,9 @@
     └── 📁docs
         ├── architecture.md
         ├── DEVELOP.md
+        ├── folder-tree.md
+        ├── renderer_flow.md
+        ├── renderer.md
     └── 📁examples
         ├── tests.rs
     └── 📁src
@@ -21,6 +24,7 @@
             └── 📁renderer
                 ├── mod.rs
             ├── mod.rs
+            ├── tree.rs
         └── 📁platform
             └── 📁io
                 ├── mod.rs
@@ -32,9 +36,14 @@
                 ├── network_core.rs
                 ├── sender_pool.rs
             └── 📁renderer
+                └── 📁glyph
+                    ├── fonts.rs
+                    ├── mod.rs
+                └── 📁shader
+                    ├── main.wgsl
+                    ├── text.wgsl
                 ├── gpu.rs
                 ├── mod.rs
-                ├── shader.wgsl
             └── 📁ui
                 ├── mod.rs
             ├── mod.rs
@@ -50,8 +59,8 @@
     ├── Cargo.toml
     ├── CODE_OF_CONDUCT.md
     ├── CONTRIBUTING.md
+    ├── deny.toml
     ├── LICENSE
     ├── README.en.md
-    ├── README.md
-    └── tasks.md
+    └── README.md
 ```

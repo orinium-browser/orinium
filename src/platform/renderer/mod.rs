@@ -1,2 +1,2 @@
-pub mod gpu;
 mod glyph;
+pub mod gpu;
