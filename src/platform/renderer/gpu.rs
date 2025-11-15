@@ -2,11 +2,10 @@ use crate::engine::renderer::DrawCommand;
 use anyhow::Result;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
-use wgpu_text::{
-    BrushBuilder, TextBrush,
-    glyph_brush::{Section as TextSection, Text},
-};
+use wgpu_text::glyph_brush::{Section as TextSection, Text};
 use winit::window::Window;
+
+use crate::platform::renderer::glyph::text::TextRenderer;
 
 /// GPU描画コンテキスト
 pub struct GpuRenderer {
@@ -27,8 +26,14 @@ pub struct GpuRenderer {
     /// 頂点数
     num_vertices: u32,
 
-    /// テキスト描画用の描画領域とブラシ
-    glyph_brush: Option<TextBrush<ab_glyph::FontArc>>,
+    /// テキスト描画用ラッパー
+    text_renderer: Option<TextRenderer>,
+    /// テキスト垂直スクロールオフセット（ピクセル）
+    text_scroll: f32,
+    /// アニメーション用ターゲットスクロール位置
+    target_text_scroll: f32,
+    /// 最後のフレーム時刻（アニメーション計算用）
+    last_frame: Option<std::time::Instant>,
 }
 
 #[repr(C)]
@@ -61,7 +66,7 @@ impl Vertex {
 
 impl GpuRenderer {
     /// 新しいGPUレンダラーを作成
-    pub async fn new(window: Arc<Window>) -> Result<Self> {
+    pub async fn new(window: Arc<Window>, font_path: Option<&str>) -> Result<Self> {
         let size = window.inner_size();
 
         // GPUドライバとの通信インスタンス
@@ -173,45 +178,62 @@ impl GpuRenderer {
         });
         // --- レンダーパイプライン作成終了 ---
 
-        // テキスト描画用ブラシの作成
-        // フォントデータの読み込み（システムフォントから適当に探す）
-        let mut font_data: Option<Vec<u8>> = None;
-        let candidates = [
-            "C:\\Windows\\Fonts\\arial.ttf",
-            "C:\\Windows\\Fonts\\segoeui.ttf",
-            "C:\\Windows\\Fonts\\seguisym.ttf",
-        ];
-        for p in &candidates {
-            if let Ok(b) = std::fs::read(p) {
-                font_data = Some(b);
-                break;
+        // テキスト描画用ラッパーの初期化。引数で渡されたフォントパスがあればそれを優先して読み込む。
+        let text_renderer = if let Some(p) = font_path {
+            match std::fs::read(p) {
+                Ok(bytes) => match TextRenderer::new_from_bytes(&device, config.width, config.height, config.format, bytes) {
+                    Ok(t) => Some(t),
+                    Err(e) => {
+                        log::warn!("failed to init text renderer from provided font: {}", e);
+                        None
+                    }
+                },
+                Err(e) => {
+                    log::warn!("failed to read font path '{}': {}", p, e);
+                    None
+                }
             }
-        }
-
-        let glyph_brush = if let Some(bytes) = font_data {
-            let font_arc = ab_glyph::FontArc::try_from_vec(bytes).unwrap();
-            let brush = BrushBuilder::using_font(font_arc).build(
-                &device,
-                config.width,
-                config.height,
-                config.format,
-            );
-            Some(brush)
         } else {
-            None
+            match TextRenderer::new_from_device(&device, config.width, config.height, config.format) {
+                Ok(t) => Some(t),
+                Err(e) => {
+                    log::warn!("no system font found for text renderer: {}", e);
+                    None
+                }
+            }
         };
 
         Ok(Self {
-            surface,
-            device,
-            queue,
-            config,
-            size,
-            render_pipeline,
-            vertex_buffer: None,
-            num_vertices: 0,
-            glyph_brush,
-        })
+             surface,
+             device,
+             queue,
+             config,
+             size,
+             render_pipeline,
+             vertex_buffer: None,
+             num_vertices: 0,
+             text_renderer,
+             text_scroll: 0.0,
+             target_text_scroll: 0.0,
+             last_frame: None,
+         })
+     }
+
+    /// スクロールのターゲットを相対更新（アニメーションで実際のtext_scrollに反映される）
+    pub fn scroll_text_by(&mut self, dy: f32) {
+        self.target_text_scroll = (self.target_text_scroll + dy).max(0.0);
+        self.last_frame = None;
+    }
+
+    /// テキストのスクロール位置ターゲットを設定（ピクセル）
+    pub fn set_text_scroll(&mut self, offset: f32) {
+        self.target_text_scroll = offset.max(0.0);
+        self.last_frame = None;
+    }
+
+    /// 現在のテキストスクロールオフセットを返す
+    pub fn text_scroll(&self) -> f32 {
+        self.text_scroll
     }
 
     /// ウィンドウサイズが変更された時の処理
@@ -224,8 +246,8 @@ impl GpuRenderer {
 
             self.surface.configure(&self.device, &self.config);
 
-            if let Some(brush) = &mut self.glyph_brush {
-                brush.resize_view(
+            if let Some(tr) = &mut self.text_renderer {
+                tr.resize_view(
                     self.config.width as f32,
                     self.config.height as f32,
                     &self.queue,
@@ -321,8 +343,10 @@ impl GpuRenderer {
                 color,
             } = command
             {
+                // スクロールオフセットを適用して Y 座標を移動
+                let y_with_scroll = *y - self.text_scroll;
                 let s = TextSection {
-                    screen_position: (*x, *y),
+                    screen_position: (*x, y_with_scroll),
                     bounds: (self.size.width as f32, self.size.height as f32),
                     text: vec![
                         Text::new(text)
@@ -335,19 +359,37 @@ impl GpuRenderer {
             }
         }
 
-        if let Some(brush) = &mut self.glyph_brush {
+        if let Some(tr) = &mut self.text_renderer {
             // テキスト描画キューに追加
-            brush.queue(&self.device, &self.queue, &sections).unwrap();
+            tr.queue(&self.device, &self.queue, &sections).unwrap();
         }
     }
 
     /// フレームを描画
-    pub fn render(&mut self) -> Result<()> {
+    pub fn render(&mut self) -> Result<bool> {
         // 描画するフレームバッファを取得
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+
+        // text_scroll を target_text_scroll に向かって進める
+        let now = std::time::Instant::now();
+        let dt = if let Some(prev) = self.last_frame {
+            let d = now.duration_since(prev).as_secs_f32();
+            d
+        } else {
+            1.0 / 60.0
+        };
+        self.last_frame = Some(now);
+
+        let smoothing_speed = 15.0_f32;
+        let alpha = 1.0 - (-smoothing_speed * dt).exp();
+        self.text_scroll += (self.target_text_scroll - self.text_scroll) * alpha;
+        let animating = (self.target_text_scroll - self.text_scroll).abs() > 0.5;
+
+    // アニメーション中はテキストブラシが更新位置を反映できるようにセクションを再キューする必要がある
+    // 補足: 呼び出し元（UI層）も各フレームで描画コマンドを再キューしているため、ここではアニメーション状態を返り値で通知するだけ
 
         // GPUコマンドのエンコーダーの作成
         let mut encoder = self
@@ -390,7 +432,7 @@ impl GpuRenderer {
         }
 
         // テキストをレンダリング
-        if let Some(brush) = &mut self.glyph_brush {
+        if let Some(tr) = &mut self.text_renderer {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Text Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -406,7 +448,7 @@ impl GpuRenderer {
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
-            brush.draw(&mut rpass);
+            tr.draw(&mut rpass);
         }
 
         // コマンドをGPUに送信
@@ -415,6 +457,6 @@ impl GpuRenderer {
         // フレームを画面に表示
         output.present();
 
-        Ok(())
+        Ok(animating)
     }
 }

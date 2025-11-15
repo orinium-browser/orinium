@@ -1,4 +1,5 @@
 use std::error::Error;
+use std::env;
 
 pub type Section<'a> = wgpu_text::glyph_brush::Section<'a>;
 
@@ -10,16 +11,37 @@ pub struct TextRenderer {
 }
 
 impl TextRenderer {
-    /// フォントファイルパスを受け取り、フォントバイトを読み込んで保持する
-    pub fn new(font_path: &str) -> Result<Self, Box<dyn Error + Send + Sync + 'static>> {
-        let bytes = std::fs::read(font_path)?;
-        Ok(Self {
-            brush: None,
-            pending_font: Some(bytes),
-        })
+    /// 情報を渡してシステムフォントから初期化する
+    pub fn new_from_device(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> Result<Self, Box<dyn Error + Send + Sync + 'static>> {
+        // 後々環境変数とかに設定しているときに使えるようにしてます
+        if let Ok(p) = env::var("ORINIUM_FONT") {
+            if let Ok(bytes) = std::fs::read(&p) {
+                return Self::new_from_bytes(device, width, height, format, bytes);
+            }
+        }
+
+        // 代表的な Windows フォント候補
+        let candidates = [
+            "C:\\Windows\\Fonts\\arial.ttf",
+            "C:\\Windows\\Fonts\\segoeui.ttf",
+            "C:\\Windows\\Fonts\\seguisym.ttf",
+        ];
+
+        for p in &candidates {
+            if let Ok(bytes) = std::fs::read(p) {
+                // build brush from bytes
+                return Self::new_from_bytes(device, width, height, format, bytes);
+            }
+        }
+
+        Err("no system font found".into())
     }
 
-    /// 既に wgpu デバイスとフォントがある場合の生成
     pub fn new_with_fontarc(
         device: &wgpu::Device,
         width: u32,

@@ -10,7 +10,9 @@ use winit::event_loop::EventLoop;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let _args: Vec<String> = env::args().collect::<Vec<String>>();
+    let args: Vec<String> = env::args().collect();
+    let font_path = if args.len() > 1 { Some(args[1].clone()) } else { None };
+
     env_logger::init();
 
     // テスト用のHTML
@@ -127,7 +129,7 @@ async fn main() -> Result<()> {
     // ウィンドウとイベントループを作成
     let event_loop =
         EventLoop::<orinium_browser::platform::ui::State>::with_user_event().build()?;
-    let mut app = App::new();
+    let mut app = App::new(font_path);
 
     app.set_draw_commands(draw_commands);
 
