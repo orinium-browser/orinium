@@ -226,18 +226,22 @@ impl GpuRenderer {
 
     /// スクロールのターゲットを相対更新（アニメーションで実際のtext_scrollに反映される）
     pub fn scroll_text_by(&mut self, dy: f32) {
-        self.target_text_scroll = (self.target_text_scroll + dy).max(0.0);
+        // 使えるスクロール範囲に収める
+        let max_offset = (self.content_height - self.size.height as f32).max(0.0);
+        self.target_text_scroll = (self.target_text_scroll + dy).clamp(0.0, max_offset);
         self.last_frame = None;
     }
 
     /// テキストのスクロール位置ターゲットを設定（ピクセル）
     pub fn set_text_scroll(&mut self, offset: f32) {
-         self.target_text_scroll = offset.max(0.0);
+         let max_offset = (self.content_height - self.size.height as f32).max(0.0);
+         self.target_text_scroll = offset.clamp(0.0, max_offset);
          self.last_frame = None;
      }
 
     pub fn set_text_scroll_immediate(&mut self, offset: f32) {
-        let v = offset.max(0.0);
+        let max_offset = (self.content_height - self.size.height as f32).max(0.0);
+        let v = offset.clamp(0.0, max_offset);
         self.target_text_scroll = v;
         self.text_scroll = v;
         self.last_frame = None;
