@@ -28,6 +28,31 @@ async fn main() -> Result<()> {
                 <div>
                     <p>Nested paragraph in a div.</p>
                 </div>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
             </body>
         </html>
     "#;

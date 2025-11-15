@@ -6,6 +6,7 @@ use wgpu_text::glyph_brush::{Section as TextSection, Text};
 use winit::window::Window;
 
 use crate::platform::renderer::glyph::text::TextRenderer;
+use crate::platform::renderer::scroll_bar::ScrollBar;
 
 /// GPU描画コンテキスト
 pub struct GpuRenderer {
@@ -34,6 +35,9 @@ pub struct GpuRenderer {
     target_text_scroll: f32,
     /// 最後のフレーム時刻（アニメーション計算用）
     last_frame: Option<std::time::Instant>,
+
+    /// コンテンツの高さ（スクロール可能領域の高さ）
+    content_height: f32,
 }
 
 #[repr(C)]
@@ -46,7 +50,7 @@ struct Vertex {
 impl Vertex {
     fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+            array_stride: size_of::<Vertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &[
                 wgpu::VertexAttribute {
@@ -55,7 +59,7 @@ impl Vertex {
                     format: wgpu::VertexFormat::Float32x3,
                 },
                 wgpu::VertexAttribute {
-                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    offset: size_of::<[f32; 3]>() as wgpu::BufferAddress,
                     shader_location: 1,
                     format: wgpu::VertexFormat::Float32x4,
                 },
@@ -216,6 +220,7 @@ impl GpuRenderer {
              text_scroll: 0.0,
              target_text_scroll: 0.0,
              last_frame: None,
+             content_height: 0.0,
          })
      }
 
@@ -227,13 +232,25 @@ impl GpuRenderer {
 
     /// テキストのスクロール位置ターゲットを設定（ピクセル）
     pub fn set_text_scroll(&mut self, offset: f32) {
-        self.target_text_scroll = offset.max(0.0);
+         self.target_text_scroll = offset.max(0.0);
+         self.last_frame = None;
+     }
+
+    pub fn set_text_scroll_immediate(&mut self, offset: f32) {
+        let v = offset.max(0.0);
+        self.target_text_scroll = v;
+        self.text_scroll = v;
         self.last_frame = None;
     }
 
     /// 現在のテキストスクロールオフセットを返す
     pub fn text_scroll(&self) -> f32 {
         self.text_scroll
+    }
+
+    /// コンテンツ全体の高さを返す（UI がスクロールバーのヒットテストに使用）
+    pub fn content_height(&self) -> f32 {
+        self.content_height
     }
 
     /// ウィンドウサイズが変更された時の処理
@@ -317,19 +334,54 @@ impl GpuRenderer {
 
     /// 描画命令を更新
     pub fn update_draw_commands(&mut self, commands: &[DrawCommand]) {
-        let vertices = self.generate_vertices(commands); // テキストコマンドは後で処理
-        self.num_vertices = vertices.len() as u32;
+        let mut all_vertices = self.generate_vertices(commands);
 
-        if !vertices.is_empty() {
-            // create_buffer_init()で頂点データをGPUのメモリにアップロード
-            // 頂点バッファの生成
+        // Compute content height from commands (max y + approx height)
+        let mut max_y: f32 = 0.0;
+        for command in commands {
+            match command {
+                DrawCommand::DrawText { x: _x, y, text: _t, font_size, .. } => {
+                    let bottom = y + font_size * 1.2; // approximate line height
+                    if bottom > max_y { max_y = bottom; }
+                }
+                DrawCommand::DrawRect { x: _x, y, height: h, .. } => {
+                    let bottom = y + h;
+                    if bottom > max_y { max_y = bottom; }
+                }
+            }
+        }
+        self.content_height = max_y.max(self.size.height as f32);
+
+        let sb = ScrollBar::default();
+        log::debug!("update_draw_commands: viewport=({},{}), computed content_height={}", self.size.width, self.size.height, self.content_height);
+        if let Some((x1, y1, x2, y2)) = sb.thumb_rect(self.size.width as f32, self.size.height as f32, self.content_height, self.text_scroll) {
+            log::debug!("scrollbar thumb rect: x1={},y1={},x2={},y2={}", x1, y1, x2, y2);
+            let vw = self.size.width as f32;
+            let vh = self.size.height as f32;
+            let color = sb.color;
+            all_vertices.extend_from_slice(&[
+                Vertex { position: [ (x1 / vw) * 2.0 - 1.0, 1.0 - (y1 / vh) * 2.0, 0.0 ], color },
+                Vertex { position: [ (x1 / vw) * 2.0 - 1.0, 1.0 - (y2 / vh) * 2.0, 0.0 ], color },
+                Vertex { position: [ (x2 / vw) * 2.0 - 1.0, 1.0 - (y1 / vh) * 2.0, 0.0 ], color },
+                Vertex { position: [ (x2 / vw) * 2.0 - 1.0, 1.0 - (y1 / vh) * 2.0, 0.0 ], color },
+                Vertex { position: [ (x1 / vw) * 2.0 - 1.0, 1.0 - (y2 / vh) * 2.0, 0.0 ], color },
+                Vertex { position: [ (x2 / vw) * 2.0 - 1.0, 1.0 - (y2 / vh) * 2.0, 0.0 ], color },
+            ]);
+        } else {
+            log::debug!("no scrollbar needed (content fits viewport)");
+        }
+
+        log::debug!("update_draw_commands: total_vertices_after_scrollbar={}", all_vertices.len());
+
+        if !all_vertices.is_empty() {
             self.vertex_buffer = Some(self.device.create_buffer_init(
                 &wgpu::util::BufferInitDescriptor {
                     label: Some("Vertex Buffer"),
-                    contents: bytemuck::cast_slice(&vertices),
+                    contents: bytemuck::cast_slice(&all_vertices),
                     usage: wgpu::BufferUsages::VERTEX,
                 },
             ));
+            self.num_vertices = all_vertices.len() as u32;
         }
 
         // DrawCommandからテキスト描画セクションに変換

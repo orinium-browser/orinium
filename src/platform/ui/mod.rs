@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::engine::renderer::DrawCommand;
 use crate::platform::renderer::gpu::GpuRenderer;
+use crate::platform::renderer::scroll_bar::ScrollBar;
 
 #[allow(unused_imports)]
 use winit::{
@@ -21,6 +22,12 @@ pub struct App {
     state: Option<State>,
     draw_commands: Vec<DrawCommand>,
     font_path: Option<String>,
+    // Scrollbar UI state
+    scroll_bar: ScrollBar,
+    last_cursor: (f32, f32),
+    dragging_scrollbar: bool,
+    drag_start_y: f32,
+    drag_start_scroll: f32,
 }
 
 impl State {
@@ -60,6 +67,11 @@ impl App {
             state: None,
             draw_commands: Vec::new(),
             font_path,
+            scroll_bar: ScrollBar::new(),
+            last_cursor: (0.0, 0.0),
+            dragging_scrollbar: false,
+            drag_start_y: 0.0,
+            drag_start_scroll: 0.0,
         }
     }
 
@@ -192,6 +204,55 @@ impl ApplicationHandler<State> for App {
                     }
                 }
             }
+            WindowEvent::CursorMoved { position, .. } => {
+                let (x, y) = (position.x as f32, position.y as f32);
+
+                // スクロールバーをドラッグしているときに位置を更新する
+                if self.dragging_scrollbar {
+                    // compute mapping from thumb travel to content scroll
+                    let vw = state.window.inner_size().width as f32;
+                    let vh = state.window.inner_size().height as f32;
+                    let content_h = state.gpu_renderer.content_height();
+                    if let Some((_x1, y1, _x2, y2)) = self.scroll_bar.thumb_rect(vw, vh, content_h, self.drag_start_scroll) {
+                        let thumb_h = y2 - y1;
+                        let max_thumb_top = (vh - 2.0 * self.scroll_bar.margin - thumb_h).max(0.0);
+                        if max_thumb_top > 0.0 {
+                            let dy = y - self.drag_start_y;
+                            let scrollable = (content_h - vh).max(0.0);
+                            let delta_scroll = dy / max_thumb_top * scrollable;
+                            let new_scroll = (self.drag_start_scroll + delta_scroll).clamp(0.0, scrollable);
+                            state.gpu_renderer.set_text_scroll_immediate(new_scroll);
+                            if !self.draw_commands.is_empty() {
+                                state.gpu_renderer.update_draw_commands(&self.draw_commands);
+                            }
+                            state.window.request_redraw();
+                        }
+                    }
+                 }
+
+                 self.last_cursor = (x, y);
+             }
+             WindowEvent::MouseInput { state, button, .. } => {
+                 if button == MouseButton::Left {
+                     match state {
+                         ElementState::Pressed => {
+                             // Check if we hit the scrollbar thumb
+                            let vw = self.state.as_ref().unwrap().window.inner_size().width as f32;
+                            let vh = self.state.as_ref().unwrap().window.inner_size().height as f32;
+                            let content_h = self.state.as_ref().unwrap().gpu_renderer.content_height();
+                            let (px, py) = self.last_cursor;
+                            if self.scroll_bar.hit_test_thumb(vw, vh, content_h, self.state.as_ref().unwrap().gpu_renderer.text_scroll(), px, py) {
+                                self.dragging_scrollbar = true;
+                                self.drag_start_y = py;
+                                self.drag_start_scroll = self.state.as_ref().unwrap().gpu_renderer.text_scroll();
+                            }
+                         }
+                         ElementState::Released => {
+                             self.dragging_scrollbar = false;
+                         }
+                     }
+                 }
+             }
             _ => {}
         }
     }
