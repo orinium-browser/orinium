@@ -38,6 +38,8 @@ pub struct GpuRenderer {
 
     /// コンテンツの高さ（スクロール可能領域の高さ）
     content_height: f32,
+    /// マウスオーバーしてるかどうか
+    scrollbar_hover: bool,
 }
 
 #[repr(C)]
@@ -50,7 +52,7 @@ struct Vertex {
 impl Vertex {
     fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
-            array_stride: size_of::<Vertex>() as wgpu::BufferAddress,
+            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &[
                 wgpu::VertexAttribute {
@@ -59,7 +61,7 @@ impl Vertex {
                     format: wgpu::VertexFormat::Float32x3,
                 },
                 wgpu::VertexAttribute {
-                    offset: size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
                     shader_location: 1,
                     format: wgpu::VertexFormat::Float32x4,
                 },
@@ -221,6 +223,7 @@ impl GpuRenderer {
              target_text_scroll: 0.0,
              last_frame: None,
              content_height: 0.0,
+             scrollbar_hover: false,
          })
      }
 
@@ -359,21 +362,27 @@ impl GpuRenderer {
         let sb = ScrollBar::default();
         log::debug!("update_draw_commands: viewport=({},{}), computed content_height={}", self.size.width, self.size.height, self.content_height);
         if let Some((x1, y1, x2, y2)) = sb.thumb_rect(self.size.width as f32, self.size.height as f32, self.content_height, self.text_scroll) {
-            log::debug!("scrollbar thumb rect: x1={},y1={},x2={},y2={}", x1, y1, x2, y2);
-            let vw = self.size.width as f32;
-            let vh = self.size.height as f32;
-            let color = sb.color;
-            all_vertices.extend_from_slice(&[
-                Vertex { position: [ (x1 / vw) * 2.0 - 1.0, 1.0 - (y1 / vh) * 2.0, 0.0 ], color },
-                Vertex { position: [ (x1 / vw) * 2.0 - 1.0, 1.0 - (y2 / vh) * 2.0, 0.0 ], color },
-                Vertex { position: [ (x2 / vw) * 2.0 - 1.0, 1.0 - (y1 / vh) * 2.0, 0.0 ], color },
-                Vertex { position: [ (x2 / vw) * 2.0 - 1.0, 1.0 - (y1 / vh) * 2.0, 0.0 ], color },
-                Vertex { position: [ (x1 / vw) * 2.0 - 1.0, 1.0 - (y2 / vh) * 2.0, 0.0 ], color },
-                Vertex { position: [ (x2 / vw) * 2.0 - 1.0, 1.0 - (y2 / vh) * 2.0, 0.0 ], color },
-            ]);
-        } else {
-            log::debug!("no scrollbar needed (content fits viewport)");
-        }
+             log::debug!("scrollbar thumb rect: x1={},y1={},x2={},y2={}", x1, y1, x2, y2);
+             let vw = self.size.width as f32;
+             let vh = self.size.height as f32;
+             // darken color slightly when hovered
+             let base = sb.color;
+             let color = if self.scrollbar_hover {
+                 [base[0] * 0.6, base[1] * 0.6, base[2] * 0.6, base[3]]
+             } else {
+                 base
+             };
+             all_vertices.extend_from_slice(&[
+                 Vertex { position: [ (x1 / vw) * 2.0 - 1.0, 1.0 - (y1 / vh) * 2.0, 0.0 ], color },
+                 Vertex { position: [ (x1 / vw) * 2.0 - 1.0, 1.0 - (y2 / vh) * 2.0, 0.0 ], color },
+                 Vertex { position: [ (x2 / vw) * 2.0 - 1.0, 1.0 - (y1 / vh) * 2.0, 0.0 ], color },
+                 Vertex { position: [ (x2 / vw) * 2.0 - 1.0, 1.0 - (y1 / vh) * 2.0, 0.0 ], color },
+                 Vertex { position: [ (x1 / vw) * 2.0 - 1.0, 1.0 - (y2 / vh) * 2.0, 0.0 ], color },
+                 Vertex { position: [ (x2 / vw) * 2.0 - 1.0, 1.0 - (y2 / vh) * 2.0, 0.0 ], color },
+             ]);
+         } else {
+             log::debug!("no scrollbar needed (content fits viewport)");
+         }
 
         log::debug!("update_draw_commands: total_vertices_after_scrollbar={}", all_vertices.len());
 
@@ -514,5 +523,15 @@ impl GpuRenderer {
         output.present();
 
         Ok(animating)
+    }
+
+    /// Set whether the scrollbar thumb is hovered (affects color)
+    pub fn set_scrollbar_hover(&mut self, hover: bool) {
+        self.scrollbar_hover = hover;
+    }
+
+    /// Return whether scrollbar thumb is hovered
+    pub fn scrollbar_hover(&self) -> bool {
+        self.scrollbar_hover
     }
 }

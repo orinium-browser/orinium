@@ -207,9 +207,8 @@ impl ApplicationHandler<State> for App {
             WindowEvent::CursorMoved { position, .. } => {
                 let (x, y) = (position.x as f32, position.y as f32);
 
-                // スクロールバーをドラッグしているときに位置を更新する
+                // If dragging the scrollbar, update content scroll immediately
                 if self.dragging_scrollbar {
-                    // compute mapping from thumb travel to content scroll
                     let vw = state.window.inner_size().width as f32;
                     let vh = state.window.inner_size().height as f32;
                     let content_h = state.gpu_renderer.content_height();
@@ -228,11 +227,29 @@ impl ApplicationHandler<State> for App {
                             state.window.request_redraw();
                         }
                     }
-                 }
+                    self.last_cursor = (x, y);
+                    return;
+                }
 
-                 self.last_cursor = (x, y);
-             }
-             WindowEvent::MouseInput { state, button, .. } => {
+                // Not dragging: update hover state for scrollbar thumb
+                if let Some(state_ref) = &mut self.state {
+                    let vw = state_ref.window.inner_size().width as f32;
+                    let vh = state_ref.window.inner_size().height as f32;
+                    let content_h = state_ref.gpu_renderer.content_height();
+                    let hovered = self.scroll_bar.hit_test_thumb(vw, vh, content_h, state_ref.gpu_renderer.text_scroll(), x, y);
+                    if hovered != state_ref.gpu_renderer.scrollbar_hover() {
+                        state_ref.gpu_renderer.set_scrollbar_hover(hovered);
+                        // requeue vertices so color change is visible
+                        if !self.draw_commands.is_empty() {
+                            state_ref.gpu_renderer.update_draw_commands(&self.draw_commands);
+                        }
+                        state_ref.window.request_redraw();
+                    }
+                }
+
+                self.last_cursor = (x, y);
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
                  if button == MouseButton::Left {
                      match state {
                          ElementState::Pressed => {
