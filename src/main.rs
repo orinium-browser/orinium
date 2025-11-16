@@ -10,7 +10,13 @@ use winit::event_loop::EventLoop;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let _args: Vec<String> = env::args().collect::<Vec<String>>();
+    let args: Vec<String> = env::args().collect();
+    let font_path = if args.len() > 1 {
+        Some(args[1].clone())
+    } else {
+        None
+    };
+
     env_logger::init();
 
     // テスト用のHTML
@@ -26,6 +32,31 @@ async fn main() -> Result<()> {
                 <div>
                     <p>Nested paragraph in a div.</p>
                 </div>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
+                <p>a</p>
             </body>
         </html>
     "#;
@@ -117,9 +148,13 @@ async fn main() -> Result<()> {
     let mut css_parser = CssParser::new(css);
     let css_tree = css_parser.parse()?;
 
+    // スタイルツリーの構築
+    let mut style_tree = orinium_browser::engine::styler::StyleTree::transform(&dom_tree);
+    style_tree = style_tree.style(&[css_tree]);
+
     // レンダラーを作成して描画命令を生成
     let renderer = Renderer::new(800.0, 600.0);
-    let draw_commands = renderer.generate_draw_commands(&dom_tree, &css_tree);
+    let draw_commands = renderer.generate_draw_commands(&mut style_tree);
 
     log::info!("Generated {} draw commands", draw_commands.len());
     log::info!("Generated draw commands: {draw_commands:#?}");
@@ -127,7 +162,7 @@ async fn main() -> Result<()> {
     // ウィンドウとイベントループを作成
     let event_loop =
         EventLoop::<orinium_browser::platform::ui::State>::with_user_event().build()?;
-    let mut app = App::new();
+    let mut app = App::new(font_path);
 
     app.set_draw_commands(draw_commands);
 
