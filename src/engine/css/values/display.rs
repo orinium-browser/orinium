@@ -5,8 +5,10 @@
 
 /// display: ~~
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default)]
 pub enum Display {
     Block,
+    #[default]
     Inline,
     None,
     // 将来的に追加する例：
@@ -15,8 +17,3 @@ pub enum Display {
     // Grid,
 }
 
-impl Default for Display {
-    fn default() -> Self {
-        Display::Inline
-    }
-}

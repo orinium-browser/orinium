@@ -3,7 +3,10 @@
 //! html要素ごとの最小限の display / margin / padding を定義する。
 
 use super::style_tree::Style;
-use crate::engine::css::values::{Border, Color, Display, Length};
+use crate::engine::css::values::{
+    // Border, Color,
+    Display, Length
+};
 use crate::engine::html::parser::HtmlNodeType;
 use crate::engine::html::util;
 
@@ -94,7 +97,7 @@ pub fn default_style_for(node: &HtmlNodeType) -> Style {
         }
 
         // その他のブロック要素群
-        _ if util::is_block_level_element(&tag_name) => {
+        _ if util::is_block_level_element(tag_name) => {
             s.display = Some(Display::Block);
         }
 
