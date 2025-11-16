@@ -3,6 +3,7 @@
 pub mod computed_tree;
 pub mod matcher;
 pub mod style_tree;
+pub mod ua;
 
 // use self::computed_tree::*;
 // use self::style_tree::*;
