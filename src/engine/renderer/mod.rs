@@ -1,32 +1,27 @@
-//! engine::renderer - DOM と CSSOM を統合して描画命令を生成
+//! DOM と CSSOM を統合して RenderTree を生成し、描画命令を出力
 
 mod render_tree;
 
-#[allow(unused_imports)]
-use self::render_tree::{RenderTree, RenderObject};
-
+use self::render_tree::{BuildRenderTree, RenderObjectKind, RenderTree};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::engine::css::cssom::CssNodeType;
-use crate::engine::html::parser::HtmlNodeType;
-use crate::engine::html::util as html_util;
-use crate::engine::tree::{Tree, TreeNode};
+use crate::engine::styler::StyleTree;
 
 #[derive(Debug, Clone)]
 pub enum DrawCommand {
-    DrawRect {
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
-        color: Color,
-    },
     DrawText {
         x: f32,
         y: f32,
         text: String,
         font_size: f32,
+        color: Color,
+    },
+    DrawRect {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
         color: Color,
     },
 }
@@ -40,25 +35,10 @@ pub struct Color {
 }
 
 impl Color {
-    pub const BLACK: Color = Color {
-        r: 0.0,
-        g: 0.0,
-        b: 0.0,
-        a: 1.0,
-    };
-    pub const WHITE: Color = Color {
-        r: 1.0,
-        g: 1.0,
-        b: 1.0,
-        a: 1.0,
-    };
+    pub const BLACK: Color = Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
 
     pub fn new(r: f32, g: f32, b: f32, a: f32) -> Self {
         Self { r, g, b, a }
-    }
-
-    pub fn to_tuple(&self) -> (f32, f32, f32, f32) {
-        (self.r, self.g, self.b, self.a)
     }
 }
 
@@ -69,85 +49,75 @@ pub struct Renderer {
 
 impl Renderer {
     pub fn new(width: f32, height: f32) -> Self {
-        Self {
-            viewport_width: width,
-            viewport_height: height,
-        }
+        Self { viewport_width: width, viewport_height: height }
     }
 
-    /// RenderTree を構築して描画命令を生成
-    pub fn generate_draw_commands(
-        &self,
-        dom_tree: &Tree<HtmlNodeType>,
-        _css_tree: &Tree<CssNodeType>,
-    ) -> Vec<DrawCommand> {
+    /// StyleTree → ComputedStyleTree → RenderTree → DrawCommand
+    pub fn generate_draw_commands(&self, style_tree: &mut StyleTree) -> Vec<DrawCommand> {
+        let computed_tree = style_tree.compute();
+        let render_tree: RenderTree = computed_tree.build_render_tree();
+
         let mut commands = Vec::new();
-        let mut current_x = 10.0;
-        let mut current_y = 10.0;
-
-        Renderer::traverse_and_generate(
-            dom_tree.clone().root,
-            &mut commands,
-            &mut current_x,
-            &mut current_y,
-        );
-
+        self.traverse_render_tree(&render_tree.root, &mut commands, 0.0, 0.0);
         commands
     }
 
-    /// DOMツリーを走査して描画命令を生成（再帰的）
-    fn traverse_and_generate(
-        node: Rc<RefCell<TreeNode<HtmlNodeType>>>,
+    fn traverse_render_tree(
+        &self,
+        node: &Rc<RefCell<crate::engine::tree::TreeNode<crate::engine::renderer::render_tree::RenderObject>>>,
         commands: &mut Vec<DrawCommand>,
-        current_x: &mut f32,
-        current_y: &mut f32,
+        mut current_x: f32,
+        mut current_y: f32,
     ) {
-        let node_borrow = node.borrow();
+        let obj = node.borrow().value.clone();
 
-        match &node_borrow.value {
-            HtmlNodeType::Document => {
-                // ドキュメントノードは子要素を処理
-                for child in &node_borrow.children {
-                    Renderer::traverse_and_generate(child.clone(), commands, current_x, current_y);
-                }
-            }
-            HtmlNodeType::Element { tag_name, .. } => {
-                // 要素ノードの処理
-                let line_height = 20.0;
+        match obj.kind {
+            RenderObjectKind::Text => {
+                if let Some(text) = obj.text {
+                    let color = obj
+                        .style
+                        .color
+                        .map(|c| {
+                            let (r, g, b, a) = c.to_rgba_tuple(None);
+                            Color::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, a)
+                        })
+                        .unwrap_or(Color::BLACK);
 
-                // ブロック要素の場合は改行
-                if html_util::is_block_level_element(tag_name.as_str()) {
-                    *current_x = 10.0;
-                    *current_y += line_height;
-                }
-
-                // 子要素を処理
-                for child in &node_borrow.children {
-                    Renderer::traverse_and_generate(child.clone(), commands, current_x, current_y);
-                }
-
-                // ブロック要素の後は改行
-                if html_util::is_block_level_element(tag_name.as_str()) {
-                    *current_x = 10.0;
-                    *current_y += line_height / 2.0;
-                }
-            }
-            HtmlNodeType::Text(text) => {
-                // テキストノードの処理
-                if !text.trim().is_empty() {
                     commands.push(DrawCommand::DrawText {
-                        x: *current_x,
-                        y: *current_y,
+                        x: current_x,
+                        y: current_y,
                         text: text.clone(),
                         font_size: 16.0,
-                        color: Color::BLACK,
+                        color,
                     });
 
-                    // 簡易的なテキスト幅計算（実際にはフォントメトリクスが必要）
-                    *current_x += text.len() as f32 * 8.0;
+                    current_x += text.len() as f32 * 8.0;
                 }
             }
-            _ => {} // その他のノードタイプを無視
+
+            RenderObjectKind::Block | RenderObjectKind::Inline => {
+                // 簡易レイアウト: Block は改行、Inline は横に並べる
+                if let RenderObjectKind::Block = obj.kind {
+                    current_x = 0.0;
+                    current_y += 20.0;
+                }
+                if let RenderObjectKind::Inline = obj.kind {
+                    let width = obj.layout.content.width;
+                    current_x += width;
+                    current_y += 0.0;
+                }
+
+                for child in &node.borrow().children {
+                    self.traverse_render_tree(child, commands, current_x, current_y);
+                }
+
+                if let RenderObjectKind::Block = obj.kind {
+                    current_x = 0.0;
+                    current_y += 10.0;
+                }
+            }
+
+            RenderObjectKind::Anonymous => {}
         }
     }
 }

@@ -117,9 +117,13 @@ async fn main() -> Result<()> {
     let mut css_parser = CssParser::new(css);
     let css_tree = css_parser.parse()?;
 
+    // スタイルツリーの構築
+    let mut style_tree = orinium_browser::engine::styler::StyleTree::transform(&dom_tree);
+    style_tree = style_tree.style(&[css_tree]);
+
     // レンダラーを作成して描画命令を生成
     let renderer = Renderer::new(800.0, 600.0);
-    let draw_commands = renderer.generate_draw_commands(&dom_tree, &css_tree);
+    let draw_commands = renderer.generate_draw_commands(&mut style_tree);
 
     log::info!("Generated {} draw commands", draw_commands.len());
     log::info!("Generated draw commands: {draw_commands:#?}");
