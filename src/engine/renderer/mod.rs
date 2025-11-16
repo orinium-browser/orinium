@@ -35,7 +35,12 @@ pub struct Color {
 }
 
 impl Color {
-    pub const BLACK: Color = Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
+    pub const BLACK: Color = Color {
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+        a: 1.0,
+    };
 
     pub fn new(r: f32, g: f32, b: f32, a: f32) -> Self {
         Self { r, g, b, a }
@@ -49,7 +54,10 @@ pub struct Renderer {
 
 impl Renderer {
     pub fn new(width: f32, height: f32) -> Self {
-        Self { viewport_width: width, viewport_height: height }
+        Self {
+            viewport_width: width,
+            viewport_height: height,
+        }
     }
 
     /// StyleTree → ComputedStyleTree → RenderTree → DrawCommand
@@ -64,7 +72,11 @@ impl Renderer {
 
     fn traverse_render_tree(
         &self,
-        node: &Rc<RefCell<crate::engine::tree::TreeNode<crate::engine::renderer::render_tree::RenderObject>>>,
+        node: &Rc<
+            RefCell<
+                crate::engine::tree::TreeNode<crate::engine::renderer::render_tree::RenderObject>,
+            >,
+        >,
         commands: &mut Vec<DrawCommand>,
         mut current_x: f32,
         mut current_y: f32,
