@@ -2,7 +2,7 @@
 
 mod render_tree;
 
-#[allow(dead_code)]
+#[allow(unused_imports)]
 use self::render_tree::{RenderTree, RenderObject, BuildRenderTree};
 
 use std::cell::RefCell;
