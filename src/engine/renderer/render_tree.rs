@@ -4,10 +4,10 @@
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
-use crate::engine::tree::*;
-use crate::engine::styler::computed_tree::{ComputedStyleNode, ComputedStyle};
 use crate::engine::css::values::Color;
 use crate::engine::css::values::Display;
+use crate::engine::styler::computed_tree::{ComputedStyle, ComputedStyleNode};
+use crate::engine::tree::*;
 use crate::html::HtmlNodeType;
 
 /// レンダリング用ノード
@@ -76,7 +76,11 @@ impl BuildRenderTree for Tree<ComputedStyleNode> {
             let html_node_ref = html_node.borrow();
 
             // display:none の場合は Anonymous にする（レンダーツリーに表示させない）
-            let display = node.computed.as_ref().map(|c| c.display).unwrap_or_default();
+            let display = node
+                .computed
+                .as_ref()
+                .map(|c| c.display)
+                .unwrap_or_default();
             if let Display::None = display {
                 return RenderObject {
                     kind: RenderObjectKind::Anonymous,
