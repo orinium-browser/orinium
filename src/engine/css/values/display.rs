@@ -4,7 +4,7 @@
 //! ブラウザの最小構成として、Block / Inline / None を持つ。
 
 /// display: ~~
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Display {
     Block,
     #[default]
