@@ -6,8 +6,13 @@ use orinium_browser::engine::styler::style_tree::StyleTree;
 use utils::test_dom;
 
 #[test]
-fn test_dom_to_style() {
+fn test_style_to_be_computed () {
     let dom = test_dom();
-    let style_tree = StyleTree::transform(&dom);
+    println!("{}", dom);
+    let mut style_tree = StyleTree::transform(&dom);
     println!("{}", style_tree);
+    style_tree = style_tree.style();
+    println!("{}", style_tree);
+    let computed_tree = style_tree.compute();
+    println!("{}", computed_tree);
 }
