@@ -2,6 +2,9 @@
 
 mod render_tree;
 
+#[allow(dead_code)]
+use self::render_tree::{RenderTree, RenderObject, BuildRenderTree};
+
 use std::cell::RefCell;
 use std::rc::Rc;
 
