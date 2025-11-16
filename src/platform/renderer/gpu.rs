@@ -417,10 +417,7 @@ impl GpuRenderer {
                 &mut all_vertices,
                 vw,
                 vh,
-                x1,
-                y1,
-                x2,
-                y2,
+                (x1, y1, x2, y2),
                 radius,
                 color,
             );
@@ -584,13 +581,11 @@ impl GpuRenderer {
         all_vertices: &mut Vec<Vertex>,
         vw: f32,
         vh: f32,
-        x1: f32,
-        y1: f32,
-        x2: f32,
-        y2: f32,
+        rect_pos: (f32, f32, f32, f32),
         radius: f32,
         color: [f32; 4],
     ) {
+        let (x1, y1, x2, y2) = rect_pos;
         // 角丸の半径は幅/高さに収める
         let r = radius.min((x2 - x1) * 0.5).min((y2 - y1) * 0.5);
         if r <= 0.0 {
