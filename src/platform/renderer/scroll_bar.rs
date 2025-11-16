@@ -46,7 +46,9 @@ impl ScrollBar {
         let margin = self.margin;
 
         // ビューポート／コンテンツ比に応じた高さを計算
-        let thumb_h = (vh * (vh / content_height)).max(self.min_thumb).min(vh - 2.0 * margin);
+        let thumb_h = (vh * (vh / content_height))
+            .max(self.min_thumb)
+            .min(vh - 2.0 * margin);
 
         // トラック内で上端が移動できる最大距離
         let max_thumb_top = (vh - 2.0 * margin - thumb_h).max(0.0);
@@ -74,7 +76,9 @@ impl ScrollBar {
         px: f32,
         py: f32,
     ) -> bool {
-        if let Some((x1, y1, x2, y2)) = self.thumb_rect(viewport_width, viewport_height, content_height, scroll_y) {
+        if let Some((x1, y1, x2, y2)) =
+            self.thumb_rect(viewport_width, viewport_height, content_height, scroll_y)
+        {
             px >= x1 && px <= x2 && py >= y1 && py <= y2
         } else {
             false
@@ -83,9 +87,9 @@ impl ScrollBar {
 }
 
 // 以下、テンション上がった@nekogakureによるアスキーアート
-/* 
+/*
 𓈒𓂂⚝　　 + ⊂⊃
-　 　　　 ∧_∧　+
-　　　　(   ᴗ  ̫ᴗ)
-　　　  i⌒/ つつ　　𓂃𓈒𓂂⚝
+∧_∧　+
+(   ᴗ  ̫ᴗ)
+i⌒/ つつ　　𓂃𓈒𓂂⚝
 */

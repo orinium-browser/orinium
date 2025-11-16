@@ -1,5 +1,5 @@
-use std::error::Error;
 use std::env;
+use std::error::Error;
 
 pub type Section<'a> = wgpu_text::glyph_brush::Section<'a>;
 
@@ -19,10 +19,10 @@ impl TextRenderer {
         format: wgpu::TextureFormat,
     ) -> Result<Self, Box<dyn Error + Send + Sync + 'static>> {
         // 後々環境変数とかに設定しているときに使えるようにしてます
-        if let Ok(p) = env::var("ORINIUM_FONT") {
-            if let Ok(bytes) = std::fs::read(&p) {
-                return Self::new_from_bytes(device, width, height, format, bytes);
-            }
+        if let Ok(p) = env::var("ORINIUM_FONT")
+            && let Ok(bytes) = std::fs::read(&p)
+        {
+            return Self::new_from_bytes(device, width, height, format, bytes);
         }
 
         // 代表的な Windows フォント候補

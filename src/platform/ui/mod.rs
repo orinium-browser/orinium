@@ -148,7 +148,11 @@ impl ApplicationHandler<State> for App {
                     MouseScrollDelta::PixelDelta(pos) => -pos.y as f32,
                 };
                 state.gpu_renderer.scroll_text_by(scroll_amount);
-                log::debug!("mouse wheel scroll_amount={} text_scroll_before={}", scroll_amount, state.gpu_renderer.text_scroll());
+                log::debug!(
+                    "mouse wheel scroll_amount={} text_scroll_before={}",
+                    scroll_amount,
+                    state.gpu_renderer.text_scroll()
+                );
                 if !self.draw_commands.is_empty() {
                     state.gpu_renderer.update_draw_commands(&self.draw_commands);
                 }
@@ -207,18 +211,22 @@ impl ApplicationHandler<State> for App {
             WindowEvent::CursorMoved { position, .. } => {
                 let (x, y) = (position.x as f32, position.y as f32);
 
-                 if self.dragging_scrollbar {
+                if self.dragging_scrollbar {
                     let vw = state.window.inner_size().width as f32;
                     let vh = state.window.inner_size().height as f32;
                     let content_h = state.gpu_renderer.content_height();
-                    if let Some((_x1, y1, _x2, y2)) = self.scroll_bar.thumb_rect(vw, vh, content_h, self.drag_start_scroll) {
+                    if let Some((_x1, y1, _x2, y2)) =
+                        self.scroll_bar
+                            .thumb_rect(vw, vh, content_h, self.drag_start_scroll)
+                    {
                         let thumb_h = y2 - y1;
                         let max_thumb_top = (vh - 2.0 * self.scroll_bar.margin - thumb_h).max(0.0);
                         if max_thumb_top > 0.0 {
                             let dy = y - self.drag_start_y;
                             let scrollable = (content_h - vh).max(0.0);
                             let delta_scroll = dy / max_thumb_top * scrollable;
-                            let new_scroll = (self.drag_start_scroll + delta_scroll).clamp(0.0, scrollable);
+                            let new_scroll =
+                                (self.drag_start_scroll + delta_scroll).clamp(0.0, scrollable);
                             state.gpu_renderer.set_text_scroll_immediate(new_scroll);
                             if !self.draw_commands.is_empty() {
                                 state.gpu_renderer.update_draw_commands(&self.draw_commands);
@@ -234,12 +242,21 @@ impl ApplicationHandler<State> for App {
                     let vw = state_ref.window.inner_size().width as f32;
                     let vh = state_ref.window.inner_size().height as f32;
                     let content_h = state_ref.gpu_renderer.content_height();
-                    let hovered = self.scroll_bar.hit_test_thumb(vw, vh, content_h, state_ref.gpu_renderer.text_scroll(), x, y);
+                    let hovered = self.scroll_bar.hit_test_thumb(
+                        vw,
+                        vh,
+                        content_h,
+                        state_ref.gpu_renderer.text_scroll(),
+                        x,
+                        y,
+                    );
                     if hovered != state_ref.gpu_renderer.scrollbar_hover() {
                         state_ref.gpu_renderer.set_scrollbar_hover(hovered);
                         // requeue vertices so color change is visible
                         if !self.draw_commands.is_empty() {
-                            state_ref.gpu_renderer.update_draw_commands(&self.draw_commands);
+                            state_ref
+                                .gpu_renderer
+                                .update_draw_commands(&self.draw_commands);
                         }
                         state_ref.window.request_redraw();
                     }
@@ -248,26 +265,35 @@ impl ApplicationHandler<State> for App {
                 self.last_cursor = (x, y);
             }
             WindowEvent::MouseInput { state, button, .. } => {
-                 if button == MouseButton::Left {
-                     match state {
-                         ElementState::Pressed => {
-                             // Check if we hit the scrollbar thumb
+                if button == MouseButton::Left {
+                    match state {
+                        ElementState::Pressed => {
+                            // Check if we hit the scrollbar thumb
                             let vw = self.state.as_ref().unwrap().window.inner_size().width as f32;
                             let vh = self.state.as_ref().unwrap().window.inner_size().height as f32;
-                            let content_h = self.state.as_ref().unwrap().gpu_renderer.content_height();
+                            let content_h =
+                                self.state.as_ref().unwrap().gpu_renderer.content_height();
                             let (px, py) = self.last_cursor;
-                            if self.scroll_bar.hit_test_thumb(vw, vh, content_h, self.state.as_ref().unwrap().gpu_renderer.text_scroll(), px, py) {
+                            if self.scroll_bar.hit_test_thumb(
+                                vw,
+                                vh,
+                                content_h,
+                                self.state.as_ref().unwrap().gpu_renderer.text_scroll(),
+                                px,
+                                py,
+                            ) {
                                 self.dragging_scrollbar = true;
                                 self.drag_start_y = py;
-                                self.drag_start_scroll = self.state.as_ref().unwrap().gpu_renderer.text_scroll();
+                                self.drag_start_scroll =
+                                    self.state.as_ref().unwrap().gpu_renderer.text_scroll();
                             }
-                         }
-                         ElementState::Released => {
-                             self.dragging_scrollbar = false;
-                         }
-                     }
-                 }
-             }
+                        }
+                        ElementState::Released => {
+                            self.dragging_scrollbar = false;
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }

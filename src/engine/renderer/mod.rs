@@ -76,9 +76,7 @@ impl Renderer {
         &self,
         node: &Rc<
             RefCell<
-                crate::engine::tree::TreeNode<
-                    crate::engine::renderer::render_tree::RenderObject,
-                >,
+                crate::engine::tree::TreeNode<crate::engine::renderer::render_tree::RenderObject>,
             >,
         >,
         commands: &mut Vec<DrawCommand>,

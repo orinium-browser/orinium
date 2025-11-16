@@ -169,7 +169,7 @@ impl GpuRenderer {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,    // 三角扇がカリングで消えちゃう...
+                cull_mode: None, // 三角扇がカリングで消えちゃう...
                 polygon_mode: wgpu::PolygonMode::Fill,
                 unclipped_depth: false,
                 conservative: false,
@@ -187,7 +187,13 @@ impl GpuRenderer {
         // テキスト描画用ラッパーの初期化。引数で渡されたフォントパスがあればそれを優先して読み込む。
         let text_renderer = if let Some(p) = font_path {
             match std::fs::read(p) {
-                Ok(bytes) => match TextRenderer::new_from_bytes(&device, config.width, config.height, config.format, bytes) {
+                Ok(bytes) => match TextRenderer::new_from_bytes(
+                    &device,
+                    config.width,
+                    config.height,
+                    config.format,
+                    bytes,
+                ) {
                     Ok(t) => Some(t),
                     Err(e) => {
                         log::warn!("failed to init text renderer from provided font: {}", e);
@@ -200,7 +206,8 @@ impl GpuRenderer {
                 }
             }
         } else {
-            match TextRenderer::new_from_device(&device, config.width, config.height, config.format) {
+            match TextRenderer::new_from_device(&device, config.width, config.height, config.format)
+            {
                 Ok(t) => Some(t),
                 Err(e) => {
                     log::warn!("no system font found for text renderer: {}", e);
@@ -347,23 +354,54 @@ impl GpuRenderer {
         let mut max_y: f32 = 0.0;
         for command in commands {
             match command {
-                DrawCommand::DrawText { x: _x, y, text: _t, font_size, .. } => {
+                DrawCommand::DrawText {
+                    x: _x,
+                    y,
+                    text: _t,
+                    font_size,
+                    ..
+                } => {
                     let bottom = y + font_size * 1.2; // approximate line height
-                    if bottom > max_y { max_y = bottom; }
+                    if bottom > max_y {
+                        max_y = bottom;
+                    }
                 }
-                DrawCommand::DrawRect { x: _x, y, height: h, .. } => {
+                DrawCommand::DrawRect {
+                    x: _x,
+                    y,
+                    height: h,
+                    ..
+                } => {
                     let bottom = y + h;
-                    if bottom > max_y { max_y = bottom; }
+                    if bottom > max_y {
+                        max_y = bottom;
+                    }
                 }
             }
         }
         self.content_height = max_y.max(self.size.height as f32);
 
         let sb = ScrollBar::default();
-        log::debug!("update_draw_commands: viewport=({},{}), computed content_height={}", self.size.width, self.size.height, self.content_height);
-        if let Some((x1, y1, x2, y2)) = sb.thumb_rect(self.size.width as f32, self.size.height as f32, self.content_height, self.text_scroll) {
+        log::debug!(
+            "update_draw_commands: viewport=({},{}), computed content_height={}",
+            self.size.width,
+            self.size.height,
+            self.content_height
+        );
+        if let Some((x1, y1, x2, y2)) = sb.thumb_rect(
+            self.size.width as f32,
+            self.size.height as f32,
+            self.content_height,
+            self.text_scroll,
+        ) {
             // サム矩形が得られたら角丸矩形ヘルパーで頂点を生成する
-            log::debug!("scrollbar thumb rect: x1={},y1={},x2={},y2={}", x1, y1, x2, y2);
+            log::debug!(
+                "scrollbar thumb rect: x1={},y1={},x2={},y2={}",
+                x1,
+                y1,
+                x2,
+                y2
+            );
             let vw = self.size.width as f32;
             let vh = self.size.height as f32;
             let base = sb.color;
@@ -375,12 +413,25 @@ impl GpuRenderer {
             };
             // 角丸の半径（ピクセル）
             let radius = 6.0_f32;
-            self.push_rounded_rect_vertices(&mut all_vertices, vw, vh, x1, y1, x2, y2, radius, color);
+            self.push_rounded_rect_vertices(
+                &mut all_vertices,
+                vw,
+                vh,
+                x1,
+                y1,
+                x2,
+                y2,
+                radius,
+                color,
+            );
         } else {
             log::debug!("no scrollbar needed (content fits viewport)");
         }
 
-        log::debug!("update_draw_commands: total_vertices_after_scrollbar={}", all_vertices.len());
+        log::debug!(
+            "update_draw_commands: total_vertices_after_scrollbar={}",
+            all_vertices.len()
+        );
 
         if !all_vertices.is_empty() {
             self.vertex_buffer = Some(self.device.create_buffer_init(
@@ -437,8 +488,7 @@ impl GpuRenderer {
         // text_scroll を target_text_scroll に向かって進める
         let now = std::time::Instant::now();
         let dt = if let Some(prev) = self.last_frame {
-            let d = now.duration_since(prev).as_secs_f32();
-            d
+            now.duration_since(prev).as_secs_f32()
         } else {
             1.0 / 60.0
         };
@@ -546,12 +596,30 @@ impl GpuRenderer {
         if r <= 0.0 {
             // 普通の長方形として追加
             all_vertices.extend_from_slice(&[
-                Vertex { position: [(x1 / vw) * 2.0 - 1.0, 1.0 - (y1 / vh) * 2.0, 0.0], color },
-                Vertex { position: [(x1 / vw) * 2.0 - 1.0, 1.0 - (y2 / vh) * 2.0, 0.0], color },
-                Vertex { position: [(x2 / vw) * 2.0 - 1.0, 1.0 - (y1 / vh) * 2.0, 0.0], color },
-                Vertex { position: [(x2 / vw) * 2.0 - 1.0, 1.0 - (y1 / vh) * 2.0, 0.0], color },
-                Vertex { position: [(x1 / vw) * 2.0 - 1.0, 1.0 - (y2 / vh) * 2.0, 0.0], color },
-                Vertex { position: [(x2 / vw) * 2.0 - 1.0, 1.0 - (y2 / vh) * 2.0, 0.0], color },
+                Vertex {
+                    position: [(x1 / vw) * 2.0 - 1.0, 1.0 - (y1 / vh) * 2.0, 0.0],
+                    color,
+                },
+                Vertex {
+                    position: [(x1 / vw) * 2.0 - 1.0, 1.0 - (y2 / vh) * 2.0, 0.0],
+                    color,
+                },
+                Vertex {
+                    position: [(x2 / vw) * 2.0 - 1.0, 1.0 - (y1 / vh) * 2.0, 0.0],
+                    color,
+                },
+                Vertex {
+                    position: [(x2 / vw) * 2.0 - 1.0, 1.0 - (y1 / vh) * 2.0, 0.0],
+                    color,
+                },
+                Vertex {
+                    position: [(x1 / vw) * 2.0 - 1.0, 1.0 - (y2 / vh) * 2.0, 0.0],
+                    color,
+                },
+                Vertex {
+                    position: [(x2 / vw) * 2.0 - 1.0, 1.0 - (y2 / vh) * 2.0, 0.0],
+                    color,
+                },
             ]);
             return;
         }
@@ -562,12 +630,30 @@ impl GpuRenderer {
         let cy1 = y1;
         let cy2 = y2;
         all_vertices.extend_from_slice(&[
-            Vertex { position: [(cx1 / vw) * 2.0 - 1.0, 1.0 - (cy1 / vh) * 2.0, 0.0], color },
-            Vertex { position: [(cx1 / vw) * 2.0 - 1.0, 1.0 - (cy2 / vh) * 2.0, 0.0], color },
-            Vertex { position: [(cx2 / vw) * 2.0 - 1.0, 1.0 - (cy1 / vh) * 2.0, 0.0], color },
-            Vertex { position: [(cx2 / vw) * 2.0 - 1.0, 1.0 - (cy1 / vh) * 2.0, 0.0], color },
-            Vertex { position: [(cx1 / vw) * 2.0 - 1.0, 1.0 - (cy2 / vh) * 2.0, 0.0], color },
-            Vertex { position: [(cx2 / vw) * 2.0 - 1.0, 1.0 - (cy2 / vh) * 2.0, 0.0], color },
+            Vertex {
+                position: [(cx1 / vw) * 2.0 - 1.0, 1.0 - (cy1 / vh) * 2.0, 0.0],
+                color,
+            },
+            Vertex {
+                position: [(cx1 / vw) * 2.0 - 1.0, 1.0 - (cy2 / vh) * 2.0, 0.0],
+                color,
+            },
+            Vertex {
+                position: [(cx2 / vw) * 2.0 - 1.0, 1.0 - (cy1 / vh) * 2.0, 0.0],
+                color,
+            },
+            Vertex {
+                position: [(cx2 / vw) * 2.0 - 1.0, 1.0 - (cy1 / vh) * 2.0, 0.0],
+                color,
+            },
+            Vertex {
+                position: [(cx1 / vw) * 2.0 - 1.0, 1.0 - (cy2 / vh) * 2.0, 0.0],
+                color,
+            },
+            Vertex {
+                position: [(cx2 / vw) * 2.0 - 1.0, 1.0 - (cy2 / vh) * 2.0, 0.0],
+                color,
+            },
         ]);
 
         // 左側矩形（上下に角丸分を除いた領域）
@@ -577,12 +663,30 @@ impl GpuRenderer {
         let ly2 = y2 - r;
         if ly2 > ly1 {
             all_vertices.extend_from_slice(&[
-                Vertex { position: [(lx1 / vw) * 2.0 - 1.0, 1.0 - (ly1 / vh) * 2.0, 0.0], color },
-                Vertex { position: [(lx1 / vw) * 2.0 - 1.0, 1.0 - (ly2 / vh) * 2.0, 0.0], color },
-                Vertex { position: [(lx2 / vw) * 2.0 - 1.0, 1.0 - (ly1 / vh) * 2.0, 0.0], color },
-                Vertex { position: [(lx2 / vw) * 2.0 - 1.0, 1.0 - (ly1 / vh) * 2.0, 0.0], color },
-                Vertex { position: [(lx1 / vw) * 2.0 - 1.0, 1.0 - (ly2 / vh) * 2.0, 0.0], color },
-                Vertex { position: [(lx2 / vw) * 2.0 - 1.0, 1.0 - (ly2 / vh) * 2.0, 0.0], color },
+                Vertex {
+                    position: [(lx1 / vw) * 2.0 - 1.0, 1.0 - (ly1 / vh) * 2.0, 0.0],
+                    color,
+                },
+                Vertex {
+                    position: [(lx1 / vw) * 2.0 - 1.0, 1.0 - (ly2 / vh) * 2.0, 0.0],
+                    color,
+                },
+                Vertex {
+                    position: [(lx2 / vw) * 2.0 - 1.0, 1.0 - (ly1 / vh) * 2.0, 0.0],
+                    color,
+                },
+                Vertex {
+                    position: [(lx2 / vw) * 2.0 - 1.0, 1.0 - (ly1 / vh) * 2.0, 0.0],
+                    color,
+                },
+                Vertex {
+                    position: [(lx1 / vw) * 2.0 - 1.0, 1.0 - (ly2 / vh) * 2.0, 0.0],
+                    color,
+                },
+                Vertex {
+                    position: [(lx2 / vw) * 2.0 - 1.0, 1.0 - (ly2 / vh) * 2.0, 0.0],
+                    color,
+                },
             ]);
         }
 
@@ -591,12 +695,30 @@ impl GpuRenderer {
         let rx2 = x2;
         if ly2 > ly1 {
             all_vertices.extend_from_slice(&[
-                Vertex { position: [(rx1 / vw) * 2.0 - 1.0, 1.0 - (ly1 / vh) * 2.0, 0.0], color },
-                Vertex { position: [(rx1 / vw) * 2.0 - 1.0, 1.0 - (ly2 / vh) * 2.0, 0.0], color },
-                Vertex { position: [(rx2 / vw) * 2.0 - 1.0, 1.0 - (ly1 / vh) * 2.0, 0.0], color },
-                Vertex { position: [(rx2 / vw) * 2.0 - 1.0, 1.0 - (ly1 / vh) * 2.0, 0.0], color },
-                Vertex { position: [(rx1 / vw) * 2.0 - 1.0, 1.0 - (ly2 / vh) * 2.0, 0.0], color },
-                Vertex { position: [(rx2 / vw) * 2.0 - 1.0, 1.0 - (ly2 / vh) * 2.0, 0.0], color },
+                Vertex {
+                    position: [(rx1 / vw) * 2.0 - 1.0, 1.0 - (ly1 / vh) * 2.0, 0.0],
+                    color,
+                },
+                Vertex {
+                    position: [(rx1 / vw) * 2.0 - 1.0, 1.0 - (ly2 / vh) * 2.0, 0.0],
+                    color,
+                },
+                Vertex {
+                    position: [(rx2 / vw) * 2.0 - 1.0, 1.0 - (ly1 / vh) * 2.0, 0.0],
+                    color,
+                },
+                Vertex {
+                    position: [(rx2 / vw) * 2.0 - 1.0, 1.0 - (ly1 / vh) * 2.0, 0.0],
+                    color,
+                },
+                Vertex {
+                    position: [(rx1 / vw) * 2.0 - 1.0, 1.0 - (ly2 / vh) * 2.0, 0.0],
+                    color,
+                },
+                Vertex {
+                    position: [(rx2 / vw) * 2.0 - 1.0, 1.0 - (ly2 / vh) * 2.0, 0.0],
+                    color,
+                },
             ]);
         }
 
@@ -614,9 +736,18 @@ impl GpuRenderer {
             let y00 = cy + a0.sin() * r;
             let x01 = cx + a1.cos() * r;
             let y01 = cy + a1.sin() * r;
-            all_vertices.push(Vertex { position: [(cx / vw) * 2.0 - 1.0, 1.0 - (cy / vh) * 2.0, 0.0], color });
-            all_vertices.push(Vertex { position: [(x00 / vw) * 2.0 - 1.0, 1.0 - (y00 / vh) * 2.0, 0.0], color });
-            all_vertices.push(Vertex { position: [(x01 / vw) * 2.0 - 1.0, 1.0 - (y01 / vh) * 2.0, 0.0], color });
+            all_vertices.push(Vertex {
+                position: [(cx / vw) * 2.0 - 1.0, 1.0 - (cy / vh) * 2.0, 0.0],
+                color,
+            });
+            all_vertices.push(Vertex {
+                position: [(x00 / vw) * 2.0 - 1.0, 1.0 - (y00 / vh) * 2.0, 0.0],
+                color,
+            });
+            all_vertices.push(Vertex {
+                position: [(x01 / vw) * 2.0 - 1.0, 1.0 - (y01 / vh) * 2.0, 0.0],
+                color,
+            });
         }
         // 右上
         let cx = x2 - r;
@@ -628,9 +759,18 @@ impl GpuRenderer {
             let y00 = cy + a0.sin() * r;
             let x01 = cx + a1.cos() * r;
             let y01 = cy + a1.sin() * r;
-            all_vertices.push(Vertex { position: [(cx / vw) * 2.0 - 1.0, 1.0 - (cy / vh) * 2.0, 0.0], color });
-            all_vertices.push(Vertex { position: [(x00 / vw) * 2.0 - 1.0, 1.0 - (y00 / vh) * 2.0, 0.0], color });
-            all_vertices.push(Vertex { position: [(x01 / vw) * 2.0 - 1.0, 1.0 - (y01 / vh) * 2.0, 0.0], color });
+            all_vertices.push(Vertex {
+                position: [(cx / vw) * 2.0 - 1.0, 1.0 - (cy / vh) * 2.0, 0.0],
+                color,
+            });
+            all_vertices.push(Vertex {
+                position: [(x00 / vw) * 2.0 - 1.0, 1.0 - (y00 / vh) * 2.0, 0.0],
+                color,
+            });
+            all_vertices.push(Vertex {
+                position: [(x01 / vw) * 2.0 - 1.0, 1.0 - (y01 / vh) * 2.0, 0.0],
+                color,
+            });
         }
         // 右下
         let cx = x2 - r;
@@ -642,9 +782,18 @@ impl GpuRenderer {
             let y00 = cy + a0.sin() * r;
             let x01 = cx + a1.cos() * r;
             let y01 = cy + a1.sin() * r;
-            all_vertices.push(Vertex { position: [(cx / vw) * 2.0 - 1.0, 1.0 - (cy / vh) * 2.0, 0.0], color });
-            all_vertices.push(Vertex { position: [(x00 / vw) * 2.0 - 1.0, 1.0 - (y00 / vh) * 2.0, 0.0], color });
-            all_vertices.push(Vertex { position: [(x01 / vw) * 2.0 - 1.0, 1.0 - (y01 / vh) * 2.0, 0.0], color });
+            all_vertices.push(Vertex {
+                position: [(cx / vw) * 2.0 - 1.0, 1.0 - (cy / vh) * 2.0, 0.0],
+                color,
+            });
+            all_vertices.push(Vertex {
+                position: [(x00 / vw) * 2.0 - 1.0, 1.0 - (y00 / vh) * 2.0, 0.0],
+                color,
+            });
+            all_vertices.push(Vertex {
+                position: [(x01 / vw) * 2.0 - 1.0, 1.0 - (y01 / vh) * 2.0, 0.0],
+                color,
+            });
         }
         // 左下
         let cx = x1 + r;
@@ -656,9 +805,18 @@ impl GpuRenderer {
             let y00 = cy + a0.sin() * r;
             let x01 = cx + a1.cos() * r;
             let y01 = cy + a1.sin() * r;
-            all_vertices.push(Vertex { position: [(cx / vw) * 2.0 - 1.0, 1.0 - (cy / vh) * 2.0, 0.0], color });
-            all_vertices.push(Vertex { position: [(x00 / vw) * 2.0 - 1.0, 1.0 - (y00 / vh) * 2.0, 0.0], color });
-            all_vertices.push(Vertex { position: [(x01 / vw) * 2.0 - 1.0, 1.0 - (y01 / vh) * 2.0, 0.0], color });
+            all_vertices.push(Vertex {
+                position: [(cx / vw) * 2.0 - 1.0, 1.0 - (cy / vh) * 2.0, 0.0],
+                color,
+            });
+            all_vertices.push(Vertex {
+                position: [(x00 / vw) * 2.0 - 1.0, 1.0 - (y00 / vh) * 2.0, 0.0],
+                color,
+            });
+            all_vertices.push(Vertex {
+                position: [(x01 / vw) * 2.0 - 1.0, 1.0 - (y01 / vh) * 2.0, 0.0],
+                color,
+            });
         }
     }
 }

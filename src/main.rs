@@ -11,7 +11,11 @@ use winit::event_loop::EventLoop;
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
-    let font_path = if args.len() > 1 { Some(args[1].clone()) } else { None };
+    let font_path = if args.len() > 1 {
+        Some(args[1].clone())
+    } else {
+        None
+    };
 
     env_logger::init();
 
