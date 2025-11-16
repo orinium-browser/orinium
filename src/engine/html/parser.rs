@@ -48,8 +48,7 @@ impl<'a> Parser<'a> {
 
     pub fn parse(&mut self) -> Tree<HtmlNodeType> {
         while let Some(token) = self.tokenizer.next_token() {
-            //println!("---");
-            //println!("Processing token: {token:?}");
+            log::debug!("Processing token: {token:?}");
             match token {
                 Token::StartTag { .. } => self.handle_start_tag(token),
                 Token::EndTag { .. } => self.handle_end_tag(token),
@@ -70,6 +69,7 @@ impl<'a> Parser<'a> {
             self_closing,
         } = token
         {
+            log::debug!("stack len: {}", self.stack.len());
             let mut parent = Rc::clone(self.stack.last().unwrap());
             if self.check_start_tag_with_invalid_nesting(&name, &parent) {
                 if let HtmlNodeType::Element { tag_name, .. } = &parent.borrow().value {
