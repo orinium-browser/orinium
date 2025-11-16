@@ -3,7 +3,7 @@
 mod render_tree;
 
 #[allow(unused_imports)]
-use self::render_tree::{RenderTree, RenderObject, BuildRenderTree};
+use self::render_tree::{RenderTree, RenderObject};
 
 use std::cell::RefCell;
 use std::rc::Rc;
