@@ -126,12 +126,23 @@ impl ApplicationHandler<State> for App {
 
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::Resized(size) => state.resize(size.width, size.height),
+            WindowEvent::Resized(size) => {
+                // レンダラーのサイズを更新
+                state.resize(size.width, size.height);
+                // 既に描画コマンドがある場合は頂点バッファ（スクロールバー含む）を再生成
+                if !self.draw_commands.is_empty() {
+                    state.gpu_renderer.update_draw_commands(&self.draw_commands);
+                }
+                // 変化後すぐに1フレーム描画して古い頂点が残る表示を防ぐ
+                if let Err(e) = state.gpu_renderer.render() {
+                    log::error!("render on resize error: {}", e);
+                }
+                state.window.request_redraw();
+            }
             WindowEvent::RedrawRequested => {
                 match state.gpu_renderer.render() {
                     Ok(animating) => {
                         if animating && !self.draw_commands.is_empty() {
-                            // update queued text sections to reflect current animated scroll
                             state.gpu_renderer.update_draw_commands(&self.draw_commands);
                             state.window.request_redraw();
                         }
@@ -251,7 +262,6 @@ impl ApplicationHandler<State> for App {
                  if button == MouseButton::Left {
                      match state {
                          ElementState::Pressed => {
-                             // Check if we hit the scrollbar thumb
                             let vw = self.state.as_ref().unwrap().window.inner_size().width as f32;
                             let vh = self.state.as_ref().unwrap().window.inner_size().height as f32;
                             let content_h = self.state.as_ref().unwrap().gpu_renderer.content_height();
