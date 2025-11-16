@@ -13,11 +13,10 @@ use crate::engine::html::util;
 
 /// HTML ノードに対するデフォルト Style を返す
 pub fn default_style_for(node: &HtmlNodeType) -> Style {
-    // ベースの空/default Style
-    let mut s = Style::default();
-
-    // 共通デフォルト（inline を基本に）
-    s.display = Some(Display::Inline);
+    let mut s = Style {
+        display: Some(Display::Inline),
+        ..Default::default()
+    };
 
     let tag_name = node.tag_name();
     let tag_name = tag_name.as_str();
