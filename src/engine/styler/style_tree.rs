@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
 use super::computed_tree::{ComputedStyle, ComputedStyleNode};
+use crate::engine::css::cssom::CssNodeType;
 use crate::engine::tree::*;
 use crate::html::HtmlNodeType;
 
@@ -31,7 +32,7 @@ impl StyleTree {
     }
 
     /// styleを適応させる
-    pub fn style(&mut self) -> Self {
+    pub fn style(&mut self, _cssoms: &[Tree<CssNodeType>]) -> Self {
         // 仮実装
         self.map(&|node: &StyleNode| StyleNode {
             html: node.html(),

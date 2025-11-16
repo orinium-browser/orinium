@@ -11,7 +11,7 @@ fn test_style_to_be_computed() {
     println!("{}", dom);
     let mut style_tree = StyleTree::transform(&dom);
     println!("{}", style_tree);
-    style_tree = style_tree.style();
+    style_tree = style_tree.style(&[]);
     println!("{}", style_tree);
     let computed_tree = style_tree.compute();
     println!("{}", computed_tree);
