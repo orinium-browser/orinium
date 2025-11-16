@@ -1,5 +1,5 @@
 use orinium_browser::{
-    engine::{css::cssom::Parser as CssParser, html::parser::Parser as HtmlParser},
+    engine::{html::parser::Parser as HtmlParser},
     platform::{network::NetworkCore, ui::App},
 };
 

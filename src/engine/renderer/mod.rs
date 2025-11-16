@@ -66,7 +66,9 @@ impl Renderer {
         let render_tree: RenderTree = computed_tree.build_render_tree();
 
         let mut commands = Vec::new();
-        self.traverse_render_tree(&render_tree.root, &mut commands, 0.0, 0.0);
+        let mut x = 0.0;
+        let mut y = 0.0;
+        self.traverse_render_tree(&render_tree.root, &mut commands, &mut x, &mut y);
         commands
     }
 
@@ -74,12 +76,14 @@ impl Renderer {
         &self,
         node: &Rc<
             RefCell<
-                crate::engine::tree::TreeNode<crate::engine::renderer::render_tree::RenderObject>,
+                crate::engine::tree::TreeNode<
+                    crate::engine::renderer::render_tree::RenderObject,
+                >,
             >,
         >,
         commands: &mut Vec<DrawCommand>,
-        mut current_x: f32,
-        mut current_y: f32,
+        current_x: &mut f32,
+        current_y: &mut f32,
     ) {
         let obj = node.borrow().value.clone();
 
@@ -96,36 +100,37 @@ impl Renderer {
                         .unwrap_or(Color::BLACK);
 
                     commands.push(DrawCommand::DrawText {
-                        x: current_x,
-                        y: current_y,
+                        x: *current_x,
+                        y: *current_y,
                         text: text.clone(),
                         font_size: 16.0,
                         color,
                     });
 
-                    current_x += text.len() as f32 * 8.0;
+                    *current_x += text.len() as f32 * 8.0;
                 }
             }
 
             RenderObjectKind::Block | RenderObjectKind::Inline => {
-                // 簡易レイアウト: Block は改行、Inline は横に並べる
+                // block は改行
                 if let RenderObjectKind::Block = obj.kind {
-                    current_x = 0.0;
-                    current_y += 20.0;
-                }
-                if let RenderObjectKind::Inline = obj.kind {
-                    let width = obj.layout.content.width;
-                    current_x += width;
-                    current_y += 0.0;
+                    *current_x = 0.0;
+                    *current_y += 20.0;
                 }
 
+                // inline は幅ぶん進める
+                if let RenderObjectKind::Inline = obj.kind {
+                    *current_x += obj.layout.content.width;
+                }
+
+                // 子供へ
                 for child in &node.borrow().children {
                     self.traverse_render_tree(child, commands, current_x, current_y);
                 }
 
                 if let RenderObjectKind::Block = obj.kind {
-                    current_x = 0.0;
-                    current_y += 10.0;
+                    *current_x = 0.0;
+                    *current_y += 10.0;
                 }
             }
 
