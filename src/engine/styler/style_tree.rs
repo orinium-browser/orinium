@@ -5,7 +5,7 @@ use super::computed_tree::{ComputedStyle, ComputedStyleNode};
 use super::ua::default_style_for;
 
 use crate::engine::css::cssom::CssNodeType;
-use crate::engine::css::values::{Color, Display, Length, Border};
+use crate::engine::css::values::{Border, Color, Display, Length};
 use crate::engine::tree::*;
 use crate::html::HtmlNodeType;
 
@@ -20,7 +20,6 @@ impl StyleNode {
         self.html.clone()
     }
 }
-
 
 #[derive(Debug, Clone, Default)]
 pub struct Style {
