@@ -154,9 +154,8 @@ async fn main() -> Result<()> {
                     // ウィンドウとイベントループを作成
                     let event_loop =
                         EventLoop::<orinium_browser::platform::ui::State>::with_user_event()
-                            .build()
-                            .unwrap();
-                    let mut app = App::new();
+                            .build()?;
+                    let mut app = App::new(None);
                     app.set_draw_commands(draw_commands);
                     let _ = event_loop.run_app(&mut app);
                 } else {
