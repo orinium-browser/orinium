@@ -75,13 +75,12 @@ impl TextRenderer {
         queue: &wgpu::Queue,
         sections: &[Section<'a>],
     ) -> Result<(), Box<dyn Error>> {
-        if self.brush.is_none() {
-            if let Some(bytes) = self.pending_font.take() {
+        if self.brush.is_none()
+            && let Some(bytes) = self.pending_font.take() {
                 // device/queue/format/width/height情報が必要だが、ここではdeviceだけある。幅・高さ・formatは仮の値を使うか、呼び出し側でnew_from_bytesを呼ぶべき。
                 // 安全策として初期化は行わずpending_fontを戻す
                 self.pending_font = Some(bytes);
             }
-        }
 
         if let Some(brush) = &mut self.brush {
             brush.queue(device, queue, sections)?;
