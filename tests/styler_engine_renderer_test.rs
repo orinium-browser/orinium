@@ -1,4 +1,4 @@
-//! Stylerの挙動確認に為に作りました
+//! Stylerとengine::rendererの挙動確認に為に作りました
 
 mod utils;
 

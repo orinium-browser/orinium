@@ -5,5 +5,5 @@ pub mod matcher;
 pub mod style_tree;
 pub mod ua;
 
-// use self::computed_tree::*;
-// use self::style_tree::*;
+// pub use computed_tree::ComputedStyleTree;
+pub use style_tree::StyleTree;
