@@ -94,7 +94,7 @@ pub fn default_style_for(node: &HtmlNodeType) -> Style {
         }
 
         // その他のブロック要素群
-        _ => if util::is_block_level_element(&tag_name) {
+        _ if util::is_block_level_element(&tag_name) => {
             s.display = Some(Display::Block);
         }
 
