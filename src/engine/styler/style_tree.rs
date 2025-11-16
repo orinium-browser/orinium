@@ -18,7 +18,7 @@ impl StyleNode {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Style;
 
 pub type StyleTree = Tree<StyleNode>;
