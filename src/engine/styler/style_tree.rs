@@ -2,6 +2,8 @@ use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
 use super::computed_tree::{ComputedStyle, ComputedStyleNode};
+use super::ua::default_style_for;
+
 use crate::engine::css::cssom::CssNodeType;
 use crate::engine::css::values::{Color, Display, Length, Border};
 use crate::engine::tree::*;
@@ -55,8 +57,10 @@ impl StyleTree {
     /// styleを適応させる
     pub fn style(&mut self, _cssoms: &[Tree<CssNodeType>]) -> Self {
         self.map(&|node: &StyleNode| {
-            let html = node.html();
-            let style = Style::default();
+            let html: Weak<RefCell<TreeNode<HtmlNodeType>>> = node.html();
+
+            // UA デフォルトスタイルを取得
+            let style = default_style_for(&html.upgrade().unwrap().borrow().value);
 
             StyleNode {
                 html,
@@ -66,9 +70,15 @@ impl StyleTree {
     }
 
     pub fn compute(&mut self) -> Tree<ComputedStyleNode> {
-        self.map(&|node: &StyleNode| ComputedStyleNode {
-            html: node.html(),
-            computed: Some(ComputedStyle::compute(node.style.clone().unwrap())),
+        self.map(&|node: &StyleNode| {
+            let style = node.style.clone().unwrap();
+
+            let computed = ComputedStyle::compute(style);
+
+            ComputedStyleNode {
+                html: node.html(),
+                computed: Some(computed),
+            }
         })
     }
 }
