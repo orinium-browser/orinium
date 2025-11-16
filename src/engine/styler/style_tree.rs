@@ -54,10 +54,14 @@ impl StyleTree {
 
     /// styleを適応させる
     pub fn style(&mut self, _cssoms: &[Tree<CssNodeType>]) -> Self {
-        // 仮実装
-        self.map(&|node: &StyleNode| StyleNode {
-            html: node.html(),
-            style: Some(Style::default()),
+        self.map(&|node: &StyleNode| {
+            let html = node.html();
+            let style = Style::default();
+
+            StyleNode {
+                html,
+                style: Some(style),
+            }
         })
     }
 
