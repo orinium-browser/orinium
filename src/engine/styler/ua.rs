@@ -5,7 +5,8 @@
 use super::style_tree::Style;
 use crate::engine::css::values::{
     // Border, Color,
-    Display, Length
+    Display,
+    Length,
 };
 use crate::engine::html::parser::HtmlNodeType;
 use crate::engine::html::util;
