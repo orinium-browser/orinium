@@ -20,6 +20,15 @@ pub enum HtmlNodeType {
     },
 }
 
+impl HtmlNodeType {
+    pub fn tag_name(&self) -> String {
+        match self {
+            HtmlNodeType::Element { tag_name, .. } => tag_name.clone(),
+            _ => "".to_string(),
+        }
+    }
+}
+
 pub struct Parser<'a> {
     tokenizer: crate::engine::html::tokenizer::Tokenizer<'a>,
     tree: Tree<HtmlNodeType>,
