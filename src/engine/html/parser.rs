@@ -69,7 +69,6 @@ impl<'a> Parser<'a> {
             self_closing,
         } = token
         {
-            log::debug!(target:"HtmlParser" ,"stack len: {}", self.stack.len());
             let mut parent = Rc::clone(self.stack.last().unwrap());
             if self.check_start_tag_with_invalid_nesting(&name, &parent) {
                 if let HtmlNodeType::Element { tag_name, .. } = &parent.borrow().value {
@@ -92,6 +91,7 @@ impl<'a> Parser<'a> {
             // Self-closing タグは stack に push しない
             if !self_closing {
                 self.stack.push(new_node);
+                log::debug!(target:"HtmlParser" ,"Stack len: {}, Pushed <{}> to stack.", self.stack.len(), name);
             }
         }
     }
@@ -99,10 +99,12 @@ impl<'a> Parser<'a> {
     fn handle_end_tag(&mut self, token: Token) {
         if let Token::EndTag { name } = token {
             while let Some(top) = self.stack.pop() {
-                if let HtmlNodeType::Element { tag_name, .. } = &top.borrow().value
-                    && tag_name == &name
-                {
-                    break;
+                if let HtmlNodeType::Element { tag_name, .. } = &top.borrow().value {
+                    if tag_name == &name {
+                        break;
+                    } else {
+                        log::debug!(target:"HtmlParser" ,"Stack len: {}, Unmatched end tag: </{}>, Find <{}>", self.stack.len(), name, tag_name);
+                    }
                 }
             }
         }
