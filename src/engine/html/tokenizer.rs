@@ -4,7 +4,7 @@ pub struct Attribute {
     pub value: String,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Doctype {
         name: Option<String>,
