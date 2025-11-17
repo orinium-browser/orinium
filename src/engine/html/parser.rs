@@ -34,6 +34,7 @@ pub struct Parser<'a> {
     tokenizer: crate::engine::html::tokenizer::Tokenizer<'a>,
     tree: Tree<HtmlNodeType>,
     stack: Vec<Rc<RefCell<TreeNode<HtmlNodeType>>>>,
+    tag_stack: Vec<String>,
 }
 
 impl<'a> Parser<'a> {
@@ -44,6 +45,7 @@ impl<'a> Parser<'a> {
             tokenizer: Tokenizer::new(input),
             tree: document.clone(),
             stack: vec![document.root.clone()],
+            tag_stack: vec![],
         }
     }
 
@@ -70,6 +72,7 @@ impl<'a> Parser<'a> {
             self_closing,
         } = token
         {
+            self.tag_stack.push(name.clone());
             let mut parent = Rc::clone(self.stack.last().unwrap());
             if self.check_start_tag_with_invalid_nesting(&name, &parent) {
                 if let HtmlNodeType::Element { tag_name, .. } = &parent.borrow().value {
@@ -98,16 +101,27 @@ impl<'a> Parser<'a> {
     }
 
     fn handle_end_tag(&mut self, token: Token) {
-        if let Token::EndTag { name } = token {
-            while let Some(top) = self.stack.pop() {
-                if let HtmlNodeType::Element { tag_name, .. } = &top.borrow().value {
-                    if tag_name == &name {
-                        log::debug!(target:"HtmlParser::Stack" ,"Stack len: {}, -Popped </{}> from stack.", self.stack.len(), name);
-                        break;
-                    } else {
-                        log::debug!(target:"HtmlParser::Stack" ,"Stack len: {}, Unmatched end tag: </{}>, Find <{}>", self.stack.len(), name, tag_name);
+        if let Token::EndTag { ref name } = token {
+            let name = name.clone();
+            if self.tag_stack.contains(&name) {
+                while let Some(top) = self.stack.pop() {
+                    self.tag_stack.pop();
+                    if let HtmlNodeType::Element { tag_name, .. } = &top.borrow().value {
+                        if tag_name == &name {
+                            log::debug!(target:"HtmlParser::Stack" ,"Stack len: {}, -Popped </{}> from stack.", self.stack.len(), name);
+                            break;
+                        } else {
+                            log::debug!(target:"HtmlParser::Stack" ,"Stack len: {}, Unmatched end tag: </{}>, Find <{}>", self.stack.len(), name, tag_name);
+                        }
                     }
                 }
+            } else {
+                let parent = Rc::clone(self.stack.last().unwrap());
+                TreeNode::add_child_value(
+                    &parent,
+                    HtmlNodeType::InvalidNode(token, format!("No matching start tag for </{}>", name)),
+                ); 
+                log::debug!(target:"HtmlParser::Invalid" ,"Invalid end tag: </{}>", name);
             }
         }
     }
