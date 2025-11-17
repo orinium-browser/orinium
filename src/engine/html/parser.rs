@@ -48,7 +48,7 @@ impl<'a> Parser<'a> {
 
     pub fn parse(&mut self) -> Tree<HtmlNodeType> {
         while let Some(token) = self.tokenizer.next_token() {
-            log::debug!(target:"HtmlParser" ,"Processing token: {token:?}");
+            log::debug!(target:"HtmlParser::ProcessingToken" ,"Processing token: {token:?}");
             match token {
                 Token::StartTag { .. } => self.handle_start_tag(token),
                 Token::EndTag { .. } => self.handle_end_tag(token),
@@ -91,7 +91,7 @@ impl<'a> Parser<'a> {
             // Self-closing タグは stack に push しない
             if !self_closing {
                 self.stack.push(new_node);
-                log::debug!(target:"HtmlParser" ,"Stack len: {}, Pushed <{}> to stack.", self.stack.len(), name);
+                log::debug!(target:"HtmlParser::StackLog" ,"Stack len: {}, Pushed <{}> to stack.", self.stack.len(), name);
             }
         }
     }
@@ -103,7 +103,7 @@ impl<'a> Parser<'a> {
                     if tag_name == &name {
                         break;
                     } else {
-                        log::debug!(target:"HtmlParser" ,"Stack len: {}, Unmatched end tag: </{}>, Find <{}>", self.stack.len(), name, tag_name);
+                        log::debug!(target:"HtmlParser::StackLog" ,"Stack len: {}, Unmatched end tag: </{}>, Find <{}>", self.stack.len(), name, tag_name);
                     }
                 }
             }
