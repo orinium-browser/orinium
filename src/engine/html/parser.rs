@@ -18,7 +18,7 @@ pub enum HtmlNodeType {
         public_id: Option<String>,
         system_id: Option<String>,
     },
-    InvalidNode(Token),
+    InvalidNode(Token, String), // 不正なトークン用
 }
 
 impl HtmlNodeType {
