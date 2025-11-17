@@ -72,6 +72,7 @@ impl Renderer {
         commands
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn traverse_render_tree(
         &self,
         node: &Rc<

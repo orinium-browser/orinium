@@ -11,6 +11,8 @@ use winit::event_loop::EventLoop;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    env_logger::init();
+
     let args: Vec<String> = env::args().collect::<Vec<String>>();
     if args.len() >= 2 {
         match args[1].as_str() {

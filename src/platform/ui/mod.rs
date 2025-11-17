@@ -139,19 +139,17 @@ impl ApplicationHandler<State> for App {
                 }
                 state.window.request_redraw();
             }
-            WindowEvent::RedrawRequested => {
-                match state.gpu_renderer.render() {
-                    Ok(animating) => {
-                        if animating && !self.draw_commands.is_empty() {
-                            state.gpu_renderer.update_draw_commands(&self.draw_commands);
-                            state.window.request_redraw();
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("render error: {}", e);
+            WindowEvent::RedrawRequested => match state.gpu_renderer.render() {
+                Ok(animating) => {
+                    if animating && !self.draw_commands.is_empty() {
+                        state.gpu_renderer.update_draw_commands(&self.draw_commands);
+                        state.window.request_redraw();
                     }
                 }
-            }
+                Err(e) => {
+                    log::error!("render error: {}", e);
+                }
+            },
             WindowEvent::MouseWheel { delta, .. } => {
                 // delta.y: positive when scrolling up on some platforms; invert if needed
                 let scroll_amount = match delta {

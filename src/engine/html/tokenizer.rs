@@ -4,7 +4,7 @@ pub struct Attribute {
     pub value: String,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Doctype {
         name: Option<String>,
@@ -108,7 +108,7 @@ impl<'a> Tokenizer<'a> {
             let c = self.input[self.pos..].chars().next().unwrap();
             self.pos += c.len_utf8();
 
-            //print!("State: {:?}, Char: '{}'\n", self.state, c);
+            log::debug!(target:"HtmlTokenizer::Char","State: {:?}, Char: '{}'", self.state, c);
 
             match self.state {
                 TokenizerState::Data => self.state_data(c),
@@ -134,6 +134,22 @@ impl<'a> Tokenizer<'a> {
             }
 
             if let Some(token) = self.token.take() {
+                #[cfg(debug_assertions)]
+                match &token {
+                    Token::StartTag { name, .. } => {
+                        log::debug!(target:"HtmlTokenizer::EmitToken::TagStart" ,"Emitting token: {name}, Pos: {}", self.pos)
+                    }
+                    Token::EndTag { name } => {
+                        log::debug!(target:"HtmlTokenizer::EmitToken::TagEnd" ,"Emitting token: {name}, Pos: {}", self.pos)
+                    }
+                    Token::Comment(comment) => {
+                        log::debug!(target:"HtmlTokenizer::EmitToken::Comment" ,"Emitting token: {}, Pos: {}", comment, self.pos)
+                    }
+                    Token::Text(text) => {
+                        log::debug!(target:"HtmlTokenizer::EmitToken::Text" ,"Emitting token: `{}`, Pos: {}", text, self.pos)
+                    }
+                    _ => {}
+                }
                 return Some(token);
             }
         }
