@@ -119,8 +119,11 @@ impl<'a> Parser<'a> {
                 let parent = Rc::clone(self.stack.last().unwrap());
                 TreeNode::add_child_value(
                     &parent,
-                    HtmlNodeType::InvalidNode(token, format!("No matching start tag for </{}>", name)),
-                ); 
+                    HtmlNodeType::InvalidNode(
+                        token,
+                        format!("No matching start tag for </{}>", name),
+                    ),
+                );
                 log::debug!(target:"HtmlParser::Invalid" ,"Invalid end tag: </{}>", name);
             }
         }
