@@ -139,7 +139,7 @@ impl<'a> Tokenizer<'a> {
                     Token::StartTag {name, ..}=> log::debug!(target:"HtmlTokenizer::EmitToken::TagStart" ,"Emitting token: {name}, Pos: {}", self.pos),
                     Token::EndTag {name}=> log::debug!(target:"HtmlTokenizer::EmitToken::TagEnd" ,"Emitting token: {name}, Pos: {}", self.pos),
                     Token::Comment(comment) => log::debug!(target:"HtmlTokenizer::EmitToken::Comment" ,"Emitting token: {}, Pos: {}", comment, self.pos),
-                    Token::Text(text) => log::debug!(target:"HtmlTokenizer::EmitToken::Text" ,"Emitting token: {}, Pos: {}", text, self.pos),
+                    Token::Text(text) => log::debug!(target:"HtmlTokenizer::EmitToken::Text" ,"Emitting token: `{}`, Pos: {}", text, self.pos),
                     _ => {},
                 }
                 return Some(token);
