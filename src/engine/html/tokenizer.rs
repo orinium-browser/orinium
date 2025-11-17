@@ -108,7 +108,7 @@ impl<'a> Tokenizer<'a> {
             let c = self.input[self.pos..].chars().next().unwrap();
             self.pos += c.len_utf8();
 
-            //print!("State: {:?}, Char: '{}'\n", self.state, c);
+            log::debug!(target:"HtmlTokenizer::Char","State: {:?}, Char: '{}'", self.state, c);
 
             match self.state {
                 TokenizerState::Data => self.state_data(c),
@@ -134,6 +134,12 @@ impl<'a> Tokenizer<'a> {
             }
 
             if let Some(token) = self.token.take() {
+                #[cfg(debug_assertions)]
+                match &token {
+                    Token::StartTag {name, ..}=> log::debug!(target:"HtmlTokenizer::EmitToken::TagStart" ,"Emitting token: {name}, Pos: {}", self.pos),
+                    Token::EndTag {name}=> log::debug!(target:"HtmlTokenizer::EmitToken::TagEnd" ,"Emitting token: {name}, Pos: {}", self.pos),
+                    _ => log::debug!(target:"HtmlTokenizer::EmitToken" ,"Emitting token: {token:?}, Pos: {}", self.pos),
+                }
                 return Some(token);
             }
         }
