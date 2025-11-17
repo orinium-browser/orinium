@@ -91,7 +91,7 @@ impl<'a> Parser<'a> {
             // Self-closing タグは stack に push しない
             if !self_closing {
                 self.stack.push(new_node);
-                log::debug!(target:"HtmlParser::StackLog" ,"Stack len: {}, +Pushed <{}> to stack.", self.stack.len(), name);
+                log::debug!(target:"HtmlParser::Stack" ,"Stack len: {}, +Pushed <{}> to stack.", self.stack.len(), name);
             }
         }
     }
@@ -101,10 +101,10 @@ impl<'a> Parser<'a> {
             while let Some(top) = self.stack.pop() {
                 if let HtmlNodeType::Element { tag_name, .. } = &top.borrow().value {
                     if tag_name == &name {
-                        log::debug!(target:"HtmlParser::StackLog" ,"Stack len: {}, -Popped </{}> from stack.", self.stack.len(), name);
+                        log::debug!(target:"HtmlParser::Stack" ,"Stack len: {}, -Popped </{}> from stack.", self.stack.len(), name);
                         break;
                     } else {
-                        log::debug!(target:"HtmlParser::StackLog" ,"Stack len: {}, Unmatched end tag: </{}>, Find <{}>", self.stack.len(), name, tag_name);
+                        log::debug!(target:"HtmlParser::Stack" ,"Stack len: {}, Unmatched end tag: </{}>, Find <{}>", self.stack.len(), name, tag_name);
                     }
                 }
             }
