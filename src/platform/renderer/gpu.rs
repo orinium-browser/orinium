@@ -5,8 +5,8 @@ use wgpu::util::DeviceExt;
 use wgpu_text::glyph_brush::{Section as TextSection, Text};
 use winit::window::Window;
 
-use crate::platform::renderer::glyph::text::TextRenderer;
-use crate::platform::renderer::scroll_bar::ScrollBar;
+use super::glyph::text::TextRenderer;
+use super::scroll_bar::ScrollBar;
 
 /// GPU描画コンテキスト
 pub struct GpuRenderer {
