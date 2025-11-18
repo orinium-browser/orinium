@@ -39,14 +39,14 @@ impl DomTree {
 
         self.traverse(&mut |node| {
             let n = node.borrow();
-            if let HtmlNodeType::Element { tag_name: t, .. } = &n.value {
-                if t.eq_ignore_ascii_case(tag_name) {
-                    let children = &n.children;
-                    for child in children {
-                        let child_ref = child.borrow();
-                        if let HtmlNodeType::Text(content) = &child_ref.value {
-                            texts.push(content.clone());
-                        }
+            if let HtmlNodeType::Element { tag_name: t, .. } = &n.value
+                && t.eq_ignore_ascii_case(tag_name)
+            {
+                let children = &n.children;
+                for child in children {
+                    let child_ref = child.borrow();
+                    if let HtmlNodeType::Text(content) = &child_ref.value {
+                        texts.push(content.clone());
                     }
                 }
             }
