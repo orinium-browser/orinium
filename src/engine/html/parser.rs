@@ -30,9 +30,11 @@ impl HtmlNodeType {
     }
 }
 
+pub type DomTree = Tree<HtmlNodeType>;
+
 pub struct Parser<'a> {
     tokenizer: crate::engine::html::tokenizer::Tokenizer<'a>,
-    tree: Tree<HtmlNodeType>,
+    tree: DomTree,
     stack: Vec<Rc<RefCell<TreeNode<HtmlNodeType>>>>,
     tag_stack: Vec<String>,
 }
@@ -49,7 +51,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse(&mut self) -> Tree<HtmlNodeType> {
+    pub fn parse(&mut self) -> DomTree {
         while let Some(token) = self.tokenizer.next_token() {
             log::debug!(target:"HtmlParser::Token" ,"Processing token: {token:?}");
             match token {
