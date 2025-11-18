@@ -29,6 +29,7 @@ async fn main() -> Result<()> {
             <body>
                 <h1>Hello, Orinium Browser!</h1>
                 <p>This is a test paragraph.</p>
+                <p>日本語テスト</p>
                 <div>
                     <p>Nested paragraph in a div.</p>
                 </div>
