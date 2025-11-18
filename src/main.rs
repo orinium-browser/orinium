@@ -69,7 +69,7 @@ async fn main() -> Result<()> {
     log::info!("DOM Tree parsed successfully");
 
     // CSSOMツリーの構築
-    let css = r#"
+    let css: &str = r#"
     /* Reset / Normalize */
     html, body {
         margin: 0;
@@ -146,7 +146,11 @@ async fn main() -> Result<()> {
     }
     "#;
 
-    let mut css_parser = CssParser::new(css);
+    // domから取得したスタイルを追加
+    let additional_css = dom_tree.collect_text_by_tag("style").join("\n");
+    let css: String = additional_css + css;
+
+    let mut css_parser = CssParser::new(&css);
     let css_tree = css_parser.parse()?;
 
     // スタイルツリーの構築
