@@ -32,6 +32,30 @@ impl HtmlNodeType {
 
 pub type DomTree = Tree<HtmlNodeType>;
 
+impl DomTree {
+    /// 指定したタグ名の要素のテキストノードをすべて集める
+    pub fn collect_text_by_tag(&self, tag_name: &str) -> Vec<String> {
+        let mut texts = Vec::new();
+
+        self.traverse(&mut |node| {
+            let n = node.borrow();
+            if let HtmlNodeType::Element { tag_name: t, .. } = &n.value {
+                if t.eq_ignore_ascii_case(tag_name) {
+                    let children = &n.children;
+                    for child in children {
+                        let child_ref = child.borrow();
+                        if let HtmlNodeType::Text(content) = &child_ref.value {
+                            texts.push(content.clone());
+                        }
+                    }
+                }
+            }
+        });
+
+        texts
+    }
+}
+
 pub struct Parser<'a> {
     tokenizer: crate::engine::html::tokenizer::Tokenizer<'a>,
     tree: DomTree,
