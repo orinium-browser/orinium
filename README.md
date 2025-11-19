@@ -1,27 +1,13 @@
 <h1 align="center">Orinium Browser</h1>
 
 <div align="center">
-  <a href="https://deepwiki.com/orinium-browser/orinium" target="_blank">
-    <img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki" />
-  </a>
+  <a href="https://deepwiki.com/orinium-browser/orinium" target="_blank"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki" /></a>
+  <a href="./LICENSE" target="_blank"><img src="https://img.shields.io/github/license/orinium-browser/orinium" alt="Github license" /></a>
+  <a href="https://discord.gg/2zYbEnMC5H" target="_blank"><img src="https://img.shields.io/badge/Discord-5865F2?style=flat&logo=discord&logoColor=white" alt="Discord server" /></a>
+  
 
-  <a href="./LICENSE" target="_blank">
-    <img src="https://img.shields.io/github/license/orinium-browser/orinium" alt="Github license" />
-  </a>
-
-  <a href="https://discord.gg/2zYbEnMC5H" target="_blank">
-    <img src="https://img.shields.io/badge/Discord-5865F2?style=flat&logo=discord&logoColor=white" alt="Discord server" />
-  </a>
-
-  <br />
-
-  <a href="https://github.com/orinium-browser/orinium/actions" target="_blank">
-    <img src="https://github.com/orinium-browser/orinium/actions/workflows/rust.yml/badge.svg" alt="Action Rust" />
-  </a>
-
-  <a href="https://deps.rs/repo/github/orinium-browser/orinium" target="_blank">
-    <img src="https://deps.rs/repo/github/orinium-browser/orinium/status.svg" alt="dependency status" />
-  </a>
+  <a href="https://github.com/orinium-browser/orinium/actions" target="_blank"><img src="https://github.com/orinium-browser/orinium/actions/workflows/rust.yml/badge.svg" alt="Action Rust" /></a>
+  <a href="https://deps.rs/repo/github/orinium-browser/orinium" target="_blank"><img src="https://deps.rs/repo/github/orinium-browser/orinium/status.svg" alt="dependency status" /></a>
 </div>
 
 <a href="./README.en.md" align="center">English</a>
@@ -48,6 +34,7 @@
 
 その他の開発時に目を通しておくと便利なドキュメントは[Docs/](./docs/)にあります。
 なお、一部のものを除いて、ドキュメントは言語ごとに分かれています。
+
 
 
 
