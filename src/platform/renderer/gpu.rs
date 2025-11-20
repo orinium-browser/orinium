@@ -5,8 +5,8 @@ use wgpu::util::DeviceExt;
 use wgpu_text::glyph_brush::{Section as TextSection, Text};
 use winit::window::Window;
 
-use crate::platform::renderer::glyph::text::TextRenderer;
-use crate::platform::renderer::scroll_bar::ScrollBar;
+use super::glyph::text::TextRenderer;
+use super::scroll_bar::ScrollBar;
 
 /// GPU描画コンテキスト
 pub struct GpuRenderer {
@@ -196,12 +196,12 @@ impl GpuRenderer {
                 ) {
                     Ok(t) => Some(t),
                     Err(e) => {
-                        log::warn!("failed to init text renderer from provided font: {}", e);
+                        log::warn!(target:"PRender::gpu::font" ,"failed to init text renderer from provided font: {}", e);
                         None
                     }
                 },
                 Err(e) => {
-                    log::warn!("failed to read font path '{}': {}", p, e);
+                    log::warn!(target:"PRender::gpu::font" ,"failed to read font path '{}': {}", p, e);
                     None
                 }
             }
@@ -210,7 +210,7 @@ impl GpuRenderer {
             {
                 Ok(t) => Some(t),
                 Err(e) => {
-                    log::warn!("no system font found for text renderer: {}", e);
+                    log::warn!(target:"PRender::gpu::font" ,"no system font found for text renderer: {}", e);
                     None
                 }
             }
@@ -383,6 +383,7 @@ impl GpuRenderer {
 
         let sb = ScrollBar::default();
         log::debug!(
+            target:"PRender::gpu::CmdGen" ,
             "update_draw_commands: viewport=({},{}), computed content_height={}",
             self.size.width,
             self.size.height,
@@ -396,6 +397,7 @@ impl GpuRenderer {
         ) {
             // サム矩形が得られたら角丸矩形ヘルパーで頂点を生成する
             log::debug!(
+                target:"PRender::gpu::CmdGen::etc" ,
                 "scrollbar thumb rect: x1={},y1={},x2={},y2={}",
                 x1,
                 y1,
@@ -422,10 +424,11 @@ impl GpuRenderer {
                 color,
             );
         } else {
-            log::debug!("no scrollbar needed (content fits viewport)");
+            log::debug!(target:"PRender::gpu::CmdGen::etc" ,"no scrollbar needed (content fits viewport)");
         }
 
         log::debug!(
+            target:"PRender::gpu::CmdGen::etc" ,
             "update_draw_commands: total_vertices_after_scrollbar={}",
             all_vertices.len()
         );

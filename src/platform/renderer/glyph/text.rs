@@ -27,6 +27,9 @@ impl TextRenderer {
 
         // 代表的な Windows フォント候補
         let candidates = [
+            "C:\\Windows\\Fonts\\meiryo.ttc",   // メイリオ
+            "C:\\Windows\\Fonts\\msgothic.ttc", // MS ゴシック
+            "C:\\Windows\\Fonts\\msmincho.ttc", // MS 明朝
             "C:\\Windows\\Fonts\\arial.ttf",
             "C:\\Windows\\Fonts\\segoeui.ttf",
             "C:\\Windows\\Fonts\\seguisym.ttf",

@@ -81,13 +81,13 @@ impl<T> Tree<T> {
     }
 
     /// ツリーを再帰的に走査して処理
-    pub fn traverse<F>(&self, f: &F)
+    pub fn traverse<F>(&self, f: &mut F)
     where
-        F: Fn(&Rc<RefCell<TreeNode<T>>>),
+        F: FnMut(&Rc<RefCell<TreeNode<T>>>),
     {
-        fn visit<T, F>(node: &Rc<RefCell<TreeNode<T>>>, f: &F)
+        fn visit<T, F>(node: &Rc<RefCell<TreeNode<T>>>, f: &mut F)
         where
-            F: Fn(&Rc<RefCell<TreeNode<T>>>),
+            F: FnMut(&Rc<RefCell<TreeNode<T>>>),
         {
             f(node);
             for child in &node.borrow().children {
