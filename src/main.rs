@@ -1,4 +1,5 @@
 use anyhow::Result;
+use orinium_browser::browser::BrowserApp;
 //use orinium_browser::renderer::Color;
 use std::env;
 
@@ -167,9 +168,7 @@ async fn main() -> Result<()> {
     // ウィンドウとイベントループを作成
     let event_loop =
         EventLoop::<orinium_browser::platform::ui::State>::with_user_event().build()?;
-    let mut app = App::new(font_path);
-
-    app.set_draw_commands(draw_commands);
+    let mut app = App::new(BrowserApp::with_draw_commands(draw_commands));
 
     event_loop.run_app(&mut app)?;
 
