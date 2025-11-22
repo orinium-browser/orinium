@@ -1,4 +1,5 @@
 use orinium_browser::{
+    browser::BrowserApp,
     engine::html::parser::Parser as HtmlParser,
     platform::{network::NetworkCore, ui::App},
 };
@@ -157,8 +158,7 @@ async fn main() -> Result<()> {
                     let event_loop =
                         EventLoop::<orinium_browser::platform::ui::State>::with_user_event()
                             .build()?;
-                    let mut app = App::new(None);
-                    app.set_draw_commands(draw_commands);
+                    let mut app = App::new(BrowserApp::new().with_draw_commands(draw_commands));
                     let _ = event_loop.run_app(&mut app);
                 } else {
                     eprintln!("Please provide a URL for simple rendering test.");
