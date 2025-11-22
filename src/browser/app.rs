@@ -10,6 +10,12 @@ pub struct BrowserApp {
     draw_commands: Vec<DrawCommand>,
 }
 
+impl Default for BrowserApp {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BrowserApp {
     pub fn new() -> Self {
         Self {
@@ -37,10 +43,10 @@ impl BrowserApp {
                 return BrowserCommand::Exit;
             }
             WindowEvent::RedrawRequested => {
-                if let Ok(animating) = gpu.render() {
-                    if animating {
-                        self.apply_draw_commands(gpu);
-                    }
+                if let Ok(animating) = gpu.render()
+                    && animating
+                {
+                    self.apply_draw_commands(gpu);
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
