@@ -4,6 +4,7 @@ use winit::event::WindowEvent;
 
 pub enum BrowserCommand {
     Exit,
+    RequestRedraw,
     None,
 }
 pub struct BrowserApp {
@@ -56,6 +57,7 @@ impl BrowserApp {
                 };
                 gpu.scroll_text_by(scroll_amount);
                 self.apply_draw_commands(gpu);
+                return BrowserCommand::RequestRedraw;
             }
             _ => {}
         }

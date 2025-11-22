@@ -59,6 +59,9 @@ impl ApplicationHandler<State> for App {
                 .handle_window_event(event, &mut state.gpu_renderer)
             {
                 BrowserCommand::Exit => event_loop.exit(),
+                BrowserCommand::RequestRedraw => {
+                    state.window.request_redraw();
+                }
                 BrowserCommand::None => {}
             }
         }
