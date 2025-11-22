@@ -2,7 +2,6 @@ use anyhow::Result;
 use orinium_browser::browser::BrowserApp;
 //use orinium_browser::renderer::Color;
 use std::env;
-use std::sync::Arc;
 
 use orinium_browser::engine::css::cssom::Parser as CssParser;
 use orinium_browser::engine::html::parser::Parser as HtmlParser;
