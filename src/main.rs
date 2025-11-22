@@ -2,6 +2,7 @@ use anyhow::Result;
 use orinium_browser::browser::BrowserApp;
 //use orinium_browser::renderer::Color;
 use std::env;
+use std::sync::Arc;
 
 use orinium_browser::engine::css::cssom::Parser as CssParser;
 use orinium_browser::engine::html::parser::Parser as HtmlParser;
@@ -168,7 +169,7 @@ async fn main() -> Result<()> {
     // ウィンドウとイベントループを作成
     let event_loop =
         EventLoop::<orinium_browser::platform::ui::State>::with_user_event().build()?;
-    let mut app = App::new(BrowserApp::with_draw_commands(draw_commands));
+    let mut app = App::new(BrowserApp::new().with_draw_commands(draw_commands));
 
     event_loop.run_app(&mut app)?;
 

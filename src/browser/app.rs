@@ -18,8 +18,9 @@ impl BrowserApp {
     }
 
     // 開発テスト用
-    pub fn with_draw_commands(draw_commands: Vec<DrawCommand>) -> Self {
-        Self { draw_commands }
+    pub fn with_draw_commands(mut self, draw_commands: Vec<DrawCommand>) -> Self {
+        self.draw_commands = draw_commands;
+        self
     }
 
     pub fn apply_draw_commands(&self, gpu: &mut GpuRenderer) {
