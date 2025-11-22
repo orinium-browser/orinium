@@ -1,11 +1,11 @@
 use std::sync::Arc;
 use winit::application::ApplicationHandler;
-use winit::event_loop::{ActiveEventLoop};
 use winit::event::WindowEvent;
+use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowId};
 
-use crate::platform::renderer::gpu::GpuRenderer;
 use crate::browser::{BrowserApp, BrowserCommand};
+use crate::platform::renderer::gpu::GpuRenderer;
 
 pub struct State {
     pub window: Arc<Window>,
@@ -28,7 +28,11 @@ impl App {
 
 impl ApplicationHandler<State> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        let window = Arc::new(event_loop.create_window(Window::default_attributes()).unwrap());
+        let window = Arc::new(
+            event_loop
+                .create_window(Window::default_attributes())
+                .unwrap(),
+        );
         let state = State {
             window: window.clone(),
             gpu_renderer: pollster::block_on(GpuRenderer::new(window.clone(), None)).unwrap(),
@@ -37,14 +41,23 @@ impl ApplicationHandler<State> for App {
 
         // 初回描画
         if let Some(state) = &mut self.state {
-            self.browser_app.apply_draw_commands(&mut state.gpu_renderer);
+            self.browser_app
+                .apply_draw_commands(&mut state.gpu_renderer);
             state.window.request_redraw();
         }
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        _window_id: WindowId,
+        event: WindowEvent,
+    ) {
         if let Some(state) = &mut self.state {
-            match self.browser_app.handle_window_event(event, &mut state.gpu_renderer) {
+            match self
+                .browser_app
+                .handle_window_event(event, &mut state.gpu_renderer)
+            {
                 BrowserCommand::Exit => event_loop.exit(),
                 BrowserCommand::None => {}
             }

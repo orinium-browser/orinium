@@ -27,7 +27,11 @@ impl BrowserApp {
         gpu.update_draw_commands(&self.draw_commands);
     }
 
-    pub fn handle_window_event(&mut self, event: WindowEvent, gpu: &mut GpuRenderer) -> BrowserCommand {
+    pub fn handle_window_event(
+        &mut self,
+        event: WindowEvent,
+        gpu: &mut GpuRenderer,
+    ) -> BrowserCommand {
         match event {
             WindowEvent::CloseRequested => {
                 return BrowserCommand::Exit;
