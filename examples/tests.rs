@@ -1,7 +1,7 @@
 use orinium_browser::{
     browser::BrowserApp,
     engine::html::parser::Parser as HtmlParser,
-    platform::{network::NetworkCore, ui::App},
+    platform::{network::NetworkCore, system::App},
 };
 
 use colored::*;
@@ -156,7 +156,7 @@ async fn main() -> Result<()> {
                     println!("Draw Commands:\n{:#?}", draw_commands);
                     // ウィンドウとイベントループを作成
                     let event_loop =
-                        EventLoop::<orinium_browser::platform::ui::State>::with_user_event()
+                        EventLoop::<orinium_browser::platform::system::State>::with_user_event()
                             .build()?;
                     let mut app = App::new(BrowserApp::new().with_draw_commands(draw_commands));
                     let _ = event_loop.run_app(&mut app);

@@ -6,7 +6,7 @@ use std::env;
 use orinium_browser::engine::css::cssom::Parser as CssParser;
 use orinium_browser::engine::html::parser::Parser as HtmlParser;
 use orinium_browser::engine::renderer::Renderer;
-use orinium_browser::platform::ui::App;
+use orinium_browser::platform::system::App;
 use winit::event_loop::EventLoop;
 
 #[tokio::main]
@@ -167,7 +167,7 @@ async fn main() -> Result<()> {
 
     // ウィンドウとイベントループを作成
     let event_loop =
-        EventLoop::<orinium_browser::platform::ui::State>::with_user_event().build()?;
+        EventLoop::<orinium_browser::platform::system::State>::with_user_event().build()?;
     let mut app = App::new(BrowserApp::new().with_draw_commands(draw_commands));
 
     event_loop.run_app(&mut app)?;
