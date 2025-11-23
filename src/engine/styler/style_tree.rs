@@ -56,13 +56,17 @@ impl StyleTree {
     /// styleを適応させる
     pub fn style(&mut self, _cssoms: &[Tree<CssNodeType>]) -> Self {
         self.map(&|node: &StyleNode| {
-            let html: Weak<RefCell<TreeNode<HtmlNodeType>>> = node.html();
+            let html_weak = node.html.clone();
+            let html_rc: Rc<RefCell<TreeNode<HtmlNodeType>>> = html_weak.upgrade().unwrap();
+            let html = html_rc.borrow().value.clone();
 
             // UA デフォルトスタイルを取得
-            let style = default_style_for(&html.upgrade().unwrap().borrow().value);
+            let mut style = default_style_for(&html);
+
+            style.height = Some(Length::Px(20.0));
 
             StyleNode {
-                html,
+                html: html_weak,
                 style: Some(style),
             }
         })

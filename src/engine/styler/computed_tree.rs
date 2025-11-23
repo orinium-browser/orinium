@@ -6,6 +6,8 @@ use crate::html::HtmlNodeType;
 use std::cell::RefCell;
 use std::rc::Weak;
 
+pub type ComputedTree = Tree<ComputedStyleNode>;
+
 /// 計算済みスタイルを持つノード
 #[derive(Debug, Clone)]
 pub struct ComputedStyleNode {

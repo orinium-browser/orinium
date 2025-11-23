@@ -1,7 +1,7 @@
 use orinium_browser::{
     browser::BrowserApp,
     engine::html::parser::Parser as HtmlParser,
-    platform::{network::NetworkCore, system::App},
+    platform::{network::NetworkCore, system::App}, renderer::RenderTree,
 };
 
 use colored::*;
@@ -149,9 +149,11 @@ async fn main() -> Result<()> {
                     let mut style_tree =
                         orinium_browser::engine::styler::StyleTree::transform(&dom);
                     style_tree = style_tree.style(&[]);
+                    let computed_tree = style_tree.compute();
+                    let mut render_tree = RenderTree::from_computed_tree(&computed_tree);
                     // レンダラーを作成して描画命令を生成
-                    let renderer = orinium_browser::engine::renderer::Renderer::new(800.0, 600.0);
-                    let draw_commands = renderer.generate_draw_commands(&mut style_tree);
+                    let renderer = orinium_browser::engine::renderer::Renderer::new();
+                    let draw_commands = renderer.generate_draw_commands(&mut render_tree);
                     println!("Generated {} draw commands", draw_commands.len());
                     println!("Draw Commands:\n{:#?}", draw_commands);
                     // ウィンドウとイベントループを作成

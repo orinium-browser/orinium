@@ -285,10 +285,7 @@ impl<'a> Parser<'a> {
                 public_id: None,
                 system_id: None,
             });
-            TreeNode::add_child_at_first(
-                &root,
-                Rc::clone(&doctype_node)
-            );
+            TreeNode::add_child_at_first(&root, Rc::clone(&doctype_node));
         }
 
         if !has_html {
@@ -296,10 +293,7 @@ impl<'a> Parser<'a> {
                 tag_name: "html".to_string(),
                 attributes: vec![],
             });
-            TreeNode::add_child(
-                &root,
-                Rc::clone(&html_node)
-            );
+            TreeNode::add_child(&root, Rc::clone(&html_node));
 
             if !has_head {
                 TreeNode::add_child_value(
