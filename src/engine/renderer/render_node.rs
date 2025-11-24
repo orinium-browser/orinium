@@ -36,11 +36,13 @@ impl RenderNode {
         }
     }
 
-    pub fn set_scroll_offset(&mut self, offset_y: f32) {
+    pub fn set_scroll_offset(&mut self,offset_x: f32 ,offset_y: f32) {
         if let NodeKind::Scrollable {
+            scroll_offset_x,
             scroll_offset_y, ..
         } = &mut self.kind
         {
+            *scroll_offset_x = offset_x;
             *scroll_offset_y = offset_y;
         }
     }
