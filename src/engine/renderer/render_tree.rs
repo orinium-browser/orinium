@@ -67,7 +67,8 @@ impl RenderTree {
                 };
 
                 // 再帰呼び出しして子ノードの最大 y を取得
-                let child_bottom_y = Self::convert_node(child, &new_tree.root, child_pos_x, child_pos_y);
+                let child_bottom_y =
+                    Self::convert_node(child, &new_tree.root, child_pos_x, child_pos_y);
 
                 match child_kind {
                     NodeKind::Block => {
