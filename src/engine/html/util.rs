@@ -1,6 +1,7 @@
 //!HTML関連のユーティリティ関数群
 //! # util
-//! * `fn is_block_level_element(tag_name: &str) -> bool` - タグ名が典型的なブロック要素かどうか判定する
+//! - `fn is_block_level_element(tag_name: &str) -> bool` - タグ名が典型的なブロック要素かどうか判定する
+//! - `fn is_inline_element(tag_name: &str) -> bool` - タグ名が典型的なインライン要素かどうか判定する
 
 /// is_block_level_element - タグ名が典型的なブロック要素かどうか判定する
 ///
@@ -27,5 +28,25 @@ pub fn is_block_level_element(tag_name: &str) -> bool {
         "form" | "textarea" | "output" | "meter" | "progress" |
         // メディア・埋め込み
         "canvas" | "video" | "audio" | "svg" | "object" | "embed" | "iframe"
+    )
+}
+
+/// is_inline_element - タグ名が典型的なインライン要素かどうか判定する
+/// 注意:
+/// - HTML5 の「デフォルトでインライン扱いされる要素」を代表例で列挙していますが、
+///   仕様の解釈やブラウザ依存・CSSでのdisplay変更には触れていません。
+/// - 必要なら要素リストに追加・削除してください。 
+pub fn is_inline_element(tag_name: &str) -> bool {
+    let tag = tag_name.trim().to_ascii_lowercase();
+    matches!(
+        tag.as_str(),
+        // テキスト系
+        "span" | "a" | "em" | "strong" | "b" | "i" | "u" | "small" | "sub" | "sup" | "mark" |
+        // 画像・メディア
+        "img" | "br" | "wbr" |
+        // フォーム系
+        "input" | "label" | "select" | "button" |
+        // その他インライン要素
+        "code" | "q" | "cite" | "time" | "var" | "samp" | "kbd" | "dfn"
     )
 }
