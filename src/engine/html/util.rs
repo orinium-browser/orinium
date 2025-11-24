@@ -14,39 +14,56 @@
 //!   - decode_entity
 //! 
 
-pub fn decode_entity(entity: &str) -> Option<String> {
-    match entity {
-        "amp" => Some("&".to_string()),
-        "lt" => Some("<".to_string()),
-        "gt" => Some(">".to_string()),
-        "quot" => Some("\"".to_string()),
-        "apos" => Some("'".to_string()),
-        "nbsp" => Some("\u{00A0}".to_string()),
-        "copy" => Some("©".to_string()),
-        "reg" => Some("®".to_string()),
-        "trade" => Some("™".to_string()),
-        "euro" => Some("€".to_string()),
-        "cent" => Some("¢".to_string()),
-        "pound" => Some("£".to_string()),
-        "yen" => Some("¥".to_string()),
-        "times" => Some("\u{00d7}".to_string()), // `×` xとは別文字
-        "divide" => Some("÷".to_string()),
-        _ if entity.starts_with("#x") => {
-            // Hex 数値文字参照
-            u32::from_str_radix(&entity[2..], 16)
-                .ok()
-                .and_then(char::from_u32)
-                .map(|c| c.to_string())
-        }
-        _ if entity.starts_with('#') => {
-            // Decimal 数値文字参照
-            entity[1..].parse::<u32>()
-                .ok()
-                .and_then(char::from_u32)
-                .map(|c| c.to_string())
-        }
-        _ => None,
+use entities::{Codepoints, ENTITIES};
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
+
+static NAMED_ENTITIES: Lazy<HashMap<&'static str, String>> = Lazy::new(|| {
+    let mut map = HashMap::new();
+    for ent in ENTITIES.iter() {
+        let key = ent.entity.trim_start_matches('&').trim_end_matches(';');
+        // Codepoints をマッチさせて String に変換
+        let value = match ent.codepoints {
+            Codepoints::Single(cp) => {
+                char::from_u32(cp).map(|c| c.to_string()).unwrap_or_default()
+            }
+            Codepoints::Double(cp1, cp2) => {
+                let mut s = String::new();
+                if let Some(c1) = char::from_u32(cp1) {
+                    s.push(c1);
+                }
+                if let Some(c2) = char::from_u32(cp2) {
+                    s.push(c2);
+                }
+                s
+            }
+        };
+        map.insert(key, value);
     }
+    map
+});
+
+pub fn decode_entity(entity: &str) -> Option<String> {
+    if let Some(val) = NAMED_ENTITIES.get(entity) {
+        return Some(val.clone());
+    }
+
+    if entity.starts_with("#x") || entity.starts_with("#X") {
+        return u32::from_str_radix(&entity[2..], 16)
+            .ok()
+            .and_then(char::from_u32)
+            .map(|c| c.to_string());
+    }
+
+    if entity.starts_with('#') {
+        return entity[1..]
+            .parse::<u32>()
+            .ok()
+            .and_then(char::from_u32)
+            .map(|c| c.to_string());
+    }
+
+    None
 }
 
 
