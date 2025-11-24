@@ -9,7 +9,6 @@ impl Default for Color {
     fn default() -> Self {
         Color::Rgba(0, 0, 0, 1.0) // デフォルトは不透明な黒
     }
-    
 }
 
 impl Color {

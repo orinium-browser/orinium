@@ -198,7 +198,8 @@ impl<'a> Tokenizer<'a> {
         match c {
             ';' => {
                 // 今まで溜めた &xxx をデコードする
-                let entity = self.buffer
+                let entity = self
+                    .buffer
                     .split_terminator('&')
                     .last()
                     .unwrap_or("")
@@ -206,8 +207,7 @@ impl<'a> Tokenizer<'a> {
                     .trim_end_matches(';');
 
                 println!("Decoding entity: &{};", entity);
-                let decoded = decode_entity(entity)
-                    .unwrap_or_else(|| format!("&{};", entity));
+                let decoded = decode_entity(entity).unwrap_or_else(|| format!("&{};", entity));
 
                 if let Some(Token::Text(ref mut text)) = self.current_token {
                     text.push_str(&decoded);

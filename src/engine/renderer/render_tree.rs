@@ -1,5 +1,5 @@
-use super::render_node::{NodeKind, RenderNode, RenderTree};
 use super::render::Color;
+use super::render_node::{NodeKind, RenderNode, RenderTree};
 use crate::engine::css::Length;
 use crate::engine::html::{HtmlNodeType, util as html_util};
 use crate::engine::styler::computed_tree::{ComputedStyleNode, ComputedTree};
@@ -32,10 +32,9 @@ impl RenderTree {
                     .font_size
                     .unwrap_or(Length::Px(19.0))
                     .to_px(10.0),
-                color: Color::from_rgba_tuple(computed_style
-                    .color
-                    .unwrap_or_default()
-                    .to_rgba_tuple(None)),
+                color: Color::from_rgba_tuple(
+                    computed_style.color.unwrap_or_default().to_rgba_tuple(None),
+                ),
             },
             // Element ノードならタグ名で判定
             HtmlNodeType::Element { tag_name, .. } => match tag_name.as_str() {
@@ -47,7 +46,7 @@ impl RenderTree {
                     log::warn!(target:"RenderTree::NodeKind", "Unknown element tag: {}", tag_name);
                     // println!("Unknown element tag: {}", tag_name);
                     NodeKind::Unknown
-                },
+                }
             },
             HtmlNodeType::Document => NodeKind::Block,
             // それ以外は Unknown
