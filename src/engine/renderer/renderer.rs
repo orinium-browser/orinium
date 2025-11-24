@@ -66,7 +66,6 @@ impl Renderer {
         let node_borrow = node.borrow();
         let abs_x = offset_x + node_borrow.value.x;
         let abs_y = offset_y + node_borrow.value.y;
-        println!("{}", abs_y);
 
         match &node_borrow.value.kind {
             NodeKind::Text(text) => {
@@ -87,7 +86,12 @@ impl Renderer {
                     color: Color::new(0.8, 0.8, 0.8, 1.0),
                 });
             }
-            NodeKind::Scrollable{tree: inner_tree, ..} => {
+            NodeKind::Scrollable {
+                tree: inner_tree,
+                scroll_offset_x,
+                scroll_offset_y,
+                ..
+            } => {
                 out.push(DrawCommand::DrawRect {
                     x: abs_x,
                     y: abs_y,
@@ -96,12 +100,12 @@ impl Renderer {
                     color: Color::new(0.95, 0.95, 0.95, 1.0),
                 });
                 // 内部ツリーを再帰描画
-                self.traverse_tree(&inner_tree.root, abs_x, abs_y, out);
+                self.traverse_tree(&inner_tree.root, *scroll_offset_x, *scroll_offset_y, out);
             }
         }
 
         for child in node_borrow.children() {
-            self.traverse_tree(child, abs_x, abs_y, out);
+            self.traverse_tree(child, offset_x, offset_y, out);
         }
     }
 }

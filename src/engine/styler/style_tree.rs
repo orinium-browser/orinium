@@ -63,7 +63,7 @@ impl StyleTree {
             // UA デフォルトスタイルを取得
             let mut style = default_style_for(&html);
 
-            style.height = Some(Length::Px(20.0));
+            style.height = Some(Length::Px(20.0)); // 仮値
 
             StyleNode {
                 html: html_weak,
