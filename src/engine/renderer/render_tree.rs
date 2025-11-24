@@ -38,7 +38,11 @@ impl RenderTree {
                 // 将来的に Scrollable などを追加可能
                 _ if html_util::is_block_level_element(tag_name) => NodeKind::Block,
                 _ if html_util::is_inline_element(tag_name) => NodeKind::Inline,
-                _ => NodeKind::Unknown,
+                _ => {
+                    log::warn!(target:"RenderTree::NodeKind", "Unknown element tag: {}", tag_name);
+                    // println!("Unknown element tag: {}", tag_name);
+                    NodeKind::Unknown
+                },
             },
             HtmlNodeType::Document => NodeKind::Block,
             // それ以外は Unknown

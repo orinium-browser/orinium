@@ -155,6 +155,7 @@ async fn main() -> Result<()> {
                     // レンダラーを作成して描画命令を生成
                     let renderer = orinium_browser::engine::renderer::Renderer::new();
                     let draw_commands = renderer.generate_draw_commands(&mut render_tree);
+                    println!("dom_tree: {}", dom);
                     println!("style_tree: {}" ,style_tree);
                     // println!("computed_tree: {}", computed_tree);
                     println!("render_tree: {}", render_tree);
