@@ -45,37 +45,40 @@ impl RenderTree {
         dst: &Rc<RefCell<TreeNode<RenderNode>>>,
         mut pos_x: f32,
         mut pos_y: f32,
-    ) {
-        // 現在のノードの種類を設定
+    ) -> f32 {
         let kind = Self::detect_kind(&src.borrow().value);
         dst.borrow_mut().value.kind = kind.clone();
 
         match kind {
             NodeKind::Block | NodeKind::Inline => {
-                // 子ノードを再帰的に変換
                 for child in src.borrow().children() {
                     let child_value = &child.borrow().value;
                     let computed = &child_value.computed.clone().unwrap();
                     let child_kind = Self::detect_kind(child_value);
                     let new_node = RenderNode::new(child_kind.clone(), pos_x, pos_y, 0.0, 0.0);
-                    match child_kind {
+                    let new_tree = Tree::new(new_node);
+                    TreeNode::add_child(dst, Rc::clone(&new_tree.root));
+
+                    // 再帰的に変換して pos_y を更新
+                    let child_pos_y = match child_kind {
+                        NodeKind::Block => {
+                            pos_x = 0.0;
+                            pos_y + computed.height.unwrap_or(Length::Px(0.0)).to_px(10.0)
+                        }
                         NodeKind::Inline => {
                             pos_x += computed.width.unwrap_or(Length::Px(0.0)).to_px(10.0);
+                            pos_y
                         }
-                        NodeKind::Block => {
-                            pos_x = 0.0; // ブロック要素の場合は改行
-                            pos_y += computed.height.unwrap_or(Length::Px(0.0)).to_px(10.0);
-                        }
-                        _ => {}
-                    }
-                    let new_tree = Tree::new(new_node);
-                    // ツリーに子を追加
-                    TreeNode::add_child(dst, Rc::clone(&new_tree.root));
-                    // 再帰的に変換
-                    Self::convert_node(child, &new_tree.root, pos_x, pos_y);
+                        _ => pos_y,
+                    };
+
+                    // 子の再帰呼び出し
+                    pos_y = Self::convert_node(child, &new_tree.root, pos_x, child_pos_y);
                 }
             }
-            _ => { /* 他のノードは子供への処理はしない */ }
+            _ => {}
         }
+
+        pos_y // 更新後の pos_y を返す
     }
 }
