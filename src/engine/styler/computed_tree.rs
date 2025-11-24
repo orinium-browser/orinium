@@ -36,6 +36,8 @@ pub struct ComputedStyle {
     pub background_color: Option<Color>,
 
     pub border: Option<Border>,
+
+    pub font_size: Option<Length>,
 }
 
 impl ComputedStyle {
@@ -61,6 +63,8 @@ impl ComputedStyle {
             background_color: style.background_color,
 
             border: style.border,
+
+            font_size: style.font_size,
         }
     }
 }

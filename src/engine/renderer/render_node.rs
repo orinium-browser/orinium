@@ -4,7 +4,10 @@ use crate::engine::tree::Tree;
 
 #[derive(Debug, Clone)]
 pub enum NodeKind {
-    Text(String),
+    Text {
+        text: String,
+        font_size: f32,
+    },
     Button,
     Scrollable {
         tree: Tree<RenderNode>,

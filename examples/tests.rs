@@ -149,7 +149,7 @@ async fn main() -> Result<()> {
                     */
                     let mut style_tree =
                         orinium_browser::engine::styler::StyleTree::transform(&dom);
-                    style_tree = style_tree.style(&[]);
+                    style_tree.style(&[]);
                     let computed_tree = style_tree.compute();
                     let mut render_tree = RenderTree::from_computed_tree(&computed_tree);
                     // レンダラーを作成して描画命令を生成

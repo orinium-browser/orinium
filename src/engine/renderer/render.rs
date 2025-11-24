@@ -74,12 +74,12 @@ impl Renderer {
         let abs_y = offset_y + node_borrow.value.y;
 
         match &node_borrow.value.kind {
-            NodeKind::Text(text) => {
+            NodeKind::Text { text, font_size } => {
                 out.push(DrawCommand::DrawText {
                     x: abs_x,
                     y: abs_y,
                     text: text.clone(),
-                    font_size: 16.0,
+                    font_size: *font_size,
                     color: Color::BLACK,
                 });
             }

@@ -20,11 +20,18 @@ impl RenderTree {
 
     /// ComputedStyleNode から NodeKind を判定
     fn detect_kind(node: &ComputedStyleNode) -> NodeKind {
+        let computed_style = node.computed.clone().unwrap();
         let html = node.html.upgrade().unwrap();
         let html_ref = html.borrow();
         match &html_ref.value {
             // テキストノードなら NodeKind::Text に
-            HtmlNodeType::Text(t) => NodeKind::Text(t.clone()),
+            HtmlNodeType::Text(t) => NodeKind::Text {
+                text: t.clone(),
+                font_size: computed_style
+                    .font_size
+                    .unwrap_or(Length::Px(19.0))
+                    .to_px(10.0),
+            },
             // Element ノードならタグ名で判定
             HtmlNodeType::Element { tag_name, .. } => match tag_name.as_str() {
                 "button" => NodeKind::Button,

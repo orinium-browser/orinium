@@ -158,7 +158,7 @@ async fn main() -> Result<()> {
 
     // スタイルツリーの構築
     let mut style_tree = orinium_browser::engine::styler::StyleTree::transform(&dom_tree);
-    style_tree = style_tree.style(&[css_tree]);
+    style_tree.style(&[css_tree]);
     let computed_tree = style_tree.compute();
     let render_tree = RenderTree::from_computed_tree(&computed_tree);
 
