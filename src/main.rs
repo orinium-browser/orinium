@@ -35,6 +35,7 @@ async fn main() -> Result<()> {
                 <div>
                     <p>Nested paragraph in a div.</p>
                     <p>Span inside a paragraph: <span>Span Text</span></p>
+                    <p>&amp; &lt; &gt; &quot; &#65; &#x41;</p>
                 </div>
                 <p>a</p>
                 <p>a</p>
@@ -163,8 +164,8 @@ async fn main() -> Result<()> {
     let render_tree = RenderTree::from_computed_tree(&computed_tree);
 
     println!("dom_tree: {}", dom_tree);
-    println!("style_tree: {}", style_tree);
-    println!("computed_tree: {}", computed_tree);
+    // println!("style_tree: {}", style_tree);
+    // println!("computed_tree: {}", computed_tree);
     println!("render_tree: {}", render_tree);
 
     // レンダラーを作成して描画命令を生成
