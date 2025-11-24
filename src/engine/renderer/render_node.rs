@@ -11,6 +11,8 @@ pub enum NodeKind {
         scroll_offset_y: f32,
         scroll_offset_x: f32,
     }, // スクロール可能ノード
+    Block,
+    Inline,
     Unknown,
 }
 

@@ -86,6 +86,15 @@ impl Renderer {
                     color: Color::new(0.8, 0.8, 0.8, 1.0),
                 });
             }
+            NodeKind::Inline => {
+                out.push(DrawCommand::DrawRect {
+                    x: abs_x,
+                    y: abs_y,
+                    width: node_borrow.value.width,
+                    height: node_borrow.value.height,
+                    color: Color::new(0.9, 0.9, 0.9, 1.0),
+                });
+            }
             NodeKind::Scrollable {
                 tree: inner_tree,
                 scroll_offset_x,
