@@ -1,11 +1,44 @@
-//! HTML関連のユーティリティ関数群
+//! # HTML関連のユーティリティ関数群
+//! ## タグのカテゴリ分けと判定 
 //! - タグを明確にカテゴリ分け（block / inline / inline-block / table-ish / other）
 //! - 重複が起きないように定義し、判定関数は既存の名前で使えるようにしている
+//!   - element_category, is_block_level_element, is_inline_element
 //!
 //! 注:
 //! - 「デフォルトのUA stylesheet による display の振る舞い」を基準に簡易判定しています。
 //! - CSS による display の上書きやカスタム要素は考慮していません。
 //! - 必要に応じてカテゴリやタグの追加・調整をしてください。
+//! 
+//! ## htmlエスケープ処理
+//! - 基本的なHTMLエスケープ文字列をデコードする関数を提供
+//!   - decode_entity
+//! 
+
+pub fn decode_entity(entity: &str) -> Option<String> {
+    match entity {
+        "amp" => Some("&".to_string()),
+        "lt" => Some("<".to_string()),
+        "gt" => Some(">".to_string()),
+        "quot" => Some("\"".to_string()),
+        "apos" => Some("'".to_string()),
+        _ if entity.starts_with("#x") => {
+            // Hex 数値文字参照
+            u32::from_str_radix(&entity[2..], 16)
+                .ok()
+                .and_then(char::from_u32)
+                .map(|c| c.to_string())
+        }
+        _ if entity.starts_with('#') => {
+            // Decimal 数値文字参照
+            entity[1..].parse::<u32>()
+                .ok()
+                .and_then(char::from_u32)
+                .map(|c| c.to_string())
+        }
+        _ => None,
+    }
+}
+
 
 fn normalize(tag_name: &str) -> String {
     tag_name.trim().to_ascii_lowercase()

@@ -1,3 +1,5 @@
+use super::util::decode_entity;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Attribute {
     pub name: String,
@@ -193,30 +195,33 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn state_escape_decoding(&mut self, c: char) {
-        // 簡易的にエスケープシーケンスを処理
         match c {
             ';' => {
-                // エスケープシーケンス終了
-                // ここでは単純に '&' を追加するだけ
-                self.buffer.push('&');
+                // 今まで溜めた &xxx をデコードする
+                let entity = self.buffer
+                    .split_terminator('&')
+                    .last()
+                    .unwrap_or("")
+                    .trim()
+                    .trim_end_matches(';');
+
+                println!("Decoding entity: &{};", entity);
+                let decoded = decode_entity(entity)
+                    .unwrap_or_else(|| format!("&{};", entity));
+
                 if let Some(Token::Text(ref mut text)) = self.current_token {
-                    text.push('&');
+                    text.push_str(&decoded);
                 } else {
-                    self.current_token = Some(Token::Text("&".to_string()));
+                    self.current_token = Some(Token::Text(decoded));
                 }
+
+                self.buffer.clear();
                 self.state = TokenizerState::Data;
             }
+
             _ => {
-                // エスケープシーケンスの一部として扱う
-                self.buffer.push('&');
+                // エンティティ名の一部
                 self.buffer.push(c);
-                if let Some(Token::Text(ref mut text)) = self.current_token {
-                    text.push('&');
-                    text.push(c);
-                } else {
-                    self.current_token = Some(Token::Text(format!("&{}", c)));
-                }
-                self.state = TokenizerState::Data;
             }
         }
     }
