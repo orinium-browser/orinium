@@ -7,7 +7,7 @@ use super::ua::default_style_for;
 use crate::engine::css::cssom::CssNodeType;
 use crate::engine::css::values::{Border, Color, Display, Length};
 use crate::engine::tree::*;
-use crate::html::HtmlNodeType;
+use crate::html::{HtmlNodeType, util as html_util};
 
 #[derive(Debug, Clone)]
 pub struct StyleNode {
@@ -63,7 +63,28 @@ impl StyleTree {
             // UA デフォルトスタイルを取得
             let mut style = default_style_for(&html);
 
-            style.height = Some(Length::Px(20.0)); // 仮値
+            style.height = Some(Length::Px(16.0)); // 仮の高さ設定
+            style.width = Some(Length::Px(100.0)); // 仮の幅設定
+
+            if let HtmlNodeType::Element { tag_name, .. } = &html {
+                match tag_name.as_str() {
+                    _ if html_util::is_block_level_element(tag_name) => {
+                        style.display = Some(Display::Block);
+                    }
+                    _ if html_util::is_inline_element(tag_name) => {
+                        style.display = Some(Display::Inline);
+                    }
+                    _ => {}
+                }
+            }
+
+            if let Some(style_display) = &style.display {
+                match style_display {
+                    Display::Block => {}
+                    Display::Inline => {}
+                    Display::None => {}
+                }
+            }
 
             StyleNode {
                 html: html_weak,

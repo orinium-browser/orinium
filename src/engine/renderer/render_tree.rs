@@ -14,7 +14,7 @@ impl RenderTree {
         // RenderNode を作成してツリーのルートとする
         let render_tree = Tree::new(RenderNode::new(root_kind, 0.0, 0.0, 0.0, 0.0));
         // 子ノードを再帰的に変換
-        Self::convert_node(&tree.root, &render_tree.root, 0.0);
+        Self::convert_node(&tree.root, &render_tree.root, 0.0, 0.0);
         render_tree
     }
 
@@ -43,6 +43,7 @@ impl RenderTree {
     fn convert_node(
         src: &Rc<RefCell<TreeNode<ComputedStyleNode>>>,
         dst: &Rc<RefCell<TreeNode<RenderNode>>>,
+        mut pos_x: f32,
         mut pos_y: f32,
     ) {
         // 現在のノードの種類を設定
@@ -56,13 +57,22 @@ impl RenderTree {
                     let child_value = &child.borrow().value;
                     let computed = &child_value.computed.clone().unwrap();
                     let child_kind = Self::detect_kind(child_value);
-                    let new_node = RenderNode::new(child_kind, 0.0, pos_y, 0.0, 0.0);
-                    pos_y += computed.height.unwrap_or(Length::Px(0.0)).to_px(10.0);
+                    let new_node = RenderNode::new(child_kind.clone(), pos_x, pos_y, 0.0, 0.0);
+                    match child_kind {
+                        NodeKind::Inline => {
+                            pos_x += computed.width.unwrap_or(Length::Px(0.0)).to_px(10.0);
+                        }
+                        NodeKind::Block => {
+                            pos_x = 0.0; // ブロック要素の場合は改行
+                            pos_y += computed.height.unwrap_or(Length::Px(0.0)).to_px(10.0);
+                        }
+                        _ => {}
+                    }
                     let new_tree = Tree::new(new_node);
                     // ツリーに子を追加
                     TreeNode::add_child(dst, Rc::clone(&new_tree.root));
                     // 再帰的に変換
-                    Self::convert_node(child, &new_tree.root, pos_y);
+                    Self::convert_node(child, &new_tree.root, pos_x, pos_y);
                 }
             }
             _ => { /* 他のノードは子供への処理はしない */ }
