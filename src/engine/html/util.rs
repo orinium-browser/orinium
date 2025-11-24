@@ -19,28 +19,58 @@ fn normalize(tag_name: &str) -> String {
 /// - other: 上のどれにも該当しない雑多な要素
 const BLOCK_TAGS: &[&str] = &[
     // セクショナル / グループ
-    "html", "body", "main", "header", "footer", "section", "nav", "article", "aside",
+    "html",
+    "body",
+    "main",
+    "header",
+    "footer",
+    "section",
+    "nav",
+    "article",
+    "aside",
     // 見出し
-    "h1", "h2", "h3", "h4", "h5", "h6",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
     // 段落系
-    "p", "pre", "blockquote", "address", "hr",
+    "p",
+    "pre",
+    "blockquote",
+    "address",
+    "hr",
     // レイアウト・グループ
-    "div", "fieldset", "figure", "figcaption", "details", "summary",
+    "div",
+    "fieldset",
+    "figure",
+    "figcaption",
+    "details",
+    "summary",
     // リスト系（li/dt/dd は list-item / block-like）
-    "ul", "ol", "li", "dl", "dt", "dd",
+    "ul",
+    "ol",
+    "li",
+    "dl",
+    "dt",
+    "dd",
     // フォーム系（幅取りがある要素をブロック扱いしたい場合に含めるがここでは block扱い）
-    "form", "textarea",
+    "form",
+    "textarea",
     // 埋め込み（ブロック的に扱われることが多いが厳密には元の display を参照）
-    "iframe", "canvas", "object", "embed"
+    "iframe",
+    "canvas",
+    "object",
+    "embed",
 ];
 
 const INLINE_TAGS: &[&str] = &[
     // テキスト系
-    "a", "span", "em", "strong", "b", "i", "u", "small",
-    "sub", "sup", "mark", "code", "q", "cite", "time", "var", "samp", "kbd", "dfn",
+    "a", "span", "em", "strong", "b", "i", "u", "small", "sub", "sup", "mark", "code", "q", "cite",
+    "time", "var", "samp", "kbd", "dfn",
     // 画像・改行等（img は UA stylesheet では inline と定義される）
-    "img", "br", "wbr",
-    // フォーム系の一部（input は通常 inline）
+    "img", "br", "wbr", // フォーム系の一部（input は通常 inline）
     "input", "label",
 ];
 
@@ -52,7 +82,7 @@ const INLINE_BLOCK_TAGS: &[&str] = &[
 
 const TABLEISH_TAGS: &[&str] = &[
     // 表関連は table 系独特の display を持つため別カテゴリ
-    "table", "thead", "tbody", "tfoot", "tr", "td", "th", "caption", "colgroup", "col"
+    "table", "thead", "tbody", "tfoot", "tr", "td", "th", "caption", "colgroup", "col",
 ];
 
 const OTHER_TAGS: &[&str] = &[
