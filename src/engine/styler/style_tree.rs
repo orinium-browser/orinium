@@ -7,7 +7,7 @@ use super::ua::default_style_for;
 use crate::engine::css::cssom::CssNodeType;
 use crate::engine::css::values::{Border, Color, Display, Length};
 use crate::engine::tree::*;
-use crate::html::HtmlNodeType;
+use crate::html::{HtmlNodeType, util as html_util};
 
 #[derive(Debug, Clone)]
 pub struct StyleNode {
@@ -41,6 +41,8 @@ pub struct Style {
     pub background_color: Option<Color>,
 
     pub border: Option<Border>,
+
+    pub font_size: Option<Length>,
 }
 
 pub type StyleTree = Tree<StyleNode>;
@@ -54,17 +56,52 @@ impl StyleTree {
     }
 
     /// styleを適応させる
-    pub fn style(&mut self, _cssoms: &[Tree<CssNodeType>]) -> Self {
-        self.map(&|node: &StyleNode| {
-            let html: Weak<RefCell<TreeNode<HtmlNodeType>>> = node.html();
+    pub fn style(&mut self, _cssoms: &[Tree<CssNodeType>]) {
+        self.traverse(&mut |node: &Rc<RefCell<TreeNode<StyleNode>>>| {
+            let mut node = node.borrow_mut();
+            let node_value = node.value.clone();
+            let html_weak = node_value.html.clone();
+            let html_rc: Rc<RefCell<TreeNode<HtmlNodeType>>> = html_weak.upgrade().unwrap();
+            let html = html_rc.borrow().value.clone();
 
-            // UA デフォルトスタイルを取得
-            let style = default_style_for(&html.upgrade().unwrap().borrow().value);
+            // 1. UA デフォルトスタイル
+            let mut style = default_style_for(&html);
 
-            StyleNode {
-                html,
-                style: Some(style),
+            // 2. 親スタイルを取得して継承
+            let parent_style = node.parent().and_then(|p| p.borrow().value.style.clone());
+
+            if let Some(parent) = parent_style {
+                inherit_from_parent(&mut style, &parent);
             }
+
+            if let Some(font_size) = style.font_size {
+                style.height = Some(font_size);
+            } else {
+                style.height = Some(Length::Px(16.0)); // 仮の高さ設定
+            }
+            style.width = Some(Length::Px(100.0)); // 仮の幅設定
+
+            if let HtmlNodeType::Element { tag_name, .. } = &html {
+                match tag_name.as_str() {
+                    _ if html_util::is_block_level_element(tag_name) => {
+                        style.display = Some(Display::Block);
+                    }
+                    _ if html_util::is_inline_element(tag_name) => {
+                        style.display = Some(Display::Inline);
+                    }
+                    _ => {}
+                }
+            }
+
+            if let Some(style_display) = &style.display {
+                match style_display {
+                    Display::Block => {}
+                    Display::Inline => {}
+                    Display::None => {}
+                }
+            }
+
+            node.value.style = Some(style);
         })
     }
 
@@ -80,4 +117,18 @@ impl StyleTree {
             }
         })
     }
+}
+
+/// 親スタイルから継承可能プロパティだけをコピー
+fn inherit_from_parent(child: &mut Style, parent: &Style) {
+    // --- 代表的な継承プロパティ ---
+    if child.font_size.is_none() {
+        child.font_size = parent.font_size.clone();
+    }
+
+    if child.color.is_none() {
+        child.color = parent.color.clone();
+    }
+
+    // 余白やパディングは継承しない
 }

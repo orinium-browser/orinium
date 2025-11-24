@@ -1,5 +1,6 @@
 use anyhow::Result;
 use orinium_browser::browser::BrowserApp;
+use orinium_browser::renderer::RenderTree;
 //use orinium_browser::renderer::Color;
 use std::env;
 
@@ -33,6 +34,7 @@ async fn main() -> Result<()> {
                 <p>日本語テスト</p>
                 <div>
                     <p>Nested paragraph in a div.</p>
+                    <p>Span inside a paragraph: <span>Span Text</span></p>
                 </div>
                 <p>a</p>
                 <p>a</p>
@@ -156,11 +158,18 @@ async fn main() -> Result<()> {
 
     // スタイルツリーの構築
     let mut style_tree = orinium_browser::engine::styler::StyleTree::transform(&dom_tree);
-    style_tree = style_tree.style(&[css_tree]);
+    style_tree.style(&[css_tree]);
+    let computed_tree = style_tree.compute();
+    let render_tree = RenderTree::from_computed_tree(&computed_tree);
+
+    println!("dom_tree: {}", dom_tree);
+    println!("style_tree: {}", style_tree);
+    println!("computed_tree: {}", computed_tree);
+    println!("render_tree: {}", render_tree);
 
     // レンダラーを作成して描画命令を生成
-    let renderer = Renderer::new(800.0, 600.0);
-    let draw_commands = renderer.generate_draw_commands(&mut style_tree);
+    let renderer = Renderer::new();
+    let draw_commands = renderer.generate_draw_commands(&render_tree);
 
     log::info!("Generated {} draw commands", draw_commands.len());
     log::info!("Generated draw commands: {draw_commands:#?}");

@@ -40,21 +40,37 @@ pub fn default_style_for(node: &HtmlNodeType) -> Style {
             s.display = Some(Display::Block);
             s.margin_top = Some(Length::Px(21.0));
             s.margin_bottom = Some(Length::Px(14.0));
+            s.font_size = Some(Length::Px(32.0));
         }
         "h2" => {
             s.display = Some(Display::Block);
             s.margin_top = Some(Length::Px(18.0));
             s.margin_bottom = Some(Length::Px(12.0));
+            s.font_size = Some(Length::Px(24.0));
         }
         "h3" => {
             s.display = Some(Display::Block);
             s.margin_top = Some(Length::Px(16.0));
             s.margin_bottom = Some(Length::Px(10.0));
+            s.font_size = Some(Length::Px(18.0));
         }
         "h4" | "h5" | "h6" => {
             s.display = Some(Display::Block);
             s.margin_top = Some(Length::Px(12.0));
             s.margin_bottom = Some(Length::Px(6.0));
+            match tag_name {
+                "h4" => s.font_size = Some(Length::Px(16.0)),
+                "h5" => s.font_size = Some(Length::Px(14.0)),
+                "h6" => s.font_size = Some(Length::Px(12.0)),
+                _ => {}
+            }
+        }
+
+        "p" => {
+            s.display = Some(Display::Block);
+            s.margin_top = Some(Length::Px(16.0));
+            s.margin_bottom = Some(Length::Px(16.0));
+            s.font_size = Some(Length::Px(16.0));
         }
 
         // リスト
