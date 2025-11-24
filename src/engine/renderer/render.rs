@@ -77,7 +77,7 @@ impl Renderer {
                     color: Color::BLACK,
                 });
             }
-            NodeKind::Button | NodeKind::Unknown => {
+            NodeKind::Button | NodeKind::Block | NodeKind::Unknown => {
                 out.push(DrawCommand::DrawRect {
                     x: abs_x,
                     y: abs_y,
