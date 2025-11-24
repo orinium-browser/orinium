@@ -23,6 +23,15 @@ impl Color {
     pub fn new(r: f32, g: f32, b: f32, a: f32) -> Self {
         Self { r, g, b, a }
     }
+
+    pub fn from_rgba_tuple(rgba: (u8, u8, u8, f32)) -> Self {
+        Self {
+            r: rgba.0 as f32 / 255.0,
+            g: rgba.1 as f32 / 255.0,
+            b: rgba.2 as f32 / 255.0,
+            a: rgba.3,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -74,13 +83,13 @@ impl Renderer {
         let abs_y = offset_y + node_borrow.value.y;
 
         match &node_borrow.value.kind {
-            NodeKind::Text { text, font_size } => {
+            NodeKind::Text { text, font_size , color} => {
                 out.push(DrawCommand::DrawText {
                     x: abs_x,
                     y: abs_y,
                     text: text.clone(),
                     font_size: *font_size,
-                    color: Color::BLACK,
+                    color: color.clone(),
                 });
             }
             NodeKind::Button | NodeKind::Block | NodeKind::Unknown => {

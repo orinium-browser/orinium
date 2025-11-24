@@ -1,5 +1,7 @@
 //! RenderNode と RenderTree
 
+use super::render::Color;
+
 use crate::engine::tree::Tree;
 
 #[derive(Debug, Clone)]
@@ -7,6 +9,7 @@ pub enum NodeKind {
     Text {
         text: String,
         font_size: f32,
+        color: Color,
     },
     Button,
     Scrollable {

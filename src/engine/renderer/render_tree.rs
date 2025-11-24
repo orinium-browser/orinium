@@ -1,4 +1,5 @@
 use super::render_node::{NodeKind, RenderNode, RenderTree};
+use super::render::Color;
 use crate::engine::css::Length;
 use crate::engine::html::{HtmlNodeType, util as html_util};
 use crate::engine::styler::computed_tree::{ComputedStyleNode, ComputedTree};
@@ -31,6 +32,10 @@ impl RenderTree {
                     .font_size
                     .unwrap_or(Length::Px(19.0))
                     .to_px(10.0),
+                color: Color::from_rgba_tuple(computed_style
+                    .color
+                    .unwrap_or_default()
+                    .to_rgba_tuple(None)),
             },
             // Element ノードならタグ名で判定
             HtmlNodeType::Element { tag_name, .. } => match tag_name.as_str() {

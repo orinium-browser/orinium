@@ -5,6 +5,13 @@ pub enum Color {
     Transparent,           // 透明
 }
 
+impl Default for Color {
+    fn default() -> Self {
+        Color::Rgba(0, 0, 0, 1.0) // デフォルトは不透明な黒
+    }
+    
+}
+
 impl Color {
     pub const BLACK: Color = Color::Rgba(0, 0, 0, 1.0);
     pub const WHITE: Color = Color::Rgba(255, 255, 255, 1.0);
