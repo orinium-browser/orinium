@@ -50,7 +50,7 @@ impl RenderTree {
         dst.borrow_mut().value.kind = kind.clone();
 
         match kind {
-            NodeKind::Block => {
+            NodeKind::Block | NodeKind::Inline => {
                 // 子ノードを再帰的に変換
                 for child in src.borrow().children() {
                     let child_value = &child.borrow().value;
