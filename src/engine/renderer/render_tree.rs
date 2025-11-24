@@ -14,7 +14,7 @@ impl RenderTree {
         // RenderNode を作成してツリーのルートとする
         let render_tree = Tree::new(RenderNode::new(root_kind, 0.0, 0.0, 0.0, 0.0));
         // 子ノードを再帰的に変換
-        Self::convert_node(&tree.root, &render_tree.root, 0.0, 0.0);
+        let _ = Self::convert_node(&tree.root, &render_tree.root, 0.0, 0.0);
         render_tree
     }
 
@@ -40,6 +40,7 @@ impl RenderTree {
     }
 
     /// 再帰的に ComputedTree を RenderTree に変換
+    /// pos_y を返してブロックの縦位置を更新
     fn convert_node(
         src: &Rc<RefCell<TreeNode<ComputedStyleNode>>>,
         dst: &Rc<RefCell<TreeNode<RenderNode>>>,
@@ -49,36 +50,33 @@ impl RenderTree {
         let kind = Self::detect_kind(&src.borrow().value);
         dst.borrow_mut().value.kind = kind.clone();
 
-        match kind {
-            NodeKind::Block | NodeKind::Inline => {
-                for child in src.borrow().children() {
-                    let child_value = &child.borrow().value;
-                    let computed = &child_value.computed.clone().unwrap();
-                    let child_kind = Self::detect_kind(child_value);
-                    let new_node = RenderNode::new(child_kind.clone(), pos_x, pos_y, 0.0, 0.0);
-                    let new_tree = Tree::new(new_node);
-                    TreeNode::add_child(dst, Rc::clone(&new_tree.root));
+        if let NodeKind::Block | NodeKind::Inline = kind {
+            for child in src.borrow().children() {
+                let child_value = &child.borrow().value;
+                let computed = child_value.computed.as_ref().unwrap();
+                let child_kind = Self::detect_kind(child_value);
 
-                    // 再帰的に変換して pos_y を更新
-                    let child_pos_y = match child_kind {
-                        NodeKind::Block => {
-                            pos_x = 0.0;
-                            pos_y + computed.height.unwrap_or(Length::Px(0.0)).to_px(10.0)
-                        }
-                        NodeKind::Inline => {
-                            pos_x += computed.width.unwrap_or(Length::Px(0.0)).to_px(10.0);
-                            pos_y
-                        }
-                        _ => pos_y,
-                    };
+                let new_node = RenderNode::new(child_kind.clone(), pos_x, pos_y, 0.0, 0.0);
+                let new_tree = Tree::new(new_node);
+                TreeNode::add_child(dst, Rc::clone(&new_tree.root));
 
-                    // 子の再帰呼び出し
-                    pos_y = Self::convert_node(child, &new_tree.root, pos_x, child_pos_y);
+                // 座標計算を整理
+                let (child_pos_x, child_pos_y) = match child_kind {
+                    NodeKind::Block => (0.0, pos_y + computed.height.unwrap_or(Length::Px(0.0)).to_px(10.0)),
+                    NodeKind::Inline => (pos_x + computed.width.unwrap_or(Length::Px(0.0)).to_px(10.0), pos_y),
+                    _ => (pos_x, pos_y),
+                };
+
+                // 再帰呼び出し
+                pos_y = Self::convert_node(child, &new_tree.root, child_pos_x, child_pos_y);
+
+                // インライン要素の場合は pos_x を元に戻す（横積みは親ブロック内でリセットしたい場合）
+                if matches!(child_kind, NodeKind::Inline) {
+                    pos_x = 0.0;
                 }
             }
-            _ => {}
         }
 
-        pos_y // 更新後の pos_y を返す
+        pos_y
     }
 }
