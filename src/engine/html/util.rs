@@ -21,6 +21,16 @@ pub fn decode_entity(entity: &str) -> Option<String> {
         "gt" => Some(">".to_string()),
         "quot" => Some("\"".to_string()),
         "apos" => Some("'".to_string()),
+        "nbsp" => Some("\u{00A0}".to_string()),
+        "copy" => Some("©".to_string()),
+        "reg" => Some("®".to_string()),
+        "trade" => Some("™".to_string()),
+        "euro" => Some("€".to_string()),
+        "cent" => Some("¢".to_string()),
+        "pound" => Some("£".to_string()),
+        "yen" => Some("¥".to_string()),
+        "times" => Some("\u{00d7}".to_string()), // `×` xとは別文字
+        "divide" => Some("÷".to_string()),
         _ if entity.starts_with("#x") => {
             // Hex 数値文字参照
             u32::from_str_radix(&entity[2..], 16)
