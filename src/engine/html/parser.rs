@@ -100,9 +100,9 @@ impl<'a> Parser<'a> {
         {
             self.tag_stack.push(name.clone());
             let mut parent = Rc::clone(self.stack.last().unwrap());
-            if self.check_start_tag_with_invalid_nesting(&name, &parent) {
+            while self.check_start_tag_with_invalid_nesting(&name, &parent) {
                 if let HtmlNodeType::Element { tag_name, .. } = &parent.borrow().value {
-                    //println!("Auto-closing tag: <{}> to allow <{}> inside it.", tag_name, name);
+                    log::info!(target:"HtmlParser::AutoClosing" ,"Auto-closing tag: <{}> to allow <{}> inside it.", tag_name, name);
                     self.handle_end_tag(Token::EndTag {
                         name: tag_name.clone(),
                     });
@@ -210,6 +210,11 @@ impl<'a> Parser<'a> {
         parent: &Rc<RefCell<TreeNode<HtmlNodeType>>>,
     ) -> bool {
         if let HtmlNodeType::Element { tag_name, .. } = &parent.borrow().value {
+            // <html> 以外の中に <body> が来た場合、そのタグを閉じる
+            if tag_name != "html" && name == "body" {
+                println!("here we can see 「お行儀の悪いコード」");
+                return true;
+            }
             // <p> の中に <p> が来た場合、前の <p> を閉じる
             if tag_name == "p" && name == "p" {
                 return true;
