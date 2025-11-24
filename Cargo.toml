@@ -32,3 +32,4 @@ image = "0.25.9"
 
 [dev-dependencies]
 colored = "3.0.0" # コマンドラインハイライト用
+strsim = "0.11.1"
