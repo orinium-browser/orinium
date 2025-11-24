@@ -160,7 +160,7 @@ async fn main() -> Result<()> {
     let mut style_tree = orinium_browser::engine::styler::StyleTree::transform(&dom_tree);
     style_tree = style_tree.style(&[css_tree]);
     let computed_tree = style_tree.compute();
-    let mut render_tree = RenderTree::from_computed_tree(&computed_tree);
+    let render_tree = RenderTree::from_computed_tree(&computed_tree);
 
     println!("dom_tree: {}", dom_tree);
     println!("style_tree: {}", style_tree);
