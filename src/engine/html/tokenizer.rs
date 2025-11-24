@@ -27,6 +27,7 @@ pub enum Token {
 #[derive(Debug, PartialEq)]
 pub enum TokenizerState {
     Data,
+    EscapeDecoding,
     TagOpen,
     EndTagOpen,
     TagName,
@@ -112,6 +113,7 @@ impl<'a> Tokenizer<'a> {
 
             match self.state {
                 TokenizerState::Data => self.state_data(c),
+                TokenizerState::EscapeDecoding => self.state_escape_decoding(c),
                 _ if self.state.is_doctype() => self.state_doctype(c),
                 TokenizerState::TagOpen => self.state_tag_open(c),
                 TokenizerState::TagName => self.state_tag_name(c),
@@ -129,6 +131,7 @@ impl<'a> Tokenizer<'a> {
                 _ if self.state.is_comment() => self.state_comment(c),
                 _ => {
                     // 未実装の状態は無視してData状態に戻る
+                    log::warn!(target:"HtmlTokenizer::State","Unimplemented state: {:?}, returning to Data state", self.state);
                     self.state = TokenizerState::Data;
                 }
             }
@@ -176,7 +179,7 @@ impl<'a> Tokenizer<'a> {
                 self.state = TokenizerState::TagOpen
             }
             '&' => {
-                log::warn!("エスケープ処理（未実装）");
+                self.state = TokenizerState::EscapeDecoding;
             }
             _ => {
                 self.buffer.push(c);
@@ -185,6 +188,35 @@ impl<'a> Tokenizer<'a> {
                 } else {
                     self.current_token = Some(Token::Text(c.to_string()));
                 }
+            }
+        }
+    }
+
+    fn state_escape_decoding(&mut self, c: char) {
+        // 簡易的にエスケープシーケンスを処理
+        match c {
+            ';' => {
+                // エスケープシーケンス終了
+                // ここでは単純に '&' を追加するだけ
+                self.buffer.push('&');
+                if let Some(Token::Text(ref mut text)) = self.current_token {
+                    text.push('&');
+                } else {
+                    self.current_token = Some(Token::Text("&".to_string()));
+                }
+                self.state = TokenizerState::Data;
+            }
+            _ => {
+                // エスケープシーケンスの一部として扱う
+                self.buffer.push('&');
+                self.buffer.push(c);
+                if let Some(Token::Text(ref mut text)) = self.current_token {
+                    text.push('&');
+                    text.push(c);
+                } else {
+                    self.current_token = Some(Token::Text(format!("&{}", c)));
+                }
+                self.state = TokenizerState::Data;
             }
         }
     }
