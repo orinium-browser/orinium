@@ -14,8 +14,8 @@ use std::rc::{Rc, Weak};
 #[derive(Clone)]
 pub struct TreeNode<T> {
     pub value: T,
-    pub children: Vec<Rc<RefCell<TreeNode<T>>>>,
-    pub parent: Option<Weak<RefCell<TreeNode<T>>>>,
+    children: Vec<Rc<RefCell<TreeNode<T>>>>,
+    parent: Option<Weak<RefCell<TreeNode<T>>>>,
 }
 
 impl<T> TreeNode<T> {
@@ -28,10 +28,23 @@ impl<T> TreeNode<T> {
         }))
     }
 
+    pub fn children(&self) -> &Vec<Rc<RefCell<TreeNode<T>>>> {
+        &self.children
+    }
+
+    pub fn parent(&self) -> Option<Rc<RefCell<TreeNode<T>>>> {
+        self.parent.as_ref().and_then(|weak| weak.upgrade())
+    }
+
     /// 子ノードを追加
     pub fn add_child(parent: &Rc<RefCell<Self>>, child: Rc<RefCell<Self>>) {
         child.borrow_mut().parent = Some(Rc::downgrade(parent));
         parent.borrow_mut().children.push(child);
+    }
+
+    pub fn add_child_at_first(parent: &Rc<RefCell<Self>>, child: Rc<RefCell<Self>>) {
+        child.borrow_mut().parent = Some(Rc::downgrade(parent));
+        parent.borrow_mut().children.insert(0, child);
     }
 
     /// 子ノードを作ってそのまま追加する
@@ -68,12 +81,12 @@ impl<T: Clone + Debug> Debug for TreeNode<T> {
 }
 
 /// ツリー本体
-#[derive(Clone)]
-pub struct Tree<T> {
+#[derive(Debug, Clone)]
+pub struct Tree<T: Clone> {
     pub root: Rc<RefCell<TreeNode<T>>>,
 }
 
-impl<T> Tree<T> {
+impl<T: Clone> Tree<T> {
     pub fn new(root_value: T) -> Self {
         Tree {
             root: TreeNode::new(root_value),

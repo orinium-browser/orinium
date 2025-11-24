@@ -1,3 +1,5 @@
+use super::util::decode_entity;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Attribute {
     pub name: String,
@@ -27,6 +29,7 @@ pub enum Token {
 #[derive(Debug, PartialEq)]
 pub enum TokenizerState {
     Data,
+    EscapeDecoding,
     TagOpen,
     EndTagOpen,
     TagName,
@@ -112,6 +115,7 @@ impl<'a> Tokenizer<'a> {
 
             match self.state {
                 TokenizerState::Data => self.state_data(c),
+                TokenizerState::EscapeDecoding => self.state_escape_decoding(c),
                 _ if self.state.is_doctype() => self.state_doctype(c),
                 TokenizerState::TagOpen => self.state_tag_open(c),
                 TokenizerState::TagName => self.state_tag_name(c),
@@ -129,6 +133,7 @@ impl<'a> Tokenizer<'a> {
                 _ if self.state.is_comment() => self.state_comment(c),
                 _ => {
                     // 未実装の状態は無視してData状態に戻る
+                    log::warn!(target:"HtmlTokenizer::State","Unimplemented state: {:?}, returning to Data state", self.state);
                     self.state = TokenizerState::Data;
                 }
             }
@@ -176,7 +181,7 @@ impl<'a> Tokenizer<'a> {
                 self.state = TokenizerState::TagOpen
             }
             '&' => {
-                log::warn!("エスケープ処理（未実装）");
+                self.state = TokenizerState::EscapeDecoding;
             }
             _ => {
                 self.buffer.push(c);
@@ -185,6 +190,38 @@ impl<'a> Tokenizer<'a> {
                 } else {
                     self.current_token = Some(Token::Text(c.to_string()));
                 }
+            }
+        }
+    }
+
+    fn state_escape_decoding(&mut self, c: char) {
+        match c {
+            ';' => {
+                // 今まで溜めた &xxx をデコードする
+                let entity = self.buffer
+                    .split_terminator('&')
+                    .last()
+                    .unwrap_or("")
+                    .trim()
+                    .trim_end_matches(';');
+
+                println!("Decoding entity: &{};", entity);
+                let decoded = decode_entity(entity)
+                    .unwrap_or_else(|| format!("&{};", entity));
+
+                if let Some(Token::Text(ref mut text)) = self.current_token {
+                    text.push_str(&decoded);
+                } else {
+                    self.current_token = Some(Token::Text(decoded));
+                }
+
+                self.buffer.clear();
+                self.state = TokenizerState::Data;
+            }
+
+            _ => {
+                // エンティティ名の一部
+                self.buffer.push(c);
             }
         }
     }

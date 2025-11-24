@@ -1,3 +1,6 @@
+/// ブラウザ関連のモジュールをまとめたトップレベルモジュール
+pub mod browser;
+
 /// ブラウザのコア機能を提供するモジュール
 /// このモジュールには、HTML/CSSパーサー、DOMツリー構築、
 /// JavaScriptエンジンなどブラウザの中核となる機能が含まれます。
@@ -12,4 +15,4 @@ pub use engine::html;
 pub use engine::html::parser;
 pub use engine::renderer;
 pub use platform::network;
-pub use platform::ui;
+pub use platform::system;
