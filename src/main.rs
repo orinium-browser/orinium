@@ -169,7 +169,7 @@ async fn main() -> Result<()> {
 
     // レンダラーを作成して描画命令を生成
     let renderer = Renderer::new();
-    let draw_commands = renderer.generate_draw_commands(&mut render_tree);
+    let draw_commands = renderer.generate_draw_commands(&render_tree);
 
     log::info!("Generated {} draw commands", draw_commands.len());
     log::info!("Generated draw commands: {draw_commands:#?}");
