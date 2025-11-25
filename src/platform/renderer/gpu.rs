@@ -287,15 +287,91 @@ impl GpuRenderer {
         }
     }
 
-    /// 描画命令から頂点データを生成
-    fn generate_vertices(&self, commands: &[DrawCommand]) -> Vec<Vertex> {
-        let mut vertices = Vec::new();
+    /// 描画命令を解析して頂点バッファやテキストキューに登録
+    /// Textのclippingはまだ未実装
+    pub fn parse_draw_commands(&mut self, commands: &[DrawCommand]) {
         let width = self.size.width as f32;
         let height = self.size.height as f32;
 
+        // --- 頂点データ ---
+        let mut vertices = Vec::new();
+        // --- Text ---
+        let mut sections: Vec<TextSection> = Vec::new();
+        // --- transform stack ---
+        let mut transform_stack: Vec<(f32, f32)> = vec![(0.0, 0.0)];
+        let current_transform = |stack: &Vec<(f32, f32)>| -> (f32, f32) {
+            let mut dx = 0.0;
+            let mut dy = 0.0;
+            for (x, y) in stack.iter() {
+                dx += x;
+                dy += y;
+            }
+            (dx, dy)
+        };
+        // --- clip stack ---
+        #[derive(Clone, Copy)]
+        struct ClipRect {
+            x: f32,
+            y: f32,
+            w: f32,
+            h: f32,
+        }
+        let mut clip_stack: Vec<ClipRect> = vec![ClipRect {
+            x: 0.0,
+            y: 0.0,
+            w: width,
+            h: height,
+        }];
+        let current_clip = |stack: &Vec<ClipRect>| -> ClipRect {
+            *stack.last().unwrap()
+        };
+
+
         for command in commands {
-            #[allow(clippy::single_match)]
             match command {
+                // Transform (Push / Pop)
+                DrawCommand::PushTransform { dx, dy } => {
+                    transform_stack.push((*dx, *dy));
+                }
+                DrawCommand::PopTransform => {
+                    if transform_stack.len() > 1 {
+                        transform_stack.pop();
+                    }
+                }
+
+                // Clip (Push / Pop)
+                DrawCommand::PushClip { x, y, width: w, height: h } => {
+                    let (tdx, tdy) = current_transform(&transform_stack);
+                    let new_clip = ClipRect {
+                        x: x + tdx,
+                        y: y + tdy,
+                        w: *w,
+                        h: *h,
+                    };
+
+                    // 現在の clip との AND を取る
+                    let parent = current_clip(&clip_stack);
+
+                    let x1 = new_clip.x.max(parent.x);
+                    let y1 = new_clip.y.max(parent.y);
+                    let x2 = (new_clip.x + new_clip.w).min(parent.x + parent.w);
+                    let y2 = (new_clip.y + new_clip.h).min(parent.y + parent.h);
+
+                    clip_stack.push(ClipRect {
+                        x: x1,
+                        y: y1,
+                        w: (x2 - x1).max(0.0),
+                        h: (y2 - y1).max(0.0),
+                    });
+                }
+
+                DrawCommand::PopClip => {
+                    if clip_stack.len() > 1 {
+                        clip_stack.pop();
+                    }
+                }
+
+                // Rectangle
                 DrawCommand::DrawRect {
                     x,
                     y,
@@ -303,176 +379,82 @@ impl GpuRenderer {
                     height: h,
                     color,
                 } => {
-                    // スクリーン座標からNDC座標に変換
-                    let x1 = (x / width) * 2.0 - 1.0;
-                    let y1 = 1.0 - (y / height) * 2.0;
-                    let x2 = ((x + w) / width) * 2.0 - 1.0;
-                    let y2 = 1.0 - ((y + h) / height) * 2.0;
+                    // transform
+                    let (tdx, tdy) = current_transform(&transform_stack);
+                    let mut x1 = x + tdx;
+                    let mut y1 = y + tdy;
+                    let mut x2 = x1 + w;
+                    let mut y2 = y1 + h;
 
-                    let color_array = [color.r, color.g, color.b, color.a];
+                    // clip 取得
+                    let clip = current_clip(&clip_stack);
 
-                    // 矩形を2つの三角形で構成
+                    // 完全に外なら skip
+                    if x2 <= clip.x || x1 >= clip.x + clip.w ||
+                    y2 <= clip.y || y1 >= clip.y + clip.h {
+                        continue;
+                    }
+
+                    // 部分クリップ
+                    x1 = x1.max(clip.x);
+                    y1 = y1.max(clip.y);
+                    x2 = x2.min(clip.x + clip.w);
+                    y2 = y2.min(clip.y + clip.h);
+
+                    // NDC
+                    let ndc = |v, max| (v / max) * 2.0 - 1.0;
+
+                    let px1 = ndc(x1, width);
+                    let py1 = 1.0 - ndc(y1, height);
+                    let px2 = ndc(x2, width);
+                    let py2 = 1.0 - ndc(y2, height);
+
+                    let color = [color.r, color.g, color.b, color.a];
+
                     vertices.extend_from_slice(&[
-                        Vertex {
-                            position: [x1, y1, 0.0],
-                            color: color_array,
-                        },
-                        Vertex {
-                            position: [x1, y2, 0.0],
-                            color: color_array,
-                        },
-                        Vertex {
-                            position: [x2, y1, 0.0],
-                            color: color_array,
-                        },
-                        Vertex {
-                            position: [x2, y1, 0.0],
-                            color: color_array,
-                        },
-                        Vertex {
-                            position: [x1, y2, 0.0],
-                            color: color_array,
-                        },
-                        Vertex {
-                            position: [x2, y2, 0.0],
-                            color: color_array,
-                        },
+                        Vertex { position: [px1, py1, 0.0], color },
+                        Vertex { position: [px1, py2, 0.0], color },
+                        Vertex { position: [px2, py1, 0.0], color },
+
+                        Vertex { position: [px2, py1, 0.0], color },
+                        Vertex { position: [px1, py2, 0.0], color },
+                        Vertex { position: [px2, py2, 0.0], color },
                     ]);
                 }
-                _ => {}
-            }
-        }
 
-        vertices
-    }
+                // Text
+                DrawCommand::DrawText { x, y, text, font_size, color } => {
+                    let (tdx, tdy) = current_transform(&transform_stack);
 
-    /// 描画命令を更新
-    pub fn update_draw_commands(&mut self, commands: &[DrawCommand]) {
-        let mut all_vertices = self.generate_vertices(commands);
-
-        // Compute content height from commands (max y + approx height)
-        let mut max_y: f32 = 0.0;
-        for command in commands {
-            match command {
-                DrawCommand::DrawText {
-                    x: _x,
-                    y,
-                    text: _t,
-                    font_size,
-                    ..
-                } => {
-                    let bottom = y + font_size * 1.2; // approximate line height
-                    if bottom > max_y {
-                        max_y = bottom;
-                    }
-                }
-                DrawCommand::DrawRect {
-                    x: _x,
-                    y,
-                    height: h,
-                    ..
-                } => {
-                    let bottom = y + h;
-                    if bottom > max_y {
-                        max_y = bottom;
-                    }
+                    let section = TextSection {
+                        screen_position: (*x + tdx, *y + tdy),
+                        bounds: (self.size.width as f32, self.size.height as f32),
+                        text: vec![
+                            Text::new(text)
+                                .with_scale(*font_size)
+                                .with_color([color.r, color.g, color.b, color.a]),
+                        ],
+                        ..TextSection::default()
+                    };
+                    sections.push(section);
                 }
             }
         }
-        self.content_height = max_y.max(self.size.height as f32);
 
-        let sb = ScrollBar::default();
-        log::debug!(
-            target:"PRender::gpu::CmdGen" ,
-            "update_draw_commands: viewport=({},{}), computed content_height={}",
-            self.size.width,
-            self.size.height,
-            self.content_height
-        );
-        if let Some((x1, y1, x2, y2)) = sb.thumb_rect(
-            self.size.width as f32,
-            self.size.height as f32,
-            self.content_height,
-            self.text_scroll,
-        ) {
-            // サム矩形が得られたら角丸矩形ヘルパーで頂点を生成する
-            log::debug!(
-                target:"PRender::gpu::CmdGen::etc" ,
-                "scrollbar thumb rect: x1={},y1={},x2={},y2={}",
-                x1,
-                y1,
-                x2,
-                y2
-            );
-            let vw = self.size.width as f32;
-            let vh = self.size.height as f32;
-            let base = sb.color;
-            // ホバー時はやや暗めにする
-            let color = if self.scrollbar_hover {
-                [base[0] * 0.6, base[1] * 0.6, base[2] * 0.6, base[3]]
-            } else {
-                base
-            };
-            // 角丸の半径（ピクセル）
-            let radius = 6.0_f32;
-            self.push_rounded_rect_vertices(
-                &mut all_vertices,
-                vw,
-                vh,
-                (x1, y1, x2, y2),
-                radius,
-                color,
-            );
-        } else {
-            log::debug!(target:"PRender::gpu::CmdGen::etc" ,"no scrollbar needed (content fits viewport)");
-        }
-
-        log::debug!(
-            target:"PRender::gpu::CmdGen::etc" ,
-            "update_draw_commands: total_vertices_after_scrollbar={}",
-            all_vertices.len()
-        );
-
-        if !all_vertices.is_empty() {
+        // 頂点バッファを登録
+        if !vertices.is_empty() {
             self.vertex_buffer = Some(self.device.create_buffer_init(
                 &wgpu::util::BufferInitDescriptor {
                     label: Some("Vertex Buffer"),
-                    contents: bytemuck::cast_slice(&all_vertices),
+                    contents: bytemuck::cast_slice(&vertices),
                     usage: wgpu::BufferUsages::VERTEX,
                 },
             ));
-            self.num_vertices = all_vertices.len() as u32;
+            self.num_vertices = vertices.len() as u32;
         }
 
-        // DrawCommandからテキスト描画セクションに変換
-        let mut sections: Vec<TextSection> = Vec::new();
-        for command in commands {
-            if let DrawCommand::DrawText {
-                x,
-                y,
-                text,
-                font_size,
-                color,
-            } = command
-            {
-                // スクロールオフセットを適用して Y 座標を移動
-                let y_with_scroll = *y - self.text_scroll;
-                let s = TextSection {
-                    screen_position: (*x, y_with_scroll),
-                    bounds: (self.size.width as f32, self.size.height as f32),
-                    text: vec![
-                        Text::new(text)
-                            .with_scale(*font_size)
-                            .with_color([color.r, color.g, color.b, color.a]),
-                    ],
-                    ..TextSection::default()
-                };
-                sections.push(s);
-            }
-        }
-
+        // テキストセクションをキューに追加
         if let Some(tr) = &mut self.text_renderer {
-            // テキスト描画キューに追加
             tr.queue(&self.device, &self.queue, &sections).unwrap();
         }
     }

@@ -43,6 +43,7 @@ pub enum DrawCommand {
         font_size: f32,
         color: Color,
     },
+
     DrawRect {
         x: f32,
         y: f32,
@@ -50,6 +51,19 @@ pub enum DrawCommand {
         height: f32,
         color: Color,
     },
+
+    /// クリッピング領域（ネスト可能）
+    PushClip {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    },
+    PopClip,
+
+    /// 座標変換（スクロールや入れ子レイアウト）
+    PushTransform { dx: f32, dy: f32 },
+    PopTransform,
 }
 
 pub struct Renderer;
