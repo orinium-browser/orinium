@@ -52,6 +52,18 @@ pub enum DrawCommand {
         color: Color,
     },
 
+    DrawPolygon {
+        points: Vec<(f32, f32)>,
+        color: Color,
+    },
+
+    DrawEllipse {
+        center: (f32, f32),
+        radius_x: f32,   // 円なら radius_x == radius_y
+        radius_y: f32,
+        color: Color,
+    },
+
     /// クリッピング領域（ネスト可能）
     PushClip {
         x: f32,

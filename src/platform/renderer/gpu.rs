@@ -438,6 +438,37 @@ impl GpuRenderer {
                     };
                     sections.push(section);
                 }
+
+                // Polygon
+                #[allow(unused)]
+                DrawCommand::DrawPolygon { points, color } => {
+                    // transform
+                    let (tdx, tdy) = current_transform(&transform_stack);
+                    let mut transformed_points: Vec<(f32, f32)> = points
+                        .iter()
+                        .map(|(px, py)| (px + tdx, py + tdy))
+                        .collect();
+
+                    // clip 取得
+                    let clip = current_clip(&clip_stack);
+
+                    todo!("Polygon drawing with clipping is not implemented yet");
+                }
+
+                // Ellipse
+                #[allow(unused)]
+                DrawCommand::DrawEllipse { center, radius_x, radius_y, color } => {
+                    // transform
+                    let (tdx, tdy) = current_transform(&transform_stack);
+                    let cx = center.0 + tdx;
+                    let cy = center.1 + tdy;
+
+                    // clip 取得
+                    let clip = current_clip(&clip_stack);
+
+                    todo!("Ellipse drawing with clipping is not implemented yet");
+                }
+                
             }
         }
 
