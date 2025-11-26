@@ -125,12 +125,7 @@ impl Renderer {
 
     pub fn generate_draw_commands(&self, tree: &RenderTree) -> Vec<DrawCommand> {
         let mut commands = vec![];
-        commands.push( DrawCommand::PushTransform { dx: 10.0, dy: 10.0 } );
-        commands.push( DrawCommand::PushClip { x: 0.0, y: 0.0, width: 150.0, height: 100.0 } );
-        commands.push( DrawCommand::DrawRect { x: 0.0, y: 0.0, width: 150.0, height: 100.0, color: Color::RED} );
         self.traverse_tree(&tree.root, 0.0, 0.0, &mut commands);
-        commands.push( DrawCommand::PopClip );
-        commands.push( DrawCommand::PopTransform );
         commands
     }
 
