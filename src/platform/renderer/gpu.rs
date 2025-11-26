@@ -322,10 +322,7 @@ impl GpuRenderer {
             w: width,
             h: height,
         }];
-        let current_clip = |stack: &Vec<ClipRect>| -> ClipRect {
-            *stack.last().unwrap()
-        };
-
+        let current_clip = |stack: &Vec<ClipRect>| -> ClipRect { *stack.last().unwrap() };
 
         for command in commands {
             match command {
@@ -340,7 +337,12 @@ impl GpuRenderer {
                 }
 
                 // Clip (Push / Pop)
-                DrawCommand::PushClip { x, y, width: w, height: h } => {
+                DrawCommand::PushClip {
+                    x,
+                    y,
+                    width: w,
+                    height: h,
+                } => {
                     let (tdx, tdy) = current_transform(&transform_stack);
                     let new_clip = ClipRect {
                         x: x + tdx,
@@ -390,8 +392,11 @@ impl GpuRenderer {
                     let clip = current_clip(&clip_stack);
 
                     // 完全に外なら skip
-                    if x2 <= clip.x || x1 >= clip.x + clip.w ||
-                    y2 <= clip.y || y1 >= clip.y + clip.h {
+                    if x2 <= clip.x
+                        || x1 >= clip.x + clip.w
+                        || y2 <= clip.y
+                        || y1 >= clip.y + clip.h
+                    {
                         continue;
                     }
 
@@ -411,6 +416,7 @@ impl GpuRenderer {
 
                     let color = [color.r, color.g, color.b, color.a];
 
+                    #[rustfmt::skip]
                     vertices.extend_from_slice(&[
                         Vertex { position: [px1, py1, 0.0], color },
                         Vertex { position: [px1, py2, 0.0], color },
@@ -423,7 +429,13 @@ impl GpuRenderer {
                 }
 
                 // Text
-                DrawCommand::DrawText { x, y, text, font_size, color } => {
+                DrawCommand::DrawText {
+                    x,
+                    y,
+                    text,
+                    font_size,
+                    color,
+                } => {
                     let (tdx, tdy) = current_transform(&transform_stack);
 
                     let section = TextSection {
@@ -444,10 +456,8 @@ impl GpuRenderer {
                 DrawCommand::DrawPolygon { points, color } => {
                     // transform
                     let (tdx, tdy) = current_transform(&transform_stack);
-                    let mut transformed_points: Vec<(f32, f32)> = points
-                        .iter()
-                        .map(|(px, py)| (px + tdx, py + tdy))
-                        .collect();
+                    let mut transformed_points: Vec<(f32, f32)> =
+                        points.iter().map(|(px, py)| (px + tdx, py + tdy)).collect();
 
                     // clip 取得
                     let clip = current_clip(&clip_stack);
@@ -457,7 +467,12 @@ impl GpuRenderer {
 
                 // Ellipse
                 #[allow(unused)]
-                DrawCommand::DrawEllipse { center, radius_x, radius_y, color } => {
+                DrawCommand::DrawEllipse {
+                    center,
+                    radius_x,
+                    radius_y,
+                    color,
+                } => {
                     // transform
                     let (tdx, tdy) = current_transform(&transform_stack);
                     let cx = center.0 + tdx;
@@ -468,7 +483,6 @@ impl GpuRenderer {
 
                     todo!("Ellipse drawing with clipping is not implemented yet");
                 }
-                
             }
         }
 

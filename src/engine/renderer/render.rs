@@ -59,7 +59,7 @@ pub enum DrawCommand {
 
     DrawEllipse {
         center: (f32, f32),
-        radius_x: f32,   // 円なら radius_x == radius_y
+        radius_x: f32, // 円なら radius_x == radius_y
         radius_y: f32,
         color: Color,
     },
@@ -74,7 +74,10 @@ pub enum DrawCommand {
     PopClip,
 
     /// 座標変換（スクロールや入れ子レイアウト）
-    PushTransform { dx: f32, dy: f32 },
+    PushTransform {
+        dx: f32,
+        dy: f32,
+    },
     PopTransform,
 }
 
