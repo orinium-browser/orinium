@@ -13,9 +13,23 @@ impl RenderTree {
         // ルートノードの種類を判定
         let root_kind = Self::detect_kind(&tree.root.borrow().value);
         // RenderNode を作成してツリーのルートとする
-        let render_tree = Tree::new(RenderNode::new(root_kind, 0.0, 0.0, 0.0, 0.0));
+        let inner_render_tree = Tree::new(RenderNode::new(root_kind, 0.0, 0.0, 0.0, 0.0));
         // 子ノードを再帰的に変換
-        let _ = Self::convert_node(&tree.root, &render_tree.root, 0.0, 0.0);
+        let _ = Self::convert_node(&tree.root, &inner_render_tree.root, 0.0, 0.0);
+
+        let page_root_scrollable = RenderNode::new(
+            NodeKind::Scrollable {
+                tree: inner_render_tree,
+                scroll_offset_y: 0.0,
+                scroll_offset_x: 0.0,
+            },
+            0.0,
+            0.0,
+            600.0,
+            400.0,
+        );
+        let render_tree = Tree::new(page_root_scrollable);
+
         render_tree
     }
 
