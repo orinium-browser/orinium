@@ -185,8 +185,23 @@ impl Renderer {
                     height: node_borrow.value.height,
                     color: Color::new(0.95, 0.95, 0.95, 1.0),
                 });
+
+                out.push(DrawCommand::PushClip {
+                    x: abs_x,
+                    y: abs_y,
+                    width: node_borrow.value.width,
+                    height: node_borrow.value.height,
+                });
+                out.push(DrawCommand::PushTransform {
+                    dx: -*scroll_offset_x,
+                    dy: -*scroll_offset_y,
+                });
+
                 // 内部ツリーを再帰描画
-                self.traverse_tree(&inner_tree.root, *scroll_offset_x, *scroll_offset_y, out);
+                self.traverse_tree(&inner_tree.root, 0.0, 0.0, out);
+
+                out.push(DrawCommand::PopTransform);
+                out.push(DrawCommand::PopClip);
             }
         }
 
