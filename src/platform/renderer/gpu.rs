@@ -6,7 +6,7 @@ use wgpu_text::glyph_brush::{Section as TextSection, Text};
 use winit::window::Window;
 
 use super::glyph::text::TextRenderer;
-use super::scroll_bar::ScrollBar;
+// use super::scroll_bar::ScrollBar;
 
 /// GPU描画コンテキスト
 pub struct GpuRenderer {
@@ -410,9 +410,9 @@ impl GpuRenderer {
                     let ndc = |v, max| (v / max) * 2.0 - 1.0;
 
                     let px1 = ndc(x1, width);
-                    let py1 = 1.0 - ndc(y1, height);
+                    let py1 = -ndc(y1, height);
                     let px2 = ndc(x2, width);
-                    let py2 = 1.0 - ndc(y2, height);
+                    let py2 = -ndc(y2, height);
 
                     let color = [color.r, color.g, color.b, color.a];
 
@@ -438,9 +438,12 @@ impl GpuRenderer {
                 } => {
                     let (tdx, tdy) = current_transform(&transform_stack);
 
+                    let clip = current_clip(&clip_stack);
+                    let (clip_x, clip_y) = (clip.x + clip.w, clip.y + clip.h);
+
                     let section = TextSection {
                         screen_position: (*x + tdx, *y + tdy),
-                        bounds: (self.size.width as f32, self.size.height as f32),
+                        bounds: (clip_x, clip_y),
                         text: vec![
                             Text::new(text)
                                 .with_scale(*font_size)

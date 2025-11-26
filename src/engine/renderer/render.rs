@@ -20,6 +20,35 @@ impl Color {
         b: 0.0,
         a: 1.0,
     };
+
+    pub const WHITE: Color = Color {
+        r: 1.0,
+        g: 1.0,
+        b: 1.0,
+        a: 1.0,
+    };
+
+    pub const RED: Color = Color {
+        r: 1.0,
+        g: 0.0,
+        b: 0.0,
+        a: 1.0,
+    };
+
+    pub const GREEN: Color = Color {
+        r: 0.0,
+        g: 1.0,
+        b: 0.0,
+        a: 1.0,
+    };
+
+    pub const BLUE: Color = Color {
+        r: 0.0,
+        g: 0.0,
+        b: 1.0,
+        a: 1.0,
+    };
+
     pub fn new(r: f32, g: f32, b: f32, a: f32) -> Self {
         Self { r, g, b, a }
     }
@@ -96,7 +125,12 @@ impl Renderer {
 
     pub fn generate_draw_commands(&self, tree: &RenderTree) -> Vec<DrawCommand> {
         let mut commands = vec![];
+        commands.push( DrawCommand::PushTransform { dx: 10.0, dy: 10.0 } );
+        commands.push( DrawCommand::PushClip { x: 0.0, y: 0.0, width: 150.0, height: 100.0 } );
+        commands.push( DrawCommand::DrawRect { x: 0.0, y: 0.0, width: 150.0, height: 100.0, color: Color::RED} );
         self.traverse_tree(&tree.root, 0.0, 0.0, &mut commands);
+        commands.push( DrawCommand::PopClip );
+        commands.push( DrawCommand::PopTransform );
         commands
     }
 
