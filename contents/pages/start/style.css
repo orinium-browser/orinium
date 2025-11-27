@@ -1,0 +1,114 @@
+/*
+ *  This file is licensed under the Apache 2.0 License.
+ *  (c) 2025 orinium-browser
+ *  created by nekogakure
+ */
+
+/* This colors is using theme */
+:root{
+    --bg: #ffffff;
+    --text: #202124;
+    --muted: #858585;
+    --radius: 100px;
+    --shadow: 0 1px 3px rgba(60,64,67,0.15), 0 1px 2px rgba(60,64,67,0.08);
+    --gap: 8px;
+    --max-width: 700px;
+    --pad-vertical: 48px;
+    --input-padding: 12px 8px;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans JP", "Yu Gothic", "Meiryo"
+}
+
+body {
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+    font-family: var(--font), sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    height: 100vh;
+}
+
+div.logo {
+    display: none;
+}
+
+main.welcome {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    min-height: 100vh;
+    padding: var(--pad-vertical) 20px;
+    box-sizing: border-box;
+}
+
+.welcome-header {
+    text-align: center;
+    margin-bottom: 28px;
+}
+
+.brand-logo {
+    width: 35%;
+    height: 35%;
+    object-fit: contain;
+    display: block;
+    margin: 0 auto 8px auto;
+}
+
+.search {
+    width: 100%;
+    max-width: var(--max-width);
+    margin: 20px 0 32px 0;
+}
+
+.search-box,
+.search-box input[type="search"] {
+    background: transparent;
+}
+
+.search-box {
+    align-items: center;
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    display: flex;
+    padding: 8px 16px;
+    gap: var(--gap);
+}
+
+.search-box input[type="search"] {
+    width: 100%;
+    border: none;
+    outline: none;
+    font-size: 16px;
+    flex: 1;
+    padding: var(--input-padding);
+    color: var(--text);
+}
+
+.icon-btn {
+    background: transparent;
+    border: none;
+    padding: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+
+.search-btn {
+    background: transparent;
+    border: none;
+    padding: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+
+.icon-btn svg,
+.search-btn svg {
+    width: 24px;
+    height: 24px;
+    display: block;
+    fill: var(--muted);
+}
