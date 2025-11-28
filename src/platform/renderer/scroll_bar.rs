@@ -1,3 +1,4 @@
+#![allow(unused)]
 #[derive(Debug, Clone, Copy)]
 pub struct ScrollBar {
     /// スクロールバーのトラックの幅（ピクセル）
@@ -21,7 +22,6 @@ impl Default for ScrollBar {
     }
 }
 
-#[allow(unused)]
 impl ScrollBar {
     pub fn new() -> Self {
         Self::default()
