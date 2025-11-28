@@ -163,7 +163,7 @@ async fn main() -> Result<()> {
                     let event_loop =
                         EventLoop::<orinium_browser::platform::system::State>::with_user_event()
                             .build()?;
-                    let mut app = App::new(BrowserApp::new().with_draw_commands(draw_commands));
+                    let mut app = App::new(BrowserApp::new().with_draw_info(render_tree, draw_commands));
                     let _ = event_loop.run_app(&mut app);
                 } else {
                     eprintln!("Please provide a URL for simple rendering test.");

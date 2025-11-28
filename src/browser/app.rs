@@ -32,7 +32,8 @@ impl BrowserApp {
     }
 
     // 開発テスト用
-    pub fn with_draw_commands(mut self, draw_commands: Vec<DrawCommand>) -> Self {
+    pub fn with_draw_info(mut self, render_tree: RenderTree,  draw_commands: Vec<DrawCommand>) -> Self {
+        self.render_tree = Some(render_tree);
         self.draw_commands = draw_commands;
         self
     }
