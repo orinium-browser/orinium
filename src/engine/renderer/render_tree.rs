@@ -28,7 +28,7 @@ impl RenderTree {
             600.0,
             400.0,
         );
-        
+
         Tree::new(page_root_scrollable)
     }
 
