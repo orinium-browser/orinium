@@ -10,12 +10,12 @@ use super::webview::WebView;
 ///
 /// WebView が「ページそのもの」の状態を管理するのに対し、
 /// Tab は UI 上のタブとしてのメタ情報（タイトルなど）を管理します。
-/// 
+///
 /// TODO:
 /// - ページの状態（Error、loading）の管理を追加
 pub struct Tab {
     title: Option<String>,
-    webview: Option<WebView>
+    webview: Option<WebView>,
 }
 
 impl Default for Tab {
@@ -28,7 +28,7 @@ impl Tab {
     pub fn new() -> Self {
         Self {
             title: None,
-            webview: None
+            webview: None,
         }
     }
     pub fn load_from_raw_html(&mut self, html_source: &str) {
@@ -40,8 +40,6 @@ impl Tab {
     }
 
     pub fn render_tree(&self) -> Option<&RenderTree> {
-        self.webview
-            .as_ref()
-            .and_then(|wv| wv.render.as_ref())
+        self.webview.as_ref().and_then(|wv| wv.render.as_ref())
     }
 }

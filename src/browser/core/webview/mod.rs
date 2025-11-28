@@ -1,7 +1,7 @@
 use crate::engine::{
-    html::parser::{Parser as HtmlParser, DomTree},
+    html::parser::{DomTree, Parser as HtmlParser},
     // css::cssom::Parser as CssParser,
-    renderer::{RenderTree},
+    renderer::RenderTree,
     styler::style_tree::StyleTree,
 };
 
@@ -48,7 +48,7 @@ impl WebView {
     }
 
     /// ロード → DOM/CSS/Style/Render のフルパイプライン
-    /// 
+    ///
     /// TODO:
     /// - dom_tree をクローンするコストを削減
     /// - cssソースの適応

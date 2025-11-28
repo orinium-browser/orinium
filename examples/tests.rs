@@ -1,8 +1,6 @@
 use orinium_browser::{
-    browser::BrowserApp,
-    engine::html::parser::Parser as HtmlParser,
-    platform::network::NetworkCore,
-    renderer::RenderTree,
+    browser::BrowserApp, engine::html::parser::Parser as HtmlParser,
+    platform::network::NetworkCore, renderer::RenderTree,
 };
 
 use colored::*;
