@@ -1,5 +1,5 @@
 use super::tab::Tab;
-use crate::engine::renderer::DrawCommand;
+use crate::engine::renderer::{DrawCommand, RenderTree};
 use crate::platform::renderer::gpu::GpuRenderer;
 use winit::event::WindowEvent;
 
@@ -9,9 +9,10 @@ pub enum BrowserCommand {
     None,
 }
 
+#[allow(unused)]
 pub struct BrowserApp {
-    #[allow(unused)]
     tabs: Tab,
+    render_tree: Option<RenderTree>,
     draw_commands: Vec<DrawCommand>,
 }
 
@@ -25,6 +26,7 @@ impl BrowserApp {
     pub fn new() -> Self {
         Self {
             tabs: Tab::new(),
+            render_tree: None,
             draw_commands: vec![],
         }
     }
