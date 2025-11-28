@@ -175,12 +175,9 @@ async fn main() -> Result<()> {
     log::info!("Generated {} draw commands", draw_commands.len());
     log::info!("Generated draw commands: {draw_commands:#?}");
 
-    // ウィンドウとイベントループを作成
-    let event_loop =
-        EventLoop::<orinium_browser::platform::system::State>::with_user_event().build()?;
-    let mut app = App::new(BrowserApp::new().with_draw_info(render_tree, draw_commands));
+    let browser = BrowserApp::default().with_draw_info(render_tree, draw_commands);
 
-    event_loop.run_app(&mut app)?;
+    browser.run()?;
 
     Ok(())
 }

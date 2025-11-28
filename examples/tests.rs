@@ -159,12 +159,9 @@ async fn main() -> Result<()> {
                     println!("style_tree: {}", style_tree);
                     // println!("computed_tree: {}", computed_tree);
                     println!("render_tree: {}", render_tree);
-                    // ウィンドウとイベントループを作成
-                    let event_loop =
-                        EventLoop::<orinium_browser::platform::system::State>::with_user_event()
-                            .build()?;
-                    let mut app = App::new(BrowserApp::new().with_draw_info(render_tree, draw_commands));
-                    let _ = event_loop.run_app(&mut app);
+
+                    let browser = BrowserApp::default().with_draw_info(render_tree, draw_commands);
+                    browser.run()?
                 } else {
                     eprintln!("Please provide a URL for simple rendering test.");
                 }
