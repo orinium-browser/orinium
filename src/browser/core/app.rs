@@ -92,9 +92,8 @@ impl BrowserApp {
             WindowEvent::CloseRequested => BrowserCommand::Exit,
 
             WindowEvent::RedrawRequested => {
-                if let Ok(animating) = gpu.render()
-                    && animating
-                {
+                // Ok(animationg)
+                if let Ok(true) = gpu.render() {
                     self.apply_draw_commands(gpu);
                 }
                 BrowserCommand::None
