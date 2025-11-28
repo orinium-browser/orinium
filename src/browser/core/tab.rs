@@ -2,6 +2,17 @@ use crate::renderer::RenderTree;
 
 use super::webview::WebView;
 
+/// Tab はブラウザで開かれた 1 つのページを表す構造体です。
+///
+/// 主な責務:
+/// - 現在表示しているページのタイトルの保持
+/// - ページ内容を扱う WebView の保持
+///
+/// WebView が「ページそのもの」の状態を管理するのに対し、
+/// Tab は UI 上のタブとしてのメタ情報（タイトルなど）を管理します。
+/// 
+/// TODO:
+/// - ページの状態（Error、loading）の管理を追加
 pub struct Tab {
     title: Option<String>,
     webview: Option<WebView>

@@ -5,6 +5,17 @@ use crate::engine::{
     styler::style_tree::StyleTree,
 };
 
+/// WebView は 1 つのウェブページの表示・レイアウト・描画を管理する構造体です。
+///
+/// 主に以下の責務を持ちます:
+/// - HTML の読み込み・DOM ツリーの構築
+/// - CSS の適用・Style Tree の生成
+/// - レンダーツリー(RenderTree)の構築とレイアウト計算
+/// - DrawCommand の生成による描画準備
+/// - スクロールやビューポート等のページ固有の状態管理
+///
+/// WebView はタブ(Tab)の内部に持たれ、BrowserApp から更新・描画処理が呼ばれます。
+/// 1 WebView = 1 ページ(ドキュメント) と対応します。
 pub struct WebView {
     pub url: Option<String>,
 
