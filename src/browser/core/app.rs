@@ -24,7 +24,7 @@ pub enum BrowserCommand {
 ///
 /// アプリケーションの「外側の枠組み」を担当し、
 /// ブラウザ起動 → イベントループ → 描画の流れを制御します。
-/// 
+///
 /// TODO:
 /// - tabsの実装
 pub struct BrowserApp {
@@ -43,12 +43,16 @@ impl Default for BrowserApp {
 }
 
 impl BrowserApp {
+    /// ブラウザのメインループを開始
     pub fn run(self) -> Result<()> {
         let event_loop =
             winit::event_loop::EventLoop::<crate::platform::system::State>::with_user_event()
                 .build()?;
+
         let mut app = App::new(self);
+
         event_loop.run_app(&mut app)?;
+
         Ok(())
     }
 
@@ -78,35 +82,37 @@ impl BrowserApp {
         gpu.parse_draw_commands(&self.draw_commands);
     }
 
+    /// ウィンドウイベントの処理
     pub fn handle_window_event(
         &mut self,
         event: WindowEvent,
         gpu: &mut GpuRenderer,
     ) -> BrowserCommand {
         match event {
-            WindowEvent::CloseRequested => {
-                return BrowserCommand::Exit;
-            }
+            WindowEvent::CloseRequested => BrowserCommand::Exit,
+
             WindowEvent::RedrawRequested => {
-                if let Ok(animating) = gpu.render()
-                    && animating
-                {
-                    self.apply_draw_commands(gpu);
+                if let Ok(animating) = gpu.render() {
+                    if animating {
+                        self.apply_draw_commands(gpu);
+                    }
                 }
+                BrowserCommand::None
             }
+
             /*
             WindowEvent::MouseWheel { delta, .. } => {
                 let scroll_amount = match delta {
                     winit::event::MouseScrollDelta::LineDelta(_, y) => -y * 60.0,
                     winit::event::MouseScrollDelta::PixelDelta(pos) => -pos.y as f32,
                 };
+                // TODO: スクロール対象のタブ/レンダーツリーに反映
                 self.apply_draw_commands(gpu);
-                return BrowserCommand::RequestRedraw;
+                BrowserCommand::RequestRedraw
             }
             */
-            _ => {}
+            _ => BrowserCommand::None,
         }
-        BrowserCommand::None
     }
 
     pub fn window_size(&self) -> (u32, u32) {
