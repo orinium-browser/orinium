@@ -29,17 +29,11 @@ pub struct GpuRenderer {
 
     /// テキスト描画用ラッパー
     text_renderer: Option<TextRenderer>,
-    /// テキスト垂直スクロールオフセット（ピクセル）
-    text_scroll: f32,
-    /// アニメーション用ターゲットスクロール位置
-    target_text_scroll: f32,
     /// 最後のフレーム時刻（アニメーション計算用）
     last_frame: Option<std::time::Instant>,
 
-    /// コンテンツの高さ（スクロール可能領域の高さ）
+    /// コンテンツの高さ（描画対象物の高さ）
     content_height: f32,
-    /// マウスオーバーしてるかどうか
-    scrollbar_hover: bool,
 }
 
 #[repr(C)]
@@ -226,40 +220,9 @@ impl GpuRenderer {
             vertex_buffer: None,
             num_vertices: 0,
             text_renderer,
-            text_scroll: 0.0,
-            target_text_scroll: 0.0,
             last_frame: None,
             content_height: 0.0,
-            scrollbar_hover: false,
         })
-    }
-
-    /// スクロールのターゲットを相対更新（アニメーションで実際のtext_scrollに反映される）
-    pub fn scroll_text_by(&mut self, dy: f32) {
-        // 使えるスクロール範囲に収める
-        let max_offset = (self.content_height - self.size.height as f32).max(0.0);
-        self.target_text_scroll = (self.target_text_scroll + dy).clamp(0.0, max_offset);
-        self.last_frame = None;
-    }
-
-    /// テキストのスクロール位置ターゲットを設定（ピクセル）
-    pub fn set_text_scroll(&mut self, offset: f32) {
-        let max_offset = (self.content_height - self.size.height as f32).max(0.0);
-        self.target_text_scroll = offset.clamp(0.0, max_offset);
-        self.last_frame = None;
-    }
-
-    pub fn set_text_scroll_immediate(&mut self, offset: f32) {
-        let max_offset = (self.content_height - self.size.height as f32).max(0.0);
-        let v = offset.clamp(0.0, max_offset);
-        self.target_text_scroll = v;
-        self.text_scroll = v;
-        self.last_frame = None;
-    }
-
-    /// 現在のテキストスクロールオフセットを返す
-    pub fn text_scroll(&self) -> f32 {
-        self.text_scroll
     }
 
     /// コンテンツ全体の高さを返す（UI がスクロールバーのヒットテストに使用）
@@ -525,9 +488,9 @@ impl GpuRenderer {
         self.last_frame = Some(now);
 
         let smoothing_speed = 15.0_f32;
-        let alpha = 1.0 - (-smoothing_speed * dt).exp();
-        self.text_scroll += (self.target_text_scroll - self.text_scroll) * alpha;
-        let animating = (self.target_text_scroll - self.text_scroll).abs() > 0.5;
+        let _alpha = 1.0 - (-smoothing_speed * dt).exp();
+
+        let animating = false;
 
         // アニメーション中はテキストブラシが更新位置を反映できるようにセクションを再キューする必要がある
         // 補足: 呼び出し元（UI層）も各フレームで描画コマンドを再キューしているため、ここではアニメーション状態を返り値で通知するだけ
@@ -599,12 +562,5 @@ impl GpuRenderer {
         output.present();
 
         Ok(animating)
-    }
-    pub fn set_scrollbar_hover(&mut self, hover: bool) {
-        self.scrollbar_hover = hover;
-    }
-
-    pub fn scrollbar_hover(&self) -> bool {
-        self.scrollbar_hover
     }
 }

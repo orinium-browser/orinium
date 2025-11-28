@@ -50,15 +50,16 @@ impl BrowserApp {
                     self.apply_draw_commands(gpu);
                 }
             }
+            /*
             WindowEvent::MouseWheel { delta, .. } => {
                 let scroll_amount = match delta {
                     winit::event::MouseScrollDelta::LineDelta(_, y) => -y * 60.0,
                     winit::event::MouseScrollDelta::PixelDelta(pos) => -pos.y as f32,
                 };
-                gpu.scroll_text_by(scroll_amount);
                 self.apply_draw_commands(gpu);
                 return BrowserCommand::RequestRedraw;
             }
+            */
             _ => {}
         }
         BrowserCommand::None
