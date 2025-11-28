@@ -10,6 +10,7 @@ pub enum BrowserCommand {
 }
 
 pub struct BrowserApp {
+    #[allow(unused)]
     tabs: Tab,
     draw_commands: Vec<DrawCommand>,
 }
