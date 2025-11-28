@@ -28,9 +28,8 @@ impl RenderTree {
             600.0,
             400.0,
         );
-        let render_tree = Tree::new(page_root_scrollable);
-
-        render_tree
+        
+        Tree::new(page_root_scrollable)
     }
 
     /// ComputedStyleNode から NodeKind を判定

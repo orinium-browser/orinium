@@ -55,8 +55,8 @@ pub fn decode_entity(entity: &str) -> Option<String> {
             .map(|c| c.to_string());
     }
 
-    if entity.starts_with('#') {
-        return entity[1..]
+    if let Some(entity_number) = entity.strip_prefix('#') {
+        return entity_number
             .parse::<u32>()
             .ok()
             .and_then(char::from_u32)
@@ -172,16 +172,10 @@ pub fn element_category(tag_name: &str) -> &'static str {
 // 互換性のための関数:
 /// - is_block_level_element は "block" と "table" を block-like として true を返す
 pub fn is_block_level_element(tag_name: &str) -> bool {
-    match element_category(tag_name) {
-        "block" | "table" => true,
-        _ => false,
-    }
+    matches!(element_category(tag_name), "block" | "table")
 }
 
 /// - is_inline_element は "inline" のみ true を返す（inline-block は false）
 pub fn is_inline_element(tag_name: &str) -> bool {
-    match element_category(tag_name) {
-        "inline" => true,
-        _ => false,
-    }
+    matches!(element_category(tag_name), "inline")
 }

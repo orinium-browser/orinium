@@ -123,11 +123,11 @@ impl StyleTree {
 fn inherit_from_parent(child: &mut Style, parent: &Style) {
     // --- 代表的な継承プロパティ ---
     if child.font_size.is_none() {
-        child.font_size = parent.font_size.clone();
+        child.font_size = parent.font_size;
     }
 
     if child.color.is_none() {
-        child.color = parent.color.clone();
+        child.color = parent.color;
     }
 
     // 余白やパディングは継承しない

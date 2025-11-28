@@ -201,7 +201,7 @@ impl<'a> Tokenizer<'a> {
                 let entity = self
                     .buffer
                     .split_terminator('&')
-                    .last()
+                    .next_back()
                     .unwrap_or("")
                     .trim()
                     .trim_end_matches(';');
