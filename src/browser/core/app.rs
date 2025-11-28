@@ -14,9 +14,9 @@ pub enum BrowserCommand {
     None,
 }
 
-#[allow(unused)]
 pub struct BrowserApp {
-    tabs: Tab,
+    #[allow(unused)]
+    tabs: Vec<Tab>,
     // render_tree: RenderTree,
     draw_commands: Vec<DrawCommand>,
     window_size: (u32, u32), // (x, y)
@@ -42,7 +42,7 @@ impl BrowserApp {
     pub fn new(window_size: (u32, u32), window_title: String) -> Self {
         //let (render_tree, draw_commands) = init_browser_ui(window_size);
         Self {
-            tabs: Tab::new(),
+            tabs: vec![],
             // render_tree,
             draw_commands: vec![],
             window_size,

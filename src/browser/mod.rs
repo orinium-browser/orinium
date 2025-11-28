@@ -1,6 +1,6 @@
-pub mod app;
-pub mod tab;
-pub mod ui;
+//! TODO: コアモジュール以外にwebviewなどの外部アプリ向けのっモジュールを公開
 
-pub use app::BrowserApp;
-pub use app::BrowserCommand;
+pub mod core;
+
+pub use core::BrowserApp;
+pub use core::BrowserCommand;
