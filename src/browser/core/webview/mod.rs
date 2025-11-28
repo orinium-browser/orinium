@@ -33,6 +33,12 @@ pub struct WebView {
     pub needs_redraw: bool,
 }
 
+impl Default for WebView {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WebView {
     pub fn new() -> Self {
         Self {
