@@ -156,7 +156,7 @@ async fn main() -> Result<()> {
                     let renderer = orinium_browser::engine::renderer::Renderer::new();
                     let draw_commands = renderer.generate_draw_commands(&mut render_tree);
                     println!("dom_tree: {}", dom);
-                    println!("style_tree: {}" ,style_tree);
+                    println!("style_tree: {}", style_tree);
                     // println!("computed_tree: {}", computed_tree);
                     println!("render_tree: {}", render_tree);
                     // ウィンドウとイベントループを作成
@@ -171,6 +171,10 @@ async fn main() -> Result<()> {
             }
             _ => {
                 eprintln!("Unknown argument: {}", args[1]);
+                let commands: Vec<&str> = get_commands().keys().copied().collect();
+                if let Some(suggested) = suggest_command(&args[1], &commands) {
+                    eprintln!("Did you mean: {} ?", suggested);
+                }
                 eprintln!("Use help for usage information.");
             }
         }
@@ -180,6 +184,22 @@ async fn main() -> Result<()> {
     print!("\n");
 
     Ok(())
+}
+
+use strsim::levenshtein;
+
+fn suggest_command<'a>(input: &'a str, commands: &'a [&'a str]) -> Option<&'a str> {
+    commands
+        .iter()
+        .min_by_key(|cmd| levenshtein(input, cmd))
+        .and_then(|&cmd| {
+            if levenshtein(input, cmd) <= 4 {
+                // 文字数差が4以内なら提案
+                Some(cmd)
+            } else {
+                None
+            }
+        })
 }
 
 use std::collections::HashMap;

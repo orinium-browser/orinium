@@ -20,6 +20,35 @@ impl Color {
         b: 0.0,
         a: 1.0,
     };
+
+    pub const WHITE: Color = Color {
+        r: 1.0,
+        g: 1.0,
+        b: 1.0,
+        a: 1.0,
+    };
+
+    pub const RED: Color = Color {
+        r: 1.0,
+        g: 0.0,
+        b: 0.0,
+        a: 1.0,
+    };
+
+    pub const GREEN: Color = Color {
+        r: 0.0,
+        g: 1.0,
+        b: 0.0,
+        a: 1.0,
+    };
+
+    pub const BLUE: Color = Color {
+        r: 0.0,
+        g: 0.0,
+        b: 1.0,
+        a: 1.0,
+    };
+
     pub fn new(r: f32, g: f32, b: f32, a: f32) -> Self {
         Self { r, g, b, a }
     }
@@ -43,6 +72,7 @@ pub enum DrawCommand {
         font_size: f32,
         color: Color,
     },
+
     DrawRect {
         x: f32,
         y: f32,
@@ -50,6 +80,34 @@ pub enum DrawCommand {
         height: f32,
         color: Color,
     },
+
+    DrawPolygon {
+        points: Vec<(f32, f32)>,
+        color: Color,
+    },
+
+    DrawEllipse {
+        center: (f32, f32),
+        radius_x: f32, // 円なら radius_x == radius_y
+        radius_y: f32,
+        color: Color,
+    },
+
+    /// クリッピング領域（ネスト可能）
+    PushClip {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    },
+    PopClip,
+
+    /// 座標変換（スクロールや入れ子レイアウト）
+    PushTransform {
+        dx: f32,
+        dy: f32,
+    },
+    PopTransform,
 }
 
 pub struct Renderer;
@@ -83,7 +141,11 @@ impl Renderer {
         let abs_y = offset_y + node_borrow.value.y;
 
         match &node_borrow.value.kind {
-            NodeKind::Text { text, font_size , color} => {
+            NodeKind::Text {
+                text,
+                font_size,
+                color,
+            } => {
                 out.push(DrawCommand::DrawText {
                     x: abs_x,
                     y: abs_y,
@@ -123,8 +185,23 @@ impl Renderer {
                     height: node_borrow.value.height,
                     color: Color::new(0.95, 0.95, 0.95, 1.0),
                 });
+
+                out.push(DrawCommand::PushClip {
+                    x: abs_x,
+                    y: abs_y,
+                    width: node_borrow.value.width,
+                    height: node_borrow.value.height,
+                });
+                out.push(DrawCommand::PushTransform {
+                    dx: -*scroll_offset_x,
+                    dy: -*scroll_offset_y,
+                });
+
                 // 内部ツリーを再帰描画
-                self.traverse_tree(&inner_tree.root, *scroll_offset_x, *scroll_offset_y, out);
+                self.traverse_tree(&inner_tree.root, 0.0, 0.0, out);
+
+                out.push(DrawCommand::PopTransform);
+                out.push(DrawCommand::PopClip);
             }
         }
 

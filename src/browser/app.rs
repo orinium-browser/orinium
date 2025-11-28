@@ -31,7 +31,7 @@ impl BrowserApp {
     }
 
     pub fn apply_draw_commands(&self, gpu: &mut GpuRenderer) {
-        gpu.update_draw_commands(&self.draw_commands);
+        gpu.parse_draw_commands(&self.draw_commands);
     }
 
     pub fn handle_window_event(

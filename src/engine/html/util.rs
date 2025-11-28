@@ -1,5 +1,5 @@
 //! # HTML関連のユーティリティ関数群
-//! ## タグのカテゴリ分けと判定 
+//! ## タグのカテゴリ分けと判定
 //! - タグを明確にカテゴリ分け（block / inline / inline-block / table-ish / other）
 //! - 重複が起きないように定義し、判定関数は既存の名前で使えるようにしている
 //!   - element_category, is_block_level_element, is_inline_element
@@ -8,11 +8,11 @@
 //! - 「デフォルトのUA stylesheet による display の振る舞い」を基準に簡易判定しています。
 //! - CSS による display の上書きやカスタム要素は考慮していません。
 //! - 必要に応じてカテゴリやタグの追加・調整をしてください。
-//! 
+//!
 //! ## htmlエスケープ処理
 //! - 基本的なHTMLエスケープ文字列をデコードする関数を提供
 //!   - decode_entity
-//! 
+//!
 
 use entities::{Codepoints, ENTITIES};
 use once_cell::sync::Lazy;
@@ -24,9 +24,9 @@ static NAMED_ENTITIES: Lazy<HashMap<&'static str, String>> = Lazy::new(|| {
         let key = ent.entity.trim_start_matches('&').trim_end_matches(';');
         // Codepoints をマッチさせて String に変換
         let value = match ent.codepoints {
-            Codepoints::Single(cp) => {
-                char::from_u32(cp).map(|c| c.to_string()).unwrap_or_default()
-            }
+            Codepoints::Single(cp) => char::from_u32(cp)
+                .map(|c| c.to_string())
+                .unwrap_or_default(),
             Codepoints::Double(cp1, cp2) => {
                 let mut s = String::new();
                 if let Some(c1) = char::from_u32(cp1) {
@@ -65,7 +65,6 @@ pub fn decode_entity(entity: &str) -> Option<String> {
 
     None
 }
-
 
 fn normalize(tag_name: &str) -> String {
     tag_name.trim().to_ascii_lowercase()

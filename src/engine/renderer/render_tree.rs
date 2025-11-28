@@ -1,5 +1,5 @@
-use super::render_node::{NodeKind, RenderNode, RenderTree};
 use super::render::Color;
+use super::render_node::{NodeKind, RenderNode, RenderTree};
 use crate::engine::css::Length;
 use crate::engine::html::{HtmlNodeType, util as html_util};
 use crate::engine::styler::computed_tree::{ComputedStyleNode, ComputedTree};
@@ -13,9 +13,23 @@ impl RenderTree {
         // ルートノードの種類を判定
         let root_kind = Self::detect_kind(&tree.root.borrow().value);
         // RenderNode を作成してツリーのルートとする
-        let render_tree = Tree::new(RenderNode::new(root_kind, 0.0, 0.0, 0.0, 0.0));
+        let inner_render_tree = Tree::new(RenderNode::new(root_kind, 0.0, 0.0, 0.0, 0.0));
         // 子ノードを再帰的に変換
-        let _ = Self::convert_node(&tree.root, &render_tree.root, 0.0, 0.0);
+        let _ = Self::convert_node(&tree.root, &inner_render_tree.root, 0.0, 0.0);
+
+        let page_root_scrollable = RenderNode::new(
+            NodeKind::Scrollable {
+                tree: inner_render_tree,
+                scroll_offset_y: 0.0,
+                scroll_offset_x: 0.0,
+            },
+            0.0,
+            0.0,
+            600.0,
+            400.0,
+        );
+        let render_tree = Tree::new(page_root_scrollable);
+
         render_tree
     }
 
@@ -32,10 +46,9 @@ impl RenderTree {
                     .font_size
                     .unwrap_or(Length::Px(19.0))
                     .to_px(10.0),
-                color: Color::from_rgba_tuple(computed_style
-                    .color
-                    .unwrap_or_default()
-                    .to_rgba_tuple(None)),
+                color: Color::from_rgba_tuple(
+                    computed_style.color.unwrap_or_default().to_rgba_tuple(None),
+                ),
             },
             // Element ノードならタグ名で判定
             HtmlNodeType::Element { tag_name, .. } => match tag_name.as_str() {
@@ -47,7 +60,7 @@ impl RenderTree {
                     log::warn!(target:"RenderTree::NodeKind", "Unknown element tag: {}", tag_name);
                     // println!("Unknown element tag: {}", tag_name);
                     NodeKind::Unknown
-                },
+                }
             },
             HtmlNodeType::Document => NodeKind::Block,
             // それ以外は Unknown
