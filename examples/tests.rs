@@ -1,7 +1,7 @@
 use orinium_browser::{
     browser::BrowserApp,
     engine::html::parser::Parser as HtmlParser,
-    platform::{network::NetworkCore, system::App},
+    platform::network::NetworkCore,
     renderer::RenderTree,
 };
 
@@ -9,7 +9,6 @@ use colored::*;
 
 use anyhow::Result;
 use std::env;
-use winit::event_loop::EventLoop;
 
 #[tokio::main]
 async fn main() -> Result<()> {

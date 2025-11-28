@@ -7,8 +7,6 @@ use std::env;
 use orinium_browser::engine::css::cssom::Parser as CssParser;
 use orinium_browser::engine::html::parser::Parser as HtmlParser;
 use orinium_browser::engine::renderer::Renderer;
-use orinium_browser::platform::system::App;
-use winit::event_loop::EventLoop;
 
 #[tokio::main]
 async fn main() -> Result<()> {
