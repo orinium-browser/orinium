@@ -93,12 +93,10 @@ impl BrowserApp {
                 && !t.is_empty()
             {
                 self.window_title = t;
-            } else {
-                if let Some(url) = active.url()
-                    && !url.is_empty()
-                {
-                    self.window_title = url;
-                }
+            } else if let Some(url) = active.url()
+                && !url.is_empty()
+            {
+                self.window_title = url;
             }
         }
     }
