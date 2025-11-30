@@ -15,6 +15,7 @@ use super::webview::WebView;
 /// - ページの状態（Error、loading）の管理を追加
 pub struct Tab {
     title: Option<String>,
+    url: Option<String>,
     webview: Option<WebView>,
 }
 
@@ -28,6 +29,7 @@ impl Tab {
     pub fn new() -> Self {
         Self {
             title: None,
+            url: None,
             webview: None,
         }
     }
@@ -45,5 +47,9 @@ impl Tab {
 
     pub fn title(&self) -> Option<String> {
         self.title.clone()
+    }
+
+    pub fn url(&self) -> Option<String> {
+        self.url.clone()
     }
 }
