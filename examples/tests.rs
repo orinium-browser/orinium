@@ -1,5 +1,6 @@
 use orinium_browser::{
-    browser::{BrowserApp, Tab}, engine::html::parser::Parser as HtmlParser,
+    browser::{BrowserApp, Tab},
+    engine::html::parser::Parser as HtmlParser,
     platform::network::NetworkCore,
 };
 

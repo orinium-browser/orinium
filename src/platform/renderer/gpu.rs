@@ -560,7 +560,11 @@ impl GpuRenderer {
         Ok(animating)
     }
 
-    fn update_vertices(&mut self, old_size: winit::dpi::PhysicalSize<u32>, new_size: winit::dpi::PhysicalSize<u32>) {
+    fn update_vertices(
+        &mut self,
+        old_size: winit::dpi::PhysicalSize<u32>,
+        new_size: winit::dpi::PhysicalSize<u32>,
+    ) {
         let old_w = old_size.width as f32;
         let old_h = old_size.height as f32;
         let new_w = new_size.width as f32;

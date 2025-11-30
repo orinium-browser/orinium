@@ -2,7 +2,6 @@ use anyhow::Result;
 use orinium_browser::browser::{BrowserApp, Tab};
 use std::env;
 
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();

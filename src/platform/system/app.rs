@@ -71,6 +71,10 @@ impl ApplicationHandler<State> for App {
                 BrowserCommand::Exit => event_loop.exit(),
                 BrowserCommand::RequestRedraw => {
                     state.window.request_redraw();
+                    state.window.set_title(&self.browser_app.window_title());
+                }
+                BrowserCommand::RenameWindowTitle => {
+                    state.window.set_title(&self.browser_app.window_title())
                 }
                 BrowserCommand::None => {}
             }

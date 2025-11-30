@@ -42,4 +42,8 @@ impl Tab {
     pub fn render_tree(&self) -> Option<&RenderTree> {
         self.webview.as_ref().and_then(|wv| wv.render.as_ref())
     }
+
+    pub fn title(&self) -> Option<String> {
+        self.title.clone()
+    }
 }

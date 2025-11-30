@@ -1,7 +1,7 @@
 use super::tab::Tab;
 // use super::ui::init_browser_ui;
 
-use crate::engine::renderer::{DrawCommand, Renderer, RenderTree};
+use crate::engine::renderer::{DrawCommand, RenderTree, Renderer};
 use crate::platform::renderer::gpu::GpuRenderer;
 use crate::system::App;
 
@@ -10,6 +10,7 @@ use winit::event::WindowEvent;
 
 pub enum BrowserCommand {
     Exit,
+    RenameWindowTitle,
     RequestRedraw,
     None,
 }
@@ -81,11 +82,18 @@ impl BrowserApp {
         self.tabs.push(tab);
     }
 
-    fn rebuild_commands_from_tabs(&mut self) {
+    fn build_from_tabs(&mut self) {
         if let Some(active) = self.tabs.first() {
             let tree = active.render_tree().unwrap();
             let renderer = Renderer::new();
             self.draw_commands = renderer.generate_draw_commands(tree);
+
+            let title = active.title();
+            if let Some(t) = title
+                && !t.is_empty()
+            {
+                self.window_title = t;
+            }
         }
     }
 
@@ -103,14 +111,14 @@ impl BrowserApp {
             WindowEvent::CloseRequested => BrowserCommand::Exit,
 
             WindowEvent::RedrawRequested => {
-                self.rebuild_commands_from_tabs();
+                self.build_from_tabs();
                 self.apply_draw_commands(gpu);
 
                 // Ok(animationg)
                 if let Ok(true) = gpu.render() {
                     self.apply_draw_commands(gpu);
                 }
-                BrowserCommand::None
+                BrowserCommand::RenameWindowTitle
             }
 
             WindowEvent::Resized(pysical_size) => {
