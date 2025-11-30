@@ -562,8 +562,4 @@ impl GpuRenderer {
 
         Ok(animating)
     }
-
-    pub fn set_window_size(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
-        self.size = new_size;
-    }
 }
