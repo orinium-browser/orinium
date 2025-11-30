@@ -31,9 +31,6 @@ pub struct GpuRenderer {
     text_renderer: Option<TextRenderer>,
     /// 最後のフレーム時刻（アニメーション計算用）
     last_frame: Option<std::time::Instant>,
-
-    /// コンテンツの高さ（描画対象物の高さ）
-    content_height: f32,
 }
 
 #[repr(C)]
@@ -221,13 +218,7 @@ impl GpuRenderer {
             num_vertices: 0,
             text_renderer,
             last_frame: None,
-            content_height: 0.0,
         })
-    }
-
-    /// コンテンツ全体の高さを返す（UI がスクロールバーのヒットテストに使用）
-    pub fn content_height(&self) -> f32 {
-        self.content_height
     }
 
     /// ウィンドウサイズが変更された時の処理
