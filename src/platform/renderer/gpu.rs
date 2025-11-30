@@ -20,6 +20,8 @@ pub struct GpuRenderer {
     config: wgpu::SurfaceConfiguration,
     /// WindowSize
     size: winit::dpi::PhysicalSize<u32>,
+    /// ディスプレイ倍率
+    scale_factor: f64,
     /// RenderPipelin（頂点 to ピクセル）
     render_pipeline: wgpu::RenderPipeline,
     /// 頂点バッファ
@@ -65,6 +67,7 @@ impl GpuRenderer {
     /// 新しいGPUレンダラーを作成
     pub async fn new(window: Arc<Window>, font_path: Option<&str>) -> Result<Self> {
         let size = window.inner_size();
+        let scale_factor = window.scale_factor();
 
         // GPUドライバとの通信インスタンス
         // wgpuインスタンスの作成
@@ -213,6 +216,7 @@ impl GpuRenderer {
             queue,
             config,
             size,
+            scale_factor,
             render_pipeline,
             vertex_buffer: None,
             num_vertices: 0,
