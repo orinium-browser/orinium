@@ -233,6 +233,8 @@ impl GpuRenderer {
     /// ウィンドウサイズが変更された時の処理
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
+            log::info!(target:"PRender::gpu::resized", "Resized: {}x{}", new_size.width, new_size.height);
+
             self.size = new_size;
 
             self.config.width = new_size.width;
@@ -562,5 +564,9 @@ impl GpuRenderer {
         output.present();
 
         Ok(animating)
+    }
+
+    pub fn set_window_size(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
+        self.size = new_size;
     }
 }

@@ -99,6 +99,15 @@ impl BrowserApp {
                 BrowserCommand::None
             }
 
+            WindowEvent::Resized(pysical_size) => {
+                let width = pysical_size.width;
+                let height = pysical_size.height;
+                self.window_size = (width, height);
+                gpu.resize(pysical_size);
+
+                BrowserCommand::None
+            }
+
             /*
             WindowEvent::MouseWheel { delta, .. } => {
                 let scroll_amount = match delta {
