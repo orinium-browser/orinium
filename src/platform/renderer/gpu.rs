@@ -257,6 +257,8 @@ impl GpuRenderer {
         let mut vertices = Vec::new();
         // --- Text ---
         let mut sections: Vec<TextSection> = Vec::new();
+        // --- scale_factor ---
+        let sf = self.scale_factor as f32;
         // --- transform stack ---
         let mut transform_stack: Vec<(f32, f32)> = vec![(0.0, 0.0)];
         let current_transform = |stack: &Vec<(f32, f32)>| -> (f32, f32) {
@@ -343,28 +345,28 @@ impl GpuRenderer {
                 } => {
                     // transform
                     let (tdx, tdy) = current_transform(&transform_stack);
-                    let mut x1 = x + tdx;
-                    let mut y1 = y + tdy;
-                    let mut x2 = x1 + w;
-                    let mut y2 = y1 + h;
+                    let mut x1 = (x + tdx) * sf;
+                    let mut y1 = (y + tdy) * sf;
+                    let mut x2 = x1 + w * sf;
+                    let mut y2 = y1 + h * sf;
 
                     // clip 取得
                     let clip = current_clip(&clip_stack);
 
                     // 完全に外なら skip
-                    if x2 <= clip.x
-                        || x1 >= clip.x + clip.w
-                        || y2 <= clip.y
-                        || y1 >= clip.y + clip.h
+                    if x2 <= clip.x * sf
+                        || x1 >= (clip.x + clip.w) * sf
+                        || y2 <= clip.y * sf
+                        || y1 >= (clip.y + clip.h) * sf
                     {
                         continue;
                     }
 
                     // 部分クリップ
-                    x1 = x1.max(clip.x);
-                    y1 = y1.max(clip.y);
-                    x2 = x2.min(clip.x + clip.w);
-                    y2 = y2.min(clip.y + clip.h);
+                    x1 = x1.max(clip.x * sf);
+                    y1 = y1.max(clip.y * sf);
+                    x2 = x2.min((clip.x + clip.w) * sf);
+                    y2 = y2.min((clip.y + clip.h) * sf);
 
                     // NDC
                     let ndc = |v, max| (v / max) * 2.0 - 1.0;
@@ -402,11 +404,11 @@ impl GpuRenderer {
                     let (clip_x, clip_y) = (clip.x + clip.w, clip.y + clip.h);
 
                     let section = TextSection {
-                        screen_position: (*x + tdx, *y + tdy),
-                        bounds: (clip_x, clip_y),
+                        screen_position: ((*x + tdx) * sf, (*y + tdy) * sf),
+                        bounds: (clip_x * sf, clip_y * sf),
                         text: vec![
                             Text::new(text)
-                                .with_scale(*font_size)
+                                .with_scale(*font_size * sf)
                                 .with_color([color.r, color.g, color.b, color.a]),
                         ],
                         ..TextSection::default()
