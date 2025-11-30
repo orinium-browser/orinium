@@ -4,3 +4,4 @@ pub mod core;
 
 pub use core::BrowserApp;
 pub use core::BrowserCommand;
+pub use core::Tab;

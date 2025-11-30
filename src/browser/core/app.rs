@@ -1,7 +1,7 @@
 use super::tab::Tab;
 // use super::ui::init_browser_ui;
 
-use crate::engine::renderer::{DrawCommand, RenderTree};
+use crate::engine::renderer::{DrawCommand, Renderer, RenderTree};
 use crate::platform::renderer::gpu::GpuRenderer;
 use crate::system::App;
 
@@ -28,7 +28,6 @@ pub enum BrowserCommand {
 /// TODO:
 /// - tabsの実装
 pub struct BrowserApp {
-    #[allow(unused)]
     tabs: Vec<Tab>,
     // render_tree: RenderTree,
     draw_commands: Vec<DrawCommand>,
@@ -78,6 +77,18 @@ impl BrowserApp {
         self
     }
 
+    pub fn add_tab(&mut self, tab: Tab) {
+        self.tabs.push(tab);
+    }
+
+    fn rebuild_commands_from_tabs(&mut self) {
+        if let Some(active) = self.tabs.first() {
+            let tree = active.render_tree().unwrap();
+            let renderer = Renderer::new();
+            self.draw_commands = renderer.generate_draw_commands(tree);
+        }
+    }
+
     pub fn apply_draw_commands(&self, gpu: &mut GpuRenderer) {
         gpu.parse_draw_commands(&self.draw_commands);
     }
@@ -92,6 +103,9 @@ impl BrowserApp {
             WindowEvent::CloseRequested => BrowserCommand::Exit,
 
             WindowEvent::RedrawRequested => {
+                self.rebuild_commands_from_tabs();
+                self.apply_draw_commands(gpu);
+
                 // Ok(animationg)
                 if let Ok(true) = gpu.render() {
                     self.apply_draw_commands(gpu);
