@@ -1,6 +1,6 @@
 use orinium_browser::{
-    browser::BrowserApp, engine::html::parser::Parser as HtmlParser,
-    platform::network::NetworkCore, renderer::RenderTree,
+    browser::{BrowserApp, Tab}, engine::html::parser::Parser as HtmlParser,
+    platform::network::NetworkCore,
 };
 
 use colored::*;
@@ -137,27 +137,14 @@ async fn main() -> Result<()> {
                     let net = NetworkCore::new();
                     let resp = net.fetch_url(url).await.expect("Failed to fetch URL");
                     let html = String::from_utf8_lossy(&resp.body).to_string();
-                    let mut html_parser = HtmlParser::new(&html);
-                    let dom = html_parser.parse();
-                    /*
-                    let css = "";
-                    let mut css_parser = CssParser::new(css);
-                    let cssom = css_parser.parse()?;
-                    */
-                    let mut style_tree =
-                        orinium_browser::engine::styler::StyleTree::transform(&dom);
-                    style_tree.style(&[]);
-                    let computed_tree = style_tree.compute();
-                    let mut render_tree = RenderTree::from_computed_tree(&computed_tree);
-                    // レンダラーを作成して描画命令を生成
-                    let renderer = orinium_browser::engine::renderer::Renderer::new();
-                    let draw_commands = renderer.generate_draw_commands(&mut render_tree);
-                    println!("dom_tree: {}", dom);
-                    println!("style_tree: {}", style_tree);
-                    // println!("computed_tree: {}", computed_tree);
-                    println!("render_tree: {}", render_tree);
 
-                    let browser = BrowserApp::default().with_draw_info(render_tree, draw_commands);
+                    let mut browser = BrowserApp::default();
+
+                    let mut tab = Tab::new();
+                    tab.load_from_raw_html(&html);
+
+                    browser.add_tab(tab);
+
                     browser.run()?
                 } else {
                     eprintln!("Please provide a URL for simple rendering test.");
