@@ -7,6 +7,8 @@ use wgpu_text::{BrushBuilder, TextBrush};
 
 pub struct TextRenderer {
     brush: TextBrush<ab_glyph::FontArc>,
+
+    #[allow(unused)]
     pending_font: Option<Vec<u8>>,
 }
 

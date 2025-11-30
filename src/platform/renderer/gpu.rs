@@ -20,26 +20,21 @@ pub struct GpuRenderer {
     config: wgpu::SurfaceConfiguration,
     /// WindowSize
     size: winit::dpi::PhysicalSize<u32>,
+    /// ディスプレイ倍率
+    scale_factor: f64,
     /// RenderPipelin（頂点 to ピクセル）
     render_pipeline: wgpu::RenderPipeline,
     /// 頂点バッファ
     vertex_buffer: Option<wgpu::Buffer>,
+    /// 頂点
+    vertices: Vec<Vertex>,
     /// 頂点数
     num_vertices: u32,
 
     /// テキスト描画用ラッパー
     text_renderer: Option<TextRenderer>,
-    /// テキスト垂直スクロールオフセット（ピクセル）
-    text_scroll: f32,
-    /// アニメーション用ターゲットスクロール位置
-    target_text_scroll: f32,
     /// 最後のフレーム時刻（アニメーション計算用）
     last_frame: Option<std::time::Instant>,
-
-    /// コンテンツの高さ（スクロール可能領域の高さ）
-    content_height: f32,
-    /// マウスオーバーしてるかどうか
-    scrollbar_hover: bool,
 }
 
 #[repr(C)]
@@ -74,6 +69,7 @@ impl GpuRenderer {
     /// 新しいGPUレンダラーを作成
     pub async fn new(window: Arc<Window>, font_path: Option<&str>) -> Result<Self> {
         let size = window.inner_size();
+        let scale_factor = window.scale_factor();
 
         // GPUドライバとの通信インスタンス
         // wgpuインスタンスの作成
@@ -222,60 +218,31 @@ impl GpuRenderer {
             queue,
             config,
             size,
+            scale_factor,
             render_pipeline,
             vertex_buffer: None,
+            vertices: vec![],
             num_vertices: 0,
             text_renderer,
-            text_scroll: 0.0,
-            target_text_scroll: 0.0,
             last_frame: None,
-            content_height: 0.0,
-            scrollbar_hover: false,
         })
-    }
-
-    /// スクロールのターゲットを相対更新（アニメーションで実際のtext_scrollに反映される）
-    pub fn scroll_text_by(&mut self, dy: f32) {
-        // 使えるスクロール範囲に収める
-        let max_offset = (self.content_height - self.size.height as f32).max(0.0);
-        self.target_text_scroll = (self.target_text_scroll + dy).clamp(0.0, max_offset);
-        self.last_frame = None;
-    }
-
-    /// テキストのスクロール位置ターゲットを設定（ピクセル）
-    pub fn set_text_scroll(&mut self, offset: f32) {
-        let max_offset = (self.content_height - self.size.height as f32).max(0.0);
-        self.target_text_scroll = offset.clamp(0.0, max_offset);
-        self.last_frame = None;
-    }
-
-    pub fn set_text_scroll_immediate(&mut self, offset: f32) {
-        let max_offset = (self.content_height - self.size.height as f32).max(0.0);
-        let v = offset.clamp(0.0, max_offset);
-        self.target_text_scroll = v;
-        self.text_scroll = v;
-        self.last_frame = None;
-    }
-
-    /// 現在のテキストスクロールオフセットを返す
-    pub fn text_scroll(&self) -> f32 {
-        self.text_scroll
-    }
-
-    /// コンテンツ全体の高さを返す（UI がスクロールバーのヒットテストに使用）
-    pub fn content_height(&self) -> f32 {
-        self.content_height
     }
 
     /// ウィンドウサイズが変更された時の処理
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
+            log::info!(target:"PRender::gpu::resized", "Resized: {}x{}", new_size.width, new_size.height);
+
+            let old_size = self.size;
+
             self.size = new_size;
 
             self.config.width = new_size.width;
             self.config.height = new_size.height;
 
             self.surface.configure(&self.device, &self.config);
+
+            self.update_vertices(old_size, new_size);
 
             if let Some(tr) = &mut self.text_renderer {
                 tr.resize_view(
@@ -297,6 +264,8 @@ impl GpuRenderer {
         let mut vertices = Vec::new();
         // --- Text ---
         let mut sections: Vec<TextSection> = Vec::new();
+        // --- scale_factor ---
+        let sf = self.scale_factor as f32;
         // --- transform stack ---
         let mut transform_stack: Vec<(f32, f32)> = vec![(0.0, 0.0)];
         let current_transform = |stack: &Vec<(f32, f32)>| -> (f32, f32) {
@@ -383,28 +352,28 @@ impl GpuRenderer {
                 } => {
                     // transform
                     let (tdx, tdy) = current_transform(&transform_stack);
-                    let mut x1 = x + tdx;
-                    let mut y1 = y + tdy;
-                    let mut x2 = x1 + w;
-                    let mut y2 = y1 + h;
+                    let mut x1 = (x + tdx) * sf;
+                    let mut y1 = (y + tdy) * sf;
+                    let mut x2 = x1 + w * sf;
+                    let mut y2 = y1 + h * sf;
 
                     // clip 取得
                     let clip = current_clip(&clip_stack);
 
                     // 完全に外なら skip
-                    if x2 <= clip.x
-                        || x1 >= clip.x + clip.w
-                        || y2 <= clip.y
-                        || y1 >= clip.y + clip.h
+                    if x2 <= clip.x * sf
+                        || x1 >= (clip.x + clip.w) * sf
+                        || y2 <= clip.y * sf
+                        || y1 >= (clip.y + clip.h) * sf
                     {
                         continue;
                     }
 
                     // 部分クリップ
-                    x1 = x1.max(clip.x);
-                    y1 = y1.max(clip.y);
-                    x2 = x2.min(clip.x + clip.w);
-                    y2 = y2.min(clip.y + clip.h);
+                    x1 = x1.max(clip.x * sf);
+                    y1 = y1.max(clip.y * sf);
+                    x2 = x2.min((clip.x + clip.w) * sf);
+                    y2 = y2.min((clip.y + clip.h) * sf);
 
                     // NDC
                     let ndc = |v, max| (v / max) * 2.0 - 1.0;
@@ -442,11 +411,11 @@ impl GpuRenderer {
                     let (clip_x, clip_y) = (clip.x + clip.w, clip.y + clip.h);
 
                     let section = TextSection {
-                        screen_position: (*x + tdx, *y + tdy),
-                        bounds: (clip_x, clip_y),
+                        screen_position: ((*x + tdx) * sf, (*y + tdy) * sf),
+                        bounds: (clip_x * sf, clip_y * sf),
                         text: vec![
                             Text::new(text)
-                                .with_scale(*font_size)
+                                .with_scale(*font_size * sf)
                                 .with_color([color.r, color.g, color.b, color.a]),
                         ],
                         ..TextSection::default()
@@ -489,17 +458,7 @@ impl GpuRenderer {
             }
         }
 
-        // 頂点バッファを登録
-        if !vertices.is_empty() {
-            self.vertex_buffer = Some(self.device.create_buffer_init(
-                &wgpu::util::BufferInitDescriptor {
-                    label: Some("Vertex Buffer"),
-                    contents: bytemuck::cast_slice(&vertices),
-                    usage: wgpu::BufferUsages::VERTEX,
-                },
-            ));
-            self.num_vertices = vertices.len() as u32;
-        }
+        self.set_vertex_buffer(vertices);
 
         // テキストセクションをキューに追加
         if let Some(tr) = &mut self.text_renderer {
@@ -525,9 +484,9 @@ impl GpuRenderer {
         self.last_frame = Some(now);
 
         let smoothing_speed = 15.0_f32;
-        let alpha = 1.0 - (-smoothing_speed * dt).exp();
-        self.text_scroll += (self.target_text_scroll - self.text_scroll) * alpha;
-        let animating = (self.target_text_scroll - self.text_scroll).abs() > 0.5;
+        let _alpha = 1.0 - (-smoothing_speed * dt).exp();
+
+        let animating = false;
 
         // アニメーション中はテキストブラシが更新位置を反映できるようにセクションを再キューする必要がある
         // 補足: 呼び出し元（UI層）も各フレームで描画コマンドを再キューしているため、ここではアニメーション状態を返り値で通知するだけ
@@ -600,251 +559,47 @@ impl GpuRenderer {
 
         Ok(animating)
     }
-    pub fn set_scrollbar_hover(&mut self, hover: bool) {
-        self.scrollbar_hover = hover;
-    }
 
-    pub fn scrollbar_hover(&self) -> bool {
-        self.scrollbar_hover
-    }
-
-    /// 指定したスクリーン座標の角丸長方形を頂点バッファ用の三角形列として追加する
-    fn push_rounded_rect_vertices(
-        &self,
-        all_vertices: &mut Vec<Vertex>,
-        vw: f32,
-        vh: f32,
-        rect_pos: (f32, f32, f32, f32),
-        radius: f32,
-        color: [f32; 4],
+    fn update_vertices(
+        &mut self,
+        old_size: winit::dpi::PhysicalSize<u32>,
+        new_size: winit::dpi::PhysicalSize<u32>,
     ) {
-        let (x1, y1, x2, y2) = rect_pos;
-        // 角丸の半径は幅/高さに収める
-        let r = radius.min((x2 - x1) * 0.5).min((y2 - y1) * 0.5);
-        if r <= 0.0 {
-            // 普通の長方形として追加
-            all_vertices.extend_from_slice(&[
-                Vertex {
-                    position: [(x1 / vw) * 2.0 - 1.0, 1.0 - (y1 / vh) * 2.0, 0.0],
-                    color,
-                },
-                Vertex {
-                    position: [(x1 / vw) * 2.0 - 1.0, 1.0 - (y2 / vh) * 2.0, 0.0],
-                    color,
-                },
-                Vertex {
-                    position: [(x2 / vw) * 2.0 - 1.0, 1.0 - (y1 / vh) * 2.0, 0.0],
-                    color,
-                },
-                Vertex {
-                    position: [(x2 / vw) * 2.0 - 1.0, 1.0 - (y1 / vh) * 2.0, 0.0],
-                    color,
-                },
-                Vertex {
-                    position: [(x1 / vw) * 2.0 - 1.0, 1.0 - (y2 / vh) * 2.0, 0.0],
-                    color,
-                },
-                Vertex {
-                    position: [(x2 / vw) * 2.0 - 1.0, 1.0 - (y2 / vh) * 2.0, 0.0],
-                    color,
-                },
-            ]);
-            return;
-        }
+        let old_w = old_size.width as f32;
+        let old_h = old_size.height as f32;
+        let new_w = new_size.width as f32;
+        let new_h = new_size.height as f32;
 
-        // 中央矩形（左右に角丸分を除いた領域）
-        let cx1 = x1 + r;
-        let cx2 = x2 - r;
-        let cy1 = y1;
-        let cy2 = y2;
-        all_vertices.extend_from_slice(&[
-            Vertex {
-                position: [(cx1 / vw) * 2.0 - 1.0, 1.0 - (cy1 / vh) * 2.0, 0.0],
-                color,
-            },
-            Vertex {
-                position: [(cx1 / vw) * 2.0 - 1.0, 1.0 - (cy2 / vh) * 2.0, 0.0],
-                color,
-            },
-            Vertex {
-                position: [(cx2 / vw) * 2.0 - 1.0, 1.0 - (cy1 / vh) * 2.0, 0.0],
-                color,
-            },
-            Vertex {
-                position: [(cx2 / vw) * 2.0 - 1.0, 1.0 - (cy1 / vh) * 2.0, 0.0],
-                color,
-            },
-            Vertex {
-                position: [(cx1 / vw) * 2.0 - 1.0, 1.0 - (cy2 / vh) * 2.0, 0.0],
-                color,
-            },
-            Vertex {
-                position: [(cx2 / vw) * 2.0 - 1.0, 1.0 - (cy2 / vh) * 2.0, 0.0],
-                color,
-            },
-        ]);
+        let mut new_vertices = self.vertices.clone();
 
-        // 左側矩形（上下に角丸分を除いた領域）
-        let lx1 = x1;
-        let lx2 = x1 + r;
-        let ly1 = y1 + r;
-        let ly2 = y2 - r;
-        if ly2 > ly1 {
-            all_vertices.extend_from_slice(&[
-                Vertex {
-                    position: [(lx1 / vw) * 2.0 - 1.0, 1.0 - (ly1 / vh) * 2.0, 0.0],
-                    color,
-                },
-                Vertex {
-                    position: [(lx1 / vw) * 2.0 - 1.0, 1.0 - (ly2 / vh) * 2.0, 0.0],
-                    color,
-                },
-                Vertex {
-                    position: [(lx2 / vw) * 2.0 - 1.0, 1.0 - (ly1 / vh) * 2.0, 0.0],
-                    color,
-                },
-                Vertex {
-                    position: [(lx2 / vw) * 2.0 - 1.0, 1.0 - (ly1 / vh) * 2.0, 0.0],
-                    color,
-                },
-                Vertex {
-                    position: [(lx1 / vw) * 2.0 - 1.0, 1.0 - (ly2 / vh) * 2.0, 0.0],
-                    color,
-                },
-                Vertex {
-                    position: [(lx2 / vw) * 2.0 - 1.0, 1.0 - (ly2 / vh) * 2.0, 0.0],
-                    color,
-                },
-            ]);
-        }
+        for vertex in new_vertices.iter_mut() {
+            // old NDC -> logical
+            let logical_x = (vertex.position[0] + 1.0) / 2.0 * old_w;
+            let logical_y = -(vertex.position[1] - 1.0) / 2.0 * old_h;
 
-        // 右側矩形
-        let rx1 = x2 - r;
-        let rx2 = x2;
-        if ly2 > ly1 {
-            all_vertices.extend_from_slice(&[
-                Vertex {
-                    position: [(rx1 / vw) * 2.0 - 1.0, 1.0 - (ly1 / vh) * 2.0, 0.0],
-                    color,
-                },
-                Vertex {
-                    position: [(rx1 / vw) * 2.0 - 1.0, 1.0 - (ly2 / vh) * 2.0, 0.0],
-                    color,
-                },
-                Vertex {
-                    position: [(rx2 / vw) * 2.0 - 1.0, 1.0 - (ly1 / vh) * 2.0, 0.0],
-                    color,
-                },
-                Vertex {
-                    position: [(rx2 / vw) * 2.0 - 1.0, 1.0 - (ly1 / vh) * 2.0, 0.0],
-                    color,
-                },
-                Vertex {
-                    position: [(rx1 / vw) * 2.0 - 1.0, 1.0 - (ly2 / vh) * 2.0, 0.0],
-                    color,
-                },
-                Vertex {
-                    position: [(rx2 / vw) * 2.0 - 1.0, 1.0 - (ly2 / vh) * 2.0, 0.0],
-                    color,
-                },
-            ]);
+            // logical -> new NDC
+            vertex.position[0] = (logical_x / new_w) * 2.0 - 1.0;
+            vertex.position[1] = -((logical_y / new_h) * 2.0 - 1.0);
         }
+        self.set_vertex_buffer(new_vertices);
+    }
 
-        // 角の四半円を三角形扇で近似する
-        let segments_per_corner = 8usize; // 精度
-        let inv = 1.0 / (segments_per_corner as f32);
-        use std::f32::consts::PI;
-        // 左上
-        let cx = x1 + r;
-        let cy = y1 + r;
-        for i in 0..segments_per_corner {
-            let a0 = PI * 1.0 + (i as f32) * (PI * 0.5) * inv;
-            let a1 = PI * 1.0 + ((i + 1) as f32) * (PI * 0.5) * inv;
-            let x00 = cx + a0.cos() * r;
-            let y00 = cy + a0.sin() * r;
-            let x01 = cx + a1.cos() * r;
-            let y01 = cy + a1.sin() * r;
-            all_vertices.push(Vertex {
-                position: [(cx / vw) * 2.0 - 1.0, 1.0 - (cy / vh) * 2.0, 0.0],
-                color,
-            });
-            all_vertices.push(Vertex {
-                position: [(x00 / vw) * 2.0 - 1.0, 1.0 - (y00 / vh) * 2.0, 0.0],
-                color,
-            });
-            all_vertices.push(Vertex {
-                position: [(x01 / vw) * 2.0 - 1.0, 1.0 - (y01 / vh) * 2.0, 0.0],
-                color,
-            });
+    fn set_vertex_buffer(&mut self, vertices: Vec<Vertex>) {
+        // 頂点バッファを登録
+        if !vertices.is_empty() {
+            self.vertex_buffer = Some(self.device.create_buffer_init(
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("Vertex Buffer"),
+                    contents: bytemuck::cast_slice(&vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                },
+            ));
+            self.num_vertices = vertices.len() as u32;
         }
-        // 右上
-        let cx = x2 - r;
-        let cy = y1 + r;
-        for i in 0..segments_per_corner {
-            let a0 = PI * 1.5 + (i as f32) * (PI * 0.5) * inv;
-            let a1 = PI * 1.5 + ((i + 1) as f32) * (PI * 0.5) * inv;
-            let x00 = cx + a0.cos() * r;
-            let y00 = cy + a0.sin() * r;
-            let x01 = cx + a1.cos() * r;
-            let y01 = cy + a1.sin() * r;
-            all_vertices.push(Vertex {
-                position: [(cx / vw) * 2.0 - 1.0, 1.0 - (cy / vh) * 2.0, 0.0],
-                color,
-            });
-            all_vertices.push(Vertex {
-                position: [(x00 / vw) * 2.0 - 1.0, 1.0 - (y00 / vh) * 2.0, 0.0],
-                color,
-            });
-            all_vertices.push(Vertex {
-                position: [(x01 / vw) * 2.0 - 1.0, 1.0 - (y01 / vh) * 2.0, 0.0],
-                color,
-            });
-        }
-        // 右下
-        let cx = x2 - r;
-        let cy = y2 - r;
-        for i in 0..segments_per_corner {
-            let a0 = 0.0 + (i as f32) * (PI * 0.5) * inv;
-            let a1 = 0.0 + ((i + 1) as f32) * (PI * 0.5) * inv;
-            let x00 = cx + a0.cos() * r;
-            let y00 = cy + a0.sin() * r;
-            let x01 = cx + a1.cos() * r;
-            let y01 = cy + a1.sin() * r;
-            all_vertices.push(Vertex {
-                position: [(cx / vw) * 2.0 - 1.0, 1.0 - (cy / vh) * 2.0, 0.0],
-                color,
-            });
-            all_vertices.push(Vertex {
-                position: [(x00 / vw) * 2.0 - 1.0, 1.0 - (y00 / vh) * 2.0, 0.0],
-                color,
-            });
-            all_vertices.push(Vertex {
-                position: [(x01 / vw) * 2.0 - 1.0, 1.0 - (y01 / vh) * 2.0, 0.0],
-                color,
-            });
-        }
-        // 左下
-        let cx = x1 + r;
-        let cy = y2 - r;
-        for i in 0..segments_per_corner {
-            let a0 = PI * 0.5 + (i as f32) * (PI * 0.5) * inv;
-            let a1 = PI * 0.5 + ((i + 1) as f32) * (PI * 0.5) * inv;
-            let x00 = cx + a0.cos() * r;
-            let y00 = cy + a0.sin() * r;
-            let x01 = cx + a1.cos() * r;
-            let y01 = cy + a1.sin() * r;
-            all_vertices.push(Vertex {
-                position: [(cx / vw) * 2.0 - 1.0, 1.0 - (cy / vh) * 2.0, 0.0],
-                color,
-            });
-            all_vertices.push(Vertex {
-                position: [(x00 / vw) * 2.0 - 1.0, 1.0 - (y00 / vh) * 2.0, 0.0],
-                color,
-            });
-            all_vertices.push(Vertex {
-                position: [(x01 / vw) * 2.0 - 1.0, 1.0 - (y01 / vh) * 2.0, 0.0],
-                color,
-            });
-        }
+        self.vertices = vertices;
+    }
+
+    pub fn set_scale_factor(&mut self, scale_factor: f64) {
+        self.scale_factor = scale_factor;
     }
 }

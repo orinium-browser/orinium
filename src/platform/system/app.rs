@@ -28,9 +28,19 @@ impl App {
 
 impl ApplicationHandler<State> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        // reqed = requested
+        let reqed_window_size = self.browser_app.window_size();
+        let reqed_window_title = self.browser_app.window_title();
         let window = Arc::new(
             event_loop
-                .create_window(Window::default_attributes())
+                .create_window(
+                    Window::default_attributes()
+                        .with_inner_size(winit::dpi::PhysicalSize::new(
+                            reqed_window_size.0,
+                            reqed_window_size.1,
+                        ))
+                        .with_title(reqed_window_title),
+                )
                 .unwrap(),
         );
         let state = State {
@@ -61,6 +71,10 @@ impl ApplicationHandler<State> for App {
                 BrowserCommand::Exit => event_loop.exit(),
                 BrowserCommand::RequestRedraw => {
                     state.window.request_redraw();
+                    state.window.set_title(&self.browser_app.window_title());
+                }
+                BrowserCommand::RenameWindowTitle => {
+                    state.window.set_title(&self.browser_app.window_title())
                 }
                 BrowserCommand::None => {}
             }
