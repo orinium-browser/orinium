@@ -594,4 +594,8 @@ impl GpuRenderer {
         }
         self.vertices = vertices;
     }
+
+    pub fn set_scale_factor(&mut self, scale_factor: f64) {
+        self.scale_factor = scale_factor;
+    }
 }

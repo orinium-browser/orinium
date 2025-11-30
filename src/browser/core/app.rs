@@ -108,6 +108,12 @@ impl BrowserApp {
                 BrowserCommand::None
             }
 
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                gpu.set_scale_factor(scale_factor);
+
+                BrowserCommand::None
+            }
+
             /*
             WindowEvent::MouseWheel { delta, .. } => {
                 let scroll_amount = match delta {
