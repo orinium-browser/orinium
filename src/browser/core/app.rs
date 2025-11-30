@@ -1,5 +1,9 @@
+use std::sync::Arc;
+
 use super::tab::Tab;
 // use super::ui::init_browser_ui;
+
+use crate::platform::network::NetworkCore;
 
 use crate::engine::renderer::{DrawCommand, RenderTree, Renderer};
 use crate::platform::renderer::gpu::GpuRenderer;
@@ -27,13 +31,15 @@ pub enum BrowserCommand {
 /// ブラウザ起動 → イベントループ → 描画の流れを制御します。
 ///
 /// TODO:
-/// - tabsの実装
+/// - ネットワーク機構の実装
 pub struct BrowserApp {
     tabs: Vec<Tab>,
     // render_tree: RenderTree,
     draw_commands: Vec<DrawCommand>,
     window_size: (u32, u32), // (x, y)
     window_title: String,
+    #[allow(unused)]
+    network: Arc<NetworkCore>,
 }
 
 impl Default for BrowserApp {
@@ -58,12 +64,14 @@ impl BrowserApp {
 
     pub fn new(window_size: (u32, u32), window_title: String) -> Self {
         //let (render_tree, draw_commands) = init_browser_ui(window_size);
+        let network = Arc::new(NetworkCore::new());
         Self {
             tabs: vec![],
             // render_tree,
             draw_commands: vec![],
             window_size,
             window_title,
+            network,
         }
     }
 
