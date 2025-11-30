@@ -26,6 +26,8 @@ pub struct GpuRenderer {
     render_pipeline: wgpu::RenderPipeline,
     /// 頂点バッファ
     vertex_buffer: Option<wgpu::Buffer>,
+    /// 頂点
+    vertices: Vec<Vertex>,
     /// 頂点数
     num_vertices: u32,
 
@@ -219,6 +221,7 @@ impl GpuRenderer {
             scale_factor,
             render_pipeline,
             vertex_buffer: None,
+            vertices: vec![],
             num_vertices: 0,
             text_renderer,
             last_frame: None,
@@ -230,12 +233,16 @@ impl GpuRenderer {
         if new_size.width > 0 && new_size.height > 0 {
             log::info!(target:"PRender::gpu::resized", "Resized: {}x{}", new_size.width, new_size.height);
 
+            let old_size = self.size;
+
             self.size = new_size;
 
             self.config.width = new_size.width;
             self.config.height = new_size.height;
 
             self.surface.configure(&self.device, &self.config);
+
+            self.update_vertices(old_size, new_size);
 
             if let Some(tr) = &mut self.text_renderer {
                 tr.resize_view(
@@ -451,17 +458,7 @@ impl GpuRenderer {
             }
         }
 
-        // 頂点バッファを登録
-        if !vertices.is_empty() {
-            self.vertex_buffer = Some(self.device.create_buffer_init(
-                &wgpu::util::BufferInitDescriptor {
-                    label: Some("Vertex Buffer"),
-                    contents: bytemuck::cast_slice(&vertices),
-                    usage: wgpu::BufferUsages::VERTEX,
-                },
-            ));
-            self.num_vertices = vertices.len() as u32;
-        }
+        self.set_vertex_buffer(vertices);
 
         // テキストセクションをキューに追加
         if let Some(tr) = &mut self.text_renderer {
@@ -561,5 +558,40 @@ impl GpuRenderer {
         output.present();
 
         Ok(animating)
+    }
+
+    fn update_vertices(&mut self, old_size: winit::dpi::PhysicalSize<u32>, new_size: winit::dpi::PhysicalSize<u32>) {
+        let old_w = old_size.width as f32;
+        let old_h = old_size.height as f32;
+        let new_w = new_size.width as f32;
+        let new_h = new_size.height as f32;
+
+        let mut new_vertices = self.vertices.clone();
+
+        for vertex in new_vertices.iter_mut() {
+            // old NDC -> logical
+            let logical_x = (vertex.position[0] + 1.0) / 2.0 * old_w;
+            let logical_y = -(vertex.position[1] - 1.0) / 2.0 * old_h;
+
+            // logical -> new NDC
+            vertex.position[0] = (logical_x / new_w) * 2.0 - 1.0;
+            vertex.position[1] = -((logical_y / new_h) * 2.0 - 1.0);
+        }
+        self.set_vertex_buffer(new_vertices);
+    }
+
+    fn set_vertex_buffer(&mut self, vertices: Vec<Vertex>) {
+        // 頂点バッファを登録
+        if !vertices.is_empty() {
+            self.vertex_buffer = Some(self.device.create_buffer_init(
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("Vertex Buffer"),
+                    contents: bytemuck::cast_slice(&vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                },
+            ));
+            self.num_vertices = vertices.len() as u32;
+        }
+        self.vertices = vertices;
     }
 }
