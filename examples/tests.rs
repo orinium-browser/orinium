@@ -135,14 +135,13 @@ async fn main() -> Result<()> {
                 if args.len() == 3 {
                     let url = &args[2];
                     println!("Testing simple rendering for URL: {}", url);
-                    let net = NetworkCore::new();
-                    let resp = net.fetch_url(url).await.expect("Failed to fetch URL");
-                    let html = String::from_utf8_lossy(&resp.body).to_string();
 
                     let mut browser = BrowserApp::default();
 
-                    let mut tab = Tab::new();
-                    tab.load_from_raw_html(&html);
+                    let net = browser.network();
+
+                    let mut tab = Tab::new(net);
+                    tab.load_from_url(&url).await?;
 
                     browser.add_tab(tab);
 

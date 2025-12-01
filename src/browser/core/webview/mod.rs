@@ -1,9 +1,13 @@
+use std::sync::Arc;
+
 use crate::engine::{
+    css::cssom::Parser as CssParser,
     html::parser::{DomTree, Parser as HtmlParser},
-    // css::cssom::Parser as CssParser,
     renderer::RenderTree,
     styler::style_tree::StyleTree,
 };
+
+use crate::platform::network::NetworkCore;
 
 /// WebView は 1 つのウェブページの表示・レイアウト・描画を管理する構造体です。
 ///
@@ -59,7 +63,7 @@ impl WebView {
     /// - dom_tree をクローンするコストを削減
     /// - cssソースの適応
     /// - cssをstyle element から適応
-    pub fn load(&mut self, html_source: &str, _css_source: Option<&str>) {
+    pub fn load_from_raw_source(&mut self, html_source: &str, _css_source: Option<&str>) {
         // DOM
         let mut parser = HtmlParser::new(html_source);
         let dom_tree = parser.parse();
@@ -78,4 +82,90 @@ impl WebView {
 
         self.needs_redraw = true;
     }
+
+    /// URL を使った本格的なページロード
+    ///
+    /// - HTML を取得
+    /// - DOM パース
+    /// - `<link rel="stylesheet">` を解決して CSS を取得
+    /// - Style Tree を構築
+    /// - Render Tree を構築
+    pub async fn load_from_url(&mut self, url: &str, net: Arc<NetworkCore>) -> anyhow::Result<()> {
+        // --- HTML をロード ---
+        let html_bytes = net
+            .fetch_url(url)
+            .await
+            .map_err(|e| anyhow::Error::msg(e.to_string()))?;
+
+        let html_source = String::from_utf8_lossy(&html_bytes.body).to_string();
+
+        // --- DOM パース ---
+        let mut parser = HtmlParser::new(&html_source);
+        let dom_tree = parser.parse();
+        let dom_root = dom_tree.root.borrow();
+        self.dom = Some(dom_tree.clone());
+
+        // --- title 抽出 ---
+        self.title = dom_tree.collect_text_by_tag("title").first().cloned();
+
+        // --- CSS リンクを解決 ---
+        let mut css_sources: Vec<String> = Vec::new();
+
+        // <link rel="stylesheet" href="...">
+        for node in dom_root.find_children_by(|n| n.tag_name() == "link") {
+            let node = node.borrow();
+            let html_node = &node.value;
+            if let Some(rel) = html_node.get_attr("rel") {
+                if rel == "stylesheet" {
+                    if let Some(href) = html_node.get_attr("href") {
+                        let css_url = resolve_url(url, &href);
+
+                        if let Ok(res) = net.fetch_url(&css_url).await {
+                            let bytes = res.body;
+                            if let Ok(text) = String::from_utf8(bytes) {
+                                css_sources.push(text);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // style タグから読み取る
+        for css_text in dom_tree.collect_text_by_tag("style") {
+            css_sources.push(css_text);
+        }
+
+        // --- Style Tree を構築 ---
+        let mut style_tree = StyleTree::transform(&dom_tree);
+
+        let mut cssoms = vec![];
+        for css_text in css_sources {
+            let mut css_parser = CssParser::new(&css_text);
+            let cssom = css_parser.parse()?;
+            cssoms.push(cssom);
+        }
+
+        // UA + 外部CSS + <style> の CSS を反映
+        style_tree.style(&cssoms);
+
+        let computed_tree = style_tree.compute();
+
+        // --- 6. Render Tree ---
+        let render_tree = RenderTree::from_computed_tree(&computed_tree);
+        self.render = Some(render_tree);
+
+        // --- 7. 再描画要求 ---
+        self.needs_redraw = true;
+
+        Ok(())
+    }
+}
+
+fn resolve_url(base: &str, path: &str) -> String {
+    if path.starts_with("http://") || path.starts_with("https://") {
+        return path.to_string();
+    }
+    let base_url = url::Url::parse(base).unwrap();
+    base_url.join(path).unwrap().to_string()
 }

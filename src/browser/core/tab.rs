@@ -1,4 +1,6 @@
-use crate::renderer::RenderTree;
+use std::sync::Arc;
+
+use crate::{network::NetworkCore, renderer::RenderTree};
 
 use super::webview::WebView;
 
@@ -14,6 +16,7 @@ use super::webview::WebView;
 /// TODO:
 /// - ページの状態（Error、loading）の管理を追加
 pub struct Tab {
+    net: Arc<NetworkCore>,
     title: Option<String>,
     url: Option<String>,
     webview: Option<WebView>,
@@ -21,13 +24,15 @@ pub struct Tab {
 
 impl Default for Tab {
     fn default() -> Self {
-        Self::new()
+        let net = Arc::new(NetworkCore::new());
+        Self::new(net)
     }
 }
 
 impl Tab {
-    pub fn new() -> Self {
+    pub fn new(net: Arc<NetworkCore>) -> Self {
         Self {
+            net,
             title: None,
             url: None,
             webview: None,
@@ -35,10 +40,20 @@ impl Tab {
     }
     pub fn load_from_raw_html(&mut self, html_source: &str) {
         let mut view = WebView::new();
-        view.load(html_source, None);
+        view.load_from_raw_source(html_source, None);
         self.title = view.title.clone();
 
         self.webview = Some(view);
+    }
+
+    pub async fn load_from_url(&mut self, url: &str) -> anyhow::Result<()> {
+        let net = self.net.clone();
+        let mut view = WebView::new();
+        view.load_from_url(url, net).await?;
+        self.title = view.title.clone();
+
+        self.webview = Some(view);
+        Ok(())
     }
 
     pub fn render_tree(&self) -> Option<&RenderTree> {

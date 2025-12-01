@@ -170,4 +170,8 @@ impl BrowserApp {
     pub fn window_title(&self) -> String {
         self.window_title.clone()
     }
+
+    pub fn network(&self) -> Arc<NetworkCore> {
+        self.network.clone()
+    }
 }
