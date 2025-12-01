@@ -28,6 +28,16 @@ impl HtmlNodeType {
             _ => "".to_string(),
         }
     }
+
+    pub fn get_attr(&self, name: &str) -> Option<String> {
+        match self {
+            HtmlNodeType::Element { attributes, .. } => attributes
+                .iter()
+                .find(|attr| attr.name == name)
+                .map(|attr| attr.value.clone()),
+            _ => None,
+        }
+    }
 }
 
 pub type DomTree = Tree<HtmlNodeType>;
