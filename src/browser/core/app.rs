@@ -31,14 +31,13 @@ pub enum BrowserCommand {
 /// ブラウザ起動 → イベントループ → 描画の流れを制御します。
 ///
 /// TODO:
-/// - ネットワーク機構の実装
+/// - ブラウザUIの実装
 pub struct BrowserApp {
     tabs: Vec<Tab>,
     // render_tree: RenderTree,
     draw_commands: Vec<DrawCommand>,
     window_size: (u32, u32), // (x, y)
     window_title: String,
-    #[allow(unused)]
     network: Arc<NetworkCore>,
 }
 
