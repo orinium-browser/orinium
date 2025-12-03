@@ -119,11 +119,17 @@ impl WebView {
         };
 
         for node in link_nodes {
-            let node = node.borrow();
-            let html_node = &node.value;
-            if let Some(rel) = html_node.get_attr("rel")
+            let (rel, href) = {
+                let node_ref = node.borrow();
+                let html_node = &node_ref.value;
+
+                let rel = html_node.get_attr("rel").map(|s| s.to_string());
+                let href = html_node.get_attr("href").map(|s| s.to_string());
+                (rel, href)
+            };
+
+            if let (Some(rel), Some(href)) = (rel, href)
                 && rel == "stylesheet"
-                && let Some(href) = html_node.get_attr("href")
             {
                 let css_url = resolve_url(url, &href);
 
