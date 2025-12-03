@@ -115,17 +115,16 @@ impl WebView {
         for node in dom_root.find_children_by(|n| n.tag_name() == "link") {
             let node = node.borrow();
             let html_node = &node.value;
-            if let Some(rel) = html_node.get_attr("rel") {
-                if rel == "stylesheet" {
-                    if let Some(href) = html_node.get_attr("href") {
-                        let css_url = resolve_url(url, &href);
+            if let Some(rel) = html_node.get_attr("rel")
+                && rel == "stylesheet"
+                && let Some(href) = html_node.get_attr("href")
+            {
+                let css_url = resolve_url(url, &href);
 
-                        if let Ok(res) = net.fetch_url(&css_url).await {
-                            let bytes = res.body;
-                            if let Ok(text) = String::from_utf8(bytes) {
-                                css_sources.push(text);
-                            }
-                        }
+                if let Ok(res) = net.fetch_url(&css_url).await {
+                    let bytes = res.body;
+                    if let Ok(text) = String::from_utf8(bytes) {
+                        css_sources.push(text);
                     }
                 }
             }
