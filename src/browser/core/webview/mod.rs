@@ -115,7 +115,6 @@ impl WebView {
             let root = dom_tree.root.borrow();
             root.find_children_by(|n| n.tag_name() == "link")
                 .into_iter()
-                .map(|n| n.clone())
                 .collect()
         };
 
