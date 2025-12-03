@@ -102,7 +102,6 @@ impl WebView {
         // --- DOM パース ---
         let mut parser = HtmlParser::new(&html_source);
         let dom_tree = parser.parse();
-        let dom_root = dom_tree.root.borrow();
         self.dom = Some(dom_tree.clone());
 
         // --- title 抽出 ---
@@ -112,7 +111,15 @@ impl WebView {
         let mut css_sources: Vec<String> = Vec::new();
 
         // <link rel="stylesheet" href="...">
-        for node in dom_root.find_children_by(|n| n.tag_name() == "link") {
+        let link_nodes: Vec<_> = {
+            let root = dom_tree.root.borrow();
+            root.find_children_by(|n| n.tag_name() == "link")
+                .into_iter()
+                .map(|n| n.clone())
+                .collect()
+        };
+
+        for node in link_nodes {
             let node = node.borrow();
             let html_node = &node.value;
             if let Some(rel) = html_node.get_attr("rel")
