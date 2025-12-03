@@ -150,11 +150,11 @@ impl WebView {
 
         let computed_tree = style_tree.compute();
 
-        // --- 6. Render Tree ---
+        // --- Render Tree ---
         let render_tree = RenderTree::from_computed_tree(&computed_tree);
         self.render = Some(render_tree);
 
-        // --- 7. 再描画要求 ---
+        // --- 再描画要求 ---
         self.needs_redraw = true;
 
         Ok(())
