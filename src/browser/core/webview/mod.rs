@@ -77,7 +77,9 @@ impl WebView {
         let computed_tree = style_tree.compute();
 
         // Render Tree
-        let render_tree = RenderTree::from_computed_tree(&computed_tree);
+        let mut render_tree = RenderTree::from_computed_tree(&computed_tree);
+        render_tree.set_root_size(800.0, 600.0);
+        render_tree.layout();
         self.render = Some(render_tree);
 
         self.needs_redraw = true;
@@ -163,7 +165,11 @@ impl WebView {
         let computed_tree = style_tree.compute();
 
         // --- Render Tree ---
-        let render_tree = RenderTree::from_computed_tree(&computed_tree);
+        let mut render_tree = RenderTree::from_computed_tree(&computed_tree);
+        render_tree.set_root_size(800.0, 600.0);
+        render_tree.layout();
+
+        // println!("RenderTree: {}", render_tree);
         self.render = Some(render_tree);
 
         // --- 再描画要求 ---

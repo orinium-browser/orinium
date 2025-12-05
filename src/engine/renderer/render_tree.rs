@@ -8,6 +8,108 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 impl RenderTree {
+    pub fn set_root_size(&mut self, w: f32, h: f32) {
+        let mut root = self.root.borrow_mut();
+        if let NodeKind::Scrollable {..} = root.value.kind {
+            root.value.width = w;
+            root.value.height = h;
+        }
+    }
+
+    /// RenderTree を再レイアウト
+    pub fn layout(&mut self) {
+        let root_width = self.root.borrow().value.width;
+        let root_height = self.root.borrow().value.height;
+        Self::layout_node(&self.root, 0.0, 0.0, root_width, root_height);
+    }
+
+    /// 再帰的にノードをレイアウト
+    fn layout_node(
+        node: &Rc<RefCell<TreeNode<RenderNode>>>,
+        start_x: f32,
+        start_y: f32,
+        available_width: f32,
+        available_height: f32,
+    ) -> f32 {
+        // まず immutable borrow で子ノードをコピー
+        let children: Vec<_> = {
+            let node_ref = node.borrow();
+            node_ref.children().clone()
+        };
+
+        // mutable borrow で自身の RenderNode にアクセス
+        let mut node_ref = node.borrow_mut();
+        let render_node = &mut node_ref.value;
+        render_node.layout.available_width = available_width;
+
+        match &mut render_node.kind {
+            NodeKind::Block => {
+                let mut y_offset = start_y;
+                for child in children {
+                    y_offset = Self::layout_node(&child, start_x, y_offset, available_width, available_height);
+                }
+                render_node.x = start_x;
+                render_node.y = start_y;
+                render_node.width = available_width;
+                render_node.height = y_offset - start_y;
+                start_y + render_node.height
+            }
+
+            NodeKind::Inline => {
+                let mut x_offset = start_x;
+                let mut y_offset = start_y;
+                let mut line_height: f32 = 0.0;
+
+                for child in children {
+                    let _child_bottom = Self::layout_node(&child, x_offset, y_offset, available_width, available_height);
+                    let mut child_ref = child.borrow_mut();
+                    let child_width = child_ref.value.width;
+                    let child_height = child_ref.value.height;
+
+                    // 折り返し判定
+                    if x_offset + child_width > start_x + available_width {
+                        x_offset = start_x;
+                        y_offset += line_height;
+                        line_height = 0.0;
+                    }
+
+                    // 子ノードの位置を更新（Inline は横に積む）
+                    child_ref.value.x = x_offset;
+                    child_ref.value.y = y_offset;
+
+                    x_offset += child_width;
+                    line_height = line_height.max(child_height);
+                }
+
+                render_node.x = start_x;
+                render_node.y = start_y;
+                render_node.width = available_width;
+                render_node.height = line_height + (y_offset - start_y);
+                start_y + render_node.height
+            }
+
+            NodeKind::Scrollable { tree, .. } => {
+                // Scrollable 内部を再帰レイアウト
+                let _ = Self::layout_node(&tree.root, start_x, start_y, available_width, available_height);
+                render_node.x = start_x;
+                render_node.y = start_y;
+                render_node.width = available_width;
+                render_node.height = render_node.height.max(available_height);
+                start_y + render_node.height
+            }
+
+            NodeKind::Text { .. } | NodeKind::Button | NodeKind::Unknown => {
+                // preferred_width / preferred_height を使う
+                render_node.width = render_node.layout.preferred_width.unwrap_or(0.0);
+                render_node.height = render_node.layout.preferred_height.unwrap_or(20.0);
+                render_node.x = start_x;
+                render_node.y = start_y;
+                start_y + render_node.height
+            }
+        }
+    }
+
+
     /// ComputedTree から RenderTree を生成（レイアウト情報はここでは付けない）
     pub fn from_computed_tree(tree: &ComputedTree) -> RenderTree {
         let root_kind = Self::detect_kind(&tree.root.borrow().value);
