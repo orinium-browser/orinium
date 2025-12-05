@@ -181,6 +181,7 @@ impl<'a> Tokenizer<'a> {
                 self.state = TokenizerState::TagOpen
             }
             '&' => {
+                self.buffer.push('&');
                 self.state = TokenizerState::EscapeDecoding;
             }
             _ => {
@@ -197,22 +198,23 @@ impl<'a> Tokenizer<'a> {
     fn state_escape_decoding(&mut self, c: char) {
         match c {
             ';' => {
-                // 今まで溜めた &xxx をデコードする
-                let entity = self
-                    .buffer
-                    .split_terminator('&')
-                    .next_back()
-                    .unwrap_or("")
-                    .trim()
-                    .trim_end_matches(';');
+                let mut iter = self.buffer.rsplitn(2, '&');
 
-                println!("Decoding entity: &{};", entity);
+                let entity = iter.next().unwrap_or("");
+                let others = iter
+                    .next()
+                    .unwrap_or("")
+                    .rsplit('&')
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join("&");
+
                 let decoded = decode_entity(entity).unwrap_or_else(|| format!("&{};", entity));
 
                 if let Some(Token::Text(ref mut text)) = self.current_token {
-                    text.push_str(&decoded);
+                    text.push_str(&(others + &decoded));
                 } else {
-                    self.current_token = Some(Token::Text(decoded));
+                    self.current_token = Some(Token::Text(others + &decoded));
                 }
 
                 self.buffer.clear();

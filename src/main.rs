@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
 
     let mut browser = BrowserApp::default();
 
-    let mut tab = Tab::new();
+    let mut tab = Tab::new(browser.network());
     tab.load_from_raw_html(html);
 
     browser.add_tab(tab);
