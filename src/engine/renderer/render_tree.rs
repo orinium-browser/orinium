@@ -171,8 +171,9 @@ impl RenderTree {
         dst: &Rc<RefCell<TreeNode<RenderNode>>>,
     ) {
         for child in src.borrow().children() {
+            let kind = Self::detect_kind(&child.borrow().value);
             let mut new_node =
-                RenderNode::new(Self::detect_kind(&child.borrow().value), 0.0, 0.0, 0.0, 0.0);
+                RenderNode::new(kind.clone(), 0.0, 0.0, 0.0, 0.0);
 
             // LayoutInfo に最低限のメタ情報をコピー
             if let Some(computed) = child.borrow().value.computed.as_ref() {
@@ -190,8 +191,11 @@ impl RenderTree {
             let new_tree = Tree::new(new_node);
             TreeNode::add_child(dst, Rc::clone(&new_tree.root));
 
-            // 再帰
-            Self::convert_structure(child, &new_tree.root);
+            // 再帰処理
+            match kind {
+                NodeKind::Unknown => {}
+                _ => Self::convert_structure(child, &new_tree.root),
+            }            
         }
     }
 }
