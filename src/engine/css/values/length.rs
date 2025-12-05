@@ -30,6 +30,15 @@ impl Length {
         }
     }
 
+    /// ピクセル値として評価
+    /// Autoの場合、Noneを返す
+    pub fn to_px_option(&self, base: f32) -> Option<f32> {
+        match self {
+            Length::Auto => None,
+            _ => Some(self.to_px(base)),
+        }
+    }
+
     /// CSS文字列からLength
     pub fn from_css(value: &str) -> Option<Length> {
         let value = value.trim();
