@@ -10,7 +10,7 @@ use std::rc::Rc;
 impl RenderTree {
     pub fn set_root_size(&mut self, w: f32, h: f32) {
         let mut root = self.root.borrow_mut();
-        if let NodeKind::Scrollable {..} = root.value.kind {
+        if let NodeKind::Scrollable { .. } = root.value.kind {
             root.value.width = w;
             root.value.height = h;
         }
@@ -46,7 +46,13 @@ impl RenderTree {
             NodeKind::Block => {
                 let mut y_offset = start_y;
                 for child in children {
-                    y_offset = Self::layout_node(&child, start_x, y_offset, available_width, available_height);
+                    y_offset = Self::layout_node(
+                        &child,
+                        start_x,
+                        y_offset,
+                        available_width,
+                        available_height,
+                    );
                 }
                 render_node.x = start_x;
                 render_node.y = start_y;
@@ -61,7 +67,13 @@ impl RenderTree {
                 let mut line_height: f32 = 0.0;
 
                 for child in children {
-                    let _child_bottom = Self::layout_node(&child, x_offset, y_offset, available_width, available_height);
+                    let _child_bottom = Self::layout_node(
+                        &child,
+                        x_offset,
+                        y_offset,
+                        available_width,
+                        available_height,
+                    );
                     let mut child_ref = child.borrow_mut();
                     let child_width = child_ref.value.width;
                     let child_height = child_ref.value.height;
@@ -90,7 +102,13 @@ impl RenderTree {
 
             NodeKind::Scrollable { tree, .. } => {
                 // Scrollable 内部を再帰レイアウト
-                let _ = Self::layout_node(&tree.root, start_x, start_y, available_width, available_height);
+                let _ = Self::layout_node(
+                    &tree.root,
+                    start_x,
+                    start_y,
+                    available_width,
+                    available_height,
+                );
                 render_node.x = start_x;
                 render_node.y = start_y;
                 render_node.width = available_width;
@@ -108,7 +126,6 @@ impl RenderTree {
             }
         }
     }
-
 
     /// ComputedTree から RenderTree を生成（レイアウト情報はここでは付けない）
     pub fn from_computed_tree(tree: &ComputedTree) -> RenderTree {
@@ -172,8 +189,7 @@ impl RenderTree {
     ) {
         for child in src.borrow().children() {
             let kind = Self::detect_kind(&child.borrow().value);
-            let mut new_node =
-                RenderNode::new(kind.clone(), 0.0, 0.0, 0.0, 0.0);
+            let mut new_node = RenderNode::new(kind.clone(), 0.0, 0.0, 0.0, 0.0);
 
             // LayoutInfo に最低限のメタ情報をコピー
             if let Some(computed) = child.borrow().value.computed.as_ref() {
@@ -195,7 +211,7 @@ impl RenderTree {
             match kind {
                 NodeKind::Unknown => {}
                 _ => Self::convert_structure(child, &new_tree.root),
-            }            
+            }
         }
     }
 }
