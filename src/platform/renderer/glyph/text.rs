@@ -1,7 +1,12 @@
 use std::error::Error;
 use std::{env, sync::Arc};
 
-use glyphon::{Cache, FontSystem, TextAtlas, TextRenderer as TextBrush, Viewport, fontdb};
+use glyphon::{
+    Cache, FontSystem, PrepareError, SwashCache, TextArea, TextAtlas, TextRenderer as TextBrush,
+    Viewport, fontdb,
+};
+
+pub type TextSection<'a> = TextArea<'a>;
 
 pub struct TextRenderer {
     brush: TextBrush,
@@ -82,6 +87,25 @@ impl TextRenderer {
         let font = fontdb::Source::Binary(font_source);
         let font_sys = FontSystem::new_with_fonts(vec![font]);
         Self::new_with_fontsys(device, queue, format, font_sys)
+    }
+
+    /// 複数 TextArea を Atlas に転送（GPU へコピー）
+    pub fn prepare<'a>(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        text_areas: impl IntoIterator<Item = TextArea<'a>>,
+    ) -> Result<(), PrepareError> {
+        let mut cache = SwashCache::new();
+        self.brush.prepare(
+            device,
+            queue,
+            &mut self.font_sys,
+            &mut self.atlas,
+            &self.viewport,
+            text_areas,
+            &mut cache,
+        )
     }
 
     /// フレームを描画
