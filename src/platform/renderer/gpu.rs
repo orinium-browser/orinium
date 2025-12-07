@@ -2,7 +2,6 @@ use crate::engine::renderer::DrawCommand;
 use anyhow::Result;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
-use wgpu_text::glyph_brush::{Section as TextSection, Text};
 use winit::window::Window;
 
 use super::glyph::text::TextRenderer;

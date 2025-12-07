@@ -1,9 +1,6 @@
 use std::env;
 use std::error::Error;
 
-pub type Section<'a> = wgpu_text::glyph_brush::Section<'a>;
-
-use wgpu_text::{BrushBuilder, TextBrush};
 
 pub struct TextRenderer {
     brush: TextBrush<ab_glyph::FontArc>,
