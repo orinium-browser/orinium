@@ -84,6 +84,7 @@ impl TextRenderer {
         Self::new_with_fontsys(device, queue, format, font_sys)
     }
 
+    /// フレームを描画
     pub fn draw<'a>(&mut self, rpass: &mut wgpu::RenderPass<'a>) {
         self.brush.render(&self.atlas, &self.viewport, rpass);
     }
