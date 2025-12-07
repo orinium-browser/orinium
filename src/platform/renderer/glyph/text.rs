@@ -1,4 +1,3 @@
-use std::error::Error;
 use std::{env, sync::Arc};
 
 use glyphon::{
@@ -23,7 +22,7 @@ impl TextRenderer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
-    ) -> Result<Self, Box<dyn Error + Send + Sync + 'static>> {
+    ) -> anyhow::Result<Self> {
         // 後々環境変数とかに設定しているときに使えるようにしてます
         if let Ok(p) = env::var("ORINIUM_FONT")
             && let Ok(bytes) = std::fs::read(&p)
@@ -48,7 +47,7 @@ impl TextRenderer {
             }
         }
 
-        Err("no system font found".into())
+        anyhow::bail!("no system font found");
     }
 
     pub fn new_with_fontsys(
@@ -56,7 +55,7 @@ impl TextRenderer {
         queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
         font_sys: FontSystem,
-    ) -> Result<Self, Box<dyn Error + Send + Sync + 'static>> {
+    ) -> anyhow::Result<Self> {
         let cache = Cache::new(device);
         let mut atlas = TextAtlas::new(device, queue, &cache, format);
         let multisample = wgpu::MultisampleState {
@@ -83,7 +82,7 @@ impl TextRenderer {
         queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
         font_bytes: Vec<u8>,
-    ) -> Result<Self, Box<dyn Error + Send + Sync + 'static>> {
+    ) -> anyhow::Result<Self> {
         let font_source = Arc::new(font_bytes);
         let font = fontdb::Source::Binary(font_source);
         let font_sys = FontSystem::new_with_fonts(vec![font]);
