@@ -2,11 +2,12 @@ use std::error::Error;
 use std::{env, sync::Arc};
 
 use glyphon::{
-    Cache, FontSystem, PrepareError, SwashCache, TextArea, TextAtlas, TextRenderer as TextBrush,
-    Viewport, fontdb,
+    Buffer, Cache, FontSystem, PrepareError, SwashCache, TextArea, TextAtlas,
+    TextRenderer as TextBrush, Viewport, fontdb,
 };
 
 pub type TextSection<'a> = TextArea<'a>;
+pub type TextBuffer = Buffer;
 
 pub struct TextRenderer {
     brush: TextBrush,
