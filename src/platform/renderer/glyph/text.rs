@@ -1,10 +1,11 @@
 use std::error::Error;
 use std::{env, sync::Arc};
 
-use glyphon::{Cache, FontSystem, TextAtlas, TextRenderer as TextBrush, fontdb};
+use glyphon::{Cache, FontSystem, TextAtlas, TextRenderer as TextBrush, Viewport, fontdb};
 
 pub struct TextRenderer {
     brush: TextBrush,
+    viewport: Viewport,
     cache: Cache,
     atlas: TextAtlas,
     font_sys: FontSystem,
@@ -59,11 +60,14 @@ impl TextRenderer {
         };
         let brush = TextBrush::new(&mut atlas, device, multisample, None);
 
+        let viewport = Viewport::new(device, &cache);
+
         Ok(Self {
             brush,
             cache,
             atlas,
             font_sys,
+            viewport,
         })
     }
 
@@ -80,24 +84,7 @@ impl TextRenderer {
         Self::new_with_fontsys(device, queue, format, font_sys)
     }
 
-    /// セクションをキューに入れる
-    pub fn queue<'a>(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        sections: &[Section<'a>],
-    ) -> Result<(), Box<dyn Error>> {
-        self.brush.queue(device, queue, sections)?;
-        Ok(())
-    }
-
-    /// 実際の描画
     pub fn draw<'a>(&mut self, rpass: &mut wgpu::RenderPass<'a>) {
-        self.brush.draw(rpass);
-    }
-
-    /// ビューサイズが変わったとき
-    pub fn resize_view(&mut self, width: f32, height: f32, queue: &wgpu::Queue) {
-        self.brush.resize_view(width, height, queue);
+        self.brush.render(&self.atlas, &self.viewport, rpass);
     }
 }
