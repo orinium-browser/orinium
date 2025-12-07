@@ -17,8 +17,7 @@ once_cell = "1.21.3"
 entities = "1.0.1"
 winit = "0.30.12"
 wgpu = "27.0.1"
-wgpu_text = "27.0.1"
-glyphon = "0.9.0"
+glyphon = { git = "https://github.com/grovesNL/glyphon", rev = "9dd9376" }
 fontdue = "0.9.3"
 ab_glyph = "0.2"
 bytemuck = { version = "1.24", features = ["derive"] }
