@@ -184,8 +184,7 @@ impl GpuRenderer {
             match std::fs::read(p) {
                 Ok(bytes) => match TextRenderer::new_from_bytes(
                     &device,
-                    config.width,
-                    config.height,
+                    &queue,
                     config.format,
                     bytes,
                 ) {
@@ -201,8 +200,11 @@ impl GpuRenderer {
                 }
             }
         } else {
-            match TextRenderer::new_from_device(&device, config.width, config.height, config.format)
-            {
+            match TextRenderer::new_from_device(
+                &device,
+                &queue,
+                config.format,
+            ) {
                 Ok(t) => Some(t),
                 Err(e) => {
                     log::warn!(target:"PRender::gpu::font" ,"no system font found for text renderer: {}", e);

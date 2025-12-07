@@ -1,27 +1,27 @@
-use std::env;
 use std::error::Error;
+use std::{env, sync::Arc};
 
+use glyphon::{Cache, FontSystem, TextAtlas, TextRenderer as TextBrush, fontdb};
 
 pub struct TextRenderer {
-    brush: TextBrush<ab_glyph::FontArc>,
-
-    #[allow(unused)]
-    pending_font: Option<Vec<u8>>,
+    brush: TextBrush,
+    cache: Cache,
+    atlas: TextAtlas,
+    font_sys: FontSystem,
 }
 
 impl TextRenderer {
     /// 情報を渡してシステムフォントから初期化する
     pub fn new_from_device(
         device: &wgpu::Device,
-        width: u32,
-        height: u32,
+        queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
     ) -> Result<Self, Box<dyn Error + Send + Sync + 'static>> {
         // 後々環境変数とかに設定しているときに使えるようにしてます
         if let Ok(p) = env::var("ORINIUM_FONT")
             && let Ok(bytes) = std::fs::read(&p)
         {
-            return Self::new_from_bytes(device, width, height, format, bytes);
+            return Self::new_from_bytes(device, queue, format, bytes);
         }
 
         // 代表的な Windows フォント候補
@@ -37,37 +37,47 @@ impl TextRenderer {
         for p in &candidates {
             if let Ok(bytes) = std::fs::read(p) {
                 // build brush from bytes
-                return Self::new_from_bytes(device, width, height, format, bytes);
+                return Self::new_from_bytes(device, queue, format, bytes);
             }
         }
 
         Err("no system font found".into())
     }
 
-    pub fn new_with_fontarc(
+    pub fn new_with_fontsys(
         device: &wgpu::Device,
-        width: u32,
-        height: u32,
+        queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
-        font_arc: ab_glyph::FontArc,
+        font_sys: FontSystem,
     ) -> Result<Self, Box<dyn Error + Send + Sync + 'static>> {
-        let brush = BrushBuilder::using_font(font_arc).build(device, width, height, format);
+        let cache = Cache::new(device);
+        let mut atlas = TextAtlas::new(device, queue, &cache, format);
+        let multisample = wgpu::MultisampleState {
+            count: 1,                         // MSAA 無効
+            mask: !0,                         // 全サンプル有効
+            alpha_to_coverage_enabled: false, // glyphon は距離場なので不要
+        };
+        let brush = TextBrush::new(&mut atlas, device, multisample, None);
+
         Ok(Self {
             brush,
-            pending_font: None,
+            cache,
+            atlas,
+            font_sys,
         })
     }
 
     /// フォントバイト列から生成するコンストラクタ
     pub fn new_from_bytes(
         device: &wgpu::Device,
-        width: u32,
-        height: u32,
+        queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
         font_bytes: Vec<u8>,
     ) -> Result<Self, Box<dyn Error + Send + Sync + 'static>> {
-        let font_arc = ab_glyph::FontArc::try_from_vec(font_bytes)?;
-        Self::new_with_fontarc(device, width, height, format, font_arc)
+        let font_source = Arc::new(font_bytes);
+        let font = fontdb::Source::Binary(font_source);
+        let font_sys = FontSystem::new_with_fonts(vec![font]);
+        Self::new_with_fontsys(device, queue, format, font_sys)
     }
 
     /// セクションをキューに入れる
