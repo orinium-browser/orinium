@@ -31,7 +31,7 @@ impl RenderTree {
         available_width: f32,
         available_height: f32,
     ) -> f32 {
-        // まず immutable borrow で子ノードをコピー
+        // immutable borrow で子ノードをクローン
         let children: Vec<_> = {
             let node_ref = node.borrow();
             node_ref.children().clone()
