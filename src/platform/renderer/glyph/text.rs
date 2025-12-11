@@ -5,8 +5,7 @@ use glyphon::{
     TextRenderer as TextBrush, Viewport, fontdb,
 };
 
-pub type TextSection<'a> = TextArea<'a>;
-pub type TextBuffer = Buffer;
+pub type TextSection = Buffer;
 
 pub struct TextRenderer {
     brush: TextBrush,
@@ -89,12 +88,12 @@ impl TextRenderer {
         Self::new_with_fontsys(device, queue, format, font_sys)
     }
 
-    /// 複数 TextArea を Atlas に転送（GPU へコピー）
+    /// Buffer から TextArea を作って Atlas に転送（GPU へコピー）
     pub fn prepare<'a>(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        text_areas: impl IntoIterator<Item = TextArea<'a>>,
+        text_buffers: Vec<Buffer>,
     ) -> Result<(), PrepareError> {
         let mut cache = SwashCache::new();
         self.brush.prepare(
