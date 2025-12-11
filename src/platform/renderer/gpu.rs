@@ -2,11 +2,10 @@ use crate::engine::renderer::DrawCommand;
 use anyhow::Result;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
-use wgpu_text::glyph_brush::{Section as TextSection, Text};
 use winit::window::Window;
 
-use super::glyph::text::TextRenderer;
-// use super::scroll_bar::ScrollBar;
+use super::glyph::text::{TextRenderer, TextSection};
+use glyphon::Color as GlyphColor;
 
 /// GPU描画コンテキスト
 pub struct GpuRenderer {
@@ -183,27 +182,22 @@ impl GpuRenderer {
         // テキスト描画用ラッパーの初期化。引数で渡されたフォントパスがあればそれを優先して読み込む。
         let text_renderer = if let Some(p) = font_path {
             match std::fs::read(p) {
-                Ok(bytes) => match TextRenderer::new_from_bytes(
-                    &device,
-                    config.width,
-                    config.height,
-                    config.format,
-                    bytes,
-                ) {
-                    Ok(t) => Some(t),
-                    Err(e) => {
-                        log::warn!(target:"PRender::gpu::font" ,"failed to init text renderer from provided font: {}", e);
-                        None
+                Ok(bytes) => {
+                    match TextRenderer::new_from_bytes(&device, &queue, config.format, bytes) {
+                        Ok(t) => Some(t),
+                        Err(e) => {
+                            log::warn!(target:"PRender::gpu::font" ,"failed to init text renderer from provided font: {}", e);
+                            None
+                        }
                     }
-                },
+                }
                 Err(e) => {
                     log::warn!(target:"PRender::gpu::font" ,"failed to read font path '{}': {}", p, e);
                     None
                 }
             }
         } else {
-            match TextRenderer::new_from_device(&device, config.width, config.height, config.format)
-            {
+            match TextRenderer::new_from_device(&device, &queue, config.format) {
                 Ok(t) => Some(t),
                 Err(e) => {
                     log::warn!(target:"PRender::gpu::font" ,"no system font found for text renderer: {}", e);
@@ -410,15 +404,25 @@ impl GpuRenderer {
                     let clip = current_clip(&clip_stack);
                     let (clip_x, clip_y) = (clip.x + clip.w, clip.y + clip.h);
 
-                    let section = TextSection {
-                        screen_position: ((*x + tdx) * sf, (*y + tdy) * sf),
-                        bounds: (clip_x * sf, clip_y * sf),
-                        text: vec![
-                            Text::new(text)
-                                .with_scale(*font_size * sf)
-                                .with_color([color.r, color.g, color.b, color.a]),
-                        ],
-                        ..TextSection::default()
+                    // Use TextRenderer helper to create a Buffer with correct FontSystem handling
+                    let section = if let Some(tr) = &mut self.text_renderer {
+                        // convert color to glyphon Color (u8 rgba)
+                        let gc = GlyphColor::rgba(
+                            (color.r * 255.0) as u8,
+                            (color.g * 255.0) as u8,
+                            (color.b * 255.0) as u8,
+                            (color.a * 255.0) as u8,
+                        );
+                        let buffer = tr.create_buffer_for_text(text, *font_size * sf, gc);
+
+                        TextSection {
+                            screen_position: ((*x + tdx) * sf, (*y + tdy) * sf),
+                            bounds: (clip_x * sf, clip_y * sf),
+                            buffer,
+                        }
+                    } else {
+                        // No text renderer available; skip
+                        continue;
                     };
                     sections.push(section);
                 }
