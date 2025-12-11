@@ -1,25 +1,31 @@
 use std::{env, sync::Arc};
 
 use glyphon::{
-    Buffer, Cache, FontSystem, PrepareError, SwashCache, TextArea, TextAtlas,
-    TextRenderer as TextBrush, Viewport, TextBounds, Resolution, Color as GlyphColor,
-    Metrics, Shaping, Attrs, fontdb,
+    Attrs, Buffer, Cache, Color as GlyphColor, FontSystem, Metrics, PrepareError, Resolution,
+    Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer as TextBrush, Viewport,
+    fontdb,
 };
 
 /// テキストセクション位置・クリップ・描画するBufferをまとめた構造体
 pub struct TextSection {
-    pub screen_position: (f32, f32),    /// スクリーン上の位置 (左上原点)
-    pub bounds: (f32, f32),             /// クリップ領域の幅・高さ
+    /// スクリーン上の位置 (左上原点)
+    pub screen_position: (f32, f32),
+    /// クリップ領域の幅・高さ
+    pub bounds: (f32, f32),
     pub buffer: Buffer,
 }
 
 /// glyphon使ったテキストレンダラー
 #[allow(dead_code)]
 pub struct TextRenderer {
-    brush: TextBrush,       /// glyphonのテキストブラシ
-    viewport: Viewport,     /// ビューポート情報
-    cache: Cache,           /// glyphonのキャッシュ
-    atlas: TextAtlas,       /// glyphonのテキストアトラス
+    /// glyphonのテキストブラシ
+    brush: TextBrush,
+    /// ビューポート情報
+    viewport: Viewport,
+    /// glyphonのキャッシュ
+    cache: Cache,
+    /// glyphonのテキストアトラス
+    atlas: TextAtlas,
     font_sys: FontSystem,
 }
 
@@ -97,7 +103,12 @@ impl TextRenderer {
 
     /// Create a cosmic-text `Buffer` for the given text using the internal `FontSystem`.
     /// This encapsulates the required `Metrics` and calls `set_text`.
-    pub fn create_buffer_for_text(&mut self, text: &str, font_size: f32, color: GlyphColor) -> Buffer {
+    pub fn create_buffer_for_text(
+        &mut self,
+        text: &str,
+        font_size: f32,
+        color: GlyphColor,
+    ) -> Buffer {
         // reasonable default line height (1.2x)
         let metrics = Metrics::relative(font_size, 1.2);
 
@@ -161,12 +172,19 @@ impl TextRenderer {
 
     /// ビューポート（解像度）を更新
     pub fn resize_view(&mut self, width: f32, height: f32, queue: &wgpu::Queue) {
-        self.viewport
-            .update(queue, Resolution { width: width as u32, height: height as u32 });
+        self.viewport.update(
+            queue,
+            Resolution {
+                width: width as u32,
+                height: height as u32,
+            },
+        );
     }
 
     /// フレームを描画
     pub fn draw<'a>(&mut self, rpass: &mut wgpu::RenderPass<'a>) {
-        self.brush.render(&self.atlas, &self.viewport, rpass).expect("PANIC: Text draw failed");
+        self.brush
+            .render(&self.atlas, &self.viewport, rpass)
+            .expect("PANIC: Text draw failed");
     }
 }

@@ -5,7 +5,7 @@ use wgpu::util::DeviceExt;
 use winit::window::Window;
 
 use super::glyph::text::{TextRenderer, TextSection};
-use glyphon::{Color as GlyphColor};
+use glyphon::Color as GlyphColor;
 
 /// GPU描画コンテキスト
 pub struct GpuRenderer {
