@@ -402,7 +402,6 @@ impl GpuRenderer {
                     let (tdx, tdy) = current_transform(&transform_stack);
 
                     let clip = current_clip(&clip_stack);
-                    let (clip_x, clip_y) = (clip.x + clip.w, clip.y + clip.h);
 
                     // Use TextRenderer helper to create a Buffer with correct FontSystem handling
                     let section = if let Some(tr) = &mut self.text_renderer {
@@ -417,7 +416,8 @@ impl GpuRenderer {
 
                         TextSection {
                             screen_position: ((*x + tdx) * sf, (*y + tdy) * sf),
-                            bounds: (clip_x * sf, clip_y * sf),
+                            clip_origin: (clip.x * sf, clip.y * sf),
+                            bounds: (clip.w * sf, clip.h * sf),
                             buffer,
                         }
                     } else {
