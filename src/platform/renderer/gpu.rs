@@ -249,7 +249,6 @@ impl GpuRenderer {
     }
 
     /// 描画命令を解析して頂点バッファやテキストキューに登録
-    /// Textのclippingはまだ未実装
     pub fn parse_draw_commands(&mut self, commands: &[DrawCommand]) {
         let width = self.size.width as f32;
         let height = self.size.height as f32;
@@ -432,8 +431,10 @@ impl GpuRenderer {
                 DrawCommand::DrawPolygon { points, color } => {
                     // transform
                     let (tdx, tdy) = current_transform(&transform_stack);
-                    let transformed_points: Vec<(f32, f32)> =
-                        points.iter().map(|(px, py)| ((px + tdx) * sf, (py + tdy) * sf)).collect();
+                    let transformed_points: Vec<(f32, f32)> = points
+                        .iter()
+                        .map(|(px, py)| ((px + tdx) * sf, (py + tdy) * sf))
+                        .collect();
 
                     // clip 取得
                     let clip = current_clip(&clip_stack);
@@ -473,10 +474,10 @@ impl GpuRenderer {
                             // inside test
                             let inside = |x: f32, y: f32| -> bool {
                                 match edge {
-                                    0 => x >= clip_l,            // left
-                                    1 => x <= clip_r,            // right
-                                    2 => y >= clip_t,            // top
-                                    3 => y <= clip_b,            // bottom
+                                    0 => x >= clip_l, // left
+                                    1 => x <= clip_r, // right
+                                    2 => y >= clip_t, // top
+                                    3 => y <= clip_b, // bottom
                                     _ => true,
                                 }
                             };
@@ -565,13 +566,21 @@ impl GpuRenderer {
                         // clip triangle against rect using Sutherland–Hodgman (4 edges)
                         let mut poly = tri;
                         poly = clip_against_edge(&poly, 0); // left
-                        if poly.is_empty() { continue; }
+                        if poly.is_empty() {
+                            continue;
+                        }
                         poly = clip_against_edge(&poly, 1); // right
-                        if poly.is_empty() { continue; }
+                        if poly.is_empty() {
+                            continue;
+                        }
                         poly = clip_against_edge(&poly, 2); // top
-                        if poly.is_empty() { continue; }
+                        if poly.is_empty() {
+                            continue;
+                        }
                         poly = clip_against_edge(&poly, 3); // bottom
-                        if poly.is_empty() { continue; }
+                        if poly.is_empty() {
+                            continue;
+                        }
 
                         // triangulate resulting polygon as fan
                         for j in 1..(poly.len() - 1) {
@@ -586,9 +595,18 @@ impl GpuRenderer {
                             let px3 = ndc(p3.0, width);
                             let py3 = -ndc(p3.1, height);
 
-                            vertices.push(Vertex { position: [px1, py1, 0.0], color: color_arr });
-                            vertices.push(Vertex { position: [px2, py2, 0.0], color: color_arr });
-                            vertices.push(Vertex { position: [px3, py3, 0.0], color: color_arr });
+                            vertices.push(Vertex {
+                                position: [px1, py1, 0.0],
+                                color: color_arr,
+                            });
+                            vertices.push(Vertex {
+                                position: [px2, py2, 0.0],
+                                color: color_arr,
+                            });
+                            vertices.push(Vertex {
+                                position: [px3, py3, 0.0],
+                                color: color_arr,
+                            });
                         }
                     }
                 }

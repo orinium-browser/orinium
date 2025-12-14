@@ -1,16 +1,14 @@
 use anyhow::Result;
 use orinium_browser::browser::BrowserApp;
 use orinium_browser::engine::renderer::DrawCommand;
-use orinium_browser::engine::renderer::render::Color;
 use orinium_browser::engine::renderer::RenderTree;
-use orinium_browser::engine::renderer::render_node::{RenderNode, NodeKind};
+use orinium_browser::engine::renderer::render::Color;
+use orinium_browser::engine::renderer::render_node::{NodeKind, RenderNode};
 
 fn main() -> Result<()> {
     env_logger::init();
 
     let mut commands = Vec::new();
-
-
 
     // bg
     commands.push(DrawCommand::DrawRect {
