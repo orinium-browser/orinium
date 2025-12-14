@@ -427,7 +427,6 @@ impl GpuRenderer {
                 }
 
                 // Polygon
-                #[allow(unused)]
                 DrawCommand::DrawPolygon { points, color } => {
                     // transform
                     let (tdx, tdy) = current_transform(&transform_stack);
