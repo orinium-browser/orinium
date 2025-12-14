@@ -494,7 +494,7 @@ impl GpuRenderer {
                                         // vertical line x = clip_l or clip_r
                                         let x_edge = if edge == 0 { clip_l } else { clip_r };
                                         let dx = ex - sx;
-                                        if dx.abs() < std::f32::EPSILON {
+                                        if dx.abs() < f32::EPSILON {
                                             (x_edge, sy)
                                         } else {
                                             let t = (x_edge - sx) / dx;
@@ -505,7 +505,7 @@ impl GpuRenderer {
                                         // horizontal line y = clip_t or clip_b
                                         let y_edge = if edge == 2 { clip_t } else { clip_b };
                                         let dy = ey - sy;
-                                        if dy.abs() < std::f32::EPSILON {
+                                        if dy.abs() < f32::EPSILON {
                                             (sx, y_edge)
                                         } else {
                                             let t = (y_edge - sy) / dy;
@@ -521,7 +521,7 @@ impl GpuRenderer {
                                     0 | 1 => {
                                         let x_edge = if edge == 0 { clip_l } else { clip_r };
                                         let dx = ex - sx;
-                                        if dx.abs() < std::f32::EPSILON {
+                                        if dx.abs() < f32::EPSILON {
                                             (x_edge, sy)
                                         } else {
                                             let t = (x_edge - sx) / dx;
@@ -531,7 +531,7 @@ impl GpuRenderer {
                                     2 | 3 => {
                                         let y_edge = if edge == 2 { clip_t } else { clip_b };
                                         let dy = ey - sy;
-                                        if dy.abs() < std::f32::EPSILON {
+                                        if dy.abs() < f32::EPSILON {
                                             (sx, y_edge)
                                         } else {
                                             let t = (y_edge - sy) / dy;
