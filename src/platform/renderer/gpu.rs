@@ -249,7 +249,6 @@ impl GpuRenderer {
     }
 
     /// 描画命令を解析して頂点バッファやテキストキューに登録
-    /// Textのclippingはまだ未実装
     pub fn parse_draw_commands(&mut self, commands: &[DrawCommand]) {
         let width = self.size.width as f32;
         let height = self.size.height as f32;
@@ -402,7 +401,6 @@ impl GpuRenderer {
                     let (tdx, tdy) = current_transform(&transform_stack);
 
                     let clip = current_clip(&clip_stack);
-                    let (clip_x, clip_y) = (clip.x + clip.w, clip.y + clip.h);
 
                     // Use TextRenderer helper to create a Buffer with correct FontSystem handling
                     let section = if let Some(tr) = &mut self.text_renderer {
@@ -417,7 +415,8 @@ impl GpuRenderer {
 
                         TextSection {
                             screen_position: ((*x + tdx) * sf, (*y + tdy) * sf),
-                            bounds: (clip_x * sf, clip_y * sf),
+                            clip_origin: (clip.x * sf, clip.y * sf),
+                            bounds: (clip.w * sf, clip.h * sf),
                             buffer,
                         }
                     } else {
@@ -428,17 +427,187 @@ impl GpuRenderer {
                 }
 
                 // Polygon
-                #[allow(unused)]
                 DrawCommand::DrawPolygon { points, color } => {
                     // transform
                     let (tdx, tdy) = current_transform(&transform_stack);
-                    let mut transformed_points: Vec<(f32, f32)> =
-                        points.iter().map(|(px, py)| (px + tdx, py + tdy)).collect();
+                    let transformed_points: Vec<(f32, f32)> = points
+                        .iter()
+                        .map(|(px, py)| ((px + tdx) * sf, (py + tdy) * sf))
+                        .collect();
 
                     // clip 取得
                     let clip = current_clip(&clip_stack);
+                    // clip in scaled (screen) coords
+                    let clip_l = clip.x * sf;
+                    let clip_t = clip.y * sf;
+                    let clip_r = (clip.x + clip.w) * sf;
+                    let clip_b = (clip.y + clip.h) * sf;
 
-                    todo!("Polygon drawing with clipping is not implemented yet");
+                    // Quick reject by bounding box
+                    let mut min_x = f32::INFINITY;
+                    let mut min_y = f32::INFINITY;
+                    let mut max_x = f32::NEG_INFINITY;
+                    let mut max_y = f32::NEG_INFINITY;
+                    for (x, y) in transformed_points.iter() {
+                        min_x = min_x.min(*x);
+                        min_y = min_y.min(*y);
+                        max_x = max_x.max(*x);
+                        max_y = max_y.max(*y);
+                    }
+                    if max_x <= clip_l || min_x >= clip_r || max_y <= clip_t || min_y >= clip_b {
+                        // fully outside
+                        continue;
+                    }
+
+                    // Helper: Sutherland–Hodgman polygon clipping against an axis-aligned edge
+                    let clip_against_edge = |poly: &Vec<(f32, f32)>, edge: u8| -> Vec<(f32, f32)> {
+                        // edge: 0=left,1=right,2=top,3=bottom
+                        let mut out: Vec<(f32, f32)> = Vec::new();
+                        if poly.is_empty() {
+                            return out;
+                        }
+                        let len = poly.len();
+                        for i in 0..len {
+                            let (sx, sy) = poly[i];
+                            let (ex, ey) = poly[(i + 1) % len];
+                            // inside test
+                            let inside = |x: f32, y: f32| -> bool {
+                                match edge {
+                                    0 => x >= clip_l, // left
+                                    1 => x <= clip_r, // right
+                                    2 => y >= clip_t, // top
+                                    3 => y <= clip_b, // bottom
+                                    _ => true,
+                                }
+                            };
+                            let s_in = inside(sx, sy);
+                            let e_in = inside(ex, ey);
+
+                            if s_in && e_in {
+                                // both inside
+                                out.push((ex, ey));
+                            } else if s_in && !e_in {
+                                // going out: add intersection
+                                // compute intersection between segment and clipping line
+                                let (ix, iy) = match edge {
+                                    0 | 1 => {
+                                        // vertical line x = clip_l or clip_r
+                                        let x_edge = if edge == 0 { clip_l } else { clip_r };
+                                        let dx = ex - sx;
+                                        if dx.abs() < f32::EPSILON {
+                                            (x_edge, sy)
+                                        } else {
+                                            let t = (x_edge - sx) / dx;
+                                            (x_edge, sy + t * (ey - sy))
+                                        }
+                                    }
+                                    2 | 3 => {
+                                        // horizontal line y = clip_t or clip_b
+                                        let y_edge = if edge == 2 { clip_t } else { clip_b };
+                                        let dy = ey - sy;
+                                        if dy.abs() < f32::EPSILON {
+                                            (sx, y_edge)
+                                        } else {
+                                            let t = (y_edge - sy) / dy;
+                                            (sx + t * (ex - sx), y_edge)
+                                        }
+                                    }
+                                    _ => (ex, ey),
+                                };
+                                out.push((ix, iy));
+                            } else if !s_in && e_in {
+                                // entering: add intersection then end point
+                                let (ix, iy) = match edge {
+                                    0 | 1 => {
+                                        let x_edge = if edge == 0 { clip_l } else { clip_r };
+                                        let dx = ex - sx;
+                                        if dx.abs() < f32::EPSILON {
+                                            (x_edge, sy)
+                                        } else {
+                                            let t = (x_edge - sx) / dx;
+                                            (x_edge, sy + t * (ey - sy))
+                                        }
+                                    }
+                                    2 | 3 => {
+                                        let y_edge = if edge == 2 { clip_t } else { clip_b };
+                                        let dy = ey - sy;
+                                        if dy.abs() < f32::EPSILON {
+                                            (sx, y_edge)
+                                        } else {
+                                            let t = (y_edge - sy) / dy;
+                                            (sx + t * (ex - sx), y_edge)
+                                        }
+                                    }
+                                    _ => (ex, ey),
+                                };
+                                out.push((ix, iy));
+                                out.push((ex, ey));
+                            } else {
+                                // both outside: do nothing
+                            }
+                        }
+                        out
+                    };
+
+                    // Triangulate polygon into fan triangles from vertex 0, clip each triangle, and push resulting triangles
+                    if transformed_points.len() < 3 {
+                        continue;
+                    }
+
+                    // NDC helper
+                    let ndc = |v: f32, max: f32| (v / max) * 2.0 - 1.0;
+
+                    let color_arr = [color.r, color.g, color.b, color.a];
+
+                    let v0 = transformed_points[0];
+                    for i in 1..(transformed_points.len() - 1) {
+                        let tri = vec![v0, transformed_points[i], transformed_points[i + 1]];
+                        // clip triangle against rect using Sutherland–Hodgman (4 edges)
+                        let mut poly = tri;
+                        poly = clip_against_edge(&poly, 0); // left
+                        if poly.is_empty() {
+                            continue;
+                        }
+                        poly = clip_against_edge(&poly, 1); // right
+                        if poly.is_empty() {
+                            continue;
+                        }
+                        poly = clip_against_edge(&poly, 2); // top
+                        if poly.is_empty() {
+                            continue;
+                        }
+                        poly = clip_against_edge(&poly, 3); // bottom
+                        if poly.is_empty() {
+                            continue;
+                        }
+
+                        // triangulate resulting polygon as fan
+                        for j in 1..(poly.len() - 1) {
+                            let p1 = poly[0];
+                            let p2 = poly[j];
+                            let p3 = poly[j + 1];
+
+                            let px1 = ndc(p1.0, width);
+                            let py1 = -ndc(p1.1, height);
+                            let px2 = ndc(p2.0, width);
+                            let py2 = -ndc(p2.1, height);
+                            let px3 = ndc(p3.0, width);
+                            let py3 = -ndc(p3.1, height);
+
+                            vertices.push(Vertex {
+                                position: [px1, py1, 0.0],
+                                color: color_arr,
+                            });
+                            vertices.push(Vertex {
+                                position: [px2, py2, 0.0],
+                                color: color_arr,
+                            });
+                            vertices.push(Vertex {
+                                position: [px3, py3, 0.0],
+                                color: color_arr,
+                            });
+                        }
+                    }
                 }
 
                 // Ellipse
