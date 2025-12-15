@@ -23,6 +23,29 @@ In the future, this browser engine will support extensions. The planned formats 
 
 Supporting these formats helps maintain compatibility with other browsers, while unique features designed specifically for Orinium will provide a better user experience.
 
+## Run
+Clone the repository.
+
+```bash
+git clone https://github.com/orinium-browser/orinium.git
+cd orinium
+```
+> [!NOTE]
+> Orinium's MSRV (Minimum Supported Rust Version) is 1.88.0.
+> If you are using an earlier version, please upgrade to Rust 1.88.0 or later.
+> 
+> If you are using rustup, you can set the required version with the following commands:
+> 
+> ```bash
+> rustup toolchain install 1.88.0
+> rustup override set 1.88.0
+> ```
+You can run Orinium using Cargo.
+
+```bash
+cargo run
+```
+
 ## Contributing
 See [CONTRIBUTING.md](./CONTRIBUTING.md).
 

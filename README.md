@@ -19,6 +19,28 @@
 このブラウザエンジンのソースコードは、**Googleに依存しません**。Firefoxなどの一部のブラウザを除いて、世の中の多くのブラウザはGoogleのChromiumに依存しています。
 このプロジェクトはChromiumに代る新しいブラウザエンジンを提供します。
 
+## Run
+リポジトリをクローンします。
+
+```bash
+git clone https://github.com/orinium-browser/orinium.git
+cd orinium
+```
+> [!NOTE]
+> Orinium の MSRV (Minimum Supported Rust Version) は 1.88.0 です。
+> それ以前のバージョンを使用している方は 1.88.0 以降のバージョンに切り替えてください。
+> 
+> rustup を使用している場合は、以下でバージョンを合わせられます。
+> ```bash
+> rustup toolchain install 1.88.0
+> rustup override set 1.88.0
+> ```
+Cargo を使って実行可能です。
+
+```bash
+cargo run
+```
+
 ## 拡張機能形式
 将来的にこのブラウザエンジンは拡張機能をサポートします。現在サポート予定の形式は、
 * Orinium 独自の形式
