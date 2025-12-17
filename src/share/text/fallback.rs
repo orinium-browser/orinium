@@ -1,8 +1,11 @@
 use crate::share::text::{TextMeasureError, TextMeasurement, TextMeasurementRequest, TextMeasurer};
+
+// エンジンのフォールバックテキスト計測器
 pub struct EngineFallbackTextMeasurer {
     pub avg_char_width_ratio: f32,
 }
 
+// デフォルト実装
 impl Default for EngineFallbackTextMeasurer {
     fn default() -> Self {
         Self {
@@ -12,6 +15,7 @@ impl Default for EngineFallbackTextMeasurer {
 }
 
 impl TextMeasurer for EngineFallbackTextMeasurer {
+    /// テキスト計測を行う
     fn measure(&self, req: &TextMeasurementRequest) -> Result<TextMeasurement, TextMeasureError> {
         let length = req.text.chars().count() as f32;
         let char_w = req.font.size_px * self.avg_char_width_ratio;
