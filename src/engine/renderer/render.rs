@@ -125,19 +125,17 @@ impl Renderer {
 
     pub fn generate_draw_commands(&self, tree: &RenderTree) -> Vec<DrawCommand> {
         let mut commands = vec![];
-        Self::traverse_tree(&tree.root, 0.0, 0.0, &mut commands);
+        Self::traverse_tree(&tree.root, &mut commands);
         commands
     }
 
     fn traverse_tree(
         node: &Rc<RefCell<TreeNode<RenderNode>>>,
-        offset_x: f32,
-        offset_y: f32,
         out: &mut Vec<DrawCommand>,
     ) {
         let node_borrow = node.borrow();
-        let abs_x = offset_x + node_borrow.value.x;
-        let abs_y = offset_y + node_borrow.value.y;
+        let abs_x = node_borrow.value.x;
+        let abs_y = node_borrow.value.y;
 
         match &node_borrow.value.kind {
             NodeKind::Text {
@@ -197,7 +195,7 @@ impl Renderer {
                 });
 
                 // 内部ツリーを再帰描画
-                Self::traverse_tree(&inner_tree.root, 0.0, 0.0, out);
+                Self::traverse_tree(&inner_tree.root, out);
 
                 out.push(DrawCommand::PopTransform);
                 out.push(DrawCommand::PopClip);
@@ -205,7 +203,7 @@ impl Renderer {
         }
 
         for child in node_borrow.children() {
-            Self::traverse_tree(child, offset_x, offset_y, out);
+            Self::traverse_tree(child, out);
         }
     }
 }
