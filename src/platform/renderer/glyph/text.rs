@@ -10,6 +10,8 @@ use glyphon::{
 pub struct TextSection {
     /// スクリーン上の位置 (左上原点)
     pub screen_position: (f32, f32),
+    /// クリップ領域の左上座標（スクリーン座標）
+    pub clip_origin: (f32, f32),
     /// クリップ領域の幅・高さ
     pub bounds: (f32, f32),
     pub buffer: Buffer,
@@ -137,10 +139,10 @@ impl TextRenderer {
 
         for s in sections.iter() {
             let bounds = TextBounds {
-                left: s.screen_position.0.round() as i32,
-                top: s.screen_position.1.round() as i32,
-                right: s.bounds.0.round() as i32,
-                bottom: s.bounds.1.round() as i32,
+                left: s.clip_origin.0.round() as i32,
+                top: s.clip_origin.1.round() as i32,
+                right: (s.clip_origin.0 + s.bounds.0).round() as i32,
+                bottom: (s.clip_origin.1 + s.bounds.1).round() as i32,
             };
 
             // デフォルト色は Buffer 内の属性が優先されるため適当で良い
