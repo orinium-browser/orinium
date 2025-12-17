@@ -54,7 +54,10 @@ cargo run
 ## Contributing
 See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
-For the architecture, see [architecture.md](./docs/architecture.md).
+For the architecture, see [architecture.md](./docs/en/architecture.md).
 
-Other useful documentation for development can be found in the [Docs/](./docs/) directory.
+Join the community to connect with other developers and stay up to date.
+Join our Discord community: [here](https://discord.gg/tMGPgHFsxJ)
+
+Other useful documentation for development can be found in the [Docs/](./docs/en) directory.
 And, most documents are classified based on their lang.

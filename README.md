@@ -54,6 +54,9 @@ cargo run
 
 アーキテクチャは[architecture.md](./docs/architecture.md)を参照してください。
 
+コミュニティに参加すると、他の開発者と交流したり、最新情報を入手したりできます。
+Discordコミュニティは[ここ](https://discord.gg/tMGPgHFsxJ)です！
+
 その他の開発時に目を通しておくと便利なドキュメントは[Docs/](./docs/)にあります。
 なお、一部のものを除いて、ドキュメントは言語ごとに分かれています。
 
