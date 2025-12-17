@@ -175,7 +175,7 @@ impl<T: Debug + Clone> Display for Tree<T> {
 
 /// 再帰的にツリーを表示するヘルパー関数
 fn fmt_tree_node<T: Debug + Clone>(
-    node: &std::rc::Rc<std::cell::RefCell<TreeNode<T>>>,
+    node: &Rc<RefCell<TreeNode<T>>>,
     f: &mut Formatter<'_>,
     ancestors_last: &[bool],
 ) -> fmt::Result {

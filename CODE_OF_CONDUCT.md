@@ -68,7 +68,7 @@
 
 **帰結**: コミュニティ内でのあらゆる種類の公的な相互関係の永久的な禁止。
 
-> 帰属 この行動規範は、https://www.contributor-covenant.org/version/2/0/code_of_conduct.html で利用可能な [Contributor Covenant][homepage] バージョン2.0を基に作成されています。
+> 帰属 この行動規範は、https://www.contributor-covenant.org/version/2/0/code_of_conduct.html で利用可能な [Contributor Covenant] バージョン2.0を基に作成されています。
 
 コミュニティへの影響ガイドラインは[Mozilla's code of conduct enforcement ladder](https://github.com/mozilla/diversity)に適合しています。
 

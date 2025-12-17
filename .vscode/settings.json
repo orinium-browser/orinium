@@ -2,6 +2,4 @@
     "editor.tabSize": 4,
     "editor.insertSpaces": true,
     "editor.detectIndentation": false,
-    "draw.folder.structure.exclude": [".git", ".vscode",".github","contents"],
-    "draw.folder.structure.respectGitignore": true,
 }

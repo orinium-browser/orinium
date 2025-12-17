@@ -52,19 +52,10 @@ cargo run
 ## 貢献
 [CONTRIBUTING.md](./CONTRIBUTING.md)を参照してください。
 
-アーキテクチャは[architecture.md](./docs/architecture.md)を参照してください。
+アーキテクチャは[architecture.md](./docs/ja/architecture.md)を参照してください。
 
-その他の開発時に目を通しておくと便利なドキュメントは[Docs/](./docs/)にあります。
+コミュニティに参加すると、他の開発者と交流したり、最新情報を入手したりできます。
+Discordコミュニティは[ここ](https://discord.gg/tMGPgHFsxJ)です！
+
+その他の開発時に目を通しておくと便利なドキュメントは[ここ](./docs/ja)にあります。
 なお、一部のものを除いて、ドキュメントは言語ごとに分かれています。
-
-
-
-
-
-
-
-
-
-
-
-
