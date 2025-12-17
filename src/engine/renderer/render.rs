@@ -129,10 +129,7 @@ impl Renderer {
         commands
     }
 
-    fn traverse_tree(
-        node: &Rc<RefCell<TreeNode<RenderNode>>>,
-        out: &mut Vec<DrawCommand>,
-    ) {
+    fn traverse_tree(node: &Rc<RefCell<TreeNode<RenderNode>>>, out: &mut Vec<DrawCommand>) {
         let node_borrow = node.borrow();
         let abs_x = node_borrow.value.x;
         let abs_y = node_borrow.value.y;
