@@ -94,6 +94,7 @@ impl BrowserApp {
             let tree = active.render_tree().unwrap();
             let renderer = Renderer::new();
             self.draw_commands = renderer.generate_draw_commands(tree);
+            println!("DrawCommands: {:?}", self.draw_commands);
 
             let title = active.title();
             if let Some(t) = title

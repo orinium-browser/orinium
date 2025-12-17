@@ -69,9 +69,9 @@ impl RenderTree {
                 }
                 render_node.x = start_x;
                 render_node.y = start_y;
-                render_node.width = available_width;
+                render_node.width = x_offset - start_x;
                 render_node.height = y_offset - start_y;
-                (x_offset, start_y + render_node.height)
+                (start_x, start_y + render_node.height)
             }
 
             NodeKind::Inline => {
