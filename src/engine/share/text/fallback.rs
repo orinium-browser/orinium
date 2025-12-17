@@ -1,4 +1,6 @@
-use crate::engine::share::text::{TextMeasureError, TextMeasurement, TextMeasurementRequest, TextMeasurer};
+use crate::engine::share::text::{
+    TextMeasureError, TextMeasurement, TextMeasurementRequest, TextMeasurer,
+};
 
 // エンジンのフォールバックテキスト計測器
 pub struct EngineFallbackTextMeasurer {
@@ -51,22 +53,32 @@ impl TextMeasurer for EngineFallbackTextMeasurer {
 // ここにテスト書いてるけど許せ
 #[cfg(test)]
 mod tests {
-    use crate::engine::share::text::{FontDescription, LayoutConstraints};
     use super::*;
+    use crate::engine::share::text::{FontDescription, LayoutConstraints};
 
     #[test]
     fn fallback_measure_simple() {
         let measurer = EngineFallbackTextMeasurer::default();
         let req = TextMeasurementRequest {
             text: "abc".to_string(),
-            font: FontDescription { family: None, size_px: 10.0 },
-            constraints: LayoutConstraints { max_width: None, wrap: false, max_lines: None },
+            font: FontDescription {
+                family: None,
+                size_px: 10.0,
+            },
+            constraints: LayoutConstraints {
+                max_width: None,
+                wrap: false,
+                max_lines: None,
+            },
         };
 
         let res = measurer.measure(&req).expect("measurement should succeed");
         let expected_width = 3.0 * 10.0 * measurer.avg_char_width_ratio; // 3 chars * font * ratio
         let expected_height = 10.0_f32;
         assert!((res.width - expected_width).abs() < 1e-6, "width mismatch");
-        assert!((res.height - expected_height).abs() < 1e-6, "height mismatch");
+        assert!(
+            (res.height - expected_height).abs() < 1e-6,
+            "height mismatch"
+        );
     }
 }

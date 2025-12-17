@@ -1,5 +1,7 @@
+use orinium_browser::engine::share::text::{
+    FontDescription, LayoutConstraints, TextMeasurementRequest, TextMeasurer,
+};
 use orinium_browser::platform::renderer::text_measurer::PlatformTextMeasurer;
-use orinium_browser::engine::share::text::{TextMeasurementRequest, FontDescription, LayoutConstraints, TextMeasurer};
 
 #[test]
 fn platform_text_measurer_from_bytes_smoke() {
@@ -29,8 +31,15 @@ fn platform_text_measurer_from_bytes_smoke() {
 
     let req = TextMeasurementRequest {
         text: "Hello, world!".to_string(),
-        font: FontDescription { family: None, size_px: 16.0 },
-        constraints: LayoutConstraints { max_width: Some(200.0), wrap: true, max_lines: None },
+        font: FontDescription {
+            family: None,
+            size_px: 16.0,
+        },
+        constraints: LayoutConstraints {
+            max_width: Some(200.0),
+            wrap: true,
+            max_lines: None,
+        },
     };
 
     let res = pm.measure(&req).expect("measure");

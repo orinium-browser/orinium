@@ -1,8 +1,10 @@
+use crate::engine::share::text::{
+    TextMeasureError, TextMeasurement, TextMeasurementRequest, TextMeasurer,
+};
+use fontdue::Font as FontDue;
 use std::collections::HashMap;
 use std::env;
 use std::path::Path;
-use crate::engine::share::text::{TextMeasurement, TextMeasurementRequest, TextMeasureError, TextMeasurer};
-use fontdue::Font as FontDue;
 
 /// テキスト計測のプラットフォーム側実装
 pub struct PlatformTextMeasurer {
@@ -29,7 +31,10 @@ impl PlatformTextMeasurer {
             if let Ok(bytes) = std::fs::read(&p) {
                 let font = FontDue::from_bytes(&bytes[..], fontdue::FontSettings::default())?;
                 fonts.insert("default".to_string(), font);
-                return Ok(Self { fonts, default_font: "default".to_string() });
+                return Ok(Self {
+                    fonts,
+                    default_font: "default".to_string(),
+                });
             }
         }
 
@@ -38,7 +43,10 @@ impl PlatformTextMeasurer {
                 if let Ok(bytes) = std::fs::read(p) {
                     let font = FontDue::from_bytes(&bytes[..], fontdue::FontSettings::default())?;
                     fonts.insert("default".to_string(), font);
-                    return Ok(Self { fonts, default_font: "default".to_string() });
+                    return Ok(Self {
+                        fonts,
+                        default_font: "default".to_string(),
+                    });
                 }
             }
         }
@@ -51,14 +59,20 @@ impl PlatformTextMeasurer {
         let font = FontDue::from_bytes(&bytes[..], fontdue::FontSettings::default())?;
         let mut fonts = HashMap::new();
         fonts.insert(id.to_string(), font);
-        Ok(Self { fonts, default_font: id.to_string() })
+        Ok(Self {
+            fonts,
+            default_font: id.to_string(),
+        })
     }
 }
 
 impl TextMeasurer for PlatformTextMeasurer {
     /// テキスト計測を行う
     fn measure(&self, req: &TextMeasurementRequest) -> Result<TextMeasurement, TextMeasureError> {
-        let font = self.fonts.get(&self.default_font).ok_or_else(|| TextMeasureError::FontNotFound(self.default_font.clone()))?;
+        let font = self
+            .fonts
+            .get(&self.default_font)
+            .ok_or_else(|| TextMeasureError::FontNotFound(self.default_font.clone()))?;
         let font_size = req.font.size_px.max(1.0);
 
         let mut advances: Vec<f32> = Vec::new();
@@ -70,7 +84,12 @@ impl TextMeasurer for PlatformTextMeasurer {
         let line_height = font_size * 1.2;
 
         if advances.is_empty() {
-            return Ok(TextMeasurement { width: 0.0, height: line_height, baseline: font_size * 0.8, glyphs: None });
+            return Ok(TextMeasurement {
+                width: 0.0,
+                height: line_height,
+                baseline: font_size * 0.8,
+                glyphs: None,
+            });
         }
 
         let mut max_width: f32 = 0.0;
@@ -90,11 +109,15 @@ impl TextMeasurer for PlatformTextMeasurer {
                 }
                 max_width = max_width.max(cur_width);
             } else {
-                for a in advances.iter() { cur_width += a; }
+                for a in advances.iter() {
+                    cur_width += a;
+                }
                 max_width = cur_width;
             }
         } else {
-            for a in advances.iter() { cur_width += a; }
+            for a in advances.iter() {
+                cur_width += a;
+            }
             max_width = cur_width;
         }
 
@@ -105,6 +128,11 @@ impl TextMeasurer for PlatformTextMeasurer {
         }
 
         let height = lines as f32 * line_height;
-        Ok(TextMeasurement { width: max_width, height, baseline: font_size * 0.8, glyphs: None })
+        Ok(TextMeasurement {
+            width: max_width,
+            height,
+            baseline: font_size * 0.8,
+            glyphs: None,
+        })
     }
 }

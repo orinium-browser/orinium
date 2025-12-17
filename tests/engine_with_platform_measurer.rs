@@ -1,10 +1,12 @@
-use std::rc::Rc;
 use orinium_browser::engine::html::HtmlNodeType;
 use orinium_browser::engine::renderer::RenderTree;
-use orinium_browser::engine::styler::computed_tree::{ComputedStyle, ComputedStyleNode, ComputedTree};
+use orinium_browser::engine::styler::computed_tree::{
+    ComputedStyle, ComputedStyleNode, ComputedTree,
+};
 use orinium_browser::engine::styler::style_tree::Style;
 use orinium_browser::engine::tree::TreeNode;
 use orinium_browser::platform::renderer::text_measurer::PlatformTextMeasurer;
+use std::rc::Rc;
 
 #[test]
 fn engine_layout_with_platform_measurer() {
@@ -38,13 +40,19 @@ fn engine_layout_with_platform_measurer() {
     let html_weak = Rc::downgrade(&html_text_node);
     // デフォルトスタイルを計算してComputedStyleNodeを作成
     let computed = ComputedStyle::compute(Style::default());
-    let computed_node = ComputedStyleNode { html: html_weak.clone(), computed: Some(computed) };
+    let computed_node = ComputedStyleNode {
+        html: html_weak.clone(),
+        computed: Some(computed),
+    };
 
     // ルートのドキュメントノードとComputedTreeを準備
     let root_html_node = TreeNode::new(HtmlNodeType::Document);
     let root_weak = Rc::downgrade(&root_html_node);
     let root_computed = ComputedStyle::compute(Style::default());
-    let tree = ComputedTree::new(ComputedStyleNode { html: root_weak, computed: Some(root_computed) });
+    let tree = ComputedTree::new(ComputedStyleNode {
+        html: root_weak,
+        computed: Some(root_computed),
+    });
     // ルートに子ノード（テキスト）を追加
     let _child = TreeNode::add_child_value(&tree.root, computed_node);
 
@@ -62,7 +70,9 @@ fn engine_layout_with_platform_measurer() {
     let root_node = render_tree.root.borrow();
     match &root_node.value.kind {
         // ルートはScrollableであることを期待
-        orinium_browser::engine::renderer::NodeKind::Scrollable { tree: inner_tree, .. } => {
+        orinium_browser::engine::renderer::NodeKind::Scrollable {
+            tree: inner_tree, ..
+        } => {
             // 内部ツリーの子を取得
             let children = inner_tree.root.borrow().children().clone();
             assert!(!children.is_empty(), "no children in inner render tree");
