@@ -18,18 +18,29 @@ impl RenderTree {
 
     /// RenderTree を再レイアウト
     pub fn layout(&mut self) {
+        // 測定器が指定されていない場合はエンジンのフォールバックを使う
+        let fallback = crate::engine::share::text::EngineFallbackTextMeasurer::default();
+        self.layout_with_measurer(&fallback);
+    }
+
+    /// RenderTree を指定の TextMeasurer でレイアウト
+    pub fn layout_with_measurer(
+        &mut self,
+        measurer: &dyn crate::engine::share::text::TextMeasurer,
+    ) {
         let root_width = self.root.borrow().value.width;
         let root_height = self.root.borrow().value.height;
-        Self::layout_node(&self.root, 0.0, 0.0, root_width, root_height);
+        Self::layout_node_with_measurer(&self.root, 0.0, 0.0, root_width, root_height, measurer);
     }
 
     /// 再帰的にノードをレイアウト
-    fn layout_node(
+    fn layout_node_with_measurer(
         node: &Rc<RefCell<TreeNode<RenderNode>>>,
         start_x: f32,
         start_y: f32,
         available_width: f32,
         available_height: f32,
+        measurer: &dyn crate::engine::share::text::TextMeasurer,
     ) -> f32 {
         // immutable borrow で子ノードをクローン
         let children: Vec<_> = {
@@ -46,12 +57,13 @@ impl RenderTree {
             NodeKind::Block => {
                 let mut y_offset = start_y;
                 for child in children {
-                    y_offset = Self::layout_node(
+                    y_offset = Self::layout_node_with_measurer(
                         &child,
                         start_x,
                         y_offset,
                         available_width,
                         available_height,
+                        measurer,
                     );
                 }
                 render_node.x = start_x;
@@ -67,12 +79,13 @@ impl RenderTree {
                 let mut line_height: f32 = 0.0;
 
                 for child in children {
-                    let _child_bottom = Self::layout_node(
+                    let _child_bottom = Self::layout_node_with_measurer(
                         &child,
                         x_offset,
                         y_offset,
                         available_width,
                         available_height,
+                        measurer,
                     );
                     let mut child_ref = child.borrow_mut();
                     let child_width = child_ref.value.width;
@@ -102,12 +115,13 @@ impl RenderTree {
 
             NodeKind::Scrollable { tree, .. } => {
                 // Scrollable 内部を再帰レイアウト
-                let _ = Self::layout_node(
+                let _ = Self::layout_node_with_measurer(
                     &tree.root,
                     start_x,
                     start_y,
                     available_width,
                     available_height,
+                    measurer,
                 );
                 render_node.x = start_x;
                 render_node.y = start_y;
@@ -116,7 +130,39 @@ impl RenderTree {
                 start_y + render_node.height
             }
 
-            NodeKind::Text { .. } | NodeKind::Button | NodeKind::Unknown => {
+            NodeKind::Text {
+                text,
+                font_size,
+                color: _,
+            } => {
+                // テキストノードは TextMeasurer でサイズを求める
+                let req = crate::engine::share::text::TextMeasurementRequest {
+                    text: text.clone(),
+                    font: crate::engine::share::text::FontDescription {
+                        family: None,
+                        size_px: *font_size,
+                    },
+                    constraints: crate::engine::share::text::LayoutConstraints {
+                        max_width: Some(available_width),
+                        wrap: true,
+                        max_lines: None,
+                    },
+                };
+
+                if let Ok(meas) = measurer.measure(&req) {
+                    render_node.width = meas.width;
+                    render_node.height = meas.height;
+                } else {
+                    // 測定に失敗したら既存の値を使う
+                    render_node.width = render_node.layout.preferred_width.unwrap_or(0.0);
+                    render_node.height = render_node.layout.preferred_height.unwrap_or(20.0);
+                }
+                render_node.x = start_x;
+                render_node.y = start_y;
+                start_y + render_node.height
+            }
+
+            NodeKind::Button | NodeKind::Unknown => {
                 // preferred_width / preferred_height を使う
                 render_node.width = render_node.layout.preferred_width.unwrap_or(0.0);
                 render_node.height = render_node.layout.preferred_height.unwrap_or(20.0);
