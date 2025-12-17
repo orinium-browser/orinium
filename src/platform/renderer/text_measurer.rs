@@ -27,27 +27,27 @@ impl PlatformTextMeasurer {
         let mut fonts: HashMap<String, FontDue> = HashMap::new();
 
         // もし環境変数あるならそっちのフォントを優先
-        if let Ok(p) = env::var("ORINIUM_FONT") {
-            if let Ok(bytes) = std::fs::read(&p) {
+        if let Ok(p) = env::var("ORINIUM_FONT")
+            && let Ok(bytes) = std::fs::read(&p)
+        {
+            let font = FontDue::from_bytes(&bytes[..], fontdue::FontSettings::default())?;
+            fonts.insert("default".to_string(), font);
+            return Ok(Self {
+                fonts,
+                default_font: "default".to_string(),
+            });
+        }
+
+        for p in &candidates {
+            if Path::new(p).exists()
+                && let Ok(bytes) = std::fs::read(p)
+            {
                 let font = FontDue::from_bytes(&bytes[..], fontdue::FontSettings::default())?;
                 fonts.insert("default".to_string(), font);
                 return Ok(Self {
                     fonts,
                     default_font: "default".to_string(),
                 });
-            }
-        }
-
-        for p in &candidates {
-            if Path::new(p).exists() {
-                if let Ok(bytes) = std::fs::read(p) {
-                    let font = FontDue::from_bytes(&bytes[..], fontdue::FontSettings::default())?;
-                    fonts.insert("default".to_string(), font);
-                    return Ok(Self {
-                        fonts,
-                        default_font: "default".to_string(),
-                    });
-                }
             }
         }
 
@@ -121,10 +121,10 @@ impl TextMeasurer for PlatformTextMeasurer {
             max_width = cur_width;
         }
 
-        if let Some(max_lines) = req.constraints.max_lines {
-            if lines > max_lines {
-                lines = max_lines;
-            }
+        if let Some(max_lines) = req.constraints.max_lines
+            && lines > max_lines
+        {
+            lines = max_lines;
         }
 
         let height = lines as f32 * line_height;

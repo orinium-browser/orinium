@@ -25,19 +25,18 @@ impl TextMeasurer for EngineFallbackTextMeasurer {
         let line_height = req.font.size_px * 1.0;
         let mut lines = 1.0;
 
-        if req.constraints.wrap {
-            if let Some(max_w) = req.constraints.max_width {
-                if max_w > 0.0 {
-                    lines = (width / max_w).ceil().max(1.0);
-                    width = max_w.min(width);
-                }
-            }
+        if req.constraints.wrap
+            && let Some(max_w) = req.constraints.max_width
+            && max_w > 0.0
+        {
+            lines = (width / max_w).ceil().max(1.0);
+            width = max_w.min(width);
         }
 
-        if let Some(max_lines) = req.constraints.max_lines {
-            if lines as usize > max_lines {
-                lines = max_lines as f32;
-            }
+        if let Some(max_lines) = req.constraints.max_lines
+            && lines as usize > max_lines
+        {
+            lines = max_lines as f32;
         }
 
         let height = lines * line_height;
