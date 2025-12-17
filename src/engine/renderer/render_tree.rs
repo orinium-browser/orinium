@@ -41,7 +41,7 @@ impl RenderTree {
         available_width: f32,
         available_height: f32,
         measurer: &dyn crate::engine::bridge::text::TextMeasurer,
-    ) -> f32 {
+    ) -> (f32, f32) {
         // immutable borrow で子ノードをクローン
         let children: Vec<_> = {
             let node_ref = node.borrow();
@@ -55,11 +55,12 @@ impl RenderTree {
 
         match &mut render_node.kind {
             NodeKind::Block => {
+                let mut x_offset = start_x;
                 let mut y_offset = start_y;
                 for child in children {
-                    y_offset = Self::layout_node_with_measurer(
+                    (x_offset, y_offset) = Self::layout_node_with_measurer(
                         &child,
-                        start_x,
+                        x_offset,
                         y_offset,
                         available_width,
                         available_height,
@@ -70,7 +71,7 @@ impl RenderTree {
                 render_node.y = start_y;
                 render_node.width = available_width;
                 render_node.height = y_offset - start_y;
-                start_y + render_node.height
+                (x_offset, start_y + render_node.height)
             }
 
             NodeKind::Inline => {
@@ -110,7 +111,7 @@ impl RenderTree {
                 render_node.y = start_y;
                 render_node.width = available_width;
                 render_node.height = line_height + (y_offset - start_y);
-                start_y + render_node.height
+                (start_x + render_node.width, y_offset)
             }
 
             NodeKind::Scrollable { tree, .. } => {
@@ -127,7 +128,7 @@ impl RenderTree {
                 render_node.y = start_y;
                 render_node.width = available_width;
                 render_node.height = render_node.height.max(available_height);
-                start_y + render_node.height
+                (start_x, start_y + render_node.height)
             }
 
             NodeKind::Text {
@@ -159,16 +160,25 @@ impl RenderTree {
                 }
                 render_node.x = start_x;
                 render_node.y = start_y;
-                start_y + render_node.height
+                (start_x, start_y + render_node.height)
             }
 
-            NodeKind::Button | NodeKind::Unknown => {
+            NodeKind::Button => {
                 // preferred_width / preferred_height を使う
                 render_node.width = render_node.layout.preferred_width.unwrap_or(0.0);
                 render_node.height = render_node.layout.preferred_height.unwrap_or(20.0);
                 render_node.x = start_x;
                 render_node.y = start_y;
-                start_y + render_node.height
+                (start_x, start_y + render_node.height)
+            }
+
+            NodeKind::Unknown => {
+                // 不明なノードはサイズ0で無視
+                render_node.width = 0.0;
+                render_node.height = 0.0;
+                render_node.x = start_x;
+                render_node.y = start_y;
+                (start_x, start_y)
             }
         }
     }
