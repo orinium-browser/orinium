@@ -21,7 +21,7 @@ pub enum CssValue {
 }
 
 pub struct Parser<'a> {
-    tokenizer: crate::engine::css::cssom::tokenizer::Tokenizer<'a>,
+    tokenizer: Tokenizer<'a>,
     tree: Tree<CssNodeType>,
     stack: Vec<Rc<RefCell<TreeNode<CssNodeType>>>>,
     selector_buffer: String,

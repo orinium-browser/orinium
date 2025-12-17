@@ -67,7 +67,7 @@ impl DomTree {
 }
 
 pub struct Parser<'a> {
-    tokenizer: crate::engine::html::tokenizer::Tokenizer<'a>,
+    tokenizer: Tokenizer<'a>,
     tree: DomTree,
     stack: Vec<Rc<RefCell<TreeNode<HtmlNodeType>>>>,
     tag_stack: Vec<String>,
