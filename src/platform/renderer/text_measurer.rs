@@ -1,4 +1,4 @@
-use crate::engine::share::text::{
+use crate::engine::bridge::text::{
     TextMeasureError, TextMeasurement, TextMeasurementRequest, TextMeasurer,
 };
 use fontdue::Font as FontDue;

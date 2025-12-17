@@ -1,6 +1,6 @@
 use orinium_browser::engine::html::HtmlNodeType;
 use orinium_browser::engine::renderer::{NodeKind, RenderTree};
-use orinium_browser::engine::share::text::{
+use orinium_browser::engine::bridge::text::{
     TextMeasureError, TextMeasurement, TextMeasurementRequest, TextMeasurer,
 };
 use orinium_browser::engine::styler::computed_tree::{

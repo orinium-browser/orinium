@@ -1,4 +1,4 @@
-use crate::engine::share::text::{
+use crate::engine::bridge::text::{
     TextMeasureError, TextMeasurement, TextMeasurementRequest, TextMeasurer,
 };
 
@@ -53,7 +53,7 @@ impl TextMeasurer for EngineFallbackTextMeasurer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::share::text::{FontDescription, LayoutConstraints};
+    use crate::engine::bridge::text::{FontDescription, LayoutConstraints};
 
     #[test]
     fn fallback_measure_simple() {

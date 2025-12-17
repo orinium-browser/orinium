@@ -1,4 +1,4 @@
-use orinium_browser::engine::share::text::{
+use orinium_browser::engine::bridge::text::{
     FontDescription, LayoutConstraints, TextMeasurementRequest, TextMeasurer,
 };
 use orinium_browser::platform::renderer::text_measurer::PlatformTextMeasurer;

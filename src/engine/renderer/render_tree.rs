@@ -19,14 +19,14 @@ impl RenderTree {
     /// RenderTree を再レイアウト
     pub fn layout(&mut self) {
         // 測定器が指定されていない場合はエンジンのフォールバックを使う
-        let fallback = crate::engine::share::text::EngineFallbackTextMeasurer::default();
+        let fallback = crate::engine::bridge::text::EngineFallbackTextMeasurer::default();
         self.layout_with_measurer(&fallback);
     }
 
     /// RenderTree を指定の TextMeasurer でレイアウト
     pub fn layout_with_measurer(
         &mut self,
-        measurer: &dyn crate::engine::share::text::TextMeasurer,
+        measurer: &dyn crate::engine::bridge::text::TextMeasurer,
     ) {
         let root_width = self.root.borrow().value.width;
         let root_height = self.root.borrow().value.height;
@@ -40,7 +40,7 @@ impl RenderTree {
         start_y: f32,
         available_width: f32,
         available_height: f32,
-        measurer: &dyn crate::engine::share::text::TextMeasurer,
+        measurer: &dyn crate::engine::bridge::text::TextMeasurer,
     ) -> f32 {
         // immutable borrow で子ノードをクローン
         let children: Vec<_> = {
@@ -136,13 +136,13 @@ impl RenderTree {
                 color: _,
             } => {
                 // テキストノードは TextMeasurer でサイズを求める
-                let req = crate::engine::share::text::TextMeasurementRequest {
+                let req = crate::engine::bridge::text::TextMeasurementRequest {
                     text: text.clone(),
-                    font: crate::engine::share::text::FontDescription {
+                    font: crate::engine::bridge::text::FontDescription {
                         family: None,
                         size_px: *font_size,
                     },
-                    constraints: crate::engine::share::text::LayoutConstraints {
+                    constraints: crate::engine::bridge::text::LayoutConstraints {
                         max_width: Some(available_width),
                         wrap: true,
                         max_lines: None,
