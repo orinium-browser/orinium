@@ -59,5 +59,5 @@ For the architecture, see [architecture.md](./docs/en/architecture.md).
 Join the community to connect with other developers and stay up to date.
 Join our Discord community: [here](https://discord.gg/tMGPgHFsxJ)
 
-Other useful documentation for development can be found in [the](./docs/en) directory.
+Other useful documentation for development can be found in [the directory](./docs/en).
 And, most documents are classified based on their lang.
