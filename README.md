@@ -52,7 +52,7 @@ cargo run
 ## 貢献
 [CONTRIBUTING.md](./CONTRIBUTING.md)を参照してください。
 
-アーキテクチャは[architecture.md](./docs/architecture.md)を参照してください。
+アーキテクチャは[architecture.md](./docs/ja/architecture.md)を参照してください。
 
 コミュニティに参加すると、他の開発者と交流したり、最新情報を入手したりできます。
 Discordコミュニティは[ここ](https://discord.gg/tMGPgHFsxJ)です！
