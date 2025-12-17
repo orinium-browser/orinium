@@ -24,7 +24,10 @@ impl RenderTree {
     }
 
     /// RenderTree を指定の TextMeasurer でレイアウト
-    pub fn layout_with_measurer(&mut self, measurer: &dyn crate::engine::share::text::TextMeasurer) {
+    pub fn layout_with_measurer(
+        &mut self,
+        measurer: &dyn crate::engine::share::text::TextMeasurer,
+    ) {
         let root_width = self.root.borrow().value.width;
         let root_height = self.root.borrow().value.height;
         Self::layout_node_with_measurer(&self.root, 0.0, 0.0, root_width, root_height, measurer);
@@ -127,7 +130,11 @@ impl RenderTree {
                 start_y + render_node.height
             }
 
-            NodeKind::Text { text, font_size, color: _ } => {
+            NodeKind::Text {
+                text,
+                font_size,
+                color: _,
+            } => {
                 // テキストノードは TextMeasurer でサイズを求める
                 let req = crate::engine::share::text::TextMeasurementRequest {
                     text: text.clone(),
