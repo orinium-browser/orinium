@@ -1,5 +1,5 @@
 use orinium_browser::platform::renderer::text_measurer::PlatformTextMeasurer;
-use orinium_browser::share::text::{TextMeasurementRequest, FontDescription, LayoutConstraints, TextMeasurer};
+use orinium_browser::engine::share::text::{TextMeasurementRequest, FontDescription, LayoutConstraints, TextMeasurer};
 
 #[test]
 fn platform_text_measurer_from_bytes_smoke() {

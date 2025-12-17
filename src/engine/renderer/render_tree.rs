@@ -19,12 +19,12 @@ impl RenderTree {
     /// RenderTree を再レイアウト
     pub fn layout(&mut self) {
         // 測定器が指定されていない場合はエンジンのフォールバックを使う
-        let fallback = crate::share::text::EngineFallbackTextMeasurer::default();
+        let fallback = crate::engine::share::text::EngineFallbackTextMeasurer::default();
         self.layout_with_measurer(&fallback);
     }
 
     /// RenderTree を指定の TextMeasurer でレイアウト
-    pub fn layout_with_measurer(&mut self, measurer: &dyn crate::share::text::TextMeasurer) {
+    pub fn layout_with_measurer(&mut self, measurer: &dyn crate::engine::share::text::TextMeasurer) {
         let root_width = self.root.borrow().value.width;
         let root_height = self.root.borrow().value.height;
         Self::layout_node_with_measurer(&self.root, 0.0, 0.0, root_width, root_height, measurer);
@@ -37,7 +37,7 @@ impl RenderTree {
         start_y: f32,
         available_width: f32,
         available_height: f32,
-        measurer: &dyn crate::share::text::TextMeasurer,
+        measurer: &dyn crate::engine::share::text::TextMeasurer,
     ) -> f32 {
         // immutable borrow で子ノードをクローン
         let children: Vec<_> = {
@@ -129,13 +129,13 @@ impl RenderTree {
 
             NodeKind::Text { text, font_size, color: _ } => {
                 // テキストノードは TextMeasurer でサイズを求める
-                let req = crate::share::text::TextMeasurementRequest {
+                let req = crate::engine::share::text::TextMeasurementRequest {
                     text: text.clone(),
-                    font: crate::share::text::FontDescription {
+                    font: crate::engine::share::text::FontDescription {
                         family: None,
                         size_px: *font_size,
                     },
-                    constraints: crate::share::text::LayoutConstraints {
+                    constraints: crate::engine::share::text::LayoutConstraints {
                         max_width: Some(available_width),
                         wrap: true,
                         max_lines: None,

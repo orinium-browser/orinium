@@ -4,7 +4,7 @@ use orinium_browser::engine::renderer::{RenderTree, NodeKind};
 use orinium_browser::engine::styler::computed_tree::{ComputedStyle, ComputedStyleNode, ComputedTree};
 use orinium_browser::engine::styler::style_tree::Style;
 use orinium_browser::engine::tree::TreeNode;
-use orinium_browser::share::text::{TextMeasurement, TextMeasurementRequest, TextMeasurer, TextMeasureError};
+use orinium_browser::engine::share::text::{TextMeasurement, TextMeasurementRequest, TextMeasurer, TextMeasureError};
 
 struct MockMeasurer {}
 impl TextMeasurer for MockMeasurer {

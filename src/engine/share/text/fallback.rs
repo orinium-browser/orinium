@@ -1,4 +1,4 @@
-use crate::share::text::{TextMeasureError, TextMeasurement, TextMeasurementRequest, TextMeasurer};
+use crate::engine::share::text::{TextMeasureError, TextMeasurement, TextMeasurementRequest, TextMeasurer};
 
 // エンジンのフォールバックテキスト計測器
 pub struct EngineFallbackTextMeasurer {
@@ -51,7 +51,7 @@ impl TextMeasurer for EngineFallbackTextMeasurer {
 // ここにテスト書いてるけど許せ
 #[cfg(test)]
 mod tests {
-    use crate::share::text::{FontDescription, LayoutConstraints};
+    use crate::engine::share::text::{FontDescription, LayoutConstraints};
     use super::*;
 
     #[test]

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::env;
 use std::path::Path;
-use crate::share::text::{TextMeasurement, TextMeasurementRequest, TextMeasureError, TextMeasurer};
+use crate::engine::share::text::{TextMeasurement, TextMeasurementRequest, TextMeasureError, TextMeasurer};
 use fontdue::Font as FontDue;
 
 /// テキスト計測のプラットフォーム側実装

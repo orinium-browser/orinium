@@ -11,9 +11,6 @@ pub mod engine;
 /// ファイルI/Oなどプラットフォーム固有の実装が含まれます。
 pub mod platform;
 
-/// 共有ユーティリティやデータ構造を持つモジュール
-pub mod share;
-
 pub use engine::html;
 pub use engine::html::parser;
 pub use engine::renderer;
