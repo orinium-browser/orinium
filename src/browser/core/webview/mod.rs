@@ -80,7 +80,7 @@ impl WebView {
         let mut render_tree = RenderTree::from_computed_tree(&computed_tree);
         render_tree.set_root_size(800.0, 600.0);
         render_tree.layout();
-        println!("RenderTree: {}", render_tree);
+        //println!("RenderTree: {}", render_tree);
         self.render = Some(render_tree);
 
         self.needs_redraw = true;
