@@ -104,13 +104,12 @@ pub fn selector_matches_on_node(
                 attributes,
                 ..
             } = &n_borrow.value
+                && simple_selector_matches(part, tag_name, attributes)
             {
-                if simple_selector_matches(part, tag_name, attributes) {
-                    matched = true;
-                    // 次のパートをマッチさせるため、祖先からさらに探索する
-                    current_node = n_borrow.parent();
-                    break;
-                }
+                matched = true;
+                // 次のパートをマッチさせるため、祖先からさらに探索する
+                current_node = n_borrow.parent();
+                break;
             }
             search_node = n_borrow.parent();
         }
