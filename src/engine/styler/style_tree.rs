@@ -94,14 +94,6 @@ impl StyleTree {
                 }
             }
 
-            if let Some(style_display) = &style.display {
-                match style_display {
-                    Display::Block => {}
-                    Display::Inline => {}
-                    Display::None => {}
-                }
-            }
-
             // 3. User stylesheets (cssoms) を走査してルールを適用
             for css in cssoms {
                 // css は stylesheet tree。ルート直下や再帰的に Rule ノードが存在するので traverse で探す
