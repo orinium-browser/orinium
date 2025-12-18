@@ -96,7 +96,7 @@ impl StyleTree {
 
             // 3. User stylesheets (cssoms) を走査してルールを適用
             for css in cssoms {
-                // css は stylesheet tree。ルート直下や再帰的に Rule ノードが存在するので traverse で探す
+                // ルート直下や再帰的に Rule ノードが存在するので traverse で探す
                 css.traverse(&mut |css_node_rc| {
                     let css_node = css_node_rc.borrow();
                     match &css_node.value {
