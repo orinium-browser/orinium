@@ -1,6 +1,6 @@
-use crate::html::tokenizer::Attribute;
-use crate::html::HtmlNodeType;
 use crate::engine::tree::TreeNode;
+use crate::html::HtmlNodeType;
+use crate::html::tokenizer::Attribute;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -37,23 +37,33 @@ fn simple_selector_matches(simple: &str, tag: &str, attrs: &[Attribute]) -> bool
             let start = pos;
             while pos < s.len() {
                 let c = s.as_bytes()[pos] as char;
-                if c == '.' || c == '#' { break; }
+                if c == '.' || c == '#' {
+                    break;
+                }
                 pos += 1;
             }
             let class = &s[start..pos];
-            let has = attrs.iter().any(|a| a.name == "class" && a.value.split_whitespace().any(|c| c == class));
-            if !has { return false; }
+            let has = attrs
+                .iter()
+                .any(|a| a.name == "class" && a.value.split_whitespace().any(|c| c == class));
+            if !has {
+                return false;
+            }
         } else if ch == '#' {
             pos += 1;
             let start = pos;
             while pos < s.len() {
                 let c = s.as_bytes()[pos] as char;
-                if c == '.' || c == '#' { break; }
+                if c == '.' || c == '#' {
+                    break;
+                }
                 pos += 1;
             }
             let id = &s[start..pos];
             let has = attrs.iter().any(|a| a.name == "id" && a.value == id);
-            if !has { return false; }
+            if !has {
+                return false;
+            }
         } else {
             // Unknown token, fail-safe
             return false;
@@ -65,9 +75,14 @@ fn simple_selector_matches(simple: &str, tag: &str, attrs: &[Attribute]) -> bool
 
 /// 複合セレクタ（子孫セレクタを含む）をノードに対して判定する。
 /// 例: "div .foo #bar" といったスペースで区切られたセレクタをサポートする。
-pub fn selector_matches_on_node(selector: &str, node: &Rc<RefCell<TreeNode<HtmlNodeType>>>) -> bool {
+pub fn selector_matches_on_node(
+    selector: &str,
+    node: &Rc<RefCell<TreeNode<HtmlNodeType>>>,
+) -> bool {
     let selector = selector.trim();
-    if selector.is_empty() { return false; }
+    if selector.is_empty() {
+        return false;
+    }
 
     // セレクタを空白で分割して右からマッチさせる（子孫セレクタ）
     let parts: Vec<&str> = selector.split_whitespace().collect();
@@ -84,7 +99,12 @@ pub fn selector_matches_on_node(selector: &str, node: &Rc<RefCell<TreeNode<HtmlN
         let mut search_node = current_node.clone();
         while let Some(n) = search_node {
             let n_borrow = n.borrow();
-            if let HtmlNodeType::Element { tag_name, attributes, .. } = &n_borrow.value {
+            if let HtmlNodeType::Element {
+                tag_name,
+                attributes,
+                ..
+            } = &n_borrow.value
+            {
                 if simple_selector_matches(part, tag_name, attributes) {
                     matched = true;
                     // 次のパートをマッチさせるため、祖先からさらに探索する

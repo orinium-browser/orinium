@@ -4,11 +4,11 @@ use std::rc::{Rc, Weak};
 use super::computed_tree::{ComputedStyle, ComputedStyleNode};
 use super::ua::default_style_for;
 
+use super::matcher::selector_matches_on_node;
 use crate::engine::css::cssom::{CssNodeType, CssValue};
 use crate::engine::css::values::{Border, Color, Display, Length};
 use crate::engine::tree::*;
 use crate::html::{HtmlNodeType, util as html_util};
-use super::matcher::selector_matches_on_node;
 
 #[derive(Debug, Clone)]
 pub struct StyleNode {
@@ -115,7 +115,9 @@ impl StyleTree {
                                     // この rule applies -> 子の Declaration を走査して適用
                                     for child in css_node_rc.borrow().children().iter() {
                                         let child_b = child.borrow();
-                                        if let CssNodeType::Declaration { name, value } = &child_b.value {
+                                        if let CssNodeType::Declaration { name, value } =
+                                            &child_b.value
+                                        {
                                             match name.as_str() {
                                                 "color" => {
                                                     if let CssValue::Color(c) = value {
@@ -140,9 +142,16 @@ impl StyleTree {
                                                 "display" => {
                                                     if let CssValue::Keyword(k) = value {
                                                         match k.as_str() {
-                                                            "block" => style.display = Some(Display::Block),
-                                                            "inline" => style.display = Some(Display::Inline),
-                                                            "none" => style.display = Some(Display::None),
+                                                            "block" => {
+                                                                style.display = Some(Display::Block)
+                                                            }
+                                                            "inline" => {
+                                                                style.display =
+                                                                    Some(Display::Inline)
+                                                            }
+                                                            "none" => {
+                                                                style.display = Some(Display::None)
+                                                            }
                                                             _ => {}
                                                         }
                                                     }
