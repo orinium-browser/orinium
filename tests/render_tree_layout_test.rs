@@ -2,7 +2,7 @@ use orinium_browser::engine::bridge::text::{
     TextMeasureError, TextMeasurement, TextMeasurementRequest, TextMeasurer,
 };
 use orinium_browser::engine::html::HtmlNodeType;
-use orinium_browser::engine::renderer::{NodeKind, RenderTree};
+use orinium_browser::engine::renderer::NodeKind;
 use orinium_browser::engine::styler::computed_tree::{
     ComputedStyle, ComputedStyleNode, ComputedTree,
 };
@@ -52,10 +52,8 @@ fn render_tree_uses_measurer() {
     });
     let _child = TreeNode::add_child_value(&tree.root, computed_node);
 
-    let mut render_tree = RenderTree::from_computed_tree(&tree);
-
     let meas = MockMeasurer {};
-    render_tree.layout_with_measurer(&meas);
+    let render_tree = tree.layout_with_measurer(&meas, 800.0, 600.0);
 
     let root_node = render_tree.root.borrow();
     if let NodeKind::Scrollable {

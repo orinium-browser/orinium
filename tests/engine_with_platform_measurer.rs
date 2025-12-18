@@ -1,5 +1,4 @@
 use orinium_browser::engine::html::HtmlNodeType;
-use orinium_browser::engine::renderer::RenderTree;
 use orinium_browser::engine::styler::computed_tree::{
     ComputedStyle, ComputedStyleNode, ComputedTree,
 };
@@ -56,15 +55,12 @@ fn engine_layout_with_platform_measurer() {
     // ルートに子ノード（テキスト）を追加
     let _child = TreeNode::add_child_value(&tree.root, computed_node);
 
-    // ComputedTree から RenderTree を生成
-    let mut render_tree = RenderTree::from_computed_tree(&tree);
-
     // フォントファイルを読み込み、PlatformTextMeasurer を作成
     let bytes = std::fs::read(path).expect("read font");
     let pm = PlatformTextMeasurer::from_bytes("sys", bytes).expect("create measurer");
 
     // 測定器を使ってレイアウトを実行
-    render_tree.layout_with_measurer(&pm);
+    let render_tree = tree.layout_with_measurer(&pm, 800.0, 600.0);
 
     // レンダーツリーのルートを検査して、子のサイズが測定されていることを確認
     let root_node = render_tree.root.borrow();

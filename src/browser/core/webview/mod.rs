@@ -76,21 +76,15 @@ impl WebView {
         style_tree.style(&[]);
         let computed_tree = style_tree.compute();
 
-        // Render Tree
-        let mut render_tree = RenderTree::from_computed_tree(&computed_tree);
-        render_tree.set_root_size(800.0, 600.0);
-
+        // Render Tree: ComputedTree にレイアウトを任せて RenderTree を受け取る
         let measurer = crate::platform::renderer::text_measurer::PlatformTextMeasurer::new();
-        match measurer {
-            Ok(measurer) => {
-                render_tree.layout_with_measurer(&measurer);
-            }
+        let render_tree = match measurer {
+            Ok(measurer) => computed_tree.layout_with_measurer(&measurer, 800.0, 600.0),
             Err(e) => {
                 println!("Failed to create PlatformTextMeasurer: {}", e);
-                render_tree.layout_with_fallback();
+                computed_tree.layout_with_fallback(800.0, 600.0)
             }
-        }
-        //println!("RenderTree: {}", render_tree);
+        };
         self.render = Some(render_tree);
 
         self.needs_redraw = true;
@@ -176,21 +170,14 @@ impl WebView {
         let computed_tree = style_tree.compute();
 
         // --- Render Tree ---
-        let mut render_tree = RenderTree::from_computed_tree(&computed_tree);
-        render_tree.set_root_size(800.0, 600.0);
-
         let measurer = crate::platform::renderer::text_measurer::PlatformTextMeasurer::new();
-        match measurer {
-            Ok(measurer) => {
-                render_tree.layout_with_measurer(&measurer);
-            }
+        let render_tree = match measurer {
+            Ok(measurer) => computed_tree.layout_with_measurer(&measurer, 800.0, 600.0),
             Err(e) => {
                 println!("Failed to create PlatformTextMeasurer: {}", e);
-                render_tree.layout_with_fallback();
+                computed_tree.layout_with_fallback(800.0, 600.0)
             }
-        }
-
-        // println!("RenderTree: {}", render_tree);
+        };
         self.render = Some(render_tree);
 
         // --- 再描画要求 ---

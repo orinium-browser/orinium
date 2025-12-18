@@ -15,3 +15,9 @@ pub enum Display {
     // Flex,
     // Grid,
 }
+
+impl Display {
+    pub fn is_none(&self) -> bool {
+        *self == Display::None
+    }
+}

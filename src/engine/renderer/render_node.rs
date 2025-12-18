@@ -40,10 +40,8 @@ pub struct RenderNode {
     /// 計算されたレイアウトサイズ
     pub width: f32,
     pub height: f32,
-
-    /// レイアウトアルゴリズムが必要とするメタ情報
-    pub layout: LayoutInfo,
-    pub display: Display,
+    // NOTE: レイアウトメタ情報と display は ComputedTree 側で扱うため
+    // RenderNode からは外して、レンダリングに必要な位置・大きさ・内容のみにする。
 }
 
 /// レイアウト再計算のための最低限の情報
@@ -99,15 +97,13 @@ impl Display {
 }
 
 impl RenderNode {
-    pub fn new(kind: NodeKind, display: Display, x: f32, y: f32, width: f32, height: f32) -> Self {
+    pub fn new(kind: NodeKind, x: f32, y: f32, width: f32, height: f32) -> Self {
         Self {
             kind,
             x,
             y,
             width,
             height,
-            layout: LayoutInfo::new(width),
-            display,
         }
     }
 
