@@ -21,7 +21,7 @@ fn main() -> Result<()> {
             size_px: 24.0,
         },
         constraints: LayoutConstraints {
-            max_width: Some(400.0),
+            max_width: None,
             wrap: true,
             max_lines: None,
         },
