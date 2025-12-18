@@ -212,7 +212,7 @@ impl RenderTree {
             _ => NodeKind::Unknown,
         };
 
-        let display = Display::from_css_display(computed_style.display.clone());
+        let display = Display::from_css_display(computed_style.display);
         if display.is_none() {
             return (NodeKind::Unknown, display);
         }
