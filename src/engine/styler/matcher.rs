@@ -12,7 +12,7 @@ fn simple_selector_matches(simple: &str, tag: &str, attrs: &[Attribute]) -> bool
     let bytes = s.as_bytes();
 
     // タグ名（先頭にタグ名が来ている場合）
-    let mut tag_name = "";
+    let tag_name: &str;
     if !s.is_empty() && bytes[0] != b'.' && bytes[0] != b'#' {
         // read until . or #
         let mut end = 0;
