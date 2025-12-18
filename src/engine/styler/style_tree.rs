@@ -168,6 +168,7 @@ impl StyleTree {
                                 }
                             }
                         }
+                        CssNodeType::AtRule {..} => {}
                         _ => {}
                     }
                 });
