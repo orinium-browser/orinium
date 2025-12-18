@@ -17,7 +17,7 @@ impl RenderTree {
     }
 
     /// RenderTree を再レイアウト
-    pub fn layout(&mut self) {
+    pub fn layout_with_fallback(&mut self) {
         // 測定器が指定されていない場合はエンジンのフォールバックを使う
         let fallback = crate::engine::bridge::text::EngineFallbackTextMeasurer::default();
         self.layout_with_measurer(&fallback);

@@ -79,7 +79,17 @@ impl WebView {
         // Render Tree
         let mut render_tree = RenderTree::from_computed_tree(&computed_tree);
         render_tree.set_root_size(800.0, 600.0);
-        render_tree.layout();
+
+        let measurer = crate::platform::renderer::text_measurer::PlatformTextMeasurer::new();
+        match measurer {
+            Ok(measurer) => {
+                render_tree.layout_with_measurer(&measurer);
+            }
+            Err(e) => {
+                println!("Failed to create PlatformTextMeasurer: {}", e);
+                render_tree.layout_with_fallback();
+            }
+        }
         //println!("RenderTree: {}", render_tree);
         self.render = Some(render_tree);
 
@@ -168,7 +178,17 @@ impl WebView {
         // --- Render Tree ---
         let mut render_tree = RenderTree::from_computed_tree(&computed_tree);
         render_tree.set_root_size(800.0, 600.0);
-        render_tree.layout();
+        
+        let measurer = crate::platform::renderer::text_measurer::PlatformTextMeasurer::new();
+        match measurer {
+            Ok(measurer) => {
+                render_tree.layout_with_measurer(&measurer);
+            }
+            Err(e) => {
+                println!("Failed to create PlatformTextMeasurer: {}", e);
+                render_tree.layout_with_fallback();
+            }
+        }
 
         // println!("RenderTree: {}", render_tree);
         self.render = Some(render_tree);
