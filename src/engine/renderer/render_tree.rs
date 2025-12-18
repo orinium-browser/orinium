@@ -34,6 +34,7 @@ impl RenderTree {
     }
 
     /// 再帰的にノードをレイアウト
+    /// 返り値: (content_width, content_height)
     fn layout_node_with_measurer(
         node: &Rc<RefCell<TreeNode<RenderNode>>>,
         start_x: f32,
@@ -58,7 +59,7 @@ impl RenderTree {
                 let mut x_offset = start_x;
                 let mut y_offset = start_y;
                 for child in children {
-                    (x_offset, y_offset) = Self::layout_node_with_measurer(
+                    let (child_height, child_width) = Self::layout_node_with_measurer(
                         &child,
                         x_offset,
                         y_offset,
@@ -66,14 +67,14 @@ impl RenderTree {
                         available_height,
                         measurer,
                     );
-                    match render_node.display {
+                    match child.borrow().value.display {
                         Display::Block => {
                             // ブロック要素は改行
-                            x_offset = start_x;
+                            y_offset += child_height;
                         }
                         Display::Inline => {
                             // インライン要素は横並び
-                            y_offset = start_y;
+                            x_offset += child_width;
                             // TODO: 折り返し処理
                         }
                         Display::None => {
@@ -85,7 +86,6 @@ impl RenderTree {
                 render_node.y = start_y;
                 render_node.width = x_offset - start_x;
                 render_node.height = y_offset - start_y;
-                (start_x, start_y + render_node.height)
             }
 
             NodeKind::Scrollable { tree, .. } => {
@@ -102,7 +102,6 @@ impl RenderTree {
                 render_node.y = start_y;
                 render_node.width = available_width;
                 render_node.height = render_node.height.max(available_height);
-                (start_x, start_y + render_node.height)
             }
 
             NodeKind::Text {
@@ -134,7 +133,6 @@ impl RenderTree {
                 }
                 render_node.x = start_x;
                 render_node.y = start_y;
-                (start_x, start_y + render_node.height)
             }
 
             NodeKind::Button => {
@@ -143,7 +141,6 @@ impl RenderTree {
                 render_node.height = render_node.layout.preferred_height.unwrap_or(20.0);
                 render_node.x = start_x;
                 render_node.y = start_y;
-                (start_x, start_y + render_node.height)
             }
 
             NodeKind::Unknown => {
@@ -152,9 +149,10 @@ impl RenderTree {
                 render_node.height = 0.0;
                 render_node.x = start_x;
                 render_node.y = start_y;
-                (start_x, start_y)
             }
         }
+        // content size を返す
+        (render_node.width, render_node.height)
     }
 
     /// ComputedTree から RenderTree を生成（レイアウト情報はここでは付けない）

@@ -178,7 +178,7 @@ impl WebView {
         // --- Render Tree ---
         let mut render_tree = RenderTree::from_computed_tree(&computed_tree);
         render_tree.set_root_size(800.0, 600.0);
-        
+
         let measurer = crate::platform::renderer::text_measurer::PlatformTextMeasurer::new();
         match measurer {
             Ok(measurer) => {
