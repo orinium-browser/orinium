@@ -147,7 +147,7 @@ impl Renderer {
                     font_size: *font_size,
                     color: color.clone(),
                 });
-                /*
+                // /*
                 out.push(DrawCommand::DrawRect {
                     x: abs_x,
                     y: abs_y,
@@ -155,7 +155,7 @@ impl Renderer {
                     height: node_borrow.value.height,
                     color: Color::new(0.9, 0.0, 0.0, 1.0),
                 });
-                */
+                // */
             }
             NodeKind::Button => {
                 out.push(DrawCommand::DrawRect {
