@@ -3,7 +3,7 @@ use orinium_browser::browser::BrowserApp;
 use orinium_browser::engine::renderer::DrawCommand;
 use orinium_browser::engine::renderer::RenderTree;
 use orinium_browser::engine::renderer::render::Color;
-use orinium_browser::engine::renderer::render_node::{NodeKind, RenderNode};
+use orinium_browser::engine::renderer::render_node::{Display, NodeKind, RenderNode};
 
 fn main() -> Result<()> {
     env_logger::init();
@@ -62,7 +62,7 @@ fn main() -> Result<()> {
     });
     commands.push(DrawCommand::PopClip);
 
-    let root = RenderNode::new(NodeKind::Unknown, 0.0, 0.0, 800.0, 600.0);
+    let root = RenderNode::new(NodeKind::Unknown, Display::Block, 0.0, 0.0, 800.0, 600.0);
     let render_tree = RenderTree::new(root);
     let app = BrowserApp::default().with_draw_info(render_tree, commands);
     app.run()?;

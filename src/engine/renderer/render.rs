@@ -147,8 +147,17 @@ impl Renderer {
                     font_size: *font_size,
                     color: color.clone(),
                 });
+                /*
+                out.push(DrawCommand::DrawRect {
+                    x: abs_x,
+                    y: abs_y,
+                    width: node_borrow.value.width,
+                    height: node_borrow.value.height,
+                    color: Color::new(0.9, 0.0, 0.0, 1.0),
+                });
+                */
             }
-            NodeKind::Button | NodeKind::Block | NodeKind::Unknown => {
+            NodeKind::Button => {
                 out.push(DrawCommand::DrawRect {
                     x: abs_x,
                     y: abs_y,
@@ -157,7 +166,7 @@ impl Renderer {
                     color: Color::new(0.8, 0.8, 0.8, 1.0),
                 });
             }
-            NodeKind::Inline => {
+            NodeKind::Container => {
                 out.push(DrawCommand::DrawRect {
                     x: abs_x,
                     y: abs_y,
@@ -196,6 +205,9 @@ impl Renderer {
 
                 out.push(DrawCommand::PopTransform);
                 out.push(DrawCommand::PopClip);
+            }
+            NodeKind::Unknown => {
+                // 無視
             }
         }
 

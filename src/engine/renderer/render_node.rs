@@ -23,11 +23,7 @@ pub enum NodeKind {
         scroll_offset_y: f32,
     },
 
-    /// ブロック要素（幅いっぱい＋縦積み）
-    Block,
-
-    /// インライン要素（横方向に並ぶ）
-    Inline,
+    Container,
 
     /// 未知の要素
     Unknown,
@@ -47,6 +43,7 @@ pub struct RenderNode {
 
     /// レイアウトアルゴリズムが必要とするメタ情報
     pub layout: LayoutInfo,
+    pub display: Display,
 }
 
 /// レイアウト再計算のための最低限の情報
@@ -79,8 +76,30 @@ impl LayoutInfo {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub enum Display {
+    #[default]
+    Block,
+    Inline,
+    None,
+}
+
+impl Display {
+    pub fn is_none(&self) -> bool {
+        matches!(self, Display::None)
+    }
+
+    pub fn from_css_display(display: crate::engine::css::values::Display) -> Self {
+        match display {
+            crate::engine::css::values::Display::Block => Display::Block,
+            crate::engine::css::values::Display::Inline => Display::Inline,
+            crate::engine::css::values::Display::None => Display::None,
+        }
+    }
+}
+
 impl RenderNode {
-    pub fn new(kind: NodeKind, x: f32, y: f32, width: f32, height: f32) -> Self {
+    pub fn new(kind: NodeKind, display: Display, x: f32, y: f32, width: f32, height: f32) -> Self {
         Self {
             kind,
             x,
@@ -88,6 +107,7 @@ impl RenderNode {
             width,
             height,
             layout: LayoutInfo::new(width),
+            display,
         }
     }
 

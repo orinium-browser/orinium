@@ -1,5 +1,5 @@
 use super::render::Color;
-use super::render_node::{NodeKind, RenderNode, RenderTree};
+use super::render_node::{Display, NodeKind, RenderNode, RenderTree};
 use crate::engine::css::Length;
 use crate::engine::html::{HtmlNodeType, util as html_util};
 use crate::engine::styler::computed_tree::{ComputedStyleNode, ComputedTree};
@@ -54,7 +54,7 @@ impl RenderTree {
         render_node.layout.available_width = available_width;
 
         match &mut render_node.kind {
-            NodeKind::Block => {
+            NodeKind::Container => {
                 let mut x_offset = start_x;
                 let mut y_offset = start_y;
                 for child in children {
@@ -66,52 +66,26 @@ impl RenderTree {
                         available_height,
                         measurer,
                     );
+                    match render_node.display {
+                        Display::Block => {
+                            // ブロック要素は改行
+                            x_offset = start_x;
+                        }
+                        Display::Inline => {
+                            // インライン要素は横並び
+                            y_offset = start_y;
+                            // TODO: 折り返し処理
+                        }
+                        Display::None => {
+                            // 非表示要素は無視
+                        }
+                    }
                 }
                 render_node.x = start_x;
                 render_node.y = start_y;
                 render_node.width = x_offset - start_x;
                 render_node.height = y_offset - start_y;
                 (start_x, start_y + render_node.height)
-            }
-
-            NodeKind::Inline => {
-                let mut x_offset = start_x;
-                let mut y_offset = start_y;
-                let mut line_height: f32 = 0.0;
-
-                for child in children {
-                    let _child_bottom = Self::layout_node_with_measurer(
-                        &child,
-                        x_offset,
-                        y_offset,
-                        available_width,
-                        available_height,
-                        measurer,
-                    );
-                    let mut child_ref = child.borrow_mut();
-                    let child_width = child_ref.value.width;
-                    let child_height = child_ref.value.height;
-
-                    // 折り返し判定
-                    if x_offset + child_width > start_x + available_width {
-                        x_offset = start_x;
-                        y_offset += line_height;
-                        line_height = 0.0;
-                    }
-
-                    // 子ノードの位置を更新（Inline は横に積む）
-                    child_ref.value.x = x_offset;
-                    child_ref.value.y = y_offset;
-
-                    x_offset += child_width;
-                    line_height = line_height.max(child_height);
-                }
-
-                render_node.x = start_x;
-                render_node.y = start_y;
-                render_node.width = available_width;
-                render_node.height = line_height + (y_offset - start_y);
-                (start_x + render_node.width, y_offset)
             }
 
             NodeKind::Scrollable { tree, .. } => {
@@ -185,8 +159,8 @@ impl RenderTree {
 
     /// ComputedTree から RenderTree を生成（レイアウト情報はここでは付けない）
     pub fn from_computed_tree(tree: &ComputedTree) -> RenderTree {
-        let root_kind = Self::detect_kind(&tree.root.borrow().value);
-        let root_node = RenderNode::new(root_kind, 0.0, 0.0, 0.0, 0.0);
+        let (root_kind, _display) = Self::detect_kind_display(&tree.root.borrow().value);
+        let root_node = RenderNode::new(root_kind, Display::Block, 0.0, 0.0, 0.0, 0.0);
         let inner_render_tree = Tree::new(root_node);
 
         // 子ノード構造だけをコピー
@@ -199,6 +173,7 @@ impl RenderTree {
                 scroll_offset_y: 0.0,
                 scroll_offset_x: 0.0,
             },
+            Display::Block,
             0.0,
             0.0,
             0.0,
@@ -209,11 +184,11 @@ impl RenderTree {
     }
 
     /// ComputedStyleNode から NodeKind を判定
-    fn detect_kind(node: &ComputedStyleNode) -> NodeKind {
+    fn detect_kind_display(node: &ComputedStyleNode) -> (NodeKind, Display) {
         let computed_style = node.computed.clone().unwrap();
         let html = node.html.upgrade().unwrap();
         let html_ref = html.borrow();
-        match &html_ref.value {
+        let kind = match &html_ref.value {
             HtmlNodeType::Text(t) => NodeKind::Text {
                 text: t.clone(),
                 font_size: computed_style
@@ -226,16 +201,22 @@ impl RenderTree {
             },
             HtmlNodeType::Element { tag_name, .. } => match tag_name.as_str() {
                 "button" => NodeKind::Button,
-                _ if html_util::is_block_level_element(tag_name) => NodeKind::Block,
-                _ if html_util::is_inline_element(tag_name) => NodeKind::Inline,
+                _ if html_util::is_block_level_element(tag_name) => NodeKind::Container,
+                _ if html_util::is_inline_element(tag_name) => NodeKind::Container,
                 _ => {
                     log::warn!(target:"RenderTree::NodeKind", "Unknown element tag: {}", tag_name);
                     NodeKind::Unknown
                 }
             },
-            HtmlNodeType::Document => NodeKind::Block,
+            HtmlNodeType::Document => NodeKind::Container,
             _ => NodeKind::Unknown,
+        };
+
+        let display = Display::from_css_display(computed_style.display.clone());
+        if display.is_none() {
+            return (NodeKind::Unknown, display);
         }
+        (kind, display)
     }
 
     /// 再帰的に ComputedTree を RenderTree に変換（構造コピーのみ）
@@ -244,8 +225,8 @@ impl RenderTree {
         dst: &Rc<RefCell<TreeNode<RenderNode>>>,
     ) {
         for child in src.borrow().children() {
-            let kind = Self::detect_kind(&child.borrow().value);
-            let mut new_node = RenderNode::new(kind.clone(), 0.0, 0.0, 0.0, 0.0);
+            let (kind, display) = Self::detect_kind_display(&child.borrow().value);
+            let mut new_node = RenderNode::new(kind.clone(), display, 0.0, 0.0, 0.0, 0.0);
 
             // LayoutInfo に最低限のメタ情報をコピー
             if let Some(computed) = child.borrow().value.computed.as_ref() {
