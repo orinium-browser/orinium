@@ -10,7 +10,7 @@ impl RenderTree {
         }
     }
 
-    /// ComputedTree から RenderTree を生成（レイアウト情報はここでは付けない）
+    /// ComputedTree から RenderTree を生成
     pub fn from_computed_tree(tree: &ComputedTree) -> RenderTree {
         // Delegate to ComputedTree's layout routine with fallback measurer.
         let fallback = crate::engine::bridge::text::EngineFallbackTextMeasurer::default();
