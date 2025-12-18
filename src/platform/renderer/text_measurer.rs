@@ -75,15 +75,39 @@ impl TextMeasurer for PlatformTextMeasurer {
             .ok_or_else(|| TextMeasureError::FontNotFound(self.default_font.clone()))?;
         let font_size = req.font.size_px.max(1.0);
 
-        let mut advances: Vec<f32> = Vec::new();
-        for ch in req.text.chars() {
-            let (metrics, _bitmap) = font.rasterize(ch, font_size);
-            advances.push(metrics.advance_width);
+        // エスケープシーケンスを解釈する（\n, \r, \t, \\\ など）
+        fn unescape_text(s: &str) -> String {
+            let mut out = String::with_capacity(s.len());
+            let mut it = s.chars();
+            while let Some(c) = it.next() {
+                if c == '\\' {
+                    if let Some(n) = it.next() {
+                        match n {
+                            'n' => out.push('\n'),
+                            'r' => out.push('\r'),
+                            't' => out.push('\t'),
+                            '\\' => out.push('\\'),
+                            '\'' => out.push('\''),
+                            '"' => out.push('"'),
+                            other => out.push(other),
+                        }
+                    } else {
+                        // 末尾のバックスラッシュはそのまま
+                        out.push('\\');
+                    }
+                } else {
+                    out.push(c);
+                }
+            }
+            out
         }
+
+        let text = unescape_text(&req.text);
 
         let line_height = font_size * 1.2;
 
-        if advances.is_empty() {
+        // 空文字は高さだけ返す
+        if text.is_empty() {
             return Ok(TextMeasurement {
                 width: 0.0,
                 height: line_height,
@@ -92,39 +116,70 @@ impl TextMeasurer for PlatformTextMeasurer {
             });
         }
 
+        // スペース幅をタブ処理のために取得
+        let space_advance = {
+            let (m, _b) = font.rasterize(' ', font_size);
+            m.advance_width
+        };
+
         let mut max_width: f32 = 0.0;
         let mut cur_width: f32 = 0.0;
         let mut lines: usize = 1;
 
-        if req.constraints.wrap {
-            if let Some(mw) = req.constraints.max_width {
-                for a in advances.iter() {
-                    if cur_width + a > mw && cur_width > 0.0 {
-                        max_width = max_width.max(cur_width);
-                        cur_width = *a;
-                        lines += 1;
-                    } else {
-                        cur_width += a;
+        for ch in text.chars() {
+            if ch == '\r' {
+                // CR は無視（CRLF は \n で処理）
+                continue;
+            }
+
+            if ch == '\n' {
+                max_width = max_width.max(cur_width);
+                cur_width = 0.0;
+                lines = lines.saturating_add(1);
+                if let Some(max_lines) = req.constraints.max_lines {
+                    if lines > max_lines {
+                        break;
                     }
                 }
-                max_width = max_width.max(cur_width);
+                continue;
+            }
+
+            let advance = if ch == '\t' {
+                // タブはスペース4個分で扱う
+                space_advance * 4.0
             } else {
-                for a in advances.iter() {
-                    cur_width += a;
+                let (metrics, _bitmap) = font.rasterize(ch, font_size);
+                metrics.advance_width
+            };
+
+            if req.constraints.wrap {
+                if let Some(mw) = req.constraints.max_width {
+                    if cur_width + advance > mw && cur_width > 0.0 {
+                        max_width = max_width.max(cur_width);
+                        cur_width = advance;
+                        lines = lines.saturating_add(1);
+                        if let Some(max_lines) = req.constraints.max_lines {
+                            if lines > max_lines {
+                                break;
+                            }
+                        }
+                    } else {
+                        cur_width += advance;
+                    }
+                } else {
+                    cur_width += advance;
                 }
-                max_width = cur_width;
+            } else {
+                cur_width += advance;
             }
-        } else {
-            for a in advances.iter() {
-                cur_width += a;
-            }
-            max_width = cur_width;
         }
 
-        if let Some(max_lines) = req.constraints.max_lines
-            && lines > max_lines
-        {
-            lines = max_lines;
+        max_width = max_width.max(cur_width);
+
+        if let Some(max_lines) = req.constraints.max_lines {
+            if lines > max_lines {
+                lines = max_lines;
+            }
         }
 
         let height = lines as f32 * line_height;
