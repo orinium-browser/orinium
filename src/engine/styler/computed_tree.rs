@@ -3,8 +3,7 @@ use super::style_tree::Style;
 use crate::engine::css::values::{Border, Color, Display, Length};
 use crate::html::HtmlNodeType;
 use std::cell::RefCell;
-use std::rc::Rc;
-use std::rc::Weak;
+use std::rc::{Rc, Weak};
 
 use crate::engine::bridge::text;
 use crate::engine::renderer::render::Color as RenderColor;
