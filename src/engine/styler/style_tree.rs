@@ -4,10 +4,11 @@ use std::rc::{Rc, Weak};
 use super::computed_tree::{ComputedStyle, ComputedStyleNode};
 use super::ua::default_style_for;
 
-use crate::engine::css::cssom::CssNodeType;
+use crate::engine::css::cssom::{CssNodeType, CssValue};
 use crate::engine::css::values::{Border, Color, Display, Length};
 use crate::engine::tree::*;
 use crate::html::{HtmlNodeType, util as html_util};
+use super::matcher::selector_matches_on_node;
 
 #[derive(Debug, Clone)]
 pub struct StyleNode {
@@ -56,7 +57,7 @@ impl StyleTree {
     }
 
     /// styleを適応させる
-    pub fn style(&mut self, _cssoms: &[Tree<CssNodeType>]) {
+    pub fn style(&mut self, cssoms: &[Tree<CssNodeType>]) {
         self.traverse(&mut |node: &Rc<RefCell<TreeNode<StyleNode>>>| {
             let mut node = node.borrow_mut();
             let node_value = node.value.clone();
@@ -99,6 +100,68 @@ impl StyleTree {
                     Display::Inline => {}
                     Display::None => {}
                 }
+            }
+
+            // 3. User stylesheets (cssoms) を走査してルールを適用
+            for css in cssoms {
+                // css は stylesheet tree。ルート直下や再帰的に Rule ノードが存在するので traverse で探す
+                css.traverse(&mut |css_node_rc| {
+                    let css_node = css_node_rc.borrow();
+                    match &css_node.value {
+                        CssNodeType::Rule { selectors } => {
+                            // この rule の宣言（子ノード）を見て適用する
+                            for sel in selectors {
+                                if selector_matches_on_node(sel.as_str(), &html_rc) {
+                                    // この rule applies -> 子の Declaration を走査して適用
+                                    for child in css_node_rc.borrow().children().iter() {
+                                        let child_b = child.borrow();
+                                        if let CssNodeType::Declaration { name, value } = &child_b.value {
+                                            match name.as_str() {
+                                                "color" => {
+                                                    if let CssValue::Color(c) = value {
+                                                        style.color = Some(*c);
+                                                    }
+                                                }
+                                                "background-color" => {
+                                                    if let CssValue::Color(c) = value {
+                                                        style.background_color = Some(*c);
+                                                    }
+                                                }
+                                                "width" => {
+                                                    if let CssValue::Length(l) = value {
+                                                        style.width = Some(*l);
+                                                    }
+                                                }
+                                                "height" => {
+                                                    if let CssValue::Length(l) = value {
+                                                        style.height = Some(*l);
+                                                    }
+                                                }
+                                                "display" => {
+                                                    if let CssValue::Keyword(k) = value {
+                                                        match k.as_str() {
+                                                            "block" => style.display = Some(Display::Block),
+                                                            "inline" => style.display = Some(Display::Inline),
+                                                            "none" => style.display = Some(Display::None),
+                                                            _ => {}
+                                                        }
+                                                    }
+                                                }
+                                                "font-size" => {
+                                                    if let CssValue::Length(l) = value {
+                                                        style.font_size = Some(*l);
+                                                    }
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                });
             }
 
             node.value.style = Some(style);
