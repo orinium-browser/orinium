@@ -1,6 +1,3 @@
-#![allow(dead_code)]
-#![allow(unused)]
-
 use crate::engine::css::cssom::{CssNodeType, CssValue};
 use crate::engine::html::tokenizer::Attribute;
 use crate::engine::tree::{Tree, TreeNode};
