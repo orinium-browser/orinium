@@ -62,7 +62,7 @@ fn main() -> Result<()> {
     });
     commands.push(DrawCommand::PopClip);
 
-    let root = RenderNode::new(NodeKind::Unknown, 0.0, 0.0, 800.0, 600.0);
+    let root = RenderNode::new(NodeKind::Container, 0.0, 0.0, 800.0, 600.0);
     let render_tree = RenderTree::new(root);
     let app = BrowserApp::default().with_draw_info(render_tree, commands);
     app.run()?;

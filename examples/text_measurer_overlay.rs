@@ -51,7 +51,7 @@ fn main() -> Result<()> {
     });
 
     let root = orinium_browser::engine::renderer::render_node::RenderNode::new(
-        NodeKind::Unknown,
+        NodeKind::Container,
         0.0,
         0.0,
         800.0,
