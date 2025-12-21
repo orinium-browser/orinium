@@ -68,34 +68,7 @@ impl TextMeasurer for PlatformTextMeasurer {
             .ok_or_else(|| TextMeasureError::FontNotFound(self.default_font.clone()))?;
         let font_size = req.font.size_px.max(1.0);
 
-        // エスケープシーケンスを解釈する（\n, \r, \t, \\\ など）
-        fn unescape_text(s: &str) -> String {
-            let mut out = String::with_capacity(s.len());
-            let mut it = s.chars();
-            while let Some(c) = it.next() {
-                if c == '\\' {
-                    if let Some(n) = it.next() {
-                        match n {
-                            'n' => out.push('\n'),
-                            'r' => out.push('\r'),
-                            't' => out.push('\t'),
-                            '\\' => out.push('\\'),
-                            '\'' => out.push('\''),
-                            '"' => out.push('"'),
-                            other => out.push(other),
-                        }
-                    } else {
-                        // 末尾のバックスラッシュはそのまま
-                        out.push('\\');
-                    }
-                } else {
-                    out.push(c);
-                }
-            }
-            out
-        }
-
-        let text = unescape_text(&req.text);
+        let text = &req.text;
 
         let line_height = font_size * 1.2;
 
