@@ -13,7 +13,7 @@ pub struct PlatformTextMeasurer {
 
 impl PlatformTextMeasurer {
     /// システムフォントから初期化を試みる
-    /// 
+    ///
     /// TODO:
     /// - PlatformTextRenderer とfontの共有化
     /// - フォント選択機能を追加
