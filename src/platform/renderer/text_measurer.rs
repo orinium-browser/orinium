@@ -99,6 +99,7 @@ impl TextMeasurer for PlatformTextMeasurer {
         let mut lines: usize = 1;
 
         for ch in text.chars() {
+            print!("{:?}", ch);
             if ch == '\r' {
                 // CR は無視（CRLF は \n で処理）
                 continue;
@@ -125,6 +126,8 @@ impl TextMeasurer for PlatformTextMeasurer {
                     metrics.advance_width
                 })
             };
+
+            println!(" : {}", advance);
 
             if req.constraints.wrap {
                 if let Some(mw) = req.constraints.max_width {

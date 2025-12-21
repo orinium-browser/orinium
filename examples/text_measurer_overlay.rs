@@ -11,44 +11,32 @@ use orinium_browser::{
 fn main() -> Result<()> {
     env_logger::init();
 
-    let text = "This is a sample text to demonstrate text measurement and overlay rendering in the Orinium Browser example application.\nThe quick brown fox jumps over the lazy dog. 1234567890!@#$%^&*()_+-=[]{}|;':\",.<>/?`~";
     let measurer = PlatformTextMeasurer::new().map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    let req = TextMeasurementRequest {
-        text: text.to_string(),
-        font: FontDescription {
-            family: None,
-            size_px: 24.0,
-        },
-        constraints: LayoutConstraints {
-            max_width: None,
-            wrap: true,
-            max_lines: None,
-        },
-    };
-
-    let measurement = measurer
-        .measure(&req)
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
     let mut commands = Vec::new();
 
-    let x = 50.0;
-    let y = 50.0;
-
-    commands.push(DrawCommand::DrawRect {
-        x,
-        y,
-        width: measurement.width,
-        height: measurement.height,
-        color: Color::BLACK,
-    });
-    commands.push(DrawCommand::DrawText {
-        x,
-        y,
-        text: text.to_string(),
-        font_size: 24.0,
-        color: Color::WHITE,
-    });
+    commands.extend(debug_text_commands(
+        &measurer,
+        "Test text",
+        50.0,
+        50.0,
+        24.0,
+    )?);
+    commands.extend(debug_text_commands(
+        &measurer,
+        "こんにちは、世界！",
+        50.0,
+        100.0,
+        32.0,
+    )?);
+    commands.extend(debug_text_commands(&measurer, "This is a longer piece of text that should wrap around to the next line when it exceeds the maximum width.", 50.0, 150.0, 20.0)?);
+    commands.extend(debug_text_commands(
+        &measurer,
+        "1234567890-^#$%&()=~|",
+        50.0,
+        250.0,
+        24.0,
+    )?);
 
     let root = orinium_browser::engine::renderer::render_node::RenderNode::new(
         NodeKind::Container,
@@ -62,4 +50,46 @@ fn main() -> Result<()> {
     app.run()?;
 
     Ok(())
+}
+
+fn debug_text_commands(
+    measurer: &dyn TextMeasurer,
+    text: &str,
+    x: f32,
+    y: f32,
+    font_size: f32,
+) -> anyhow::Result<Vec<DrawCommand>> {
+    let req = TextMeasurementRequest {
+        text: text.to_string(),
+        font: FontDescription {
+            family: None,
+            size_px: font_size,
+        },
+        constraints: LayoutConstraints {
+            max_width: None,
+            wrap: true,
+            max_lines: None,
+        },
+    };
+
+    let measurement = measurer
+        .measure(&req)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    Ok(vec![
+        DrawCommand::DrawRect {
+            x,
+            y,
+            width: measurement.width,
+            height: measurement.height,
+            color: Color::BLACK,
+        },
+        DrawCommand::DrawText {
+            x,
+            y,
+            text: text.to_string(),
+            font_size,
+            color: Color::WHITE,
+        },
+    ])
 }
