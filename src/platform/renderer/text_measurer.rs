@@ -15,14 +15,6 @@ pub struct PlatformTextMeasurer {
 impl PlatformTextMeasurer {
     /// システムフォントから初期化を試みる
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let candidates = [
-            "C:\\Windows\\Fonts\\meiryo.ttc",
-            "C:\\Windows\\Fonts\\msgothic.ttc",
-            "C:\\Windows\\Fonts\\msmincho.ttc",
-            "C:\\Windows\\Fonts\\arial.ttf",
-            "C:\\Windows\\Fonts\\segoeui.ttf",
-        ];
-
         // 読み込んだフォントキャッシュ
         let mut fonts: HashMap<String, FontDue> = HashMap::new();
 
@@ -38,10 +30,8 @@ impl PlatformTextMeasurer {
             });
         }
 
-        for p in &candidates {
-            if Path::new(p).exists()
-                && let Ok(bytes) = std::fs::read(p)
-            {
+        for p in crate::platform::font::system_font_candidates()? {
+            if let Ok(bytes) = std::fs::read(p) {
                 let font = FontDue::from_bytes(&bytes[..], fontdue::FontSettings::default())?;
                 fonts.insert("default".to_string(), font);
                 return Ok(Self {
