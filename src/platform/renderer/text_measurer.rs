@@ -61,7 +61,7 @@ impl PlatformTextMeasurer {
 
 impl TextMeasurer for PlatformTextMeasurer {
     /// テキスト計測を行う
-    /// 
+    ///
     /// TODO
     /// - Baselineの計算
     fn measure(&self, req: &TextMeasurementRequest) -> Result<TextMeasurement, TextMeasureError> {
@@ -91,6 +91,9 @@ impl TextMeasurer for PlatformTextMeasurer {
             m.advance_width
         };
 
+        // 文字幅cache
+        let mut advance_cache: HashMap<char, f32> = HashMap::new();
+
         let mut max_width: f32 = 0.0;
         let mut cur_width: f32 = 0.0;
         let mut lines: usize = 1;
@@ -117,8 +120,10 @@ impl TextMeasurer for PlatformTextMeasurer {
                 // タブはスペース4個分で扱う
                 space_advance * 4.0
             } else {
-                let (metrics, _bitmap) = font.rasterize(ch, font_size);
-                metrics.advance_width
+                *advance_cache.entry(ch).or_insert_with(|| {
+                    let (metrics, _) = font.rasterize(ch, font_size);
+                    metrics.advance_width
+                })
             };
 
             if req.constraints.wrap {
