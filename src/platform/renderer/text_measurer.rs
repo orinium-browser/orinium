@@ -4,7 +4,6 @@ use crate::engine::bridge::text::{
 use fontdue::Font as FontDue;
 use std::collections::HashMap;
 use std::env;
-use std::path::Path;
 
 /// テキスト計測のプラットフォーム側実装
 pub struct PlatformTextMeasurer {
