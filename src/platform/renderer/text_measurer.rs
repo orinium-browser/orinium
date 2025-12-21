@@ -136,10 +136,10 @@ impl TextMeasurer for PlatformTextMeasurer {
                 max_width = max_width.max(cur_width);
                 cur_width = 0.0;
                 lines = lines.saturating_add(1);
-                if let Some(max_lines) = req.constraints.max_lines {
-                    if lines > max_lines {
-                        break;
-                    }
+                if let Some(max_lines) = req.constraints.max_lines
+                    && lines > max_lines
+                {
+                    break;
                 }
                 continue;
             }
@@ -158,10 +158,10 @@ impl TextMeasurer for PlatformTextMeasurer {
                         max_width = max_width.max(cur_width);
                         cur_width = advance;
                         lines = lines.saturating_add(1);
-                        if let Some(max_lines) = req.constraints.max_lines {
-                            if lines > max_lines {
-                                break;
-                            }
+                        if let Some(max_lines) = req.constraints.max_lines
+                            && lines > max_lines
+                        {
+                            break;
                         }
                     } else {
                         cur_width += advance;
@@ -176,10 +176,10 @@ impl TextMeasurer for PlatformTextMeasurer {
 
         max_width = max_width.max(cur_width);
 
-        if let Some(max_lines) = req.constraints.max_lines {
-            if lines > max_lines {
-                lines = max_lines;
-            }
+        if let Some(max_lines) = req.constraints.max_lines
+            && lines > max_lines
+        {
+            lines = max_lines;
         }
 
         let height = lines as f32 * line_height;
