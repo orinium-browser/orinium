@@ -6,6 +6,8 @@ use glyphon::{
     fontdb,
 };
 
+use crate::platform::font;
+
 /// テキストセクション位置・クリップ・描画するBufferをまとめた構造体
 pub struct TextSection {
     /// スクリーン上の位置 (左上原点)
@@ -44,16 +46,7 @@ impl TextRenderer {
             return Self::new_from_bytes(device, queue, format, bytes);
         }
 
-        let candidates = [
-            "C:\\Windows\\Fonts\\meiryo.ttc",   // メイリオ
-            "C:\\Windows\\Fonts\\msgothic.ttc", // MS ゴシック
-            "C:\\Windows\\Fonts\\msmincho.ttc", // MS 明朝
-            "C:\\Windows\\Fonts\\arial.ttf",    // Arial
-            "C:\\Windows\\Fonts\\segoeui.ttf",  // Segoe UI
-            "C:\\Windows\\Fonts\\seguisym.ttf", // Segoe UI Symbol
-        ];
-
-        for p in &candidates {
+        for p in font::system_font_candidates()? {
             if let Ok(bytes) = std::fs::read(p) {
                 // build brush from bytes
                 return Self::new_from_bytes(device, queue, format, bytes);
