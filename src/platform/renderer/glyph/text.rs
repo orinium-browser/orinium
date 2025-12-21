@@ -18,7 +18,6 @@ pub struct TextSection {
 }
 
 /// glyphon使ったテキストレンダラー
-#[allow(dead_code)]
 pub struct TextRenderer {
     /// glyphonのテキストブラシ
     brush: TextBrush,
