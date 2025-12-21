@@ -13,6 +13,10 @@ pub struct PlatformTextMeasurer {
 
 impl PlatformTextMeasurer {
     /// システムフォントから初期化を試みる
+    /// 
+    /// TODO:
+    /// - PlatformTextRenderer とfontの共有化
+    /// - フォント選択機能を追加
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         // 読み込んだフォントキャッシュ
         let mut fonts: HashMap<String, FontDue> = HashMap::new();
