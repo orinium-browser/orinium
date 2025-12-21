@@ -61,6 +61,9 @@ impl PlatformTextMeasurer {
 
 impl TextMeasurer for PlatformTextMeasurer {
     /// テキスト計測を行う
+    /// 
+    /// TODO
+    /// - Baselineの計算
     fn measure(&self, req: &TextMeasurementRequest) -> Result<TextMeasurement, TextMeasureError> {
         let font = self
             .fonts
