@@ -76,7 +76,6 @@ impl WebView {
         style_tree.style(&[]);
         let computed_tree = style_tree.compute();
 
-        // Render Tree: ComputedTree にレイアウトを任せて RenderTree を受け取る
         let measurer = crate::platform::renderer::text_measurer::PlatformTextMeasurer::new();
         let render_tree = match measurer {
             Ok(measurer) => computed_tree.layout_with_measurer(&measurer, 800.0, 600.0),
@@ -154,9 +153,7 @@ impl WebView {
             css_sources.push(css_text);
         }
 
-        // --- Style Tree を構築 ---
-        let mut style_tree = StyleTree::transform(&dom_tree);
-
+        // --- CSSOM を構築 ---
         let mut cssoms = vec![];
         for css_text in css_sources {
             let mut css_parser = CssParser::new(&css_text);
@@ -164,9 +161,9 @@ impl WebView {
             cssoms.push(cssom);
         }
 
-        // UA + 外部CSS + <style> の CSS を反映
+        // --- Style Tree を構築 ---
+        let mut style_tree = StyleTree::transform(&dom_tree);
         style_tree.style(&cssoms);
-
         let computed_tree = style_tree.compute();
 
         // --- Render Tree ---
@@ -180,7 +177,6 @@ impl WebView {
         };
         self.render = Some(render_tree);
 
-        // --- 再描画要求 ---
         self.needs_redraw = true;
 
         Ok(())
