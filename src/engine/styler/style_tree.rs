@@ -3,6 +3,7 @@ use std::rc::{Rc, Weak};
 
 use super::computed_tree::{ComputedStyle, ComputedStyleNode};
 use super::ua::default_style_for;
+use log;
 
 use super::matcher::selector_matches_on_node;
 use crate::engine::css::cssom::{CssNodeType, CssValue};
@@ -67,12 +68,14 @@ impl StyleTree {
 
             // 1. UA デフォルトスタイル
             let mut style = default_style_for(&html);
+            log::debug!(target: "Styler::StyleTree", "UA default style for node={:?}: {:?}", html, style);
 
             // 2. 親スタイルを取得して継承
-            let parent_style = node.parent().and_then(|p| p.borrow().value.style.clone());
+            let parent_node = node.parent();
 
-            if let Some(parent) = parent_style {
-                inherit_from_parent(&mut style, &parent);
+            if let Some(parent_rc) = parent_node.clone() {
+                inherit_from_parent_from_node(&mut style, &parent_rc);
+                log::debug!(target: "Styler::StyleTree", "After inheriting from parent for node={:?}: {:?}", html, style);
             }
 
             if let Some(font_size) = style.font_size {
@@ -94,6 +97,7 @@ impl StyleTree {
                 }
             }
 
+            log::debug!(target: "Styler::StyleTree", "Before applying user styles for node={:?}: {:?}", html, style);
             // 3. User stylesheets (cssoms) を走査してルールを適用
             for css in cssoms {
                 // ルート直下や再帰的に Rule ノードが存在するので traverse で探す
@@ -104,57 +108,69 @@ impl StyleTree {
                             // この rule の宣言（子ノード）を見て適用する
                             for sel in selectors {
                                 if selector_matches_on_node(sel.as_str(), &html_rc) {
-                                    // この rule applies -> 子の Declaration を走査して適用
-                                    for child in css_node_rc.borrow().children().iter() {
-                                        let child_b = child.borrow();
-                                        if let CssNodeType::Declaration { name, value } =
-                                            &child_b.value
-                                        {
-                                            match name.as_str() {
-                                                "color" => {
-                                                    if let CssValue::Color(c) = value {
-                                                        style.color = Some(*c);
-                                                    }
-                                                }
-                                                "background-color" => {
-                                                    if let CssValue::Color(c) = value {
-                                                        style.background_color = Some(*c);
-                                                    }
-                                                }
-                                                "width" => {
-                                                    if let CssValue::Length(l) = value {
-                                                        style.width = Some(*l);
-                                                    }
-                                                }
-                                                "height" => {
-                                                    if let CssValue::Length(l) = value {
-                                                        style.height = Some(*l);
-                                                    }
-                                                }
-                                                "display" => {
-                                                    if let CssValue::Keyword(k) = value {
-                                                        match k.as_str() {
-                                                            "block" => {
-                                                                style.display = Some(Display::Block)
+                                    // 要素ノードのみ処理する
+                                    match &html {
+                                        HtmlNodeType::Element { .. } | HtmlNodeType::Document => {
+                                            log::debug!(target: "Styler::StyleTree::CSS", "Selector matched '{}' on node={:?}", sel, html);
+                                            // この rule applies -> 子の Declaration を走査して適用
+                                            for child in css_node_rc.borrow().children().iter() {
+                                                let child_b = child.borrow();
+                                                if let CssNodeType::Declaration { name, value } = &child_b.value {
+                                                    match name.as_str() {
+                                                        "color" => {
+                                                            if let CssValue::Color(c) = value {
+                                                                let old = style.color;
+                                                                style.color = Some(*c);
+                                                                log::debug!(target: "Styler::StyleTree::CSS", "Applied 'color': {:?} -> {:?} (node={:?})", old, style.color, html);
                                                             }
-                                                            "inline" => {
-                                                                style.display =
-                                                                    Some(Display::Inline)
-                                                            }
-                                                            "none" => {
-                                                                style.display = Some(Display::None)
-                                                            }
-                                                            _ => {}
                                                         }
+                                                        "background-color" => {
+                                                            if let CssValue::Color(c) = value {
+                                                                let old = style.background_color;
+                                                                style.background_color = Some(*c);
+                                                                log::debug!(target: "Styler::StyleTree::CSS", "Applied 'background-color': {:?} -> {:?} (node={:?})", old, style.background_color, html);
+                                                            }
+                                                        }
+                                                        "width" => {
+                                                            if let CssValue::Length(l) = value {
+                                                                let old = style.width;
+                                                                style.width = Some(*l);
+                                                                log::debug!(target: "Styler::StyleTree::CSS", "Applied 'width': {:?} -> {:?} (node={:?})", old, style.width, html);
+                                                            }
+                                                        }
+                                                        "height" => {
+                                                            if let CssValue::Length(l) = value {
+                                                                let old = style.height;
+                                                                style.height = Some(*l);
+                                                                log::debug!(target: "Styler::StyleTree::CSS", "Applied 'height': {:?} -> {:?} (node={:?})", old, style.height, html);
+                                                            }
+                                                        }
+                                                        "display" => {
+                                                            if let CssValue::Keyword(k) = value {
+                                                                let old = style.display;
+                                                                match k.as_str() {
+                                                                    "block" => { style.display = Some(Display::Block) }
+                                                                    "inline" => { style.display = Some(Display::Inline) }
+                                                                    "none" => { style.display = Some(Display::None) }
+                                                                    _ => {}
+                                                                }
+                                                                log::debug!(target: "Styler::StyleTree::CSS", "Applied 'display': {:?} -> {:?} (node={:?})", old, style.display, html);
+                                                            }
+                                                        }
+                                                        "font-size" => {
+                                                            if let CssValue::Length(l) = value {
+                                                                let old = style.font_size;
+                                                                style.font_size = Some(*l);
+                                                                log::debug!(target: "Styler::StyleTree::CSS", "Applied 'font-size': {:?} -> {:?} (node={:?})", old, style.font_size, html);
+                                                            }
+                                                        }
+                                                        _ => {}
                                                     }
                                                 }
-                                                "font-size" => {
-                                                    if let CssValue::Length(l) = value {
-                                                        style.font_size = Some(*l);
-                                                    }
-                                                }
-                                                _ => {}
                                             }
+                                        }
+                                        _ => {
+                                            // 非要素ノード（Text など）は無視
                                         }
                                     }
                                 }
@@ -184,16 +200,62 @@ impl StyleTree {
     }
 }
 
-/// 親スタイルから継承可能プロパティだけをコピー
-fn inherit_from_parent(child: &mut Style, parent: &Style) {
-    // --- 代表的な継承プロパティ ---
-    if child.font_size.is_none() {
-        child.font_size = parent.font_size;
-    }
-
+// 親ノードから継承する（font-size は計算済み px 値で継承する）
+fn inherit_from_parent_from_node(
+    child: &mut Style,
+    parent_node: &Rc<RefCell<TreeNode<StyleNode>>>,
+) {
+    // color はそのまま継承
     if child.color.is_none() {
-        child.color = parent.color;
+        if let Some(parent_style) = parent_node.borrow().value.style.clone() {
+            child.color = parent_style.color;
+        }
     }
 
-    // 余白やパディングは継承しない
+    // font-size は "computed" として px に解決して継承する
+    if child.font_size.is_none() {
+        // 親ノードのフォントサイズを px で解決して設定
+        let resolved = resolve_font_size_px_from_node(parent_node);
+        child.font_size = Some(Length::Px(resolved));
+    }
+}
+
+// ノードから font-size を再帰的に解決して px を返す（見つからなければ 16px フォールバック）
+fn resolve_font_size_px_from_node(node: &Rc<RefCell<TreeNode<StyleNode>>>) -> f32 {
+    // デフォルトベース
+    const DEFAULT_FONT_PX: f32 = 16.0;
+
+    // まずこのノードの style に font_size があるか確認
+    if let Some(style) = node.borrow().value.style.clone() {
+        if let Some(length) = style.font_size {
+            match length {
+                Length::Px(px) => return px,
+                Length::Em(em) => {
+                    // base を親から解決
+                    if let Some(parent) = node.borrow().parent() {
+                        let base = resolve_font_size_px_from_node(&parent);
+                        return Length::Em(em).to_px(base);
+                    } else {
+                        return Length::Em(em).to_px(DEFAULT_FONT_PX);
+                    }
+                }
+                Length::Percent(p) => {
+                    if let Some(parent) = node.borrow().parent() {
+                        let base = resolve_font_size_px_from_node(&parent);
+                        return Length::Percent(p).to_px(base);
+                    } else {
+                        return Length::Percent(p).to_px(DEFAULT_FONT_PX);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // 見つからなければ祖先を辿る
+    if let Some(parent) = node.borrow().parent() {
+        return resolve_font_size_px_from_node(&parent);
+    }
+
+    DEFAULT_FONT_PX
 }
