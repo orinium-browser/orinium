@@ -25,8 +25,6 @@ pub struct TextRenderer {
     brush: TextBrush,
     /// ビューポート情報
     viewport: Viewport,
-    /// glyphonのキャッシュ
-    cache: Cache,
     /// glyphonのテキストアトラス
     atlas: TextAtlas,
     font_sys: FontSystem,
@@ -75,7 +73,6 @@ impl TextRenderer {
 
         Ok(Self {
             brush,
-            cache,
             atlas,
             font_sys,
             viewport,
