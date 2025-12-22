@@ -21,10 +21,10 @@ impl PlatformTextMeasurer {
     /// - フォント選択機能を追加
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let mut maybe_bytes: Option<Vec<u8>> = None;
-        if let Ok(p) = env::var("ORINIUM_FONT") {
-            if let Ok(b) = std::fs::read(&p) {
-                maybe_bytes = Some(b);
-            }
+        if let Ok(p) = env::var("ORINIUM_FONT")
+            && let Ok(b) = std::fs::read(&p)
+        {
+            maybe_bytes = Some(b);
         }
 
         if maybe_bytes.is_none() {
@@ -74,14 +74,14 @@ impl TextMeasurer for PlatformTextMeasurer {
             .map_err(|e| TextMeasureError::Internal(format!("font_sys lock poisoned: {}", e)))?;
 
         let metrics = Metrics::relative(font_size, 1.2);
-        let mut buffer = Buffer::new(&mut *fs, metrics);
+        let mut buffer = Buffer::new(&mut fs, metrics);
 
         // attrs: only metrics needed for layout here
         let attrs = Attrs::new()
             .metrics(metrics)
             .color(GlyphColor::rgba(0, 0, 0, 255));
 
-        buffer.set_text(&mut *fs, &req.text, &attrs, Shaping::Advanced, None);
+        buffer.set_text(&mut fs, &req.text, &attrs, Shaping::Advanced, None);
 
         // compute width and height from layout using Buffer::line_layout()
         let mut max_width: f32 = 0.0;
@@ -89,7 +89,7 @@ impl TextMeasurer for PlatformTextMeasurer {
 
         // iterate over buffer lines (paragraphs) and accumulate their laid-out lines
         for line_i in 0..buffer.lines.len() {
-            if let Some(layout_lines) = buffer.line_layout(&mut *fs, line_i) {
+            if let Some(layout_lines) = buffer.line_layout(&mut fs, line_i) {
                 for ll in layout_lines.iter() {
                     max_width = max_width.max(ll.w);
                     lines += 1;
@@ -109,10 +109,10 @@ impl TextMeasurer for PlatformTextMeasurer {
         }
 
         // handle wrap / max_lines constraint
-        if let Some(max_lines) = req.constraints.max_lines {
-            if lines > max_lines {
-                lines = max_lines;
-            }
+        if let Some(max_lines) = req.constraints.max_lines
+            && lines > max_lines
+        {
+            lines = max_lines;
         }
 
         let line_height = metrics.line_height;
