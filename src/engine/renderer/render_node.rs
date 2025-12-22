@@ -29,6 +29,15 @@ pub enum NodeKind {
     Unknown,
 }
 
+impl std::fmt::Display for NodeKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NodeKind::Scrollable { .. } => write!(f, "Scrollable {{..}}"),
+            _ => write!(f, "{:?}", self),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RenderNode {
     pub kind: NodeKind,
