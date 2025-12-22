@@ -112,7 +112,7 @@ impl TextRenderer {
         let attrs = Attrs::new().metrics(metrics).color(color);
 
         // shape and layout
-        buffer.set_text(&mut self.font_sys, text, &attrs, Shaping::Advanced);
+        buffer.set_text(&mut self.font_sys, text, &attrs, Shaping::Advanced, None);
 
         buffer
     }
