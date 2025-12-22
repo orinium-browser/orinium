@@ -8,6 +8,13 @@ use crate::html::HtmlNodeType;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+// デバッグ用の変数たち
+#[cfg(debug_assertions)]
+thread_local! {
+    // レイアウトの再帰深度を追跡
+    static LAYOUT_DEPTH: std::cell::Cell<usize> = std::cell::Cell::new(0);
+}
+
 impl RenderTree {
     pub fn set_root_size(&mut self, w: f32, h: f32) {
         let mut root = self.root.borrow_mut();
@@ -89,7 +96,7 @@ impl RenderTree {
                 }
                 _ if crate::engine::html::util::is_inline_element(tag_name) => NodeKind::Container,
                 _ => {
-                    log::warn!(target:"ComputedTree::NodeKind", "Unknown element tag: {}", tag_name);
+                    log::warn!(target:"RenderTree::NodeKind", "Unknown element tag: {}", tag_name);
                     NodeKind::Unknown
                 }
             },
@@ -142,11 +149,21 @@ impl RenderTree {
         let mut node_ref = node.borrow_mut();
         let render_node = &mut node_ref.value;
 
+        // デバッグ用ログ
+        #[cfg(debug_assertions)]
+        LAYOUT_DEPTH.with(|d| {
+            log::debug!(target: "RenderTree::layout_node_recursive", "{:?}: {:?} Start", d.get(), render_node.kind);
+        });
+
         match &mut render_node.kind {
             NodeKind::Container => {
                 let mut x_offset = start_x;
                 let mut y_offset = start_y;
-                log::debug!(target: "RenderTree::layout_node_recursive", "Laying out Container node with {} children", src_children.len());
+                #[cfg(debug_assertions)]
+                LAYOUT_DEPTH.with(|d| {
+                    d.set(d.get() + 1);
+                    log::debug!(target: "RenderTree::layout_node_recursive", "  Laying out Container node with {} children", src_children.len());
+                });
                 for (s_child, d_child) in src_children.iter().zip(dst_children.iter()) {
                     let (child_h, child_w) = Self::layout_node_recursive(
                         s_child,
@@ -179,7 +196,10 @@ impl RenderTree {
                 render_node.y = start_y;
                 render_node.width = x_offset - start_x;
                 render_node.height = y_offset - start_y;
-                log::debug!(target: "RenderTree::layout_node_recursive", "Container node layout complete");
+                #[cfg(debug_assertions)]
+                LAYOUT_DEPTH.with(|d| {
+                    d.set(d.get() - 1);
+                });
             }
 
             NodeKind::Scrollable { tree, .. } => {
@@ -259,7 +279,10 @@ impl RenderTree {
             }
         }
 
-        log::debug!(target: "RenderTree::layout_node_recursive", "Laid out node: {} at ({}, {}) size=({}, {})", render_node.kind, render_node.x, render_node.y, render_node.width, render_node.height);
+        #[cfg(debug_assertions)]
+        LAYOUT_DEPTH.with(|d| {
+            log::debug!(target: "RenderTree::layout_node_recursive", "{:?}: Laid out node: {} at ({}, {}) size=({}, {})", d.get(), render_node.kind, render_node.x, render_node.y, render_node.width, render_node.height);
+        });
         (render_node.width, render_node.height)
     }
 }

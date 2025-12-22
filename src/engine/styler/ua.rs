@@ -18,7 +18,7 @@ pub fn default_style_for(node: &HtmlNodeType) -> Style {
         ..Default::default()
     };
 
-    let tag_name = node.tag_name();
+    let tag_name = node.tag_name().unwrap_or("".to_string());
     let tag_name = tag_name.as_str();
 
     match tag_name {

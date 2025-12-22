@@ -119,7 +119,7 @@ impl WebView {
         // <link rel="stylesheet" href="...">
         let link_nodes: Vec<_> = {
             let root = dom_tree.root.borrow();
-            root.find_children_by(|n| n.tag_name() == "link")
+            root.find_children_by(|n| n.tag_name() == Some("link".to_string()))
                 .into_iter()
                 .collect()
         };
