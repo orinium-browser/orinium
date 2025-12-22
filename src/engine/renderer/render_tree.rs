@@ -257,6 +257,7 @@ impl RenderTree {
             }
         }
 
+        log::debug!(target: "RenderTree::layout_node_recursive", "Laid out node: {} at ({}, {}) size=({}, {})", render_node.kind, render_node.x, render_node.y, render_node.width, render_node.height);
         (render_node.width, render_node.height)
     }
 }
