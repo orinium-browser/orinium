@@ -146,6 +146,7 @@ impl RenderTree {
             NodeKind::Container => {
                 let mut x_offset = start_x;
                 let mut y_offset = start_y;
+                log::debug!(target: "RenderTree::layout_node_recursive", "Laying out Container node with {} children", src_children.len());
                 for (s_child, d_child) in src_children.iter().zip(dst_children.iter()) {
                     let (child_h, child_w) = Self::layout_node_recursive(
                         s_child,
@@ -178,6 +179,7 @@ impl RenderTree {
                 render_node.y = start_y;
                 render_node.width = x_offset - start_x;
                 render_node.height = y_offset - start_y;
+                log::debug!(target: "RenderTree::layout_node_recursive", "Container node layout complete");
             }
 
             NodeKind::Scrollable { tree, .. } => {
