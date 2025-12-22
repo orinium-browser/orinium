@@ -127,8 +127,6 @@ impl TextMeasurer for PlatformTextMeasurer {
                 })
             };
 
-            println!(" : {}", advance);
-
             if req.constraints.wrap {
                 if let Some(mw) = req.constraints.max_width {
                     if cur_width + advance > mw && cur_width > 0.0 {
@@ -149,6 +147,8 @@ impl TextMeasurer for PlatformTextMeasurer {
             } else {
                 cur_width += advance;
             }
+
+            println!(" : {}({})", advance, cur_width);
         }
 
         max_width = max_width.max(cur_width);

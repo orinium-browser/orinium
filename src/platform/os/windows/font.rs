@@ -7,8 +7,8 @@ use std::path::PathBuf;
 pub fn system_font_candidates() -> Result<Vec<PathBuf>> {
     Ok(vec![
         // 日本語
-        PathBuf::from(r"C:\Windows\Fonts\meiryo.ttc"),
         PathBuf::from(r"C:\Windows\Fonts\msgothic.ttc"),
+        PathBuf::from(r"C:\Windows\Fonts\meiryo.ttc"),
         PathBuf::from(r"C:\Windows\Fonts\msmincho.ttc"),
         // fallback
         PathBuf::from(r"C:\Windows\Fonts\segoeui.ttf"),

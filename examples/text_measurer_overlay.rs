@@ -37,6 +37,8 @@ fn main() -> Result<()> {
         250.0,
         24.0,
     )?);
+    commands.extend(debug_text_commands(&measurer, "！！", 50.0, 300.0, 24.0)?);
+    commands.extend(debug_text_commands(&measurer, "字！", 50.0, 350.0, 24.0)?);
 
     let root = orinium_browser::engine::renderer::render_node::RenderNode::new(
         NodeKind::Container,
