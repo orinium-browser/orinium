@@ -1,6 +1,7 @@
 use orinium_browser::{
     browser::{BrowserApp, Tab},
     engine::html::parser::Parser as HtmlParser,
+    html::HtmlNodeType,
     platform::network::NetworkCore,
 };
 
@@ -34,10 +35,13 @@ async fn main() -> Result<()> {
 
                 println!("\n{}", "Note:".bold());
                 println!("  - URLs must include the scheme (http:// or https://).");
+                println!(
+                    "  - HIDE_TAG_NAMES is a comma-separated list of tag names to hide in DOM output."
+                );
                 println!("  - For 'plain_css_parse', the CSS string must be quoted.");
             }
             "parse_dom" => {
-                if args.len() == 3 {
+                if args.len() == 3 || args.len() == 4 {
                     let url = &args[2];
                     println!("Parsing DOM for URL: {}", url);
                     let net = NetworkCore::new();
@@ -49,6 +53,23 @@ async fn main() -> Result<()> {
                     );
                     let mut parser = HtmlParser::new(&html);
                     let dom = parser.parse();
+                    if args.len() == 4 {
+                        let hide_tag_names: Vec<String> =
+                            args[3].split(',').map(|s| s.to_ascii_lowercase()).collect();
+
+                        dom.traverse(&mut |n| {
+                            let mut node = n.borrow_mut();
+
+                            if let HtmlNodeType::Element { tag_name, .. } = &node.value {
+                                if hide_tag_names
+                                    .iter()
+                                    .any(|hide| hide == &tag_name.to_ascii_lowercase())
+                                {
+                                    node.children_mut().clear();
+                                }
+                            }
+                        });
+                    }
                     println!("DOM Tree:\n{}", dom);
                 } else {
                     eprintln!("Please provide a URL for DOM parsing test.");
@@ -193,7 +214,7 @@ fn get_commands<'a>() -> HashMap<&'a str, (&'a str, &'a str)> {
         "parse_dom",
         (
             "Fetch and parse the HTML of the given URL into a DOM tree.",
-            "[URL]",
+            "[URL] [Optional: HIDE_TAG_NAMES]",
         ),
     );
     map.insert(
