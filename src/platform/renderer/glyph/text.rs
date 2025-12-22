@@ -27,6 +27,8 @@ pub struct TextRenderer {
     viewport: Viewport,
     /// glyphonのテキストアトラス
     atlas: TextAtlas,
+    /// rasterize 結果のキャッシュ
+    swash_cache: SwashCache,
     font_sys: FontSystem,
 }
 
@@ -71,11 +73,14 @@ impl TextRenderer {
 
         let viewport = Viewport::new(device, &cache);
 
+        let swash_cache = SwashCache::new();
+
         Ok(Self {
             brush,
             atlas,
             font_sys,
             viewport,
+            swash_cache,
         })
     }
 
@@ -121,8 +126,6 @@ impl TextRenderer {
         queue: &wgpu::Queue,
         sections: &'a [TextSection],
     ) -> Result<(), PrepareError> {
-        let mut cache = SwashCache::new();
-
         // TextArea は Buffer を参照するライフタイムを持つため、一時的にベクタに詰めて渡す
         let mut text_areas: Vec<TextArea<'a>> = Vec::with_capacity(sections.len());
 
@@ -157,7 +160,7 @@ impl TextRenderer {
             &mut self.atlas,
             &self.viewport,
             text_areas,
-            &mut cache,
+            &mut self.swash_cache,
         )
     }
 
