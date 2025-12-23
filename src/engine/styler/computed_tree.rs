@@ -1,5 +1,3 @@
-use super::style_tree::Style;
-
 use crate::engine::css::values::{Border, Color, Display, Length};
 use crate::html::HtmlNodeType;
 use std::cell::RefCell;
@@ -49,7 +47,7 @@ impl ComputedTree {
 }
 
 /// 計算済みスタイル
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ComputedStyle {
     pub display: Display,
     pub width: Option<Length>,
@@ -74,33 +72,6 @@ pub struct ComputedStyle {
 }
 
 impl ComputedStyle {
-    /// Style から計算済みスタイルを作る
-    pub fn compute(style: Style) -> Self {
-        Self {
-            display: style.display.unwrap_or(Display::Inline),
-            width: style.width,
-            height: style.height,
-
-            // margin/padding は None の場合 0 にフォールバック
-            margin_top: style.margin_top.unwrap_or(Length::Px(0.0)),
-            margin_right: style.margin_right.unwrap_or(Length::Px(0.0)),
-            margin_bottom: style.margin_bottom.unwrap_or(Length::Px(0.0)),
-            margin_left: style.margin_left.unwrap_or(Length::Px(0.0)),
-
-            padding_top: style.padding_top.unwrap_or(Length::Px(0.0)),
-            padding_right: style.padding_right.unwrap_or(Length::Px(0.0)),
-            padding_bottom: style.padding_bottom.unwrap_or(Length::Px(0.0)),
-            padding_left: style.padding_left.unwrap_or(Length::Px(0.0)),
-
-            color: style.color,
-            background_color: style.background_color,
-
-            border: style.border,
-
-            font_size: style.font_size,
-        }
-    }
-
     /// 指定された長さをピクセルで解決する
     /// - `available` はパーセンテージ解決時の基準（幅/高さに対する親の利用可能値）
     /// - `base_font` は `em` 等の相対単位解決に用いる基準（px）

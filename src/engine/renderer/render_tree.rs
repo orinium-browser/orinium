@@ -3,7 +3,7 @@ use super::render_node::{NodeKind, RenderNode, RenderTree};
 use crate::engine::bridge::text;
 use crate::engine::css::values::Display;
 use crate::engine::renderer::Color as RenderColor;
-use crate::engine::styler::computed_tree::{ComputedStyle, ComputedStyleNode, ComputedTree};
+use crate::engine::styler::computed_tree::{ComputedStyleNode, ComputedTree};
 use crate::engine::tree::{Tree, TreeNode};
 use crate::html::HtmlNodeType;
 use std::cell::RefCell;
@@ -82,9 +82,7 @@ impl RenderTree {
 
     /// ComputedStyleNode から NodeKind を判定（RenderNode 用）
     fn detect_kind_display(node: &ComputedStyleNode) -> (NodeKind, Option<Display>) {
-        let computed_style = node.computed.clone().unwrap_or_else(|| {
-            ComputedStyle::compute(crate::engine::styler::style_tree::Style::default())
-        });
+        let computed_style = node.computed.clone().unwrap_or_default();
         let html = node.html.upgrade().unwrap();
         let html_ref = html.borrow();
         let kind = match &html_ref.value {

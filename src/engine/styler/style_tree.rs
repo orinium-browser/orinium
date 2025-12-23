@@ -47,6 +47,31 @@ pub struct Style {
     pub font_size: Option<Length>,
 }
 
+impl Style {
+    fn to_computed(&self) -> ComputedStyle {
+        ComputedStyle {
+            display: self.display.unwrap_or(Display::Inline),
+            width: self.width,
+            height: self.height,
+
+            margin_top: self.margin_top.unwrap_or(Length::Px(0.0)),
+            margin_right: self.margin_right.unwrap_or(Length::Px(0.0)),
+            margin_bottom: self.margin_bottom.unwrap_or(Length::Px(0.0)),
+            margin_left: self.margin_left.unwrap_or(Length::Px(0.0)),
+
+            padding_top: self.padding_top.unwrap_or(Length::Px(0.0)),
+            padding_right: self.padding_right.unwrap_or(Length::Px(0.0)),
+            padding_bottom: self.padding_bottom.unwrap_or(Length::Px(0.0)),
+            padding_left: self.padding_left.unwrap_or(Length::Px(0.0)),
+
+            color: self.color,
+            background_color: self.background_color,
+            border: self.border,
+            font_size: self.font_size,
+        }
+    }
+}
+
 pub type StyleTree = Tree<StyleNode>;
 
 impl StyleTree {
@@ -190,7 +215,7 @@ impl StyleTree {
         self.map(&|node: &StyleNode| {
             let style = node.style.clone().unwrap();
 
-            let computed = ComputedStyle::compute(style);
+            let computed = style.to_computed();
 
             ComputedStyleNode {
                 html: node.html(),
