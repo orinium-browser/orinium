@@ -16,11 +16,32 @@ thread_local! {
 }
 
 impl RenderTree {
-    pub fn set_root_size(&mut self, w: f32, h: f32) {
-        let mut root = self.root.borrow_mut();
-        // ルートを Scrollable で包まないため、ノード種別に関わらずルートサイズを設定する
-        root.value.width = w;
-        root.value.height = h;
+    pub fn set_root_size(self, w: f32, h: f32) -> RenderTree {
+        {
+            let mut root = self.root.borrow_mut();
+            // ルートを Scrollable で包まないため、ノード種別に関わらずルートサイズを設定する
+            root.value.width = w;
+            root.value.height = h;
+        }
+        RenderTree { root: self.root }
+    }
+
+    pub fn wrap_in_scrollable(self, x: f32, y: f32, w: f32, h: f32) -> RenderTree {
+        let scrollable_node = RenderNode::new(
+            NodeKind::Scrollable {
+                tree: self,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+            },
+            x,
+            y,
+            w,
+            h,
+        );
+        let scrollable_tree = Tree::new(scrollable_node);
+        RenderTree {
+            root: scrollable_tree.root,
+        }
     }
 
     /// ComputedTree から RenderTree を生成（フォールバック測定器）
