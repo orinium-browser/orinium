@@ -7,7 +7,6 @@ use orinium_browser::engine::renderer::render_node::RenderNodeTrait;
 use orinium_browser::engine::styler::computed_tree::{
     ComputedStyle, ComputedStyleNode, ComputedTree,
 };
-use orinium_browser::engine::styler::style_tree::Style;
 use orinium_browser::engine::tree::TreeNode;
 use std::rc::Rc;
 
@@ -28,7 +27,7 @@ fn render_tree_uses_measurer() {
     let html_text_node = TreeNode::new(HtmlNodeType::Text("hello".to_string()));
     let html_weak = Rc::downgrade(&html_text_node);
 
-    let computed = ComputedStyle::compute(Style::default());
+    let computed = ComputedStyle::default();
     let computed_node = ComputedStyleNode {
         html: html_weak.clone(),
         computed: Some(computed),
@@ -46,7 +45,7 @@ fn render_tree_uses_measurer() {
         "root_html_node weak upgrade failed"
     );
 
-    let root_computed = ComputedStyle::compute(Style::default());
+    let root_computed = ComputedStyle::default();
     let tree = ComputedTree::new(ComputedStyleNode {
         html: root_weak,
         computed: Some(root_computed),

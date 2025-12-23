@@ -3,7 +3,6 @@ use orinium_browser::engine::renderer::render_node::RenderNodeTrait;
 use orinium_browser::engine::styler::computed_tree::{
     ComputedStyle, ComputedStyleNode, ComputedTree,
 };
-use orinium_browser::engine::styler::style_tree::Style;
 use orinium_browser::engine::tree::TreeNode;
 use orinium_browser::platform::renderer::text_measurer::PlatformTextMeasurer;
 use std::rc::Rc;
@@ -39,7 +38,7 @@ fn engine_layout_with_platform_measurer() {
     let html_text_node = TreeNode::new(HtmlNodeType::Text("Platform test".to_string()));
     let html_weak = Rc::downgrade(&html_text_node);
     // デフォルトスタイルを計算してComputedStyleNodeを作成
-    let computed = ComputedStyle::compute(Style::default());
+    let computed = ComputedStyle::default();
     let computed_node = ComputedStyleNode {
         html: html_weak.clone(),
         computed: Some(computed),
@@ -48,7 +47,7 @@ fn engine_layout_with_platform_measurer() {
     // ルートのドキュメントノードとComputedTreeを準備
     let root_html_node = TreeNode::new(HtmlNodeType::Document);
     let root_weak = Rc::downgrade(&root_html_node);
-    let root_computed = ComputedStyle::compute(Style::default());
+    let root_computed = ComputedStyle::default();
     let tree = ComputedTree::new(ComputedStyleNode {
         html: root_weak,
         computed: Some(root_computed),
