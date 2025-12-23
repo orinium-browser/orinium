@@ -67,7 +67,9 @@ pub trait RenderNodeTrait {
         self.set_layout(x, y, width, height);
     }
 
+    /// (x, y)
     fn position(&self) -> (f32, f32);
+    /// (width, height)
     fn size(&self) -> (f32, f32);
 
     fn kind(&self) -> &NodeKind;
