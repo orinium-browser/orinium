@@ -76,8 +76,8 @@ fn engine_layout_with_platform_measurer() {
             let first = &children[0];
             let rn = &first.borrow().value;
             // 測定結果が正の値であることを確認
-            assert!(rn.width > 0.0, "measured width should be > 0");
-            assert!(rn.height > 0.0, "measured height should be > 0");
+            assert!(rn.size().0 > 0.0, "measured width should be > 0");
+            assert!(rn.size().1 > 0.0, "measured height should be > 0");
         }
         _ => panic!("expected Scrollable root in RenderTree"),
     }

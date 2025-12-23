@@ -232,7 +232,7 @@ impl RenderTree {
                     start_x,
                     start_y,
                     available_width,
-                    render_node.height.max(available_height),
+                    render_node.size().1.max(available_height),
                 );
             }
 
@@ -294,8 +294,8 @@ impl RenderTree {
 
         #[cfg(debug_assertions)]
         LAYOUT_DEPTH.with(|d| {
-            log::debug!(target: "RenderTree::layout_node_recursive", "{:?}: Laid out node: {} at ({}, {}) size=({}, {})", d.get(), render_node.kind(), render_node.x, render_node.y, render_node.width, render_node.height);
+            log::debug!(target: "RenderTree::layout_node_recursive", "{:?}: Laid out node: {} at {:?} size={:?}", d.get(), render_node.kind(), render_node.position(), render_node.size());
         });
-        (render_node.width, render_node.height)
+        render_node.size()
     }
 }

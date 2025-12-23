@@ -75,8 +75,7 @@ impl Renderer {
 
     fn traverse_tree(node: &Rc<RefCell<TreeNode<RenderNode>>>, out: &mut Vec<DrawCommand>) {
         let node_borrow = node.borrow();
-        let abs_x = node_borrow.value.x;
-        let abs_y = node_borrow.value.y;
+        let (abs_x, abs_y) =node_borrow.value.position();
 
         match &node_borrow.value.kind() {
             NodeKind::Text {
@@ -96,8 +95,8 @@ impl Renderer {
                 out.push(DrawCommand::DrawRect {
                     x: abs_x,
                     y: abs_y,
-                    width: node_borrow.value.width,
-                    height: node_borrow.value.height,
+                    width: node_borrow.value.size().0,
+                    height: node_borrow.value.size().1,
                     color: Color::new(0.8, 0.8, 0.8, 1.0),
                 });
             }
@@ -105,8 +104,8 @@ impl Renderer {
                 out.push(DrawCommand::DrawRect {
                     x: abs_x,
                     y: abs_y,
-                    width: node_borrow.value.width,
-                    height: node_borrow.value.height,
+                    width: node_borrow.value.size().0,
+                    height: node_borrow.value.size().1,
                     color: Color::new(0.9, 0.9, 0.9, 1.0),
                 });
             }
@@ -119,16 +118,16 @@ impl Renderer {
                 out.push(DrawCommand::DrawRect {
                     x: abs_x,
                     y: abs_y,
-                    width: node_borrow.value.width,
-                    height: node_borrow.value.height,
+                    width: node_borrow.value.size().0,
+                    height: node_borrow.value.size().1,
                     color: Color::new(0.95, 0.95, 0.95, 1.0),
                 });
 
                 out.push(DrawCommand::PushClip {
                     x: abs_x,
                     y: abs_y,
-                    width: node_borrow.value.width,
-                    height: node_borrow.value.height,
+                    width: node_borrow.value.size().0,
+                    height: node_borrow.value.size().1,
                 });
                 out.push(DrawCommand::PushTransform {
                     dx: -*scroll_offset_x,
