@@ -18,30 +18,52 @@ async fn main() -> Result<()> {
     if args.len() >= 2 {
         match args[1].as_str() {
             "help" => {
-                let commands = get_commands();
-                println!("{}", "Orinium Browser Test Application".bold().underline());
-                println!("\n{}", "Usage:".bold());
-                println!("  cargo run --example tests [COMMAND] [ARGS]\n");
+                if args.len() == 3 {
+                    let command = &args[2];
+                    let commands = get_commands();
+                    if let Some((description, args, delail)) = commands.get(command.as_str()) {
+                        println!("{}", format!("Help for command: {}", command).bold().underline());
+                        println!("\n{}:", "Description".bold());
+                        println!("  {}", description);
+                        println!("\n{}:", "Usage".bold());
+                        println!("  cargo run --example tests {} {}", command, args);
+                        if !delail.is_empty() {
+                            println!("\n{}:", "Details".bold());
+                            println!("  {}", delail);
+                        }
+                    } else {
+                        eprintln!("Unknown command: {}", command);
+                        let command_list: Vec<&str> = commands.keys().copied().collect();
+                        if let Some(suggested) = suggest_command(command, &command_list) {
+                            eprintln!("Did you mean: {} ?", suggested);
+                        }
+                    }
+                } else {
+                    let commands = get_commands();
+                    println!("{}", "Orinium Browser Test Application".bold().underline());
+                    println!("\n{}", "Usage:".bold());
+                    println!("  cargo run --example tests [COMMAND] [ARGS]\n");
 
-                println!("{}", "Available Commands:".bold());
-                for (name, (description, args)) in &commands {
-                    println!(
-                        "  {:<15} {:<4} - {}",
-                        name.green().bold(),
-                        args.cyan(),
-                        description
-                    );
+                    println!("{}", "Available Commands:".bold());
+                    for (name, (description, args, _detail)) in &commands {
+                        println!(
+                            "  {:<15} {:<8} - {}",
+                            name.green().bold(),
+                            args.cyan(),
+                            description
+                        );
+                    }
+
+                    println!("\n{}", "Note:".bold());
+                    println!("  - URLs must include the scheme (http:// or https://).");
+                    println!("  - For 'plain_css_parse', the CSS string must be quoted.");
+
+                    println!("\nTo see more details about a specific command, run:");
+                    println!("  cargo run --example tests help [COMMAND]");
                 }
-
-                println!("\n{}", "Note:".bold());
-                println!("  - URLs must include the scheme (http:// or https://).");
-                println!(
-                    "  - HIDE_TAG_NAMES is a comma-separated list of tag names to hide in DOM output."
-                );
-                println!("  - For 'plain_css_parse', the CSS string must be quoted.");
             }
             "parse_dom" => {
-                if args.len() == 3 || args.len() == 4 {
+                if args.len() == 3 || args.len() == 4 || args.len() == 5 {
                     let url = &args[2];
                     println!("Parsing DOM for URL: {}", url);
                     let net = NetworkCore::new();
@@ -53,20 +75,33 @@ async fn main() -> Result<()> {
                     );
                     let mut parser = HtmlParser::new(&html);
                     let dom = parser.parse();
-                    if args.len() == 4 {
+                    if args.len() >= 4 {
                         let hide_tag_names: Vec<String> =
                             args[3].split(',').map(|s| s.to_ascii_lowercase()).collect();
+
+                        let hidden_attr = if args.len() == 5 {
+                            args[4].to_ascii_lowercase() == "true"
+                        } else {
+                            false
+                        };
 
                         dom.traverse(&mut |n| {
                             let mut node = n.borrow_mut();
 
-                            if let HtmlNodeType::Element { tag_name, .. } = &node.value {
-                                if hide_tag_names
-                                    .iter()
-                                    .any(|hide| hide == &tag_name.to_ascii_lowercase())
-                                {
-                                    node.children_mut().clear();
-                                }
+                            if hide_tag_names.iter().any(|hide| {
+                                hide == &node
+                                    .value
+                                    .tag_name()
+                                    .unwrap_or("".to_string())
+                                    .to_ascii_lowercase()
+                            }) {
+                                node.children_mut().clear();
+                            }
+
+                            if let HtmlNodeType::Element { attributes, .. } = &mut node.value
+                                && hidden_attr
+                            {
+                                attributes.clear();
                             }
                         });
                     }
@@ -207,49 +242,55 @@ fn suggest_command<'a>(input: &'a str, commands: &'a [&'a str]) -> Option<&'a st
 use std::collections::HashMap;
 
 #[rustfmt::skip]
-fn get_commands<'a>() -> HashMap<&'a str, (&'a str, &'a str)> {
+fn get_commands<'a>() -> HashMap<&'a str, (&'a str, &'a str, &'a str)> {
     let mut map = HashMap::new();
 
     map.insert(
         "parse_dom",
         (
-            "Fetch and parse the HTML of the given URL into a DOM tree.",
-            "[URL] [Optional: HIDE_TAG_NAMES]",
+            "Fetch and parse the HTML of the given URL into a DOM tree. Optionally hide specified tag names and their attributes.",
+            "URL [..]",
+            "If additional arguments are provided, the second argument is a comma-separated list of tag names to hide, and the third argument is a boolean (true/false) indicating whether to hide attributes of those tags."
         ),
     );
     map.insert(
         "parse_cssom",
         (
             "Fetch and parse the CSS of the given URL into a CSSOM tree.",
-            "[URL]",
+            "URL",
+            "",
         ),
     );
     map.insert(
         "plain_css_parse",
         (
             "Parse a CSS string directly into a CSSOM tree.",
-            "[CSS]",
+            "RAW_CSS",
+            "",
         ),
     );
     map.insert(
         "send_request",
         (
             "Send a basic HTTP/HTTPS request (no redirect handling).",
-            "[URL]",
+            "URL",
+            "",
         ),
     );
     map.insert(
         "fetch_url",
         (
             "Fetch a URL and display status, headers, and body.",
-            "[URL]",
+            "URL",
+            "",
         ),
     );
     map.insert(
         "simple_render",
         (
             "Fetch HTML from a URL, parse DOM and CSSOM, and generate draw commands.",
-            "[URL]",
+            "URL",
+            "",
         ),
     );
 
