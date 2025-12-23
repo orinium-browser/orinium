@@ -131,28 +131,6 @@ impl LayoutInfo {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub enum Display {
-    #[default]
-    Block,
-    Inline,
-    None,
-}
-
-impl Display {
-    pub fn is_none(&self) -> bool {
-        matches!(self, Display::None)
-    }
-
-    pub fn from_css_display(display: crate::engine::css::values::Display) -> Self {
-        match display {
-            crate::engine::css::values::Display::Block => Display::Block,
-            crate::engine::css::values::Display::Inline => Display::Inline,
-            crate::engine::css::values::Display::None => Display::None,
-        }
-    }
-}
-
 impl RenderNode {
     pub fn new(kind: NodeKind, x: f32, y: f32, width: f32, height: f32) -> Self {
         Self {

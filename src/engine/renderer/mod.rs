@@ -4,5 +4,5 @@ pub mod render_tree;
 pub mod types;
 
 pub use render::{DrawCommand, Renderer};
-pub use render_node::{Display, NodeKind, RenderNode, RenderTree};
+pub use render_node::{NodeKind, RenderNode, RenderTree};
 pub use types::Color;
