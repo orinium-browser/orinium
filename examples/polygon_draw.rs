@@ -1,8 +1,8 @@
 use anyhow::Result;
 use orinium_browser::browser::BrowserApp;
+use orinium_browser::engine::renderer::Color;
 use orinium_browser::engine::renderer::DrawCommand;
 use orinium_browser::engine::renderer::RenderTree;
-use orinium_browser::engine::renderer::Color;
 use orinium_browser::engine::renderer::render_node::{NodeKind, RenderNode};
 
 fn main() -> Result<()> {

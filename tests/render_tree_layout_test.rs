@@ -65,7 +65,10 @@ fn render_tree_uses_measurer() {
         assert!(!children.is_empty(), "no children in inner render tree");
         let first = &children[0];
         let rn = &first.borrow().value;
-        assert!((rn.size().0 - 50.0).abs() < 1e-6, "width not set by measurer");
+        assert!(
+            (rn.size().0 - 50.0).abs() < 1e-6,
+            "width not set by measurer"
+        );
         assert!(
             (rn.size().1 - 12.0).abs() < 1e-6,
             "height not set by measurer"

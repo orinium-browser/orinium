@@ -75,7 +75,7 @@ impl Renderer {
 
     fn traverse_tree(node: &Rc<RefCell<TreeNode<RenderNode>>>, out: &mut Vec<DrawCommand>) {
         let node_borrow = node.borrow();
-        let (abs_x, abs_y) =node_borrow.value.position();
+        let (abs_x, abs_y) = node_borrow.value.position();
 
         match &node_borrow.value.kind() {
             NodeKind::Text {
