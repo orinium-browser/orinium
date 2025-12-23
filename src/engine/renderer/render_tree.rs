@@ -13,7 +13,7 @@ use std::rc::Rc;
 #[cfg(debug_assertions)]
 thread_local! {
     // レイアウトの再帰深度を追跡
-    static LAYOUT_DEPTH: std::cell::Cell<usize> = std::cell::Cell::new(0);
+    static LAYOUT_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 impl RenderTree {

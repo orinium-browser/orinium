@@ -206,10 +206,10 @@ fn inherit_from_parent_from_node(
     parent_node: &Rc<RefCell<TreeNode<StyleNode>>>,
 ) {
     // color はそのまま継承
-    if child.color.is_none() {
-        if let Some(parent_style) = parent_node.borrow().value.style.clone() {
-            child.color = parent_style.color;
-        }
+    if child.color.is_none()
+        && let Some(parent_style) = parent_node.borrow().value.style.clone()
+    {
+        child.color = parent_style.color;
     }
 
     // font-size は "computed" として px に解決して継承する
@@ -226,29 +226,29 @@ fn resolve_font_size_px_from_node(node: &Rc<RefCell<TreeNode<StyleNode>>>) -> f3
     const DEFAULT_FONT_PX: f32 = 16.0;
 
     // まずこのノードの style に font_size があるか確認
-    if let Some(style) = node.borrow().value.style.clone() {
-        if let Some(length) = style.font_size {
-            match length {
-                Length::Px(px) => return px,
-                Length::Em(em) => {
-                    // base を親から解決
-                    if let Some(parent) = node.borrow().parent() {
-                        let base = resolve_font_size_px_from_node(&parent);
-                        return Length::Em(em).to_px(base);
-                    } else {
-                        return Length::Em(em).to_px(DEFAULT_FONT_PX);
-                    }
+    if let Some(style) = node.borrow().value.style.clone()
+        && let Some(length) = style.font_size
+    {
+        match length {
+            Length::Px(px) => return px,
+            Length::Em(em) => {
+                // base を親から解決
+                if let Some(parent) = node.borrow().parent() {
+                    let base = resolve_font_size_px_from_node(&parent);
+                    return Length::Em(em).to_px(base);
+                } else {
+                    return Length::Em(em).to_px(DEFAULT_FONT_PX);
                 }
-                Length::Percent(p) => {
-                    if let Some(parent) = node.borrow().parent() {
-                        let base = resolve_font_size_px_from_node(&parent);
-                        return Length::Percent(p).to_px(base);
-                    } else {
-                        return Length::Percent(p).to_px(DEFAULT_FONT_PX);
-                    }
-                }
-                _ => {}
             }
+            Length::Percent(p) => {
+                if let Some(parent) = node.borrow().parent() {
+                    let base = resolve_font_size_px_from_node(&parent);
+                    return Length::Percent(p).to_px(base);
+                } else {
+                    return Length::Percent(p).to_px(DEFAULT_FONT_PX);
+                }
+            }
+            _ => {}
         }
     }
 

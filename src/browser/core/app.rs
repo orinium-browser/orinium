@@ -155,9 +155,9 @@ impl BrowserApp {
                     winit::event::MouseScrollDelta::LineDelta(_, y) => -y * 60.0,
                     winit::event::MouseScrollDelta::PixelDelta(pos) => -pos.y as f32,
                 };
-                self.tabs
-                    .first_mut()
-                    .map(|tab| tab.scroll_page(0.0, scroll_amount));
+                if let Some(tab) = self.tabs.first_mut() {
+                    tab.scroll_page(0.0, scroll_amount)
+                }
                 self.build_from_tabs();
                 BrowserCommand::RequestRedraw
             }
