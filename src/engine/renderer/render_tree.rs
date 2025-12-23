@@ -139,8 +139,8 @@ impl RenderTree {
         measurer: &dyn text::TextMeasurer,
     ) -> (f32, f32) {
         // 対応する子をペアで巡回するために src/dst の子を取得
-        let src_children = src.borrow();
-        let src_children: &Vec<_> = src_children.children();
+        let src_borrow = src.borrow();
+        let src_children: &Vec<_> = src_borrow.children();
         let dst_children: Vec<_> = {
             let r = node.borrow();
             r.children().clone()
@@ -152,7 +152,7 @@ impl RenderTree {
         // デバッグ用ログ
         #[cfg(debug_assertions)]
         LAYOUT_DEPTH.with(|d| {
-            log::debug!(target: "RenderTree::layout_node_recursive", "{:?}: {:?} Start", d.get(), render_node.kind);
+            log::debug!(target: "RenderTree::layout_node_recursive", "{:?}: {} {:?} Start", d.get(), render_node.kind, src_borrow.value.computed.as_ref().map(|c| c.display).unwrap());
         });
 
         match &mut render_node.kind {
