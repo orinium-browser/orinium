@@ -1,3 +1,4 @@
+use super::render_node::RenderNodeTrait;
 use super::render_node::{NodeKind, RenderNode, RenderTree};
 use crate::engine::bridge::text;
 use crate::engine::css::values::Display;
@@ -20,8 +21,7 @@ impl RenderTree {
         {
             let mut root = self.root.borrow_mut();
             // ルートを Scrollable で包まないため、ノード種別に関わらずルートサイズを設定する
-            root.value.width = w;
-            root.value.height = h;
+            root.value.set_size(w, h);
         }
         RenderTree { root: self.root }
     }
@@ -161,10 +161,10 @@ impl RenderTree {
         // デバッグ用ログ
         #[cfg(debug_assertions)]
         LAYOUT_DEPTH.with(|d| {
-            log::debug!(target: "RenderTree::layout_node_recursive", "{:?}: {} {:?} Start", d.get(), render_node.kind, src_borrow.value.computed.as_ref().map(|c| c.display).unwrap());
+            log::debug!(target: "RenderTree::layout_node_recursive", "{:?}: {} {:?} Start", d.get(), render_node.kind(), src_borrow.value.computed.as_ref().map(|c| c.display).unwrap());
         });
 
-        match &mut render_node.kind {
+        match &mut render_node.kind() {
             NodeKind::Container => {
                 let mut x_offset = start_x;
                 let mut y_offset = start_y;
@@ -205,10 +205,12 @@ impl RenderTree {
                         y_offset += child_h;
                     }
                 }
-                render_node.x = start_x;
-                render_node.y = start_y;
-                render_node.width = width.max(x_offset - start_x);
-                render_node.height = height.max(y_offset - start_y);
+                render_node.set_layout(
+                    start_x,
+                    start_y,
+                    width.max(x_offset - start_x),
+                    height.max(y_offset - start_y),
+                );
                 #[cfg(debug_assertions)]
                 LAYOUT_DEPTH.with(|d| {
                     d.set(d.get() - 1);
@@ -226,10 +228,12 @@ impl RenderTree {
                     available_height,
                     measurer,
                 );
-                render_node.x = start_x;
-                render_node.y = start_y;
-                render_node.width = available_width;
-                render_node.height = render_node.height.max(available_height);
+                render_node.set_layout(
+                    start_x,
+                    start_y,
+                    available_width,
+                    render_node.height.max(available_height),
+                );
             }
 
             NodeKind::Text {
@@ -249,52 +253,48 @@ impl RenderTree {
                         max_lines: None,
                     },
                 };
-                if let Ok(meas) = measurer.measure(&req) {
-                    render_node.width = meas.width;
-                    render_node.height = meas.height;
+                let (width, height) = if let Ok(meas) = measurer.measure(&req) {
+                    (meas.width, meas.height)
                 } else if let Some(computed) = src.borrow().value.computed.as_ref() {
                     // サイズ解決は ComputedStyle の責務
-                    render_node.width = computed
-                        .resolved_width_px(available_width, *font_size)
-                        .unwrap_or(0.0);
-                    render_node.height = computed
-                        .resolved_height_px(available_height, *font_size)
-                        .unwrap_or(20.0);
+                    (
+                        computed
+                            .resolved_width_px(available_width, *font_size)
+                            .unwrap_or(0.0),
+                        computed
+                            .resolved_height_px(available_height, *font_size)
+                            .unwrap_or(20.0),
+                    )
                 } else {
-                    render_node.width = 0.0;
-                    render_node.height = 20.0;
-                }
-                render_node.x = start_x;
-                render_node.y = start_y;
+                    (0.0, 20.0)
+                };
+                render_node.set_layout(start_x, start_y, width, height);
             }
 
             NodeKind::Button => {
-                if let Some(computed) = src.borrow().value.computed.as_ref() {
-                    render_node.width = computed
-                        .resolved_width_px(available_width, 10.0)
-                        .unwrap_or(0.0);
-                    render_node.height = computed
-                        .resolved_height_px(available_height, 10.0)
-                        .unwrap_or(20.0);
+                let (width, height) = if let Some(computed) = src.borrow().value.computed.as_ref() {
+                    (
+                        computed
+                            .resolved_width_px(available_width, 10.0)
+                            .unwrap_or(0.0),
+                        computed
+                            .resolved_height_px(available_height, 10.0)
+                            .unwrap_or(20.0),
+                    )
                 } else {
-                    render_node.width = 0.0;
-                    render_node.height = 20.0;
-                }
-                render_node.x = start_x;
-                render_node.y = start_y;
+                    (0.0, 20.0)
+                };
+                render_node.set_layout(start_x, start_y, width, height);
             }
 
             NodeKind::Unknown => {
-                render_node.width = 0.0;
-                render_node.height = 0.0;
-                render_node.x = start_x;
-                render_node.y = start_y;
+                render_node.set_layout(start_x, start_y, 0.0, 0.0);
             }
         }
 
         #[cfg(debug_assertions)]
         LAYOUT_DEPTH.with(|d| {
-            log::debug!(target: "RenderTree::layout_node_recursive", "{:?}: Laid out node: {} at ({}, {}) size=({}, {})", d.get(), render_node.kind, render_node.x, render_node.y, render_node.width, render_node.height);
+            log::debug!(target: "RenderTree::layout_node_recursive", "{:?}: Laid out node: {} at ({}, {}) size=({}, {})", d.get(), render_node.kind(), render_node.x, render_node.y, render_node.width, render_node.height);
         });
         (render_node.width, render_node.height)
     }

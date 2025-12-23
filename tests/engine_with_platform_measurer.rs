@@ -3,6 +3,7 @@ use orinium_browser::engine::styler::computed_tree::{
     ComputedStyle, ComputedStyleNode, ComputedTree,
 };
 use orinium_browser::engine::styler::style_tree::Style;
+use orinium_browser::engine::renderer::render_node::RenderNodeTrait;
 use orinium_browser::engine::tree::TreeNode;
 use orinium_browser::platform::renderer::text_measurer::PlatformTextMeasurer;
 use std::rc::Rc;
@@ -64,7 +65,7 @@ fn engine_layout_with_platform_measurer() {
 
     // レンダーツリーのルートを検査して、子のサイズが測定されていることを確認
     let root_node = render_tree.root.borrow();
-    match &root_node.value.kind {
+    match &root_node.value.kind() {
         // ルートはScrollableであることを期待
         orinium_browser::engine::renderer::NodeKind::Scrollable {
             tree: inner_tree, ..

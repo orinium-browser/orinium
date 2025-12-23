@@ -3,6 +3,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use super::render_node::{NodeKind, RenderNode, RenderTree};
+use super::render_node::RenderNodeTrait;
 use crate::engine::tree::TreeNode;
 
 #[derive(Debug, Clone)]
@@ -134,7 +135,7 @@ impl Renderer {
         let abs_x = node_borrow.value.x;
         let abs_y = node_borrow.value.y;
 
-        match &node_borrow.value.kind {
+        match &node_borrow.value.kind() {
             NodeKind::Text {
                 text,
                 font_size,

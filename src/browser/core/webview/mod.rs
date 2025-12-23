@@ -202,12 +202,14 @@ impl WebView {
             delta_x: f32,
             delta_y: f32,
         ) {
+            use crate::engine::renderer::render_node::RenderNodeTrait;
+
             let mut node_borrow = node.borrow_mut();
             if let crate::engine::renderer::NodeKind::Scrollable {
                 scroll_offset_x,
                 scroll_offset_y,
                 ..
-            } = &mut node_borrow.value.kind
+            } = &mut node_borrow.value.kind_mut()
             {
                 *scroll_offset_x += delta_x;
                 *scroll_offset_y += delta_y;

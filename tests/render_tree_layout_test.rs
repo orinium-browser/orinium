@@ -3,6 +3,7 @@ use orinium_browser::engine::bridge::text::{
 };
 use orinium_browser::engine::html::HtmlNodeType;
 use orinium_browser::engine::renderer::NodeKind;
+use orinium_browser::engine::renderer::render_node::RenderNodeTrait;
 use orinium_browser::engine::styler::computed_tree::{
     ComputedStyle, ComputedStyleNode, ComputedTree,
 };
@@ -58,7 +59,7 @@ fn render_tree_uses_measurer() {
     let root_node = render_tree.root.borrow();
     if let NodeKind::Scrollable {
         tree: inner_tree, ..
-    } = &root_node.value.kind
+    } = &root_node.value.kind()
     {
         let children = inner_tree.root.borrow().children().clone();
         assert!(!children.is_empty(), "no children in inner render tree");

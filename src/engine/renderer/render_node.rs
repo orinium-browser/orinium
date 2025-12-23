@@ -40,7 +40,7 @@ impl std::fmt::Display for NodeKind {
 
 #[derive(Debug, Clone)]
 pub struct RenderNode {
-    pub kind: NodeKind,
+    kind: NodeKind,
 
     /// 計算されたレイアウト位置
     pub x: f32,
@@ -51,6 +51,52 @@ pub struct RenderNode {
     pub height: f32,
     // NOTE: レイアウトメタ情報と display は ComputedTree 側で扱うため
     // RenderNode からは外して、レンダリングに必要な位置・大きさ・内容のみにする。
+}
+
+/// RenderNode のレイアウト結果に対する安定した API
+pub trait RenderNodeTrait {
+    fn set_layout(&mut self, x: f32, y: f32, width: f32, height: f32);
+
+    fn set_position(&mut self, x: f32, y: f32) {
+        let (w, h) = self.size();
+        self.set_layout(x, y, w, h);
+    }
+
+    fn set_size(&mut self, width: f32, height: f32) {
+        let (x, y) = self.position();
+        self.set_layout(x, y, width, height);
+    }
+
+    fn position(&self) -> (f32, f32);
+    fn size(&self) -> (f32, f32);
+
+    fn kind(&self) -> &NodeKind;
+    fn kind_mut(&mut self) -> &mut NodeKind;
+}
+
+impl RenderNodeTrait for RenderNode {
+    fn set_layout(&mut self, x: f32, y: f32, width: f32, height: f32) {
+        self.x = x;
+        self.y = y;
+        self.width = width;
+        self.height = height;
+    }
+
+    fn position(&self) -> (f32, f32) {
+        (self.x, self.y)
+    }
+
+    fn size(&self) -> (f32, f32) {
+        (self.width, self.height)
+    }
+
+    fn kind(&self) -> &NodeKind {
+        &self.kind
+    }
+
+    fn kind_mut(&mut self) -> &mut NodeKind {
+        &mut self.kind
+    }
 }
 
 /// レイアウト再計算のための最低限の情報
