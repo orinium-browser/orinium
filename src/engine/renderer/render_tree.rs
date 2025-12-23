@@ -159,6 +159,8 @@ impl RenderTree {
             NodeKind::Container => {
                 let mut x_offset = start_x;
                 let mut y_offset = start_y;
+                let mut width: f32 = 0.0;
+                let mut height: f32 = 0.0;
                 #[cfg(debug_assertions)]
                 LAYOUT_DEPTH.with(|d| {
                     d.set(d.get() + 1);
@@ -181,9 +183,11 @@ impl RenderTree {
                         match disp {
                             Display::Block => {
                                 y_offset += child_h;
+                                width = width.max(child_w);
                             }
                             Display::Inline => {
                                 x_offset += child_w;
+                                height = height.max(child_h);
                             }
                             Display::None => {}
                         }
@@ -194,8 +198,8 @@ impl RenderTree {
                 }
                 render_node.x = start_x;
                 render_node.y = start_y;
-                render_node.width = x_offset - start_x;
-                render_node.height = y_offset - start_y;
+                render_node.width = width.max(x_offset - start_x);
+                render_node.height = height.max(y_offset - start_y);
                 #[cfg(debug_assertions)]
                 LAYOUT_DEPTH.with(|d| {
                     d.set(d.get() - 1);
