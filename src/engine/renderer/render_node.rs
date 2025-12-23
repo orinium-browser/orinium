@@ -1,7 +1,7 @@
 //! RenderNode と RenderTree
 //! 最低限のレイアウト情報を保持する。
 
-use super::render::Color;
+use super::types::Color;
 use crate::engine::tree::Tree;
 
 #[derive(Debug, Clone)]

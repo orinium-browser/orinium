@@ -2,7 +2,7 @@ use super::render_node::RenderNodeTrait;
 use super::render_node::{NodeKind, RenderNode, RenderTree};
 use crate::engine::bridge::text;
 use crate::engine::css::values::Display;
-use crate::engine::renderer::render::Color as RenderColor;
+use crate::engine::renderer::Color as RenderColor;
 use crate::engine::styler::computed_tree::{ComputedStyle, ComputedStyleNode, ComputedTree};
 use crate::engine::tree::{Tree, TreeNode};
 use crate::html::HtmlNodeType;
