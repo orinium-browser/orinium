@@ -43,12 +43,12 @@ pub struct RenderNode {
     kind: NodeKind,
 
     /// 計算されたレイアウト位置
-    pub x: f32,
-    pub y: f32,
+    x: f32,
+    y: f32,
 
     /// 計算されたレイアウトサイズ
-    pub width: f32,
-    pub height: f32,
+    width: f32,
+    height: f32,
     // NOTE: レイアウトメタ情報と display は ComputedTree 側で扱うため
     // RenderNode からは外して、レンダリングに必要な位置・大きさ・内容のみにする。
 }
