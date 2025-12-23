@@ -2,8 +2,8 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-use super::render_node::{NodeKind, RenderNode, RenderTree};
 use super::render_node::RenderNodeTrait;
+use super::render_node::{NodeKind, RenderNode, RenderTree};
 use crate::engine::tree::TreeNode;
 
 #[derive(Debug, Clone)]
