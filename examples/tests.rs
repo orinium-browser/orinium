@@ -22,7 +22,10 @@ async fn main() -> Result<()> {
                     let command = &args[2];
                     let commands = get_commands();
                     if let Some((description, args, delail)) = commands.get(command.as_str()) {
-                        println!("{}", format!("Help for command: {}", command).bold().underline());
+                        println!(
+                            "{}",
+                            format!("Help for command: {}", command).bold().underline()
+                        );
                         println!("\n{}:", "Description".bold());
                         println!("  {}", description);
                         println!("\n{}:", "Usage".bold());
