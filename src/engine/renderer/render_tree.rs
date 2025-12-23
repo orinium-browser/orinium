@@ -167,7 +167,7 @@ impl RenderTree {
                     log::debug!(target: "RenderTree::layout_node_recursive", "  Laying out Container node with {} children", src_children.len());
                 });
                 for (s_child, d_child) in src_children.iter().zip(dst_children.iter()) {
-                    let (child_h, child_w) = Self::layout_node_recursive(
+                    let (child_w, child_h) = Self::layout_node_recursive(
                         s_child,
                         d_child,
                         x_offset,
