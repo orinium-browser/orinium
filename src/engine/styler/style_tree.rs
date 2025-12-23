@@ -2,11 +2,12 @@ use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
 use super::computed_tree::{ComputedStyle, ComputedStyleNode};
+use super::style::Style;
 use super::ua::default_style_for;
 
 use super::matcher::selector_matches_on_node;
 use crate::engine::css::cssom::{CssNodeType, CssValue};
-use crate::engine::css::values::{Border, Color, Display, Length};
+use crate::engine::css::values::{Display, Length};
 use crate::engine::tree::*;
 use crate::html::{HtmlNodeType, util as html_util};
 
@@ -20,30 +21,6 @@ impl StyleNode {
     pub fn html(&self) -> Weak<RefCell<TreeNode<HtmlNodeType>>> {
         self.html.clone()
     }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct Style {
-    pub display: Option<Display>,
-    pub width: Option<Length>,
-    pub height: Option<Length>,
-
-    pub margin_top: Option<Length>,
-    pub margin_right: Option<Length>,
-    pub margin_bottom: Option<Length>,
-    pub margin_left: Option<Length>,
-
-    pub padding_top: Option<Length>,
-    pub padding_right: Option<Length>,
-    pub padding_bottom: Option<Length>,
-    pub padding_left: Option<Length>,
-
-    pub color: Option<Color>,
-    pub background_color: Option<Color>,
-
-    pub border: Option<Border>,
-
-    pub font_size: Option<Length>,
 }
 
 impl Style {

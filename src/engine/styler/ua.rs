@@ -2,7 +2,7 @@
 //!
 //! html要素ごとの最小限の display / margin / padding を定義する。
 
-use super::style_tree::Style;
+use super::style::Style;
 use crate::engine::css::values::{
     // Border, Color,
     Display,
