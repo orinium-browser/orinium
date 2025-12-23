@@ -3,7 +3,6 @@ use std::rc::{Rc, Weak};
 
 use super::computed_tree::{ComputedStyle, ComputedStyleNode};
 use super::ua::default_style_for;
-use log;
 
 use super::matcher::selector_matches_on_node;
 use crate::engine::css::cssom::{CssNodeType, CssValue};
