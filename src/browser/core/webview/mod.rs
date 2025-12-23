@@ -84,6 +84,10 @@ impl WebView {
                 computed_tree.layout_with_fallback(800.0, 600.0)
             }
         };
+        
+        // Scrollable でラップ
+        let render_tree = render_tree.wrap_in_scrollable(0.0, 0.0, 800.0, 600.0);
+
         self.render = Some(render_tree);
 
         self.needs_redraw = true;
@@ -175,11 +179,46 @@ impl WebView {
                 computed_tree.layout_with_fallback(800.0, 600.0)
             }
         };
+
+        // Scrollable でラップ
+        let render_tree = render_tree.wrap_in_scrollable(0.0, 0.0, 800.0, 600.0);
+
         self.render = Some(render_tree);
 
         self.needs_redraw = true;
 
         Ok(())
+    }
+
+    pub fn scroll_page(&mut self, delta_x: f32, delta_y: f32) {
+        self.scroll_x += delta_x;
+        self.scroll_y += delta_y;
+        fn scroll_scrollable(
+            node: &std::rc::Rc<
+                std::cell::RefCell<
+                    crate::engine::tree::TreeNode<crate::engine::renderer::RenderNode>,
+                >,
+            >,
+            delta_x: f32,
+            delta_y: f32,
+        ) {
+            let mut node_borrow = node.borrow_mut();
+            if let crate::engine::renderer::NodeKind::Scrollable {
+                scroll_offset_x,
+                scroll_offset_y,
+                ..
+            } = &mut node_borrow.value.kind
+            {
+                *scroll_offset_x += delta_x;
+                *scroll_offset_y += delta_y;
+            } else {
+                panic!("scroll_page called on non-scrollable node; this should not happen");
+            }
+        }
+        if let Some(render_tree) = &self.render {
+            scroll_scrollable(&render_tree.root, delta_x, delta_y);
+        }
+        self.needs_redraw = true;
     }
 }
 
