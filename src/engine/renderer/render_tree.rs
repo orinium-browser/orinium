@@ -18,10 +18,9 @@ thread_local! {
 impl RenderTree {
     pub fn set_root_size(&mut self, w: f32, h: f32) {
         let mut root = self.root.borrow_mut();
-        if let NodeKind::Scrollable { .. } = root.value.kind {
-            root.value.width = w;
-            root.value.height = h;
-        }
+        // ルートを Scrollable で包まないため、ノード種別に関わらずルートサイズを設定する
+        root.value.width = w;
+        root.value.height = h;
     }
 
     /// ComputedTree から RenderTree を生成（フォールバック測定器）
@@ -34,8 +33,8 @@ impl RenderTree {
     pub fn from_computed_tree_with_measurer(
         tree: &ComputedTree,
         measurer: &dyn text::TextMeasurer,
-        root_width: f32,
-        root_height: f32,
+        available_width: f32,
+        available_height: f32,
     ) -> RenderTree {
         // まず構造だけを RenderTree にコピー
         let (root_kind, _display) = Self::detect_kind_display(&tree.root.borrow().value);
@@ -43,19 +42,8 @@ impl RenderTree {
         let inner_render_tree = Tree::new(root_node);
         Self::convert_structure(&tree.root, &inner_render_tree.root);
 
-        // ページルートは Scrollable でラップ
-        let page_root = RenderNode::new(
-            NodeKind::Scrollable {
-                tree: inner_render_tree,
-                scroll_offset_x: 0.0,
-                scroll_offset_y: 0.0,
-            },
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-        );
-        let render_tree = Tree::new(page_root);
+        // ページルートはそのまま返す（Scrollable でラップしない）
+        let render_tree = inner_render_tree;
 
         // 再帰レイアウト（ComputedTree の情報と測定器を用いる）
         Self::layout_node_recursive(
@@ -63,8 +51,8 @@ impl RenderTree {
             &render_tree.root,
             0.0,
             0.0,
-            root_width,
-            root_height,
+            available_width,
+            available_height,
             measurer,
         );
 
