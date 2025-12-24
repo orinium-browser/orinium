@@ -2,8 +2,7 @@ use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
 use super::computed_tree::{ComputedStyle, ComputedStyleNode};
-use super::style::Style;
-use super::ua::default_style_for;
+use super::style::{Style, UADefault};
 
 use super::matcher::selector_matches_on_node;
 use crate::engine::css::cssom::{CssNodeType, CssValue};
@@ -68,7 +67,7 @@ impl StyleTree {
             let html = html_rc.borrow().value.clone();
 
             // 1. UA デフォルトスタイル
-            let mut style = default_style_for(&html);
+            let mut style = UADefault::default_style_for(&html);
             log::debug!(target: "Styler::StyleTree", "UA default style for node={:?}: {:?}", html, style);
 
             // 2. 親スタイルを取得して継承

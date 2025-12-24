@@ -24,3 +24,8 @@ pub struct Style {
 
     pub font_size: Option<Length>,
 }
+
+pub trait UADefault {
+    /// HTML ノードに対するデフォルト Style を返す
+    fn default_style_for(node: &crate::engine::html::parser::HtmlNodeType) -> Self;
+}
