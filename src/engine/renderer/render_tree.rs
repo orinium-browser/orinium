@@ -1,8 +1,8 @@
+use super::Color;
 use super::render_node::RenderNodeTrait;
 use super::render_node::{NodeKind, RenderNode, RenderTree};
 use crate::engine::bridge::text;
 use crate::engine::css::values::Display;
-use crate::engine::renderer::Color as RenderColor;
 use crate::engine::styler::computed_tree::{ComputedStyleNode, ComputedTree};
 use crate::engine::tree::{Tree, TreeNode};
 use crate::html::HtmlNodeType;
@@ -92,7 +92,7 @@ impl RenderTree {
                     .font_size
                     .unwrap_or(crate::engine::css::values::Length::Px(19.0))
                     .to_px(10.0),
-                color: RenderColor::from_rgba_tuple(
+                color: Color::from_rgba_tuple(
                     computed_style.color.unwrap_or_default().to_rgba_tuple(None),
                 ),
             },
