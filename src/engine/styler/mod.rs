@@ -1,7 +1,7 @@
 //! DOM/CSSOM を統合し、各ノードの最終スタイル（ComputedStyle）を決定する。
 
 pub mod computed_tree;
-pub(crate) mod matcher;
+pub mod matcher;
 pub mod style;
 pub mod style_tree;
 pub(crate) mod ua;
