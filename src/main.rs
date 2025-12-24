@@ -30,6 +30,8 @@ async fn main() -> Result<()> {
                     <p>&amp; &lt; &gt; &quot; &#65; &#x41;</p>
                 </div>
                 <p>Very long text to test wrapping behavior. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>
+                <p>Button below:</p>
+                <button>Click Me!</button>
             </body>
         </html>
     "#;
