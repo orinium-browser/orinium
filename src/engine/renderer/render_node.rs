@@ -11,6 +11,7 @@ pub enum NodeKind {
         text: String,
         font_size: f32,
         color: Color,
+        max_width: f32,
     },
 
     /// ボタンなどのインタラクティブな要素

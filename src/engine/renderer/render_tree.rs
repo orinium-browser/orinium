@@ -96,6 +96,7 @@ impl RenderTree {
                 color: Color::from_rgba_tuple(
                     computed_style.color.unwrap_or_default().to_rgba_tuple(None),
                 ),
+                max_width: 0.0,
             },
             HtmlNodeType::Element { tag_name, .. } => match tag_name.as_str() {
                 "button" => NodeKind::Button,
@@ -137,6 +138,9 @@ impl RenderTree {
 
     /// 再帰的にノードをレイアウト（ComputedTree の情報を元に RenderTree のサイズ/位置を埋める）
     /// 返り値: (content_width, content_height)
+    ///
+    /// TODO:
+    /// - padding, margin, border の考慮
     fn layout_node_recursive(
         src: &Rc<RefCell<TreeNode<ComputedStyleNode>>>,
         node: &Rc<RefCell<TreeNode<RenderNode>>>,
@@ -163,7 +167,7 @@ impl RenderTree {
             log::debug!(target: "RenderTree::layout_node_recursive", "{:?}: {} {:?} Start", d.get(), render_node.kind(), src_borrow.value.computed.as_ref().map(|c| c.display).unwrap());
         });
 
-        match &mut render_node.kind() {
+        match &mut render_node.kind_mut() {
             NodeKind::Container => {
                 let mut x_offset = start_x;
                 let mut y_offset = start_y;
@@ -246,7 +250,9 @@ impl RenderTree {
                 text,
                 font_size,
                 color: _,
+                max_width,
             } => {
+                *max_width = available_width;
                 let req = text::TextMeasurementRequest {
                     text: text.clone(),
                     font: text::FontDescription {
@@ -254,7 +260,7 @@ impl RenderTree {
                         size_px: *font_size,
                     },
                     constraints: text::LayoutConstraints {
-                        max_width: Some(available_width),
+                        max_width: Some(*max_width),
                         wrap: true,
                         max_lines: None,
                     },

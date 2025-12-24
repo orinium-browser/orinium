@@ -15,6 +15,7 @@ pub enum DrawCommand {
         text: String,
         font_size: f32,
         color: Color,
+        max_width: f32,
     },
 
     DrawRect {
@@ -82,6 +83,7 @@ impl Renderer {
                 text,
                 font_size,
                 color,
+                max_width,
             } => {
                 out.push(DrawCommand::DrawText {
                     x: abs_x,
@@ -89,6 +91,7 @@ impl Renderer {
                     text: text.clone(),
                     font_size: *font_size,
                     color: color.clone(),
+                    max_width: *max_width,
                 });
             }
             NodeKind::Button => {

@@ -397,6 +397,7 @@ impl GpuRenderer {
                     text,
                     font_size,
                     color,
+                    max_width,
                 } => {
                     let (tdx, tdy) = current_transform(&transform_stack);
 
@@ -413,10 +414,16 @@ impl GpuRenderer {
                         );
                         let buffer = tr.create_buffer_for_text(text, *font_size * sf, gc);
 
+                        let bounds_x = if (x + max_width) < (clip.x + clip.w) {
+                            (x + max_width) - clip.x
+                        } else {
+                            clip.w
+                        };
+
                         TextSection {
                             screen_position: ((*x + tdx) * sf, (*y + tdy) * sf),
                             clip_origin: (clip.x * sf, clip.y * sf),
-                            bounds: (clip.w * sf, clip.h * sf),
+                            bounds: (bounds_x * sf, clip.h * sf),
                             buffer,
                         }
                     } else {
