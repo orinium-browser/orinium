@@ -35,13 +35,13 @@ git clone https://github.com/orinium-browser/orinium.git
 cd orinium
 ```
 > [!NOTE]
-> Orinium の MSRV (Minimum Supported Rust Version) は 1.88.0 です。
-> それ以前のバージョンを使用している方は 1.88.0 以降のバージョンに切り替えてください。
+> Orinium の MSRV (Minimum Supported Rust Version) は 1.92.0 です。
+> それ以前のバージョンを使用している方は 1.92.0 以降のバージョンに切り替えてください。
 > 
 > rustup を使用している場合は、以下でバージョンを合わせられます。
 > ```bash
-> rustup toolchain install 1.88.0
-> rustup override set 1.88.0
+> rustup toolchain install 1.92.0
+> rustup override set 1.92.0
 > ```
 Cargo を使って実行可能です。
 

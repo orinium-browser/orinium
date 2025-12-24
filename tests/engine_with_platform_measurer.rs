@@ -1,9 +1,8 @@
 use orinium_browser::engine::html::HtmlNodeType;
-use orinium_browser::engine::renderer::RenderTree;
+use orinium_browser::engine::renderer::render_node::RenderNodeTrait;
 use orinium_browser::engine::styler::computed_tree::{
     ComputedStyle, ComputedStyleNode, ComputedTree,
 };
-use orinium_browser::engine::styler::style_tree::Style;
 use orinium_browser::engine::tree::TreeNode;
 use orinium_browser::platform::renderer::text_measurer::PlatformTextMeasurer;
 use std::rc::Rc;
@@ -39,7 +38,7 @@ fn engine_layout_with_platform_measurer() {
     let html_text_node = TreeNode::new(HtmlNodeType::Text("Platform test".to_string()));
     let html_weak = Rc::downgrade(&html_text_node);
     // デフォルトスタイルを計算してComputedStyleNodeを作成
-    let computed = ComputedStyle::compute(Style::default());
+    let computed = ComputedStyle::default();
     let computed_node = ComputedStyleNode {
         html: html_weak.clone(),
         computed: Some(computed),
@@ -48,7 +47,7 @@ fn engine_layout_with_platform_measurer() {
     // ルートのドキュメントノードとComputedTreeを準備
     let root_html_node = TreeNode::new(HtmlNodeType::Document);
     let root_weak = Rc::downgrade(&root_html_node);
-    let root_computed = ComputedStyle::compute(Style::default());
+    let root_computed = ComputedStyle::default();
     let tree = ComputedTree::new(ComputedStyleNode {
         html: root_weak,
         computed: Some(root_computed),
@@ -56,19 +55,16 @@ fn engine_layout_with_platform_measurer() {
     // ルートに子ノード（テキスト）を追加
     let _child = TreeNode::add_child_value(&tree.root, computed_node);
 
-    // ComputedTree から RenderTree を生成
-    let mut render_tree = RenderTree::from_computed_tree(&tree);
-
     // フォントファイルを読み込み、PlatformTextMeasurer を作成
     let bytes = std::fs::read(path).expect("read font");
     let pm = PlatformTextMeasurer::from_bytes("sys", bytes).expect("create measurer");
 
     // 測定器を使ってレイアウトを実行
-    render_tree.layout_with_measurer(&pm);
+    let render_tree = tree.layout_with_measurer(&pm, 800.0, 600.0);
 
     // レンダーツリーのルートを検査して、子のサイズが測定されていることを確認
     let root_node = render_tree.root.borrow();
-    match &root_node.value.kind {
+    match &root_node.value.kind() {
         // ルートはScrollableであることを期待
         orinium_browser::engine::renderer::NodeKind::Scrollable {
             tree: inner_tree, ..
@@ -79,8 +75,8 @@ fn engine_layout_with_platform_measurer() {
             let first = &children[0];
             let rn = &first.borrow().value;
             // 測定結果が正の値であることを確認
-            assert!(rn.width > 0.0, "measured width should be > 0");
-            assert!(rn.height > 0.0, "measured height should be > 0");
+            assert!(rn.size().0 > 0.0, "measured width should be > 0");
+            assert!(rn.size().1 > 0.0, "measured height should be > 0");
         }
         _ => panic!("expected Scrollable root in RenderTree"),
     }

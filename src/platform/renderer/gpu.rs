@@ -137,7 +137,7 @@ impl GpuRenderer {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
                 bind_group_layouts: &[],
-                push_constant_ranges: &[],
+                immediate_size: 0,
             });
 
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -175,7 +175,7 @@ impl GpuRenderer {
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },
-            multiview: None,
+            multiview_mask: None,
         });
         // --- レンダーパイプライン作成終了 ---
 
@@ -397,6 +397,7 @@ impl GpuRenderer {
                     text,
                     font_size,
                     color,
+                    max_width,
                 } => {
                     let (tdx, tdy) = current_transform(&transform_stack);
 
@@ -413,10 +414,16 @@ impl GpuRenderer {
                         );
                         let buffer = tr.create_buffer_for_text(text, *font_size * sf, gc);
 
+                        let bounds_x = if (x + max_width) < (clip.x + clip.w) {
+                            (x + max_width) - clip.x
+                        } else {
+                            clip.w
+                        };
+
                         TextSection {
                             screen_position: ((*x + tdx) * sf, (*y + tdy) * sf),
                             clip_origin: (clip.x * sf, clip.y * sf),
-                            bounds: (clip.w * sf, clip.h * sf),
+                            bounds: (bounds_x * sf, clip.h * sf),
                             buffer,
                         }
                     } else {
@@ -693,6 +700,7 @@ impl GpuRenderer {
                 depth_stencil_attachment: None,
                 occlusion_query_set: None,
                 timestamp_writes: None,
+                multiview_mask: None,
             });
 
             // 使用するシェーダー・設定をセット
@@ -720,6 +728,7 @@ impl GpuRenderer {
                 depth_stencil_attachment: None,
                 occlusion_query_set: None,
                 timestamp_writes: None,
+                multiview_mask: None,
             });
             tr.draw(&mut rpass);
         }

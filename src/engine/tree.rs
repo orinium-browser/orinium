@@ -32,6 +32,10 @@ impl<T> TreeNode<T> {
         &self.children
     }
 
+    pub fn children_mut(&mut self) -> &mut Vec<Rc<RefCell<TreeNode<T>>>> {
+        &mut self.children
+    }
+
     pub fn parent(&self) -> Option<Rc<RefCell<TreeNode<T>>>> {
         self.parent.as_ref().and_then(|weak| weak.upgrade())
     }

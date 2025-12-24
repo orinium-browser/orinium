@@ -1,6 +1,8 @@
 pub mod render;
 pub mod render_node;
-pub mod render_tree;
+pub(crate) mod render_tree;
+pub mod types;
 
-pub use render::{Color, DrawCommand, Renderer};
+pub use render::{DrawCommand, Renderer};
 pub use render_node::{NodeKind, RenderNode, RenderTree};
+pub use types::Color;

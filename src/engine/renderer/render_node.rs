@@ -1,7 +1,7 @@
 //! RenderNode と RenderTree
 //! 最低限のレイアウト情報を保持する。
 
-use super::render::Color;
+use super::types::Color;
 use crate::engine::tree::Tree;
 
 #[derive(Debug, Clone)]
@@ -11,6 +11,7 @@ pub enum NodeKind {
         text: String,
         font_size: f32,
         color: Color,
+        max_width: f32,
     },
 
     /// ボタンなどのインタラクティブな要素
@@ -23,30 +24,82 @@ pub enum NodeKind {
         scroll_offset_y: f32,
     },
 
-    /// ブロック要素（幅いっぱい＋縦積み）
-    Block,
-
-    /// インライン要素（横方向に並ぶ）
-    Inline,
+    Container,
 
     /// 未知の要素
     Unknown,
 }
 
+impl std::fmt::Display for NodeKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NodeKind::Scrollable { .. } => write!(f, "Scrollable {{..}}"),
+            _ => write!(f, "{:?}", self),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RenderNode {
-    pub kind: NodeKind,
+    kind: NodeKind,
 
     /// 計算されたレイアウト位置
-    pub x: f32,
-    pub y: f32,
+    x: f32,
+    y: f32,
 
     /// 計算されたレイアウトサイズ
-    pub width: f32,
-    pub height: f32,
+    width: f32,
+    height: f32,
+    // NOTE: レイアウトメタ情報と display は ComputedTree 側で扱うため
+    // RenderNode からは外して、レンダリングに必要な位置・大きさ・内容のみにする。
+}
 
-    /// レイアウトアルゴリズムが必要とするメタ情報
-    pub layout: LayoutInfo,
+/// RenderNode のレイアウト結果に対する安定した API
+pub trait RenderNodeTrait {
+    fn set_layout(&mut self, x: f32, y: f32, width: f32, height: f32);
+
+    fn set_position(&mut self, x: f32, y: f32) {
+        let (w, h) = self.size();
+        self.set_layout(x, y, w, h);
+    }
+
+    fn set_size(&mut self, width: f32, height: f32) {
+        let (x, y) = self.position();
+        self.set_layout(x, y, width, height);
+    }
+
+    /// (x, y)
+    fn position(&self) -> (f32, f32);
+    /// (width, height)
+    fn size(&self) -> (f32, f32);
+
+    fn kind(&self) -> &NodeKind;
+    fn kind_mut(&mut self) -> &mut NodeKind;
+}
+
+impl RenderNodeTrait for RenderNode {
+    fn set_layout(&mut self, x: f32, y: f32, width: f32, height: f32) {
+        self.x = x;
+        self.y = y;
+        self.width = width;
+        self.height = height;
+    }
+
+    fn position(&self) -> (f32, f32) {
+        (self.x, self.y)
+    }
+
+    fn size(&self) -> (f32, f32) {
+        (self.width, self.height)
+    }
+
+    fn kind(&self) -> &NodeKind {
+        &self.kind
+    }
+
+    fn kind_mut(&mut self) -> &mut NodeKind {
+        &mut self.kind
+    }
 }
 
 /// レイアウト再計算のための最低限の情報
@@ -87,7 +140,6 @@ impl RenderNode {
             y,
             width,
             height,
-            layout: LayoutInfo::new(width),
         }
     }
 

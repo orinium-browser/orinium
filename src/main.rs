@@ -29,15 +29,9 @@ async fn main() -> Result<()> {
                     <p>Span inside a paragraph: <span>Span Text</span></p>
                     <p>&amp; &lt; &gt; &quot; &#65; &#x41;</p>
                 </div>
-                <p>a</p>
-                <p>a</p>
-                <p>a</p>
-                <p>a</p>
-                <p>a</p>
-                <p>a</p>
-                <p>a</p>
-                <p>a</p>
-                <p>a</p>
+                <p>Very long text to test wrapping behavior. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>
+                <p>Button below:</p>
+                <button>Click Me!</button>
             </body>
         </html>
     "#;

@@ -36,14 +36,14 @@ git clone https://github.com/orinium-browser/orinium.git
 cd orinium
 ```
 > [!NOTE]
-> Orinium's MSRV (Minimum Supported Rust Version) is 1.88.0.
-> If you are using an earlier version, please upgrade to Rust 1.88.0 or later.
+> Orinium's MSRV (Minimum Supported Rust Version) is 1.92.0.
+> If you are using an earlier version, please upgrade to Rust 1.92.0 or later.
 > 
 > If you are using rustup, you can set the required version with the following commands:
 > 
 > ```bash
-> rustup toolchain install 1.88.0
-> rustup override set 1.88.0
+> rustup toolchain install 1.92.0
+> rustup override set 1.92.0
 > ```
 You can run Orinium using Cargo.
 
@@ -59,5 +59,5 @@ For the architecture, see [architecture.md](./docs/en/architecture.md).
 Join the community to connect with other developers and stay up to date.
 Join our Discord community: [here](https://discord.gg/tMGPgHFsxJ)
 
-Other useful documentation for development can be found in [the](./docs/en) directory.
+Other useful documentation for development can be found in [the directory](./docs/en).
 And, most documents are classified based on their lang.
