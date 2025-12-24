@@ -6,6 +6,7 @@ use crate::engine::css::values::Display;
 use crate::engine::styler::computed_tree::{ComputedStyleNode, ComputedTree};
 use crate::engine::tree::{Tree, TreeNode};
 use crate::html::HtmlNodeType;
+use core::panic;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -204,8 +205,10 @@ impl RenderTree {
                             Display::None => {}
                         }
                     } else {
-                        // default: treat as block
-                        y_offset += child_h;
+                        panic!(
+                            "ComputedStyle missing for node during layout: {:?}; Should not happen",
+                            s_child.borrow().value
+                        );
                     }
                 }
                 render_node.set_layout(
