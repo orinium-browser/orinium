@@ -197,20 +197,26 @@ impl RenderTree {
                             Display::Block => {
                                 y_offset += child_h;
                                 width = width.max(child_w);
+                                log::debug!(target: "RenderTree::layout_node_recursive::Block", "  Block child laid out at ({}, {}), size=({}, {})", x_offset, y_offset - child_h, child_w, child_h);
                             }
                             Display::Inline => {
                                 x_offset += child_w;
                                 height = height.max(child_h);
                                 available_width -= child_w;
-                                if x_offset - start_x > origin_available_width {
+                                #[cfg(debug_assertions)]
+                                LAYOUT_DEPTH.with(|d| {
+                                    log::debug!(target: "RenderTree::layout_node_recursive::Inline", "{:?}: Inline child laid out at ({}, {}), size=({}, {}), remaining available_width={}", d.get(), x_offset - child_w, y_offset, child_w, child_h, available_width);
+                                });
+                                if 0.0 > available_width {
                                     // 折り返し
                                     x_offset = start_x + child_w;
                                     y_offset += child_h;
                                     available_width = origin_available_width;
-                                    // 子供も改行
-                                    d_child.borrow_mut().value.set_position(start_x, y_offset);
+                                    #[cfg(debug_assertions)]
+                                    LAYOUT_DEPTH.with(|d| {
+                                        log::debug!(target: "RenderTree::layout_node_recursive::Inline", "{:?}: Line break occurred, new position=({}, {})", d.get(), start_x, y_offset);
+                                    });
                                 }
-
                             }
                             Display::None => {}
                         }
