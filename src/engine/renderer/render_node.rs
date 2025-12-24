@@ -166,7 +166,6 @@ impl RenderNode {
 
 pub type RenderTree = Tree<RenderNode>;
 
-
 // ========================
 //      renderTree実装
 // ========================
@@ -484,4 +483,3 @@ impl RenderTree {
         render_node.size()
     }
 }
-
