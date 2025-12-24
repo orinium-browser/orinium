@@ -92,6 +92,7 @@ fn debug_text_commands(
             text: text.to_string(),
             font_size,
             color: Color::WHITE,
+            max_width: measurement.width,
         },
     ])
 }

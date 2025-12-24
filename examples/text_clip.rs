@@ -1,3 +1,5 @@
+use std::f32::INFINITY;
+
 use anyhow::Result;
 use orinium_browser::{
     browser::BrowserApp,
@@ -30,6 +32,7 @@ fn main() -> Result<()> {
         text: text.to_string(),
         font_size: 20.0,
         color: Color::BLACK,
+        max_width: INFINITY,
     });
     commands.push(DrawCommand::PopClip);
 
