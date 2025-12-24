@@ -196,6 +196,7 @@ impl RenderTree {
                         match disp {
                             Display::Block => {
                                 y_offset += child_h;
+                                x_offset = start_x;
                                 width = width.max(child_w);
                             }
                             Display::Inline => {
