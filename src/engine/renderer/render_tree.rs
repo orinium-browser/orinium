@@ -195,6 +195,11 @@ impl RenderTree {
                             Display::Inline => {
                                 x_offset += child_w;
                                 height = height.max(child_h);
+                                if x_offset - start_x > available_width {
+                                    // 折り返し
+                                    x_offset = start_x + child_w;
+                                    y_offset += child_h;
+                                }
                             }
                             Display::None => {}
                         }
