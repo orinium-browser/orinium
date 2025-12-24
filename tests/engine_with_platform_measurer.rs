@@ -60,7 +60,9 @@ fn engine_layout_with_platform_measurer() {
     let pm = PlatformTextMeasurer::from_bytes("sys", bytes).expect("create measurer");
 
     // 測定器を使ってレイアウトを実行
-    let render_tree = tree.layout_with_measurer(&pm, 800.0, 600.0).wrap_in_scrollable(0.0, 0.0, 800.0, 600.0);
+    let render_tree = tree
+        .layout_with_measurer(&pm, 800.0, 600.0)
+        .wrap_in_scrollable(0.0, 0.0, 800.0, 600.0);
 
     // レンダーツリーのルートを検査して、子のサイズが測定されていることを確認
     let root_node = render_tree.root.borrow();
