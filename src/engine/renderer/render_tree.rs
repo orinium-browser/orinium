@@ -146,7 +146,7 @@ impl RenderTree {
         node: &Rc<RefCell<TreeNode<RenderNode>>>,
         start_x: f32,
         start_y: f32,
-        available_width: f32,
+        mut available_width: f32,
         available_height: f32,
         measurer: &dyn text::TextMeasurer,
     ) -> (f32, f32) {
@@ -173,6 +173,7 @@ impl RenderTree {
                 let mut y_offset = start_y;
                 let mut width: f32 = 0.0;
                 let mut height: f32 = 0.0;
+                let origin_available_width = available_width;
                 #[cfg(debug_assertions)]
                 LAYOUT_DEPTH.with(|d| {
                     d.set(d.get() + 1);
@@ -200,11 +201,16 @@ impl RenderTree {
                             Display::Inline => {
                                 x_offset += child_w;
                                 height = height.max(child_h);
-                                if x_offset - start_x > available_width {
+                                available_width -= child_w;
+                                if x_offset - start_x > origin_available_width {
                                     // 折り返し
                                     x_offset = start_x + child_w;
                                     y_offset += child_h;
+                                    available_width = origin_available_width;
+                                    // 子供も改行
+                                    d_child.borrow_mut().value.set_position(start_x, y_offset);
                                 }
+
                             }
                             Display::None => {}
                         }
