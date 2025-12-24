@@ -1,6 +1,6 @@
 pub mod render;
 pub mod render_node;
-pub mod render_tree;
+pub(crate) mod render_tree;
 pub mod types;
 
 pub use render::{DrawCommand, Renderer};
