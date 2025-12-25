@@ -1,6 +1,6 @@
 //! RenderNode と RenderTree
 //! 最低限のレイアウト情報を保持する。
-//! 
+//!
 //! RenderTree は RenderNode のツリー構造であり、各ノードはレイアウト位置・サイズ・描画に必要な情報を持つ。
 use crate::engine::bridge::text;
 use crate::engine::css::values::Display;
