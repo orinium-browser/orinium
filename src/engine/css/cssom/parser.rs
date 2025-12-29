@@ -53,7 +53,7 @@ impl<'a> Parser<'a> {
             match token {
                 Token::LeftBrace => {
                     self.brace_depth += 1;
-                    let selector = self.selector_buffer.trim();
+                    let selector = self.selector_buffer.trim().to_string();
                     self.parse_rule(selector)?;
                     self.selector_buffer.clear();
                 }
