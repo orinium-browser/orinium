@@ -54,7 +54,7 @@ impl<'a> Parser<'a> {
                 Token::LeftBrace => {
                     self.brace_depth += 1;
                     let selector = self.selector_buffer.trim().to_string();
-                    self.parse_rule(selector)?;
+                    self.parse_rule(&selector)?;
                     self.selector_buffer.clear();
                 }
                 Token::AtKeyword(key) => self.parse_at_rule(&key)?,
