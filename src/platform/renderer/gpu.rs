@@ -34,6 +34,9 @@ pub struct GpuRenderer {
     text_renderer: Option<TextRenderer>,
     /// 最後のフレーム時刻（アニメーション計算用）
     last_frame: Option<std::time::Instant>,
+
+    /// テキストカリングを有効にする
+    enable_text_culling: bool,
 }
 
 #[repr(C)]
@@ -206,6 +209,9 @@ impl GpuRenderer {
             }
         };
 
+        // Enable text culling by default, allow override by env var
+        let enable_text_culling = std::env::var("ORINIUM_TEXT_CULL").map(|v| v != "0") .unwrap_or(true);
+
         Ok(Self {
             surface,
             device,
@@ -219,6 +225,7 @@ impl GpuRenderer {
             num_vertices: 0,
             text_renderer,
             last_frame: None,
+            enable_text_culling,
         })
     }
 
@@ -397,10 +404,48 @@ impl GpuRenderer {
                     text,
                     font_size,
                     color,
+                    width: tw,
+                    height: th,
                 } => {
                     let (tdx, tdy) = current_transform(&transform_stack);
 
                     let clip = current_clip(&clip_stack);
+
+                    // Text culling: if enabled and the text's bounding box is fully outside current clip, skip creating buffer
+                    let mut skip_text = false;
+                    if self.enable_text_culling {
+                        // compute screen-space bbox
+                        let sx1 = (x + tdx) * sf;
+                        let sy1 = (y + tdy) * sf;
+                        // if width/height are zero or NaN, estimate from font size and line count
+                        let est_w = if !tw.is_finite() || *tw <= 0.0 {
+                            // fall back: estimate width as font_size * 10.0 * approximate_chars
+                            (*font_size * sf) * (text.len().max(1) as f32) * 0.5
+                        } else {
+                            *tw * sf
+                        };
+                        let est_h = if !th.is_finite() || *th <= 0.0 {
+                            // estimate height as font_size * 1.2 * lines
+                            (*font_size * sf) * 1.2 * (text.lines().count() as f32).max(1.0)
+                        } else {
+                            *th * sf
+                        };
+                        let sx2 = sx1 + est_w;
+                        let sy2 = sy1 + est_h;
+
+                        let clip_l = clip.x * sf;
+                        let clip_t = clip.y * sf;
+                        let clip_r = (clip.x + clip.w) * sf;
+                        let clip_b = (clip.y + clip.h) * sf;
+
+                        if sx2 <= clip_l || sx1 >= clip_r || sy2 <= clip_t || sy1 >= clip_b {
+                            skip_text = true;
+                        }
+                    }
+
+                    if skip_text {
+                        continue;
+                    }
 
                     // Use TextRenderer helper to create a Buffer with correct FontSystem handling
                     let section = if let Some(tr) = &mut self.text_renderer {
