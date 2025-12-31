@@ -257,8 +257,8 @@ impl GpuRenderer {
 
     /// 描画命令を解析して頂点バッファやテキストキューに登録
     pub fn parse_draw_commands(&mut self, commands: &[DrawCommand]) {
-        let width = self.size.width as f32;
-        let height = self.size.height as f32;
+        let screen_width = self.size.width as f32;
+        let screen_height = self.size.height as f32;
 
         // --- 頂点データ ---
         let mut vertices = Vec::new();
@@ -288,8 +288,8 @@ impl GpuRenderer {
         let mut clip_stack: Vec<ClipRect> = vec![ClipRect {
             x: 0.0,
             y: 0.0,
-            w: width,
-            h: height,
+            w: screen_width,
+            h: screen_height,
         }];
         let current_clip = |stack: &Vec<ClipRect>| -> ClipRect { *stack.last().unwrap() };
 
@@ -378,10 +378,10 @@ impl GpuRenderer {
                     // NDC
                     let ndc = |v, max| (v / max) * 2.0 - 1.0;
 
-                    let px1 = ndc(x1, width);
-                    let py1 = -ndc(y1, height);
-                    let px2 = ndc(x2, width);
-                    let py2 = -ndc(y2, height);
+                    let px1 = ndc(x1, screen_width);
+                    let py1 = -ndc(y1, screen_height);
+                    let px2 = ndc(x2, screen_width);
+                    let py2 = -ndc(y2, screen_height);
 
                     let color = [color.r, color.g, color.b, color.a];
 
@@ -407,24 +407,18 @@ impl GpuRenderer {
                     font_size,
                     color,
                     max_width,
-                    width,
-                    height,
                 } => {
                     let (tdx, tdy) = current_transform(&transform_stack);
 
                     let clip = current_clip(&clip_stack);
 
-                    let tw = if (x + width) < (clip.x + clip.w) {
-                        (x + width) - clip.x
+                    let tw = if (x + max_width) < (clip.x + clip.w) {
+                        (x + max_width) - clip.x
                     } else {
                         clip.w
                     };
 
-                    let th = if (y + height) < (clip.y + clip.h) {
-                        (y + height) - clip.y
-                    } else {
-                        clip.h
-                    };
+                    let th = clip.h;
 
                     // Text culling: if enabled and the text's bounding box is fully outside current clip, skip creating buffer
                     let mut skip_text = false;
@@ -647,12 +641,12 @@ impl GpuRenderer {
                             let p2 = poly[j];
                             let p3 = poly[j + 1];
 
-                            let px1 = ndc(p1.0, width);
-                            let py1 = -ndc(p1.1, height);
-                            let px2 = ndc(p2.0, width);
-                            let py2 = -ndc(p2.1, height);
-                            let px3 = ndc(p3.0, width);
-                            let py3 = -ndc(p3.1, height);
+                            let px1 = ndc(p1.0, screen_width);
+                            let py1 = -ndc(p1.1, screen_height);
+                            let px2 = ndc(p2.0, screen_width);
+                            let py2 = -ndc(p2.1, screen_height);
+                            let px3 = ndc(p3.0, screen_width);
+                            let py3 = -ndc(p3.1, screen_height);
 
                             vertices.push(Vertex {
                                 position: [px1, py1, 0.0],
