@@ -470,7 +470,7 @@ impl GpuRenderer {
                         TextSection {
                             screen_position: ((*x + tdx) * sf, (*y + tdy) * sf),
                             clip_origin: (clip.x * sf, clip.y * sf),
-                            bounds: (tw* sf, tw* sf),
+                            bounds: (tw * sf, th * sf),
                             buffer,
                         }
                     } else {
