@@ -60,7 +60,7 @@ fn debug_text_commands(
     x: f32,
     y: f32,
     font_size: f32,
-) -> anyhow::Result<Vec<DrawCommand>> {
+) -> Result<Vec<DrawCommand>> {
     let req = TextMeasurementRequest {
         text: text.to_string(),
         font: FontDescription {

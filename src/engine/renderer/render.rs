@@ -31,6 +31,14 @@ pub enum DrawCommand {
         color: Color,
     },
 
+    DrawImage {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        src: Option<String>,
+    },
+
     DrawEllipse {
         center: (f32, f32),
         radius_x: f32, // 円なら radius_x == radius_y
@@ -142,6 +150,15 @@ impl Renderer {
 
                 out.push(DrawCommand::PopTransform);
                 out.push(DrawCommand::PopClip);
+            }
+            NodeKind::Image { src } => {
+                out.push(DrawCommand::DrawImage {
+                    x: abs_x,
+                    y: abs_y,
+                    width: node_borrow.value.size().0,
+                    height: node_borrow.value.size().1,
+                    src: src.clone(),
+                });
             }
             NodeKind::Unknown => {
                 // 無視

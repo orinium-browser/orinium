@@ -102,8 +102,7 @@ impl WebView {
     /// - Render Tree を構築
     pub async fn load_from_url(&mut self, url: &str, net: Arc<NetworkCore>) -> anyhow::Result<()> {
         // --- HTML をロード ---
-        let html_bytes = net
-            .fetch_url(url)
+        let html_bytes = crate::browser::url_solver::fetch_url(&net, url)
             .await
             .map_err(|e| anyhow::Error::msg(e.to_string()))?;
 
@@ -143,7 +142,7 @@ impl WebView {
             {
                 let css_url = resolve_url(url, &href);
 
-                if let Ok(res) = net.fetch_url(&css_url).await {
+                if let Ok(res) = crate::browser::url_solver::fetch_url(&net, &css_url).await {
                     let bytes = res.body;
                     if let Ok(text) = String::from_utf8(bytes) {
                         css_sources.push(text);

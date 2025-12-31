@@ -23,6 +23,11 @@ pub enum NodeKind {
         max_width: f32,
     },
 
+    /// 画像ノード
+    Image {
+        src: Option<String>,
+    },
+
     /// ボタンなどのインタラクティブな要素
     Button,
 
@@ -209,7 +214,7 @@ impl RenderTree {
 
     /// ComputedTree から RenderTree を生成（フォールバック測定器）
     pub fn from_computed_tree(tree: &ComputedTree) -> RenderTree {
-        let fallback = crate::engine::bridge::text::EngineFallbackTextMeasurer::default();
+        let fallback = text::EngineFallbackTextMeasurer::default();
         Self::from_computed_tree_with_measurer(tree, &fallback, 0.0, 0.0)
     }
 
@@ -260,8 +265,13 @@ impl RenderTree {
                 ),
                 max_width: 0.0,
             },
-            HtmlNodeType::Element { tag_name, .. } => match tag_name.as_str() {
+            HtmlNodeType::Element { tag_name, attributes } => match tag_name.as_str() {
                 "button" => NodeKind::Button,
+                "img" => {
+                    // extract src attribute if present
+                    let src = attributes.iter().find(|a| a.name == "src").map(|a| a.value.clone());
+                    NodeKind::Image { src }
+                }
                 _ if crate::engine::html::util::is_block_level_element(tag_name) => {
                     NodeKind::Container
                 }
@@ -471,6 +481,21 @@ impl RenderTree {
                     (0.0, 20.0)
                 };
                 render_node.set_layout(start_x, start_y, width, height);
+            }
+
+            NodeKind::Image { src: _ } => {
+                // Determine size from computed style (width/height) if present, otherwise fallback
+                if let Some(computed) = src.borrow().value.computed.as_ref() {
+                    let width = computed
+                        .resolved_width_px(available_width, 10.0)
+                        .unwrap_or(100.0);
+                    let height = computed
+                        .resolved_height_px(available_height, 10.0)
+                        .unwrap_or(100.0);
+                    render_node.set_layout(start_x, start_y, width, height);
+                } else {
+                    render_node.set_layout(start_x, start_y, 100.0, 100.0);
+                }
             }
 
             NodeKind::Unknown => {

@@ -233,19 +233,19 @@ fn resolve_font_size_px_from_node(node: &Rc<RefCell<TreeNode<StyleNode>>>) -> f3
             Length::Px(px) => return px,
             Length::Em(em) => {
                 // base を親から解決
-                if let Some(parent) = node.borrow().parent() {
+                return if let Some(parent) = node.borrow().parent() {
                     let base = resolve_font_size_px_from_node(&parent);
-                    return Length::Em(em).to_px(base);
+                    Length::Em(em).to_px(base)
                 } else {
-                    return Length::Em(em).to_px(DEFAULT_FONT_PX);
+                    Length::Em(em).to_px(DEFAULT_FONT_PX)
                 }
             }
             Length::Percent(p) => {
-                if let Some(parent) = node.borrow().parent() {
+                return if let Some(parent) = node.borrow().parent() {
                     let base = resolve_font_size_px_from_node(&parent);
-                    return Length::Percent(p).to_px(base);
+                    Length::Percent(p).to_px(base)
                 } else {
-                    return Length::Percent(p).to_px(DEFAULT_FONT_PX);
+                    Length::Percent(p).to_px(DEFAULT_FONT_PX)
                 }
             }
             _ => {}

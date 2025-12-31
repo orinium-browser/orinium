@@ -20,7 +20,7 @@ impl ComputedTree {
     /// フォールバックの測定器でレイアウトを行い RenderTree を返す
     pub fn layout_with_fallback(&self, root_width: f32, root_height: f32) -> RenderTree {
         let fallback = text::EngineFallbackTextMeasurer::default();
-        crate::engine::renderer::render_node::RenderTree::from_computed_tree_with_measurer(
+        RenderTree::from_computed_tree_with_measurer(
             self,
             &fallback,
             root_width,
@@ -35,7 +35,7 @@ impl ComputedTree {
         root_width: f32,
         root_height: f32,
     ) -> RenderTree {
-        crate::engine::renderer::render_node::RenderTree::from_computed_tree_with_measurer(
+        RenderTree::from_computed_tree_with_measurer(
             self,
             measurer,
             root_width,
