@@ -21,6 +21,8 @@ pub enum DrawCommand {
         font_size: f32,
         /// 文字色(RGBA)
         color: Color,
+        /// テキストボックスの折り返し幅
+        max_width: f32,
         /// テキストボックスの幅
         width: f32,
         /// テキストボックスの高さ
@@ -120,8 +122,9 @@ impl Renderer {
                     text: text.clone(),
                     font_size: *font_size,
                     color: color.clone(),
-                    width: node_borrow.value.width,
-                    height: node_borrow.value.height,
+                    max_width: *max_width,
+                    width: node_borrow.value.size().0,
+                    height: node_borrow.value.size().1,
                 });
             }
             NodeKind::Button => {

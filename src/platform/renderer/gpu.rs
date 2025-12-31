@@ -398,18 +398,33 @@ impl GpuRenderer {
                 }
 
                 // Text
+                // TODO:
+                // - Clip 用の width （描画限界）と改行用の max_width を分けて扱う
                 DrawCommand::DrawText {
                     x,
                     y,
                     text,
                     font_size,
                     color,
-                    width: tw,
-                    height: th,
+                    max_width,
+                    width,
+                    height,
                 } => {
                     let (tdx, tdy) = current_transform(&transform_stack);
 
                     let clip = current_clip(&clip_stack);
+
+                    let tw = if (x + width) < (clip.x + clip.w) {
+                        (x + width) - clip.x
+                    } else {
+                        clip.w
+                    };
+
+                    let th = if (y + height) < (clip.y + clip.h) {
+                        (y + height) - clip.y
+                    } else {
+                        clip.h
+                    };
 
                     // Text culling: if enabled and the text's bounding box is fully outside current clip, skip creating buffer
                     let mut skip_text = false;
@@ -418,17 +433,17 @@ impl GpuRenderer {
                         let sx1 = (x + tdx) * sf;
                         let sy1 = (y + tdy) * sf;
                         // if width/height are zero or NaN, estimate from font size and line count
-                        let est_w = if !tw.is_finite() || *tw <= 0.0 {
+                        let est_w = if !tw.is_finite() || tw <= 0.0 {
                             // fall back: estimate width as font_size * 10.0 * approximate_chars
                             (*font_size * sf) * (text.len().max(1) as f32) * 0.5
                         } else {
-                            *tw * sf
+                            tw * sf
                         };
-                        let est_h = if !th.is_finite() || *th <= 0.0 {
+                        let est_h = if !th.is_finite() || th <= 0.0 {
                             // estimate height as font_size * 1.2 * lines
                             (*font_size * sf) * 1.2 * (text.lines().count() as f32).max(1.0)
                         } else {
-                            *th * sf
+                            th * sf
                         };
                         let sx2 = sx1 + est_w;
                         let sy2 = sy1 + est_h;
@@ -458,16 +473,10 @@ impl GpuRenderer {
                         );
                         let buffer = tr.create_buffer_for_text(text, *font_size * sf, gc);
 
-                        let bounds_x = if (x + max_width) < (clip.x + clip.w) {
-                            (x + max_width) - clip.x
-                        } else {
-                            clip.w
-                        };
-
                         TextSection {
                             screen_position: ((*x + tdx) * sf, (*y + tdy) * sf),
                             clip_origin: (clip.x * sf, clip.y * sf),
-                            bounds: (bounds_x * sf, clip.h * sf),
+                            bounds: (tw* sf, tw* sf),
                             buffer,
                         }
                     } else {
