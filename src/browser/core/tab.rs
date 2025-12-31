@@ -67,4 +67,10 @@ impl Tab {
     pub fn url(&self) -> Option<String> {
         self.url.clone()
     }
+
+    pub fn scroll_page(&mut self, delta_x: f32, delta_y: f32) {
+        if let Some(webview) = &mut self.webview {
+            webview.scroll_page(delta_x, delta_y);
+        }
+    }
 }

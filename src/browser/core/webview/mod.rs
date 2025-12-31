@@ -76,7 +76,6 @@ impl WebView {
         style_tree.style(&[]);
         let computed_tree = style_tree.compute();
 
-        // Render Tree: ComputedTree にレイアウトを任せて RenderTree を受け取る
         let measurer = crate::platform::renderer::text_measurer::PlatformTextMeasurer::new();
         let render_tree = match measurer {
             Ok(measurer) => computed_tree.layout_with_measurer(&measurer, 800.0, 600.0),
@@ -85,6 +84,10 @@ impl WebView {
                 computed_tree.layout_with_fallback(800.0, 600.0)
             }
         };
+
+        // Scrollable でラップ
+        let render_tree = render_tree.wrap_in_scrollable(0.0, 0.0, 800.0, 600.0);
+
         self.render = Some(render_tree);
 
         self.needs_redraw = true;
@@ -120,7 +123,7 @@ impl WebView {
         // <link rel="stylesheet" href="...">
         let link_nodes: Vec<_> = {
             let root = dom_tree.root.borrow();
-            root.find_children_by(|n| n.tag_name() == "link")
+            root.find_children_by(|n| n.tag_name() == Some("link".to_string()))
                 .into_iter()
                 .collect()
         };
@@ -154,9 +157,7 @@ impl WebView {
             css_sources.push(css_text);
         }
 
-        // --- Style Tree を構築 ---
-        let mut style_tree = StyleTree::transform(&dom_tree);
-
+        // --- CSSOM を構築 ---
         let mut cssoms = vec![];
         for css_text in css_sources {
             let mut css_parser = CssParser::new(&css_text);
@@ -164,9 +165,9 @@ impl WebView {
             cssoms.push(cssom);
         }
 
-        // UA + 外部CSS + <style> の CSS を反映
+        // --- Style Tree を構築 ---
+        let mut style_tree = StyleTree::transform(&dom_tree);
         style_tree.style(&cssoms);
-
         let computed_tree = style_tree.compute();
 
         // --- Render Tree ---
@@ -178,12 +179,48 @@ impl WebView {
                 computed_tree.layout_with_fallback(800.0, 600.0)
             }
         };
+
+        // Scrollable でラップ
+        let render_tree = render_tree.wrap_in_scrollable(0.0, 0.0, 800.0, 600.0);
+
         self.render = Some(render_tree);
 
-        // --- 再描画要求 ---
         self.needs_redraw = true;
 
         Ok(())
+    }
+
+    pub fn scroll_page(&mut self, delta_x: f32, delta_y: f32) {
+        self.scroll_x += delta_x;
+        self.scroll_y += delta_y;
+        fn scroll_scrollable(
+            node: &std::rc::Rc<
+                std::cell::RefCell<
+                    crate::engine::tree::TreeNode<crate::engine::renderer::RenderNode>,
+                >,
+            >,
+            delta_x: f32,
+            delta_y: f32,
+        ) {
+            use crate::engine::renderer::render_node::RenderNodeTrait;
+
+            let mut node_borrow = node.borrow_mut();
+            if let crate::engine::renderer::NodeKind::Scrollable {
+                scroll_offset_x,
+                scroll_offset_y,
+                ..
+            } = &mut node_borrow.value.kind_mut()
+            {
+                *scroll_offset_x += delta_x;
+                *scroll_offset_y += delta_y;
+            } else {
+                panic!("scroll_page called on non-scrollable node; this should not happen");
+            }
+        }
+        if let Some(render_tree) = &self.render {
+            scroll_scrollable(&render_tree.root, delta_x, delta_y);
+        }
+        self.needs_redraw = true;
     }
 }
 

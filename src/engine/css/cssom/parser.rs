@@ -54,10 +54,10 @@ impl<'a> Parser<'a> {
                 Token::LeftBrace => {
                     self.brace_depth += 1;
                     let selector = self.selector_buffer.trim().to_string();
-                    self.parse_rule(selector)?;
+                    self.parse_rule(&selector)?;
                     self.selector_buffer.clear();
                 }
-                Token::AtKeyword(key) => self.parse_at_rule(key)?,
+                Token::AtKeyword(key) => self.parse_at_rule(&key)?,
                 Token::Delim(_) | Token::Hash(_) | Token::Ident(_) | Token::Comma => {
                     self.selector_buffer.push_str(&token_to_string(&token));
                 }
@@ -111,7 +111,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_rule(&mut self, selectors: String) -> Result<()> {
+    fn parse_rule(&mut self, selectors: &str) -> Result<()> {
         if selectors.trim().is_empty() {
             bail!("Selector name is empty before '{{'");
         }
@@ -158,8 +158,8 @@ impl<'a> Parser<'a> {
                         }
                     }
 
-                    let value = value.trim().to_string();
-                    let parsed_value = self.parse_value(&value)?;
+                    let value = value.trim();
+                    let parsed_value = self.parse_value(value)?;
 
                     TreeNode::add_child_value(
                         self.stack.last().unwrap(),
@@ -185,7 +185,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn parse_at_rule(&mut self, name: String) -> Result<()> {
+    fn parse_at_rule(&mut self, name: &str) -> Result<()> {
         println!("depth: {}", self.brace_depth);
         let mut params = Vec::new();
 
@@ -194,7 +194,10 @@ impl<'a> Parser<'a> {
                 Token::Semicolon => {
                     TreeNode::add_child_value(
                         self.stack.last().unwrap(),
-                        CssNodeType::AtRule { name, params },
+                        CssNodeType::AtRule { 
+                            name: name.to_string(), 
+                            params 
+                        },
                     );
                     return Ok(());
                 }
@@ -212,19 +215,22 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn parse_at_rule_block(&mut self, name: String, params: Vec<String>) -> Result<()> {
+    fn parse_at_rule_block(&mut self, name: &str, params: Vec<String>) -> Result<()> {
         println!("Parsing at-rule block: {name} {params:?}");
         let node = TreeNode::add_child_value(
             self.stack.last().unwrap(),
-            CssNodeType::AtRule { name, params },
+            CssNodeType::AtRule { 
+                name: name.to_string(), 
+                params 
+            },
         );
         self.stack.push(node.clone());
 
         while self.brace_depth > 0 {
             self.skip_whitespace();
             match dbg!(self.collect_selector()) {
-                MaybeSelector::Selector(selector) => self.parse_rule(selector)?,
-                MaybeSelector::NotSelector(name) => self.parse_at_rule_declaration(name)?,
+                MaybeSelector::Selector(selector) => self.parse_rule(&selector)?,
+                MaybeSelector::NotSelector(name) => self.parse_at_rule_declaration(&name)?,
                 MaybeSelector::EndRule => break,
                 MaybeSelector::None => {
                     bail!("Expected selector or declaration inside at-rule block")
@@ -237,7 +243,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn parse_at_rule_declaration(&mut self, name: String) -> Result<()> {
+    fn parse_at_rule_declaration(&mut self, name: &str) -> Result<()> {
         let mut value = String::new();
         while let Some(token) = self.tokenizer.next_token() {
             match token {
@@ -249,7 +255,7 @@ impl<'a> Parser<'a> {
                 _ => value.push_str(&token_to_string(&token)),
             }
         }
-        let parsed_value = self.parse_value(&value)?;
+        let parsed_value = self.parse_value(value.trim())?;
         TreeNode::add_child_value(
             self.stack.last().unwrap(),
             CssNodeType::Declaration {
@@ -289,9 +295,6 @@ impl<'a> Parser<'a> {
     }
 }
 
-/// トークンを文字列化するヘルパー関数
-/// 例: Token::Ident("body") -> "body"
-/// コメントは無視する
 fn token_to_string(token: &Token) -> String {
     match token {
         Token::Ident(s) => s.clone(),

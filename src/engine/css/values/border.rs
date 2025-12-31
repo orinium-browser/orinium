@@ -20,7 +20,7 @@ pub enum BorderStyle {
 }
 
 /// 単一の辺のborder定義（top, right, bottom, left）
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub struct BorderSide {
     pub width: Length,
     pub style: BorderStyle,
@@ -38,7 +38,7 @@ impl Default for BorderSide {
 }
 
 /// 全体のborderプロパティを表す構造体
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Copy, Clone, Default)]
 pub struct Border {
     pub top: BorderSide,
     pub right: BorderSide,

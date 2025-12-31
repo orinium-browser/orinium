@@ -6,6 +6,8 @@ use glyphon::{
     fontdb,
 };
 
+use crate::platform::font;
+
 /// テキストセクション位置・クリップ・描画するBufferをまとめた構造体
 pub struct TextSection {
     /// スクリーン上の位置 (左上原点)
@@ -18,16 +20,15 @@ pub struct TextSection {
 }
 
 /// glyphon使ったテキストレンダラー
-#[allow(dead_code)]
 pub struct TextRenderer {
     /// glyphonのテキストブラシ
     brush: TextBrush,
     /// ビューポート情報
     viewport: Viewport,
-    /// glyphonのキャッシュ
-    cache: Cache,
     /// glyphonのテキストアトラス
     atlas: TextAtlas,
+    /// rasterize 結果のキャッシュ
+    swash_cache: SwashCache,
     font_sys: FontSystem,
 }
 
@@ -45,16 +46,7 @@ impl TextRenderer {
             return Self::new_from_bytes(device, queue, format, bytes);
         }
 
-        let candidates = [
-            "C:\\Windows\\Fonts\\meiryo.ttc",   // メイリオ
-            "C:\\Windows\\Fonts\\msgothic.ttc", // MS ゴシック
-            "C:\\Windows\\Fonts\\msmincho.ttc", // MS 明朝
-            "C:\\Windows\\Fonts\\arial.ttf",    // Arial
-            "C:\\Windows\\Fonts\\segoeui.ttf",  // Segoe UI
-            "C:\\Windows\\Fonts\\seguisym.ttf", // Segoe UI Symbol
-        ];
-
-        for p in &candidates {
+        for p in font::system_font_candidates()? {
             if let Ok(bytes) = std::fs::read(p) {
                 // build brush from bytes
                 return Self::new_from_bytes(device, queue, format, bytes);
@@ -81,12 +73,14 @@ impl TextRenderer {
 
         let viewport = Viewport::new(device, &cache);
 
+        let swash_cache = SwashCache::new();
+
         Ok(Self {
             brush,
-            cache,
             atlas,
             font_sys,
             viewport,
+            swash_cache,
         })
     }
 
@@ -120,7 +114,7 @@ impl TextRenderer {
         let attrs = Attrs::new().metrics(metrics).color(color);
 
         // shape and layout
-        buffer.set_text(&mut self.font_sys, text, &attrs, Shaping::Advanced);
+        buffer.set_text(&mut self.font_sys, text, &attrs, Shaping::Advanced, None);
 
         buffer
     }
@@ -132,8 +126,6 @@ impl TextRenderer {
         queue: &wgpu::Queue,
         sections: &'a [TextSection],
     ) -> Result<(), PrepareError> {
-        let mut cache = SwashCache::new();
-
         // TextArea は Buffer を参照するライフタイムを持つため、一時的にベクタに詰めて渡す
         let mut text_areas: Vec<TextArea<'a>> = Vec::with_capacity(sections.len());
 
@@ -168,7 +160,7 @@ impl TextRenderer {
             &mut self.atlas,
             &self.viewport,
             text_areas,
-            &mut cache,
+            &mut self.swash_cache,
         )
     }
 

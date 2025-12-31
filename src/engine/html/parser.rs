@@ -22,10 +22,10 @@ pub enum HtmlNodeType {
 }
 
 impl HtmlNodeType {
-    pub fn tag_name(&self) -> String {
+    pub fn tag_name(&self) -> Option<String> {
         match self {
-            HtmlNodeType::Element { tag_name, .. } => tag_name.clone(),
-            _ => "".to_string(),
+            HtmlNodeType::Element { tag_name, .. } => Some(tag_name.clone()),
+            _ => None,
         }
     }
 

@@ -148,17 +148,20 @@ impl BrowserApp {
                 BrowserCommand::None
             }
 
-            /*
+            // デバッグやテスト目的に簡易的に実装したスクロール処理
             WindowEvent::MouseWheel { delta, .. } => {
+                log::debug!(target: "Browser::ScrollTest", "MouseWheel: {:?}", delta);
                 let scroll_amount = match delta {
                     winit::event::MouseScrollDelta::LineDelta(_, y) => -y * 60.0,
                     winit::event::MouseScrollDelta::PixelDelta(pos) => -pos.y as f32,
                 };
-                // TODO: スクロール対象のタブ/レンダーツリーに反映
-                self.apply_draw_commands(gpu);
+                if let Some(tab) = self.tabs.first_mut() {
+                    tab.scroll_page(0.0, scroll_amount)
+                }
+                self.build_from_tabs();
                 BrowserCommand::RequestRedraw
             }
-            */
+
             _ => BrowserCommand::None,
         }
     }

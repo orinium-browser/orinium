@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<title>ウェブ技術対応状況テスト</title>
+<style>
+body { font-family: sans-serif; }
+.test-result { margin-bottom: 10px; padding: 10px; border: 1px solid #ccc; }
+
+</style>
+</head>
+<body>
+
+<h1>ウェブ技術対応状況テスト</h1>
+
+<div id="html-test" class="test-result">
+    <h2>HTML</h2>
+    <p>基本的なHTML要素のテスト</p>
+    <p>
+        要素: <span id="html-element"></span> <br>
+        属性: <span id="html-attribute"></span>
+    </p>
+</div>
+
+<div id="css-test" class="test-result">
+    <h2>CSS</h2>
+    <p>CSSスタイルのテスト</p>
+    <div id="css-style" style="width: 100px; height: 100px; background-color: red;"></div>
+    <p>
+        色: <span id="css-color"></span> <br>
+        表示:<span id="css-display"></span>
+    </p>
+</div>
+
+<div id="javascript-test" class="test-result">
+    <h2>JavaScript</h2>
+    <p>JavaScript機能のテスト</p>
+    <button id="js-button">クリック</button>
+    <p id="js-message"></p>
+</div>
+
+<script>
+// HTMLテスト
+document.getElementById('html-element').textContent = '<h1>要素</h1>' ? 'OK' : 'NG';
+document.getElementById('html-attribute').textContent = '<p class="test">属性</p>' ? 'OK' : 'NG';
+
+// CSSテスト
+const cssStyleElement = document.getElementById('css-style');
+document.getElementById('css-color').textContent = cssStyleElement.style.backgroundColor === 'red' ? 'OK' : 'NG';
+document.getElementById('css-display').textContent =  getComputedStyle(cssStyleElement).display ? 'OK' : 'NG';
+
+
+// JavaScriptテスト
+document.getElementById('js-button').addEventListener('click', function() {
+    document.getElementById('js-message').textContent = 'JavaScript OK';
+});
+</script>
+
+</body>
+</html>
