@@ -194,9 +194,9 @@ impl<'a> Parser<'a> {
                 Token::Semicolon => {
                     TreeNode::add_child_value(
                         self.stack.last().unwrap(),
-                        CssNodeType::AtRule { 
-                            name: name.to_string(), 
-                            params 
+                        CssNodeType::AtRule {
+                            name: name.to_string(),
+                            params,
                         },
                     );
                     return Ok(());
@@ -219,9 +219,9 @@ impl<'a> Parser<'a> {
         println!("Parsing at-rule block: {name} {params:?}");
         let node = TreeNode::add_child_value(
             self.stack.last().unwrap(),
-            CssNodeType::AtRule { 
-                name: name.to_string(), 
-                params 
+            CssNodeType::AtRule {
+                name: name.to_string(),
+                params,
             },
         );
         self.stack.push(node.clone());
