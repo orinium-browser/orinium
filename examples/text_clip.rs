@@ -30,6 +30,8 @@ fn main() -> Result<()> {
         text: text.to_string(),
         font_size: 20.0,
         color: Color::BLACK,
+        width: 800.0,
+        height: 600.0,
     });
     commands.push(DrawCommand::PopClip);
 
