@@ -93,6 +93,8 @@ fn debug_text_commands(
             font_size,
             color: Color::WHITE,
             max_width: measurement.width,
+            width: measurement.width,
+            height: measurement.height,
         },
     ])
 }
