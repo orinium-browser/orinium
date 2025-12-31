@@ -5,7 +5,7 @@
 ## 基本
 - インデントサイズは4です
 - 変数名はsnake_caseである必要があります（例: hoge_hoge）
-- 関数名はPascalCaseである必要があります（例: ViewDomTree）
+- 関数名はsnake_caseである必要があります（例: view_dom_tree）
 - 構造体名、列挙型名、トレイト名はPascalCaseである必要があります（例: TcpConnection, NetworkCore）
 - 定数名はSCREAMING_SNAKE_CASEである必要があります（例: MAX_CONNECTIONS）
 - モジュール名はsnake_caseである必要があります（例: network_core, connection_pool）
