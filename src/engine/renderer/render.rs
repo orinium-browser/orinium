@@ -9,47 +9,76 @@ use crate::engine::tree::TreeNode;
 
 #[derive(Debug, Clone)]
 pub enum DrawCommand {
+    /// 文字列描画
     DrawText {
+        /// 描画位置X（左上）
         x: f32,
+        /// 描画位置Y（左上）
         y: f32,
+        /// 描画する文字列
         text: String,
+        /// フォントサイズ
         font_size: f32,
+        /// 文字色(RGBA)
         color: Color,
-        max_width: f32,
-    },
-
-    DrawRect {
-        x: f32,
-        y: f32,
+        /// テキストボックスの幅
         width: f32,
+        /// テキストボックスの高さ
         height: f32,
+    },
+
+    /// 矩形描画
+    DrawRect {
+        /// 描画位置X（左上）
+        x: f32,
+        /// 描画位置Y（左上）
+        y: f32,
+        /// 幅
+        width: f32,
+        /// 高さ
+        height: f32,
+        /// 塗りつぶし色(RGBA)
         color: Color,
     },
 
+    /// 多角形描画
     DrawPolygon {
+        /// 頂点リスト
         points: Vec<(f32, f32)>,
+        /// 塗りつぶし色(RGBA)
         color: Color,
     },
 
+    /// 楕円描画
     DrawEllipse {
+        /// 中心座標
         center: (f32, f32),
+        /// X半径
         radius_x: f32, // 円なら radius_x == radius_y
+        /// Y半径
         radius_y: f32,
+        /// 塗りつぶし色(RGBA)
         color: Color,
     },
 
     /// クリッピング領域（ネスト可能）
     PushClip {
+        /// クリッピング領域の左上X座標
         x: f32,
+        /// クリッピング領域の左上Y座標
         y: f32,
+        /// クリッピング領域の幅
         width: f32,
+        /// クリッピング領域の高さ
         height: f32,
     },
     PopClip,
 
     /// 座標変換（スクロールや入れ子レイアウト）
     PushTransform {
+        /// X方向の移動量
         dx: f32,
+        /// Y方向の移動量
         dy: f32,
     },
     PopTransform,
@@ -91,7 +120,8 @@ impl Renderer {
                     text: text.clone(),
                     font_size: *font_size,
                     color: color.clone(),
-                    max_width: *max_width,
+                    width: node_borrow.value.width,
+                    height: node_borrow.value.height,
                 });
             }
             NodeKind::Button => {
