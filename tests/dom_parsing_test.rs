@@ -12,7 +12,7 @@ fn test_dom_parse() {
     <p>This is a <b>test page</b> for DOM module debuging.</p>
     <div>
         <p>Nested <span>span glyph</span></p>
-        <img src="image.png">
+        <img src="texture.png">
         <br />
         <input type="glyph" value="Hello" />
         <p>Unclosed paragraph
