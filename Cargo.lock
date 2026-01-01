@@ -2184,6 +2184,7 @@ dependencies = [
  "rustls",
  "rustls-native-certs",
  "strsim",
+ "thiserror 2.0.17",
  "tokio",
  "tokio-rustls",
  "url",
