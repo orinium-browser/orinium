@@ -634,7 +634,8 @@ impl GpuRenderer {
                     let clip = current_clip(&clip_stack);
 
                     todo!("Ellipse drawing with clipping is not implemented yet");
-                }
+                },
+                &DrawCommand::DrawImage { .. } => todo!()
             }
         }
 
