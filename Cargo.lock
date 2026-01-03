@@ -2186,6 +2186,7 @@ dependencies = [
  "strsim",
  "tokio",
  "tokio-rustls",
+ "ui_layout",
  "url",
  "wgpu",
  "wgpu-types",
@@ -3305,6 +3306,12 @@ checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
 dependencies = [
  "core_maths",
 ]
+
+[[package]]
+name = "ui_layout"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce639933e2b168fed7aaacb4fb99b618caec467bb134e8bf5fba0da8b3bf552c"
 
 [[package]]
 name = "unicode-bidi"
