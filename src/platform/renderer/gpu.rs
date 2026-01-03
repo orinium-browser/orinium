@@ -3,7 +3,7 @@ use anyhow::Result;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 use winit::window::Window;
-
+use std::mem::size_of;
 use super::glyph::text::{TextRenderer, TextSection};
 use glyphon::Color as GlyphColor;
 
@@ -23,6 +23,10 @@ pub struct GpuRenderer {
     scale_factor: f64,
     /// RenderPipelin（頂点 to ピクセル）
     render_pipeline: wgpu::RenderPipeline,
+    /// 画像描画用パイプライン
+    image_pipeline: Option<wgpu::RenderPipeline>,
+    /// 画像描画用バインドグループレイアウト
+    image_bind_group_layout: Option<wgpu::BindGroupLayout>,
     /// 頂点バッファ
     vertex_buffer: Option<wgpu::Buffer>,
     /// 頂点
@@ -58,6 +62,35 @@ impl Vertex {
                     offset: size_of::<[f32; 3]>() as wgpu::BufferAddress,
                     shader_location: 1,
                     format: wgpu::VertexFormat::Float32x4,
+                },
+            ],
+        }
+    }
+}
+
+// 画像用頂点（UV付き）
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct ImageVertex {
+    position: [f32; 3],
+    uv: [f32; 2],
+}
+
+impl ImageVertex {
+    fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: size_of::<ImageVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x2,
                 },
             ],
         }
@@ -126,10 +159,15 @@ impl GpuRenderer {
 
         // シェーダーの読み込み
         // シェーダーモジュールの作成
-        // vertex/fragment for main pipeline
         let main_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Main Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shader/main.wgsl").into()),
+        });
+
+        // 画像用シェーダー
+        let image_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Image Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shader/texture.wgsl").into()),
         });
 
         // --- レンダーパイプライン（頂点→ピクセル変換のルール）の作成 ---
@@ -177,7 +215,73 @@ impl GpuRenderer {
             },
             multiview_mask: None,
         });
-        // --- レンダーパイプライン作成終了 ---
+        // 画像用パイプラインレイアウト（テクスチャとサンプラを含む）
+        let image_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Image BindGroup Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+            ],
+            //label: None, // 削除（重複指定のため）
+        });
+
+        let image_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Image Pipeline Layout"),
+            bind_group_layouts: &[&image_bind_group_layout],
+            immediate_size: 0,
+        });
+
+        let image_pipeline = Some(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Image Pipeline"),
+            layout: Some(&image_pipeline_layout),
+            cache: None,
+            vertex: wgpu::VertexState {
+                module: &image_shader,
+                entry_point: Some("vs_image"),
+                buffers: &[ImageVertex::desc()],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &image_shader,
+                entry_point: Some("fs_image"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview_mask: None,
+        }));
 
         // テキスト描画用ラッパーの初期化。引数で渡されたフォントパスがあればそれを優先して読み込む。
         let text_renderer = if let Some(p) = font_path {
@@ -214,6 +318,8 @@ impl GpuRenderer {
             size,
             scale_factor,
             render_pipeline,
+            image_pipeline,
+            image_bind_group_layout: Some(image_bind_group_layout),
             vertex_buffer: None,
             vertices: vec![],
             num_vertices: 0,
@@ -635,7 +741,47 @@ impl GpuRenderer {
 
                     todo!("Ellipse drawing with clipping is not implemented yet");
                 },
-                &DrawCommand::DrawImage { .. } => todo!()
+                &DrawCommand::DrawImage { .. } => {
+                    // Simple fallback: draw a colored quad at the image rect to avoid complex texture upload for now
+                    if let DrawCommand::DrawImage { x, y, width: w, height: h, src: _ } = command.clone() {
+                        let (tdx, tdy) = current_transform(&transform_stack);
+
+                        let mut x1 = (x + tdx) * sf;
+                        let mut y1 = (y + tdy) * sf;
+                        let mut x2 = x1 + w * sf;
+                        let mut y2 = y1 + h * sf;
+
+                        // clip
+                        let clip = current_clip(&clip_stack);
+                        if x2 <= clip.x * sf || x1 >= (clip.x + clip.w) * sf || y2 <= clip.y * sf || y1 >= (clip.y + clip.h) * sf {
+                            continue;
+                        }
+                        x1 = x1.max(clip.x * sf);
+                        y1 = y1.max(clip.y * sf);
+                        x2 = x2.min((clip.x + clip.w) * sf);
+                        y2 = y2.min((clip.y + clip.h) * sf);
+
+                        // NDC
+                        let ndc = |v, max| (v / max) * 2.0 - 1.0;
+                        let px1 = ndc(x1, width);
+                        let py1 = -ndc(y1, height);
+                        let px2 = ndc(x2, width);
+                        let py2 = -ndc(y2, height);
+
+                        // Fallback color (magenta to indicate placeholder)
+                        let color = [1.0_f32, 0.0_f32, 1.0_f32, 1.0_f32];
+
+                        vertices.extend_from_slice(&[
+                            Vertex { position: [px1, py1, 0.0], color },
+                            Vertex { position: [px1, py2, 0.0], color },
+                            Vertex { position: [px2, py1, 0.0], color },
+
+                            Vertex { position: [px2, py1, 0.0], color },
+                            Vertex { position: [px1, py2, 0.0], color },
+                            Vertex { position: [px2, py2, 0.0], color },
+                        ]);
+                    }
+                }
             }
         }
 
@@ -786,3 +932,4 @@ impl GpuRenderer {
         self.scale_factor = scale_factor;
     }
 }
+
