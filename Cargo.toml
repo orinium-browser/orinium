@@ -31,6 +31,8 @@ http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["full"] }
 image = "0.25.9"
 thiserror = "2.0.17"
+rodio = "0.21.1"
+dasp_sample = "0.11"
 
 [dev-dependencies]
 colored = "3.0.0" # コマンドラインハイライト用
