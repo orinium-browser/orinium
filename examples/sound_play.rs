@@ -11,7 +11,7 @@ async fn main() -> Result<()> {
 
     println!("Playing resource:///{}...", filename);
 
-    // 自動デモ: 2秒再生 -> pause -> 2秒 -> resume at 20% volume -> 3秒 -> full volume -> 2秒 -> stop
+    // 2秒再生 -> pause -> 2秒 -> resume at 20% volume -> 3秒 -> full volume -> 2秒 -> stop
     tokio::time::sleep(Duration::from_secs(2)).await;
     println!("Pausing...");
     handle.pause();
