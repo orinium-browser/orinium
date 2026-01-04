@@ -1,4 +1,4 @@
-use crate::engine::renderer::DrawCommand;
+use crate::engine::layouter::DrawCommand;
 use anyhow::Result;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
@@ -385,7 +385,7 @@ impl GpuRenderer {
                     let px2 = ndc(x2, screen_width);
                     let py2 = -ndc(y2, screen_height);
 
-                    let color = [color.r, color.g, color.b, color.a];
+                    let color = color.to_f32_array();
 
                     #[rustfmt::skip]
                     vertices.extend_from_slice(&[
@@ -461,12 +461,7 @@ impl GpuRenderer {
                     // Use TextRenderer helper to create a Buffer with correct FontSystem handling
                     let section = if let Some(tr) = &mut self.text_renderer {
                         // convert color to glyphon Color (u8 rgba)
-                        let gc = GlyphColor::rgba(
-                            (color.r * 255.0) as u8,
-                            (color.g * 255.0) as u8,
-                            (color.b * 255.0) as u8,
-                            (color.a * 255.0) as u8,
-                        );
+                        let gc = GlyphColor::rgba(color.0, color.1, color.2, color.3);
                         let buffer = tr.create_buffer_for_text(text, *font_size * sf, gc);
 
                         TextSection {
@@ -481,7 +476,9 @@ impl GpuRenderer {
                     };
                     sections.push(section);
                 }
-
+                // Polygon などの為のプレースホルダー
+                _ => {}
+                /*
                 // Polygon
                 DrawCommand::DrawPolygon { points, color } => {
                     // transform
@@ -665,7 +662,8 @@ impl GpuRenderer {
                         }
                     }
                 }
-
+                */
+                /*
                 // Ellipse
                 #[allow(unused)]
                 DrawCommand::DrawEllipse {
@@ -684,6 +682,7 @@ impl GpuRenderer {
 
                     todo!("Ellipse drawing with clipping is not implemented yet");
                 }
+                */
             }
         }
 
