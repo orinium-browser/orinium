@@ -476,9 +476,7 @@ impl GpuRenderer {
                     };
                     sections.push(section);
                 }
-                // Polygon などの為のプレースホルダー
-                _ => {}
-                /*
+
                 // Polygon
                 DrawCommand::DrawPolygon { points, color } => {
                     // transform
@@ -662,8 +660,7 @@ impl GpuRenderer {
                         }
                     }
                 }
-                */
-                /*
+
                 // Ellipse
                 #[allow(unused)]
                 DrawCommand::DrawEllipse {
@@ -682,7 +679,6 @@ impl GpuRenderer {
 
                     todo!("Ellipse drawing with clipping is not implemented yet");
                 }
-                */
             }
         }
 
