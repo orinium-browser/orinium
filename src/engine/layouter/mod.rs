@@ -47,9 +47,7 @@ pub fn build_layout_and_info(
 
     let mut kind = NodeKind::Container;
     let mut style = Style {
-        display: Display::Flex {
-            flex_direction: FlexDirection::Column,
-        },
+        display: Display::Block,
         item_style: ItemStyle {
             flex_grow: 0.0,
             flex_basis: None,
@@ -98,9 +96,7 @@ pub fn build_layout_and_info(
                     flex_direction: FlexDirection::Row,
                 };
             } else if html_util::is_block_level_element(tag_name) {
-                style.display = Display::Flex {
-                    flex_direction: FlexDirection::Column,
-                };
+                style.display = Display::Block;
             }
             match tag_name.as_str() {
                 "h1" => font_size = 32.0,
