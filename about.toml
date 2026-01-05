@@ -1,5 +1,4 @@
-[licenses]
-allow = [
+accepted = [
     "Apache-2.0",
     "MIT",
     "BSD-2-Clause",
@@ -13,4 +12,3 @@ allow = [
     "OpenSSL",
     "MPL-2.0",
 ]
-confidence-threshold = 0.8

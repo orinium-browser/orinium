@@ -53,7 +53,9 @@ fn render_tree_uses_measurer() {
     let _child = TreeNode::add_child_value(&tree.root, computed_node);
 
     let meas = MockMeasurer {};
-    let render_tree = tree.layout_with_measurer(&meas, 800.0, 600.0).wrap_in_scrollable(0.0, 0.0, 800.0, 600.0);
+    let render_tree = tree
+        .layout_with_measurer(&meas, 800.0, 600.0)
+        .wrap_in_scrollable(0.0, 0.0, 800.0, 600.0);
 
     let root_node = render_tree.root.borrow();
     if let NodeKind::Scrollable {

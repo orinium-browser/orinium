@@ -12,6 +12,8 @@ use crate::engine::html::parser::HtmlNodeType;
 use crate::engine::html::util;
 
 impl UADefault for Style {
+    // TODO:
+    // - あの、displayは、えっと、utilのやつ、つかわない...?
     fn default_style_for(node: &HtmlNodeType) -> Style {
         let mut s = Style {
             display: Some(Display::Inline),
