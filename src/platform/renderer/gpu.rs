@@ -608,7 +608,7 @@ impl GpuRenderer {
                     // NDC helper
                     let ndc = |v: f32, max: f32| (v / max) * 2.0 - 1.0;
 
-                    let color_arr = [color.r, color.g, color.b, color.a];
+                    let color_arr = color.to_f32_array();
 
                     let v0 = transformed_points[0];
                     for i in 1..(transformed_points.len() - 1) {
