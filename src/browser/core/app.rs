@@ -89,8 +89,6 @@ impl BrowserApp {
             let (layout, info) = active.layout_and_info().unwrap();
             ui_layout::LayoutEngine::layout(layout, 800.0, 600.0);
             self.draw_commands = layouter::generate_draw_commands(&layout, info, 0.0, 0.0);
-            println!("Layout, Info: {:?}, {:?}", layout, info);
-            println!("DrawCommands: {:?}", self.draw_commands);
 
             let title = active.title();
             if let Some(t) = title
