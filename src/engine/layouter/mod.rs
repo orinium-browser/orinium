@@ -204,7 +204,9 @@ fn apply_declaration(
             };
         }
         ("color", CssValue::Color(c)) => {
-            *color = Color::try_from(c.to_rgba_tuple(None)).unwrap();
+            if let Ok(c) = Color::try_from(c.to_rgba_tuple(None)) {
+                *color = c;
+            }
         }
         ("font-size", CssValue::Length(len)) => {
             *font_size = len.to_px(16.0).unwrap_or(16.0);
