@@ -45,7 +45,7 @@ impl CssResolver {
 
     /// Collect declarations under a rule node
     fn collect_declarations(
-        rule_node: &std::rc::Rc<std::cell::RefCell<TreeNode<CssNodeType>>>,
+        rule_node: &Rc<std::cell::RefCell<TreeNode<CssNodeType>>>,
     ) -> Vec<(String, CssValue)> {
         let mut result = Vec::new();
 
