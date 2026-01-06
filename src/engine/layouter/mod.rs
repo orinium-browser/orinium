@@ -1,3 +1,5 @@
+mod css_resolver;
+
 use crate::engine::bridge::text;
 use crate::engine::css::cssom::CssNodeType;
 use crate::engine::tree::{Tree, TreeNode};
