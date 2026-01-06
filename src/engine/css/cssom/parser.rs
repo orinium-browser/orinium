@@ -22,6 +22,25 @@ pub struct Selector {
     pub pseudo_element: Option<String>,
 }
 
+impl Selector {
+    /// Simple selector matcher (tag / class only for now)
+    pub fn matches(&self, tag_name: &str, class_list: &[String]) -> bool {
+        if let Some(tag) = &self.tag {
+            if tag != tag_name {
+                return false;
+            }
+        }
+
+        for class in &self.classes {
+            if !class_list.iter().any(|c| c == class) {
+                return false;
+            }
+        }
+
+        true
+    }
+}
+
 /// Parsed CSS property values.
 #[derive(Debug, Clone)]
 pub enum CssValue {
