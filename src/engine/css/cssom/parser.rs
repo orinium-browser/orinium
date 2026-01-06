@@ -91,9 +91,9 @@ impl<'a> Parser<'a> {
 
                 Token::LeftBrace => {
                     self.brace_depth += 1;
-                    let selector = selector_buffer.trim();
-                    self.parse_rule(selector)?;
+                    let selector = selector_buffer.trim().to_string();
                     selector_buffer.clear();
+                    self.parse_rule(&selector)?;
                 }
 
                 _ => {}
@@ -119,6 +119,7 @@ impl<'a> Parser<'a> {
             "Parsed rule with selectors: {:?}",
             selectors
         );
+
         let rule_node =
             TreeNode::add_child_value(self.stack.last().unwrap(), CssNodeType::Rule { selectors });
 
@@ -137,6 +138,12 @@ impl<'a> Parser<'a> {
 
                 Some(Token::RightBrace) => {
                     self.brace_depth -= 1;
+                    return Ok(());
+                }
+
+                Some(Token::LeftBrace) => {
+                    // Start of next rule
+                    self.tokenizer.reconsume();
                     return Ok(());
                 }
 
@@ -175,12 +182,7 @@ impl<'a> Parser<'a> {
         while let Some(token) = self.tokenizer.next_token() {
             match token {
                 Token::Semicolon => {
-                    log::info!(
-                        target: "CssParser::AtRule",
-                        "Parsed at-rule: @{} with params: {:?}",
-                        name,
-                        params
-                    );
+                    log::info!(target:"CssParser::AtRule", "Parsed at-rule: @{} with params: {:?}", name, params);
                     TreeNode::add_child_value(
                         self.stack.last().unwrap(),
                         CssNodeType::AtRule {
@@ -221,34 +223,34 @@ impl<'a> Parser<'a> {
         while self.brace_depth > 0 {
             match self.tokenizer.next_token() {
                 Some(Token::Whitespace) => {
-                    if !selector_buffer.is_empty() {
+                    if !selector_buffer.is_empty() && !selector_buffer.ends_with(' ') {
                         selector_buffer.push(' ');
                     }
                 }
-
-                Some(Token::Ident(_) | Token::Hash(_) | Token::Delim(_) | Token::Comma) => {
+                Some(
+                    Token::Ident(_)
+                    | Token::Hash(_)
+                    | Token::Delim(_)
+                    | Token::Comma
+                    | Token::Colon,
+                ) => {
                     selector_buffer.push_str(&token_to_string(
                         self.tokenizer.last_tokenized_token().unwrap(),
                     ));
                 }
-
                 Some(Token::LeftBrace) => {
                     self.brace_depth += 1;
                     let selector = selector_buffer.trim();
-                    self.parse_rule(selector)?;
+                    if !selector.is_empty() {
+                        self.parse_rule(selector)?;
+                    }
                     selector_buffer.clear();
                 }
-
                 Some(Token::RightBrace) => {
                     self.brace_depth -= 1;
                 }
-
-                Some(Token::AtKeyword(name)) => {
-                    self.parse_at_rule(&name)?;
-                }
-
+                Some(Token::AtKeyword(name)) => self.parse_at_rule(&name)?,
                 Some(Token::Comment(_)) => {}
-
                 None => break,
                 _ => {}
             }
@@ -299,7 +301,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse css selector.
+    /// Parse CSS selector.
     fn parse_selector(input: &str) -> Selector {
         let mut rest = input;
         let mut pseudo_class = None;
@@ -315,13 +317,10 @@ impl<'a> Parser<'a> {
 
         let mut tag = None;
         let mut classes = Vec::new();
-
         for part in rest.split('.') {
-            if tag.is_none() {
-                if !part.is_empty() {
-                    tag = Some(part.to_string());
-                }
-            } else {
+            if tag.is_none() && !part.is_empty() {
+                tag = Some(part.to_string());
+            } else if !part.is_empty() {
                 classes.push(part.to_string());
             }
         }
@@ -364,9 +363,7 @@ mod tests {
         let css = "body { color: red; }";
         let mut parser = Parser::new(css);
         let tree = parser.parse().unwrap();
-
-        let root = tree.root.borrow();
-        assert_eq!(root.children().len(), 1);
+        assert_eq!(tree.root.borrow().children().len(), 1);
     }
 
     #[test]
@@ -374,8 +371,14 @@ mod tests {
         let css = "@media screen { body { margin: 10px; } }";
         let mut parser = Parser::new(css);
         let tree = parser.parse().unwrap();
+        assert_eq!(tree.root.borrow().children().len(), 1);
+    }
 
-        let root = tree.root.borrow();
-        assert_eq!(root.children().len(), 1);
+    #[test]
+    fn parse_multiple_rules() {
+        let css = "body{background:#eee;width:60vw;margin:15vh auto;font-family:system-ui,sans-serif}h1{font-size:1.5em}";
+        let mut parser = Parser::new(css);
+        let tree = parser.parse().unwrap();
+        assert_eq!(tree.root.borrow().children().len(), 2);
     }
 }
