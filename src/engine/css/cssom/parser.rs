@@ -114,6 +114,11 @@ impl<'a> Parser<'a> {
             .map(|s| Self::parse_selector(s.trim()))
             .collect::<Vec<_>>();
 
+        log::info!(
+            target: "CssParser::Rule",
+            "Parsed rule with selectors: {:?}",
+            selectors
+        );
         let rule_node =
             TreeNode::add_child_value(self.stack.last().unwrap(), CssNodeType::Rule { selectors });
 
@@ -140,6 +145,12 @@ impl<'a> Parser<'a> {
                     let value = self.collect_value()?;
                     let parsed_value = self.parse_value(&value)?;
 
+                    log::info!(
+                        target: "CssParser::Declaration",
+                        "Added declaration: {}: {:?}",
+                        name,
+                        parsed_value
+                    );
                     TreeNode::add_child_value(
                         self.stack.last().unwrap(),
                         CssNodeType::Declaration {
@@ -164,6 +175,12 @@ impl<'a> Parser<'a> {
         while let Some(token) = self.tokenizer.next_token() {
             match token {
                 Token::Semicolon => {
+                    log::info!(
+                        target: "CssParser::AtRule",
+                        "Parsed at-rule: @{} with params: {:?}",
+                        name,
+                        params
+                    );
                     TreeNode::add_child_value(
                         self.stack.last().unwrap(),
                         CssNodeType::AtRule {
