@@ -1,4 +1,5 @@
 pub mod app;
+pub mod resource_loader;
 pub mod tab;
 pub mod ui;
 pub mod webview;
