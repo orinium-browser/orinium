@@ -14,7 +14,7 @@ pub enum CssNodeType {
     Declaration { name: String, value: CssValue },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Selector {
     pub tag: Option<String>,
     pub classes: Vec<String>,
