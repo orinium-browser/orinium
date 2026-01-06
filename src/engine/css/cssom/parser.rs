@@ -9,9 +9,17 @@ use std::rc::Rc;
 #[derive(Debug, Clone)]
 pub enum CssNodeType {
     Stylesheet,
-    Rule { selectors: Vec<String> },
+    Rule { selectors: Vec<Selector> },
     AtRule { name: String, params: Vec<String> },
     Declaration { name: String, value: CssValue },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Selector {
+    pub tag: Option<String>,
+    pub classes: Vec<String>,
+    pub pseudo_class: Option<String>,
+    pub pseudo_element: Option<String>,
 }
 
 /// Parsed CSS property values.
@@ -84,7 +92,7 @@ impl<'a> Parser<'a> {
 
         let selectors = selector
             .split(',')
-            .map(|s| s.trim().to_string())
+            .map(|s| Self::parse_selector(s.trim()))
             .collect::<Vec<_>>();
 
         let rule_node =
@@ -252,6 +260,41 @@ impl<'a> Parser<'a> {
             Ok(CssValue::Color(color))
         } else {
             Ok(CssValue::Keyword(css.to_string()))
+        }
+    }
+
+    /// Parse css selector.
+    fn parse_selector(input: &str) -> Selector {
+        let mut rest = input;
+        let mut pseudo_class = None;
+        let mut pseudo_element = None;
+
+        if let Some(idx) = rest.find("::") {
+            pseudo_element = Some(rest[idx + 2..].to_string());
+            rest = &rest[..idx];
+        } else if let Some(idx) = rest.find(':') {
+            pseudo_class = Some(rest[idx + 1..].to_string());
+            rest = &rest[..idx];
+        }
+
+        let mut tag = None;
+        let mut classes = Vec::new();
+
+        for part in rest.split('.') {
+            if tag.is_none() {
+                if !part.is_empty() {
+                    tag = Some(part.to_string());
+                }
+            } else {
+                classes.push(part.to_string());
+            }
+        }
+
+        Selector {
+            tag,
+            classes,
+            pseudo_class,
+            pseudo_element,
         }
     }
 }
