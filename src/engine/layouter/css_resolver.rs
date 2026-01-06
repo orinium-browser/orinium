@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::rc::Rc
+use std::rc::Rc;
 use crate::engine::css::cssom::{CssNodeType, CssValue};
 use crate::engine::tree::{Tree, TreeNode};
 
