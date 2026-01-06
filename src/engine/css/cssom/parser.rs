@@ -81,7 +81,11 @@ impl<'a> Parser<'a> {
                     }
                 }
 
-                Token::Comma | Token::Ident(_) | Token::Hash(_) | Token::Delim(_) => {
+                Token::Comma
+                | Token::Ident(_)
+                | Token::Hash(_)
+                | Token::Delim(_)
+                | Token::Colon => {
                     selector_buffer.push_str(&token_to_string(&token));
                 }
 
@@ -303,6 +307,7 @@ impl<'a> Parser<'a> {
 
     /// Parse CSS selector.
     fn parse_selector(input: &str) -> Selector {
+        log::info!(target:"CssParser::Selector", "Parsing selector: {}", input);
         let mut rest = input;
         let mut pseudo_class = None;
         let mut pseudo_element = None;
@@ -347,10 +352,18 @@ fn token_to_string(token: &Token) -> String {
         Token::Comma => ",".into(),
         Token::LeftParen => "(".into(),
         Token::RightParen => ")".into(),
-        Token::Whitespace => " ".into(),
+        Token::LeftBrace => "{".into(),
+        Token::RightBrace => "}".into(),
+        Token::LeftBracket => "[".into(),
+        Token::RightBracket => "]".into(),
+        Token::Function(name) => format!("{name}("),
+        Token::AtKeyword(name) => format!("@{name}"),
+        Token::CDO => "<!--".into(),
+        Token::CDC => "-->".into(),
         Token::Hash(h) => format!("#{h}"),
         Token::Delim(c) => c.to_string(),
-        _ => String::new(),
+        Token::Whitespace => " ".into(),
+        Token::Comment(_) => String::new(),
     }
 }
 
