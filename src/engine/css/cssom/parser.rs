@@ -116,7 +116,7 @@ impl<'a> Parser<'a> {
 
         log::info!(
             target: "CssParser::Rule",
-            "Parsed rule with selectors: {:?}",
+            "Parsed Selectors: {:?}",
             selectors
         );
 
@@ -268,7 +268,7 @@ impl<'a> Parser<'a> {
             match token {
                 Token::Semicolon => break,
                 Token::RightBrace => {
-                    self.brace_depth -= 1;
+                    self.tokenizer.reconsume();
                     break;
                 }
                 Token::Whitespace => value.push(' '),
