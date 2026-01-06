@@ -20,8 +20,8 @@ pub enum Length {
 
 impl Length {
     /// ピクセル値として強制評価
-    fn to_px_unwprap(&self, base: f32) -> f32 {
-        match *self {
+    fn to_px_unwprap(self, base: f32) -> f32 {
+        match self {
             Length::Px(px) => px,
             Length::Em(em) => em * base,
             Length::Percent(p) => base * (p / 100.0),
