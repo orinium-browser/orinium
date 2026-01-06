@@ -43,7 +43,6 @@ pub fn build_layout_and_info(
     dom: &Rc<RefCell<TreeNode<HtmlNodeType>>>,
     cssoms: &[Tree<CssNodeType>],
     measurer: &dyn text::TextMeasurer,
-    font_size: f32,
 ) -> (LayoutNode, InfoNode) {
     let html_node = dom.borrow().value.clone();
 
@@ -100,12 +99,7 @@ pub fn build_layout_and_info(
             } else if html_util::is_block_level_element(tag_name) {
                 style.display = Display::Block;
             }
-            match tag_name.as_str() {
-                "h1" => font_size = 32.0,
-                "h2" => font_size = 24.0,
-                "h3" => font_size = 18.0,
-                _ => {}
-            }
+            // TODO: CSS ua style
         }
         _ => {}
     }
@@ -121,7 +115,7 @@ pub fn build_layout_and_info(
 
     for child_dom in dom.borrow().children() {
         let (child_layout, child_info) =
-            build_layout_and_info(child_dom, cssoms, measurer, font_size);
+            build_layout_and_info(child_dom, cssoms, measurer);
         layout_children.push(child_layout);
         info_children.push(child_info);
     }
