@@ -9,6 +9,8 @@ use ui_layout::LayoutNode;
 
 use crate::platform::network::NetworkCore;
 
+const USER_AGENT_CSS: &str = include_str!("../../../../resource/user-agent.css");
+
 /// WebView は 1 つのウェブページの表示・レイアウト・描画を管理する構造体です。
 ///
 /// 主に以下の責務を持ちます:
@@ -74,8 +76,11 @@ impl WebView {
         // Layout and Info
         self.layout_and_info = Some(layouter::build_layout_and_info(
             &dom_tree.root,
-            &[],
+            &layouter::css_resolver::CssResolver::resolve(
+                &CssParser::new(&USER_AGENT_CSS).parse().unwrap(),
+            ),
             &measurer.unwrap(),
+            layouter::Color(0, 0, 0, 255),
             16.0,
         ));
 
@@ -147,11 +152,17 @@ impl WebView {
         }
 
         // --- CSSOM を構築 ---
-        let mut cssoms = vec![];
+        let mut cssoms = Vec::with_capacity(css_sources.len() + 1);
+        cssoms.push(CssParser::new(&USER_AGENT_CSS).parse()?);
         for css_text in css_sources {
             let mut css_parser = CssParser::new(&css_text);
             let cssom = css_parser.parse()?;
             cssoms.push(cssom);
+        }
+
+        let mut resolved_styles = layouter::css_resolver::ResolvedStyles::new();
+        for cssom in cssoms {
+            resolved_styles.extend(layouter::css_resolver::CssResolver::resolve(&cssom));
         }
 
         let measurer = crate::platform::renderer::text_measurer::PlatformTextMeasurer::new();
@@ -159,8 +170,9 @@ impl WebView {
         // Layout and Info
         self.layout_and_info = Some(layouter::build_layout_and_info(
             &dom_tree.root,
-            &cssoms,
+            &resolved_styles,
             &measurer.unwrap(),
+            layouter::Color(0, 0, 0, 255),
             16.0,
         ));
 

@@ -1,8 +1,10 @@
-mod css_resolver;
+pub mod css_resolver;
+
+use css_resolver::ResolvedStyles;
 
 use crate::engine::bridge::text;
-use crate::engine::css::cssom::CssNodeType;
-use crate::engine::tree::{Tree, TreeNode};
+use crate::engine::css::cssom::CssValue;
+use crate::engine::tree::TreeNode;
 use crate::html::{HtmlNodeType, util as html_util};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -38,14 +40,50 @@ impl Color {
     }
 }
 
-/// DOM + CSSOM → LayoutNode + InfoNode
+impl TryFrom<(u8, u8, u8, f32)> for Color {
+    type Error = ();
+
+    fn try_from((r, g, b, a): (u8, u8, u8, f32)) -> Result<Self, Self::Error> {
+        if !(0.0..=1.0).contains(&a) {
+            return Err(());
+        }
+        Ok(Color(r, g, b, (a * 255.0).round() as u8))
+    }
+}
+
 pub fn build_layout_and_info(
     dom: &Rc<RefCell<TreeNode<HtmlNodeType>>>,
-    cssoms: &[Tree<CssNodeType>],
+    resolved_styles: &ResolvedStyles,
     measurer: &dyn text::TextMeasurer,
+    parent_color: Color,
+    parent_font_size: f32,
 ) -> (LayoutNode, InfoNode) {
     let html_node = dom.borrow().value.clone();
 
+    /* -----------------------------
+    Skip non-rendered elements
+    ----------------------------- */
+    if let HtmlNodeType::Element { tag_name, .. } = &html_node {
+        if is_non_rendered_element(tag_name) {
+            return (
+                LayoutNode::new(Style {
+                    display: Display::None,
+                    ..Default::default()
+                }),
+                InfoNode {
+                    kind: NodeKind::Container,
+                    color: parent_color,
+                    font_size: parent_font_size,
+                    text: None,
+                    children: Vec::new(),
+                },
+            );
+        }
+    }
+
+    /* -----------------------------
+    Initial values (inheritance)
+    ----------------------------- */
     let mut kind = NodeKind::Container;
     let mut style = Style {
         display: Display::Block,
@@ -58,17 +96,30 @@ pub fn build_layout_and_info(
         row_gap: 0.0,
         ..Default::default()
     };
-    let color = Color(0, 0, 0, 255);
+
+    let mut color = parent_color;
+    let mut font_size = parent_font_size;
     let mut text: Option<String> = None;
 
-    let mut font_size = font_size;
+    /* -----------------------------
+    Apply resolved CSS
+    ----------------------------- */
+    if let HtmlNodeType::Element { tag_name, .. } = &html_node {
+        if let Some(decls) = resolved_styles.get(tag_name) {
+            for (name, value) in decls {
+                apply_declaration(name, value, &mut style, &mut color, &mut font_size);
+            }
+        }
+    }
 
+    /* -----------------------------
+    HTML defaults / semantics
+    ----------------------------- */
     match &html_node {
         HtmlNodeType::Text(t) => {
             kind = NodeKind::Text;
             text = Some(t.clone());
 
-            // テキストのサイズを測定
             let req = text::TextMeasurementRequest {
                 text: t.clone(),
                 font: text::FontDescription {
@@ -76,21 +127,22 @@ pub fn build_layout_and_info(
                     size_px: font_size,
                 },
                 constraints: text::LayoutConstraints {
-                    max_width: Some(800.0), // とりあえず仮の最大幅
+                    max_width: Some(800.0),
                     wrap: true,
                     max_lines: None,
                 },
             };
-            let (w, h) = if let Ok(mears) = measurer.measure(&req) {
-                (mears.width, mears.height)
-            } else {
-                (800.0, font_size * 1.2)
-            };
+
+            let (w, h) = measurer
+                .measure(&req)
+                .map(|m| (m.width, m.height))
+                .unwrap_or((800.0, font_size * 1.2));
 
             style.size.width = Some(w);
             style.size.height = Some(h);
             style.item_style.flex_basis = Some(h);
         }
+
         HtmlNodeType::Element { tag_name, .. } => {
             if html_util::is_inline_element(tag_name) {
                 style.display = Display::Flex {
@@ -99,23 +151,20 @@ pub fn build_layout_and_info(
             } else if html_util::is_block_level_element(tag_name) {
                 style.display = Display::Block;
             }
-            // TODO: CSS ua style
         }
+
         _ => {}
     }
 
-    // TODO: CSS 適用
-    #[allow(unused)]
-    {
-        for css in cssoms {}
-    }
-
+    /* -----------------------------
+    Children (propagate computed style)
+    ----------------------------- */
     let mut layout_children = Vec::new();
     let mut info_children = Vec::new();
 
     for child_dom in dom.borrow().children() {
         let (child_layout, child_info) =
-            build_layout_and_info(child_dom, cssoms, measurer);
+            build_layout_and_info(child_dom, resolved_styles, measurer, color, font_size);
         layout_children.push(child_layout);
         info_children.push(child_info);
     }
@@ -130,6 +179,36 @@ pub fn build_layout_and_info(
     };
 
     (layout, info)
+}
+
+fn apply_declaration(
+    name: &str,
+    value: &CssValue,
+    style: &mut Style,
+    color: &mut Color,
+    font_size: &mut f32,
+) {
+    match (name, value) {
+        ("display", CssValue::Keyword(v)) if v == "block" => {
+            style.display = Display::Block;
+        }
+        ("display", CssValue::Keyword(v)) if v == "flex" => {
+            style.display = Display::Flex {
+                flex_direction: FlexDirection::Row,
+            };
+        }
+        ("color", CssValue::Color(c)) => {
+            *color = Color::try_from(c.to_rgba_tuple(None)).unwrap();
+        }
+        ("font-size", CssValue::Length(len)) => {
+            *font_size = len.to_px(16.0).unwrap_or(16.0);
+        }
+        _ => {}
+    }
+}
+
+fn is_non_rendered_element(tag: &str) -> bool {
+    matches!(tag, "head" | "meta" | "title" | "link" | "style" | "script")
 }
 
 #[derive(Debug, Clone)]
