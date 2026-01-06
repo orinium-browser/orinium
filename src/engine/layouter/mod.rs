@@ -51,6 +51,12 @@ impl TryFrom<(u8, u8, u8, f32)> for Color {
     }
 }
 
+/// # 継承引数
+///
+/// - parent_color
+/// - parent_font_size
+///
+/// 関数呼び出し時に適切な値に設定してください。
 pub fn build_layout_and_info(
     dom: &Rc<RefCell<TreeNode<HtmlNodeType>>>,
     resolved_styles: &ResolvedStyles,
