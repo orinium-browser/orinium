@@ -5,7 +5,7 @@ use super::tab::Tab;
 
 use crate::platform::network::NetworkCore;
 
-use crate::engine::renderer::{DrawCommand, RenderTree, Renderer};
+use crate::engine::layouter::{self, DrawCommand};
 use crate::platform::renderer::gpu::GpuRenderer;
 use crate::system::App;
 
@@ -75,12 +75,7 @@ impl BrowserApp {
     }
 
     // 開発テスト用
-    pub fn with_draw_info(
-        mut self,
-        _render_tree: RenderTree,
-        draw_commands: Vec<DrawCommand>,
-    ) -> Self {
-        // self.render_tree = render_tree;
+    pub fn with_draw_info(mut self, draw_commands: Vec<DrawCommand>) -> Self {
         self.draw_commands = draw_commands;
         self
     }
@@ -90,11 +85,10 @@ impl BrowserApp {
     }
 
     fn build_from_tabs(&mut self) {
-        if let Some(active) = self.tabs.first() {
-            let tree = active.render_tree().unwrap();
-            let renderer = Renderer::new();
-            self.draw_commands = renderer.generate_draw_commands(tree);
-            //println!("DrawCommands: {:?}", self.draw_commands);
+        if let Some(active) = self.tabs.first_mut() {
+            let (layout, info) = active.layout_and_info().unwrap();
+            ui_layout::LayoutEngine::layout(layout, 800.0, 600.0);
+            self.draw_commands = layouter::generate_draw_commands(&layout, info, 0.0, 0.0);
 
             let title = active.title();
             if let Some(t) = title

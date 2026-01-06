@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use crate::{network::NetworkCore, renderer::RenderTree};
+use crate::network::NetworkCore;
+
+use crate::engine::layouter::InfoNode;
+use ui_layout::LayoutNode;
 
 use super::webview::WebView;
 
@@ -56,8 +59,10 @@ impl Tab {
         Ok(())
     }
 
-    pub fn render_tree(&self) -> Option<&RenderTree> {
-        self.webview.as_ref().and_then(|wv| wv.render.as_ref())
+    pub fn layout_and_info(&mut self) -> Option<&mut (LayoutNode, InfoNode)> {
+        self.webview
+            .as_mut()
+            .and_then(|wv| wv.layout_and_info.as_mut())
     }
 
     pub fn title(&self) -> Option<String> {
