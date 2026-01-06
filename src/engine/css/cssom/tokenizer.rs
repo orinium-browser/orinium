@@ -111,6 +111,13 @@ impl<'a> Tokenizer<'a> {
         self.state = TokenizerState::Data;
     }
 
+    /// Re-consume the last emitted token so that the next call to `next_token` returns it again.
+    pub fn reconsume(&mut self) {
+        if let Some(ref token) = self.last_tokenized {
+            self.emitted_token = Some(token.clone());
+        }
+    }
+
     fn state_data(&mut self, c: char) {
         match c {
             c if c.is_whitespace() => self.emit(Token::Whitespace),
