@@ -8,7 +8,6 @@ use hyper_util::rt::TokioIo;
 use rustls::ClientConfig;
 use rustls::RootCertStore;
 use rustls_native_certs::load_native_certs;
-use std::error::Error;
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio::sync::RwLock;
@@ -73,7 +72,7 @@ impl NetworkCore {
         &self,
         url: &str,
         method: Method,
-    ) -> Result<Response, Box<dyn Error>> {
+    ) -> Result<Response, Box<dyn std::error::Error + Send + Sync + 'static>> {
         let url: Uri = url.parse()?;
         let host = url.host().expect("uri has no host");
 
@@ -190,7 +189,10 @@ impl NetworkCore {
         Ok(response)
     }
 
-    pub async fn fetch_url(&self, url: &str) -> Result<Response, Box<dyn Error>> {
+    pub async fn fetch_url(
+        &self,
+        url: &str,
+    ) -> Result<Response, Box<dyn std::error::Error + Send + Sync + 'static>> {
         // MAX10回
         let mut current = url.to_string();
         let mut redirects = 0usize;
