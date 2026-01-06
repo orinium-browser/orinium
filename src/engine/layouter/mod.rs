@@ -133,7 +133,7 @@ pub fn build_layout_and_info(
                     size_px: font_size,
                 },
                 constraints: text::LayoutConstraints {
-                    max_width: Some(800.0),
+                    max_width: None,
                     wrap: true,
                     max_lines: None,
                 },
