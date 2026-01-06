@@ -1,0 +1,123 @@
+/* =========================
+   User Agent Stylesheet
+   ========================= */
+
+/* --- Global defaults --- */
+* {
+  box-sizing: border-box;
+}
+
+/* --- Root element --- */
+html {
+  display: block;
+  font-size: 16px;
+}
+
+/* --- Document body --- */
+body {
+  display: block;
+  margin: 8px;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont,
+               "Segoe UI", sans-serif;
+  line-height: 1.5;
+}
+
+/* --- Headings --- */
+h1, h2, h3, h4, h5, h6 {
+  display: block;
+  font-weight: bold;
+}
+
+h1 { font-size: 2em;    margin: 0.67em 0; }
+h2 { font-size: 1.5em;  margin: 0.83em 0; }
+h3 { font-size: 1.17em; margin: 1em 0; }
+h4 { font-size: 1em;    margin: 1.33em 0; }
+h5 { font-size: 0.83em; margin: 1.67em 0; }
+h6 { font-size: 0.67em; margin: 2.33em 0; }
+
+/* --- Paragraphs --- */
+p {
+  display: block;
+  margin: 1em 0;
+}
+
+/* --- Lists --- */
+ul, ol {
+  display: block;
+  margin: 1em 0;
+  padding-left: 40px;
+}
+
+li {
+  display: list-item;
+}
+
+/* --- Links --- */
+a {
+  color: #0000ee;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+a:visited {
+  color: #551a8b;
+}
+
+/* --- Inline text elements --- */
+strong, b {
+  font-weight: bold;
+}
+
+em, i {
+  font-style: italic;
+}
+
+/* --- Preformatted text --- */
+pre {
+  display: block;
+  font-family: monospace;
+  white-space: pre;
+  margin: 1em 0;
+}
+
+code {
+  font-family: monospace;
+}
+
+/* --- Images --- */
+img {
+  display: inline-block;
+}
+
+/* --- Horizontal rule --- */
+hr {
+  display: block;
+  border: 1px inset;
+  margin: 0.5em auto;
+}
+
+/* --- Tables --- */
+table {
+  display: table;
+  border-collapse: separate;
+  border-spacing: 2px;
+}
+
+tr {
+  display: table-row;
+}
+
+td, th {
+  display: table-cell;
+  padding: 1px;
+}
+
+th {
+  font-weight: bold;
+  text-align: center;
+}
+
+/* --- Form elements --- */
+input, textarea, select, button {
+  font: inherit;
+}
