@@ -107,22 +107,22 @@ pub fn build_layout_and_info(
     /* -----------------------------
        Skip non-rendered elements
     ----------------------------- */
-    if let HtmlNodeType::Element { tag_name, .. } = &html_node {
-        if is_non_rendered_element(tag_name) {
-            return (
-                LayoutNode::new(Style {
-                    display: Display::None,
-                    ..Default::default()
-                }),
-                InfoNode {
-                    kind: NodeKind::Container,
-                    color: parent_color,
-                    font_size: parent_font_size,
-                    text: None,
-                    children: Vec::new(),
-                },
-            );
-        }
+    if let HtmlNodeType::Element { tag_name, .. } = &html_node
+        && is_non_rendered_element(tag_name)
+    {
+        return (
+            LayoutNode::new(Style {
+                display: Display::None,
+                ..Default::default()
+            }),
+            InfoNode {
+                kind: NodeKind::Container,
+                color: parent_color,
+                font_size: parent_font_size,
+                text: None,
+                children: Vec::new(),
+            },
+        );
     }
 
     /* -----------------------------

@@ -25,10 +25,10 @@ pub struct Selector {
 impl Selector {
     /// Simple selector matcher (tag / class only for now)
     pub fn matches(&self, tag_name: &str, class_list: &[String]) -> bool {
-        if let Some(tag) = &self.tag {
-            if tag != tag_name {
-                return false;
-            }
+        if let Some(tag) = &self.tag
+            && tag != tag_name
+        {
+            return false;
         }
 
         for class in &self.classes {
