@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-
+use std::rc::Rc
 use crate::engine::css::cssom::{CssNodeType, CssValue};
 use crate::engine::tree::{Tree, TreeNode};
 
@@ -19,7 +19,7 @@ impl CssResolver {
 
     /// Walk CSS AST recursively
     fn walk(
-        node: &std::rc::Rc<std::cell::RefCell<TreeNode<CssNodeType>>>,
+        node: &Rc<std::cell::RefCell<TreeNode<CssNodeType>>>,
         styles: &mut ResolvedStyles,
     ) {
         let node_ref = node.borrow();
