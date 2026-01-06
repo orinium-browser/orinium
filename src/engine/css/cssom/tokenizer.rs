@@ -85,6 +85,7 @@ impl<'a> Tokenizer<'a> {
 
             if let Some(token) = self.emitted_token.take() {
                 self.last_tokenized = Some(token.clone());
+                log::debug!(target: "CssTokenizer", "Tokenized token: {:?}", token);
                 return Some(token);
             }
         }
