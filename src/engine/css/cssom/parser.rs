@@ -5,6 +5,7 @@ use anyhow::{Result, bail};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+/// Node types stored in the CSS AST tree.
 #[derive(Debug, Clone)]
 pub enum CssNodeType {
     Stylesheet,
@@ -13,6 +14,7 @@ pub enum CssNodeType {
     Declaration { name: String, value: CssValue },
 }
 
+/// Parsed CSS property values.
 #[derive(Debug, Clone)]
 pub enum CssValue {
     Keyword(String),
@@ -20,146 +22,96 @@ pub enum CssValue {
     Color(Color),
 }
 
+/// CSS parser consuming tokens and producing a syntax tree.
 pub struct Parser<'a> {
     tokenizer: Tokenizer<'a>,
     tree: Tree<CssNodeType>,
     stack: Vec<Rc<RefCell<TreeNode<CssNodeType>>>>,
-    selector_buffer: String,
     brace_depth: usize,
 }
 
-#[derive(Debug)]
-enum MaybeSelector {
-    Selector(String),
-    NotSelector(String),
-    EndRule,
-    None,
-}
-
 impl<'a> Parser<'a> {
+    /// Create a new CSS parser.
     pub fn new(input: &'a str) -> Self {
         let tree = Tree::new(CssNodeType::Stylesheet);
         Self {
             tokenizer: Tokenizer::new(input),
             tree: tree.clone(),
             stack: vec![tree.root.clone()],
-            selector_buffer: String::new(),
             brace_depth: 0,
         }
     }
 
+    /// Parse the entire stylesheet.
     pub fn parse(&mut self) -> Result<Tree<CssNodeType>> {
+        let mut selector_buffer = String::new();
+
         while let Some(token) = self.tokenizer.next_token() {
             match token {
+                Token::Whitespace => {
+                    if !selector_buffer.is_empty() {
+                        selector_buffer.push(' ');
+                    }
+                }
+
+                Token::Comma | Token::Ident(_) | Token::Hash(_) | Token::Delim(_) => {
+                    selector_buffer.push_str(&token_to_string(&token));
+                }
+
+                Token::AtKeyword(name) => {
+                    self.parse_at_rule(&name)?;
+                }
+
                 Token::LeftBrace => {
                     self.brace_depth += 1;
-                    let selector = self.selector_buffer.trim().to_string();
-                    self.parse_rule(&selector)?;
-                    self.selector_buffer.clear();
+                    let selector = selector_buffer.trim();
+                    self.parse_rule(selector)?;
+                    selector_buffer.clear();
                 }
-                Token::AtKeyword(key) => self.parse_at_rule(&key)?,
-                Token::Delim(_) | Token::Hash(_) | Token::Ident(_) | Token::Comma => {
-                    self.selector_buffer.push_str(&token_to_string(&token));
-                }
+
                 _ => {}
             }
         }
+
         Ok(self.tree.clone())
     }
 
-    /// セレクタを収集するヘルパー関数
-    fn collect_selector(&mut self) -> MaybeSelector {
-        let mut selector = String::new();
-        let mut token = self.tokenizer.last_tokenized_token().cloned();
-
-        loop {
-            let t = match token.take() {
-                Some(t) => t,
-                None => match self.tokenizer.next_token() {
-                    Some(t2) => t2,
-                    None => break,
-                },
-            };
-
-            match t {
-                Token::LeftBrace => {
-                    self.brace_depth += 1;
-                    break;
-                }
-                Token::RightBrace => {
-                    self.brace_depth -= 1;
-                    return MaybeSelector::EndRule;
-                }
-                Token::Delim(_) | Token::Hash(_) | Token::Ident(_) | Token::Comma => {
-                    selector.push_str(&token_to_string(&t));
-                }
-                Token::Whitespace => {
-                    if !selector.is_empty() {
-                        selector.push(' ');
-                    }
-                }
-                _ => return MaybeSelector::NotSelector(selector.trim().to_string()),
-            }
-
-            token = self.tokenizer.next_token();
-        }
-
+    /// Parse a qualified rule (`selector { ... }`).
+    fn parse_rule(&mut self, selector: &str) -> Result<()> {
         if selector.is_empty() {
-            MaybeSelector::None
-        } else {
-            MaybeSelector::Selector(selector.trim().to_string())
-        }
-    }
-
-    fn parse_rule(&mut self, selectors: &str) -> Result<()> {
-        if selectors.trim().is_empty() {
-            bail!("Selector name is empty before '{{'");
+            bail!("Empty selector before '{{'");
         }
 
-        let selectors: Vec<String> = selectors.split(',').map(|s| s.trim().to_string()).collect();
+        let selectors = selector
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .collect::<Vec<_>>();
 
-        let rule_node = TreeNode::add_child_value(
-            self.stack.last().unwrap(),
-            CssNodeType::Rule {
-                selectors: selectors.clone(),
-            },
-        );
+        let rule_node =
+            TreeNode::add_child_value(self.stack.last().unwrap(), CssNodeType::Rule { selectors });
 
-        self.stack.push(rule_node.clone());
+        self.stack.push(rule_node);
         self.parse_declarations()?;
         self.stack.pop();
+
         Ok(())
     }
 
+    /// Parse a declaration block.
     fn parse_declarations(&mut self) -> Result<()> {
-        let mut return_flag = false;
-        let mut delim_name = String::new();
         loop {
             match self.tokenizer.next_token() {
+                Some(Token::Whitespace | Token::Comment(_)) => continue,
+
                 Some(Token::RightBrace) => {
                     self.brace_depth -= 1;
-                    break;
+                    return Ok(());
                 }
+
                 Some(Token::Ident(name)) => {
-                    let name = delim_name.to_string() + name.as_str();
-                    delim_name.clear();
                     self.expect_colon()?;
-                    let mut value = String::new();
-
-                    while let Some(token) = self.tokenizer.next_token() {
-                        match token {
-                            Token::Semicolon => break,
-                            Token::RightBrace => {
-                                self.brace_depth -= 1;
-                                return_flag = true;
-                                break;
-                            }
-                            _ => value.push_str(&token_to_string(&token)),
-                        }
-                    }
-
-                    let value = value.trim();
-                    let parsed_value = self.parse_value(value)?;
+                    let value = self.collect_value()?;
+                    let parsed_value = self.parse_value(&value)?;
 
                     TreeNode::add_child_value(
                         self.stack.last().unwrap(),
@@ -168,29 +120,22 @@ impl<'a> Parser<'a> {
                             value: parsed_value,
                         },
                     );
+                }
 
-                    if return_flag {
-                        return Ok(());
-                    }
-                }
-                Some(Token::Whitespace) => continue,
-                Some(Token::Delim(c)) => {
-                    delim_name.push(c);
-                }
+                Some(tok) => bail!("Unexpected token in declaration block: {tok:?}"),
                 None => break,
-                Some(Token::Comment(_)) => continue,
-                Some(tok) => bail!("Unexpected token in declaration: {tok:?}"),
             }
         }
+
         Ok(())
     }
 
+    /// Parse an at-rule (`@media`, `@import`, etc.).
     fn parse_at_rule(&mut self, name: &str) -> Result<()> {
-        println!("depth: {}", self.brace_depth);
         let mut params = Vec::new();
 
         while let Some(token) = self.tokenizer.next_token() {
-            match &token {
+            match token {
                 Token::Semicolon => {
                     TreeNode::add_child_value(
                         self.stack.last().unwrap(),
@@ -201,22 +146,22 @@ impl<'a> Parser<'a> {
                     );
                     return Ok(());
                 }
+
                 Token::LeftBrace => {
                     self.brace_depth += 1;
                     return self.parse_at_rule_block(name, params);
                 }
-                Token::RightBrace => {
-                    self.brace_depth -= 1;
-                    break;
-                }
+
+                Token::Whitespace => continue,
                 _ => params.push(token_to_string(&token)),
             }
         }
+
         Ok(())
     }
 
+    /// Parse an at-rule with a block (`@media ... { ... }`).
     fn parse_at_rule_block(&mut self, name: &str, params: Vec<String>) -> Result<()> {
-        println!("Parsing at-rule block: {name} {params:?}");
         let node = TreeNode::add_child_value(
             self.stack.last().unwrap(),
             CssNodeType::AtRule {
@@ -224,27 +169,55 @@ impl<'a> Parser<'a> {
                 params,
             },
         );
-        self.stack.push(node.clone());
+
+        self.stack.push(node);
+
+        let mut selector_buffer = String::new();
 
         while self.brace_depth > 0 {
-            self.skip_whitespace();
-            match dbg!(self.collect_selector()) {
-                MaybeSelector::Selector(selector) => self.parse_rule(&selector)?,
-                MaybeSelector::NotSelector(name) => self.parse_at_rule_declaration(&name)?,
-                MaybeSelector::EndRule => break,
-                MaybeSelector::None => {
-                    bail!("Expected selector or declaration inside at-rule block")
+            match self.tokenizer.next_token() {
+                Some(Token::Whitespace) => {
+                    if !selector_buffer.is_empty() {
+                        selector_buffer.push(' ');
+                    }
                 }
+
+                Some(Token::Ident(_) | Token::Hash(_) | Token::Delim(_) | Token::Comma) => {
+                    selector_buffer.push_str(&token_to_string(
+                        self.tokenizer.last_tokenized_token().unwrap(),
+                    ));
+                }
+
+                Some(Token::LeftBrace) => {
+                    self.brace_depth += 1;
+                    let selector = selector_buffer.trim();
+                    self.parse_rule(selector)?;
+                    selector_buffer.clear();
+                }
+
+                Some(Token::RightBrace) => {
+                    self.brace_depth -= 1;
+                }
+
+                Some(Token::AtKeyword(name)) => {
+                    self.parse_at_rule(&name)?;
+                }
+
+                Some(Token::Comment(_)) => {}
+
+                None => break,
+                _ => {}
             }
         }
 
         self.stack.pop();
-        println!("Finished parsing at-rule block");
         Ok(())
     }
 
-    fn parse_at_rule_declaration(&mut self, name: &str) -> Result<()> {
+    /// Collect a property value until `;` or `}`.
+    fn collect_value(&mut self) -> Result<String> {
         let mut value = String::new();
+
         while let Some(token) = self.tokenizer.next_token() {
             match token {
                 Token::Semicolon => break,
@@ -252,49 +225,38 @@ impl<'a> Parser<'a> {
                     self.brace_depth -= 1;
                     break;
                 }
+                Token::Whitespace => value.push(' '),
                 _ => value.push_str(&token_to_string(&token)),
             }
         }
-        let parsed_value = self.parse_value(value.trim())?;
-        TreeNode::add_child_value(
-            self.stack.last().unwrap(),
-            CssNodeType::Declaration {
-                name: name.trim().to_string(),
-                value: parsed_value,
-            },
-        );
 
-        self.parse_declarations()?;
-        Ok(())
+        Ok(value.trim().to_string())
     }
 
+    /// Expect a colon token after a property name.
     fn expect_colon(&mut self) -> Result<()> {
         match self.tokenizer.next_token() {
             Some(Token::Colon) => Ok(()),
             Some(tok) => bail!("Expected ':' after property name, found {tok:?}"),
-            None => bail!("Unexpected end of input: expected ':'"),
+            None => bail!("Unexpected end of input, expected ':'"),
         }
     }
 
-    fn parse_value(&self, css_str: &str) -> Result<CssValue> {
-        let css_str = css_str.trim();
-        if let Some(length) = Length::from_css(css_str) {
+    /// Parse a CSS value string into a structured value.
+    fn parse_value(&self, css: &str) -> Result<CssValue> {
+        if let Some(length) = Length::from_css(css) {
             Ok(CssValue::Length(length))
-        } else if let Some(color) = Color::from_hex(css_str) {
+        } else if let Some(color) = Color::from_hex(css) {
             Ok(CssValue::Color(color))
-        } else if let Some(color) = Color::from_named(css_str) {
+        } else if let Some(color) = Color::from_named(css) {
             Ok(CssValue::Color(color))
         } else {
-            Ok(CssValue::Keyword(css_str.to_string()))
+            Ok(CssValue::Keyword(css.to_string()))
         }
-    }
-
-    /// 空白トークンをスキップするヘルパー関数
-    fn skip_whitespace(&mut self) {
-        while let Some(Token::Whitespace) = self.tokenizer.next_token() {}
     }
 }
 
+/// Convert a token back into its textual representation.
 fn token_to_string(token: &Token) -> String {
     match token {
         Token::Ident(s) => s.clone(),
@@ -311,5 +273,30 @@ fn token_to_string(token: &Token) -> String {
         Token::Hash(h) => format!("#{h}"),
         Token::Delim(c) => c.to_string(),
         _ => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_simple_rule() {
+        let css = "body { color: red; }";
+        let mut parser = Parser::new(css);
+        let tree = parser.parse().unwrap();
+
+        let root = tree.root.borrow();
+        assert_eq!(root.children().len(), 1);
+    }
+
+    #[test]
+    fn parse_at_rule() {
+        let css = "@media screen { body { margin: 10px; } }";
+        let mut parser = Parser::new(css);
+        let tree = parser.parse().unwrap();
+
+        let root = tree.root.borrow();
+        assert_eq!(root.children().len(), 1);
     }
 }
