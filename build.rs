@@ -1,4 +1,8 @@
-use std::{env, fs, io, path::Path, time::{SystemTime, UNIX_EPOCH}};
+use std::{
+    env, fs, io,
+    path::Path,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 fn main() {
     clear_build_log();
@@ -14,20 +18,28 @@ fn main() {
 
     let src_root = Path::new(&manifest_dir).join("resource");
     if !src_root.exists() {
-        build_log(format_args!("[BUILD] resource directory not found at {}", src_root.display()));
+        build_log(format_args!(
+            "[BUILD] resource directory not found at {}",
+            src_root.display()
+        ));
         return;
     }
 
     let dest_root = Path::new(&target_dir).join(&profile).join("resource");
 
-    if let Err(e) = visit_files(&src_root, &|p| build_log(format_args!("cargo:rerun-if-changed={}", p.display()))) {
+    if let Err(e) = visit_files(&src_root, &|p| {
+        build_log(format_args!("cargo:rerun-if-changed={}", p.display()))
+    }) {
         build_log(format_args!("[BUILD] failed reading resource tree: {}", e));
     }
 
     if let Err(e) = copy_dir_if_newer(&src_root, &src_root, &dest_root) {
         build_log(format_args!("[BUILD] failed copying resources: {}", e));
     } else {
-        build_log(format_args!("[BUILD] resource sync completed -> {}", dest_root.display()));
+        build_log(format_args!(
+            "[BUILD] resource sync completed -> {}",
+            dest_root.display()
+        ));
     }
 }
 
@@ -73,7 +85,11 @@ fn copy_dir_if_newer(root: &Path, current: &Path, dst_root: &Path) -> io::Result
                     fs::create_dir_all(p)?;
                 }
                 fs::copy(&src_path, &dst_path)?;
-                build_log(format_args!("[BUILD] copied resource: {} -> {}", src_path.display(), dst_path.display()));
+                build_log(format_args!(
+                    "[BUILD] copied resource: {} -> {}",
+                    src_path.display(),
+                    dst_path.display()
+                ));
             }
         }
     }
@@ -105,7 +121,11 @@ fn build_log(args: std::fmt::Arguments) {
     let msg = format!("{}", args);
     let content = format!("[{}] {}", unixtime.as_secs(), msg);
 
-    match fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+    match fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
         Ok(mut f) => {
             if let Err(e) = writeln!(f, "{}", content) {
                 println!("[BUILD] failed writing build log: {}", e);
