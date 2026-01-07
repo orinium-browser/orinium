@@ -284,6 +284,11 @@ fn apply_declaration(name: &str, value: &CssValue, style: &mut Style, text_style
                 text_style.color = c;
             }
         }
+        ("color", CssValue::Keyword(v)) => {
+            if let Some(c) = keyword_color_to_color(v) {
+                text_style.color = c;
+            }
+        }
 
         ("font-size", CssValue::Length(len)) => {
             text_style.font_size = len.to_px(16.0).unwrap_or(16.0);
@@ -385,6 +390,18 @@ fn apply_declaration(name: &str, value: &CssValue, style: &mut Style, text_style
         }
 
         _ => {}
+    }
+}
+
+fn keyword_color_to_color(keyword: &str) -> Option<Color> {
+    match keyword {
+        "black" => Some(Color(0, 0, 0, 255)),
+        "white" => Some(Color(255, 255, 255, 255)),
+        "red" => Some(Color(255, 0, 0, 255)),
+        "green" => Some(Color(0, 128, 0, 255)),
+        "blue" => Some(Color(0, 0, 255, 255)),
+        "gray" | "grey" => Some(Color(128, 128, 128, 255)),
+        _ => None,
     }
 }
 
