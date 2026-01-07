@@ -198,6 +198,9 @@ impl<'a> Parser<'a> {
                         },
                     );
                 }
+                // CSS vendor prefix (ignoring for now) OR CSS hack (ex: _width, *opacity)
+                // TODO: ignore CSS hack
+                Some(Token::Delim(_)) => {}
 
                 Some(tok) => bail!("Unexpected token in declaration block: {tok:?}"),
                 None => break,
