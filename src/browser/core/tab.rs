@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use super::resource_loader::BrowserResourceLoader;
 use crate::network::NetworkCore;
 
 use crate::engine::layouter::InfoNode;
@@ -19,7 +20,7 @@ use super::webview::WebView;
 /// TODO:
 /// - ページの状態（Error、loading）の管理を追加
 pub struct Tab {
-    net: Arc<NetworkCore>,
+    net: Arc<BrowserResourceLoader>,
     title: Option<String>,
     url: Option<String>,
     webview: Option<WebView>,
@@ -27,13 +28,15 @@ pub struct Tab {
 
 impl Default for Tab {
     fn default() -> Self {
-        let net = Arc::new(NetworkCore::new());
+        let net = Arc::new(BrowserResourceLoader::new(Some(Arc::new(
+            NetworkCore::new(),
+        ))));
         Self::new(net)
     }
 }
 
 impl Tab {
-    pub fn new(net: Arc<NetworkCore>) -> Self {
+    pub fn new(net: Arc<BrowserResourceLoader>) -> Self {
         Self {
             net,
             title: None,

@@ -7,7 +7,7 @@ use crate::engine::{
 };
 use ui_layout::LayoutNode;
 
-use crate::platform::network::NetworkCore;
+use super::resource_loader::BrowserResourceLoader;
 
 const USER_AGENT_CSS: &str = include_str!("../../../../resource/user-agent.css");
 
@@ -94,10 +94,14 @@ impl WebView {
     /// - `<link rel="stylesheet">` を解決して CSS を取得
     /// - Style Tree を構築
     /// - Render Tree を構築
-    pub async fn load_from_url(&mut self, url: &str, net: Arc<NetworkCore>) -> anyhow::Result<()> {
+    pub async fn load_from_url(
+        &mut self,
+        url: &str,
+        net: Arc<BrowserResourceLoader>,
+    ) -> anyhow::Result<()> {
         // --- HTML をロード ---
         let html_bytes = net
-            .fetch_url(url)
+            .fetch(url)
             .await
             .map_err(|e| anyhow::Error::msg(e.to_string()))?;
 
@@ -137,7 +141,7 @@ impl WebView {
             {
                 let css_url = resolve_url(url, &href);
 
-                if let Ok(res) = net.fetch_url(&css_url).await {
+                if let Ok(res) = net.fetch(&css_url).await {
                     let bytes = res.body;
                     if let Ok(text) = String::from_utf8(bytes) {
                         css_sources.push(text);
@@ -189,7 +193,10 @@ impl WebView {
 }
 
 fn resolve_url(base: &str, path: &str) -> String {
-    if path.starts_with("http://") || path.starts_with("https://") {
+    if path.starts_with("http://")
+        || path.starts_with("https://")
+        || path.starts_with("resource:///")
+    {
         return path.to_string();
     }
     let base_url = url::Url::parse(base).unwrap();
