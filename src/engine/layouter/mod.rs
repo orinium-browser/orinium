@@ -464,6 +464,7 @@ pub enum DrawCommand {
 
 /// LayoutNode + InfoNode → DrawCommand
 /// `parent_x` / `parent_y` are offset from the parent node
+/// TODO: Support TextDecoration.
 pub fn generate_draw_commands(
     layout: &LayoutNode,
     info: &InfoNode,
