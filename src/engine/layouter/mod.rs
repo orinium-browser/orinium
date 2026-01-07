@@ -173,7 +173,7 @@ pub fn build_layout_and_info(
     ----------------------------- */
     if let HtmlNodeType::Text(t) = &html_node {
         kind = NodeKind::Text;
-        text = Some(t.clone());
+        text = Some(normalize_whitespace(t));
 
         let req = text::TextMeasureRequest {
             text: t.clone(),
@@ -243,6 +243,25 @@ pub fn build_layout_and_info(
     };
 
     (layout, info)
+}
+
+fn normalize_whitespace(text: &str) -> String {
+    let mut result = String::new();
+    let mut prev_was_space = false;
+
+    for c in text.chars() {
+        if c.is_whitespace() {
+            if !prev_was_space {
+                result.push(' ');
+                prev_was_space = true;
+            }
+        } else {
+            result.push(c);
+            prev_was_space = false;
+        }
+    }
+
+    result
 }
 
 fn apply_declaration(name: &str, value: &CssValue, style: &mut Style, text_style: &mut TextStyle) {
