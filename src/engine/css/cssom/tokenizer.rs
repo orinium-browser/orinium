@@ -70,6 +70,12 @@ impl<'a> Tokenizer<'a> {
 
     /// Consume input and return the next token, if any.
     pub fn next_token(&mut self) -> Option<Token> {
+        // Read `unread_token` without logging.
+        if let Some(token) = self.emitted_token.take() {
+            self.last_tokenized = Some(token.clone());
+            return Some(token);
+        }
+
         while self.pos < self.input.len() {
             let c = self.next_char();
 
@@ -112,8 +118,8 @@ impl<'a> Tokenizer<'a> {
         self.state = TokenizerState::Data;
     }
 
-    /// Re-consume the last emitted token so that the next call to `next_token` returns it again.
-    pub fn reconsume(&mut self) {
+    /// Make last_tokenized token unread.
+    pub fn unread_token(&mut self) {
         if let Some(ref token) = self.last_tokenized {
             self.emitted_token = Some(token.clone());
         }
