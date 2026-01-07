@@ -188,7 +188,7 @@ impl WebView {
 
         log::debug!(
             target: "WebView::LayoutInfo",
-            "Layouted the page:\n {:#?}",
+            "Layouted the page:\n {:?}",
             self.layout_and_info.as_ref().unwrap()
         );
 
