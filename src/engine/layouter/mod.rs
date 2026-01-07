@@ -246,7 +246,7 @@ fn apply_declaration(name: &str, value: &CssValue, style: &mut Style, text_style
             };
         }
         ("display", CssValue::Keyword(v)) if v == "inline" => {
-            // 事情あり：inline = row flex
+            // tmp：inline = row flex
             style.display = Display::Flex {
                 flex_direction: FlexDirection::Row,
             };
