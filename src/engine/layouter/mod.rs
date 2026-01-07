@@ -190,9 +190,6 @@ pub fn build_layout_and_info(
 
             style.size.width = Some(w);
             style.size.height = Some(h);
-
-            // text は inline 相当なので basis は高さ
-            style.item_style.flex_basis = Some(h);
         }
         _ => {}
     }
