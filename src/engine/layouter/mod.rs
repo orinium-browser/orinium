@@ -172,8 +172,9 @@ pub fn build_layout_and_info(
        HTML semantics
     ----------------------------- */
     if let HtmlNodeType::Text(t) = &html_node {
+        let t = normalize_whitespace(t);
         kind = NodeKind::Text;
-        text = Some(normalize_whitespace(t));
+        text = Some(t.clone());
 
         let req = text::TextMeasureRequest {
             text: t.clone(),
