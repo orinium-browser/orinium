@@ -234,6 +234,9 @@ pub fn build_layout_and_info(
 
 fn apply_declaration(name: &str, value: &CssValue, style: &mut Style, text_style: &mut TextStyle) {
     match (name, value) {
+        /* ======================
+         * Display
+         * ====================== */
         ("display", CssValue::Keyword(v)) if v == "block" => {
             style.display = Display::Block;
         }
@@ -243,30 +246,146 @@ fn apply_declaration(name: &str, value: &CssValue, style: &mut Style, text_style
             };
         }
         ("display", CssValue::Keyword(v)) if v == "inline" => {
+            // 事情あり：inline = row flex
             style.display = Display::Flex {
                 flex_direction: FlexDirection::Row,
             };
         }
+        ("display", CssValue::Keyword(v)) if v == "none" => {
+            style.display = Display::None;
+        }
+
+        /* ======================
+         * Color / Text
+         * ====================== */
         ("color", CssValue::Color(c)) => {
             if let Ok(c) = Color::try_from(c.to_rgba_tuple(None)) {
                 text_style.color = c;
             }
         }
+
         ("font-size", CssValue::Length(len)) => {
             text_style.font_size = len.to_px(16.0).unwrap_or(16.0);
+        }
+
+        ("font-weight", CssValue::Keyword(v)) if v == "normal" => {
+            text_style.font_weight = FontWeight::NORMAL;
         }
         ("font-weight", CssValue::Keyword(v)) if v == "bold" => {
             text_style.font_weight = FontWeight::BOLD;
         }
+
+        ("font-style", CssValue::Keyword(v)) if v == "normal" => {
+            text_style.font_style = FontStyle::Normal;
+        }
         ("font-style", CssValue::Keyword(v)) if v == "italic" => {
             text_style.font_style = FontStyle::Italic;
         }
+        ("font-style", CssValue::Keyword(v)) if v == "oblique" => {
+            text_style.font_style = FontStyle::Oblique;
+        }
+
+        ("text-decoration", CssValue::Keyword(v)) if v == "none" => {
+            text_style.text_decoration = TextDecoration::None;
+        }
+        ("text-decoration", CssValue::Keyword(v)) if v == "underline" => {
+            text_style.text_decoration = TextDecoration::Underline;
+        }
+
+        ("text-align", CssValue::Keyword(v)) if v == "left" => {
+            text_style.text_align = TextAlign::Left;
+        }
+        ("text-align", CssValue::Keyword(v)) if v == "center" => {
+            text_style.text_align = TextAlign::Center;
+        }
+        ("text-align", CssValue::Keyword(v)) if v == "right" => {
+            text_style.text_align = TextAlign::Right;
+        }
+
+        /* ======================
+         * Box Model
+         * ====================== */
+        ("margin", CssValue::Length(len)) => {
+            let px = len.to_px(16.0).unwrap_or(0.0);
+            style.spacing.margin_top = px;
+            style.spacing.margin_right = px;
+            style.spacing.margin_bottom = px;
+            style.spacing.margin_left = px;
+        }
+        ("padding", CssValue::Length(len)) => {
+            let px = len.to_px(16.0).unwrap_or(0.0);
+            style.spacing.padding_top = px;
+            style.spacing.padding_right = px;
+            style.spacing.padding_bottom = px;
+            style.spacing.padding_left = px;
+        }
+
+        ("margin-top", CssValue::Length(len)) => {
+            style.spacing.margin_top = len.to_px(16.0).unwrap_or(0.0);
+        }
+        ("margin-right", CssValue::Length(len)) => {
+            style.spacing.margin_right = len.to_px(16.0).unwrap_or(0.0);
+        }
+        ("margin-bottom", CssValue::Length(len)) => {
+            style.spacing.margin_bottom = len.to_px(16.0).unwrap_or(0.0);
+        }
+        ("margin-left", CssValue::Length(len)) => {
+            style.spacing.margin_left = len.to_px(16.0).unwrap_or(0.0);
+        }
+
+        /* ======================
+         * Size
+         * ====================== */
+        ("width", CssValue::Length(len)) => {
+            style.size.width = Some(len.to_px(16.0).unwrap_or(0.0));
+        }
+        ("height", CssValue::Length(len)) => {
+            style.size.height = Some(len.to_px(16.0).unwrap_or(0.0));
+        }
+
+        /* ======================
+         * Flex
+         * ====================== */
+        ("flex-direction", CssValue::Keyword(v)) if v == "row" => {
+            if let Display::Flex {
+                ref mut flex_direction,
+            } = style.display
+            {
+                *flex_direction = FlexDirection::Row;
+            }
+        }
+        ("flex-direction", CssValue::Keyword(v)) if v == "column" => {
+            if let Display::Flex {
+                ref mut flex_direction,
+            } = style.display
+            {
+                *flex_direction = FlexDirection::Column;
+            }
+        }
+
         _ => {}
     }
 }
 
 fn is_non_rendered_element(tag: &str) -> bool {
     matches!(tag, "head" | "meta" | "title" | "link" | "style" | "script")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextDecoration {
+    #[default]
+    None,
+    Underline,
+    LineThrough,
+    Overline,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -296,6 +415,8 @@ impl Default for FontWeight {
 #[derive(Copy, Debug, Clone, Default)]
 pub struct TextStyle {
     pub font_size: f32,
+    pub text_align: TextAlign,
+    pub text_decoration: TextDecoration,
     pub font_style: FontStyle,
     pub font_weight: FontWeight,
     pub color: Color,
