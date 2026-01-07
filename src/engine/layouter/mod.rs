@@ -242,6 +242,11 @@ fn apply_declaration(name: &str, value: &CssValue, style: &mut Style, text_style
                 flex_direction: FlexDirection::Row,
             };
         }
+        ("display", CssValue::Keyword(v)) if v == "inline" => {
+            style.display = Display::Flex {
+                flex_direction: FlexDirection::Row,
+            };
+        }
         ("color", CssValue::Color(c)) => {
             if let Ok(c) = Color::try_from(c.to_rgba_tuple(None)) {
                 text_style.color = c;
