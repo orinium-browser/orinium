@@ -100,7 +100,7 @@ impl TryFrom<(u8, u8, u8, f32)> for Color {
 pub fn build_layout_and_info(
     dom: &Rc<RefCell<TreeNode<HtmlNodeType>>>,
     resolved_styles: &ResolvedStyles,
-    measurer: &dyn text::TextMeasurer,
+    measurer: &dyn text::TextMeasurer<TextStyle>,
     parent_text_style: TextStyle,
     mut chain: ElementChain,
 ) -> (LayoutNode, InfoNode) {
@@ -176,17 +176,11 @@ pub fn build_layout_and_info(
             kind = NodeKind::Text;
             text = Some(t.clone());
 
-            let req = text::TextMeasurementRequest {
+            let req = text::TextMeasureRequest {
                 text: t.clone(),
-                font: text::FontDescription {
-                    family: None,
-                    size_px: text_style.font_size,
-                },
-                constraints: text::LayoutConstraints {
-                    max_width: None,
-                    wrap: true,
-                    max_lines: None,
-                },
+                style: text_style,
+                max_width: None,
+                wrap: false,
             };
 
             let (w, h) = measurer
