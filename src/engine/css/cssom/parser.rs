@@ -182,7 +182,7 @@ impl<'a> Parser<'a> {
                 Some(Token::Ident(name)) => {
                     self.expect_colon()?;
                     let value = self.collect_value()?;
-                    let parsed_value = self.parse_value(&value)?;
+                    let parsed_value = Self::parse_value(&value)?;
 
                     log::info!(
                         target: "CssParser::Declaration",
@@ -324,7 +324,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a CSS value string into a structured value.
-    fn parse_value(&self, css: &str) -> Result<CssValue> {
+    fn parse_value(css: &str) -> Result<CssValue> {
         if let Some(length) = Length::from_css(css) {
             Ok(CssValue::Length(length))
         } else if let Some(color) = Color::from_hex(css) {
