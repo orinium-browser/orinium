@@ -107,25 +107,6 @@ pub fn build_layout_and_info(
     let html_node = dom.borrow().value.clone();
 
     /* -----------------------------
-       Skip non-rendered elements
-    ----------------------------- */
-    if let HtmlNodeType::Element { tag_name, .. } = &html_node
-        && is_non_rendered_element(tag_name)
-    {
-        return (
-            LayoutNode::new(Style {
-                display: Display::None,
-                ..Default::default()
-            }),
-            InfoNode {
-                kind: NodeKind::Container,
-                text_section: None,
-                children: Vec::new(),
-            },
-        );
-    }
-
-    /* -----------------------------
        Initial values (inheritance)
     ----------------------------- */
     let mut kind = NodeKind::Container;
@@ -226,16 +207,18 @@ pub fn build_layout_and_info(
     let mut layout_children = Vec::new();
     let mut info_children = Vec::new();
 
-    for child_dom in dom.borrow().children() {
-        let (child_layout, child_info) = build_layout_and_info(
-            child_dom,
-            resolved_styles,
-            measurer,
-            text_style,
-            chain.clone(),
-        );
-        layout_children.push(child_layout);
-        info_children.push(child_info);
+    if !matches!(style.display, Display::None) {
+        for child_dom in dom.borrow().children() {
+            let (child_layout, child_info) = build_layout_and_info(
+                child_dom,
+                resolved_styles,
+                measurer,
+                text_style,
+                chain.clone(),
+            );
+            layout_children.push(child_layout);
+            info_children.push(child_info);
+        }
     }
 
     let layout = LayoutNode::with_children(style, layout_children);
@@ -403,10 +386,6 @@ fn keyword_color_to_color(keyword: &str) -> Option<Color> {
         "gray" | "grey" => Some(Color(128, 128, 128, 255)),
         _ => None,
     }
-}
-
-fn is_non_rendered_element(tag: &str) -> bool {
-    matches!(tag, "head" | "meta" | "title" | "link" | "style" | "script")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

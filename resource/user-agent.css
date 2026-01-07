@@ -236,3 +236,19 @@ button {
 input[type="hidden"] {
     display: none;
 }
+
+/* hidden elements */
+head,
+meta,
+title,
+link,
+style,
+script,
+template {
+    display: none;
+}
+
+/* HTML hidden */
+[hidden] {
+    display: none;
+}
