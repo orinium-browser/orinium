@@ -5,7 +5,7 @@ use css_resolver::ResolvedStyles;
 use crate::engine::bridge::text;
 use crate::engine::css::cssom::CssValue;
 use crate::engine::tree::TreeNode;
-use crate::html::{HtmlNodeType, util as html_util};
+use crate::html::HtmlNodeType;
 use std::cell::RefCell;
 use std::rc::Rc;
 use ui_layout::{Display, FlexDirection, ItemStyle, LayoutNode, Style};
@@ -208,17 +208,6 @@ pub fn build_layout_and_info(
             style.size.height = Some(h);
             style.item_style.flex_basis = Some(h);
         }
-
-        HtmlNodeType::Element { tag_name, .. } => {
-            if html_util::is_inline_element(tag_name) {
-                style.display = Display::Flex {
-                    flex_direction: FlexDirection::Row,
-                };
-            } else if html_util::is_block_level_element(tag_name) {
-                style.display = Display::Block;
-            }
-        }
-
         _ => {}
     }
 
