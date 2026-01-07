@@ -84,6 +84,7 @@ impl WebView {
                 font_size: 16.0,
                 ..Default::default()
             },
+            Vec::new(),
         ));
 
         self.needs_redraw = true;
@@ -182,6 +183,7 @@ impl WebView {
                 font_size: 16.0,
                 ..Default::default()
             },
+            Vec::new(),
         ));
 
         self.needs_redraw = true;

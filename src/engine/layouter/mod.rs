@@ -1,5 +1,6 @@
 pub mod css_resolver;
 
+use crate::engine::css::cssom::matcher::{ElementChain, ElementInfo};
 use css_resolver::ResolvedStyles;
 
 use crate::engine::bridge::text;
@@ -101,6 +102,7 @@ pub fn build_layout_and_info(
     resolved_styles: &ResolvedStyles,
     measurer: &dyn text::TextMeasurer,
     parent_text_style: TextStyle,
+    mut chain: ElementChain,
 ) -> (LayoutNode, InfoNode) {
     let html_node = dom.borrow().value.clone();
 
@@ -151,6 +153,11 @@ pub fn build_layout_and_info(
         ..
     } = &html_node
     {
+        let id = attributes
+            .iter()
+            .find(|a| a.name == "id")
+            .map(|a| a.value.clone());
+
         let class_list: Vec<String> = attributes
             .iter()
             .find(|attr| attr.name == "class")
@@ -162,8 +169,17 @@ pub fn build_layout_and_info(
             })
             .unwrap_or_default();
 
+        chain.insert(
+            0,
+            ElementInfo {
+                tag_name: tag_name.clone(),
+                id,
+                classes: class_list.clone(),
+            },
+        );
+
         for (selector, declarations) in resolved_styles {
-            if selector.matches(tag_name, &class_list) {
+            if selector.matches(&chain) {
                 for (name, value) in declarations {
                     apply_declaration(name, value, &mut style, &mut text_style);
                 }
@@ -211,8 +227,13 @@ pub fn build_layout_and_info(
     let mut info_children = Vec::new();
 
     for child_dom in dom.borrow().children() {
-        let (child_layout, child_info) =
-            build_layout_and_info(child_dom, resolved_styles, measurer, text_style);
+        let (child_layout, child_info) = build_layout_and_info(
+            child_dom,
+            resolved_styles,
+            measurer,
+            text_style,
+            chain.clone(),
+        );
         layout_children.push(child_layout);
         info_children.push(child_info);
     }
