@@ -9,7 +9,7 @@ use std::rc::Rc;
 #[derive(Debug, Clone)]
 pub enum CssNodeType {
     Stylesheet,
-    Rule { selectors: Vec<Selector> },
+    Rule { selectors: Vec<ComplexSelector> },
     AtRule { name: String, params: Vec<String> },
     Declaration { name: String, value: CssValue },
 }
@@ -22,23 +22,21 @@ pub struct Selector {
     pub pseudo_element: Option<String>,
 }
 
-impl Selector {
-    /// Simple selector matcher (tag / class only for now)
-    pub fn matches(&self, tag_name: &str, class_list: &[String]) -> bool {
-        if let Some(tag) = &self.tag
-            && tag != tag_name
-        {
-            return false;
-        }
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Combinator {
+    Descendant,
+}
 
-        for class in &self.classes {
-            if !class_list.iter().any(|c| c == class) {
-                return false;
-            }
-        }
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SelectorPart {
+    pub selector: Selector,
+    pub combinator: Option<Combinator>, // 左側との関係
+}
 
-        true
-    }
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ComplexSelector {
+    /// Sort: Right → Left
+    pub parts: Vec<SelectorPart>,
 }
 
 /// Parsed CSS property values.
@@ -115,7 +113,7 @@ impl<'a> Parser<'a> {
 
         let selectors = selector
             .split(',')
-            .map(|s| Self::parse_selector(s.trim()))
+            .map(|s| Self::parse_complex_selector(s.trim()))
             .collect::<Vec<_>>();
 
         log::info!(
@@ -132,6 +130,36 @@ impl<'a> Parser<'a> {
         self.stack.pop();
 
         Ok(())
+    }
+
+    fn parse_complex_selector(input: &str) -> ComplexSelector {
+        log::info!(
+            target: "CssParser::ComplexSelector",
+            "Parsing complex selector: {}",
+            input
+        );
+
+        let mut parts = Vec::new();
+
+        // descendant combinator）
+        let simples: Vec<&str> = input.split_whitespace().collect();
+
+        for (i, simple) in simples.iter().rev().enumerate() {
+            let selector = Self::parse_selector(simple);
+
+            let combinator = if i + 1 < simples.len() {
+                Some(Combinator::Descendant)
+            } else {
+                None
+            };
+
+            parts.push(SelectorPart {
+                selector,
+                combinator,
+            });
+        }
+
+        ComplexSelector { parts }
     }
 
     /// Parse a declaration block.
