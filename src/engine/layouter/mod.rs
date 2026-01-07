@@ -237,7 +237,11 @@ pub fn build_layout_and_info(
 
     let layout = LayoutNode::with_children(style, layout_children);
     let text_section = if let Some(t) = text {
-        let text_style = TextStyle::default();
+        let text_style = TextStyle {
+            font_size,
+            color,
+            ..Default::default()
+        };
         Some((t, text_style))
     } else {
         None
