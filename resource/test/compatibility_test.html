@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="ja">
+    <head>
+        <meta charset="UTF-8" />
+        <title>HTML Living Standard Compatibility Test</title>
+        <style>
+            body {
+                font-family: sans-serif;
+                line-height: 1.6;
+                padding: 20px;
+            }
+            section {
+                margin-bottom: 40px;
+            }
+            h2 {
+                border-bottom: 2px solid #333;
+                padding-bottom: 5px;
+            }
+            table,
+            th,
+            td {
+                border: 1px solid #333;
+                border-collapse: collapse;
+                padding: 5px;
+            }
+            img {
+                max-width: 100px;
+            }
+            video,
+            audio {
+                max-width: 300px;
+                display: block;
+                margin: 5px 0;
+            }
+            canvas {
+                border: 1px solid #000;
+                margin: 5px 0;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>HTML Living Standard Test Page</h1>
+
+        <section>
+            <h2>Text Content</h2>
+            <p>
+                This is a <b>bold</b> and <strong>strong</strong> text,
+                <i>italic</i> and <em>emphasized</em>.
+            </p>
+            <p>
+                <mark>Marked text</mark>, <small>small text</small>,
+                <del>deleted text</del>, <ins>inserted text</ins>.
+            </p>
+            <p>
+                <sub>Subscript</sub> and <sup>Superscript</sup>,
+                <code>inline code</code>, <samp>sample output</samp>,
+                <var>variable</var>.
+            </p>
+            <p>
+                <abbr title="HyperText Markup Language">HTML</abbr>,
+                <time datetime="2026-01-07T12:00">January 7, 2026</time>.
+            </p>
+        </section>
+
+        <section>
+            <h2>Sections</h2>
+            <header>
+                <h1>Main Header</h1>
+                <nav>
+                    <ul>
+                        <li><a href="#text">Text</a></li>
+                        <li><a href="#forms">Forms</a></li>
+                    </ul>
+                </nav>
+            </header>
+            <main>
+                <article>
+                    <h2>Article Example</h2>
+                    <p>This is an article.</p>
+                    <aside>Sidebar content with <a href="#">links</a>.</aside>
+                </article>
+                <section>
+                    <h3>Nested Section</h3>
+                    <p>Content inside a nested section.</p>
+                </section>
+            </main>
+            <footer>
+                <p>Footer content &copy; 2026</p>
+            </footer>
+        </section>
+
+        <section>
+            <h2>Lists</h2>
+            <ul>
+                <li>Unordered item 1</li>
+                <li>
+                    Unordered item 2
+                    <ul>
+                        <li>Nested unordered</li>
+                    </ul>
+                </li>
+            </ul>
+            <ol>
+                <li>Ordered item 1</li>
+                <li>
+                    Ordered item 2
+                    <ol type="a">
+                        <li>Nested ordered a</li>
+                    </ol>
+                </li>
+            </ol>
+            <dl>
+                <dt>Term 1</dt>
+                <dd>Definition 1</dd>
+                <dt>Term 2</dt>
+                <dd>Definition 2</dd>
+            </dl>
+        </section>
+
+        <section>
+            <h2>Tables</h2>
+            <table>
+                <caption>
+                    Example Table
+                </caption>
+                <thead>
+                    <tr>
+                        <th>Header 1</th>
+                        <th>Header 2</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Row 1 Col 1</td>
+                        <td>Row 1 Col 2</td>
+                    </tr>
+                    <tr>
+                        <td>Row 2 Col 1</td>
+                        <td>Row 2 Col 2</td>
+                    </tr>
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td>Footer 1</td>
+                        <td>Footer 2</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </section>
+
+        <section>
+            <h2>Media</h2>
+            <img
+                src="https://via.placeholder.com/100"
+                alt="placeholder image"
+            />
+            <video controls>
+                <source
+                    src="https://www.w3schools.com/html/mov_bbb.mp4"
+                    type="video/mp4"
+                />
+                Your browser does not support the video tag.
+            </video>
+            <audio controls>
+                <source
+                    src="https://www.w3schools.com/html/horse.ogg"
+                    type="audio/ogg"
+                />
+                Your browser does not support the audio element.
+            </audio>
+            <canvas id="canvas" width="150" height="100"></canvas>
+            <script>
+                const c = document.getElementById("canvas");
+                const ctx = c.getContext("2d");
+                ctx.fillStyle = "orange";
+                ctx.fillRect(10, 10, 130, 80);
+            </script>
+        </section>
+
+        <section>
+            <h2>Forms</h2>
+            <form action="#" method="get">
+                <label for="text">Text:</label>
+                <input type="text" id="text" name="text" /><br /><br />
+
+                <label for="password">Password:</label>
+                <input
+                    type="password"
+                    id="password"
+                    name="password"
+                /><br /><br />
+
+                <label for="email">Email:</label>
+                <input type="email" id="email" name="email" /><br /><br />
+
+                <label for="number">Number:</label>
+                <input
+                    type="number"
+                    id="number"
+                    name="number"
+                    min="0"
+                    max="10"
+                /><br /><br />
+
+                <label for="range">Range:</label>
+                <input
+                    type="range"
+                    id="range"
+                    name="range"
+                    min="0"
+                    max="100"
+                /><br /><br />
+
+                <label for="color">Color:</label>
+                <input type="color" id="color" name="color" /><br /><br />
+
+                <label>Radio:</label>
+                <input type="radio" name="radio" value="1" /> 1
+                <input type="radio" name="radio" value="2" /> 2<br /><br />
+
+                <label>Checkbox:</label>
+                <input type="checkbox" name="check" value="A" /> A
+                <input type="checkbox" name="check" value="B" /> B<br /><br />
+
+                <label for="select">Select:</label>
+                <select id="select" name="select">
+                    <option value="x">X</option>
+                    <option value="y">Y</option></select
+                ><br /><br />
+
+                <label for="textarea">Textarea:</label><br />
+                <textarea
+                    id="textarea"
+                    name="textarea"
+                    rows="3"
+                    cols="30"
+                ></textarea
+                ><br /><br />
+
+                <button type="submit">Submit</button>
+                <button type="button">Button</button>
+            </form>
+        </section>
+
+        <section>
+            <h2>Interactive and Metadata</h2>
+            <details>
+                <summary>Click to expand</summary>
+                <p>Hidden details content</p>
+            </details>
+            <dialog open>
+                <p>Dialog box content</p>
+                <button onclick="this.parentElement.close()">Close</button>
+            </dialog>
+            <meter value="0.6" min="0" max="1">60%</meter>
+            <progress value="70" max="100">70%</progress>
+            <abbr title="Cascading Style Sheets">CSS</abbr>
+        </section>
+
+        <section>
+            <h2>Embedded content</h2>
+            <iframe
+                src="https://www.example.com"
+                width="300"
+                height="100"
+                title="example iframe"
+            ></iframe>
+            <object
+                data="https://www.example.com"
+                type="text/html"
+                width="300"
+                height="100"
+            ></object>
+            <embed src="https://www.example.com" width="300" height="100" />
+        </section>
+
+        <section>
+            <h2>Other HTML5 Elements</h2>
+            <svg width="100" height="100">
+                <circle
+                    cx="50"
+                    cy="50"
+                    r="40"
+                    stroke="green"
+                    stroke-width="4"
+                    fill="yellow"
+                />
+            </svg>
+            <canvas id="canvas2" width="100" height="50"></canvas>
+            <script>
+                const c2 = document.getElementById("canvas2");
+                const ctx2 = c2.getContext("2d");
+                ctx2.fillStyle = "blue";
+                ctx2.fillRect(10, 10, 80, 30);
+            </script>
+            <template id="tmpl">
+                <p>Template content</p>
+            </template>
+            <slot name="slot1">Fallback slot content</slot>
+            <picture>
+                <source
+                    srcset="https://via.placeholder.com/100"
+                    media="(min-width: 600px)"
+                />
+                <img src="https://via.placeholder.com/50" alt="placeholder" />
+            </picture>
+        </section>
+    </body>
+</html>
