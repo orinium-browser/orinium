@@ -1,9 +1,9 @@
-use crate::engine::css::cssom::{CssNodeType, CssValue, Selector};
+use crate::engine::css::cssom::{ComplexSelector, CssNodeType, CssValue};
 use crate::engine::tree::{Tree, TreeNode};
 use std::rc::Rc;
 
-/// selector -> declarations
-pub type ResolvedStyles = Vec<(Selector, Vec<(String, CssValue)>)>;
+/// complex selector -> declarations
+pub type ResolvedStyles = Vec<(ComplexSelector, Vec<(String, CssValue)>)>;
 
 pub struct CssResolver;
 
