@@ -210,10 +210,11 @@ pub fn build_layout_and_info(
         for child_dom in dom.borrow().children() {
             if matches!(child_dom.borrow().value, HtmlNodeType::Text(_)) {
                 has_text_child = true;
+                break;
             }
         }
 
-        // block + text の混在 → flex(row) に切り替え
+        // 子に TextNode がある Block 要素は Flex(row) に変換
         if has_text_child && matches!(style.display, Display::Block) {
             style.display = Display::Flex {
                 flex_direction: FlexDirection::Row,
