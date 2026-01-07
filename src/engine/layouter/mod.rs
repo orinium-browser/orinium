@@ -540,17 +540,6 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
                 });
             }
         }
-        NodeKind::Scrollable => {
-            commands.push(DrawCommand::PushTransform {
-                dx: abs_x,
-                dy: abs_y,
-            });
-            for (child_layout, child_info) in layout.children.iter().zip(&info.children) {
-                commands.extend(generate_draw_commands(child_layout, child_info));
-            }
-            commands.push(DrawCommand::PopTransform);
-            return commands;
-        }
         NodeKind::Container => {
             commands.push(DrawCommand::PushTransform {
                 dx: abs_x,
@@ -562,6 +551,9 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
                 width: rect.width,
                 height: rect.height,
             });
+        }
+        _ => {
+            panic!("This should not be happen.")
         }
     }
 
