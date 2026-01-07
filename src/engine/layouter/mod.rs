@@ -14,8 +14,7 @@ use ui_layout::{Display, FlexDirection, ItemStyle, LayoutNode, Style};
 pub struct InfoNode {
     pub kind: NodeKind,
     pub color: Color,
-    pub font_size: f32,
-    pub text: Option<String>,
+    pub text_section: Option<(String, TextStyle)>,
     pub children: Vec<InfoNode>,
 }
 
@@ -38,6 +37,12 @@ impl Color {
             self.2 as f32 / 255.0,
             self.3 as f32 / 255.0,
         ]
+    }
+}
+
+impl Default for Color {
+    fn default() -> Self {
+        Self(0, 0, 0, 255)
     }
 }
 
@@ -118,8 +123,7 @@ pub fn build_layout_and_info(
             InfoNode {
                 kind: NodeKind::Container,
                 color: parent_color,
-                font_size: parent_font_size,
-                text: None,
+                text_section: None,
                 children: Vec::new(),
             },
         );
@@ -232,11 +236,16 @@ pub fn build_layout_and_info(
     }
 
     let layout = LayoutNode::with_children(style, layout_children);
+    let text_section = if let Some(t) = text {
+        let text_style = TextStyle::default();
+        Some((t, text_style))
+    } else {
+        None
+    };
     let info = InfoNode {
         kind,
         color,
-        font_size,
-        text,
+        text_section,
         children: info_children,
     };
 
@@ -275,14 +284,45 @@ fn is_non_rendered_element(tag: &str) -> bool {
     matches!(tag, "head" | "meta" | "title" | "link" | "style" | "script")
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FontStyle {
+    #[default]
+    Normal,
+    Italic,
+    Oblique,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct FontWeight(pub u16);
+
+impl FontWeight {
+    pub const THIN: Self = Self(100);
+    pub const NORMAL: Self = Self(400);
+    pub const BOLD: Self = Self(700);
+    pub const BLACK: Self = Self(900);
+}
+
+impl Default for FontWeight {
+    fn default() -> Self {
+        Self::NORMAL
+    }
+}
+
+#[derive(Copy, Debug, Clone, Default)]
+pub struct TextStyle {
+    pub font_size: f32,
+    pub font_style: FontStyle,
+    pub font_weight: FontWeight,
+    pub color: Color,
+}
+
 #[derive(Debug, Clone)]
 pub enum DrawCommand {
     DrawText {
         x: f32,
         y: f32,
         text: String,
-        font_size: f32,
-        color: Color,
+        style: TextStyle,
         max_width: f32,
     },
     DrawRect {
@@ -333,13 +373,12 @@ pub fn generate_draw_commands(
 
     match info.kind {
         NodeKind::Text => {
-            if let Some(text) = &info.text {
+            if let Some((text, style)) = &info.text_section {
                 commands.push(DrawCommand::DrawText {
                     x: abs_x,
                     y: abs_y,
                     text: text.clone(),
-                    font_size: info.font_size,
-                    color: info.color,
+                    style: *style,
                     max_width: rect.width,
                 });
             }

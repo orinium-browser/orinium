@@ -406,8 +406,7 @@ impl GpuRenderer {
                     x,
                     y,
                     text,
-                    font_size,
-                    color,
+                    style,
                     max_width,
                 } => {
                     let (tdx, tdy) = current_transform(&transform_stack);
@@ -421,6 +420,9 @@ impl GpuRenderer {
                     };
 
                     let th = clip.h;
+
+                    let font_size = &style.font_size;
+                    let color = &style.color;
 
                     // Text culling: if enabled and the text's bounding box is fully outside current clip, skip creating buffer
                     let mut skip_text = false;
