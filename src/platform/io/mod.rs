@@ -41,9 +41,13 @@ pub async fn load_resource(rel_path: &str) -> Result<Vec<u8>, anyhow::Error> {
 
     for cand in candidates.into_iter() {
         if cand.exists() && cand.is_file() {
-            let mut f = fs::File::open(&cand).await.context(format!("Failed to open {:?}", cand))?;
+            let mut f = fs::File::open(&cand)
+                .await
+                .context(format!("Failed to open {:?}", cand))?;
             let mut buf = Vec::new();
-            f.read_to_end(&mut buf).await.context("Failed to read file")?;
+            f.read_to_end(&mut buf)
+                .await
+                .context("Failed to read file")?;
             return Ok(buf);
         }
     }
