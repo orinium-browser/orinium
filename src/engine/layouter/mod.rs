@@ -538,6 +538,8 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
                     style: *style,
                     max_width: rect.width,
                 });
+            } else {
+                panic!("No text infomation found from `NodeKind::Text`. This should not be happen.")
             }
         }
         NodeKind::Container => {
