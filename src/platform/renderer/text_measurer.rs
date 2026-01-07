@@ -6,7 +6,7 @@ use crate::engine::layouter::TextStyle;
 use std::env;
 use std::sync::{Arc, Mutex};
 
-use glyphon::{Attrs, Buffer, Color as GlyphColor, FontSystem, Metrics, Shaping};
+use glyphon::{Attrs, Buffer, Color as GlyphColor, FontSystem, Metrics, Shaping, Style, Weight};
 
 /// Platform-backed text measurer using glyphon / cosmic-text.
 ///
@@ -90,7 +90,9 @@ impl TextMeasurer<TextStyle> for PlatformTextMeasurer {
         // Attributes used only for shaping / layout
         let attrs = Attrs::new()
             .metrics(metrics)
-            .color(GlyphColor::rgba(0, 0, 0, 255));
+            .color(GlyphColor::rgba(0, 0, 0, 255))
+            .weight(Weight(req.style.font_weight.0))
+            .style(Style::from(req.style.font_style));
 
         buffer.set_text(&mut fs, &req.text, &attrs, Shaping::Advanced, None);
 
