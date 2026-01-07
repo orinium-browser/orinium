@@ -1,10 +1,10 @@
 use std::{env, sync::Arc};
 
-use crate::engine::layouter::{FontStyle, TextStyle};
+use crate::engine::layouter::{FontStyle, TextAlign, TextStyle};
 use glyphon::{
     Attrs, Buffer, Cache, Color as GlyphColor, FontSystem, Metrics, PrepareError, Resolution,
     Shaping, Style, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer as TextBrush,
-    Viewport, Weight, fontdb,
+    Viewport, Weight, cosmic_text::Align, fontdb,
 };
 
 use crate::platform::font;
@@ -104,6 +104,7 @@ impl TextRenderer {
         let font_size = text_style.font_size;
         let color = text_style.color;
         let color = GlyphColor::rgba(color.0, color.1, color.2, color.3);
+        let align = text_style.text_align;
         let weight = text_style.font_weight;
         let style = text_style.font_style;
         // reasonable default line height (1.2x)
@@ -119,7 +120,13 @@ impl TextRenderer {
             .style(Style::from(style));
 
         // shape and layout
-        buffer.set_text(&mut self.font_sys, text, &attrs, Shaping::Advanced, None);
+        buffer.set_text(
+            &mut self.font_sys,
+            text,
+            &attrs,
+            Shaping::Advanced,
+            Some(Align::from(align)),
+        );
 
         buffer
     }
@@ -194,6 +201,16 @@ impl From<FontStyle> for Style {
             FontStyle::Normal => Style::Normal,
             FontStyle::Italic => Style::Italic,
             FontStyle::Oblique => Style::Oblique,
+        }
+    }
+}
+
+impl From<TextAlign> for Align {
+    fn from(value: TextAlign) -> Self {
+        match value {
+            TextAlign::Center => Align::Center,
+            TextAlign::Left => Align::Left,
+            TextAlign::Right => Align::Right,
         }
     }
 }
