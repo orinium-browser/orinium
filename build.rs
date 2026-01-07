@@ -108,11 +108,11 @@ fn build_log(args: std::fmt::Arguments) {
 
     let log_path = Path::new(&target_dir).join(&profile).join("build.log");
 
-    if let Some(parent) = log_path.parent() {
-        if let Err(e) = fs::create_dir_all(parent) {
-            println!("[BUILD] failed creating log dir: {}", e);
-            return;
-        }
+    if let Some(parent) = log_path.parent()
+        && let Err(e) = fs::create_dir_all(parent)
+    {
+        println!("[BUILD] failed creating log dir: {}", e);
+        return;
     }
 
     let now = SystemTime::now();
@@ -144,9 +144,9 @@ fn clear_build_log() {
         p.to_string_lossy().into_owned()
     });
     let log_path = Path::new(&target_dir).join(&profile).join("build.log");
-    if log_path.exists() {
-        if let Err(e) = fs::remove_file(&log_path) {
-            println!("[BUILD] failed removing old build log: {}", e);
-        }
+    if log_path.exists()
+        && let Err(e) = fs::remove_file(&log_path)
+    {
+        println!("[BUILD] failed removing old build log: {}", e);
     }
 }

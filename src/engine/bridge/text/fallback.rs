@@ -34,14 +34,13 @@ impl TextMeasurer<TextStyle> for FallbackTextMeasurer {
 
             current_line_width += char_width;
 
-            if request.wrap {
-                if let Some(max_width) = request.max_width {
-                    if current_line_width > max_width {
-                        max_line_width = max_line_width.max(current_line_width - char_width);
-                        current_line_width = char_width;
-                        line_count += 1;
-                    }
-                }
+            if request.wrap
+                && let Some(max_width) = request.max_width
+                && current_line_width > max_width
+            {
+                max_line_width = max_line_width.max(current_line_width - char_width);
+                current_line_width = char_width;
+                line_count += 1;
             }
         }
 

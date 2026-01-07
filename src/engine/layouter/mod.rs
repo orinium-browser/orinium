@@ -171,27 +171,24 @@ pub fn build_layout_and_info(
     /* -----------------------------
        HTML semantics
     ----------------------------- */
-    match &html_node {
-        HtmlNodeType::Text(t) => {
-            kind = NodeKind::Text;
-            text = Some(t.clone());
+    if let HtmlNodeType::Text(t) = &html_node {
+        kind = NodeKind::Text;
+        text = Some(t.clone());
 
-            let req = text::TextMeasureRequest {
-                text: t.clone(),
-                style: text_style,
-                max_width: None,
-                wrap: false,
-            };
+        let req = text::TextMeasureRequest {
+            text: t.clone(),
+            style: text_style,
+            max_width: None,
+            wrap: false,
+        };
 
-            let (w, h) = measurer
-                .measure(&req)
-                .map(|m| (m.width, m.height))
-                .unwrap_or((800.0, text_style.font_size * 1.2));
+        let (w, h) = measurer
+            .measure(&req)
+            .map(|m| (m.width, m.height))
+            .unwrap_or((800.0, text_style.font_size * 1.2));
 
-            style.size.width = Some(w);
-            style.size.height = Some(h);
-        }
-        _ => {}
+        style.size.width = Some(w);
+        style.size.height = Some(h);
     }
 
     /* -----------------------------
@@ -237,11 +234,7 @@ pub fn build_layout_and_info(
 
     let layout = LayoutNode::with_children(style, layout_children);
 
-    let text_section = if let Some(t) = text {
-        Some((t, text_style))
-    } else {
-        None
-    };
+    let text_section = text.map(|t| (t, text_style));
 
     let info = InfoNode {
         kind,

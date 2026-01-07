@@ -28,10 +28,10 @@ pub async fn load_resource(rel_path: &str) -> Result<Vec<u8>, anyhow::Error> {
     candidates.push(PathBuf::from("resource").join(rel_path));
 
     // executable directory/resource/<rel_path>
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("resource").join(rel_path));
-        }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        candidates.push(dir.join("resource").join(rel_path));
     }
 
     // current_dir()/resource/<rel_path>

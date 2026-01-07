@@ -521,10 +521,10 @@ impl<'a> Tokenizer<'a> {
                 _ => {}
             },
             '>' => {
-                if let Some(Token::Doctype { force_quirks, .. }) = &mut self.current_token {
-                    if self.state == TokenizerState::BogusDoctype {
-                        *force_quirks = true;
-                    }
+                if let Some(Token::Doctype { force_quirks, .. }) = &mut self.current_token
+                    && self.state == TokenizerState::BogusDoctype
+                {
+                    *force_quirks = true;
                 }
                 self.commit_token();
                 self.state = TokenizerState::Data;
@@ -555,10 +555,10 @@ impl<'a> Tokenizer<'a> {
                     }
                     TokenizerState::DoctypePublicIdWithSingleQuote
                     | TokenizerState::DoctypePublicIdWithDoubleQuote => {
-                        if let Some(Token::Doctype { public_id, .. }) = &mut self.current_token {
-                            if let Some(pid) = public_id {
-                                pid.push(c);
-                            }
+                        if let Some(Token::Doctype { public_id, .. }) = &mut self.current_token
+                            && let Some(pid) = public_id
+                        {
+                            pid.push(c);
                         }
                         if (self.state == TokenizerState::DoctypePublicIdWithSingleQuote
                             && c == '\'')
