@@ -250,7 +250,12 @@ fn apply_declaration(name: &str, value: &CssValue, style: &mut Style, text_style
         ("font-size", CssValue::Length(len)) => {
             text_style.font_size = len.to_px(16.0).unwrap_or(16.0);
         }
-        ("font-weight", CssValue::Keyword(v)) if v == "bold" => {}
+        ("font-weight", CssValue::Keyword(v)) if v == "bold" => {
+            text_style.font_weight = FontWeight::BOLD;
+        }
+        ("font-style", CssValue::Keyword(v)) if v == "italic" => {
+            text_style.font_style = FontStyle::Italic;
+        }
         _ => {}
     }
 }
