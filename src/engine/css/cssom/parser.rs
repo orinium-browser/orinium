@@ -129,6 +129,8 @@ impl<'a> Parser<'a> {
         self.parse_declarations()?;
         self.stack.pop();
 
+        log::info!(target: "CssParser::Rule", "Done parsing rule.");
+
         Ok(())
     }
 
@@ -175,7 +177,7 @@ impl<'a> Parser<'a> {
 
                 Some(Token::LeftBrace) => {
                     // Start of next rule
-                    self.tokenizer.reconsume();
+                    self.tokenizer.unread_token();
                     return Ok(());
                 }
 
@@ -303,7 +305,7 @@ impl<'a> Parser<'a> {
             match token {
                 Token::Semicolon => break,
                 Token::RightBrace => {
-                    self.tokenizer.reconsume();
+                    self.tokenizer.unread_token();
                     break;
                 }
                 Token::Whitespace => value.push(' '),
