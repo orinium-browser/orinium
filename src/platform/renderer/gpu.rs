@@ -412,8 +412,8 @@ impl GpuRenderer {
 
                     let clip = current_clip(&clip_stack);
 
-                    let tw = if (x + max_width) < (clip.x + clip.w) {
-                        (x + max_width) - clip.x
+                    let tw = if (tdx + x + max_width) < (clip.x + clip.w) {
+                        (tdx + x + max_width) - clip.x
                     } else {
                         clip.w
                     };
