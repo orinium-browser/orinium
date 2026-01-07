@@ -126,7 +126,7 @@ pub fn build_layout_and_info(
     let mut text: Option<String> = None;
 
     /* -----------------------------
-       Apply resolved CSS (Selector-based)
+       Apply resolved CSS
     ----------------------------- */
     if let HtmlNodeType::Element {
         tag_name,
@@ -155,7 +155,7 @@ pub fn build_layout_and_info(
             ElementInfo {
                 tag_name: tag_name.clone(),
                 id,
-                classes: class_list.clone(),
+                classes: class_list,
             },
         );
 
@@ -169,7 +169,7 @@ pub fn build_layout_and_info(
     }
 
     /* -----------------------------
-       HTML defaults / semantics
+       HTML semantics
     ----------------------------- */
     match &html_node {
         HtmlNodeType::Text(t) => {
@@ -196,6 +196,8 @@ pub fn build_layout_and_info(
 
             style.size.width = Some(w);
             style.size.height = Some(h);
+
+            // text は inline 相当なので basis は高さ
             style.item_style.flex_basis = Some(h);
         }
         _ => {}
@@ -204,10 +206,31 @@ pub fn build_layout_and_info(
     /* -----------------------------
        Children
     ----------------------------- */
+
+    // NOTE:
+    // Inline / LineBox は未実装。
+    // block 要素の直下に text ノードが存在する場合、
+    // 親を flex(row) として扱うことで inline flow を暫定的に再現する。
+    // 将来的には LineBox 実装に置き換える。
     let mut layout_children = Vec::new();
     let mut info_children = Vec::new();
 
     if !matches!(style.display, Display::None) {
+        let mut has_text_child = false;
+
+        for child_dom in dom.borrow().children() {
+            if matches!(child_dom.borrow().value, HtmlNodeType::Text(_)) {
+                has_text_child = true;
+            }
+        }
+
+        // block + text の混在 → flex(row) に切り替え
+        if has_text_child && matches!(style.display, Display::Block) {
+            style.display = Display::Flex {
+                flex_direction: FlexDirection::Row,
+            };
+        }
+
         for child_dom in dom.borrow().children() {
             let (child_layout, child_info) = build_layout_and_info(
                 child_dom,
@@ -222,11 +245,13 @@ pub fn build_layout_and_info(
     }
 
     let layout = LayoutNode::with_children(style, layout_children);
+
     let text_section = if let Some(t) = text {
         Some((t, text_style))
     } else {
         None
     };
+
     let info = InfoNode {
         kind,
         text_section,
@@ -480,20 +505,14 @@ pub enum DrawCommand {
 }
 
 /// LayoutNode + InfoNode → DrawCommand
-/// `parent_x` / `parent_y` are offset from the parent node
 /// TODO: Support TextDecoration.
-pub fn generate_draw_commands(
-    layout: &LayoutNode,
-    info: &InfoNode,
-    parent_x: f32,
-    parent_y: f32,
-) -> Vec<DrawCommand> {
+pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawCommand> {
     let mut commands = Vec::new();
 
     let rect = layout.rect;
 
-    let abs_x = parent_x + rect.x;
-    let abs_y = parent_y + rect.y;
+    let abs_x = rect.x;
+    let abs_y = rect.y;
 
     match info.kind {
         NodeKind::Text => {
@@ -513,13 +532,12 @@ pub fn generate_draw_commands(
                 dy: abs_y,
             });
             for (child_layout, child_info) in layout.children.iter().zip(&info.children) {
-                commands.extend(generate_draw_commands(child_layout, child_info, 0.0, 0.0));
+                commands.extend(generate_draw_commands(child_layout, child_info));
             }
             commands.push(DrawCommand::PopTransform);
             return commands;
         }
         NodeKind::Container => {
-            // TODO: Add clipping
             commands.push(DrawCommand::PushTransform {
                 dx: abs_x,
                 dy: abs_y,
@@ -534,7 +552,7 @@ pub fn generate_draw_commands(
     }
 
     for (child_layout, child_info) in layout.children.iter().zip(&info.children) {
-        commands.extend(generate_draw_commands(child_layout, child_info, 0.0, 0.0));
+        commands.extend(generate_draw_commands(child_layout, child_info));
     }
 
     if matches!(info.kind, NodeKind::Container) {
