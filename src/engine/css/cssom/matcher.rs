@@ -68,3 +68,167 @@ impl ComplexSelector {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::css::cssom::SelectorPart;
+
+    fn el(tag: &str, id: Option<&str>, classes: &[&str]) -> ElementInfo {
+        ElementInfo {
+            tag_name: tag.to_string(),
+            id: id.map(|s| s.to_string()),
+            classes: classes.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn match_single_selector() {
+        let selector = ComplexSelector {
+            parts: vec![SelectorPart {
+                selector: Selector {
+                    tag: Some("div".into()),
+                    classes: vec![],
+                    pseudo_class: None,
+                    pseudo_element: None,
+                },
+                combinator: None,
+            }],
+        };
+
+        let chain = vec![el("div", None, &[])];
+
+        assert!(selector.matches(&chain));
+    }
+
+    #[test]
+    fn match_descendant_selector_simple() {
+        // .main-nav ul
+        let selector = ComplexSelector {
+            parts: vec![
+                SelectorPart {
+                    selector: Selector {
+                        tag: Some("ul".into()),
+                        classes: vec![],
+                        pseudo_class: None,
+                        pseudo_element: None,
+                    },
+                    combinator: Some(Combinator::Descendant),
+                },
+                SelectorPart {
+                    selector: Selector {
+                        tag: None,
+                        classes: vec!["main-nav".into()],
+                        pseudo_class: None,
+                        pseudo_element: None,
+                    },
+                    combinator: None,
+                },
+            ],
+        };
+
+        let chain = vec![
+            el("ul", None, &[]),
+            el("nav", None, &["main-nav"]),
+            el("body", None, &[]),
+        ];
+
+        assert!(selector.matches(&chain));
+    }
+
+    #[test]
+    fn descendant_selector_fails_if_no_ancestor_match() {
+        let selector = ComplexSelector {
+            parts: vec![
+                SelectorPart {
+                    selector: Selector {
+                        tag: Some("ul".into()),
+                        classes: vec![],
+                        pseudo_class: None,
+                        pseudo_element: None,
+                    },
+                    combinator: Some(Combinator::Descendant),
+                },
+                SelectorPart {
+                    selector: Selector {
+                        tag: None,
+                        classes: vec!["main-nav".into()],
+                        pseudo_class: None,
+                        pseudo_element: None,
+                    },
+                    combinator: None,
+                },
+            ],
+        };
+
+        let chain = vec![el("ul", None, &[]), el("div", None, &["content"])];
+
+        assert!(!selector.matches(&chain));
+    }
+
+    #[test]
+    fn deep_descendant_match() {
+        // div .a span
+        let selector = ComplexSelector {
+            parts: vec![
+                SelectorPart {
+                    selector: Selector {
+                        tag: Some("span".into()),
+                        classes: vec![],
+                        pseudo_class: None,
+                        pseudo_element: None,
+                    },
+                    combinator: Some(Combinator::Descendant),
+                },
+                SelectorPart {
+                    selector: Selector {
+                        tag: None,
+                        classes: vec!["a".into()],
+                        pseudo_class: None,
+                        pseudo_element: None,
+                    },
+                    combinator: Some(Combinator::Descendant),
+                },
+                SelectorPart {
+                    selector: Selector {
+                        tag: Some("div".into()),
+                        classes: vec![],
+                        pseudo_class: None,
+                        pseudo_element: None,
+                    },
+                    combinator: None,
+                },
+            ],
+        };
+
+        let chain = vec![
+            el("span", None, &[]),
+            el("p", None, &[]),
+            el("section", None, &["a"]),
+            el("div", None, &[]),
+        ];
+
+        assert!(selector.matches(&chain));
+    }
+
+    #[test]
+    fn class_and_tag_both_required() {
+        let selector = ComplexSelector {
+            parts: vec![SelectorPart {
+                selector: Selector {
+                    tag: Some("div".into()),
+                    classes: vec!["container".into()],
+                    pseudo_class: None,
+                    pseudo_element: None,
+                },
+                combinator: None,
+            }],
+        };
+
+        let chain_ok = vec![el("div", None, &["container"])];
+        let chain_ng = vec![el("div", None, &[])];
+
+        assert!(selector.matches(&chain_ok));
+        assert!(!selector.matches(&chain_ng));
+    }
+}
