@@ -4,120 +4,235 @@
 
 /* --- Global defaults --- */
 * {
-  box-sizing: border-box;
+    box-sizing: border-box;
 }
 
 /* --- Root element --- */
 html {
-  display: block;
-  font-size: 16px;
+    display: block;
+    font-size: 16px;
 }
 
 /* --- Document body --- */
 body {
-  display: block;
-  margin: 8px;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont,
-               "Segoe UI", sans-serif;
-  line-height: 1.5;
+    display: block;
+    margin: 8px;
+    font-family:
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+    line-height: 1.5;
+}
+
+/* --- Sectioning content --- */
+article,
+aside,
+section,
+nav,
+header,
+footer,
+main {
+    display: block;
 }
 
 /* --- Headings --- */
-h1, h2, h3, h4, h5, h6 {
-  display: block;
-  font-weight: bold;
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+    display: block;
+    font-weight: bold;
 }
 
-h1 { font-size: 2em;    margin: 0.67em 0; }
-h2 { font-size: 1.5em;  margin: 0.83em 0; }
-h3 { font-size: 1.17em; margin: 1em 0; }
-h4 { font-size: 1em;    margin: 1.33em 0; }
-h5 { font-size: 0.83em; margin: 1.67em 0; }
-h6 { font-size: 0.67em; margin: 2.33em 0; }
+h1 {
+    font-size: 2em;
+    margin: 0.67em 0;
+}
+h2 {
+    font-size: 1.5em;
+    margin: 0.83em 0;
+}
+h3 {
+    font-size: 1.17em;
+    margin: 1em 0;
+}
+h4 {
+    font-size: 1em;
+    margin: 1.33em 0;
+}
+h5 {
+    font-size: 0.83em;
+    margin: 1.67em 0;
+}
+h6 {
+    font-size: 0.67em;
+    margin: 2.33em 0;
+}
 
 /* --- Paragraphs --- */
 p {
-  display: block;
-  margin: 1em 0;
+    display: block;
+    margin: 1em 0;
 }
 
 /* --- Lists --- */
-ul, ol {
-  display: block;
-  margin: 1em 0;
-  padding-left: 40px;
+ul,
+ol {
+    display: block;
+    margin: 1em 0;
+    padding-left: 40px;
 }
 
 li {
-  display: list-item;
+    display: list-item;
+}
+
+/* --- Definition lists --- */
+dl {
+    display: block;
+    margin: 1em 0;
+}
+
+dt {
+    display: block;
+    font-weight: bold;
+}
+
+dd {
+    display: block;
+    margin-left: 40px;
 }
 
 /* --- Links --- */
 a {
-  color: #0000ee;
-  text-decoration: underline;
-  cursor: pointer;
+    color: #0000ee;
+    text-decoration: underline;
+    cursor: pointer;
 }
 
 a:visited {
-  color: #551a8b;
+    color: #551a8b;
 }
 
-/* --- Inline text elements --- */
-strong, b {
-  font-weight: bold;
+/* --- Inline text semantics --- */
+strong,
+b {
+    font-weight: bold;
 }
 
-em, i {
-  font-style: italic;
+em,
+i {
+    font-style: italic;
+}
+
+small {
+    font-size: 0.8em;
+}
+
+mark {
+    background-color: yellow;
+    color: black;
+}
+
+del {
+    text-decoration: line-through;
+}
+
+ins {
+    text-decoration: underline;
+}
+
+sub {
+    vertical-align: sub;
+    font-size: 0.8em;
+}
+
+sup {
+    vertical-align: super;
+    font-size: 0.8em;
+}
+
+/* --- Quotations --- */
+blockquote {
+    display: block;
+    margin: 1em 40px;
+}
+
+q {
+    quotes: "“" "”" "‘" "’";
 }
 
 /* --- Preformatted text --- */
 pre {
-  display: block;
-  font-family: monospace;
-  white-space: pre;
-  margin: 1em 0;
+    display: block;
+    font-family: monospace;
+    white-space: pre;
+    margin: 1em 0;
 }
 
 code {
-  font-family: monospace;
+    font-family: monospace;
+}
+
+/* --- Inline helpers --- */
+span {
+    display: inline;
+}
+
+br {
+    display: inline;
 }
 
 /* --- Images --- */
 img {
-  display: inline-block;
+    display: inline-block;
 }
 
 /* --- Horizontal rule --- */
 hr {
-  display: block;
-  border: 1px inset;
-  margin: 0.5em auto;
+    display: block;
+    border: 1px inset;
+    margin: 0.5em auto;
 }
 
 /* --- Tables --- */
 table {
-  display: table;
-  border-collapse: separate;
-  border-spacing: 2px;
+    display: table;
+    border-collapse: separate;
+    border-spacing: 2px;
 }
 
 tr {
-  display: table-row;
+    display: table-row;
 }
 
-td, th {
-  display: table-cell;
-  padding: 1px;
+td,
+th {
+    display: table-cell;
+    padding: 1px;
 }
 
 th {
-  font-weight: bold;
-  text-align: center;
+    font-weight: bold;
+    text-align: center;
 }
 
 /* --- Form elements --- */
-input, textarea, select, button {
-  font: inherit;
+input,
+textarea,
+select,
+button {
+    font: inherit;
+}
+
+button {
+    display: inline-block;
+}
+
+input[type="hidden"] {
+    display: none;
 }
