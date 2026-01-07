@@ -13,7 +13,6 @@ use ui_layout::{Display, FlexDirection, ItemStyle, LayoutNode, Style};
 #[derive(Debug, Clone)]
 pub struct InfoNode {
     pub kind: NodeKind,
-    pub color: Color,
     pub text_section: Option<(String, TextStyle)>,
     pub children: Vec<InfoNode>,
 }
@@ -68,8 +67,7 @@ impl TryFrom<(u8, u8, u8, f32)> for Color {
 /// # Style resolution order (low → high priority)
 ///
 /// 1. **Inherited values from parent**
-///    - `color`
-///    - `font_size`
+///    - `text_style`
 ///
 /// 2. **Resolved CSS declarations**
 ///    - Overrides inherited values when specified
@@ -82,15 +80,13 @@ impl TryFrom<(u8, u8, u8, f32)> for Color {
 ///
 /// Only the following properties are inherited explicitly:
 ///
-/// - `color`
-/// - `font_size`
+/// - `text_style`
 ///
 /// All other style fields are initialized per node and are **not inherited**.
 ///
 /// # Parameters
 ///
-/// - `parent_color`: Inherited text color from the parent node
-/// - `parent_font_size`: Inherited font size (in px) from the parent node
+/// - `parent_text_style`
 ///
 /// These values must be passed from the computed result of the parent when
 /// calling this function recursively.
@@ -104,8 +100,7 @@ pub fn build_layout_and_info(
     dom: &Rc<RefCell<TreeNode<HtmlNodeType>>>,
     resolved_styles: &ResolvedStyles,
     measurer: &dyn text::TextMeasurer,
-    parent_color: Color,
-    parent_font_size: f32,
+    parent_text_style: TextStyle,
 ) -> (LayoutNode, InfoNode) {
     let html_node = dom.borrow().value.clone();
 
@@ -122,7 +117,6 @@ pub fn build_layout_and_info(
             }),
             InfoNode {
                 kind: NodeKind::Container,
-                color: parent_color,
                 text_section: None,
                 children: Vec::new(),
             },
@@ -145,8 +139,7 @@ pub fn build_layout_and_info(
         ..Default::default()
     };
 
-    let mut color = parent_color;
-    let mut font_size = parent_font_size;
+    let mut text_style = parent_text_style;
     let mut text: Option<String> = None;
 
     /* -----------------------------
@@ -172,7 +165,7 @@ pub fn build_layout_and_info(
         for (selector, declarations) in resolved_styles {
             if selector.matches(tag_name, &class_list) {
                 for (name, value) in declarations {
-                    apply_declaration(name, value, &mut style, &mut color, &mut font_size);
+                    apply_declaration(name, value, &mut style, &mut text_style);
                 }
             }
         }
@@ -190,7 +183,7 @@ pub fn build_layout_and_info(
                 text: t.clone(),
                 font: text::FontDescription {
                     family: None,
-                    size_px: font_size,
+                    size_px: text_style.font_size,
                 },
                 constraints: text::LayoutConstraints {
                     max_width: None,
@@ -202,7 +195,7 @@ pub fn build_layout_and_info(
             let (w, h) = measurer
                 .measure(&req)
                 .map(|m| (m.width, m.height))
-                .unwrap_or((800.0, font_size * 1.2));
+                .unwrap_or((800.0, text_style.font_size * 1.2));
 
             style.size.width = Some(w);
             style.size.height = Some(h);
@@ -219,25 +212,19 @@ pub fn build_layout_and_info(
 
     for child_dom in dom.borrow().children() {
         let (child_layout, child_info) =
-            build_layout_and_info(child_dom, resolved_styles, measurer, color, font_size);
+            build_layout_and_info(child_dom, resolved_styles, measurer, text_style);
         layout_children.push(child_layout);
         info_children.push(child_info);
     }
 
     let layout = LayoutNode::with_children(style, layout_children);
     let text_section = if let Some(t) = text {
-        let text_style = TextStyle {
-            font_size,
-            color,
-            ..Default::default()
-        };
         Some((t, text_style))
     } else {
         None
     };
     let info = InfoNode {
         kind,
-        color,
         text_section,
         children: info_children,
     };
@@ -245,13 +232,7 @@ pub fn build_layout_and_info(
     (layout, info)
 }
 
-fn apply_declaration(
-    name: &str,
-    value: &CssValue,
-    style: &mut Style,
-    color: &mut Color,
-    font_size: &mut f32,
-) {
+fn apply_declaration(name: &str, value: &CssValue, style: &mut Style, text_style: &mut TextStyle) {
     match (name, value) {
         ("display", CssValue::Keyword(v)) if v == "block" => {
             style.display = Display::Block;
@@ -263,12 +244,13 @@ fn apply_declaration(
         }
         ("color", CssValue::Color(c)) => {
             if let Ok(c) = Color::try_from(c.to_rgba_tuple(None)) {
-                *color = c;
+                text_style.color = c;
             }
         }
         ("font-size", CssValue::Length(len)) => {
-            *font_size = len.to_px(16.0).unwrap_or(16.0);
+            text_style.font_size = len.to_px(16.0).unwrap_or(16.0);
         }
+        ("font-weight", CssValue::Keyword(v)) if v == "bold" => {}
         _ => {}
     }
 }
