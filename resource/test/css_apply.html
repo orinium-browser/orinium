@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ja">
+    <head>
+        <meta charset="UTF-8" />
+        <title>CSS Apply Test</title>
+
+        <style>
+            /* --- 全体確認 --- */
+            * {
+                box-sizing: border-box;
+            }
+
+            html {
+                background: #f0f0f0;
+            }
+
+            body {
+                margin: 0;
+                font-family: sans-serif;
+            }
+
+            /* --- ナビゲーション（flex確認用） --- */
+            .main-nav {
+                background: #333;
+                padding: 10px;
+            }
+
+            .main-nav ul {
+                display: flex;
+                list-style: none;
+                padding: 0;
+                margin: 0;
+                gap: 12px;
+            }
+
+            .main-nav li {
+                background: #555;
+                color: white;
+                padding: 8px 12px;
+            }
+
+            /* --- クラスセレクタ確認 --- */
+            .highlight {
+                color: red;
+                font-weight: bold;
+            }
+
+            /* --- タグセレクタ確認 --- */
+            p {
+                color: blue;
+            }
+
+            /* --- 子孫セレクタ確認 --- */
+            .container span {
+                background: yellow;
+            }
+
+            /* --- display:none 確認 --- */
+            .hidden {
+                display: none;
+            }
+        </style>
+    </head>
+    <body>
+        <header class="main-nav">
+            <ul>
+                <li>Home</li>
+                <li>About</li>
+                <li>Docs</li>
+                <li>Contact</li>
+            </ul>
+        </header>
+
+        <main class="container">
+            <p>これは <span>通常の span</span> を含む段落です。</p>
+            <p class="highlight">この行は赤く太字になるはず</p>
+
+            <div class="hidden">このテキストは表示されないはず</div>
+        </main>
+    </body>
+</html>
