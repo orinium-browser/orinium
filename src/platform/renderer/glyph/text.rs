@@ -1,10 +1,10 @@
 use std::{env, sync::Arc};
 
-use crate::engine::layouter::{Color, FontStyle, FontWeight, TextStyle};
+use crate::engine::layouter::{FontStyle, TextStyle};
 use glyphon::{
     Attrs, Buffer, Cache, Color as GlyphColor, FontSystem, Metrics, PrepareError, Resolution,
-    Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer as TextBrush, Viewport,
-    fontdb,
+    Shaping, Style, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer as TextBrush,
+    Viewport, Weight, fontdb,
 };
 
 use crate::platform::font;
@@ -104,13 +104,19 @@ impl TextRenderer {
         let font_size = text_style.font_size;
         let color = text_style.color;
         let color = GlyphColor::rgba(color.0, color.1, color.2, color.3);
+        let weight = text_style.font_weight;
+        let style = text_style.font_style;
         // reasonable default line height (1.2x)
         let metrics = Metrics::relative(font_size, 1.2);
 
         let mut buffer = Buffer::new(&mut self.font_sys, metrics);
 
         // build attributes (defaults + color + metrics)
-        let attrs = Attrs::new().metrics(metrics).color(color);
+        let attrs = Attrs::new()
+            .metrics(metrics)
+            .color(color)
+            .weight(Weight(weight.0))
+            .style(Style::from(style));
 
         // shape and layout
         buffer.set_text(&mut self.font_sys, text, &attrs, Shaping::Advanced, None);
@@ -179,5 +185,15 @@ impl TextRenderer {
         self.brush
             .render(&self.atlas, &self.viewport, rpass)
             .expect("PANIC: Text draw failed");
+    }
+}
+
+impl From<FontStyle> for Style {
+    fn from(value: FontStyle) -> Self {
+        match value {
+            FontStyle::Normal => Style::Normal,
+            FontStyle::Italic => Style::Italic,
+            FontStyle::Oblique => Style::Oblique,
+        }
     }
 }
