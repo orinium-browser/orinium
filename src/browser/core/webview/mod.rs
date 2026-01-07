@@ -80,8 +80,10 @@ impl WebView {
                 &CssParser::new(USER_AGENT_CSS).parse().unwrap(),
             ),
             &measurer.unwrap(),
-            layouter::Color(0, 0, 0, 255),
-            16.0,
+            layouter::TextStyle {
+                font_size: 16.0,
+                ..Default::default()
+            },
         ));
 
         self.needs_redraw = true;
@@ -176,8 +178,10 @@ impl WebView {
             &dom_tree.root,
             &resolved_styles,
             &measurer.unwrap(),
-            layouter::Color(0, 0, 0, 255),
-            16.0,
+            layouter::TextStyle {
+                font_size: 16.0,
+                ..Default::default()
+            },
         ));
 
         self.needs_redraw = true;
