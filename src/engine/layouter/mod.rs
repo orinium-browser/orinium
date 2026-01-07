@@ -28,6 +28,7 @@ pub enum NodeKind {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Color(pub u8, pub u8, pub u8, pub u8);
+
 impl Color {
     /// u8 RGBA -> [f32; 4] RGBA (0.0~1.0)
     pub fn to_f32_array(&self) -> [f32; 4] {
@@ -51,12 +52,49 @@ impl TryFrom<(u8, u8, u8, f32)> for Color {
     }
 }
 
-/// # 継承引数
+/// Builds a layout tree (`LayoutNode`) and a render info tree (`InfoNode`) from the DOM.
 ///
-/// - parent_color
-/// - parent_font_size
+/// # Overview
+/// - Recursively traverses the HTML DOM
+/// - Applies resolved CSS declarations
+/// - Computes layout-related styles
+/// - Collects render-time information (color, font size, text)
 ///
-/// 関数呼び出し時に適切な値に設定してください。
+/// # Style resolution order (low → high priority)
+///
+/// 1. **Inherited values from parent**
+///    - `color`
+///    - `font_size`
+///
+/// 2. **Resolved CSS declarations**
+///    - Overrides inherited values when specified
+///
+/// 3. **HTML defaults / semantics**
+///    - `display` (block, inline, etc.)
+///    - Text measurement for text nodes
+///
+/// # Inherited properties
+///
+/// Only the following properties are inherited explicitly:
+///
+/// - `color`
+/// - `font_size`
+///
+/// All other style fields are initialized per node and are **not inherited**.
+///
+/// # Parameters
+///
+/// - `parent_color`: Inherited text color from the parent node
+/// - `parent_font_size`: Inherited font size (in px) from the parent node
+///
+/// These values must be passed from the computed result of the parent when
+/// calling this function recursively.
+///
+/// # Returns
+///
+/// A tuple of:
+/// - `LayoutNode`: used by the layout engine
+/// - `InfoNode`: used for rendering (text, color, font size)
 pub fn build_layout_and_info(
     dom: &Rc<RefCell<TreeNode<HtmlNodeType>>>,
     resolved_styles: &ResolvedStyles,
@@ -67,28 +105,28 @@ pub fn build_layout_and_info(
     let html_node = dom.borrow().value.clone();
 
     /* -----------------------------
-    Skip non-rendered elements
+       Skip non-rendered elements
     ----------------------------- */
-    if let HtmlNodeType::Element { tag_name, .. } = &html_node {
-        if is_non_rendered_element(tag_name) {
-            return (
-                LayoutNode::new(Style {
-                    display: Display::None,
-                    ..Default::default()
-                }),
-                InfoNode {
-                    kind: NodeKind::Container,
-                    color: parent_color,
-                    font_size: parent_font_size,
-                    text: None,
-                    children: Vec::new(),
-                },
-            );
-        }
+    if let HtmlNodeType::Element { tag_name, .. } = &html_node
+        && is_non_rendered_element(tag_name)
+    {
+        return (
+            LayoutNode::new(Style {
+                display: Display::None,
+                ..Default::default()
+            }),
+            InfoNode {
+                kind: NodeKind::Container,
+                color: parent_color,
+                font_size: parent_font_size,
+                text: None,
+                children: Vec::new(),
+            },
+        );
     }
 
     /* -----------------------------
-    Initial values (inheritance)
+       Initial values (inheritance)
     ----------------------------- */
     let mut kind = NodeKind::Container;
     let mut style = Style {
@@ -108,18 +146,36 @@ pub fn build_layout_and_info(
     let mut text: Option<String> = None;
 
     /* -----------------------------
-    Apply resolved CSS
+       Apply resolved CSS (Selector-based)
     ----------------------------- */
-    if let HtmlNodeType::Element { tag_name, .. } = &html_node {
-        if let Some(decls) = resolved_styles.get(tag_name) {
-            for (name, value) in decls {
-                apply_declaration(name, value, &mut style, &mut color, &mut font_size);
+    if let HtmlNodeType::Element {
+        tag_name,
+        attributes,
+        ..
+    } = &html_node
+    {
+        let class_list: Vec<String> = attributes
+            .iter()
+            .find(|attr| attr.name == "class")
+            .map(|attr| {
+                attr.value
+                    .split_whitespace()
+                    .map(|s| s.to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        for (selector, declarations) in resolved_styles {
+            if selector.matches(tag_name, &class_list) {
+                for (name, value) in declarations {
+                    apply_declaration(name, value, &mut style, &mut color, &mut font_size);
+                }
             }
         }
     }
 
     /* -----------------------------
-    HTML defaults / semantics
+       HTML defaults / semantics
     ----------------------------- */
     match &html_node {
         HtmlNodeType::Text(t) => {
@@ -163,7 +219,7 @@ pub fn build_layout_and_info(
     }
 
     /* -----------------------------
-    Children (propagate computed style)
+       Children
     ----------------------------- */
     let mut layout_children = Vec::new();
     let mut info_children = Vec::new();

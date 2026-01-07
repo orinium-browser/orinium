@@ -77,7 +77,7 @@ impl WebView {
         self.layout_and_info = Some(layouter::build_layout_and_info(
             &dom_tree.root,
             &layouter::css_resolver::CssResolver::resolve(
-                &CssParser::new(&USER_AGENT_CSS).parse().unwrap(),
+                &CssParser::new(USER_AGENT_CSS).parse().unwrap(),
             ),
             &measurer.unwrap(),
             layouter::Color(0, 0, 0, 255),
@@ -153,7 +153,7 @@ impl WebView {
 
         // --- CSSOM を構築 ---
         let mut cssoms = Vec::with_capacity(css_sources.len() + 1);
-        cssoms.push(CssParser::new(&USER_AGENT_CSS).parse()?);
+        cssoms.push(CssParser::new(USER_AGENT_CSS).parse()?);
         for css_text in css_sources {
             let mut css_parser = CssParser::new(&css_text);
             let cssom = css_parser.parse()?;

@@ -1,41 +1,28 @@
-use std::collections::HashMap;
-use std::rc::Rc;
-use crate::engine::css::cssom::{CssNodeType, CssValue};
+use crate::engine::css::cssom::{CssNodeType, CssValue, Selector};
 use crate::engine::tree::{Tree, TreeNode};
+use std::rc::Rc;
 
-/// Map: selector (e.g. "body", "p") -> declarations
-pub type ResolvedStyles = HashMap<String, Vec<(String, CssValue)>>;
+/// selector -> declarations
+pub type ResolvedStyles = Vec<(Selector, Vec<(String, CssValue)>)>;
 
-/// CSS resolver
 pub struct CssResolver;
 
 impl CssResolver {
-    /// Resolve a CSS tree into selector-based styles
     pub fn resolve(css_tree: &Tree<CssNodeType>) -> ResolvedStyles {
-        let mut styles = HashMap::new();
+        let mut styles = Vec::new();
         Self::walk(&css_tree.root, &mut styles);
         styles
     }
 
-    /// Walk CSS AST recursively
-    fn walk(
-        node: &Rc<std::cell::RefCell<TreeNode<CssNodeType>>>,
-        styles: &mut ResolvedStyles,
-    ) {
+    fn walk(node: &Rc<std::cell::RefCell<TreeNode<CssNodeType>>>, styles: &mut ResolvedStyles) {
         let node_ref = node.borrow();
 
-        match &node_ref.value {
-            CssNodeType::Rule { selectors } => {
-                let declarations = Self::collect_declarations(node);
+        if let CssNodeType::Rule { selectors } = &node_ref.value {
+            let declarations = Self::collect_declarations(node);
 
-                for selector in selectors {
-                    styles
-                        .entry(selector.clone())
-                        .or_default()
-                        .extend(declarations.clone());
-                }
+            for selector in selectors {
+                styles.push((selector.clone(), declarations.clone()));
             }
-            _ => {}
         }
 
         for child in node_ref.children() {
@@ -43,7 +30,6 @@ impl CssResolver {
         }
     }
 
-    /// Collect declarations under a rule node
     fn collect_declarations(
         rule_node: &Rc<std::cell::RefCell<TreeNode<CssNodeType>>>,
     ) -> Vec<(String, CssValue)> {
