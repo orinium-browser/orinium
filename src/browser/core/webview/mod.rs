@@ -186,6 +186,12 @@ impl WebView {
             Vec::new(),
         ));
 
+        log::debug!(
+            target: "WebView::LayoutInfo",
+            "Layouted the page:\n {:#?}",
+            self.layout_and_info.as_ref().unwrap()
+        );
+
         self.needs_redraw = true;
 
         Ok(())
