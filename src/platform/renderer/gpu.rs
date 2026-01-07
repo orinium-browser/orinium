@@ -5,7 +5,6 @@ use wgpu::util::DeviceExt;
 use winit::window::Window;
 
 use super::glyph::text::{TextRenderer, TextSection};
-use glyphon::Color as GlyphColor;
 
 /// GPU描画コンテキスト
 pub struct GpuRenderer {
@@ -422,7 +421,6 @@ impl GpuRenderer {
                     let th = clip.h;
 
                     let font_size = &style.font_size;
-                    let color = &style.color;
 
                     // Text culling: if enabled and the text's bounding box is fully outside current clip, skip creating buffer
                     let mut skip_text = false;
@@ -462,9 +460,9 @@ impl GpuRenderer {
 
                     // Use TextRenderer helper to create a Buffer with correct FontSystem handling
                     let section = if let Some(tr) = &mut self.text_renderer {
-                        // convert color to glyphon Color (u8 rgba)
-                        let gc = GlyphColor::rgba(color.0, color.1, color.2, color.3);
-                        let buffer = tr.create_buffer_for_text(text, *font_size * sf, gc);
+                        let mut render_text_style = *style;
+                        render_text_style.font_size = *font_size * sf;
+                        let buffer = tr.create_buffer_for_text(text, render_text_style);
 
                         TextSection {
                             screen_position: ((*x + tdx) * sf, (*y + tdy) * sf),

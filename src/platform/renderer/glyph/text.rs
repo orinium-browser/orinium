@@ -1,5 +1,6 @@
 use std::{env, sync::Arc};
 
+use crate::engine::layouter::{Color, FontStyle, FontWeight, TextStyle};
 use glyphon::{
     Attrs, Buffer, Cache, Color as GlyphColor, FontSystem, Metrics, PrepareError, Resolution,
     Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer as TextBrush, Viewport,
@@ -99,12 +100,10 @@ impl TextRenderer {
 
     /// Create a cosmic-text `Buffer` for the given text using the internal `FontSystem`.
     /// This encapsulates the required `Metrics` and calls `set_text`.
-    pub fn create_buffer_for_text(
-        &mut self,
-        text: &str,
-        font_size: f32,
-        color: GlyphColor,
-    ) -> Buffer {
+    pub fn create_buffer_for_text(&mut self, text: &str, text_style: TextStyle) -> Buffer {
+        let font_size = text_style.font_size;
+        let color = text_style.color;
+        let color = GlyphColor::rgba(color.0, color.1, color.2, color.3);
         // reasonable default line height (1.2x)
         let metrics = Metrics::relative(font_size, 1.2);
 
