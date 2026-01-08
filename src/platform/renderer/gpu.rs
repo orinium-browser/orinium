@@ -131,7 +131,7 @@ impl GpuRenderer {
         // vertex/fragment for main pipeline
         let main_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Main Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader/main.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shader/primitive.wgsl").into()),
         });
 
         // --- レンダーパイプライン（頂点→ピクセル変換のルール）の作成 ---
