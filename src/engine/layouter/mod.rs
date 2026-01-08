@@ -16,6 +16,7 @@ pub struct InfoNode {
     pub kind: NodeKind,
     pub text_section: Option<(String, TextStyle)>,
     pub children: Vec<InfoNode>,
+    pub image_src: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -23,6 +24,7 @@ pub enum NodeKind {
     Container,
     Text,
     Scrollable,
+    Image,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -124,6 +126,7 @@ pub fn build_layout_and_info(
 
     let mut text_style = parent_text_style;
     let mut text: Option<String> = None;
+    let mut image_src_var: Option<String> = None;
 
     /* -----------------------------
        Apply resolved CSS
@@ -190,6 +193,41 @@ pub fn build_layout_and_info(
 
         style.size.width = Some(w);
         style.size.height = Some(h);
+    } else if let HtmlNodeType::Element { tag_name, attributes, .. } = &html_node {
+        if tag_name.to_lowercase() == "img" {
+            kind = NodeKind::Image;
+            // collect src into local var
+            let mut image_src_local: Option<String> = None;
+            if let Some(src_attr) = attributes.iter().find(|a| a.name == "src") {
+                image_src_local = Some(src_attr.value.clone());
+            }
+
+            if let Some(width_attr) = attributes.iter().find(|a| a.name == "width") {
+                if let Ok(w) = width_attr.value.parse::<f32>() {
+                    style.size.width = Some(w);
+                }
+            }
+
+            if let Some(height_attr) = attributes.iter().find(|a| a.name == "height") {
+                if let Ok(h) = height_attr.value.parse::<f32>() {
+                    style.size.height = Some(h);
+                }
+            }
+
+            // If no explicit size, give a default placeholder size
+            if style.size.width.is_none() {
+                style.size.width = Some(100.0);
+            }
+            if style.size.height.is_none() {
+                style.size.height = Some(100.0);
+            }
+
+            // set text to None; image_src will be set on InfoNode creation
+            text = None;
+
+            // pass out
+            image_src_var = image_src_local;
+        }
     }
 
     /* -----------------------------
@@ -242,6 +280,7 @@ pub fn build_layout_and_info(
         kind,
         text_section,
         children: info_children,
+        image_src: image_src_var,
     };
 
     (layout, info)
@@ -495,6 +534,13 @@ pub enum DrawCommand {
         radius_y: f32,
         color: Color,
     },
+    DrawImage {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        src: Option<String>,
+    },
     PushClip {
         x: f32,
         y: f32,
@@ -539,7 +585,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
                     max_width: rect.width,
                 });
             } else {
-                panic!("No text infomation found from `NodeKind::Text`. This should not be happen.")
+                panic!("No text information found from `NodeKind::Text`. This should not be happen.")
             }
         }
         NodeKind::Container => {
@@ -553,6 +599,17 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
                 width: rect.width,
                 height: rect.height,
             });
+        }
+        NodeKind::Image => {
+            if let Some(src) = &info.image_src {
+                commands.push(DrawCommand::DrawImage {
+                    x: abs_x,
+                    y: abs_y,
+                    width: rect.width,
+                    height: rect.height,
+                    src: Some(src.clone()),
+                });
+            }
         }
         _ => {
             panic!("This should not be happen.")

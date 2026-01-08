@@ -477,6 +477,55 @@ impl GpuRenderer {
                     sections.push(section);
                 }
 
+                // Image (placeholder rectangle until texture pipeline is integrated)
+                DrawCommand::DrawImage { x, y, width: w, height: h, src: _ } => {
+                    // transform
+                    let (tdx, tdy) = current_transform(&transform_stack);
+                    let mut x1 = (x + tdx) * sf;
+                    let mut y1 = (y + tdy) * sf;
+                    let mut x2 = x1 + w * sf;
+                    let mut y2 = y1 + h * sf;
+
+                    // clip
+                    let clip = current_clip(&clip_stack);
+
+                    if x2 <= clip.x * sf
+                        || x1 >= (clip.x + clip.w) * sf
+                        || y2 <= clip.y * sf
+                        || y1 >= (clip.y + clip.h) * sf
+                    {
+                        continue;
+                    }
+
+                    // partial clip
+                    x1 = x1.max(clip.x * sf);
+                    y1 = y1.max(clip.y * sf);
+                    x2 = x2.min((clip.x + clip.w) * sf);
+                    y2 = y2.min((clip.y + clip.h) * sf);
+
+                    // NDC
+                    let ndc = |v, max| (v / max) * 2.0 - 1.0;
+
+                    let px1 = ndc(x1, screen_width);
+                    let py1 = -ndc(y1, screen_height);
+                    let px2 = ndc(x2, screen_width);
+                    let py2 = -ndc(y2, screen_height);
+
+                    // gray placeholder color
+                    let color = [0.85_f32, 0.85_f32, 0.85_f32, 1.0_f32];
+
+                    #[rustfmt::skip]
+                    vertices.extend_from_slice(&[
+                        Vertex { position: [px1, py1, 0.0], color },
+                        Vertex { position: [px1, py2, 0.0], color },
+                        Vertex { position: [px2, py1, 0.0], color },
+
+                        Vertex { position: [px2, py1, 0.0], color },
+                        Vertex { position: [px1, py2, 0.0], color },
+                        Vertex { position: [px2, py2, 0.0], color },
+                    ]);
+                }
+
                 // Polygon
                 DrawCommand::DrawPolygon { points, color } => {
                     // transform
