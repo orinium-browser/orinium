@@ -3,6 +3,7 @@ use anyhow::Result;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 use winit::window::Window;
+use std::collections::HashMap;
 
 use super::glyph::text::{TextRenderer, TextSection};
 
@@ -28,6 +29,21 @@ pub struct GpuRenderer {
     vertices: Vec<Vertex>,
     /// 頂点数
     num_vertices: u32,
+
+    /// テクスチャ用パイプライン
+    texture_pipeline: wgpu::RenderPipeline,
+    /// テクスチャ用バインドグループレイアウト
+    texture_bind_group_layout: wgpu::BindGroupLayout,
+    /// テクスチャ用頂点バッファ
+    texture_vertex_buffer: Option<wgpu::Buffer>,
+    /// テクスチャ頂点
+    texture_vertices: Vec<TexturedVertex>,
+    /// テクスチャ頂点数
+    texture_num_vertices: u32,
+    /// テクスチャキャッシュ: key=resource URI
+    texture_cache: HashMap<String, TextureEntry>,
+    /// 描画時に使うテクスチャ矩形情報（src, start_index, count）
+    texture_draws: Vec<TexturedRange>,
 
     /// テキスト描画用ラッパー
     text_renderer: Option<TextRenderer>,
@@ -64,6 +80,56 @@ impl Vertex {
             ],
         }
     }
+}
+
+// Textured vertex for image quads
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct TexturedVertex {
+    position: [f32; 2],
+    uv: [f32; 2],
+}
+
+impl TexturedVertex {
+    fn desc() -> wgpu::VertexBufferLayout<'static> {
+        use std::mem::size_of;
+        wgpu::VertexBufferLayout {
+            array_stride: size_of::<TexturedVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: size_of::<[f32; 2]>() as wgpu::BufferAddress,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+            ],
+        }
+    }
+}
+
+/// キャッシュに保持するテクスチャ情報
+struct TextureEntry {
+    /// バインドグループ
+    bind_group: wgpu::BindGroup,
+    /// テクスチャ幅
+    width: u32,
+    /// テクスチャ高さ
+    height: u32,
+}
+
+/// テクスチャ描画のための頂点レンジ情報
+struct TexturedRange {
+    /// ソースURI
+    src: String,
+    /// 開始頂点インデックス
+    start: u32,
+    /// 頂点数
+    count: u32,
 }
 
 impl GpuRenderer {
@@ -134,6 +200,12 @@ impl GpuRenderer {
             source: wgpu::ShaderSource::Wgsl(include_str!("shader/primitive.wgsl").into()),
         });
 
+        // テクスチャ用シェーダ
+        let texture_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Texture Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shader/texture.wgsl").into()),
+        });
+
         // --- レンダーパイプライン（頂点→ピクセル変換のルール）の作成 ---
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -181,6 +253,74 @@ impl GpuRenderer {
         });
         // --- レンダーパイプライン作成終了 ---
 
+        // --- テクスチャ用バインドグループレイアウトとパイプライン作成 ---
+        let texture_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("texture_bind_group_layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        let texture_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Texture Pipeline Layout"),
+            bind_group_layouts: &[&texture_bind_group_layout],
+            immediate_size: 0,
+        });
+
+        let texture_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Texture Pipeline"),
+            layout: Some(&texture_pipeline_layout),
+            cache: None,
+            vertex: wgpu::VertexState {
+                module: &texture_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[TexturedVertex::desc()],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &texture_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview_mask: None,
+        });
+        // --- テクスチャパイプライン作成終了 ---
+
         // テキスト描画用ラッパーの初期化。引数で渡されたフォントパスがあればそれを優先して読み込む。
         let text_renderer = if let Some(p) = font_path {
             match std::fs::read(p) {
@@ -224,6 +364,13 @@ impl GpuRenderer {
             vertex_buffer: None,
             vertices: vec![],
             num_vertices: 0,
+            texture_pipeline,
+            texture_bind_group_layout,
+            texture_vertex_buffer: None,
+            texture_vertices: vec![],
+            texture_num_vertices: 0,
+            texture_cache: HashMap::new(),
+            texture_draws: Vec::new(),
             text_renderer,
             last_frame: None,
             enable_text_culling,
@@ -293,6 +440,10 @@ impl GpuRenderer {
             h: screen_height,
         }];
         let current_clip = |stack: &Vec<ClipRect>| -> ClipRect { *stack.last().unwrap() };
+
+        // Reset texture buffers for this frame
+        self.texture_vertices.clear();
+        self.texture_draws.clear();
 
         for command in commands {
             match command {
@@ -477,8 +628,8 @@ impl GpuRenderer {
                     sections.push(section);
                 }
 
-                // Image (placeholder rectangle until texture pipeline is integrated)
-                DrawCommand::DrawImage { x, y, width: w, height: h, src: _ } => {
+                // Image (now textured quad if resource:///)
+                DrawCommand::DrawImage { x, y, width: w, height: h, src } => {
                     // transform
                     let (tdx, tdy) = current_transform(&transform_stack);
                     let mut x1 = (x + tdx) * sf;
@@ -511,19 +662,102 @@ impl GpuRenderer {
                     let px2 = ndc(x2, screen_width);
                     let py2 = -ndc(y2, screen_height);
 
-                    // gray placeholder color
-                    let color = [0.85_f32, 0.85_f32, 0.85_f32, 1.0_f32];
+                    // If src exists and is resource:///, try to load and create texture
+                    if let Some(s) = src {
+                        if s.starts_with("resource:///") {
+                            // Attempt to ensure texture exists in cache; if not, load synchronously via a short tokio runtime
+                            if !self.texture_cache.contains_key(s) {
+                                // Synchronously load resource from filesystem (same logic as platform::io::load_resource)
+                                let rel = s.strip_prefix("resource:///").unwrap_or(s.as_str());
+                                let mut bytes_opt: Option<Vec<u8>> = None;
+                                let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+                                candidates.push(std::path::PathBuf::from("resource").join(rel));
+                                if let Ok(exe) = std::env::current_exe() {
+                                    if let Some(dir) = exe.parent() {
+                                        candidates.push(dir.join("resource").join(rel));
+                                    }
+                                }
+                                if let Ok(cd) = std::env::current_dir() {
+                                    candidates.push(cd.join("resource").join(rel));
+                                }
 
-                    #[rustfmt::skip]
-                    vertices.extend_from_slice(&[
-                        Vertex { position: [px1, py1, 0.0], color },
-                        Vertex { position: [px1, py2, 0.0], color },
-                        Vertex { position: [px2, py1, 0.0], color },
+                                for cand in candidates.into_iter() {
+                                    if cand.exists() && cand.is_file() {
+                                        match std::fs::read(&cand) {
+                                            Ok(b) => {
+                                                bytes_opt = Some(b);
+                                                break;
+                                            }
+                                            Err(e) => {
+                                                log::warn!(target: "PRender::gpu::texture", "failed to read resource file {:?}: {}", cand, e);
+                                            }
+                                        }
+                                    }
+                                }
 
-                        Vertex { position: [px2, py1, 0.0], color },
-                        Vertex { position: [px1, py2, 0.0], color },
-                        Vertex { position: [px2, py2, 0.0], color },
-                    ]);
+                                if let Some(bytes) = bytes_opt {
+                                    // create texture from bytes
+                                    match crate::platform::renderer::texture::image::create_texture_from_bytes(&self.device, &self.queue, &bytes) {
+                                        Ok((tex, view, sampler)) => {
+                                            // create bind group using our layout
+                                            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                                label: Some(&format!("texture_bind_group:{}", s)),
+                                                layout: &self.texture_bind_group_layout,
+                                                entries: &[
+                                                    wgpu::BindGroupEntry {
+                                                        binding: 0,
+                                                        resource: wgpu::BindingResource::TextureView(&view),
+                                                    },
+                                                    wgpu::BindGroupEntry {
+                                                        binding: 1,
+                                                        resource: wgpu::BindingResource::Sampler(&sampler),
+                                                    },
+                                                ],
+                                            });
+                                            let (w_px, h_px) = (tex.size().width, tex.size().height);
+                                            self.texture_cache.insert(s.clone(), TextureEntry { bind_group, width: w_px, height: h_px });
+                                        }
+                                        Err(e) => {
+                                            log::warn!(target: "PRender::gpu::texture", "failed to create texture from bytes for {}: {}", s, e);
+                                        }
+                                    }
+                                } else {
+                                    log::warn!(target: "PRender::gpu::texture", "resource not found for {}", s);
+                                }
+                            }
+
+                            // Create textured quad vertices (NDC positions + UVs)
+                            let start = self.texture_vertices.len() as u32;
+                            #[rustfmt::skip]
+                            self.texture_vertices.extend_from_slice(&[
+                                TexturedVertex { position: [px1, py1], uv: [0.0, 0.0] },
+                                TexturedVertex { position: [px1, py2], uv: [0.0, 1.0] },
+                                TexturedVertex { position: [px2, py1], uv: [1.0, 0.0] },
+
+                                TexturedVertex { position: [px2, py1], uv: [1.0, 0.0] },
+                                TexturedVertex { position: [px1, py2], uv: [0.0, 1.0] },
+                                TexturedVertex { position: [px2, py2], uv: [1.0, 1.0] },
+                            ]);
+                            let count = (self.texture_vertices.len() as u32) - start;
+                            self.texture_draws.push(TexturedRange { src: s.clone(), start, count });
+                        } else {
+                            // Non-resource src: ignore per requirement
+                        }
+                    } else {
+                        // No src: draw placeholder grey rectangle (keep previous behavior)
+                        let color = [0.85_f32, 0.85_f32, 0.85_f32, 1.0_f32];
+
+                        #[rustfmt::skip]
+                        vertices.extend_from_slice(&[
+                            Vertex { position: [px1, py1, 0.0], color },
+                            Vertex { position: [px1, py2, 0.0], color },
+                            Vertex { position: [px2, py1, 0.0], color },
+
+                            Vertex { position: [px2, py1, 0.0], color },
+                            Vertex { position: [px1, py2, 0.0], color },
+                            Vertex { position: [px2, py2, 0.0], color },
+                        ]);
+                    }
                 }
 
                 // Polygon
@@ -732,6 +966,7 @@ impl GpuRenderer {
         }
 
         self.set_vertex_buffer(vertices);
+        self.set_texture_vertex_buffer(self.texture_vertices.clone());
 
         // テキストセクションをキューに追加
         if let Some(tr) = &mut self.text_renderer {
@@ -803,6 +1038,25 @@ impl GpuRenderer {
                 render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
                 render_pass.draw(0..self.num_vertices, 0..1);
             }
+
+            // テクスチャ描画: テクスチャ用パイプラインに切り替え、各テクスチャごとに bind group をセットして対応頂点範囲を描画
+            if self.texture_num_vertices > 0 {
+                render_pass.set_pipeline(&self.texture_pipeline);
+                if let Some(ref tbuf) = self.texture_vertex_buffer {
+                    render_pass.set_vertex_buffer(0, tbuf.slice(..));
+
+                    for tr in &self.texture_draws {
+                        if let Some(entry) = self.texture_cache.get(&tr.src) {
+                            render_pass.set_bind_group(0, &entry.bind_group, &[]);
+                            let start = tr.start;
+                            let end = tr.start + tr.count;
+                            render_pass.draw(start..end, 0..1);
+                        } else {
+                            // no texture ready: skip or draw placeholder (skipped here)
+                        }
+                    }
+                }
+            }
         }
 
         // テキストをレンダリング
@@ -857,6 +1111,19 @@ impl GpuRenderer {
             vertex.position[1] = -((logical_y / new_h) * 2.0 - 1.0);
         }
         self.set_vertex_buffer(new_vertices);
+
+        // update textured vertices similarly
+        let mut new_tvertices = self.texture_vertices.clone();
+        for tv in new_tvertices.iter_mut() {
+            // old NDC -> logical
+            let logical_x = (tv.position[0] + 1.0) / 2.0 * old_w;
+            let logical_y = -(tv.position[1] - 1.0) / 2.0 * old_h;
+
+            // logical -> new NDC
+            tv.position[0] = (logical_x / new_w) * 2.0 - 1.0;
+            tv.position[1] = -((logical_y / new_h) * 2.0 - 1.0);
+        }
+        self.set_texture_vertex_buffer(new_tvertices);
     }
 
     fn set_vertex_buffer(&mut self, vertices: Vec<Vertex>) {
@@ -872,6 +1139,20 @@ impl GpuRenderer {
             self.num_vertices = vertices.len() as u32;
         }
         self.vertices = vertices;
+    }
+
+    fn set_texture_vertex_buffer(&mut self, vertices: Vec<TexturedVertex>) {
+        if !vertices.is_empty() {
+            self.texture_vertex_buffer = Some(self.device.create_buffer_init(
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("Texture Vertex Buffer"),
+                    contents: bytemuck::cast_slice(&vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                },
+            ));
+            self.texture_num_vertices = vertices.len() as u32;
+        }
+        self.texture_vertices = vertices;
     }
 
     pub fn set_scale_factor(&mut self, scale_factor: f64) {
