@@ -196,12 +196,6 @@ impl WebView {
 
         Ok(())
     }
-
-    pub fn scroll_page(&mut self, delta_x: f32, delta_y: f32) {
-        self.scroll_x += delta_x;
-        self.scroll_y += delta_y;
-        self.needs_redraw = true;
-    }
 }
 
 fn resolve_url(base: &str, path: &str) -> String {

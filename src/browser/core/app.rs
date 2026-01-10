@@ -128,14 +128,10 @@ impl BrowserApp {
     }
 
     fn handle_scroll(&mut self, delta: winit::event::MouseScrollDelta) {
-        let scroll_amount = match delta {
+        let _scroll_amount = match delta {
             winit::event::MouseScrollDelta::LineDelta(_, y) => -y * 60.0,
             winit::event::MouseScrollDelta::PixelDelta(pos) => -pos.y as f32,
         };
-
-        if let Some(tab) = self.active_tab_mut() {
-            tab.scroll_page(0.0, scroll_amount);
-        }
     }
 
     pub fn redraw(&mut self, gpu: &mut GpuRenderer) {
