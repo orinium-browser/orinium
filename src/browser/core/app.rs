@@ -1,43 +1,29 @@
+use anyhow::Result;
 use std::sync::Arc;
+use winit::event::WindowEvent;
 
 use super::tab::Tab;
 // use super::ui::init_browser_ui;
 
+use super::BrowserCommand;
 use super::resource_loader::BrowserResourceLoader;
-use crate::platform::network::NetworkCore;
-
 use crate::engine::layouter::{self, DrawCommand};
+use crate::platform::network::NetworkCore;
 use crate::platform::renderer::gpu::GpuRenderer;
 use crate::system::App;
 
-use anyhow::Result;
-use winit::event::WindowEvent;
-
-pub enum BrowserCommand {
-    Exit,
-    RenameWindowTitle,
-    RequestRedraw,
-    None,
+pub struct RenderState {
+    pub draw_commands: Vec<DrawCommand>,
+    pub window_size: (u32, u32),
 }
 
-/// BrowserApp はブラウザ全体のアプリケーション状態を管理する構造体です。
-///
-/// 主な役割:
-/// - 複数のタブ(Tab)の管理
-/// - アクティブタブの切り替え
-/// - 各種 UI イベントの受け取りと WebView への伝達
-/// - エンジン更新処理（レイアウト・描画・ネットワークなど）を統合的に呼び出す
-///
-/// アプリケーションの「外側の枠組み」を担当し、
-/// ブラウザ起動 → イベントループ → 描画の流れを制御します。
-///
-/// TODO:
-/// - ブラウザUIの実装
 pub struct BrowserApp {
     tabs: Vec<Tab>,
-    draw_commands: Vec<DrawCommand>,
-    window_size: (u32, u32), // (x, y)
+    active_tab: usize,
+
+    render: RenderState,
     window_title: String,
+
     network: Arc<BrowserResourceLoader>,
 }
 
@@ -65,49 +51,51 @@ impl BrowserApp {
         let network = Arc::new(BrowserResourceLoader::new(Some(Arc::new(
             NetworkCore::new(),
         ))));
+
         Self {
             tabs: vec![],
-            draw_commands: vec![],
-            window_size,
+            active_tab: 0,
+            render: RenderState {
+                draw_commands: vec![],
+                window_size,
+            },
             window_title,
             network,
         }
     }
 
-    // 開発テスト用
-    pub fn with_draw_info(mut self, draw_commands: Vec<DrawCommand>) -> Self {
-        self.draw_commands = draw_commands;
-        self
-    }
+    fn rebuild_render_tree(&mut self) {
+        let size = self.window_size();
 
-    pub fn add_tab(&mut self, tab: Tab) {
-        self.tabs.push(tab);
-    }
+        let (layout, info, title) = {
+            let Some(tab) = self.active_tab_mut() else {
+                return;
+            };
 
-    fn build_from_tabs(&mut self) {
-        if let Some(active) = self.tabs.first_mut() {
-            let (layout, info) = active.layout_and_info().unwrap();
-            ui_layout::LayoutEngine::layout(layout, 800.0, 600.0);
-            self.draw_commands = layouter::generate_draw_commands(layout, info);
+            let title = if let Some(t) = tab.title().filter(|t| !t.is_empty()) {
+                Some(t)
+            } else if let Some(url) = tab.url().filter(|u| !u.is_empty()) {
+                Some(url)
+            } else {
+                None
+            };
+            let (layout, info) = tab.layout_and_info().unwrap();
 
-            let title = active.title();
-            if let Some(t) = title
-                && !t.is_empty()
-            {
-                self.window_title = t;
-            } else if let Some(url) = active.url()
-                && !url.is_empty()
-            {
-                self.window_title = url;
-            }
+            (layout, info, title)
+        };
+
+        ui_layout::LayoutEngine::layout(layout, size.0, size.1);
+        self.render.draw_commands = layouter::generate_draw_commands(layout, info);
+
+        if let Some(t) = title {
+            self.window_title = t;
         }
     }
 
-    pub fn apply_draw_commands(&self, gpu: &mut GpuRenderer) {
-        gpu.parse_draw_commands(&self.draw_commands);
+    fn active_tab_mut(&mut self) -> Option<&mut Tab> {
+        self.tabs.get_mut(self.active_tab)
     }
 
-    /// ウィンドウイベントの処理
     pub fn handle_window_event(
         &mut self,
         event: WindowEvent,
@@ -117,42 +105,23 @@ impl BrowserApp {
             WindowEvent::CloseRequested => BrowserCommand::Exit,
 
             WindowEvent::RedrawRequested => {
-                self.build_from_tabs();
-                self.apply_draw_commands(gpu);
-
-                // Ok(animationg)
-                if let Ok(true) = gpu.render() {
-                    self.apply_draw_commands(gpu);
-                }
+                self.redraw(gpu);
                 BrowserCommand::RenameWindowTitle
             }
 
-            WindowEvent::Resized(pysical_size) => {
-                let width = pysical_size.width;
-                let height = pysical_size.height;
-                self.window_size = (width, height);
-                gpu.resize(pysical_size);
-
+            WindowEvent::Resized(size) => {
+                self.render.window_size = (size.width, size.height);
+                gpu.resize(size);
                 BrowserCommand::None
             }
 
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 gpu.set_scale_factor(scale_factor);
-
                 BrowserCommand::None
             }
 
-            // デバッグやテスト目的に簡易的に実装したスクロール処理
             WindowEvent::MouseWheel { delta, .. } => {
-                log::debug!(target: "Browser::ScrollTest", "MouseWheel: {:?}", delta);
-                let scroll_amount = match delta {
-                    winit::event::MouseScrollDelta::LineDelta(_, y) => -y * 60.0,
-                    winit::event::MouseScrollDelta::PixelDelta(pos) => -pos.y as f32,
-                };
-                if let Some(tab) = self.tabs.first_mut() {
-                    tab.scroll_page(0.0, scroll_amount)
-                }
-                self.build_from_tabs();
+                self.handle_scroll(delta);
                 BrowserCommand::RequestRedraw
             }
 
@@ -160,15 +129,40 @@ impl BrowserApp {
         }
     }
 
-    pub fn window_size(&self) -> (u32, u32) {
-        self.window_size
+    fn handle_scroll(&mut self, delta: winit::event::MouseScrollDelta) {
+        let scroll_amount = match delta {
+            winit::event::MouseScrollDelta::LineDelta(_, y) => -y * 60.0,
+            winit::event::MouseScrollDelta::PixelDelta(pos) => -pos.y as f32,
+        };
+
+        if let Some(tab) = self.active_tab_mut() {
+            tab.scroll_page(0.0, scroll_amount);
+        }
     }
 
+    pub fn redraw(&mut self, gpu: &mut GpuRenderer) {
+        self.rebuild_render_tree();
+        self.apply_draw_commands(gpu);
+    }
+
+    pub fn apply_draw_commands(&self, gpu: &mut GpuRenderer) {
+        gpu.parse_draw_commands(&self.render.draw_commands);
+    }
+
+    pub fn add_tab(&mut self, tab: Tab) {
+        self.tabs.push(tab);
+    }
+
+    pub fn window_size(&self) -> (f32, f32) {
+        (
+            self.render.window_size.0 as f32,
+            self.render.window_size.1 as f32,
+        )
+    }
     pub fn window_title(&self) -> String {
-        self.window_title.clone()
+        self.window_title.to_string()
     }
-
     pub fn network(&self) -> Arc<BrowserResourceLoader> {
-        self.network.clone()
+        Arc::clone(&self.network)
     }
 }
