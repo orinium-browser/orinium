@@ -19,8 +19,16 @@ pub struct InfoNode {
 
 #[derive(Debug, Clone)]
 pub enum NodeKind {
-    Container,
-    Text { text: String, style: TextStyle },
+    Container {
+        scroll_x: bool,
+        scroll_y: bool,
+        scroll_offset_x: f32,
+        scroll_offset_y: f32,
+    },
+    Text {
+        text: String,
+        style: TextStyle,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -107,7 +115,12 @@ pub fn build_layout_and_info(
     /* -----------------------------
        Initial values (inheritance)
     ----------------------------- */
-    let mut kind = NodeKind::Container;
+    let mut kind = NodeKind::Container {
+        scroll_x: false,
+        scroll_y: false,
+        scroll_offset_x: 0.0,
+        scroll_offset_y: 0.0,
+    };
     let mut style = Style {
         display: Display::Block,
         item_style: ItemStyle {
@@ -534,7 +547,11 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
                 max_width: rect.width,
             });
         }
-        NodeKind::Container => {
+        NodeKind::Container {
+            scroll_offset_x,
+            scroll_offset_y,
+            ..
+        } => {
             commands.push(DrawCommand::PushTransform {
                 dx: abs_x,
                 dy: abs_y,
@@ -545,6 +562,10 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
                 width: rect.width,
                 height: rect.height,
             });
+            commands.push(DrawCommand::PushTransform {
+                dx: *scroll_offset_x,
+                dy: *scroll_offset_y,
+            });
         }
     }
 
@@ -552,7 +573,8 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
         commands.extend(generate_draw_commands(child_layout, child_info));
     }
 
-    if matches!(info.kind, NodeKind::Container) {
+    if matches!(info.kind, NodeKind::Container { .. }) {
+        commands.push(DrawCommand::PopTransform);
         commands.push(DrawCommand::PopClip);
         commands.push(DrawCommand::PopTransform);
     }
