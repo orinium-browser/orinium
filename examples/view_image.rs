@@ -22,7 +22,8 @@ async fn main() -> Result<()> {
             </head>
             <body>
                 <h1>Image draw test</h1>
-                <img src="resource:///image/test.png" />
+                <img src="resource:///image/test1.png" />
+                <img src="resource:///image/test2.png" />
             </body>
         </html>
     "#;
