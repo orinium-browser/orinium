@@ -110,7 +110,8 @@ impl BrowserApp {
             WindowEvent::Resized(size) => {
                 self.render.window_size = (size.width, size.height);
                 gpu.resize(size);
-                BrowserCommand::None
+                self.redraw(gpu);
+                BrowserCommand::RequestRedraw
             }
 
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
@@ -137,6 +138,10 @@ impl BrowserApp {
     pub fn redraw(&mut self, gpu: &mut GpuRenderer) {
         self.rebuild_render_tree();
         self.apply_draw_commands(gpu);
+        // Ok(animationg)
+        if let Ok(true) = gpu.render() {
+            self.apply_draw_commands(gpu);
+        }
     }
 
     pub fn apply_draw_commands(&self, gpu: &mut GpuRenderer) {
