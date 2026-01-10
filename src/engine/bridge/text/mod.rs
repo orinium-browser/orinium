@@ -1,98 +1,120 @@
+//! Text measurement abstraction for layout and rendering.
+//!
+//! # Overview
+//!
+//! This module defines the interface between the layout engine and
+//! platform-specific text measurement implementations.
+//!
+//! It does **not** own or define visual text styles.
+//! Instead, it consumes already-resolved text attributes provided
+//! by higher-level layout or rendering layers.
+//!
+//! # Responsibilities
+//!
+//! - Accept text content and layout-related parameters
+//! - Measure intrinsic text size (width, height, baseline)
+//! - Provide a backend-agnostic text measurement abstraction
+//!
+//! # Non-Responsibilities
+//!
+//! - CSS resolution or inheritance
+//! - Interpretation of visual styling semantics
+//! - Rendering or draw command generation
+//!
+//! # Data Flow
+//!
+//! ```text
+//! CSS → Layout → TextMeasurer → TextMetrics
+//! ```
+
 use std::fmt;
 
-/// フォントの説明
-#[derive(Debug, Clone)]
-pub struct FontDescription {
-    /// フォントファミリ名（None の場合はデフォルトフォント）
-    pub family: Option<String>,
-    /// フォントサイズ（ピクセル単位）
-    pub size_px: f32,
-}
+/* ============================
+ * Measure Request
+ * ============================ */
 
-/// レイアウト制約
 #[derive(Debug, Clone)]
-pub struct LayoutConstraints {
-    /// 最大幅（None の場合は無制限）
-    pub max_width: Option<f32>,
-    /// 折り返しを有効にするかどうか
-    pub wrap: bool,
-    /// 最大行数（None の場合は無制限）
-    pub max_lines: Option<usize>,
-}
-
-/// テキスト測定リクエスト
-#[derive(Debug, Clone)]
-pub struct TextMeasurementRequest {
-    /// 測定するテキスト
+pub struct TextMeasureRequest<S> {
+    /// UTF-8 text content
     pub text: String,
-    /// フォントの説明
-    pub font: FontDescription,
-    /// レイアウト制約
-    pub constraints: LayoutConstraints,
+
+    /// Opaque, resolved text attributes provided by the caller
+    pub style: S,
+
+    /// Maximum line width (None = unconstrained)
+    pub max_width: Option<f32>,
+
+    /// Enable line wrapping
+    pub wrap: bool,
 }
 
-/// グリフのメトリクス情報
-#[derive(Debug, Clone)]
-pub struct GlyphMetric {
-    /// グリフID
-    pub glyph_id: u32,
-    /// Xオフセット
-    pub x_offset: f32,
-    /// Yオフセット
-    pub y_offset: f32,
-    /// アドバンス幅
-    pub advance: f32,
-    /// グリフの幅
-    pub width: f32,
-    /// グリフの高さ
-    pub height: f32,
-}
+/* ============================
+ * Measure Result
+ * ============================ */
 
-/// テキスト測定結果
 #[derive(Debug, Clone)]
-pub struct TextMeasurement {
-    /// 全体の幅
+pub struct TextMetrics {
+    /// Logical width
     pub width: f32,
-    /// 全体の高さ
+
+    /// Logical height
     pub height: f32,
-    /// ベースライン位置
+
+    /// Baseline position from top
     pub baseline: f32,
-    /// グリフごとのメトリクス情報（存在しない場合もある）
-    pub glyphs: Option<Vec<GlyphMetric>>,
+
+    /// Number of layouted lines
+    pub line_count: usize,
 }
 
-/// テキスト測定エラー
+/* ============================
+ * Optional Glyph Info (Future)
+ * ============================ */
+
 #[derive(Debug, Clone)]
+pub struct GlyphMetrics {
+    pub glyph_id: u32,
+    pub x: f32,
+    pub y: f32,
+    pub advance: f32,
+}
+
+/* ============================
+ * Errors
+ * ============================ */
+
+#[derive(Debug)]
 pub enum TextMeasureError {
-    /// フォントが見つからない
-    FontNotFound(String),
-    /// フォントの読み込みエラー
-    FontLoadError(String),
-    /// サポートされていない機能
-    UnsupportedFeature(String),
-    /// レイアウトオーバーフロー
+    FontUnavailable,
+    UnsupportedScript,
     LayoutOverflow,
-    /// 内部エラー
     Internal(String),
 }
 
 impl fmt::Display for TextMeasureError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TextMeasureError::FontNotFound(s) => write!(f, "Font not found: {}", s),
-            TextMeasureError::FontLoadError(s) => write!(f, "Font load error: {}", s),
-            TextMeasureError::UnsupportedFeature(s) => write!(f, "Unsupported feature: {}", s),
-            TextMeasureError::LayoutOverflow => write!(f, "Layout overflow"),
-            TextMeasureError::Internal(s) => write!(f, "Internal error: {}", s),
+            Self::FontUnavailable => write!(f, "Font unavailable"),
+            Self::UnsupportedScript => write!(f, "Unsupported script"),
+            Self::LayoutOverflow => write!(f, "Layout overflow"),
+            Self::Internal(s) => write!(f, "Internal error: {s}"),
         }
     }
 }
 
 impl std::error::Error for TextMeasureError {}
 
-pub trait TextMeasurer: Send + Sync {
-    fn measure(&self, req: &TextMeasurementRequest) -> Result<TextMeasurement, TextMeasureError>;
+/* ============================
+ * Trait
+ * ============================ */
+
+pub trait TextMeasurer<S>: Send + Sync {
+    fn measure(&self, request: &TextMeasureRequest<S>) -> Result<TextMetrics, TextMeasureError>;
 }
 
+/* ============================
+ * Fallback
+ * ============================ */
+
 pub mod fallback;
-pub use fallback::EngineFallbackTextMeasurer;
+pub use fallback::FallbackTextMeasurer;

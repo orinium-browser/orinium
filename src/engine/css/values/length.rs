@@ -19,23 +19,25 @@ pub enum Length {
 }
 
 impl Length {
-    /// ピクセル値として評価（計算済みスタイルで使用）
-    pub fn to_px(&self, base: f32) -> f32 {
-        match *self {
+    /// ピクセル値として強制評価
+    fn to_px_unwprap(self, base: f32) -> f32 {
+        match self {
             Length::Px(px) => px,
             Length::Em(em) => em * base,
             Length::Percent(p) => base * (p / 100.0),
-            Length::Auto => base, // 仮の挙動（layout時に解釈）
+            Length::Auto => {
+                panic!("`Length::to_px_unwprap()` should'n be called to `Length::Auto`")
+            }
             Length::None => 0.0,
         }
     }
 
     /// ピクセル値として評価
     /// Autoの場合、Noneを返す
-    pub fn to_px_option(&self, base: f32) -> Option<f32> {
+    pub fn to_px(&self, base: f32) -> Option<f32> {
         match self {
             Length::Auto => None,
-            _ => Some(self.to_px(base)),
+            _ => Some(self.to_px_unwprap(base)),
         }
     }
 

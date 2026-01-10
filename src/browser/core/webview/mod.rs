@@ -3,11 +3,13 @@ use std::sync::Arc;
 use crate::engine::{
     css::cssom::Parser as CssParser,
     html::parser::{DomTree, Parser as HtmlParser},
-    renderer::RenderTree,
-    styler::style_tree::StyleTree,
+    layouter::{self, InfoNode},
 };
+use ui_layout::LayoutNode;
 
-use crate::platform::network::NetworkCore;
+use super::resource_loader::BrowserResourceLoader;
+
+const USER_AGENT_CSS: &str = include_str!("../../../../resource/user-agent.css");
 
 /// WebView は 1 つのウェブページの表示・レイアウト・描画を管理する構造体です。
 ///
@@ -27,8 +29,7 @@ pub struct WebView {
 
     // Core trees
     pub dom: Option<DomTree>,
-    pub style: Option<StyleTree>,
-    pub render: Option<RenderTree>,
+    pub layout_and_info: Option<(LayoutNode, InfoNode)>,
 
     // Viewport
     pub scroll_x: f32,
@@ -49,15 +50,14 @@ impl WebView {
             url: None,
             title: None,
             dom: None,
-            style: None,
-            render: None,
+            layout_and_info: None,
             scroll_x: 0.0,
             scroll_y: 0.0,
             needs_redraw: true,
         }
     }
 
-    /// ロード → DOM/CSS/Style/Render のフルパイプライン
+    /// ロード → DOM/CSS/Layout のフルパイプライン
     ///
     /// TODO:
     /// - dom_tree をクローンするコストを削減
@@ -71,24 +71,21 @@ impl WebView {
 
         self.title = dom_tree.collect_text_by_tag("title").first().cloned();
 
-        // Style Tree
-        let mut style_tree = StyleTree::transform(&dom_tree);
-        style_tree.style(&[]);
-        let computed_tree = style_tree.compute();
-
         let measurer = crate::platform::renderer::text_measurer::PlatformTextMeasurer::new();
-        let render_tree = match measurer {
-            Ok(measurer) => computed_tree.layout_with_measurer(&measurer, 800.0, 600.0),
-            Err(e) => {
-                println!("Failed to create PlatformTextMeasurer: {}", e);
-                computed_tree.layout_with_fallback(800.0, 600.0)
-            }
-        };
 
-        // Scrollable でラップ
-        let render_tree = render_tree.wrap_in_scrollable(0.0, 0.0, 800.0, 600.0);
-
-        self.render = Some(render_tree);
+        // Layout and Info
+        self.layout_and_info = Some(layouter::build_layout_and_info(
+            &dom_tree.root,
+            &layouter::css_resolver::CssResolver::resolve(
+                &CssParser::new(USER_AGENT_CSS).parse().unwrap(),
+            ),
+            &measurer.unwrap(),
+            layouter::TextStyle {
+                font_size: 16.0,
+                ..Default::default()
+            },
+            Vec::new(),
+        ));
 
         self.needs_redraw = true;
     }
@@ -100,10 +97,14 @@ impl WebView {
     /// - `<link rel="stylesheet">` を解決して CSS を取得
     /// - Style Tree を構築
     /// - Render Tree を構築
-    pub async fn load_from_url(&mut self, url: &str, net: Arc<NetworkCore>) -> anyhow::Result<()> {
+    pub async fn load_from_url(
+        &mut self,
+        url: &str,
+        net: Arc<BrowserResourceLoader>,
+    ) -> anyhow::Result<()> {
         // --- HTML をロード ---
         let html_bytes = net
-            .fetch_url(url)
+            .fetch(url)
             .await
             .map_err(|e| anyhow::Error::msg(e.to_string()))?;
 
@@ -143,7 +144,7 @@ impl WebView {
             {
                 let css_url = resolve_url(url, &href);
 
-                if let Ok(res) = net.fetch_url(&css_url).await {
+                if let Ok(res) = net.fetch(&css_url).await {
                     let bytes = res.body;
                     if let Ok(text) = String::from_utf8(bytes) {
                         css_sources.push(text);
@@ -158,32 +159,38 @@ impl WebView {
         }
 
         // --- CSSOM を構築 ---
-        let mut cssoms = vec![];
+        let mut cssoms = Vec::with_capacity(css_sources.len() + 1);
+        cssoms.push(CssParser::new(USER_AGENT_CSS).parse()?);
         for css_text in css_sources {
             let mut css_parser = CssParser::new(&css_text);
             let cssom = css_parser.parse()?;
             cssoms.push(cssom);
         }
 
-        // --- Style Tree を構築 ---
-        let mut style_tree = StyleTree::transform(&dom_tree);
-        style_tree.style(&cssoms);
-        let computed_tree = style_tree.compute();
+        let mut resolved_styles = layouter::css_resolver::ResolvedStyles::new();
+        for cssom in cssoms {
+            resolved_styles.extend(layouter::css_resolver::CssResolver::resolve(&cssom));
+        }
 
-        // --- Render Tree ---
         let measurer = crate::platform::renderer::text_measurer::PlatformTextMeasurer::new();
-        let render_tree = match measurer {
-            Ok(measurer) => computed_tree.layout_with_measurer(&measurer, 800.0, 600.0),
-            Err(e) => {
-                println!("Failed to create PlatformTextMeasurer: {}", e);
-                computed_tree.layout_with_fallback(800.0, 600.0)
-            }
-        };
 
-        // Scrollable でラップ
-        let render_tree = render_tree.wrap_in_scrollable(0.0, 0.0, 800.0, 600.0);
+        // Layout and Info
+        self.layout_and_info = Some(layouter::build_layout_and_info(
+            &dom_tree.root,
+            &resolved_styles,
+            &measurer.unwrap(),
+            layouter::TextStyle {
+                font_size: 16.0,
+                ..Default::default()
+            },
+            Vec::new(),
+        ));
 
-        self.render = Some(render_tree);
+        log::debug!(
+            target: "WebView::LayoutInfo",
+            "Layouted the page:\n {:?}",
+            self.layout_and_info.as_ref().unwrap()
+        );
 
         self.needs_redraw = true;
 
@@ -193,39 +200,15 @@ impl WebView {
     pub fn scroll_page(&mut self, delta_x: f32, delta_y: f32) {
         self.scroll_x += delta_x;
         self.scroll_y += delta_y;
-        fn scroll_scrollable(
-            node: &std::rc::Rc<
-                std::cell::RefCell<
-                    crate::engine::tree::TreeNode<crate::engine::renderer::RenderNode>,
-                >,
-            >,
-            delta_x: f32,
-            delta_y: f32,
-        ) {
-            use crate::engine::renderer::render_node::RenderNodeTrait;
-
-            let mut node_borrow = node.borrow_mut();
-            if let crate::engine::renderer::NodeKind::Scrollable {
-                scroll_offset_x,
-                scroll_offset_y,
-                ..
-            } = &mut node_borrow.value.kind_mut()
-            {
-                *scroll_offset_x += delta_x;
-                *scroll_offset_y += delta_y;
-            } else {
-                panic!("scroll_page called on non-scrollable node; this should not happen");
-            }
-        }
-        if let Some(render_tree) = &self.render {
-            scroll_scrollable(&render_tree.root, delta_x, delta_y);
-        }
         self.needs_redraw = true;
     }
 }
 
 fn resolve_url(base: &str, path: &str) -> String {
-    if path.starts_with("http://") || path.starts_with("https://") {
+    if path.starts_with("http://")
+        || path.starts_with("https://")
+        || path.starts_with("resource:///")
+    {
         return path.to_string();
     }
     let base_url = url::Url::parse(base).unwrap();

@@ -1,31 +1,34 @@
+/// CSS token definitions produced by the tokenizer.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
-    Ident(String),          // color, margin, etc.
-    StringLiteral(String),  // "string" or 'string'
-    Number(f32),            // 1.5, 10, etc.
-    Function(String),       // func(
+    Ident(String),          // Identifiers: color, margin, etc.
+    StringLiteral(String),  // Quoted strings: "string" or 'string'
+    Number(f32),            // Plain numbers: 1, 1.5, 10
+    Function(String),       // Function tokens: rgb(
     AtKeyword(String),      // @media, @import, etc.
-    Hash(String),           // #fff, #id, etc.
-    Dimension(f32, String), // 10px, 2em, etc.
-    Percentage(f32),
+    Hash(String),           // Hash tokens: #fff, #id
+    Dimension(f32, String), // Dimensions: 10px, 2em
+    Percentage(f32),        // Percentages: 50%
     Colon,
     Semicolon,
     Comma,
     Whitespace,
-    LeftBrace,    // {
-    RightBrace,   // }
-    LeftParen,    // (
-    RightParen,   // )
-    LeftBracket,  // [
-    RightBracket, // ]
-    CDO,          // '<' + "!--"
-    CDC,          // "--" + '>'
-    Delim(char),
+    LeftBrace,       // {
+    RightBrace,      // }
+    LeftParen,       // (
+    RightParen,      // )
+    LeftBracket,     // [
+    RightBracket,    // ]
+    CDO,             // <!--
+    CDC,             // -->
+    Delim(char),     // Any other delimiter
     Comment(String), // /* comment */
 }
 
+/// Internal tokenizer states.
+/// This is a simplified state machine inspired by the CSS Syntax spec.
 #[derive(Debug, PartialEq, Clone)]
-pub enum TokenizerState {
+enum TokenizerState {
     Data,
     Ident,
     Number,
@@ -33,43 +36,48 @@ pub enum TokenizerState {
     StringSingle,
     Hash,
     AtKeyword,
-    CommentStart,
     Comment,
-    CommentEndDash,
-    CommentEnd,
+    CommentEndStar,
 }
 
+/// CSS tokenizer that converts a character stream into tokens.
 pub struct Tokenizer<'a> {
     input: &'a str,
     pos: usize,
     buffer: String,
     state: TokenizerState,
-    current_token: Option<Token>,
-    token: Option<Token>,
+    emitted_token: Option<Token>,
     last_tokenized: Option<Token>,
 }
 
 impl<'a> Tokenizer<'a> {
+    /// Create a new tokenizer from an input string.
     pub fn new(input: &'a str) -> Self {
-        Tokenizer {
+        Self {
             input,
             pos: 0,
             buffer: String::new(),
             state: TokenizerState::Data,
-            current_token: None,
-            token: None,
+            emitted_token: None,
             last_tokenized: None,
         }
     }
 
+    /// Returns the most recently emitted token.
     pub fn last_tokenized_token(&self) -> Option<&Token> {
         self.last_tokenized.as_ref()
     }
 
+    /// Consume input and return the next token, if any.
     pub fn next_token(&mut self) -> Option<Token> {
+        // Read `unread_token` without logging.
+        if let Some(token) = self.emitted_token.take() {
+            self.last_tokenized = Some(token.clone());
+            return Some(token);
+        }
+
         while self.pos < self.input.len() {
-            let c = self.input[self.pos..].chars().next().unwrap();
-            self.pos += c.len_utf8();
+            let c = self.next_char();
 
             match self.state {
                 TokenizerState::Data => self.state_data(c),
@@ -78,117 +86,114 @@ impl<'a> Tokenizer<'a> {
                 TokenizerState::StringDouble | TokenizerState::StringSingle => self.state_string(c),
                 TokenizerState::Hash => self.state_hash(c),
                 TokenizerState::AtKeyword => self.state_at_keyword(c),
-                _ if self.state_is_comment() => self.state_comment(c),
-                _ => {}
+                TokenizerState::Comment | TokenizerState::CommentEndStar => self.state_comment(c),
             }
 
-            if let Some(token) = self.token.take() {
-                // println!("Tokenized: {token:?}");
+            if let Some(token) = self.emitted_token.take() {
+                self.last_tokenized = Some(token.clone());
+                log::debug!(target: "CssTokenizer", "Tokenized token: {:?}", token);
                 return Some(token);
             }
         }
+
         None
     }
 
-    fn state_is_comment(&self) -> bool {
-        matches!(
-            self.state,
-            TokenizerState::CommentStart
-                | TokenizerState::Comment
-                | TokenizerState::CommentEndDash
-                | TokenizerState::CommentEnd
-        )
+    /// Read the next UTF-8 character and advance the cursor.
+    fn next_char(&mut self) -> char {
+        let c = self.input[self.pos..].chars().next().unwrap();
+        self.pos += c.len_utf8();
+        c
     }
 
-    fn commit_token(&mut self) {
-        self.token = self.current_token.take();
-        self.last_tokenized = self.token.clone();
+    /// Step back one character (used for re-consuming).
+    fn unread_char(&mut self, c: char) {
+        self.pos -= c.len_utf8();
+    }
+
+    /// Finalize the current token and reset the buffer.
+    fn emit(&mut self, token: Token) {
         self.buffer.clear();
+        self.emitted_token = Some(token);
+        self.state = TokenizerState::Data;
+    }
+
+    /// Make last_tokenized token unread.
+    pub fn unread_token(&mut self) {
+        if let Some(ref token) = self.last_tokenized {
+            self.emitted_token = Some(token.clone());
+        }
     }
 
     fn state_data(&mut self, c: char) {
         match c {
-            c if c.is_whitespace() => {
-                self.current_token = Some(Token::Whitespace);
-                self.commit_token();
-            }
-            c if c.is_ascii_alphabetic() => {
+            c if c.is_whitespace() => self.emit(Token::Whitespace),
+
+            c if c.is_ascii_alphabetic() || c == '_' => {
                 self.buffer.push(c);
                 self.state = TokenizerState::Ident;
-                self.current_token = Some(Token::Ident(String::new()));
             }
+
             c if c.is_ascii_digit() => {
                 self.buffer.push(c);
                 self.state = TokenizerState::Number;
-                self.current_token = Some(Token::Number(0.0));
             }
-            '"' => self.state = TokenizerState::StringDouble,
-            '\'' => self.state = TokenizerState::StringSingle,
+
+            '"' => {
+                self.buffer.clear();
+                self.state = TokenizerState::StringDouble;
+            }
+
+            '\'' => {
+                self.buffer.clear();
+                self.state = TokenizerState::StringSingle;
+            }
+
             '#' => {
+                self.buffer.clear();
                 self.state = TokenizerState::Hash;
-                self.buffer.clear();
             }
+
             '@' => {
-                self.state = TokenizerState::AtKeyword;
                 self.buffer.clear();
+                self.state = TokenizerState::AtKeyword;
             }
+
             '/' if self.input[self.pos..].starts_with('*') => {
-                self.state = TokenizerState::CommentStart;
+                self.pos += 1; // consume '*'
+                self.buffer.clear();
+                self.state = TokenizerState::Comment;
             }
-            ':' => {
-                self.current_token = Some(Token::Colon);
-                self.commit_token();
-            }
-            ';' => {
-                self.current_token = Some(Token::Semicolon);
-                self.commit_token();
-            }
-            ',' => {
-                self.current_token = Some(Token::Comma);
-                self.commit_token();
-            }
-            '{' => {
-                self.current_token = Some(Token::LeftBrace);
-                self.commit_token();
-            }
-            '}' => {
-                self.current_token = Some(Token::RightBrace);
-                self.commit_token();
-            }
+
+            ':' => self.emit(Token::Colon),
+            ';' => self.emit(Token::Semicolon),
+            ',' => self.emit(Token::Comma),
+            '{' => self.emit(Token::LeftBrace),
+            '}' => self.emit(Token::RightBrace),
+
             '(' => {
-                if let Some(Token::Ident(name)) = self.current_token.take() {
-                    self.current_token = Some(Token::Function(name));
+                if let Some(Token::Ident(name)) = self.last_tokenized.take() {
+                    self.emit(Token::Function(name));
                 } else {
-                    self.current_token = Some(Token::LeftParen);
+                    self.emit(Token::LeftParen);
                 }
-                self.commit_token();
             }
-            ')' => {
-                self.current_token = Some(Token::RightParen);
-                self.commit_token();
-            }
-            '[' => {
-                self.current_token = Some(Token::LeftBracket);
-                self.commit_token();
-            }
-            ']' => {
-                self.current_token = Some(Token::RightBracket);
-                self.commit_token();
-            }
+
+            ')' => self.emit(Token::RightParen),
+            '[' => self.emit(Token::LeftBracket),
+            ']' => self.emit(Token::RightBracket),
+
             '<' if self.input[self.pos..].starts_with("!--") => {
                 self.pos += 3;
-                self.current_token = Some(Token::CDO);
-                self.commit_token();
+                self.emit(Token::CDO);
             }
+
             '-' if self.input[self.pos..].starts_with("->") => {
                 self.pos += 2;
-                self.current_token = Some(Token::CDC);
-                self.commit_token();
+                self.emit(Token::CDC);
             }
-            _ => {
-                self.current_token = Some(Token::Delim(c));
-                self.commit_token();
-            }
+
+            _ => self.emit(Token::Delim(c)),
         }
     }
 
@@ -196,10 +201,9 @@ impl<'a> Tokenizer<'a> {
         if c.is_alphanumeric() || c == '-' || c == '_' {
             self.buffer.push(c);
         } else {
-            self.current_token = Some(Token::Ident(self.buffer.clone()));
-            self.commit_token();
-            self.state = TokenizerState::Data;
-            self.pos -= c.len_utf8(); // unread
+            let ident = self.buffer.clone();
+            self.emit(Token::Ident(ident));
+            self.unread_char(c);
         }
     }
 
@@ -209,16 +213,14 @@ impl<'a> Tokenizer<'a> {
             return;
         }
 
-        let n = self.buffer.parse::<f32>().unwrap_or(0.0);
+        let value = self.buffer.parse::<f32>().unwrap_or(0.0);
 
-        // 単位 or %
         if c == '%' {
-            self.current_token = Some(Token::Percentage(n));
-            self.commit_token();
-            self.state = TokenizerState::Data;
+            self.emit(Token::Percentage(value));
         } else if c.is_ascii_alphabetic() {
             let mut unit = String::new();
             unit.push(c);
+
             while self.pos < self.input.len() {
                 let next = self.input[self.pos..].chars().next().unwrap();
                 if next.is_ascii_alphabetic() {
@@ -228,14 +230,11 @@ impl<'a> Tokenizer<'a> {
                     break;
                 }
             }
-            self.current_token = Some(Token::Dimension(n, unit));
-            self.commit_token();
-            self.state = TokenizerState::Data;
+
+            self.emit(Token::Dimension(value, unit));
         } else {
-            self.current_token = Some(Token::Number(n));
-            self.commit_token();
-            self.state = TokenizerState::Data;
-            self.pos -= c.len_utf8();
+            self.emit(Token::Number(value));
+            self.unread_char(c);
         }
     }
 
@@ -246,13 +245,11 @@ impl<'a> Tokenizer<'a> {
             '\''
         };
 
-        match c {
-            ch if ch == quote => {
-                self.current_token = Some(Token::StringLiteral(self.buffer.clone()));
-                self.commit_token();
-                self.state = TokenizerState::Data;
-            }
-            _ => self.buffer.push(c),
+        if c == quote {
+            let s = self.buffer.clone();
+            self.emit(Token::StringLiteral(s));
+        } else {
+            self.buffer.push(c);
         }
     }
 
@@ -260,10 +257,9 @@ impl<'a> Tokenizer<'a> {
         if c.is_alphanumeric() || c == '-' {
             self.buffer.push(c);
         } else {
-            self.current_token = Some(Token::Hash(self.buffer.clone()));
-            self.commit_token();
-            self.state = TokenizerState::Data;
-            self.pos -= c.len_utf8();
+            let hash = self.buffer.clone();
+            self.emit(Token::Hash(hash));
+            self.unread_char(c);
         }
     }
 
@@ -271,35 +267,28 @@ impl<'a> Tokenizer<'a> {
         if c.is_alphanumeric() || c == '-' {
             self.buffer.push(c);
         } else {
-            self.current_token = Some(Token::AtKeyword(self.buffer.clone()));
-            self.commit_token();
-            self.state = TokenizerState::Data;
-            self.pos -= c.len_utf8();
+            let kw = self.buffer.clone();
+            self.emit(Token::AtKeyword(kw));
+            self.unread_char(c);
         }
     }
 
     fn state_comment(&mut self, c: char) {
         match self.state {
-            TokenizerState::CommentStart => {
-                if c == '*' {
-                    self.state = TokenizerState::Comment;
-                } else {
-                    self.state = TokenizerState::Data;
-                }
-            }
             TokenizerState::Comment => {
                 if c == '*' {
-                    self.state = TokenizerState::CommentEndDash;
+                    self.state = TokenizerState::CommentEndStar;
                 } else {
                     self.buffer.push(c);
                 }
             }
-            TokenizerState::CommentEndDash => {
+            TokenizerState::CommentEndStar => {
                 if c == '/' {
-                    self.current_token = Some(Token::Comment(self.buffer.clone()));
-                    self.commit_token();
-                    self.state = TokenizerState::Data;
+                    let comment = self.buffer.clone();
+                    self.emit(Token::Comment(comment));
                 } else {
+                    self.buffer.push('*');
+                    self.buffer.push(c);
                     self.state = TokenizerState::Comment;
                 }
             }
@@ -315,10 +304,7 @@ mod tests {
     #[test]
     fn test_css_tokenize_basic() {
         let mut t = Tokenizer::new("body { color: red; }");
-        let mut tokens = Vec::new();
-        while let Some(tok) = t.next_token() {
-            tokens.push(tok);
-        }
+        let tokens: Vec<_> = std::iter::from_fn(|| t.next_token()).collect();
 
         assert_eq!(
             tokens,
@@ -333,7 +319,7 @@ mod tests {
                 Token::Ident("red".into()),
                 Token::Semicolon,
                 Token::Whitespace,
-                Token::RightBrace
+                Token::RightBrace,
             ]
         );
     }
@@ -342,6 +328,7 @@ mod tests {
     fn test_tokenize_dimension_and_percent() {
         let mut t = Tokenizer::new("margin: 10px 50%;");
         let tokens: Vec<_> = std::iter::from_fn(|| t.next_token()).collect();
+
         assert_eq!(
             tokens,
             vec![

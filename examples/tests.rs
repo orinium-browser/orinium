@@ -1,5 +1,5 @@
 use orinium_browser::{
-    browser::{BrowserApp, Tab},
+    browser::{BrowserApp, Tab, core::resource_loader::BrowserResourceLoader},
     engine::html::parser::Parser as HtmlParser,
     html::HtmlNodeType,
     platform::network::NetworkCore,
@@ -8,7 +8,7 @@ use orinium_browser::{
 use colored::*;
 
 use anyhow::Result;
-use std::env;
+use std::{env, sync::Arc};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -70,7 +70,8 @@ async fn main() -> Result<()> {
                     let url = &args[2];
                     println!("Parsing DOM for URL: {}", url);
                     let net = NetworkCore::new();
-                    let resp = net.fetch_url(url).await.expect("Failed to fetch URL");
+                    let loader = BrowserResourceLoader::new(Some(Arc::new(net)));
+                    let resp = loader.fetch(url).await.expect("Failed to fetch URL");
                     let html = String::from_utf8_lossy(&resp.body).to_string();
                     println!(
                         "Fetched HTML (first 50 chars):\n{}",
@@ -118,7 +119,8 @@ async fn main() -> Result<()> {
                     let url = &args[2];
                     println!("Parsing CSSOM for URL: {}", url);
                     let net = NetworkCore::new();
-                    let resp = net.fetch_url(url).await.expect("Failed to fetch URL");
+                    let loader = BrowserResourceLoader::new(Some(Arc::new(net)));
+                    let resp = loader.fetch(url).await.expect("Failed to fetch URL");
                     let css = String::from_utf8_lossy(&resp.body).to_string();
                     println!(
                         "Fetched CSS (first 50 chars):\n{}",

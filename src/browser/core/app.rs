@@ -3,9 +3,10 @@ use std::sync::Arc;
 use super::tab::Tab;
 // use super::ui::init_browser_ui;
 
+use super::resource_loader::BrowserResourceLoader;
 use crate::platform::network::NetworkCore;
 
-use crate::engine::renderer::{DrawCommand, RenderTree, Renderer};
+use crate::engine::layouter::{self, DrawCommand};
 use crate::platform::renderer::gpu::GpuRenderer;
 use crate::system::App;
 
@@ -38,7 +39,7 @@ pub struct BrowserApp {
     draw_commands: Vec<DrawCommand>,
     window_size: (u32, u32), // (x, y)
     window_title: String,
-    network: Arc<NetworkCore>,
+    network: Arc<BrowserResourceLoader>,
 }
 
 impl Default for BrowserApp {
@@ -63,7 +64,9 @@ impl BrowserApp {
 
     pub fn new(window_size: (u32, u32), window_title: String) -> Self {
         //let (render_tree, draw_commands) = init_browser_ui(window_size);
-        let network = Arc::new(NetworkCore::new());
+        let network = Arc::new(BrowserResourceLoader::new(Some(Arc::new(
+            NetworkCore::new(),
+        ))));
         Self {
             tabs: vec![],
             // render_tree,
@@ -75,12 +78,7 @@ impl BrowserApp {
     }
 
     // 開発テスト用
-    pub fn with_draw_info(
-        mut self,
-        _render_tree: RenderTree,
-        draw_commands: Vec<DrawCommand>,
-    ) -> Self {
-        // self.render_tree = render_tree;
+    pub fn with_draw_info(mut self, draw_commands: Vec<DrawCommand>) -> Self {
         self.draw_commands = draw_commands;
         self
     }
@@ -90,11 +88,10 @@ impl BrowserApp {
     }
 
     fn build_from_tabs(&mut self) {
-        if let Some(active) = self.tabs.first() {
-            let tree = active.render_tree().unwrap();
-            let renderer = Renderer::new();
-            self.draw_commands = renderer.generate_draw_commands(tree);
-            //println!("DrawCommands: {:?}", self.draw_commands);
+        if let Some(active) = self.tabs.first_mut() {
+            let (layout, info) = active.layout_and_info().unwrap();
+            ui_layout::LayoutEngine::layout(layout, 800.0, 600.0);
+            self.draw_commands = layouter::generate_draw_commands(layout, info);
 
             let title = active.title();
             if let Some(t) = title
@@ -174,7 +171,7 @@ impl BrowserApp {
         self.window_title.clone()
     }
 
-    pub fn network(&self) -> Arc<NetworkCore> {
+    pub fn network(&self) -> Arc<BrowserResourceLoader> {
         self.network.clone()
     }
 }

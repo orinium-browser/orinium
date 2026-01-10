@@ -1,6 +1,5 @@
-use orinium_browser::engine::bridge::text::{
-    FontDescription, LayoutConstraints, TextMeasurementRequest, TextMeasurer,
-};
+use orinium_browser::engine::bridge::text::{TextMeasureRequest, TextMeasurer};
+use orinium_browser::engine::layouter::TextStyle;
 use orinium_browser::platform::renderer::text_measurer::PlatformTextMeasurer;
 
 #[test]
@@ -29,17 +28,14 @@ fn platform_text_measurer_from_bytes_smoke() {
     let bytes = std::fs::read(path).expect("read font");
     let pm = PlatformTextMeasurer::from_bytes("t", bytes).expect("create measurer");
 
-    let req = TextMeasurementRequest {
+    let req = TextMeasureRequest {
         text: "Hello, world!".to_string(),
-        font: FontDescription {
-            family: None,
-            size_px: 16.0,
+        style: TextStyle {
+            font_size: 16.0,
+            ..Default::default()
         },
-        constraints: LayoutConstraints {
-            max_width: Some(200.0),
-            wrap: true,
-            max_lines: None,
-        },
+        max_width: Some(200.0),
+        wrap: true,
     };
 
     let res = pm.measure(&req).expect("measure");

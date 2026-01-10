@@ -1,11 +1,10 @@
-use crate::engine::renderer::DrawCommand;
+use crate::engine::layouter::DrawCommand;
 use anyhow::Result;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
 use super::glyph::text::{TextRenderer, TextSection};
-use glyphon::Color as GlyphColor;
 
 /// GPU描画コンテキスト
 pub struct GpuRenderer {
@@ -385,7 +384,7 @@ impl GpuRenderer {
                     let px2 = ndc(x2, screen_width);
                     let py2 = -ndc(y2, screen_height);
 
-                    let color = [color.r, color.g, color.b, color.a];
+                    let color = color.to_f32_array();
 
                     #[rustfmt::skip]
                     vertices.extend_from_slice(&[
@@ -406,21 +405,22 @@ impl GpuRenderer {
                     x,
                     y,
                     text,
-                    font_size,
-                    color,
+                    style,
                     max_width,
                 } => {
                     let (tdx, tdy) = current_transform(&transform_stack);
 
                     let clip = current_clip(&clip_stack);
 
-                    let tw = if (x + max_width) < (clip.x + clip.w) {
-                        (x + max_width) - clip.x
+                    let tw = if (tdx + x + max_width) < (clip.x + clip.w) {
+                        (tdx + x + max_width) - clip.x
                     } else {
                         clip.w
                     };
 
                     let th = clip.h;
+
+                    let font_size = &style.font_size;
 
                     // Text culling: if enabled and the text's bounding box is fully outside current clip, skip creating buffer
                     let mut skip_text = false;
@@ -460,14 +460,9 @@ impl GpuRenderer {
 
                     // Use TextRenderer helper to create a Buffer with correct FontSystem handling
                     let section = if let Some(tr) = &mut self.text_renderer {
-                        // convert color to glyphon Color (u8 rgba)
-                        let gc = GlyphColor::rgba(
-                            (color.r * 255.0) as u8,
-                            (color.g * 255.0) as u8,
-                            (color.b * 255.0) as u8,
-                            (color.a * 255.0) as u8,
-                        );
-                        let buffer = tr.create_buffer_for_text(text, *font_size * sf, gc);
+                        let mut render_text_style = *style;
+                        render_text_style.font_size = *font_size * sf;
+                        let buffer = tr.create_buffer_for_text(text, render_text_style);
 
                         TextSection {
                             screen_position: ((*x + tdx) * sf, (*y + tdy) * sf),
@@ -613,7 +608,7 @@ impl GpuRenderer {
                     // NDC helper
                     let ndc = |v: f32, max: f32| (v / max) * 2.0 - 1.0;
 
-                    let color_arr = [color.r, color.g, color.b, color.a];
+                    let color_arr = color.to_f32_array();
 
                     let v0 = transformed_points[0];
                     for i in 1..(transformed_points.len() - 1) {

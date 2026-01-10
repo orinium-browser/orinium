@@ -17,7 +17,7 @@ platform::network::NetworkCore
 engine::html::parser
    │ DOM Tree
    ▼
-engine::renderer
+engine::layouter
    │ Vec<DrawCommand>
    ▼
 platform::renderer
@@ -33,7 +33,7 @@ Window Frame
 | **browser**            | `src/browser/mod.rs`               | Orchestration layer that integrates the system and controls startup/initialization. |
 | **platform::ui**       | `src/platform/ui`                  | Manages OS windows and the event loop (`winit`); the outer boundary of the app.     |
 | **platform::renderer** | `src/platform/renderer`            | GPU abstraction (wgpu-based). Executes draw commands and manages frames.            |
-| **engine::renderer**   | `src/engine/renderer`              | Logical rendering layer that converts HTML/CSS layout results into draw commands.   |
+| **engine::layouter**   | `src/engine/layouter`              | Logical rendering layer that converts HTML/CSS layout results into draw commands.   |
 | **engine::html / css** | `src/engine/html`・`src/engine/css` | Tokenization, parsing, and construction of the DOM/CSSOM.                           |
 | **platform::network**  | `src/platform/network`             | TCP/TLS networking, HTTP handling, cache and cookie management.                     |
 | **platform::io**       | `src/platform/io`                  | OS-dependent I/O abstractions (files, configuration, etc.).                         |
@@ -45,7 +45,7 @@ sequenceDiagram
     participant Browser as browser::Browser
     participant Net as platform::network
     participant HTML as engine::html
-    participant Render as engine::renderer
+    participant Render as engine::layouter
     participant GPU as platform::renderer
 
     UI->>Browser: User input

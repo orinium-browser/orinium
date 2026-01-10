@@ -4,7 +4,7 @@ use tokio::runtime::Runtime;
 
 #[ignore]
 #[test]
-fn test_https_connection() -> Result<(), Box<dyn Error>> {
+fn test_https_connection() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     let rt = Runtime::new()?;
 
     rt.block_on(async {
@@ -79,7 +79,7 @@ fn test_http_and_https_comparison() -> Result<(), Box<dyn Error>> {
 
 #[ignore]
 #[test]
-fn test_https_redirect() -> Result<(), Box<dyn Error>> {
+fn test_https_redirect() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     let rt = Runtime::new()?;
 
     rt.block_on(async {
@@ -108,7 +108,8 @@ fn test_https_redirect() -> Result<(), Box<dyn Error>> {
 
 #[ignore]
 #[test]
-fn test_secure_site_certificate() -> Result<(), Box<dyn Error>> {
+fn test_secure_site_certificate() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>
+{
     let rt = Runtime::new()?;
 
     rt.block_on(async {

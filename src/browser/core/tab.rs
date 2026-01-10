@@ -1,6 +1,10 @@
 use std::sync::Arc;
 
-use crate::{network::NetworkCore, renderer::RenderTree};
+use super::resource_loader::BrowserResourceLoader;
+use crate::network::NetworkCore;
+
+use crate::engine::layouter::InfoNode;
+use ui_layout::LayoutNode;
 
 use super::webview::WebView;
 
@@ -16,7 +20,7 @@ use super::webview::WebView;
 /// TODO:
 /// - ページの状態（Error、loading）の管理を追加
 pub struct Tab {
-    net: Arc<NetworkCore>,
+    net: Arc<BrowserResourceLoader>,
     title: Option<String>,
     url: Option<String>,
     webview: Option<WebView>,
@@ -24,13 +28,15 @@ pub struct Tab {
 
 impl Default for Tab {
     fn default() -> Self {
-        let net = Arc::new(NetworkCore::new());
+        let net = Arc::new(BrowserResourceLoader::new(Some(Arc::new(
+            NetworkCore::new(),
+        ))));
         Self::new(net)
     }
 }
 
 impl Tab {
-    pub fn new(net: Arc<NetworkCore>) -> Self {
+    pub fn new(net: Arc<BrowserResourceLoader>) -> Self {
         Self {
             net,
             title: None,
@@ -56,8 +62,10 @@ impl Tab {
         Ok(())
     }
 
-    pub fn render_tree(&self) -> Option<&RenderTree> {
-        self.webview.as_ref().and_then(|wv| wv.render.as_ref())
+    pub fn layout_and_info(&mut self) -> Option<&mut (LayoutNode, InfoNode)> {
+        self.webview
+            .as_mut()
+            .and_then(|wv| wv.layout_and_info.as_mut())
     }
 
     pub fn title(&self) -> Option<String> {
