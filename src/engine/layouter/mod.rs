@@ -14,15 +14,13 @@ use ui_layout::{Display, FlexDirection, ItemStyle, LayoutNode, Style};
 #[derive(Debug, Clone)]
 pub struct InfoNode {
     pub kind: NodeKind,
-    pub text_section: Option<(String, TextStyle)>,
     pub children: Vec<InfoNode>,
 }
 
 #[derive(Debug, Clone)]
 pub enum NodeKind {
     Container,
-    Text,
-    Scrollable,
+    Text { text: String, style: TextStyle },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -123,7 +121,6 @@ pub fn build_layout_and_info(
     };
 
     let mut text_style = parent_text_style;
-    let mut text: Option<String> = None;
 
     /* -----------------------------
        Apply resolved CSS
@@ -173,8 +170,10 @@ pub fn build_layout_and_info(
     ----------------------------- */
     if let HtmlNodeType::Text(t) = &html_node {
         let t = normalize_whitespace(t);
-        kind = NodeKind::Text;
-        text = Some(t.clone());
+        kind = NodeKind::Text {
+            text: t.clone(),
+            style: text_style,
+        };
 
         let req = text::TextMeasureRequest {
             text: t.clone(),
@@ -236,11 +235,8 @@ pub fn build_layout_and_info(
 
     let layout = LayoutNode::with_children(style, layout_children);
 
-    let text_section = text.map(|t| (t, text_style));
-
     let info = InfoNode {
         kind,
-        text_section,
         children: info_children,
     };
 
@@ -519,28 +515,24 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
     let abs_x = rect.x;
     let abs_y = rect.y;
 
-    match info.kind {
-        NodeKind::Text => {
-            if let Some((text, style)) = &info.text_section {
-                /*
-                commands.push(DrawCommand::DrawRect {
-                    x: abs_x,
-                    y: abs_y,
-                    width: rect.width,
-                    height: rect.height,
-                    color: Color(255, 0, 0, 255),
-                });
-                */
-                commands.push(DrawCommand::DrawText {
-                    x: abs_x,
-                    y: abs_y,
-                    text: text.clone(),
-                    style: *style,
-                    max_width: rect.width,
-                });
-            } else {
-                panic!("No text infomation found from `NodeKind::Text`. This should not be happen.")
-            }
+    match &info.kind {
+        NodeKind::Text { text, style } => {
+            /*
+            commands.push(DrawCommand::DrawRect {
+                x: abs_x,
+                y: abs_y,
+                width: rect.width,
+                height: rect.height,
+                color: Color(255, 0, 0, 255),
+            });
+            */
+            commands.push(DrawCommand::DrawText {
+                x: abs_x,
+                y: abs_y,
+                text: text.clone(),
+                style: *style,
+                max_width: rect.width,
+            });
         }
         NodeKind::Container => {
             commands.push(DrawCommand::PushTransform {
@@ -553,9 +545,6 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
                 width: rect.width,
                 height: rect.height,
             });
-        }
-        _ => {
-            panic!("This should not be happen.")
         }
     }
 
