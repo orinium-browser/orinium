@@ -74,10 +74,8 @@ impl BrowserApp {
 
             let title = if let Some(t) = tab.title().filter(|t| !t.is_empty()) {
                 Some(t)
-            } else if let Some(url) = tab.url().filter(|u| !u.is_empty()) {
-                Some(url)
             } else {
-                None
+                tab.url().filter(|u| !u.is_empty())
             };
             let (layout, info) = tab.layout_and_info().unwrap();
 
