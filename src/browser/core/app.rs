@@ -35,7 +35,6 @@ pub enum BrowserCommand {
 /// - ブラウザUIの実装
 pub struct BrowserApp {
     tabs: Vec<Tab>,
-    // render_tree: RenderTree,
     draw_commands: Vec<DrawCommand>,
     window_size: (u32, u32), // (x, y)
     window_title: String,
@@ -63,13 +62,11 @@ impl BrowserApp {
     }
 
     pub fn new(window_size: (u32, u32), window_title: String) -> Self {
-        //let (render_tree, draw_commands) = init_browser_ui(window_size);
         let network = Arc::new(BrowserResourceLoader::new(Some(Arc::new(
             NetworkCore::new(),
         ))));
         Self {
             tabs: vec![],
-            // render_tree,
             draw_commands: vec![],
             window_size,
             window_title,
