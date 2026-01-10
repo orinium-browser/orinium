@@ -716,6 +716,7 @@ impl GpuRenderer {
                                             });
                                             let (w_px, h_px) = (tex.size().width, tex.size().height);
                                             self.texture_cache.insert(s.clone(), TextureEntry { bind_group, width: w_px, height: h_px });
+                                            log::info!(target: "PRender::gpu::texture", "loaded texture {} ({}x{})", s, w_px, h_px);
                                         }
                                         Err(e) => {
                                             log::warn!(target: "PRender::gpu::texture", "failed to create texture from bytes for {}: {}", s, e);
@@ -728,18 +729,61 @@ impl GpuRenderer {
 
                             // Create textured quad vertices (NDC positions + UVs)
                             let start = self.texture_vertices.len() as u32;
-                            #[rustfmt::skip]
-                            self.texture_vertices.extend_from_slice(&[
-                                TexturedVertex { position: [px1, py1], uv: [0.0, 0.0] },
-                                TexturedVertex { position: [px1, py2], uv: [0.0, 1.0] },
-                                TexturedVertex { position: [px2, py1], uv: [1.0, 0.0] },
 
-                                TexturedVertex { position: [px2, py1], uv: [1.0, 0.0] },
-                                TexturedVertex { position: [px1, py2], uv: [0.0, 1.0] },
-                                TexturedVertex { position: [px2, py2], uv: [1.0, 1.0] },
-                            ]);
-                            let count = (self.texture_vertices.len() as u32) - start;
-                            self.texture_draws.push(TexturedRange { src: s.clone(), start, count });
+                            // If texture is cached, render at the texture's intrinsic pixel size (no shrinking)
+                            if let Some(entry) = self.texture_cache.get(s) {
+                                let tex_w = entry.width as f32;
+                                let tex_h = entry.height as f32;
+
+                                // Render rectangle in screen pixels: top-left at (x1,y1), size = texture px
+                                let render_x1 = x1;
+                                let render_y1 = y1;
+                                let render_x2 = x1 + tex_w;
+                                let render_y2 = y1 + tex_h;
+
+                                // Cull if completely outside current clip
+                                let clip_l = clip.x * sf;
+                                let clip_t = clip.y * sf;
+                                let clip_r = (clip.x + clip.w) * sf;
+                                let clip_b = (clip.y + clip.h) * sf;
+
+                                if render_x2 <= clip_l || render_x1 >= clip_r || render_y2 <= clip_t || render_y1 >= clip_b {
+                                    // fully outside, skip creating vertices
+                                    log::debug!(target: "PRender::gpu::texture", "skipping offscreen texture {} at rect ({},{})-({},{})", s, render_x1, render_y1, render_x2, render_y2);
+                                } else {
+                                    // Convert to NDC for the (possibly clipped) quad
+                                    let adj_px1 = (render_x1 / screen_width) * 2.0 - 1.0;
+                                    let adj_py1 = -((render_y1 / screen_height) * 2.0 - 1.0);
+                                    let adj_px2 = (render_x2 / screen_width) * 2.0 - 1.0;
+                                    let adj_py2 = -((render_y2 / screen_height) * 2.0 - 1.0);
+
+                                    #[rustfmt::skip]
+                                    self.texture_vertices.extend_from_slice(&[
+                                        TexturedVertex { position: [adj_px1, adj_py1], uv: [0.0, 0.0] },
+                                        TexturedVertex { position: [adj_px1, adj_py2], uv: [0.0, 1.0] },
+                                        TexturedVertex { position: [adj_px2, adj_py1], uv: [1.0, 0.0] },
+
+                                        TexturedVertex { position: [adj_px2, adj_py1], uv: [1.0, 0.0] },
+                                        TexturedVertex { position: [adj_px1, adj_py2], uv: [0.0, 1.0] },
+                                        TexturedVertex { position: [adj_px2, adj_py2], uv: [1.0, 1.0] },
+                                    ]);
+                                }
+                            } else {
+                                // fallback: use full layout box (may be updated when texture is loaded)
+                                #[rustfmt::skip]
+                                self.texture_vertices.extend_from_slice(&[
+                                    TexturedVertex { position: [px1, py1], uv: [0.0, 0.0] },
+                                    TexturedVertex { position: [px1, py2], uv: [0.0, 1.0] },
+                                    TexturedVertex { position: [px2, py1], uv: [1.0, 0.0] },
+
+                                    TexturedVertex { position: [px2, py1], uv: [1.0, 0.0] },
+                                    TexturedVertex { position: [px1, py2], uv: [0.0, 1.0] },
+                                    TexturedVertex { position: [px2, py2], uv: [1.0, 1.0] },
+                                ]);
+                            }
+
+                             let count = (self.texture_vertices.len() as u32) - start;
+                             self.texture_draws.push(TexturedRange { src: s.clone(), start, count });
                         } else {
                             // Non-resource src: ignore per requirement
                         }
