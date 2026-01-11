@@ -484,10 +484,12 @@ pub enum DrawCommand {
         width: f32,
         height: f32,
         color: Color,
+        texture_id: Option<u64>,
     },
     DrawPolygon {
         points: Vec<(f32, f32)>,
         color: Color,
+        texture_id: Option<u64>,
     },
     DrawEllipse {
         center: (f32, f32),
@@ -522,15 +524,6 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
     match info.kind {
         NodeKind::Text => {
             if let Some((text, style)) = &info.text_section {
-                /*
-                commands.push(DrawCommand::DrawRect {
-                    x: abs_x,
-                    y: abs_y,
-                    width: rect.width,
-                    height: rect.height,
-                    color: Color(255, 0, 0, 255),
-                });
-                */
                 commands.push(DrawCommand::DrawText {
                     x: abs_x,
                     y: abs_y,
