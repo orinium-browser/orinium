@@ -23,7 +23,7 @@ fontdue = "0.9.3"
 ab_glyph = "0.2"
 bytemuck = { version = "1.24", features = ["derive"] }
 url = "2.5"
-rustls = { version = "0.23.35", default-features = false, features = ["tls12"] }
+rustls = { version = "0.23.36", default-features = false, features = ["tls12"] }
 rustls-native-certs = "0.8.3"
 tokio-rustls = "0.26.4"
 hyper = { version = "1", features = ["full"] }
