@@ -31,8 +31,6 @@ pub struct GpuRenderer {
 
     /// テキスト描画用ラッパー
     text_renderer: Option<TextRenderer>,
-    /// 最後のフレーム時刻（アニメーション計算用）
-    last_frame: Option<std::time::Instant>,
 
     /// テキストカリングを有効にする
     enable_text_culling: bool,
@@ -225,7 +223,6 @@ impl GpuRenderer {
             vertices: vec![],
             num_vertices: 0,
             text_renderer,
-            last_frame: None,
             enable_text_culling,
         })
     }
@@ -691,26 +688,12 @@ impl GpuRenderer {
     }
 
     /// フレームを描画
-    pub fn render(&mut self) -> Result<bool> {
+    pub fn render(&mut self) -> Result<()> {
         // 描画するフレームバッファを取得
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-
-        // text_scroll を target_text_scroll に向かって進める
-        let now = std::time::Instant::now();
-        let dt = if let Some(prev) = self.last_frame {
-            now.duration_since(prev).as_secs_f32()
-        } else {
-            1.0 / 60.0
-        };
-        self.last_frame = Some(now);
-
-        let smoothing_speed = 15.0_f32;
-        let _alpha = 1.0 - (-smoothing_speed * dt).exp();
-
-        let animating = false;
 
         // アニメーション中はテキストブラシが更新位置を反映できるようにセクションを再キューする必要がある
         // 補足: 呼び出し元（UI層）も各フレームで描画コマンドを再キューしているため、ここではアニメーション状態を返り値で通知するだけ
@@ -783,7 +766,7 @@ impl GpuRenderer {
         // フレームを画面に表示
         output.present();
 
-        Ok(animating)
+        Ok(())
     }
 
     fn update_vertices(
