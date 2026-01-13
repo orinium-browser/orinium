@@ -9,7 +9,7 @@ use crate::engine::tree::TreeNode;
 use crate::html::HtmlNodeType;
 use std::cell::RefCell;
 use std::rc::Rc;
-use ui_layout::{Display, FlexDirection, ItemStyle, LayoutNode, Style};
+use ui_layout::{Display, FlexDirection, ItemStyle, LayoutNode, Length, Style};
 
 #[derive(Debug, Clone)]
 pub struct InfoNode {
@@ -125,11 +125,8 @@ pub fn build_layout_and_info(
         display: Display::Block,
         item_style: ItemStyle {
             flex_grow: 0.0,
-            flex_basis: None,
             ..Default::default()
         },
-        column_gap: 0.0,
-        row_gap: 0.0,
         ..Default::default()
     };
 
@@ -200,8 +197,8 @@ pub fn build_layout_and_info(
             .map(|m| (m.width, m.height))
             .unwrap_or((800.0, text_style.font_size * 1.2));
 
-        style.size.width = Some(w);
-        style.size.height = Some(h);
+        style.size.width = Length::Px(w);
+        style.size.height = Length::Px(h);
     }
 
     /* -----------------------------
@@ -354,41 +351,41 @@ fn apply_declaration(name: &str, value: &CssValue, style: &mut Style, text_style
          * Box Model
          * ====================== */
         ("margin", CssValue::Length(len)) => {
-            let px = len.to_px(16.0).unwrap_or(0.0);
-            style.spacing.margin_top = px;
-            style.spacing.margin_right = px;
-            style.spacing.margin_bottom = px;
+            let px = Length::Px(len.to_px(16.0).unwrap_or(0.0));
+            style.spacing.margin_top = px.clone();
+            style.spacing.margin_right = px.clone();
+            style.spacing.margin_bottom = px.clone();
             style.spacing.margin_left = px;
         }
         ("padding", CssValue::Length(len)) => {
-            let px = len.to_px(16.0).unwrap_or(0.0);
-            style.spacing.padding_top = px;
-            style.spacing.padding_right = px;
-            style.spacing.padding_bottom = px;
+            let px = Length::Px(len.to_px(16.0).unwrap_or(0.0));
+            style.spacing.padding_top = px.clone();
+            style.spacing.padding_right = px.clone();
+            style.spacing.padding_bottom = px.clone();
             style.spacing.padding_left = px;
         }
 
         ("margin-top", CssValue::Length(len)) => {
-            style.spacing.margin_top = len.to_px(16.0).unwrap_or(0.0);
+            style.spacing.margin_top = Length::Px(len.to_px(16.0).unwrap_or(0.0));
         }
         ("margin-right", CssValue::Length(len)) => {
-            style.spacing.margin_right = len.to_px(16.0).unwrap_or(0.0);
+            style.spacing.margin_right = Length::Px(len.to_px(16.0).unwrap_or(0.0));
         }
         ("margin-bottom", CssValue::Length(len)) => {
-            style.spacing.margin_bottom = len.to_px(16.0).unwrap_or(0.0);
+            style.spacing.margin_bottom = Length::Px(len.to_px(16.0).unwrap_or(0.0));
         }
         ("margin-left", CssValue::Length(len)) => {
-            style.spacing.margin_left = len.to_px(16.0).unwrap_or(0.0);
+            style.spacing.margin_left = Length::Px(len.to_px(16.0).unwrap_or(0.0));
         }
 
         /* ======================
          * Size
          * ====================== */
         ("width", CssValue::Length(len)) => {
-            style.size.width = Some(len.to_px(16.0).unwrap_or(0.0));
+            style.size.width = Length::Px(len.to_px(16.0).unwrap_or(0.0));
         }
         ("height", CssValue::Length(len)) => {
-            style.size.height = Some(len.to_px(16.0).unwrap_or(0.0));
+            style.size.height = Length::Px(len.to_px(16.0).unwrap_or(0.0));
         }
 
         /* ======================
