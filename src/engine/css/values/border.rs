@@ -30,7 +30,7 @@ pub struct BorderSide {
 impl Default for BorderSide {
     fn default() -> Self {
         Self {
-            width: Length::Px(0.0),
+            width: Length::px(0.0),
             style: BorderStyle::None,
             color: Color::BLACK,
         }

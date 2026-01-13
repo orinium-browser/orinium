@@ -1,4 +1,7 @@
 pub mod css_resolver;
+mod csslength_to_length;
+
+use anyhow::Result;
 
 use crate::engine::css::cssom::matcher::{ElementChain, ElementInfo};
 use css_resolver::ResolvedStyles;
@@ -272,7 +275,25 @@ fn normalize_whitespace(text: &str) -> String {
     result
 }
 
-fn apply_declaration(name: &str, value: &CssValue, style: &mut Style, text_style: &mut TextStyle) {
+fn apply_declaration(
+    name: &str,
+    value: &CssValue,
+    style: &mut Style,
+    text_style: &mut TextStyle,
+) -> Option<()> {
+    let resolve_css_len = |css_len: &crate::engine::css::Length| -> Option<Length> {
+        use crate::engine::css::length::{Length as CssLength, LengthUnit};
+        match &css_len {
+            CssLength::Value(v, LengthUnit::Em) => Some(Length::Px(text_style.font_size * v)),
+            _ => css_len
+                .try_into()
+                .inspect_err(
+                    |e| log::error!(target: "Layouter", "Unknown CSS Length type: {:?}", e),
+                )
+                .ok(),
+        }
+    };
+
     match (name, value) {
         /* ======================
          * Display
@@ -309,8 +330,17 @@ fn apply_declaration(name: &str, value: &CssValue, style: &mut Style, text_style
             }
         }
 
-        ("font-size", CssValue::Length(len)) => {
-            text_style.font_size = len.to_px(16.0).unwrap_or(16.0);
+        ("font-size", CssValue::Length(css_len)) => {
+            // TODO: Add other size
+            let len = resolve_css_len(css_len)?;
+            let px = match &len {
+                Length::Px(v) => *v,
+                _ => {
+                    log::error!(target: "Layouter", "Unknown size type for font-size: {:?}", len);
+                    0.0
+                }
+            };
+            text_style.font_size = px;
         }
 
         ("font-weight", CssValue::Keyword(v)) if v == "normal" => {
@@ -350,42 +380,42 @@ fn apply_declaration(name: &str, value: &CssValue, style: &mut Style, text_style
         /* ======================
          * Box Model
          * ====================== */
-        ("margin", CssValue::Length(len)) => {
-            let px = Length::Px(len.to_px(16.0).unwrap_or(0.0));
-            style.spacing.margin_top = px.clone();
-            style.spacing.margin_right = px.clone();
-            style.spacing.margin_bottom = px.clone();
-            style.spacing.margin_left = px;
+        ("margin", CssValue::Length(css_len)) => {
+            let len = resolve_css_len(css_len)?;
+            style.spacing.margin_top = len.clone();
+            style.spacing.margin_right = len.clone();
+            style.spacing.margin_bottom = len.clone();
+            style.spacing.margin_left = len;
         }
-        ("padding", CssValue::Length(len)) => {
-            let px = Length::Px(len.to_px(16.0).unwrap_or(0.0));
-            style.spacing.padding_top = px.clone();
-            style.spacing.padding_right = px.clone();
-            style.spacing.padding_bottom = px.clone();
-            style.spacing.padding_left = px;
+        ("padding", CssValue::Length(css_len)) => {
+            let len = resolve_css_len(css_len)?;
+            style.spacing.padding_top = len.clone();
+            style.spacing.padding_right = len.clone();
+            style.spacing.padding_bottom = len.clone();
+            style.spacing.padding_left = len;
         }
 
-        ("margin-top", CssValue::Length(len)) => {
-            style.spacing.margin_top = Length::Px(len.to_px(16.0).unwrap_or(0.0));
+        ("margin-top", CssValue::Length(css_len)) => {
+            style.spacing.margin_top = resolve_css_len(css_len)?;
         }
-        ("margin-right", CssValue::Length(len)) => {
-            style.spacing.margin_right = Length::Px(len.to_px(16.0).unwrap_or(0.0));
+        ("margin-right", CssValue::Length(css_len)) => {
+            style.spacing.margin_right = resolve_css_len(css_len)?;
         }
-        ("margin-bottom", CssValue::Length(len)) => {
-            style.spacing.margin_bottom = Length::Px(len.to_px(16.0).unwrap_or(0.0));
+        ("margin-bottom", CssValue::Length(css_len)) => {
+            style.spacing.margin_bottom = resolve_css_len(css_len)?;
         }
-        ("margin-left", CssValue::Length(len)) => {
-            style.spacing.margin_left = Length::Px(len.to_px(16.0).unwrap_or(0.0));
+        ("margin-left", CssValue::Length(css_len)) => {
+            style.spacing.margin_left = resolve_css_len(css_len)?;
         }
 
         /* ======================
          * Size
          * ====================== */
-        ("width", CssValue::Length(len)) => {
-            style.size.width = Length::Px(len.to_px(16.0).unwrap_or(0.0));
+        ("width", CssValue::Length(css_len)) => {
+            style.size.width = resolve_css_len(css_len)?;
         }
-        ("height", CssValue::Length(len)) => {
-            style.size.height = Length::Px(len.to_px(16.0).unwrap_or(0.0));
+        ("height", CssValue::Length(css_len)) => {
+            style.size.height = resolve_css_len(css_len)?;
         }
 
         /* ======================
@@ -410,6 +440,7 @@ fn apply_declaration(name: &str, value: &CssValue, style: &mut Style, text_style
 
         _ => {}
     }
+    Some(())
 }
 
 fn keyword_color_to_color(keyword: &str) -> Option<Color> {
