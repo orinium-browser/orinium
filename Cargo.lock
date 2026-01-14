@@ -3311,9 +3311,9 @@ dependencies = [
 
 [[package]]
 name = "ui_layout"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd7609995ccb9032ca4441fd5d7adfa613dcf954f765190a93b0634fced0af58"
+checksum = "1c06a9f603e1cc35b02c62822e4daac281089070041022a9e3e90f0fe37d148b"
 
 [[package]]
 name = "unicode-bidi"
