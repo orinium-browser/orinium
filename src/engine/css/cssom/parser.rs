@@ -46,6 +46,7 @@ pub enum CssValue {
     Keyword(String),
     Length(Length),
     Color(Color),
+    List(Vec<CssValue>),
 }
 
 /// CSS parser consuming tokens and producing a syntax tree.
@@ -328,6 +329,20 @@ impl<'a> Parser<'a> {
 
     /// Parse a CSS value string into a structured value.
     fn parse_value(css: &str) -> Result<CssValue> {
+        let parts: Vec<&str> = css.split_whitespace().collect();
+
+        if parts.len() > 1 {
+            let mut values = Vec::new();
+            for part in parts {
+                values.push(Self::parse_single_value(part)?);
+            }
+            return Ok(CssValue::List(values));
+        }
+
+        Self::parse_single_value(css)
+    }
+
+    fn parse_single_value(css: &str) -> Result<CssValue> {
         if let Some(length) = Length::from_css(css) {
             Ok(CssValue::Length(length))
         } else if let Some(color) = Color::from_hex(css) {
