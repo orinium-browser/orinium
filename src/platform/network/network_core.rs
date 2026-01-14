@@ -14,7 +14,7 @@ use tokio::sync::RwLock;
 use tokio::time::{Duration, sleep};
 use tokio_rustls::TlsConnector;
 
-use crate::network::{HostKey, HttpSender, SenderPool};
+use super::{HostKey, HttpSender, NetworkConfig, SenderPool};
 
 pub struct Response {
     pub status: hyper::StatusCode,
@@ -24,6 +24,7 @@ pub struct Response {
 }
 
 pub struct NetworkCore {
+    network_confing: Arc<NetworkConfig>,
     sender_pool: Arc<RwLock<SenderPool>>,
     tls_config: Arc<ClientConfig>,
 }
@@ -63,6 +64,7 @@ impl NetworkCore {
             .with_no_client_auth();
 
         Self {
+            network_confing: Arc::new(NetworkConfig::default()),
             sender_pool: Arc::new(RwLock::new(SenderPool::new())),
             tls_config: Arc::new(tls_config),
         }
@@ -148,6 +150,7 @@ impl NetworkCore {
             .method(method)
             .uri(path)
             .header("Host", authority.as_str())
+            .header("User-Agent", self.network_confing.user_agent.as_str())
             .body(Empty::<Bytes>::new())?;
 
         let mut res = match &mut sender {
