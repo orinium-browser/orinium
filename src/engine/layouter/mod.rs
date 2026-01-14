@@ -393,9 +393,7 @@ fn apply_declaration(
             }
         }
         ("background-color", CssValue::Keyword(v)) => {
-            println!("{}", v);
             if let Some(c) = keyword_color_to_color(v) {
-                println!("{:?}", c);
                 container_style.background_color = c;
             }
         }
