@@ -44,3 +44,100 @@ impl CssResolver {
         result
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::css::cssom::*;
+    use crate::engine::css::values::Color;
+    use crate::engine::tree::{Tree, TreeNode};
+
+    #[test]
+    fn css_resolver_collects_rules_and_declarations() {
+        // Stylesheet
+        let tree = Tree::new(CssNodeType::Stylesheet);
+        let root = &tree.root;
+
+        // html { padding: 0 40px }
+        let html_rule = TreeNode::new(CssNodeType::Rule {
+            selectors: vec![ComplexSelector {
+                parts: vec![SelectorPart {
+                    selector: Selector {
+                        tag: Some("html".into()),
+                        classes: vec![],
+                        pseudo_class: None,
+                        pseudo_element: None,
+                    },
+                    combinator: None,
+                }],
+            }],
+        });
+        TreeNode::add_child(
+            &html_rule,
+            TreeNode::new(CssNodeType::Declaration {
+                name: "padding".into(),
+                value: CssValue::Keyword("0 40px".into()),
+            }),
+        );
+        TreeNode::add_child(root, html_rule);
+
+        // body { margin: 0; padding: 0; color: ... }
+        let body_rule = TreeNode::new(CssNodeType::Rule {
+            selectors: vec![ComplexSelector {
+                parts: vec![SelectorPart {
+                    selector: Selector {
+                        tag: Some("body".into()),
+                        classes: vec![],
+                        pseudo_class: None,
+                        pseudo_element: None,
+                    },
+                    combinator: None,
+                }],
+            }],
+        });
+
+        TreeNode::add_child(
+            &body_rule,
+            TreeNode::new(CssNodeType::Declaration {
+                name: "margin".into(),
+                value: CssValue::Keyword("0".into()),
+            }),
+        );
+        TreeNode::add_child(
+            &body_rule,
+            TreeNode::new(CssNodeType::Declaration {
+                name: "padding".into(),
+                value: CssValue::Keyword("0".into()),
+            }),
+        );
+        TreeNode::add_child(
+            &body_rule,
+            TreeNode::new(CssNodeType::Declaration {
+                name: "color".into(),
+                value: CssValue::Color(Color::Rgba(240, 240, 240, 1.0)),
+            }),
+        );
+
+        TreeNode::add_child(root, body_rule);
+
+        // 実行
+        let styles = CssResolver::resolve(&tree);
+
+        // Rule 数
+        assert_eq!(styles.len(), 2);
+
+        // html
+        let (selector, decls) = &styles[0];
+        assert_eq!(selector.parts[0].selector.tag.as_deref(), Some("html"));
+        assert_eq!(decls.len(), 1);
+        assert_eq!(decls[0].0, "padding");
+
+        // body
+        let (selector, decls) = &styles[1];
+        assert_eq!(selector.parts[0].selector.tag.as_deref(), Some("body"));
+        assert_eq!(decls.len(), 3);
+        assert_eq!(decls[0].0, "margin");
+        assert_eq!(decls[1].0, "padding");
+        assert_eq!(decls[2].0, "color");
+    }
+}
