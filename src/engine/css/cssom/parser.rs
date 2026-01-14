@@ -17,6 +17,7 @@ pub enum CssNodeType {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Selector {
     pub tag: Option<String>,
+    pub id: Option<String>,
     pub classes: Vec<String>,
     pub pseudo_class: Option<String>,
     pub pseudo_element: Option<String>,
@@ -341,10 +342,12 @@ impl<'a> Parser<'a> {
     /// Parse CSS selector.
     fn parse_selector(input: &str) -> Selector {
         log::info!(target:"CssParser::Selector", "Parsing selector: {}", input);
+
         let mut rest = input;
         let mut pseudo_class = None;
         let mut pseudo_element = None;
 
+        // 疑似要素・疑似クラス
         if let Some(idx) = rest.find("::") {
             pseudo_element = Some(rest[idx + 2..].to_string());
             rest = &rest[..idx];
@@ -354,17 +357,77 @@ impl<'a> Parser<'a> {
         }
 
         let mut tag = None;
+        let mut id = None;
         let mut classes = Vec::new();
-        for part in rest.split('.') {
-            if tag.is_none() && !part.is_empty() {
-                tag = Some(part.to_string());
-            } else if !part.is_empty() {
-                classes.push(part.to_string());
+
+        // 例: div#main.content.large
+        let mut buf = String::new();
+        let mut chars = rest.chars().peekable();
+
+        enum Mode {
+            Tag,
+            Id,
+            Class,
+        }
+
+        let mut mode = Mode::Tag;
+
+        while let Some(c) = chars.next() {
+            match c {
+                '#' => {
+                    if !buf.is_empty() && tag.is_none() {
+                        tag = Some(buf.clone());
+                    }
+                    buf.clear();
+                    mode = Mode::Id;
+                }
+                '.' => {
+                    match mode {
+                        Mode::Tag => {
+                            if !buf.is_empty() && tag.is_none() {
+                                tag = Some(buf.clone());
+                            }
+                        }
+                        Mode::Id => {
+                            if !buf.is_empty() && id.is_none() {
+                                id = Some(buf.clone());
+                            }
+                        }
+                        Mode::Class => {
+                            if !buf.is_empty() {
+                                classes.push(buf.clone());
+                            }
+                        }
+                    }
+                    buf.clear();
+                    mode = Mode::Class;
+                }
+                _ => buf.push(c),
+            }
+        }
+
+        // 残りを確定
+        match mode {
+            Mode::Tag => {
+                if !buf.is_empty() && tag.is_none() {
+                    tag = Some(buf);
+                }
+            }
+            Mode::Id => {
+                if !buf.is_empty() && id.is_none() {
+                    id = Some(buf);
+                }
+            }
+            Mode::Class => {
+                if !buf.is_empty() {
+                    classes.push(buf);
+                }
             }
         }
 
         Selector {
             tag,
+            id,
             classes,
             pseudo_class,
             pseudo_element,

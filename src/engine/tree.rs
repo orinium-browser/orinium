@@ -1,7 +1,7 @@
 //! DomTreeやRenderTreeで使用する汎用ツリー構造の実装
 //!
 //! # 概要
-//! `TreeNode` はノードの値・子ノード・親ノードを持ち、  
+//! `TreeNode` はノードの値・子ノード・親ノードを持ち、
 //! `Tree` はルートノードを保持する汎用的な木構造を表します。
 //!
 //! DOMツリー、レンダーツリーなどに再利用可能です。
@@ -168,6 +168,22 @@ impl<T: Clone> Tree<T> {
         Tree {
             root: map_node(&self.root, f),
         }
+    }
+
+    /// 条件に合うノードをすべて集める
+    pub fn find_all<F>(&self, predicate: F) -> Vec<Rc<RefCell<TreeNode<T>>>>
+    where
+        F: Fn(&T) -> bool,
+    {
+        let mut result = Vec::new();
+
+        self.traverse(&mut |node| {
+            if predicate(&node.borrow().value) {
+                result.push(Rc::clone(node));
+            }
+        });
+
+        result
     }
 }
 

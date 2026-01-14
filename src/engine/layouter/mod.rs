@@ -153,7 +153,6 @@ pub struct TextStyle {
 ///
 /// # Parameters
 ///
-/// - `parent_container_style`
 /// - `parent_text_style`
 ///
 /// These values must be passed from the computed result of the parent when
@@ -168,7 +167,6 @@ pub fn build_layout_and_info(
     dom: &Rc<RefCell<TreeNode<HtmlNodeType>>>,
     resolved_styles: &ResolvedStyles,
     measurer: &dyn text::TextMeasurer<TextStyle>,
-    parent_container_style: ContainerStyle,
     parent_text_style: TextStyle,
     mut chain: ElementChain,
 ) -> (LayoutNode, InfoNode) {
@@ -187,7 +185,9 @@ pub fn build_layout_and_info(
     };
 
     let mut text_style = parent_text_style;
-    let mut container_style = parent_container_style.clone();
+    let mut container_style = ContainerStyle {
+        background_color: Color(0, 0, 0, 0),
+    };
 
     /* -----------------------------
        Apply resolved CSS
@@ -304,7 +304,6 @@ pub fn build_layout_and_info(
                 child_dom,
                 resolved_styles,
                 measurer,
-                parent_container_style.clone(),
                 text_style,
                 chain.clone(),
             );
@@ -388,11 +387,13 @@ fn apply_declaration(
          * Color / Text
          * ====================== */
         ("background-color", CssValue::Color(c)) => {
+            println!("{:?}", c);
             if let Ok(c) = Color::try_from(c.to_rgba_tuple(None)) {
                 container_style.background_color = c;
             }
         }
         ("background-color", CssValue::Keyword(v)) => {
+            println!("{:?}", v);
             if let Some(c) = keyword_color_to_color(v) {
                 container_style.background_color = c;
             }
@@ -624,7 +625,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
                 x: 0.0,
                 y: 0.0,
                 width: rect.width,
-                height: rect.width,
+                height: rect.height,
                 color: style.background_color,
             });
             commands.push(DrawCommand::PushTransform {

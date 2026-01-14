@@ -11,13 +11,21 @@ pub struct ElementInfo {
 pub type ElementChain = Vec<ElementInfo>;
 
 impl Selector {
-    /// Simple selector matcher (tag / class / id-ready)
+    /// Simple selector matcher (tag / class / id)
     pub fn matches(&self, tag_name: &str, id: Option<&str>, class_list: &[String]) -> bool {
         // tag
-        if let Some(tag) = &self.tag
-            && tag != tag_name
-        {
-            return false;
+        if let Some(tag) = &self.tag {
+            if tag != tag_name {
+                return false;
+            }
+        }
+
+        // id
+        if let Some(expected_id) = &self.id {
+            match id {
+                Some(actual_id) if actual_id == expected_id => {}
+                _ => return false,
+            }
         }
 
         // class
@@ -27,15 +35,15 @@ impl Selector {
             }
         }
 
-        // TODO: id
-        let _ = id;
-
         true
     }
 }
 
 impl ComplexSelector {
     pub fn matches(&self, chain: &[ElementInfo]) -> bool {
+        if chain.is_empty() || self.parts.is_empty() {
+            return false;
+        }
         self.match_from(chain, 0, 0)
     }
 
@@ -50,7 +58,7 @@ impl ComplexSelector {
             return false;
         }
 
-        // セレクタが尽きた
+        // セレクタが尽きた → 完全一致
         if selector_index + 1 == self.parts.len() {
             return true;
         }
@@ -88,6 +96,7 @@ mod tests {
             parts: vec![SelectorPart {
                 selector: Selector {
                     tag: Some("div".into()),
+                    id: None,
                     classes: vec![],
                     pseudo_class: None,
                     pseudo_element: None,
@@ -109,6 +118,7 @@ mod tests {
                 SelectorPart {
                     selector: Selector {
                         tag: Some("ul".into()),
+                        id: None,
                         classes: vec![],
                         pseudo_class: None,
                         pseudo_element: None,
@@ -118,6 +128,7 @@ mod tests {
                 SelectorPart {
                     selector: Selector {
                         tag: None,
+                        id: None,
                         classes: vec!["main-nav".into()],
                         pseudo_class: None,
                         pseudo_element: None,
@@ -143,6 +154,7 @@ mod tests {
                 SelectorPart {
                     selector: Selector {
                         tag: Some("ul".into()),
+                        id: None,
                         classes: vec![],
                         pseudo_class: None,
                         pseudo_element: None,
@@ -152,6 +164,7 @@ mod tests {
                 SelectorPart {
                     selector: Selector {
                         tag: None,
+                        id: None,
                         classes: vec!["main-nav".into()],
                         pseudo_class: None,
                         pseudo_element: None,
@@ -174,6 +187,7 @@ mod tests {
                 SelectorPart {
                     selector: Selector {
                         tag: Some("span".into()),
+                        id: None,
                         classes: vec![],
                         pseudo_class: None,
                         pseudo_element: None,
@@ -183,6 +197,7 @@ mod tests {
                 SelectorPart {
                     selector: Selector {
                         tag: None,
+                        id: None,
                         classes: vec!["a".into()],
                         pseudo_class: None,
                         pseudo_element: None,
@@ -192,6 +207,7 @@ mod tests {
                 SelectorPart {
                     selector: Selector {
                         tag: Some("div".into()),
+                        id: None,
                         classes: vec![],
                         pseudo_class: None,
                         pseudo_element: None,
@@ -217,6 +233,7 @@ mod tests {
             parts: vec![SelectorPart {
                 selector: Selector {
                     tag: Some("div".into()),
+                    id: None,
                     classes: vec!["container".into()],
                     pseudo_class: None,
                     pseudo_element: None,

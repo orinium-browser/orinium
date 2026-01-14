@@ -48,7 +48,7 @@ impl CssResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::css::cssom::*;
+    use crate::engine::css::cssom::{matcher::ElementInfo, *};
     use crate::engine::css::values::Color;
     use crate::engine::tree::{Tree, TreeNode};
 
@@ -64,6 +64,7 @@ mod tests {
                 parts: vec![SelectorPart {
                     selector: Selector {
                         tag: Some("html".into()),
+                        id: None,
                         classes: vec![],
                         pseudo_class: None,
                         pseudo_element: None,
@@ -87,6 +88,7 @@ mod tests {
                 parts: vec![SelectorPart {
                     selector: Selector {
                         tag: Some("body".into()),
+                        id: None,
                         classes: vec![],
                         pseudo_class: None,
                         pseudo_element: None,
@@ -139,5 +141,155 @@ mod tests {
         assert_eq!(decls[0].0, "margin");
         assert_eq!(decls[1].0, "padding");
         assert_eq!(decls[2].0, "color");
+    }
+
+    #[test]
+    fn matches_descendant_chain_main_nav_ul_li_a() {
+        // .main-nav ul li a
+        let selector = ComplexSelector {
+            parts: vec![
+                SelectorPart {
+                    selector: Selector {
+                        tag: Some("a".into()),
+                        id: None,
+                        classes: vec![],
+                        pseudo_class: None,
+                        pseudo_element: None,
+                    },
+                    combinator: Some(Combinator::Descendant),
+                },
+                SelectorPart {
+                    selector: Selector {
+                        tag: Some("li".into()),
+                        id: None,
+                        classes: vec![],
+                        pseudo_class: None,
+                        pseudo_element: None,
+                    },
+                    combinator: Some(Combinator::Descendant),
+                },
+                SelectorPart {
+                    selector: Selector {
+                        tag: Some("ul".into()),
+                        id: None,
+                        classes: vec![],
+                        pseudo_class: None,
+                        pseudo_element: None,
+                    },
+                    combinator: Some(Combinator::Descendant),
+                },
+                SelectorPart {
+                    selector: Selector {
+                        tag: None,
+                        id: None,
+                        classes: vec!["main-nav".into()],
+                        pseudo_class: None,
+                        pseudo_element: None,
+                    },
+                    combinator: None,
+                },
+            ],
+        };
+
+        // DOM chain: a <- li <- ul <- div.main-nav
+        let chain = vec![
+            ElementInfo {
+                tag_name: "a".into(),
+                id: None,
+                classes: vec![],
+            },
+            ElementInfo {
+                tag_name: "li".into(),
+                id: None,
+                classes: vec![],
+            },
+            ElementInfo {
+                tag_name: "ul".into(),
+                id: None,
+                classes: vec![],
+            },
+            ElementInfo {
+                tag_name: "div".into(),
+                id: None,
+                classes: vec!["main-nav".into()],
+            },
+        ];
+
+        assert!(selector.matches(&chain));
+    }
+
+    #[test]
+    fn does_not_match_when_class_is_missing() {
+        // .main-nav ul li a
+        let selector = ComplexSelector {
+            parts: vec![
+                SelectorPart {
+                    selector: Selector {
+                        tag: Some("a".into()),
+                        id: None,
+                        classes: vec![],
+                        pseudo_class: None,
+                        pseudo_element: None,
+                    },
+                    combinator: Some(Combinator::Descendant),
+                },
+                SelectorPart {
+                    selector: Selector {
+                        tag: Some("li".into()),
+                        id: None,
+                        classes: vec![],
+                        pseudo_class: None,
+                        pseudo_element: None,
+                    },
+                    combinator: Some(Combinator::Descendant),
+                },
+                SelectorPart {
+                    selector: Selector {
+                        tag: Some("ul".into()),
+                        id: None,
+                        classes: vec![],
+                        pseudo_class: None,
+                        pseudo_element: None,
+                    },
+                    combinator: Some(Combinator::Descendant),
+                },
+                SelectorPart {
+                    selector: Selector {
+                        tag: None,
+                        id: None,
+                        classes: vec!["main-nav".into()],
+                        pseudo_class: None,
+                        pseudo_element: None,
+                    },
+                    combinator: None,
+                },
+            ],
+        };
+
+        // class が違う
+        let chain = vec![
+            ElementInfo {
+                tag_name: "a".into(),
+                id: None,
+                classes: vec![],
+            },
+            ElementInfo {
+                tag_name: "li".into(),
+                id: None,
+                classes: vec![],
+            },
+            ElementInfo {
+                tag_name: "ul".into(),
+                id: None,
+                classes: vec![],
+            },
+            ElementInfo {
+                tag_name: "div".into(),
+                id: None,
+                classes: vec!["header".into()],
+            },
+        ];
+
+        assert!(!selector.matches(&chain));
     }
 }

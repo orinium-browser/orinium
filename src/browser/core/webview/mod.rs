@@ -80,9 +80,6 @@ impl WebView {
                 &CssParser::new(USER_AGENT_CSS).parse().unwrap(),
             ),
             &measurer.unwrap(),
-            layouter::ContainerStyle {
-                background_color: layouter::Color(255, 255, 255, 255),
-            },
             layouter::TextStyle {
                 font_size: 16.0,
                 ..Default::default()
@@ -125,12 +122,7 @@ impl WebView {
         let mut css_sources: Vec<String> = Vec::new();
 
         // <link rel="stylesheet" href="...">
-        let link_nodes: Vec<_> = {
-            let root = dom_tree.root.borrow();
-            root.find_children_by(|n| n.tag_name() == Some("link".to_string()))
-                .into_iter()
-                .collect()
-        };
+        let link_nodes = dom_tree.find_all(|n| n.tag_name() == Some("link".to_string()));
 
         for node in link_nodes {
             let (rel, href) = {
@@ -182,9 +174,6 @@ impl WebView {
             &dom_tree.root,
             &resolved_styles,
             &measurer.unwrap(),
-            layouter::ContainerStyle {
-                background_color: layouter::Color(255, 255, 255, 255),
-            },
             layouter::TextStyle {
                 font_size: 16.0,
                 ..Default::default()
