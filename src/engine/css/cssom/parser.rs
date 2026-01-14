@@ -362,7 +362,7 @@ impl<'a> Parser<'a> {
 
         // 例: div#main.content.large
         let mut buf = String::new();
-        let mut chars = rest.chars().peekable();
+        let chars = rest.chars().peekable();
 
         enum Mode {
             Tag,
@@ -372,7 +372,7 @@ impl<'a> Parser<'a> {
 
         let mut mode = Mode::Tag;
 
-        while let Some(c) = chars.next() {
+        for c in chars {
             match c {
                 '#' => {
                     if !buf.is_empty() && tag.is_none() {

@@ -14,10 +14,10 @@ impl Selector {
     /// Simple selector matcher (tag / class / id)
     pub fn matches(&self, tag_name: &str, id: Option<&str>, class_list: &[String]) -> bool {
         // tag
-        if let Some(tag) = &self.tag {
-            if tag != tag_name {
-                return false;
-            }
+        if let Some(tag) = &self.tag
+            && tag != tag_name
+        {
+            return false;
         }
 
         // id
