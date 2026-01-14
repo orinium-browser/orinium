@@ -361,6 +361,43 @@ fn apply_declaration(
                 .ok(),
         }
     };
+    fn expand_box<F>(
+        value: &CssValue,
+        resolve_css_len: &impl Fn(&crate::engine::css::Length) -> Option<Length>,
+        mut set: F,
+    ) -> Option<()>
+    where
+        F: FnMut(Length, Length, Length, Length),
+    {
+        let resolve = |v: &CssValue| -> Option<Length> {
+            match v {
+                CssValue::Length(css_len) => resolve_css_len(css_len),
+                _ => None,
+            }
+        };
+
+        match value {
+            CssValue::Length(css_len) => {
+                let v = resolve_css_len(css_len)?;
+                set(v.clone(), v.clone(), v.clone(), v);
+            }
+            CssValue::List(values) => {
+                let vals: Vec<Length> = values.iter().map(|v| resolve(v)).collect::<Option<_>>()?;
+
+                match vals.as_slice() {
+                    [a] => set(a.clone(), a.clone(), a.clone(), a.clone()),
+                    [v, h] => set(v.clone(), h.clone(), v.clone(), h.clone()),
+                    [t, h, b] => set(t.clone(), h.clone(), b.clone(), h.clone()),
+                    [t, r, b, l] => set(t.clone(), r.clone(), b.clone(), l.clone()),
+                    _ => return None,
+                }
+            }
+
+            _ => return None,
+        }
+
+        Some(())
+    }
 
     match (name, value) {
         /* ======================
@@ -461,19 +498,21 @@ fn apply_declaration(
         /* ======================
          * Box Model
          * ====================== */
-        ("margin", CssValue::Length(css_len)) => {
-            let len = resolve_css_len(css_len)?;
-            style.spacing.margin_top = len.clone();
-            style.spacing.margin_right = len.clone();
-            style.spacing.margin_bottom = len.clone();
-            style.spacing.margin_left = len;
+        ("margin", v) => {
+            expand_box(v, &resolve_css_len, |t, r, b, l| {
+                style.spacing.margin_top = t;
+                style.spacing.margin_right = r;
+                style.spacing.margin_bottom = b;
+                style.spacing.margin_left = l;
+            })?;
         }
-        ("padding", CssValue::Length(css_len)) => {
-            let len = resolve_css_len(css_len)?;
-            style.spacing.padding_top = len.clone();
-            style.spacing.padding_right = len.clone();
-            style.spacing.padding_bottom = len.clone();
-            style.spacing.padding_left = len;
+        ("padding", v) => {
+            expand_box(v, &resolve_css_len, |t, r, b, l| {
+                style.spacing.padding_top = t;
+                style.spacing.padding_right = r;
+                style.spacing.padding_bottom = b;
+                style.spacing.padding_left = l;
+            })?;
         }
 
         ("margin-top", CssValue::Length(css_len)) => {
