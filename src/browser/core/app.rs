@@ -15,6 +15,7 @@ use crate::system::App;
 pub struct RenderState {
     pub draw_commands: Vec<DrawCommand>,
     pub window_size: (u32, u32),
+    pub scale_factor: f64,
 }
 
 pub struct BrowserApp {
@@ -58,6 +59,7 @@ impl BrowserApp {
             render: RenderState {
                 draw_commands: vec![],
                 window_size,
+                scale_factor: 1.0,
             },
             window_title,
             network,
@@ -66,6 +68,7 @@ impl BrowserApp {
 
     fn rebuild_render_tree(&mut self) {
         let size = self.window_size();
+        let sf = self.render.scale_factor as f32;
 
         let (layout, info, title) = {
             let Some(tab) = self.active_tab_mut() else {
@@ -82,7 +85,7 @@ impl BrowserApp {
             (layout, info, title)
         };
 
-        ui_layout::LayoutEngine::layout(layout, size.0, size.1);
+        ui_layout::LayoutEngine::layout(layout, size.0 / sf, size.1 / sf);
         self.render.draw_commands = layouter::generate_draw_commands(layout, info);
 
         if let Some(t) = title {
@@ -116,7 +119,9 @@ impl BrowserApp {
 
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 gpu.set_scale_factor(scale_factor);
-                BrowserCommand::None
+                self.render.scale_factor = scale_factor;
+                self.redraw(gpu);
+                BrowserCommand::RequestRedraw
             }
 
             WindowEvent::MouseWheel { delta, .. } => {
@@ -163,5 +168,9 @@ impl BrowserApp {
     }
     pub fn network(&self) -> Arc<BrowserResourceLoader> {
         Arc::clone(&self.network)
+    }
+
+    pub fn set_scale_factor(&mut self, sf: f64) {
+        self.render.scale_factor = sf
     }
 }
