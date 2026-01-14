@@ -498,6 +498,18 @@ fn apply_declaration(
         ("height", CssValue::Length(css_len)) => {
             style.size.height = resolve_css_len(css_len)?;
         }
+        ("min-width", CssValue::Length(css_len)) => {
+            style.size.min_width = resolve_css_len(css_len)?;
+        }
+        ("min-height", CssValue::Length(css_len)) => {
+            style.size.min_height = resolve_css_len(css_len)?;
+        }
+        ("max-width", CssValue::Length(css_len)) => {
+            style.size.max_width = resolve_css_len(css_len)?;
+        }
+        ("max-height", CssValue::Length(css_len)) => {
+            style.size.max_height = resolve_css_len(css_len)?;
+        }
 
         /* ======================
          * Flex
