@@ -27,6 +27,7 @@ pub enum NodeKind {
         scroll_y: bool,
         scroll_offset_x: f32,
         scroll_offset_y: f32,
+        style: ContainerStyle,
     },
     Text {
         text: String,
@@ -66,6 +67,62 @@ impl TryFrom<(u8, u8, u8, f32)> for Color {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ContainerStyle {
+    pub background_color: Color,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextDecoration {
+    #[default]
+    None,
+    Underline,
+    LineThrough,
+    Overline,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FontStyle {
+    #[default]
+    Normal,
+    Italic,
+    Oblique,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct FontWeight(pub u16);
+
+impl FontWeight {
+    pub const THIN: Self = Self(100);
+    pub const NORMAL: Self = Self(400);
+    pub const BOLD: Self = Self(700);
+    pub const BLACK: Self = Self(900);
+}
+
+impl Default for FontWeight {
+    fn default() -> Self {
+        Self::NORMAL
+    }
+}
+
+#[derive(Copy, Debug, Clone, Default)]
+pub struct TextStyle {
+    pub font_size: f32,
+    pub text_align: TextAlign,
+    pub text_decoration: TextDecoration,
+    pub font_style: FontStyle,
+    pub font_weight: FontWeight,
+    pub color: Color,
+}
+
 /// Builds a layout tree (`LayoutNode`) and a render info tree (`InfoNode`) from the DOM.
 ///
 /// # Overview
@@ -96,6 +153,7 @@ impl TryFrom<(u8, u8, u8, f32)> for Color {
 ///
 /// # Parameters
 ///
+/// - `parent_container_style`
 /// - `parent_text_style`
 ///
 /// These values must be passed from the computed result of the parent when
@@ -110,6 +168,7 @@ pub fn build_layout_and_info(
     dom: &Rc<RefCell<TreeNode<HtmlNodeType>>>,
     resolved_styles: &ResolvedStyles,
     measurer: &dyn text::TextMeasurer<TextStyle>,
+    parent_container_style: ContainerStyle,
     parent_text_style: TextStyle,
     mut chain: ElementChain,
 ) -> (LayoutNode, InfoNode) {
@@ -118,12 +177,6 @@ pub fn build_layout_and_info(
     /* -----------------------------
        Initial values (inheritance)
     ----------------------------- */
-    let mut kind = NodeKind::Container {
-        scroll_x: false,
-        scroll_y: false,
-        scroll_offset_x: 0.0,
-        scroll_offset_y: 0.0,
-    };
     let mut style = Style {
         display: Display::Block,
         item_style: ItemStyle {
@@ -134,6 +187,7 @@ pub fn build_layout_and_info(
     };
 
     let mut text_style = parent_text_style;
+    let mut container_style = parent_container_style.clone();
 
     /* -----------------------------
        Apply resolved CSS
@@ -172,18 +226,21 @@ pub fn build_layout_and_info(
         for (selector, declarations) in resolved_styles {
             if selector.matches(&chain) {
                 for (name, value) in declarations {
-                    apply_declaration(name, value, &mut style, &mut text_style);
+                    apply_declaration(
+                        name,
+                        value,
+                        &mut style,
+                        &mut container_style,
+                        &mut text_style,
+                    );
                 }
             }
         }
     }
 
-    /* -----------------------------
-       HTML semantics
-    ----------------------------- */
-    if let HtmlNodeType::Text(t) = &html_node {
+    let kind = if let HtmlNodeType::Text(t) = &html_node {
         let t = normalize_whitespace(t);
-        kind = NodeKind::Text {
+        let kind = NodeKind::Text {
             text: t.clone(),
             style: text_style,
         };
@@ -202,7 +259,16 @@ pub fn build_layout_and_info(
 
         style.size.width = Length::Px(w);
         style.size.height = Length::Px(h);
-    }
+        kind
+    } else {
+        NodeKind::Container {
+            scroll_x: false,
+            scroll_y: false,
+            scroll_offset_x: 0.0,
+            scroll_offset_y: 0.0,
+            style: container_style,
+        }
+    };
 
     /* -----------------------------
        Children
@@ -238,6 +304,7 @@ pub fn build_layout_and_info(
                 child_dom,
                 resolved_styles,
                 measurer,
+                parent_container_style.clone(),
                 text_style,
                 chain.clone(),
             );
@@ -279,6 +346,7 @@ fn apply_declaration(
     name: &str,
     value: &CssValue,
     style: &mut Style,
+    container_style: &mut ContainerStyle,
     text_style: &mut TextStyle,
 ) -> Option<()> {
     let resolve_css_len = |css_len: &crate::engine::css::Length| -> Option<Length> {
@@ -319,6 +387,19 @@ fn apply_declaration(
         /* ======================
          * Color / Text
          * ====================== */
+        ("background-color", CssValue::Color(c)) => {
+            if let Ok(c) = Color::try_from(c.to_rgba_tuple(None)) {
+                container_style.background_color = c;
+            }
+        }
+        ("background-color", CssValue::Keyword(v)) => {
+            println!("{}", v);
+            if let Some(c) = keyword_color_to_color(v) {
+                println!("{:?}", c);
+                container_style.background_color = c;
+            }
+        }
+
         ("color", CssValue::Color(c)) => {
             if let Ok(c) = Color::try_from(c.to_rgba_tuple(None)) {
                 text_style.color = c;
@@ -450,60 +531,10 @@ fn keyword_color_to_color(keyword: &str) -> Option<Color> {
         "red" => Some(Color(255, 0, 0, 255)),
         "green" => Some(Color(0, 128, 0, 255)),
         "blue" => Some(Color(0, 0, 255, 255)),
+        "yellow" => Some(Color(255, 255, 0, 255)),
         "gray" | "grey" => Some(Color(128, 128, 128, 255)),
         _ => None,
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TextAlign {
-    #[default]
-    Left,
-    Center,
-    Right,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TextDecoration {
-    #[default]
-    None,
-    Underline,
-    LineThrough,
-    Overline,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum FontStyle {
-    #[default]
-    Normal,
-    Italic,
-    Oblique,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct FontWeight(pub u16);
-
-impl FontWeight {
-    pub const THIN: Self = Self(100);
-    pub const NORMAL: Self = Self(400);
-    pub const BOLD: Self = Self(700);
-    pub const BLACK: Self = Self(900);
-}
-
-impl Default for FontWeight {
-    fn default() -> Self {
-        Self::NORMAL
-    }
-}
-
-#[derive(Copy, Debug, Clone, Default)]
-pub struct TextStyle {
-    pub font_size: f32,
-    pub text_align: TextAlign,
-    pub text_decoration: TextDecoration,
-    pub font_style: FontStyle,
-    pub font_weight: FontWeight,
-    pub color: Color,
 }
 
 #[derive(Debug, Clone)]
@@ -578,6 +609,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
         NodeKind::Container {
             scroll_offset_x,
             scroll_offset_y,
+            style,
             ..
         } => {
             commands.push(DrawCommand::PushTransform {
@@ -589,6 +621,13 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
                 y: 0.0,
                 width: rect.width,
                 height: rect.height,
+            });
+            commands.push(DrawCommand::DrawRect {
+                x: 0.0,
+                y: 0.0,
+                width: rect.width,
+                height: rect.width,
+                color: style.background_color,
             });
             commands.push(DrawCommand::PushTransform {
                 dx: *scroll_offset_x,

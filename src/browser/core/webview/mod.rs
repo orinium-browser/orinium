@@ -80,6 +80,9 @@ impl WebView {
                 &CssParser::new(USER_AGENT_CSS).parse().unwrap(),
             ),
             &measurer.unwrap(),
+            layouter::ContainerStyle {
+                background_color: layouter::Color(255, 255, 255, 255),
+            },
             layouter::TextStyle {
                 font_size: 16.0,
                 ..Default::default()
@@ -179,6 +182,9 @@ impl WebView {
             &dom_tree.root,
             &resolved_styles,
             &measurer.unwrap(),
+            layouter::ContainerStyle {
+                background_color: layouter::Color(255, 255, 255, 255),
+            },
             layouter::TextStyle {
                 font_size: 16.0,
                 ..Default::default()
