@@ -352,6 +352,7 @@ fn apply_declaration(
         use crate::engine::css::length::{Length as CssLength, LengthUnit};
         match &css_len {
             CssLength::Value(v, LengthUnit::Em) => Some(Length::Px(text_style.font_size * v)),
+            CssLength::Value(v, LengthUnit::Rem) => Some(Length::Px(16.0 * v)), // html sont-size 仮値
             _ => css_len
                 .try_into()
                 .inspect_err(
@@ -417,7 +418,7 @@ fn apply_declaration(
                 Length::Px(v) => *v,
                 _ => {
                     log::error!(target: "Layouter", "Unknown size type for font-size: {:?}", len);
-                    0.0
+                    return None;
                 }
             };
             text_style.font_size = px;
