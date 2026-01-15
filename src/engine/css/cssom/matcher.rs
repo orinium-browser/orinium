@@ -35,6 +35,16 @@ impl Selector {
             }
         }
 
+        if let Some(_pseudo) = &self.pseudo_class {
+            // TODO
+            return false;
+        }
+
+        if let Some(_pseudo) = &self.pseudo_element {
+            // TODO
+            return false;
+        }
+
         true
     }
 }
