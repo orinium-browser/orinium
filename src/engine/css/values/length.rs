@@ -134,6 +134,11 @@ impl Length {
             return Some(Self::Keyword(k));
         }
 
+        // Special keyword
+        if s == "0" {
+            return Some(Length::px(0.0));
+        }
+
         // --- number + unit ---
         // Split numeric part and unit part
         let split = s
