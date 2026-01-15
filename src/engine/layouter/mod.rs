@@ -12,7 +12,7 @@ use crate::engine::tree::TreeNode;
 use crate::html::HtmlNodeType;
 use std::cell::RefCell;
 use std::rc::Rc;
-use ui_layout::{Display, FlexDirection, ItemStyle, LayoutNode, Length, Style};
+use ui_layout::{Display, FlexDirection, LayoutNode, Length, Style};
 
 #[derive(Debug, Clone)]
 pub struct InfoNode {
