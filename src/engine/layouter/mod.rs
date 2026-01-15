@@ -175,14 +175,7 @@ pub fn build_layout_and_info(
     /* -----------------------------
        Initial values (inheritance)
     ----------------------------- */
-    let mut style = Style {
-        display: Display::Block,
-        item_style: ItemStyle {
-            flex_grow: 0.0,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
+    let mut style = Style::default();
 
     let mut text_style = parent_text_style;
     let mut container_style = ContainerStyle {
