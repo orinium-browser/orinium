@@ -467,7 +467,7 @@ fn token_to_string(token: &Token) -> String {
         Token::RightBrace => "}".into(),
         Token::LeftBracket => "[".into(),
         Token::RightBracket => "]".into(),
-        Token::Function(name) => format!("{name}("),
+        Token::Function { name, value } => format!("{name}({value:?})"),
         Token::AtKeyword(name) => format!("@{name}"),
         Token::CDO => "<!--".into(),
         Token::CDC => "-->".into(),

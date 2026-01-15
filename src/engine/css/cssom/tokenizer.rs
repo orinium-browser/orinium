@@ -1,10 +1,10 @@
 /// CSS token definitions produced by the tokenizer.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
-    Ident(String),          // Identifiers: color, margin, etc.
-    StringLiteral(String),  // Quoted strings: "string" or 'string'
-    Number(f32),            // Plain numbers: 1, 1.5, 10
-    Function(String),       // Function tokens: rgb(
+    Ident(String),         // Identifiers: color, margin, etc.
+    StringLiteral(String), // Quoted strings: "string" or 'string'
+    Number(f32),           // Plain numbers: 1, 1.5, 10
+    Function { name: String, value: FunctionValue },
     AtKeyword(String),      // @media, @import, etc.
     Hash(String),           // Hash tokens: #fff, #id
     Dimension(f32, String), // Dimensions: 10px, 2em
@@ -23,6 +23,12 @@ pub enum Token {
     CDC,             // -->
     Delim(char),     // Any other delimiter
     Comment(String), // /* comment */
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FunctionValue {
+    Raw(String),        // url(...)
+    Tokens(Vec<Token>), // rgb(), calc(), etc
 }
 
 /// Internal tokenizer states.
@@ -173,9 +179,11 @@ impl<'a> Tokenizer<'a> {
 
             '(' => {
                 if let Some(Token::Ident(name)) = self.last_tokenized.take() {
-                    self.emit(Token::Function(name));
+                    if let Some(func) = self.consume_function(name) {
+                        self.emit(func);
+                    }
                 } else {
-                    self.emit(Token::LeftParen);
+                    self.emit(Token::Delim('('));
                 }
             }
 
@@ -294,6 +302,53 @@ impl<'a> Tokenizer<'a> {
             }
             _ => {}
         }
+    }
+
+    fn consume_function(&mut self, name: String) -> Option<Token> {
+        // url() は Raw
+        if name.eq_ignore_ascii_case("url") {
+            let mut raw = String::new();
+
+            while self.pos < self.input.len() {
+                let c = self.next_char();
+                if c == ')' {
+                    break;
+                }
+                raw.push(c);
+            }
+
+            return Some(Token::Function {
+                name,
+                value: FunctionValue::Raw(raw.trim().to_string()),
+            });
+        }
+
+        // それ以外は Tokens
+        let mut tokens = Vec::new();
+        let mut depth = 1;
+
+        while self.pos < self.input.len() {
+            let token = self.next_token()?;
+
+            match token {
+                Token::Function { .. } => {
+                    depth += 1;
+                    tokens.push(token);
+                }
+                Token::RightParen => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => tokens.push(token),
+            }
+        }
+
+        Some(Token::Function {
+            name,
+            value: FunctionValue::Tokens(tokens),
+        })
     }
 }
 
