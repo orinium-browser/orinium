@@ -375,7 +375,7 @@ fn apply_declaration(
                 set(v.clone(), v.clone(), v.clone(), v);
             }
             CssValue::List(values) => {
-                let vals: Vec<Length> = values.iter().map(|v| resolve(v)).collect::<Option<_>>()?;
+                let vals: Vec<Length> = values.iter().map(resolve).collect::<Option<_>>()?;
 
                 match vals.as_slice() {
                     [a] => set(a.clone(), a.clone(), a.clone(), a.clone()),
