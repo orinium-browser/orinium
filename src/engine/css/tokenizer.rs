@@ -48,6 +48,9 @@ pub enum Token {
     /// Delimiter token (single-character symbols such as `:`, `;`, `>`, `+`)
     Delim(char),
 
+    /// Hash with String (e.g. `#fff`)
+    Hash(String),
+
     /// One or more whitespace characters
     Whitespace,
 
@@ -123,6 +126,19 @@ impl<'a> Tokenizer<'a> {
                     self.bump();
                     Token::Delim('/')
                 }
+            }
+            Some('#') => {
+                self.bump(); // consume '#'
+                let mut value = String::new();
+                while let Some(c) = self.peek() {
+                    if is_ident_continue(c) {
+                        value.push(c);
+                        self.bump();
+                    } else {
+                        break;
+                    }
+                }
+                Token::Hash(value)
             }
             Some(c) => {
                 self.bump();

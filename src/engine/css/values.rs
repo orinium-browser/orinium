@@ -20,7 +20,7 @@ impl CssValue {
     /// Colorの文字列からRGBAタプルを返す
     pub fn to_rgba_tuple(&self) -> Option<(u8, u8, u8, u8)> {
         match self {
-            CssValue::Color(s) => parse_color(s),
+            CssValue::Color(s) => parse_color(&format!("#{}", s)),
             _ => None,
         }
     }

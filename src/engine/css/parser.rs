@@ -496,6 +496,7 @@ impl<'a> Parser<'a> {
                         find_function = true;
                         continue;
                     }
+                    Token::Hash(s) => CssValue::Color(s),
                     _ => continue,
                 }
             };
