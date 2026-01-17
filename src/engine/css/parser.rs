@@ -133,6 +133,11 @@ pub struct Parser<'a> {
 
     /// Used to detect the start and end of rule blocks (`{}`).
     brace_depth: usize,
+
+    /// Lookahead token (optional)
+    ///
+    /// Parser may need to peek the next token without consuming it.
+    lookahead: Option<Token>,
 }
 
 impl<'a> Parser<'a> {
@@ -141,6 +146,24 @@ impl<'a> Parser<'a> {
         Self {
             tokenizer: Tokenizer::new(input),
             brace_depth: 0,
+            lookahead: None,
+        }
+    }
+
+    /// Peek at the next token without consuming it.
+    fn peek_token(&mut self) -> &Token {
+        if self.lookahead.is_none() {
+            self.lookahead = Some(self.tokenizer.next_token());
+        }
+        self.lookahead.as_ref().unwrap()
+    }
+
+    /// Consume and return the next token.
+    fn consume_token(&mut self) -> Token {
+        if let Some(tok) = self.lookahead.take() {
+            tok
+        } else {
+            self.tokenizer.next_token()
         }
     }
 
