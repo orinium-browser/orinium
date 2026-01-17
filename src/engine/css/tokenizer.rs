@@ -76,10 +76,10 @@ pub struct Tokenizer<'a> {
 impl<'a> Tokenizer<'a> {
     /// Create a new tokenizer from a CSS source string.
     pub fn new(input: &'a str) -> Self {
-        Self {
-            chars: input.chars(),
-            current: None,
-        }
+        let mut chars = input.chars();
+        let current = chars.next();
+
+        Self { chars, current }
     }
 
     /// Advance to the next character.
