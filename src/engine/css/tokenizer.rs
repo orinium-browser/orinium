@@ -98,14 +98,22 @@ impl<'a> Tokenizer<'a> {
     ///
     /// This is the main entry point used by the parser.
     pub fn next_token(&mut self) -> Token {
-        todo!("dispatch to specific token consumers");
+        match self.peek() {
+            Some(c) if c.is_whitespace() => self.consume_whitespace(),
+            Some(c) if is_ident_start(c) => self.consume_ident_like(),
+            Some(c) if c.is_ascii_digit() => self.consume_number_like(),
+            _ => Token::EOF,
+        }
     }
 
     /// Consume consecutive whitespace characters.
     ///
     /// Produces a single `Token::Whitespace`.
-    fn consume_whitespace(&mut self) {
-        todo!("consume whitespace");
+    fn consume_whitespace(&mut self) -> Token {
+        while matches!(self.current, Some(c) if c.is_whitespace()) {
+            self.bump();
+        }
+        Token::Whitespace
     }
 
     /// Consume an identifier or function token.
