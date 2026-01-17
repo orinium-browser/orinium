@@ -487,6 +487,8 @@ impl<'a> Parser<'a> {
                             "em" => Unit::Em,
                             "rem" => Unit::Rem,
                             "%" => Unit::Percent,
+                            "vw" => Unit::Vw,
+                            "vh" => Unit::Vh,
                             _ => Unit::Px, // fallback
                         };
                         CssValue::Length(value, unit)
