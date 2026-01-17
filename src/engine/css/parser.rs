@@ -567,71 +567,86 @@ impl<'a> Parser<'a> {
 
     fn parse_tokens_to_css_value(tokens: Vec<Token>) -> ParseResult<CssValue> {
         let mut values = vec![];
+        let mut iter = tokens.into_iter().peekable();
 
-        let mut find_function = false;
-        let mut parsing_function = false;
+        while let Some(token) = iter.next() {
+            match token {
+                Token::Ident(s) => values.push(CssValue::Keyword(s)),
+                Token::Number(n) => values.push(CssValue::Number(n)),
+                Token::String(s) => values.push(CssValue::String(s)),
+                Token::Dimension(value, unit) => {
+                    let unit = match unit.as_str() {
+                        "px" => Unit::Px,
+                        "em" => Unit::Em,
+                        "rem" => Unit::Rem,
+                        "%" => Unit::Percent,
+                        "vw" => Unit::Vw,
+                        "vh" => Unit::Vh,
+                        _ => Unit::Px,
+                    };
+                    values.push(CssValue::Length(value, unit));
+                }
+                Token::Hash(s) => values.push(CssValue::Color(s)),
 
-        let mut function_buffer: (String, Vec<CssValue>) = (String::new(), vec![]);
+                Token::Function(name) => {
+                    // Collect args
+                    let mut depth = 0;
+                    let mut func_tokens = vec![];
 
-        for token in tokens {
-            let css_value = if find_function {
-                if matches!(token, Token::Delim('(')) {
-                    parsing_function = true;
-                    find_function = false;
+                    while let Some(tok) = iter.next() {
+                        match &tok {
+                            Token::Delim('(') => {
+                                depth += 1;
+                                func_tokens.push(tok);
+                            }
+                            Token::Delim(')') => {
+                                if depth == 0 {
+                                    break;
+                                } else {
+                                    depth -= 1;
+                                    func_tokens.push(tok);
+                                }
+                            }
+                            _ => func_tokens.push(tok),
+                        }
+                    }
+
+                    let mut args = vec![];
+                    let mut buffer = vec![];
+
+                    for t in func_tokens {
+                        if t == Token::Delim(',') {
+                            if !buffer.is_empty() {
+                                let val = Self::parse_tokens_to_css_value(buffer)?;
+                                match val {
+                                    CssValue::List(list) => args.extend(list),
+                                    other => args.push(other),
+                                }
+                                buffer = vec![];
+                            }
+                        } else {
+                            buffer.push(t);
+                        }
+                    }
+
+                    // 最後のバッファを処理
+                    if !buffer.is_empty() {
+                        let val = Self::parse_tokens_to_css_value(buffer)?;
+                        match val {
+                            CssValue::List(list) => args.extend(list),
+                            other => args.push(other),
+                        }
+                    }
+
+                    values.push(CssValue::Function(name, args));
+                }
+
+                Token::Delim(',') => {
                     continue;
-                } else {
-                    return Err(ParserError {
-                        kind: ParserErrorKind::UnexpectedToken {
-                            expected: "(",
-                            found: format!("{:?}", token),
-                        },
-                        context: vec![],
-                    });
                 }
-            } else if parsing_function {
-                match token {
-                    Token::Delim(')') => {
-                        let (name, args) = std::mem::take(&mut function_buffer);
-                        CssValue::Function(name, args)
-                    }
-                    _ => {
-                        function_buffer.1.push(
-                            Self::parse_tokens_to_css_value(vec![token]).map_err(|e| {
-                                e.with_context(
-                                    "parse_to_css_value: failed to parse tokens to css value",
-                                )
-                            })?,
-                        );
-                        continue;
-                    }
-                }
-            } else {
-                match token {
-                    Token::Ident(s) => CssValue::Keyword(s),
-                    Token::Number(n) => CssValue::Number(n),
-                    Token::String(s) => CssValue::String(s),
-                    Token::Dimension(value, unit) => {
-                        let unit = match unit.as_str() {
-                            "px" => Unit::Px,
-                            "em" => Unit::Em,
-                            "rem" => Unit::Rem,
-                            "%" => Unit::Percent,
-                            "vw" => Unit::Vw,
-                            "vh" => Unit::Vh,
-                            _ => Unit::Px, // fallback
-                        };
-                        CssValue::Length(value, unit)
-                    }
-                    Token::Function(name) => {
-                        function_buffer.0 = name;
-                        find_function = true;
-                        continue;
-                    }
-                    Token::Hash(s) => CssValue::Color(s),
-                    _ => continue,
-                }
-            };
-            values.push(css_value);
+
+                _ => continue,
+            }
         }
 
         if values.len() == 1 {
