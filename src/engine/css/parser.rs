@@ -349,7 +349,50 @@ impl<'a> Parser<'a> {
                         selector,
                         combinator: current_combinator,
                     });
+                    current_combinator = None;
                     self.consume_token();
+                }
+
+                Token::Hash(id_name) => {
+                    if let Some(part) = current_parts.last_mut() {
+                        part.selector.id = Some(id_name);
+                    } else {
+                        let selector = Selector {
+                            tag: None,
+                            id: Some(id_name),
+                            classes: vec![],
+                            pseudo_class: None,
+                            pseudo_element: None,
+                        };
+                        current_parts.push(SelectorPart {
+                            selector,
+                            combinator: current_combinator,
+                        });
+                        current_combinator = None;
+                    }
+                    self.consume_token();
+                }
+
+                Token::Delim('.') => {
+                    self.consume_token();
+                    if let Token::Ident(class_name) = self.peek_token().clone() {
+                        if let Some(part) = current_parts.last_mut() {
+                            part.selector.classes.push(class_name);
+                        } else {
+                            let selector = Selector {
+                                tag: None,
+                                id: None,
+                                classes: vec![class_name],
+                                pseudo_class: None,
+                                pseudo_element: None,
+                            };
+                            current_parts.push(SelectorPart {
+                                selector,
+                                combinator: current_combinator,
+                            });
+                        }
+                        self.consume_token();
+                    }
                 }
 
                 Token::Delim(',') => {
