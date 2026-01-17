@@ -104,7 +104,7 @@ impl<'a> Tokenizer<'a> {
         match self.peek() {
             Some(c) if c.is_whitespace() => self.consume_whitespace(),
             Some(c) if is_ident_start(c) => self.consume_ident_like(),
-            Some(c) if is_string_start(c) => self.consume_string_like(),
+            Some(c) if is_string_delimiter(c) => self.consume_string_like(),
             Some(c) if c.is_ascii_digit() => self.consume_number_like(),
             Some(c) => {
                 self.bump();
@@ -172,8 +172,12 @@ fn is_ident_start(c: char) -> bool {
     c.is_ascii_alphabetic() || c == '_' || c == '-' || !c.is_ascii()
 }
 
-fn is_string_start(c: char) -> bool {
-    todo!("implement CSS string start check");
+/// Returns true if the character is a CSS string delimiter.
+///
+/// CSS strings are delimited by either double quotes (`"`)
+/// or single quotes (`'`).
+fn is_string_delimiter(c: char) -> bool {
+    matches!(c, '"' | '\'')
 }
 
 /// Returns true if the character can continue an identifier.
