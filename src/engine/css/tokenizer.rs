@@ -163,6 +163,12 @@ fn is_string_start(c: char) -> bool {
 }
 
 /// Returns true if the character can continue an identifier.
+///
+/// - ASCII letters (A–Z, a–z)
+/// - ASCII digits (0–9)
+/// - Underscore (`_`)
+/// - Hyphen (`-`)
+/// - Non-ASCII characters
 fn is_ident_continue(c: char) -> bool {
-    todo!("implement CSS identifier continuation check");
+    c.is_ascii_alphanumeric() || c == '_' || c == '-' || !c.is_ascii()
 }
