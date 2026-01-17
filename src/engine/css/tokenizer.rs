@@ -1,0 +1,114 @@
+/// CSS token produced by the tokenizer.
+///
+/// This represents *syntactic units* only.
+/// No semantic interpretation (length, color, etc.) is performed here.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Token {
+    /// Identifier token (e.g. `div`, `color`, `--custom`)
+    Ident(String),
+
+    /// Function token (e.g. `calc`, `var`)
+    Function(String),
+
+    /// Plain number without unit (e.g. `0`, `1.5`)
+    Number(f32),
+
+    /// Dimension token (e.g. `10px`, `50%`, `2em`)
+    ///
+    /// Percentages are also represented as a dimension
+    /// with `%` as the unit.
+    Dimension(f32, String),
+
+    /// Delimiter token (single-character symbols such as `:`, `;`, `>`, `+`)
+    Delim(char),
+
+    /// One or more whitespace characters
+    Whitespace,
+
+    /// End-of-input marker
+    EOF,
+}
+
+/// CSS tokenizer.
+///
+/// This struct is responsible for converting a CSS source string
+/// into a stream of `Token`s.
+///
+/// Responsibilities:
+/// - Consume raw characters
+/// - Produce syntactic tokens
+///
+/// Non-responsibilities:
+/// - Parsing declarations or selectors
+/// - Interpreting values (length, color, etc.)
+/// - Building trees or higher-level structures
+pub struct Tokenizer<'a> {
+    /// Iterator over the input characters
+    chars: std::str::Chars<'a>,
+
+    /// Current character under examination
+    current: Option<char>,
+}
+
+impl<'a> Tokenizer<'a> {
+    /// Create a new tokenizer from a CSS source string.
+    pub fn new(input: &'a str) -> Self {
+        Self {
+            chars: input.chars(),
+            current: None,
+        }
+    }
+
+    /// Advance to the next character.
+    ///
+    /// This method should update `self.current`.
+    fn bump(&mut self) {
+        todo!("advance character iterator");
+    }
+
+    /// Peek the current character without consuming it.
+    fn peek(&self) -> Option<char> {
+        todo!("return current character");
+    }
+
+    /// Consume and return the next token from the input.
+    ///
+    /// This is the main entry point used by the parser.
+    pub fn next_token(&mut self) -> Token {
+        todo!("dispatch to specific token consumers");
+    }
+
+    /// Consume consecutive whitespace characters.
+    ///
+    /// Produces a single `Token::Whitespace`.
+    fn consume_whitespace(&mut self) {
+        todo!("consume whitespace");
+    }
+
+    /// Consume an identifier or function token.
+    ///
+    /// If an identifier is immediately followed by `(`,
+    /// this method should produce a `Token::Function`.
+    fn consume_ident_like(&mut self) -> Token {
+        todo!("consume identifier or function");
+    }
+
+    /// Consume a number-like token.
+    ///
+    /// This may produce:
+    /// - `Token::Number`
+    /// - `Token::Dimension` (including `%`)
+    fn consume_number_like(&mut self) -> Token {
+        todo!("consume number or dimension");
+    }
+}
+
+/// Returns true if the character can start an identifier.
+fn is_ident_start(c: char) -> bool {
+    todo!("implement CSS identifier start check");
+}
+
+/// Returns true if the character can continue an identifier.
+fn is_ident_continue(c: char) -> bool {
+    todo!("implement CSS identifier continuation check");
+}
