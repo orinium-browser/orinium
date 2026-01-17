@@ -15,7 +15,10 @@
 //! ## Design notes
 //! - No property-specific validation is performed here
 //! - Semantic meaning is assigned in later stages (style computation, layout)
+use std::fmt;
+
 use super::tokenizer::{Token, Tokenizer};
+use super::values::{CssValue, Unit};
 
 /// Node kinds used in the CSS syntax tree.
 ///
@@ -47,7 +50,7 @@ pub enum CssNodeType {
         name: String,
 
         /// Raw value token (not yet interpreted)
-        value: Token,
+        value: CssValue,
     },
 }
 
@@ -61,6 +64,15 @@ pub struct CssNode {
 
     /// Child nodes forming the tree structure
     children: Vec<CssNode>,
+}
+
+impl CssNode {
+    pub fn node(&self) -> &CssNodeType {
+        &self.node
+    }
+    pub fn children(&self) -> &Vec<CssNode> {
+        &self.children
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -159,12 +171,42 @@ pub enum ParserErrorKind {
     MismatchedDelimiter { expected: char, found: char },
 }
 
+impl fmt::Display for ParserErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
 /// Parser error
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParserError {
     /// Kind of the error
     pub kind: ParserErrorKind,
+    /// Context
+    pub context: Vec<String>,
 }
+
+impl ParserError {
+    pub fn with_context(mut self, ctx: impl Into<String>) -> Self {
+        self.context.push(ctx.into());
+        self
+    }
+}
+
+impl fmt::Display for ParserError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut ctx = self.context.clone();
+        ctx.reverse();
+        write!(
+            f,
+            "CssParserError: {}, (Context:[{}])",
+            self.kind,
+            ctx.join(" <-")
+        )
+    }
+}
+
+impl std::error::Error for ParserError {}
 
 /// Result type for parser functions
 pub type ParseResult<T> = Result<T, ParserError>;
@@ -221,7 +263,9 @@ impl<'a> Parser<'a> {
                 }
                 _ => {
                     // Determine rule or at-rule
-                    let node = self.parse_rule()?; // placeholder
+                    let node = self
+                        .parse_rule()
+                        .map_err(|e| e.with_context("parse: failed to parse rule"))?; // placeholder
                     stylesheet.children.push(node);
                 }
             }
@@ -246,6 +290,7 @@ impl<'a> Parser<'a> {
                         expected: "{",
                         found: format!("{:?}", token),
                     },
+                    context: vec![],
                 });
             }
         }
@@ -260,10 +305,17 @@ impl<'a> Parser<'a> {
                     self.brace_depth -= 1;
                     break;
                 }
-                Token::EOF => break,
+                Token::EOF => {
+                    return Err(ParserError {
+                        kind: ParserErrorKind::UnexpectedEOF,
+                        context: vec![],
+                    });
+                }
                 _ => {
-                    // TODO: parse a declaration
-                    self.consume_token(); // placeholder consume
+                    let mut decls = self.parse_declaration_list().map_err(|e| {
+                        e.with_context("parse_rule: failed to parse declaration list")
+                    })?;
+                    children.append(&mut decls);
                 }
             }
         }
@@ -332,4 +384,168 @@ impl<'a> Parser<'a> {
 
         selectors
     }
+
+    fn parse_declaration_list(&mut self) -> ParseResult<Vec<CssNode>> {
+        let mut declarations = vec![];
+        let mut parsing_name = true;
+        let mut name = String::new();
+        let mut value_tokens = vec![];
+
+        loop {
+            let token = self.peek_token().clone();
+            match token {
+                Token::Delim(':') if parsing_name => {
+                    parsing_name = false;
+                    self.consume_token();
+                }
+                Token::Delim(';') if !parsing_name => {
+                    self.consume_token(); // consume ;
+                    declarations.push(CssNode {
+                        node: CssNodeType::Declaration {
+                            name: std::mem::take(&mut name),
+                            value: Self::parse_tokens_to_css_value(std::mem::take(
+                                &mut value_tokens,
+                            ))
+                            .map_err(|e| {
+                                e.with_context(
+                                    "parse_declaration: failed to parse declaration value list",
+                                )
+                            })?,
+                        },
+                        children: vec![],
+                    });
+                    parsing_name = true;
+                }
+                Token::Delim('}') | Token::EOF => {
+                    // Stop parsing declarations, do not consume `}` here
+                    break;
+                }
+                Token::Ident(s) if parsing_name => {
+                    name.push_str(&s);
+                    self.consume_token();
+                }
+                _ => {
+                    if !parsing_name {
+                        value_tokens.push(self.consume_token());
+                    } else {
+                        self.consume_token(); // skip unsupported token in name
+                    }
+                }
+            }
+        }
+
+        Ok(declarations)
+    }
+
+    fn parse_tokens_to_css_value(tokens: Vec<Token>) -> ParseResult<CssValue> {
+        let mut values = vec![];
+
+        let mut find_function = false;
+        let mut parsing_function = false;
+
+        let mut function_buffer: (String, Vec<CssValue>) = (String::new(), vec![]);
+
+        for token in tokens {
+            let css_value = if find_function {
+                if matches!(token, Token::Delim('(')) {
+                    parsing_function = true;
+                    find_function = false;
+                    continue;
+                } else {
+                    return Err(ParserError {
+                        kind: ParserErrorKind::UnexpectedToken {
+                            expected: "(",
+                            found: format!("{:?}", token),
+                        },
+                        context: vec![],
+                    });
+                }
+            } else if parsing_function {
+                match token {
+                    Token::Delim(')') => {
+                        let (name, args) = std::mem::take(&mut function_buffer);
+                        CssValue::Function(name, args)
+                    }
+                    _ => {
+                        function_buffer.1.push(
+                            Self::parse_tokens_to_css_value(vec![token]).map_err(|e| {
+                                e.with_context(
+                                    "parse_to_css_value: failed to parse tokens to css value",
+                                )
+                            })?,
+                        );
+                        continue;
+                    }
+                }
+            } else {
+                match token {
+                    Token::Ident(s) => CssValue::Keyword(s),
+                    Token::Number(n) => CssValue::Number(n),
+                    Token::Dimension(value, unit) => {
+                        let unit = match unit.as_str() {
+                            "px" => Unit::Px,
+                            "em" => Unit::Em,
+                            "rem" => Unit::Rem,
+                            "%" => Unit::Percent,
+                            _ => Unit::Px, // fallback
+                        };
+                        CssValue::Length(value, unit)
+                    }
+                    Token::Function(name) => {
+                        function_buffer.0 = name;
+                        find_function = true;
+                        continue;
+                    }
+                    _ => continue,
+                }
+            };
+            values.push(css_value);
+        }
+
+        if values.len() == 1 {
+            Ok(values.into_iter().next().unwrap())
+        } else {
+            Ok(CssValue::List(values))
+        }
+    }
+}
+
+// ====================
+impl fmt::Display for CssNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt_tree_node(&self, f, &[])
+    }
+}
+
+/// 再帰的にツリーを表示するヘルパー関数
+fn fmt_tree_node(
+    node: &CssNode,
+    f: &mut fmt::Formatter<'_>,
+    ancestors_last: &[bool],
+) -> fmt::Result {
+    let is_last = *ancestors_last.last().unwrap_or(&true);
+    let connector = if ancestors_last.is_empty() {
+        ""
+    } else if is_last {
+        "└── "
+    } else {
+        "├── "
+    };
+
+    let mut prefix = String::new();
+    for &ancestor_last in &ancestors_last[..ancestors_last.len().saturating_sub(1)] {
+        prefix.push_str(if ancestor_last { "    " } else { "│   " });
+    }
+
+    writeln!(f, "{}{}{:?}", prefix, connector, node.node())?;
+
+    let child_count = node.children().len();
+    for (i, child) in node.children().iter().enumerate() {
+        let child_is_last = i == child_count - 1;
+        let mut new_ancestors = ancestors_last.to_vec();
+        new_ancestors.push(child_is_last);
+        fmt_tree_node(child, f, &new_ancestors)?;
+    }
+
+    Ok(())
 }

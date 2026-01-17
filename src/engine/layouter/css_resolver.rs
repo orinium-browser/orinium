@@ -1,7 +1,8 @@
 use crate::engine::css::parser::{ComplexSelector, CssNode, CssNodeType};
+use crate::engine::css::values::CssValue;
 
 /// complex selector -> declarations
-pub type ResolvedStyles = Vec<(ComplexSelector, Vec<(String, Vec<Token>)>)>;
+pub type ResolvedStyles = Vec<(ComplexSelector, Vec<(String, CssValue)>)>;
 
 pub struct CssResolver;
 
@@ -13,7 +14,7 @@ impl CssResolver {
     }
 
     fn walk(node: &CssNode, styles: &mut ResolvedStyles) {
-        if let CssNodeType::Rule { selectors } = &node {
+        if let CssNodeType::Rule { selectors } = &node.node() {
             let declarations = Self::collect_declarations(node);
 
             for selector in selectors {
@@ -21,16 +22,16 @@ impl CssResolver {
             }
         }
 
-        for child in node_ref.children() {
+        for child in node.children() {
             Self::walk(child, styles);
         }
     }
 
-    fn collect_declarations(rule_node: &CssNode) -> Vec<(String, Token)> {
+    fn collect_declarations(rule_node: &CssNode) -> Vec<(String, CssValue)> {
         let mut result = Vec::new();
 
         for child in rule_node.children() {
-            if let CssNodeType::Declaration { name, value } = &child {
+            if let CssNodeType::Declaration { name, value } = &child.node() {
                 result.push((name.clone(), value.clone()));
             }
         }
