@@ -17,12 +17,51 @@
 //! - Semantic meaning is assigned in later stages (style computation, layout)
 use super::tokenizer::{Token, Tokenizer};
 
-/// Parsed CSS stylesheet.
+/// Node kinds used in the CSS syntax tree.
 ///
-/// Represents the root of a parsed CSS document.
-/// This structure is consumed by later stages such as
-/// style resolution and cascade processing.
-pub struct Stylesheet;
+/// These nodes represent **syntactic structure only**.
+/// No semantic validation or value resolution is performed here.
+#[derive(Debug, Clone)]
+pub enum CssNodeType {
+    /// Root node of a CSS document
+    Stylesheet,
+
+    /// Qualified rule (e.g. `div { ... }`)
+    Rule {
+        /// Selectors associated with this rule
+        selectors: Vec<ComplexSelector>,
+    },
+
+    /// At-rule (e.g. `@media`, `@supports`)
+    AtRule {
+        /// At-rule name without `@`
+        name: String,
+
+        /// Raw parameter tokens
+        params: Vec<Token>,
+    },
+
+    /// Declaration inside a rule block (e.g. `color: red`)
+    Declaration {
+        /// Property name
+        name: String,
+
+        /// Raw value token (not yet interpreted)
+        value: Token,
+    },
+}
+
+/// Node in the CSS syntax tree.
+///
+/// Each node represents a syntactic construct such as a rule,
+/// at-rule, or declaration, and may contain child nodes.
+pub struct CssNode {
+    /// Kind of this CSS node
+    node: CssNodeType,
+
+    /// Child nodes forming the tree structure
+    children: Vec<CssNode>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Selector {
