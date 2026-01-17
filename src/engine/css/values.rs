@@ -4,6 +4,8 @@ pub enum Unit {
     Em,
     Rem,
     Percent,
+    Vw,
+    Vh,
 }
 
 #[derive(Debug, Clone, PartialEq)]

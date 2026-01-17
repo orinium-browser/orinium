@@ -347,6 +347,8 @@ fn apply_declaration(
             CssValue::Length(v, u) => match u {
                 Unit::Percent => Some(Length::Percent(*v)),
                 Unit::Px => Some(Length::Px(*v)),
+                Unit::Vw => Some(Length::Vw(*v)),
+                Unit::Vh => Some(Length::Vh(*v)),
                 Unit::Em | Unit::Rem => unreachable!(),
             },
             CssValue::Number(0.0) => Some(Length::Px(0.0)),
