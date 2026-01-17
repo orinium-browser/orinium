@@ -147,8 +147,15 @@ impl<'a> Tokenizer<'a> {
 }
 
 /// Returns true if the character can start an identifier.
+///
+/// This is a simplified CSS identifier start check.
+/// It supports:
+/// - ASCII letters
+/// - underscore (`_`)
+/// - hyphen (`-`)
+/// - non-ASCII characters
 fn is_ident_start(c: char) -> bool {
-    todo!("implement CSS identifier start check");
+    c.is_ascii_alphabetic() || c == '_' || c == '-' || !c.is_ascii()
 }
 
 fn is_string_start(c: char) -> bool {
