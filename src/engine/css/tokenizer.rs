@@ -147,7 +147,23 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn consume_string_like(&mut self) -> Token {
-        todo!("consume string");
+        let quote = self.peek().unwrap(); // '"' or '\''
+        self.bump(); // consume opening quote
+
+        let mut value = String::new();
+
+        while let Some(c) = self.peek() {
+            if c == quote {
+                self.bump(); // consume closing quote
+                break;
+            }
+
+            // escape / newline handling will go here later
+            value.push(c);
+            self.bump();
+        }
+
+        Token::String(value)
     }
 
     /// Consume a number-like token.
