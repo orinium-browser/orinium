@@ -150,7 +150,7 @@ impl<'a> Tokenizer<'a> {
 ///
 /// This is a simplified CSS identifier start check.
 /// It supports:
-/// - ASCII letters
+/// - ASCII letters (A–Z, a–z)
 /// - underscore (`_`)
 /// - hyphen (`-`)
 /// - non-ASCII characters
