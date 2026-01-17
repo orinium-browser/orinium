@@ -129,7 +129,21 @@ impl<'a> Tokenizer<'a> {
     /// If an identifier is immediately followed by `(`,
     /// this method should produce a `Token::Function`.
     fn consume_ident_like(&mut self) -> Token {
-        todo!("consume identifier or function");
+        let mut ident = String::new();
+
+        while let Some(c) = self.peek() {
+            if is_ident_continue(c) {
+                ident.push(c);
+                self.bump();
+            } else {
+                break;
+            }
+        }
+        if self.peek() == Some('(') {
+            Token::Function(ident)
+        } else {
+            Token::Ident(ident)
+        }
     }
 
     fn consume_string_like(&mut self) -> Token {
