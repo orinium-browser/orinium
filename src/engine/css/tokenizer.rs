@@ -106,7 +106,11 @@ impl<'a> Tokenizer<'a> {
             Some(c) if is_ident_start(c) => self.consume_ident_like(),
             Some(c) if is_string_start(c) => self.consume_string_like(),
             Some(c) if c.is_ascii_digit() => self.consume_number_like(),
-            _ => Token::EOF,
+            Some(c) => {
+                self.bump();
+                Token::Delim(c)
+            }
+            None => Token::EOF,
         }
     }
 
