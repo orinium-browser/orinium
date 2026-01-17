@@ -15,10 +15,13 @@
 //! ## Design notes
 //! - No property-specific validation is performed here
 //! - Semantic meaning is assigned in later stages (style computation, layout)
+use super::tokenizer::{Token, Tokenizer};
 
 /// Parsed CSS stylesheet.
 ///
 /// Represents the root of a parsed CSS document.
+/// This structure is consumed by later stages such as
+/// style resolution and cascade processing.
 pub struct Stylesheet;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -69,4 +72,10 @@ pub struct ComplexSelector {
     /// `A B` is stored as:
     ///   [ B (Descendant), A (None) ]
     pub parts: Vec<SelectorPart>,
+}
+
+/// CSS parser consuming tokens and producing a syntax tree.
+pub struct Parser<'a> {
+    tokenizer: Tokenizer<'a>,
+    brace_depth: usize,
 }
