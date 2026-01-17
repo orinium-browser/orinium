@@ -36,6 +36,9 @@ pub enum Token {
     /// Plain number without unit (e.g. `0`, `1.5`)
     Number(f32),
 
+    /// Quoted string token (e.g. `"hello"`, `'world'`)
+    String(String),
+
     /// Dimension token (e.g. `10px`, `50%`, `2em`)
     ///
     /// Percentages are also represented as a dimension
