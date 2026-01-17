@@ -51,6 +51,9 @@ pub enum Token {
     /// One or more whitespace characters
     Whitespace,
 
+    /// Comment
+    Comment(String),
+
     /// End-of-input marker
     EOF,
 }
@@ -111,6 +114,16 @@ impl<'a> Tokenizer<'a> {
             Some(c) if is_ident_start(c) => self.consume_ident_like(),
             Some(c) if is_string_delimiter(c) => self.consume_string_like(),
             Some(c) if is_number_start(c, self.peek_next()) => self.consume_number_like(),
+            Some('/') => {
+                if self.peek_next() == Some('*') {
+                    self.bump(); // consume '/'
+                    self.bump(); // consume '*'
+                    self.consume_comment()
+                } else {
+                    self.bump();
+                    Token::Delim('/')
+                }
+            }
             Some(c) => {
                 self.bump();
                 Token::Delim(c)
@@ -222,6 +235,26 @@ impl<'a> Tokenizer<'a> {
             }
             _ => Token::Number(value),
         }
+    }
+
+    /// Consume a CSS comment.
+    ///
+    /// Assumes the opening `/*` has already been consumed.
+    fn consume_comment(&mut self) -> Token {
+        let mut value = String::new();
+
+        while let Some(c) = self.peek() {
+            if c == '*' && self.peek_next() == Some('/') {
+                self.bump(); // consume '*'
+                self.bump(); // consume '/'
+                break;
+            } else {
+                value.push(c);
+                self.bump();
+            }
+        }
+
+        Token::Comment(value)
     }
 }
 
