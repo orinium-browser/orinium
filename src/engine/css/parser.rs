@@ -27,6 +27,9 @@ pub struct Stylesheet;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Selector {
     /// Type selector (e.g. `div`)
+    ///
+    /// `None` represents the absence of a type selector
+    /// (e.g. `.class`, `#id`).
     pub tag: Option<String>,
 
     /// ID selector (e.g. `#main`)
