@@ -143,4 +143,42 @@ impl<'a> Parser<'a> {
             brace_depth: 0,
         }
     }
+
+    /// Parse the entire CSS source into a syntax tree.
+    ///
+    /// This method consumes tokens from the tokenizer until `Token::EOF`
+    /// is reached and constructs a `CssNode` representing the stylesheet
+    /// root.
+    ///
+    /// Parsing behavior:
+    /// - Whitespace tokens are generally ignored
+    /// - Qualified rules and at-rules are parsed into child nodes
+    /// - No semantic validation is performed at this stage
+    ///
+    /// The returned syntax tree represents **syntactic structure only**.
+    /// All semantic interpretation (cascade, inheritance, value resolution)
+    /// is handled by later stages of the engine.
+    pub fn parse(&mut self) -> CssNode {
+        let mut stylesheet = CssNode {
+            node: CssNodeType::Stylesheet,
+            children: vec![],
+        };
+
+        loop {
+            let token = self.tokenizer.next_token();
+
+            match token {
+                Token::EOF => break,
+                Token::Whitespace => { /* Ignore for now */ }
+
+                _ => {
+                    // ここで rule / at-rule / error に分岐
+                    // let node = self.parse_rule_or_at_rule(token);
+                    // stylesheet.children.push(node);
+                }
+            }
+        }
+
+        stylesheet
+    }
 }
