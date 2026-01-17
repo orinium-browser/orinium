@@ -178,7 +178,14 @@ impl<'a> Tokenizer<'a> {
     /// - `Token::Dimension` (including `%`)
     fn consume_number_like(&mut self) -> Token {
         let mut buf = String::new();
-        let mut has_dot = false;
+
+        let mut has_dot = if self.peek() == Some('.') {
+            buf.push('.');
+            self.bump();
+            true
+        } else {
+            false
+        };
 
         while let Some(c) = self.peek() {
             if c.is_ascii_digit() {
