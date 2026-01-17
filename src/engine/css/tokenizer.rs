@@ -104,6 +104,7 @@ impl<'a> Tokenizer<'a> {
         match self.peek() {
             Some(c) if c.is_whitespace() => self.consume_whitespace(),
             Some(c) if is_ident_start(c) => self.consume_ident_like(),
+            Some(c) if is_string_start(c) => self.consume_string_like(),
             Some(c) if c.is_ascii_digit() => self.consume_number_like(),
             _ => Token::EOF,
         }
@@ -127,6 +128,10 @@ impl<'a> Tokenizer<'a> {
         todo!("consume identifier or function");
     }
 
+    fn consume_string_like(&mut self) -> Token {
+        todo!("consume string");
+    }
+
     /// Consume a number-like token.
     ///
     /// This may produce:
@@ -140,6 +145,10 @@ impl<'a> Tokenizer<'a> {
 /// Returns true if the character can start an identifier.
 fn is_ident_start(c: char) -> bool {
     todo!("implement CSS identifier start check");
+}
+
+fn is_string_start(c: char) -> bool {
+    todo!("implement CSS string start check");
 }
 
 /// Returns true if the character can continue an identifier.
