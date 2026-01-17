@@ -86,12 +86,12 @@ impl<'a> Tokenizer<'a> {
     ///
     /// This method should update `self.current`.
     fn bump(&mut self) {
-        todo!("advance character iterator");
+        self.current = self.chars.next();
     }
 
     /// Peek the current character without consuming it.
     fn peek(&self) -> Option<char> {
-        todo!("return current character");
+        self.current
     }
 
     /// Consume and return the next token from the input.
