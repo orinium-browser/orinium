@@ -417,20 +417,17 @@ fn apply_declaration(
         /* ======================
          * Color / Text
          * ====================== */
-        ("background-color", CssValue::Color(c)) => {
-            println!("{:?}", c);
+        ("background-color", CssValue::Color(_c)) => {
             let c = value.to_rgba_tuple()?;
             container_style.background_color = Color(c.0, c.1, c.2, c.3);
         }
         ("background-color", CssValue::Keyword(v)) => {
-            println!("{:?}", v);
             if let Some(c) = keyword_color_to_color(v) {
                 container_style.background_color = c;
             }
         }
 
-        ("color", CssValue::Color(c)) => {
-            println!("{:?}", c);
+        ("color", CssValue::Color(_c)) => {
             let c = value.to_rgba_tuple()?;
             text_style.color = Color(c.0, c.1, c.2, c.3);
         }
@@ -576,7 +573,10 @@ fn keyword_color_to_color(keyword: &str) -> Option<Color> {
         "blue" => Some(Color(0, 0, 255, 255)),
         "yellow" => Some(Color(255, 255, 0, 255)),
         "gray" | "grey" => Some(Color(128, 128, 128, 255)),
-        _ => None,
+        _ => {
+            log::error!(target: "Layouter", "Unknown color keyword: {}", keyword);
+            None
+        }
     }
 }
 
