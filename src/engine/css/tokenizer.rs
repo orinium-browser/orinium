@@ -256,6 +256,10 @@ fn is_ident_continue(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '-' || !c.is_ascii()
 }
 
+/// Returns true if the character is a CSS number start.
+///
+/// - ASCII digits (0-9)
+/// - Dot (`.`)
 fn is_number_start(current: char, next: Option<char>) -> bool {
     current.is_ascii_digit() || (current == '.' && matches!(next, Some(c) if c.is_ascii_digit()))
 }
