@@ -51,6 +51,9 @@ pub enum Token {
     /// Hash with String (e.g. `#fff`)
     Hash(String),
 
+    /// AtKeyword (e.g. `@media`)
+    AtKeyword(String),
+
     /// One or more whitespace characters
     Whitespace,
 
@@ -112,7 +115,7 @@ impl<'a> Tokenizer<'a> {
     ///
     /// This is the main entry point used by the parser.
     pub fn next_token(&mut self) -> Token {
-        match self.peek() {
+        let token = match self.peek() {
             Some(c) if c.is_whitespace() => self.consume_whitespace(),
             Some(c) if is_ident_start(c) => self.consume_ident_like(),
             Some(c) if is_string_delimiter(c) => self.consume_string_like(),
@@ -140,12 +143,29 @@ impl<'a> Tokenizer<'a> {
                 }
                 Token::Hash(value)
             }
+            Some('@') => {
+                self.bump();
+                let mut value = String::new();
+                while let Some(c) = self.peek() {
+                    if is_ident_continue(c) {
+                        value.push(c);
+                        self.bump();
+                    } else {
+                        break;
+                    }
+                }
+                Token::AtKeyword(value)
+            }
             Some(c) => {
                 self.bump();
                 Token::Delim(c)
             }
             None => Token::EOF,
-        }
+        };
+
+        log::debug!(target: "CssTokenizer", "Tokenized: {:?}", token);
+
+        token
     }
 
     /// Consume consecutive whitespace characters.

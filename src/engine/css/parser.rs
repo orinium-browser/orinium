@@ -40,8 +40,7 @@ pub enum CssNodeType {
         /// At-rule name without `@`
         name: String,
 
-        /// Raw parameter tokens
-        params: Vec<Token>,
+        params: CssValue,
     },
 
     /// Declaration inside a rule block (e.g. `color: red`)
@@ -49,7 +48,6 @@ pub enum CssNodeType {
         /// Property name
         name: String,
 
-        /// Raw value token (not yet interpreted)
         value: CssValue,
     },
 }
@@ -58,6 +56,7 @@ pub enum CssNodeType {
 ///
 /// Each node represents a syntactic construct such as a rule,
 /// at-rule, or declaration, and may contain child nodes.
+#[derive(Debug)]
 pub struct CssNode {
     /// Kind of this CSS node
     node: CssNodeType,
@@ -259,19 +258,105 @@ impl<'a> Parser<'a> {
             match token {
                 Token::EOF => break,
                 Token::Whitespace => {
-                    self.consume_token(); // ignore whitespace
+                    self.consume_token();
+                }
+                Token::AtKeyword(_) => {
+                    let node = self
+                        .parse_at_rule()
+                        .map_err(|e| e.with_context("parse: failed to parse at-rule"))?;
+                    log::debug!(target: "CssParser", "AtRule parsed: {:?}", &node);
+                    stylesheet.children.push(node);
                 }
                 _ => {
-                    // Determine rule or at-rule
                     let node = self
                         .parse_rule()
-                        .map_err(|e| e.with_context("parse: failed to parse rule"))?; // placeholder
+                        .map_err(|e| e.with_context("parse: failed to parse rule"))?;
+                    log::debug!(target: "CssParser", "Rule parsed: {:?}", &node);
                     stylesheet.children.push(node);
                 }
             }
         }
 
         Ok(stylesheet)
+    }
+
+    fn parse_at_rule(&mut self) -> ParseResult<CssNode> {
+        // 1. consume '@' token
+        let at_name = if let Token::AtKeyword(name) = self.consume_token() {
+            name
+        } else {
+            return Err(ParserError {
+                kind: ParserErrorKind::UnexpectedToken {
+                    expected: "@keyword",
+                    found: format!("{:?}", self.peek_token()),
+                },
+                context: vec![],
+            });
+        };
+
+        // 2. Collect prelude tokens (until '{' or ';')
+        let mut prelude = vec![];
+        loop {
+            match self.peek_token() {
+                Token::Delim('{') | Token::Delim(';') | Token::EOF => break,
+                token => {
+                    prelude.push(token.clone());
+                    self.consume_token();
+                }
+            }
+        }
+
+        // 3. Block vs semicolon
+        let children = if self.peek_token() == &Token::Delim('{') {
+            self.consume_token();
+            self.brace_depth += 1;
+
+            let mut children = vec![];
+            while self.peek_token() != &Token::Delim('}') {
+                match self.peek_token() {
+                    Token::EOF => {
+                        return Err(ParserError {
+                            kind: ParserErrorKind::UnexpectedEOF,
+                            context: vec![],
+                        });
+                    }
+                    Token::Whitespace => {
+                        self.consume_token();
+                    }
+                    _ => {
+                        let node = self
+                            .parse_rule()
+                            .map_err(|e| e.with_context("parse: failed to parse rule"))?;
+                        log::debug!(target: "CssParser", "Rule in AtRule parsed: {:?}", &node);
+                        children.push(node);
+                    }
+                }
+            }
+
+            self.consume_token();
+            self.brace_depth -= 1;
+            children
+        } else {
+            if self.consume_token() != Token::Delim(';') {
+                return Err(ParserError {
+                    kind: ParserErrorKind::UnexpectedToken {
+                        expected: ";",
+                        found: format!("{:?}", self.peek_token()),
+                    },
+                    context: vec![],
+                });
+            }
+            vec![]
+        };
+
+        Ok(CssNode {
+            node: CssNodeType::AtRule {
+                name: at_name,
+                params: Self::parse_tokens_to_css_value(prelude)
+                    .map_err(|e| e.with_context("parse_at_rule: failed to parse param list"))?,
+            },
+            children,
+        })
     }
 
     /// Parse a qualified rule (e.g., `div { color: red; }`).
