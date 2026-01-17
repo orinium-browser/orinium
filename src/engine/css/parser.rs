@@ -45,11 +45,9 @@ pub struct Selector {
     pub pseudo_element: Option<String>,
 }
 
-/// Combinator that defines the relationship between this selector
-/// and the next selector evaluated on the left.
+/// Combinator defining the relationship between selectors.
 ///
-/// In right-to-left selector matching, the combinator belongs to
-/// the selector on the right-hand side.
+/// Additional combinators (`>`, `+`, `~`) may be added later.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Combinator {
     /// Descendant combinator (` `)
@@ -58,27 +56,44 @@ pub enum Combinator {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SelectorPart {
-    /// Simple selector to be matched at the current step
+    /// Simple selector matched at this step
     pub selector: Selector,
 
     /// Relationship to the next selector on the left.
     ///
-    /// `None` means this is the leftmost selector in the sequence.
+    /// `None` indicates this is the leftmost selector
+    /// in the selector sequence.
     pub combinator: Option<Combinator>,
 }
 
+/// A complex CSS selector composed of multiple selector parts.
+///
+/// Selector parts are stored **from right to left** to match
+/// the order used during selector matching.
+///
+/// Example:
+/// ```text
+/// A B
+/// ```
+/// is stored as:
+/// ```text
+/// [
+///   B (Descendant),
+///   A (None)
+/// ]
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ComplexSelector {
-    /// Selector parts ordered from right to left.
-    ///
-    /// Example:
-    /// `A B` is stored as:
-    ///   [ B (Descendant), A (None) ]
     pub parts: Vec<SelectorPart>,
 }
 
-/// CSS parser consuming tokens and producing a syntax tree.
+/// CSS parser consuming tokens and producing syntax structures.
 pub struct Parser<'a> {
+    /// Source of tokens produced by the tokenizer
     tokenizer: Tokenizer<'a>,
+
+    /// Current nesting depth of `{}` blocks
+    ///
+    /// Used to track rule and block boundaries.
     brace_depth: usize,
 }
