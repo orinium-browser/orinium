@@ -18,7 +18,7 @@
 
 /// Parsed CSS stylesheet.
 ///
-/// This is an internal representation used by the style engine.
+/// Represents the root of a parsed CSS document.
 pub struct Stylesheet;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
