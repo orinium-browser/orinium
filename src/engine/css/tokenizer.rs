@@ -172,7 +172,44 @@ impl<'a> Tokenizer<'a> {
     /// - `Token::Number`
     /// - `Token::Dimension` (including `%`)
     fn consume_number_like(&mut self) -> Token {
-        todo!("consume number or dimension");
+        let mut buf = String::new();
+        let mut has_dot = false;
+
+        while let Some(c) = self.peek() {
+            if c.is_ascii_digit() {
+                buf.push(c);
+                self.bump();
+            } else if c == '.' && !has_dot {
+                has_dot = true;
+                buf.push(c);
+                self.bump();
+            } else {
+                break;
+            }
+        }
+
+        let value: f32 = buf.parse().unwrap_or(0.0);
+
+        // --- unit / percentage branching ---
+        match self.peek() {
+            Some('%') => {
+                self.bump();
+                Token::Dimension(value, "%".to_string())
+            }
+            Some(c) if is_ident_start(c) => {
+                let mut unit = String::new();
+                while let Some(c) = self.peek() {
+                    if is_ident_continue(c) {
+                        unit.push(c);
+                        self.bump();
+                    } else {
+                        break;
+                    }
+                }
+                Token::Dimension(value, unit)
+            }
+            _ => Token::Number(value),
+        }
     }
 }
 
