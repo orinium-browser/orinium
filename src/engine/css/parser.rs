@@ -1,3 +1,29 @@
+//! CSS Parser
+//!
+//! This module implements the **CSS parser**, which consumes tokens produced
+//! by the tokenizer and builds higher-level CSS structures.
+//!
+//! ## Responsibilities
+//!
+//! - Parse token streams into structured CSS data
+//!   (selectors, declarations, component values, etc.)
+//! - Handle nesting such as functions and blocks
+//! - Preserve unresolved values for later stages
+//!
+//! ## Non-responsibilities
+//!
+//! - Tokenization of raw input
+//! - Semantic interpretation of values
+//!   (e.g. resolving lengths, computing colors)
+//! - Style computation or layout decisions
+//!
+//! ## Design notes
+//!
+//! - No property-specific validation is performed at this stage
+//!
+//! The parser intentionally avoids semantic decisions.
+//! All meaning is assigned later during style computation and layout.
+
 /// Parsed CSS stylesheet.
 ///
 /// This is an internal representation used by the style engine.

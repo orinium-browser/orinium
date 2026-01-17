@@ -1,3 +1,26 @@
+//! CSS Tokenizer
+//!
+//! This module implements a **CSS tokenizer**, responsible for converting
+//! a raw CSS source string into a flat stream of tokens.
+//!
+//! ## Responsibilities
+//!
+//! - Consume raw characters
+//! - Produce syntactic tokens defined by the CSS specification
+//! - Preserve the original structure of the input as much as possible
+//!
+//! ## Non-responsibilities
+//!
+//! - Parsing selectors or declarations
+//! - Interpreting values (lengths, colors, percentages, etc.)
+//! - Building trees or nested structures
+//!
+//! ## Design notes
+//!
+//! - Tokens are produced in a **linear stream**
+//! - Function tokens only represent the function name
+//! - Matching of parentheses and function arguments is handled by the parser
+
 /// CSS token produced by the tokenizer.
 ///
 /// This represents *syntactic units* only.
