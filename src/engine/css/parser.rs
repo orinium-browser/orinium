@@ -131,8 +131,6 @@ pub struct Parser<'a> {
     /// Source of tokens produced by the tokenizer
     tokenizer: Tokenizer<'a>,
 
-    /// Current nesting depth of `{}` blocks
-    ///
-    /// Used to track rule and block boundaries.
+    /// Used to detect the start and end of rule blocks (`{}`).
     brace_depth: usize,
 }
