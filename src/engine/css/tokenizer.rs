@@ -110,7 +110,7 @@ impl<'a> Tokenizer<'a> {
             Some(c) if c.is_whitespace() => self.consume_whitespace(),
             Some(c) if is_ident_start(c) => self.consume_ident_like(),
             Some(c) if is_string_delimiter(c) => self.consume_string_like(),
-            Some(c) if c.is_ascii_digit() => self.consume_number_like(),
+            Some(c) if is_number_start(c, self.peek_next()) => self.consume_number_like(),
             Some(c) => {
                 self.bump();
                 Token::Delim(c)
@@ -247,4 +247,8 @@ fn is_string_delimiter(c: char) -> bool {
 /// - Non-ASCII characters
 fn is_ident_continue(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '-' || !c.is_ascii()
+}
+
+fn is_number_start(current: char, next: Option<char>) -> bool {
+    current.is_ascii_digit() || (current == '.' && matches!(next, Some(c) if c.is_ascii_digit()))
 }
