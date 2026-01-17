@@ -97,6 +97,11 @@ impl<'a> Tokenizer<'a> {
         self.current
     }
 
+    /// Peek the next character from the current one without consuming it.
+    fn peek_next(&self) -> Option<char> {
+        self.chars.clone().next()
+    }
+
     /// Consume and return the next token from the input.
     ///
     /// This is the main entry point used by the parser.
