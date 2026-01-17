@@ -169,18 +169,13 @@ impl<'a> Parser<'a> {
 
     /// Parse the entire CSS source into a syntax tree.
     ///
-    /// This method consumes tokens from the tokenizer until `Token::EOF`
-    /// is reached and constructs a `CssNode` representing the stylesheet
-    /// root.
+    /// This method consumes tokens until `Token::EOF` is reached and constructs
+    /// a `CssNode` representing the stylesheet root.
     ///
     /// Parsing behavior:
-    /// - Whitespace tokens are generally ignored
+    /// - Whitespace tokens are ignored
     /// - Qualified rules and at-rules are parsed into child nodes
-    /// - No semantic validation is performed at this stage
-    ///
-    /// The returned syntax tree represents **syntactic structure only**.
-    /// All semantic interpretation (cascade, inheritance, value resolution)
-    /// is handled by later stages of the engine.
+    /// - No semantic validation is performed
     pub fn parse(&mut self) -> CssNode {
         let mut stylesheet = CssNode {
             node: CssNodeType::Stylesheet,
@@ -188,20 +183,117 @@ impl<'a> Parser<'a> {
         };
 
         loop {
-            let token = self.tokenizer.next_token();
+            let token = self.peek_token().clone();
 
             match token {
                 Token::EOF => break,
-                Token::Whitespace => { /* Ignore for now */ }
-
+                Token::Whitespace => {
+                    self.consume_token(); // ignore whitespace
+                }
                 _ => {
-                    // ここで rule / at-rule / error に分岐
-                    // let node = self.parse_rule_or_at_rule(token);
-                    // stylesheet.children.push(node);
+                    // Determine rule or at-rule
+                    let node = self.parse_rule(); // placeholder
+                    stylesheet.children.push(node);
                 }
             }
         }
 
         stylesheet
+    }
+
+    /// Parse a qualified rule (e.g., `div { color: red; }`).
+    ///
+    /// Parses the selector list first, then the block of declarations.
+    fn parse_rule(&mut self) -> CssNode {
+        // 1. Parse selectors
+        let selectors = self.parse_selector_list();
+
+        // 2. Expect `{`
+        match self.consume_token() {
+            Token::Delim('{') => self.brace_depth += 1,
+            token => panic!("Expected '{{', found {:?}", token),
+        }
+
+        // 3. Parse declarations inside the block
+        let mut children = vec![];
+        loop {
+            let token = self.peek_token().clone();
+            match token {
+                Token::Delim('}') => {
+                    self.consume_token();
+                    self.brace_depth -= 1;
+                    break;
+                }
+                Token::EOF => break,
+                _ => {
+                    // TODO: parse a declaration
+                    self.consume_token(); // placeholder consume
+                }
+            }
+        }
+
+        CssNode {
+            node: CssNodeType::Rule { selectors },
+            children,
+        }
+    }
+
+    /// Parse a comma-separated list of selectors for a rule.
+    ///
+    /// Each selector is represented as a `ComplexSelector`.
+    fn parse_selector_list(&mut self) -> Vec<ComplexSelector> {
+        let mut selectors = vec![];
+        let mut current_parts = vec![];
+        let mut current_combinator = None;
+
+        loop {
+            let token = self.peek_token().clone();
+            match token {
+                Token::Ident(s) => {
+                    let selector = Selector {
+                        tag: Some(s),
+                        id: None,
+                        classes: vec![],
+                        pseudo_class: None,
+                        pseudo_element: None,
+                    };
+                    current_parts.push(SelectorPart {
+                        selector,
+                        combinator: current_combinator,
+                    });
+                    self.consume_token();
+                }
+
+                Token::Delim(',') => {
+                    self.consume_token();
+                    if !current_parts.is_empty() {
+                        selectors.push(ComplexSelector {
+                            parts: current_parts.clone(),
+                        });
+                        current_parts.clear();
+                    }
+                }
+
+                Token::Delim('{') | Token::EOF => {
+                    if !current_parts.is_empty() {
+                        selectors.push(ComplexSelector {
+                            parts: current_parts.clone(),
+                        });
+                    }
+                    break;
+                }
+
+                Token::Whitespace => {
+                    current_combinator = Some(Combinator::Descendant);
+                    self.consume_token();
+                }
+
+                _ => {
+                    self.consume_token(); // placeholder for unsupported token
+                }
+            }
+        }
+
+        selectors
     }
 }
