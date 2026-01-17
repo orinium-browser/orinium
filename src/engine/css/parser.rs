@@ -87,7 +87,7 @@ pub struct Selector {
 /// Combinator defining the relationship between selectors.
 ///
 /// Additional combinators (`>`, `+`, `~`) may be added later.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Combinator {
     /// Descendant combinator (` `)
     Descendant,
