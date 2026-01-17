@@ -13,6 +13,7 @@ pub enum CssValue {
     Keyword(String),                 // e.g. auto, none
     Length(f32, Unit),               // e.g. 10px
     Number(f32),                     // e.g. 1.5
+    String(String),                  // e.g. "http"
     Color(String),                   // e.g. #fff, #1f1f11
     Function(String, Vec<CssValue>), // e.g. rgb(255,0,0)
     List(Vec<CssValue>),             // e.g. 100px auto

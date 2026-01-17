@@ -609,6 +609,7 @@ impl<'a> Parser<'a> {
                 match token {
                     Token::Ident(s) => CssValue::Keyword(s),
                     Token::Number(n) => CssValue::Number(n),
+                    Token::String(s) => CssValue::String(s),
                     Token::Dimension(value, unit) => {
                         let unit = match unit.as_str() {
                             "px" => Unit::Px,
