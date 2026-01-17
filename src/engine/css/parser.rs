@@ -140,6 +140,35 @@ pub struct Parser<'a> {
     lookahead: Option<Token>,
 }
 
+/// Parser error kinds
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParserErrorKind {
+    /// Expected a token but found something else
+    UnexpectedToken {
+        expected: &'static str,
+        found: String, // Token debug or value
+    },
+
+    /// Unexpected end of file
+    UnexpectedEOF,
+
+    /// Invalid or unsupported CSS syntax
+    InvalidSyntax,
+
+    /// Mismatched braces or parentheses
+    MismatchedDelimiter { expected: char, found: char },
+}
+
+/// Parser error
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParserError {
+    /// Kind of the error
+    pub kind: ParserErrorKind,
+}
+
+/// Result type for parser functions
+pub type ParseResult<T> = Result<T, ParserError>;
+
 impl<'a> Parser<'a> {
     /// Create a new CSS parser from a source string.
     pub fn new(input: &'a str) -> Self {
@@ -176,7 +205,7 @@ impl<'a> Parser<'a> {
     /// - Whitespace tokens are ignored
     /// - Qualified rules and at-rules are parsed into child nodes
     /// - No semantic validation is performed
-    pub fn parse(&mut self) -> CssNode {
+    pub fn parse(&mut self) -> ParseResult<CssNode> {
         let mut stylesheet = CssNode {
             node: CssNodeType::Stylesheet,
             children: vec![],
@@ -192,26 +221,33 @@ impl<'a> Parser<'a> {
                 }
                 _ => {
                     // Determine rule or at-rule
-                    let node = self.parse_rule(); // placeholder
+                    let node = self.parse_rule()?; // placeholder
                     stylesheet.children.push(node);
                 }
             }
         }
 
-        stylesheet
+        Ok(stylesheet)
     }
 
     /// Parse a qualified rule (e.g., `div { color: red; }`).
     ///
     /// Parses the selector list first, then the block of declarations.
-    fn parse_rule(&mut self) -> CssNode {
+    fn parse_rule(&mut self) -> ParseResult<CssNode> {
         // 1. Parse selectors
         let selectors = self.parse_selector_list();
 
         // 2. Expect `{`
         match self.consume_token() {
             Token::Delim('{') => self.brace_depth += 1,
-            token => panic!("Expected '{{', found {:?}", token),
+            token => {
+                return Err(ParserError {
+                    kind: ParserErrorKind::UnexpectedToken {
+                        expected: "{",
+                        found: format!("{:?}", token),
+                    },
+                });
+            }
         }
 
         // 3. Parse declarations inside the block
@@ -232,10 +268,10 @@ impl<'a> Parser<'a> {
             }
         }
 
-        CssNode {
+        Ok(CssNode {
             node: CssNodeType::Rule { selectors },
             children,
-        }
+        })
     }
 
     /// Parse a comma-separated list of selectors for a rule.
