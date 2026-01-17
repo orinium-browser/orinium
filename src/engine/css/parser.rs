@@ -134,3 +134,13 @@ pub struct Parser<'a> {
     /// Used to detect the start and end of rule blocks (`{}`).
     brace_depth: usize,
 }
+
+impl<'a> Parser<'a> {
+    /// Create a new CSS parser from a source string.
+    pub fn new(input: &'a str) -> Self {
+        Self {
+            tokenizer: Tokenizer::new(input),
+            brace_depth: 0,
+        }
+    }
+}
