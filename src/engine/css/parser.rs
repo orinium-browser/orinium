@@ -364,14 +364,17 @@ impl<'a> Parser<'a> {
                     }
                     _ => {
                         let mut cursor = 0;
-                        let mut saw_colon = false;
+                        let mut is_declaration = false;
 
                         loop {
                             match self.peek_next_token(cursor) {
-                                Token::Delim(':') => {
-                                    saw_colon = true;
+                                Token::Delim('{') => {
+                                    break;
                                 }
-                                Token::Delim('{') | Token::Delim('}') => break,
+                                Token::Delim('}') => {
+                                    is_declaration = true;
+                                    break;
+                                }
                                 Token::EOF => {
                                     return Err(ParserError {
                                         kind: ParserErrorKind::UnexpectedEOF,
@@ -383,7 +386,7 @@ impl<'a> Parser<'a> {
                             cursor += 1;
                         }
 
-                        let nodes = if saw_colon {
+                        let nodes = if is_declaration {
                             self.parse_declaration_list().map_err(|e| {
                                 e.with_context(
                                     "parse_at_rule: failed to parse declaration in block",
