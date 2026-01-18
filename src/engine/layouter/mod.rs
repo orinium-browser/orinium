@@ -444,6 +444,7 @@ fn apply_declaration(
             let len = resolve_css_len(value)?;
             let px = match &len {
                 Length::Px(v) => *v,
+                Length::Percent(v) => *v * text_style.font_size / 100.0,
                 _ => {
                     log::error!(target: "Layouter", "Unknown size type for font-size: {:?}", len);
                     return None;
