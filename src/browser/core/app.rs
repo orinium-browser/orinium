@@ -4,35 +4,37 @@ use winit::event::WindowEvent;
 
 use super::tab::Tab;
 // use super::ui::init_browser_ui;
-
-use super::BrowserCommand;
-use super::resource_loader::BrowserResourceLoader;
+use super::{BrowserCommand, resource_loader::BrowserResourceLoader};
 use crate::engine::layouter::{self, DrawCommand};
 use crate::platform::network::NetworkCore;
 use crate::platform::renderer::gpu::GpuRenderer;
 use crate::system::App;
 
+/// Stores rendering-related state for the browser window.
 pub struct RenderState {
+    /// List of draw commands generated from the layout engine.
     pub draw_commands: Vec<DrawCommand>,
+    /// Current window size in pixels (width, height).
     pub window_size: (u32, u32),
+    /// Current scale factor (for HiDPI displays).
     pub scale_factor: f64,
 }
 
+/// Stores input-related state for the browser window.
 #[derive(Default)]
 pub struct InputState {
-    // Add fields to track input state, e.g., mouse position, pressed keys, etc.
+    /// Current mouse position in window coordinates.
     pub mouse_position: (f64, f64),
 }
 
+/// Main browser application struct.
+/// Holds tabs, rendering state, input state, and network resources.
 pub struct BrowserApp {
     tabs: Vec<Tab>,
     active_tab: usize,
-
     render: RenderState,
     window_title: String,
-
     input: InputState,
-
     network: Arc<BrowserResourceLoader>,
 }
 
@@ -43,19 +45,18 @@ impl Default for BrowserApp {
 }
 
 impl BrowserApp {
-    /// ブラウザのメインループを開始
+    /// Starts the main browser event loop asynchronously.
     pub async fn run(self) -> Result<()> {
         let event_loop =
             winit::event_loop::EventLoop::<crate::platform::system::State>::with_user_event()
                 .build()?;
 
         let mut app = App::new(self);
-
         event_loop.run_app(&mut app)?;
-
         Ok(())
     }
 
+    /// Creates a new browser instance with the given window size and title.
     pub fn new(window_size: (u32, u32), window_title: String) -> Self {
         let network = Arc::new(BrowserResourceLoader::new(Some(Arc::new(
             NetworkCore::new(),
@@ -70,28 +71,35 @@ impl BrowserApp {
                 scale_factor: 1.0,
             },
             window_title,
-            network,
             input: InputState::default(),
+            network,
         }
     }
 
+    /// Returns a mutable reference to the currently active tab, if any.
+    fn active_tab_mut(&mut self) -> Option<&mut Tab> {
+        self.tabs.get_mut(self.active_tab)
+    }
+
+    /// Rebuilds the render tree for the active tab and generates draw commands.
     fn rebuild_render_tree(&mut self) {
         let size = self.window_size();
         let sf = self.render.scale_factor as f32;
 
-        let (layout, info, title) = {
-            let Some(tab) = self.active_tab_mut() else {
-                return;
-            };
+        let (layout, info, title) = match self.active_tab_mut() {
+            Some(tab) => {
+                let title = tab
+                    .title()
+                    .filter(|t| !t.is_empty())
+                    .or_else(|| tab.url().filter(|u| !u.is_empty()));
 
-            let title = if let Some(t) = tab.title().filter(|t| !t.is_empty()) {
-                Some(t)
-            } else {
-                tab.url().filter(|u| !u.is_empty())
-            };
-            let (layout, info) = tab.layout_and_info().unwrap();
-
-            (layout, info, title)
+                if let Some((layout, info)) = tab.layout_and_info() {
+                    (layout, info, title)
+                } else {
+                    return;
+                }
+            }
+            None => return,
         };
 
         ui_layout::LayoutEngine::layout(layout, size.0 / sf, size.1 / sf);
@@ -102,10 +110,7 @@ impl BrowserApp {
         }
     }
 
-    fn active_tab_mut(&mut self) -> Option<&mut Tab> {
-        self.tabs.get_mut(self.active_tab)
-    }
-
+    /// Handles a `winit` window event and returns a `BrowserCommand`.
     pub fn handle_window_event(
         &mut self,
         event: WindowEvent,
@@ -143,101 +148,106 @@ impl BrowserApp {
                 BrowserCommand::None
             }
 
-            WindowEvent::MouseInput { button, .. } => match button {
-                winit::event::MouseButton::Left => {
-                    let (x, y) = self.input.mouse_position;
-                    let sf = self.render.scale_factor;
-                    if let Some(tab) = self.active_tab_mut() {
-                        Self::handle_mouse_click(tab, (x / sf) as f32, (y / sf) as f32);
-                        BrowserCommand::RequestRedraw
-                    } else {
-                        BrowserCommand::None
-                    }
-                }
-                _ => BrowserCommand::None,
-            },
+            WindowEvent::MouseInput { button, .. } => self.handle_mouse_input(button),
 
             _ => BrowserCommand::None,
         }
     }
 
+    /// Handles mouse input events, mainly left-clicks for the active tab.
+    fn handle_mouse_input(&mut self, button: winit::event::MouseButton) -> BrowserCommand {
+        if button != winit::event::MouseButton::Left {
+            return BrowserCommand::None;
+        }
+
+        let (x, y) = self.input.mouse_position;
+        let sf = self.render.scale_factor;
+        if let Some(tab) = self.active_tab_mut() {
+            Self::handle_mouse_click(tab, (x / sf) as f32, (y / sf) as f32);
+            BrowserCommand::RequestRedraw
+        } else {
+            BrowserCommand::None
+        }
+    }
+
+    /// Handles scrolling for the active tab, updating its layout container offsets.
+    ///
+    /// Currently a stub.
     fn handle_scroll(&mut self, delta: winit::event::MouseScrollDelta) {
         let scroll_amount = match delta {
             winit::event::MouseScrollDelta::LineDelta(_, y) => -y * 60.0,
             winit::event::MouseScrollDelta::PixelDelta(pos) => -pos.y as f32,
         };
 
-        if let Some(tab) = self.active_tab_mut()
-            && let Some((_layout, info)) = tab.layout_and_info()
-        {
-            // ルートコンテナにスクロール量を加算
-            if let layouter::NodeKind::Container {
-                scroll_offset_x: _,
-                scroll_offset_y,
-                ..
-            } = &mut info.kind
-            {
-                *scroll_offset_y += scroll_amount;
-
-                // 上下限のチェック（簡易）
-                *scroll_offset_y = scroll_offset_y.clamp(0.0, f32::MAX);
+        if let Some(tab) = self.active_tab_mut() {
+            if let Some((_layout, info)) = tab.layout_and_info() {
+                if let layouter::NodeKind::Container {
+                    scroll_offset_y, ..
+                } = &mut info.kind
+                {
+                    *scroll_offset_y = (*scroll_offset_y + scroll_amount).clamp(0.0, f32::MAX);
+                }
             }
         }
     }
 
+    /// Handles a mouse click in the given tab at the specified coordinates.
     pub fn handle_mouse_click(tab: &mut Tab, x: f32, y: f32) {
         println!("clicked");
-        let hit_path = if let Some((layout, info)) = tab.layout_and_info() {
-            crate::engine::input::hit_test(layout, info, x, y)
-        } else {
-            return;
+        let hit_path = match tab.layout_and_info() {
+            Some((layout, info)) => crate::engine::input::hit_test(layout, info, x, y),
+            None => return,
         };
+
         if let Some(hit) = hit_path
             .iter()
-            .find(|&e| matches!(e.info.kind, layouter::NodeKind::Link { .. }))
+            .find(|e| matches!(e.info.kind, layouter::NodeKind::Link { .. }))
         {
-            match &hit.info.kind {
-                layouter::NodeKind::Link { href, .. } => {
-                    let href = href.clone();
-                    println!("リンククリック: {}", href);
-                }
-
-                _ => unreachable!(),
+            if let layouter::NodeKind::Link { href, .. } = &hit.info.kind {
+                println!("Link clicked: {}", href);
             }
         }
     }
 
+    /// Rebuilds the render tree and sends draw commands to the GPU.
     pub fn redraw(&mut self, gpu: &mut GpuRenderer) {
         self.rebuild_render_tree();
         self.apply_draw_commands(gpu);
-        let render_result = gpu.render();
-        if let Err(e) = render_result {
-            log::error!("Render error occured: {}", e);
+        if let Err(e) = gpu.render() {
+            log::error!("Render error occurred: {}", e);
         }
     }
 
+    /// Applies the current draw commands to the GPU renderer.
     pub fn apply_draw_commands(&self, gpu: &mut GpuRenderer) {
         gpu.parse_draw_commands(&self.render.draw_commands);
     }
 
+    /// Adds a new tab to the browser.
     pub fn add_tab(&mut self, tab: Tab) {
         self.tabs.push(tab);
     }
 
+    /// Returns the current window size as `(width, height)` in floating-point pixels.
     pub fn window_size(&self) -> (f32, f32) {
         (
             self.render.window_size.0 as f32,
             self.render.window_size.1 as f32,
         )
     }
+
+    /// Returns the current window title.
     pub fn window_title(&self) -> String {
-        self.window_title.to_string()
+        self.window_title.clone()
     }
+
+    /// Returns a clone of the browser's network resource loader.
     pub fn network(&self) -> Arc<BrowserResourceLoader> {
         Arc::clone(&self.network)
     }
 
+    /// Sets the current scale factor for rendering.
     pub fn set_scale_factor(&mut self, sf: f64) {
-        self.render.scale_factor = sf
+        self.render.scale_factor = sf;
     }
 }
