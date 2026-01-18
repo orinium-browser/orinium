@@ -134,10 +134,27 @@ impl BrowserApp {
     }
 
     fn handle_scroll(&mut self, delta: winit::event::MouseScrollDelta) {
-        let _scroll_amount = match delta {
+        let scroll_amount = match delta {
             winit::event::MouseScrollDelta::LineDelta(_, y) => -y * 60.0,
             winit::event::MouseScrollDelta::PixelDelta(pos) => -pos.y as f32,
         };
+
+        if let Some(tab) = self.active_tab_mut() {
+            if let Some((_layout, info)) = tab.layout_and_info() {
+                // ルートコンテナにスクロール量を加算
+                if let layouter::NodeKind::Container {
+                    scroll_offset_x: _,
+                    scroll_offset_y,
+                    ..
+                } = &mut info.kind
+                {
+                    *scroll_offset_y += scroll_amount;
+
+                    // 上下限のチェック（簡易）
+                    *scroll_offset_y = scroll_offset_y.clamp(0.0, std::f32::MAX);
+                }
+            }
+        }
     }
 
     pub fn redraw(&mut self, gpu: &mut GpuRenderer) {

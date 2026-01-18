@@ -862,7 +862,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
             });
             commands.push(DrawCommand::PushTransform {
                 dx: *scroll_offset_x,
-                dy: *scroll_offset_y,
+                dy: -*scroll_offset_y,
             });
         }
     }
