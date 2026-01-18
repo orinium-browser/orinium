@@ -524,96 +524,129 @@ impl<'a> Parser<'a> {
     /// Each selector is represented as a `ComplexSelector`.
     fn parse_selector_list(&mut self) -> Vec<ComplexSelector> {
         let mut selectors = vec![];
-        let mut current_parts = vec![];
-        let mut current_combinator = None;
+        let mut parts = vec![];
+
+        let mut current_selector: Option<Selector> = None;
+        let mut current_combinator: Option<Combinator> = None;
 
         loop {
             let token = self.peek_token().clone();
             match token {
-                Token::Ident(s) => {
-                    let selector = Selector {
-                        tag: Some(s),
+                Token::Ident(name) => {
+                    let sel = current_selector.get_or_insert_with(|| Selector {
+                        tag: None,
                         id: None,
                         classes: vec![],
                         pseudo_class: None,
                         pseudo_element: None,
-                    };
-                    current_parts.push(SelectorPart {
-                        selector,
-                        combinator: current_combinator,
                     });
-                    current_combinator = None;
+
+                    if sel.tag.is_none() {
+                        sel.tag = Some(name);
+                    }
+
                     self.consume_token();
                 }
 
-                Token::Hash(id_name) => {
-                    if let Some(part) = current_parts.last_mut() {
-                        part.selector.id = Some(id_name);
-                    } else {
-                        let selector = Selector {
-                            tag: None,
-                            id: Some(id_name),
-                            classes: vec![],
-                            pseudo_class: None,
-                            pseudo_element: None,
-                        };
-                        current_parts.push(SelectorPart {
-                            selector,
-                            combinator: current_combinator,
-                        });
-                        current_combinator = None;
-                    }
+                Token::Hash(id) => {
+                    let sel = current_selector.get_or_insert_with(|| Selector {
+                        tag: None,
+                        id: None,
+                        classes: vec![],
+                        pseudo_class: None,
+                        pseudo_element: None,
+                    });
+                    sel.id = Some(id);
                     self.consume_token();
                 }
 
                 Token::Delim('.') => {
                     self.consume_token();
-                    if let Token::Ident(class_name) = self.peek_token().clone() {
-                        if let Some(part) = current_parts.last_mut() {
-                            part.selector.classes.push(class_name);
-                        } else {
-                            let selector = Selector {
+                    if let Token::Ident(class) = self.consume_token() {
+                        let sel = current_selector.get_or_insert_with(|| Selector {
+                            tag: None,
+                            id: None,
+                            classes: vec![],
+                            pseudo_class: None,
+                            pseudo_element: None,
+                        });
+                        sel.classes.push(class);
+                    }
+                }
+
+                Token::Delim(':') => {
+                    self.consume_token();
+                    if self.peek_token() == &Token::Delim(':') {
+                        // pseudo-element
+                        self.consume_token();
+                        if let Token::Ident(name) = self.consume_token() {
+                            let sel = current_selector.get_or_insert_with(|| Selector {
                                 tag: None,
                                 id: None,
-                                classes: vec![class_name],
+                                classes: vec![],
                                 pseudo_class: None,
                                 pseudo_element: None,
-                            };
-                            current_parts.push(SelectorPart {
-                                selector,
-                                combinator: current_combinator,
                             });
+                            sel.pseudo_element = Some(name);
                         }
-                        self.consume_token();
-                    }
-                }
-
-                Token::Delim(',') => {
-                    self.consume_token();
-                    if !current_parts.is_empty() {
-                        selectors.push(ComplexSelector {
-                            parts: current_parts.clone(),
+                    } else if let Token::Ident(name) = self.consume_token() {
+                        let sel = current_selector.get_or_insert_with(|| Selector {
+                            tag: None,
+                            id: None,
+                            classes: vec![],
+                            pseudo_class: None,
+                            pseudo_element: None,
                         });
-                        current_parts.clear();
+                        sel.pseudo_class = Some(name);
                     }
-                }
-
-                Token::Delim('{') | Token::EOF => {
-                    if !current_parts.is_empty() {
-                        selectors.push(ComplexSelector {
-                            parts: current_parts.clone(),
-                        });
-                    }
-                    break;
                 }
 
                 Token::Whitespace => {
+                    // descendant combinator
+                    if let Some(sel) = current_selector.take() {
+                        parts.push(SelectorPart {
+                            selector: sel,
+                            combinator: current_combinator.take(),
+                        });
+                    }
                     current_combinator = Some(Combinator::Descendant);
                     self.consume_token();
                 }
 
+                Token::Delim(',') => {
+                    if let Some(sel) = current_selector.take() {
+                        parts.push(SelectorPart {
+                            selector: sel,
+                            combinator: current_combinator.take(),
+                        });
+                    }
+                    selectors.push(ComplexSelector {
+                        parts: parts.clone(),
+                    });
+                    parts.clear();
+                    current_combinator = None;
+                    self.consume_token();
+
+                    while matches!(self.peek_token(), Token::Whitespace) {
+                        self.consume_token();
+                    }
+                }
+
+                Token::Delim('{') | Token::EOF => {
+                    if let Some(sel) = current_selector.take() {
+                        parts.push(SelectorPart {
+                            selector: sel,
+                            combinator: current_combinator.take(),
+                        });
+                    }
+                    if !parts.is_empty() {
+                        selectors.push(ComplexSelector { parts });
+                    }
+                    break;
+                }
+
                 _ => {
-                    self.consume_token(); // placeholder for unsupported token
+                    self.consume_token();
                 }
             }
         }
