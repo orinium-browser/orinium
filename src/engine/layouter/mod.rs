@@ -581,14 +581,16 @@ fn resolve_css_len(css_len: &CssValue, text_style: &TextStyle) -> Option<Length>
 /// Resolve CssValue to Color.
 fn resolve_css_color(css_color: &CssValue) -> Option<Color> {
     fn keyword_color_to_color(keyword: &str) -> Option<Color> {
-        match keyword {
+        match keyword.to_ascii_lowercase().as_str() {
             "black" => Some(Color(0, 0, 0, 255)),
             "white" => Some(Color(255, 255, 255, 255)),
             "red" => Some(Color(255, 0, 0, 255)),
             "green" => Some(Color(0, 128, 0, 255)),
             "blue" => Some(Color(0, 0, 255, 255)),
+            "royalblue" => Some(Color(65, 105, 225, 255)),
             "yellow" => Some(Color(255, 255, 0, 255)),
             "gray" | "grey" => Some(Color(128, 128, 128, 255)),
+            "lightgray" | "lightgrey" => Some(Color(65, 105, 225, 255)),
             "transparent" => Some(Color(0, 0, 0, 0)),
             _ => {
                 log::error!(target: "Layouter", "Unknown color keyword: {}", keyword);
