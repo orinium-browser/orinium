@@ -1,13 +1,12 @@
 pub mod css_resolver;
-mod csslength_to_length;
 
 use anyhow::Result;
 
-use crate::engine::css::cssom::matcher::{ElementChain, ElementInfo};
+use crate::engine::css::matcher::{ElementChain, ElementInfo};
 use css_resolver::ResolvedStyles;
 
 use crate::engine::bridge::text;
-use crate::engine::css::cssom::CssValue;
+use crate::engine::css::values::{CssValue, Unit};
 use crate::engine::tree::TreeNode;
 use crate::html::HtmlNodeType;
 use std::cell::RefCell;
@@ -341,39 +340,39 @@ fn apply_declaration(
     container_style: &mut ContainerStyle,
     text_style: &mut TextStyle,
 ) -> Option<()> {
-    let resolve_css_len = |css_len: &crate::engine::css::Length| -> Option<Length> {
-        use crate::engine::css::length::{Length as CssLength, LengthUnit};
+    let resolve_css_len = |css_len: &CssValue| -> Option<Length> {
         match &css_len {
-            CssLength::Value(v, LengthUnit::Em) => Some(Length::Px(text_style.font_size * v)),
-            CssLength::Value(v, LengthUnit::Rem) => Some(Length::Px(16.0 * v)), // html sont-size 仮値
-            _ => css_len
-                .try_into()
-                .inspect_err(
-                    |e| log::error!(target: "Layouter", "Unknown CSS Length type: {:?}", e),
-                )
-                .ok(),
+            CssValue::Length(v, Unit::Em) => Some(Length::Px(text_style.font_size * v)),
+            CssValue::Length(v, Unit::Rem) => Some(Length::Px(16.0 * v)), // html sont-size 仮値
+            CssValue::Length(v, u) => match u {
+                Unit::Percent => Some(Length::Percent(*v)),
+                Unit::Px => Some(Length::Px(*v)),
+                Unit::Vw => Some(Length::Vw(*v)),
+                Unit::Vh => Some(Length::Vh(*v)),
+                Unit::Em | Unit::Rem => unreachable!(),
+            },
+            CssValue::Number(0.0) => Some(Length::Px(0.0)),
+            CssValue::Keyword(s) => match s.as_str() {
+                "auto" => Some(Length::Auto),
+                _ => None,
+            },
+            _ => {
+                log::error!(target: "Layouter", "Unknown CSS Length type: {:?}", css_len);
+                None
+            }
         }
     };
     fn expand_box<F>(
         value: &CssValue,
-        resolve_css_len: &impl Fn(&crate::engine::css::Length) -> Option<Length>,
+        resolve_css_len: &impl Fn(&CssValue) -> Option<Length>,
         mut set: F,
     ) -> Option<()>
     where
         F: FnMut(Length, Length, Length, Length),
     {
-        let resolve = |v: &CssValue| -> Option<Length> {
-            match v {
-                CssValue::Length(css_len) => resolve_css_len(css_len),
-                _ => None,
-            }
-        };
+        let resolve = |v: &CssValue| -> Option<Length> { resolve_css_len(v) };
 
         match value {
-            CssValue::Length(css_len) => {
-                let v = resolve_css_len(css_len)?;
-                set(v.clone(), v.clone(), v.clone(), v);
-            }
             CssValue::List(values) => {
                 let vals: Vec<Length> = values.iter().map(resolve).collect::<Option<_>>()?;
 
@@ -386,7 +385,10 @@ fn apply_declaration(
                 }
             }
 
-            _ => return None,
+            _ => {
+                let v = resolve_css_len(value)?;
+                set(v.clone(), v.clone(), v.clone(), v);
+            }
         }
 
         Some(())
@@ -417,23 +419,19 @@ fn apply_declaration(
         /* ======================
          * Color / Text
          * ====================== */
-        ("background-color", CssValue::Color(c)) => {
-            println!("{:?}", c);
-            if let Ok(c) = Color::try_from(c.to_rgba_tuple(None)) {
-                container_style.background_color = c;
-            }
+        ("background-color", CssValue::Color(_c)) => {
+            let c = value.to_rgba_tuple()?;
+            container_style.background_color = Color(c.0, c.1, c.2, c.3);
         }
         ("background-color", CssValue::Keyword(v)) => {
-            println!("{:?}", v);
             if let Some(c) = keyword_color_to_color(v) {
                 container_style.background_color = c;
             }
         }
 
-        ("color", CssValue::Color(c)) => {
-            if let Ok(c) = Color::try_from(c.to_rgba_tuple(None)) {
-                text_style.color = c;
-            }
+        ("color", CssValue::Color(_c)) => {
+            let c = value.to_rgba_tuple()?;
+            text_style.color = Color(c.0, c.1, c.2, c.3);
         }
         ("color", CssValue::Keyword(v)) => {
             if let Some(c) = keyword_color_to_color(v) {
@@ -441,9 +439,9 @@ fn apply_declaration(
             }
         }
 
-        ("font-size", CssValue::Length(css_len)) => {
+        ("font-size", CssValue::Length(_, _)) => {
             // TODO: Add other size
-            let len = resolve_css_len(css_len)?;
+            let len = resolve_css_len(value)?;
             let px = match &len {
                 Length::Px(v) => *v,
                 _ => {
@@ -508,39 +506,39 @@ fn apply_declaration(
             })?;
         }
 
-        ("margin-top", CssValue::Length(css_len)) => {
-            style.spacing.margin_top = resolve_css_len(css_len)?;
+        ("margin-top", _) => {
+            style.spacing.margin_top = resolve_css_len(value)?;
         }
-        ("margin-right", CssValue::Length(css_len)) => {
-            style.spacing.margin_right = resolve_css_len(css_len)?;
+        ("margin-right", _) => {
+            style.spacing.margin_right = resolve_css_len(value)?;
         }
-        ("margin-bottom", CssValue::Length(css_len)) => {
-            style.spacing.margin_bottom = resolve_css_len(css_len)?;
+        ("margin-bottom", _) => {
+            style.spacing.margin_bottom = resolve_css_len(value)?;
         }
-        ("margin-left", CssValue::Length(css_len)) => {
-            style.spacing.margin_left = resolve_css_len(css_len)?;
+        ("margin-left", _) => {
+            style.spacing.margin_left = resolve_css_len(value)?;
         }
 
         /* ======================
          * Size
          * ====================== */
-        ("width", CssValue::Length(css_len)) => {
-            style.size.width = resolve_css_len(css_len)?;
+        ("width", _) => {
+            style.size.width = resolve_css_len(value)?;
         }
-        ("height", CssValue::Length(css_len)) => {
-            style.size.height = resolve_css_len(css_len)?;
+        ("height", _) => {
+            style.size.height = resolve_css_len(value)?;
         }
-        ("min-width", CssValue::Length(css_len)) => {
-            style.size.min_width = resolve_css_len(css_len)?;
+        ("min-width", _) => {
+            style.size.min_width = resolve_css_len(value)?;
         }
-        ("min-height", CssValue::Length(css_len)) => {
-            style.size.min_height = resolve_css_len(css_len)?;
+        ("min-height", _) => {
+            style.size.min_height = resolve_css_len(value)?;
         }
-        ("max-width", CssValue::Length(css_len)) => {
-            style.size.max_width = resolve_css_len(css_len)?;
+        ("max-width", _) => {
+            style.size.max_width = resolve_css_len(value)?;
         }
-        ("max-height", CssValue::Length(css_len)) => {
-            style.size.max_height = resolve_css_len(css_len)?;
+        ("max-height", _) => {
+            style.size.max_height = resolve_css_len(value)?;
         }
 
         /* ======================
@@ -577,7 +575,10 @@ fn keyword_color_to_color(keyword: &str) -> Option<Color> {
         "blue" => Some(Color(0, 0, 255, 255)),
         "yellow" => Some(Color(255, 255, 0, 255)),
         "gray" | "grey" => Some(Color(128, 128, 128, 255)),
-        _ => None,
+        _ => {
+            log::error!(target: "Layouter", "Unknown color keyword: {}", keyword);
+            None
+        }
     }
 }
 

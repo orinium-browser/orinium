@@ -126,7 +126,7 @@ async fn main() -> Result<()> {
                         "Fetched CSS (first 50 chars):\n{}",
                         css.chars().take(50).collect::<String>()
                     );
-                    let mut parser = orinium_browser::engine::css::cssom::parser::Parser::new(&css);
+                    let mut parser = orinium_browser::engine::css::parser::Parser::new(&css);
                     let cssom = parser.parse()?;
                     println!("CSSOM Tree:\n{}", cssom);
                 } else {
@@ -137,7 +137,7 @@ async fn main() -> Result<()> {
                 if args.len() == 3 {
                     let css = &args[2];
                     println!("Parsing plain CSS:\n{}", css);
-                    let mut parser = orinium_browser::engine::css::cssom::parser::Parser::new(css);
+                    let mut parser = orinium_browser::engine::css::parser::Parser::new(css);
                     let cssom = parser.parse()?;
                     println!("CSSOM Tree:\n{}", cssom);
                 } else {

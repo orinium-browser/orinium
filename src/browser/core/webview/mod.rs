@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::engine::{
-    css::cssom::Parser as CssParser,
+    css::parser::Parser as CssParser,
     html::parser::{DomTree, Parser as HtmlParser},
     layouter::{self, InfoNode},
 };
