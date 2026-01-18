@@ -789,7 +789,7 @@ impl<'a> Parser<'a> {
                     let mut depth = 0;
                     let mut func_tokens = vec![];
 
-                    while let Some(tok) = iter.next() {
+                    for tok in iter.by_ref() {
                         match &tok {
                             Token::Delim('(') => {
                                 depth += 1;
@@ -860,7 +860,7 @@ impl<'a> Parser<'a> {
 // ====================
 impl fmt::Display for CssNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt_tree_node(&self, f, &[])
+        fmt_tree_node(self, f, &[])
     }
 }
 

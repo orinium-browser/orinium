@@ -9,7 +9,7 @@ pub struct CssResolver;
 impl CssResolver {
     pub fn resolve(stylecheet: &CssNode) -> ResolvedStyles {
         let mut styles = Vec::new();
-        Self::walk(&stylecheet, &mut styles);
+        Self::walk(stylecheet, &mut styles);
         styles
     }
 

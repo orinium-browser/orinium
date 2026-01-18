@@ -256,23 +256,21 @@ pub fn build_layout_and_info(
         style.size.width = Length::Px(w);
         style.size.height = Length::Px(h);
         kind
+    } else if let Some(name) = &html_node.tag_name()
+        && name == "a"
+        && let Some(href) = html_node.get_attr("href")
+    {
+        NodeKind::Link {
+            href,
+            style: container_style,
+        }
     } else {
-        if let Some(name) = &html_node.tag_name()
-            && name == "a"
-            && let Some(href) = html_node.get_attr("href")
-        {
-            NodeKind::Link {
-                href,
-                style: container_style,
-            }
-        } else {
-            NodeKind::Container {
-                scroll_x: false,
-                scroll_y: false,
-                scroll_offset_x: 0.0,
-                scroll_offset_y: 0.0,
-                style: container_style,
-            }
+        NodeKind::Container {
+            scroll_x: false,
+            scroll_y: false,
+            scroll_offset_x: 0.0,
+            scroll_offset_y: 0.0,
+            style: container_style,
         }
     };
 
@@ -593,12 +591,12 @@ fn resolve_css_len(css_len: &CssValue, text_style: &TextStyle) -> Option<Length>
             let b = args.next().unwrap();
             match op {
                 CssValue::Keyword(o) if o == "+" => Some(Length::Add(
-                    Box::new(resolve_css_len(&a, text_style)?),
-                    Box::new(resolve_css_len(&b, text_style)?),
+                    Box::new(resolve_css_len(a, text_style)?),
+                    Box::new(resolve_css_len(b, text_style)?),
                 )),
                 CssValue::Keyword(o) if o == "-" => Some(Length::Sub(
-                    Box::new(resolve_css_len(&a, text_style)?),
-                    Box::new(resolve_css_len(&b, text_style)?),
+                    Box::new(resolve_css_len(a, text_style)?),
+                    Box::new(resolve_css_len(b, text_style)?),
                 )),
                 _ => {
                     log::error!(target: "Layouter", "Unknown operator for calc function: {:?}", op);

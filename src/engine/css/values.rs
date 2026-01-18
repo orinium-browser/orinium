@@ -32,8 +32,7 @@ impl CssValue {
 /// 簡易カラー文字列パーサ
 fn parse_color(s: &str) -> Option<(u8, u8, u8, u8)> {
     let s = s.trim();
-    if s.starts_with('#') {
-        let hex = &s[1..];
+    if let Some(hex) = s.strip_prefix('#') {
         match hex.len() {
             3 => {
                 // #RGB
