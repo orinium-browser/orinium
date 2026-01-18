@@ -578,35 +578,74 @@ fn resolve_css_len(css_len: &CssValue, text_style: &TextStyle) -> Option<Length>
     }
 }
 
-/// Resolve CssValue to Color.
+/// Resolve a computed CssValue into a final RGBA Color.
+///
+/// Assumptions:
+/// - This function is called *after* cascade and inheritance resolution.
+/// - Keywords like `currentColor`, `inherit`, `initial`, `unset`
+///   must NOT reach this stage.
+/// - The returned Color is always absolute RGBA.
 fn resolve_css_color(css_color: &CssValue) -> Option<Color> {
     fn keyword_color_to_color(keyword: &str) -> Option<Color> {
+        // NOTE:
+        // Keyword matching is case-insensitive according to CSS specs.
+        // Keep this list limited to commonly used CSS Color Level 3 keywords.
         match keyword.to_ascii_lowercase().as_str() {
+            // Basic colors
             "black" => Some(Color(0, 0, 0, 255)),
             "white" => Some(Color(255, 255, 255, 255)),
             "red" => Some(Color(255, 0, 0, 255)),
             "green" => Some(Color(0, 128, 0, 255)),
             "blue" => Some(Color(0, 0, 255, 255)),
-            "royalblue" => Some(Color(65, 105, 225, 255)),
             "yellow" => Some(Color(255, 255, 0, 255)),
+
+            // Gray variants (US / UK spelling)
             "gray" | "grey" => Some(Color(128, 128, 128, 255)),
-            "lightgray" | "lightgrey" => Some(Color(65, 105, 225, 255)),
+            "lightgray" | "lightgrey" => Some(Color(211, 211, 211, 255)),
+            "darkgray" | "darkgrey" => Some(Color(169, 169, 169, 255)),
+
+            // Frequently used named colors
+            "royalblue" => Some(Color(65, 105, 225, 255)),
+            "cornflowerblue" => Some(Color(100, 149, 237, 255)),
+            "skyblue" => Some(Color(135, 206, 235, 255)),
+            "lightblue" => Some(Color(173, 216, 230, 255)),
+
+            "orange" => Some(Color(255, 165, 0, 255)),
+            "pink" => Some(Color(255, 192, 203, 255)),
+            "purple" => Some(Color(128, 0, 128, 255)),
+            "brown" => Some(Color(165, 42, 42, 255)),
+
+            // Special keyword
             "transparent" => Some(Color(0, 0, 0, 0)),
+
             _ => {
-                log::error!(target: "Layouter", "Unknown color keyword: {}", keyword);
+                log::error!(
+                    target: "Layouter",
+                    "Unknown CSS color keyword: {}",
+                    keyword
+                );
                 None
             }
         }
     }
 
-    match &css_color {
+    match css_color {
+        // Already parsed as an absolute color (rgb/rgba/hex, etc.)
         CssValue::Color(_) => {
-            let c = css_color.to_rgba_tuple()?;
-            Some(Color(c.0, c.1, c.2, c.3))
+            let (r, g, b, a) = css_color.to_rgba_tuple()?;
+            Some(Color(r, g, b, a))
         }
-        CssValue::Keyword(v) => keyword_color_to_color(v),
+
+        // Named color keyword
+        CssValue::Keyword(value) => keyword_color_to_color(value),
+
+        // Any other value reaching here is a pipeline error
         _ => {
-            log::error!(target: "Layouter", "Unknown CSS Color: {:?}", css_color);
+            log::error!(
+                target: "Layouter",
+                "Unexpected CSS color value at layout stage: {:?}",
+                css_color
+            );
             None
         }
     }
