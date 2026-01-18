@@ -334,7 +334,12 @@ impl<'a> Parser<'a> {
             }
         }
 
-        // 3. Block vs semicolon
+        // 3. Convert prelude tokens to CssValue (handles functions and nested parentheses)
+        let params = Self::parse_at_query(prelude).map_err(|e| {
+            e.with_context("parse_at_rule: failed to parse params via parse_at_query")
+        })?;
+
+        // 4. Block vs semicolon
         let children = if self.peek_token() == &Token::Delim('{') {
             self.consume_token();
             self.brace_depth += 1;
@@ -359,26 +364,38 @@ impl<'a> Parser<'a> {
                     }
                     _ => {
                         let mut cursor = 0;
-                        while !matches!(
-                            self.peek_next_token(cursor),
-                            Token::Delim(':') | Token::Delim('{')
-                        ) {
+                        let mut saw_colon = false;
+
+                        loop {
+                            match self.peek_next_token(cursor) {
+                                Token::Delim(':') => {
+                                    saw_colon = true;
+                                }
+                                Token::Delim('{') | Token::Delim('}') => break,
+                                Token::EOF => {
+                                    return Err(ParserError {
+                                        kind: ParserErrorKind::UnexpectedEOF,
+                                        context: vec![],
+                                    });
+                                }
+                                _ => {}
+                            }
                             cursor += 1;
                         }
-                        let node = if matches!(self.peek_next_token(cursor), Token::Delim(':')) {
+
+                        let nodes = if saw_colon {
                             self.parse_declaration_list().map_err(|e| {
                                 e.with_context(
                                     "parse_at_rule: failed to parse declaration in block",
                                 )
                             })?
-                        } else if matches!(self.peek_next_token(cursor), Token::Delim('{')) {
+                        } else {
                             vec![self.parse_rule().map_err(|e| {
                                 e.with_context("parse_at_rule: failed to parse rule in block")
                             })?]
-                        } else {
-                            unreachable!()
                         };
-                        children.extend(node);
+
+                        children.extend(nodes);
                     }
                 }
             }
@@ -398,11 +415,6 @@ impl<'a> Parser<'a> {
             }
             vec![]
         };
-
-        // 4. Convert prelude tokens to CssValue (handles functions and nested parentheses)
-        let params = Self::parse_at_query(prelude).map_err(|e| {
-            e.with_context("parse_at_rule: failed to parse params via parse_at_query")
-        })?;
 
         Ok(CssNode {
             node: CssNodeType::AtRule {
@@ -629,7 +641,7 @@ impl<'a> Parser<'a> {
                     }
                 }
 
-                Token::Whitespace => {
+                Token::Whitespace | Token::Comment(_) => {
                     // descendant combinator
                     if let Some(sel) = current_selector.take() {
                         parts.push(SelectorPart {
@@ -655,7 +667,7 @@ impl<'a> Parser<'a> {
                     current_combinator = None;
                     self.consume_token();
 
-                    while matches!(self.peek_token(), Token::Whitespace) {
+                    while matches!(self.peek_token(), Token::Whitespace | Token::Comment(_)) {
                         self.consume_token();
                     }
                 }
