@@ -632,6 +632,33 @@ fn resolve_css_color(css_color: &CssValue) -> Option<Color> {
         }
     }
 
+    /// Convert HSL to RGB (0..255)
+    fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
+        // 1. Compute Chroma
+        let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+        let h_prime = h / 60.0;
+        let x = c * (1.0 - ((h_prime % 2.0) - 1.0).abs());
+
+        // 2. Determine preliminary RGB values based on hue sector
+        let (r1, g1, b1) = match h_prime as u32 {
+            0 => (c, x, 0.0),
+            1 => (x, c, 0.0),
+            2 => (0.0, c, x),
+            3 => (0.0, x, c),
+            4 => (x, 0.0, c),
+            5 | 6 => (c, 0.0, x),
+            _ => (0.0, 0.0, 0.0),
+        };
+
+        // 3. Add m to match the lightness
+        let m = l - c / 2.0;
+        let r = ((r1 + m) * 255.0).round().clamp(0.0, 255.0) as u8;
+        let g = ((g1 + m) * 255.0).round().clamp(0.0, 255.0) as u8;
+        let b = ((b1 + m) * 255.0).round().clamp(0.0, 255.0) as u8;
+
+        (r, g, b)
+    }
+
     match css_color {
         // Already parsed as an absolute color (rgb/rgba/hex, etc.)
         CssValue::Color(_) => {
@@ -641,6 +668,54 @@ fn resolve_css_color(css_color: &CssValue) -> Option<Color> {
 
         // Named color keyword
         CssValue::Keyword(value) => keyword_color_to_color(value),
+
+        // rgba(r,g,b,a)
+        CssValue::Function(func, args) if func == "rgba" && args.len() == 4 => {
+            if let (
+                CssValue::Number(r),
+                CssValue::Number(g),
+                CssValue::Number(b),
+                CssValue::Number(a),
+            ) = (&args[0], &args[1], &args[2], &args[3])
+            {
+                Some(Color(
+                    (*r * 255.0).round() as u8,
+                    (*g * 255.0).round() as u8,
+                    (*b * 255.0).round() as u8,
+                    (*a * 255.0).round() as u8,
+                ))
+            } else {
+                None
+            }
+        }
+
+        // rgb(r,g,b)
+        CssValue::Function(func, args) if func == "rgb" && args.len() == 3 => {
+            if let (CssValue::Number(r), CssValue::Number(g), CssValue::Number(b)) =
+                (&args[0], &args[1], &args[2])
+            {
+                Some(Color(
+                    (*r * 255.0).round() as u8,
+                    (*g * 255.0).round() as u8,
+                    (*b * 255.0).round() as u8,
+                    255,
+                ))
+            } else {
+                None
+            }
+        }
+
+        // hsl(h,s,l)
+        CssValue::Function(func, args) if func == "hsl" && args.len() == 3 => {
+            if let (CssValue::Number(h), CssValue::Number(s), CssValue::Number(l)) =
+                (&args[0], &args[1], &args[2])
+            {
+                let (r, g, b) = hsl_to_rgb(*h, *s, *l);
+                Some(Color(r, g, b, 255))
+            } else {
+                None
+            }
+        }
 
         // Any other value reaching here is a pipeline error
         _ => {
