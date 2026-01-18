@@ -44,13 +44,6 @@ impl Tab {
             webview: None,
         }
     }
-    pub fn load_from_raw_html(&mut self, html_source: &str) {
-        let mut view = WebView::new();
-        view.load_from_raw_source(html_source, None);
-        self.title = view.title.clone();
-
-        self.webview = Some(view);
-    }
 
     pub async fn load_from_url(&mut self, url: &str) -> anyhow::Result<()> {
         let net = self.net.clone();

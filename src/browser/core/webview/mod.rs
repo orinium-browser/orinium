@@ -57,39 +57,6 @@ impl WebView {
         }
     }
 
-    /// ロード → DOM/CSS/Layout のフルパイプライン
-    ///
-    /// TODO:
-    /// - dom_tree をクローンするコストを削減
-    /// - cssソースの適応
-    /// - cssをstyle element から適応
-    pub fn load_from_raw_source(&mut self, html_source: &str, _css_source: Option<&str>) {
-        // DOM
-        let mut parser = HtmlParser::new(html_source);
-        let dom_tree = parser.parse();
-        self.dom = Some(dom_tree.clone());
-
-        self.title = dom_tree.collect_text_by_tag("title").first().cloned();
-
-        let measurer = crate::platform::renderer::text_measurer::PlatformTextMeasurer::new();
-
-        // Layout and Info
-        self.layout_and_info = Some(layouter::build_layout_and_info(
-            &dom_tree.root,
-            &layouter::css_resolver::CssResolver::resolve(
-                &CssParser::new(USER_AGENT_CSS).parse().unwrap(),
-            ),
-            &measurer.unwrap(),
-            layouter::TextStyle {
-                font_size: 16.0,
-                ..Default::default()
-            },
-            Vec::new(),
-        ));
-
-        self.needs_redraw = true;
-    }
-
     /// URL を使った本格的なページロード
     ///
     /// - HTML を取得
