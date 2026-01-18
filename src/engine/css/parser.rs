@@ -358,10 +358,27 @@ impl<'a> Parser<'a> {
                         children.push(node);
                     }
                     _ => {
-                        let node = self.parse_rule().map_err(|e| {
-                            e.with_context("parse_at_rule: failed to parse rule in block")
-                        })?;
-                        children.push(node);
+                        let mut cursor = 0;
+                        while !matches!(
+                            self.peek_next_token(cursor),
+                            Token::Delim(':') | Token::Delim('{')
+                        ) {
+                            cursor += 1;
+                        }
+                        let node = if matches!(self.peek_next_token(cursor), Token::Delim(':')) {
+                            self.parse_declaration_list().map_err(|e| {
+                                e.with_context(
+                                    "parse_at_rule: failed to parse declaration in block",
+                                )
+                            })?
+                        } else if matches!(self.peek_next_token(cursor), Token::Delim('{')) {
+                            vec![self.parse_rule().map_err(|e| {
+                                e.with_context("parse_at_rule: failed to parse rule in block")
+                            })?]
+                        } else {
+                            unreachable!()
+                        };
+                        children.extend(node);
                     }
                 }
             }
@@ -665,6 +682,7 @@ impl<'a> Parser<'a> {
         selectors
     }
 
+    /// Parse declaration until `Token::Delim('}')`.
     fn parse_declaration_list(&mut self) -> ParseResult<Vec<CssNode>> {
         let mut declarations = vec![];
         let mut parsing_name = true;
