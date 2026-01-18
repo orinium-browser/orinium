@@ -437,11 +437,14 @@ fn apply_declaration(
             text_style.font_style = FontStyle::Oblique;
         }
 
-        ("text-decoration", CssValue::Keyword(v)) if v == "none" => {
-            text_style.text_decoration = TextDecoration::None;
-        }
-        ("text-decoration", CssValue::Keyword(v)) if v == "underline" => {
-            text_style.text_decoration = TextDecoration::Underline;
+        ("text-decoration", CssValue::Keyword(v)) => {
+            text_style.text_decoration = match v.as_str() {
+                "none" => TextDecoration::None,
+                "underline" => TextDecoration::Underline,
+                "line-through" => TextDecoration::LineThrough,
+                "overline" => TextDecoration::Overline,
+                _ => TextDecoration::None,
+            };
         }
 
         ("text-align", CssValue::Keyword(v)) if v == "left" => {
@@ -719,6 +722,26 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
                 style: *style,
                 max_width: rect.width,
             });
+
+            let font_size = style.font_size;
+            let line_thickness = (font_size * 0.08).max(1.0);
+
+            let (line_y, draw) = match style.text_decoration {
+                TextDecoration::None => (0.0, false),
+                TextDecoration::Underline => (abs_y + font_size, true),
+                TextDecoration::LineThrough => (abs_y + font_size * 0.5, true),
+                TextDecoration::Overline => (abs_y, true),
+            };
+
+            if draw {
+                commands.push(DrawCommand::DrawRect {
+                    x: abs_x,
+                    y: line_y,
+                    width: rect.width,
+                    height: line_thickness,
+                    color: style.color,
+                });
+            }
         }
         NodeKind::Container {
             scroll_offset_x,
