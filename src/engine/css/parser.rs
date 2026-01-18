@@ -15,6 +15,7 @@
 //! ## Design notes
 //! - No property-specific validation is performed here
 //! - Semantic meaning is assigned in later stages (style computation, layout)
+use std::collections::VecDeque;
 use std::fmt;
 
 use super::tokenizer::{Token, Tokenizer};
@@ -158,7 +159,7 @@ pub struct Parser<'a> {
     /// Lookahead token (optional)
     ///
     /// Parser may need to peek the next token without consuming it.
-    lookahead: Option<Token>,
+    lookahead: VecDeque<Token>,
 }
 
 /// Parser error kinds
@@ -226,21 +227,29 @@ impl<'a> Parser<'a> {
         Self {
             tokenizer: Tokenizer::new(input),
             brace_depth: 0,
-            lookahead: None,
+            lookahead: VecDeque::new(),
         }
     }
 
-    /// Peek at the next token without consuming it.
-    fn peek_token(&mut self) -> &Token {
-        if self.lookahead.is_none() {
-            self.lookahead = Some(self.tokenizer.next_token());
+    fn ensure_lookahead(&mut self, n: usize) {
+        while self.lookahead.len() <= n {
+            let tok = self.tokenizer.next_token();
+            self.lookahead.push_back(tok);
         }
-        self.lookahead.as_ref().unwrap()
+    }
+
+    fn peek_next_token(&mut self, cursor_size: usize) -> &Token {
+        self.ensure_lookahead(cursor_size);
+        &self.lookahead[cursor_size]
     }
 
     /// Consume and return the next token.
+    fn peek_token(&mut self) -> &Token {
+        self.peek_next_token(0)
+    }
+
     fn consume_token(&mut self) -> Token {
-        if let Some(tok) = self.lookahead.take() {
+        if let Some(tok) = self.lookahead.pop_front() {
             tok
         } else {
             self.tokenizer.next_token()
