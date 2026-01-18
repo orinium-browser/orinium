@@ -399,7 +399,10 @@ fn apply_declaration(
          * Color / Text
          * ====================== */
         ("background-color", _) => {
-            container_style.background_color = resolve_css_color(value)?;
+            container_style.background_color = match value {
+                CssValue::Keyword(c) if c == "currentColor" => text_style.color,
+                _ => resolve_css_color(value)?,
+            }
         }
 
         ("color", _) => {
