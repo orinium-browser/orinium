@@ -180,7 +180,7 @@ impl BrowserApp {
                 *scroll_offset_y += scroll_amount;
 
                 // 上下限のチェック（簡易）
-                *scroll_offset_y = scroll_offset_y.clamp(0.0, std::f32::MAX);
+                *scroll_offset_y = scroll_offset_y.clamp(0.0, f32::MAX);
             }
         }
     }
