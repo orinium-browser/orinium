@@ -40,7 +40,7 @@ pub enum CssNodeType {
         /// At-rule name without `@`
         name: String,
 
-        params: CssValue,
+        params: AtQuery,
     },
 
     /// Declaration inside a rule block (e.g. `color: red`)
@@ -50,6 +50,16 @@ pub enum CssNodeType {
 
         value: CssValue,
     },
+}
+
+#[derive(Debug, Clone)]
+pub enum AtQuery {
+    Keyword(String), // screen, and, not
+    Condition {
+        name: String,    // max-width
+        value: CssValue, // 600px
+    },
+    Group(Vec<AtQuery>), // ( ... )
 }
 
 /// Node in the CSS syntax tree.
@@ -257,7 +267,7 @@ impl<'a> Parser<'a> {
 
             match token {
                 Token::EOF => break,
-                Token::Whitespace => {
+                Token::Whitespace | Token::Comment(_) => {
                     self.consume_token();
                 }
                 Token::AtKeyword(_) => {
@@ -294,15 +304,24 @@ impl<'a> Parser<'a> {
             });
         };
 
-        // 2. Collect prelude tokens (until '{' or ';')
+        // 2. Collect prelude tokens (until '{' or ';'), handling nested parentheses
         let mut prelude = vec![];
+        let mut paren_depth = 0;
+
         loop {
             match self.peek_token() {
-                Token::Delim('{') | Token::Delim(';') | Token::EOF => break,
-                token => {
-                    prelude.push(token.clone());
-                    self.consume_token();
+                Token::Delim('{') if paren_depth == 0 => break,
+                Token::Delim(';') if paren_depth == 0 => break,
+                Token::Delim('(') => {
+                    paren_depth += 1;
+                    prelude.push(self.consume_token());
                 }
+                Token::Delim(')') => {
+                    paren_depth -= 1;
+                    prelude.push(self.consume_token());
+                }
+                Token::EOF => break,
+                _ => prelude.push(self.consume_token()),
             }
         }
 
@@ -323,17 +342,22 @@ impl<'a> Parser<'a> {
                     Token::Whitespace => {
                         self.consume_token();
                     }
+                    Token::AtKeyword(_) => {
+                        let node = self.parse_at_rule().map_err(|e| {
+                            e.with_context("parse_at_rule: failed to parse nested at-rule")
+                        })?;
+                        children.push(node);
+                    }
                     _ => {
-                        let node = self
-                            .parse_rule()
-                            .map_err(|e| e.with_context("parse: failed to parse rule"))?;
-                        log::debug!(target: "CssParser", "Rule in AtRule parsed: {:?}", &node);
+                        let node = self.parse_rule().map_err(|e| {
+                            e.with_context("parse_at_rule: failed to parse rule in block")
+                        })?;
                         children.push(node);
                     }
                 }
             }
 
-            self.consume_token();
+            self.consume_token(); // consume '}'
             self.brace_depth -= 1;
             children
         } else {
@@ -349,14 +373,98 @@ impl<'a> Parser<'a> {
             vec![]
         };
 
+        // 4. Convert prelude tokens to CssValue (handles functions and nested parentheses)
+        let params = Self::parse_at_query(prelude)?;
+
         Ok(CssNode {
             node: CssNodeType::AtRule {
                 name: at_name,
-                params: Self::parse_tokens_to_css_value(prelude)
-                    .map_err(|e| e.with_context("parse_at_rule: failed to parse param list"))?,
+                params,
             },
             children,
         })
+    }
+
+    fn parse_at_query(tokens: Vec<Token>) -> ParseResult<AtQuery> {
+        let mut cursor = 0;
+        let items = Self::parse_at_query_list(&tokens, &mut cursor)?;
+        Ok(AtQuery::Group(items))
+    }
+
+    fn parse_at_query_list(tokens: &[Token], cursor: &mut usize) -> ParseResult<Vec<AtQuery>> {
+        let mut items = Vec::new();
+
+        while *cursor < tokens.len() {
+            match &tokens[*cursor] {
+                Token::Whitespace => {
+                    *cursor += 1;
+                }
+
+                Token::Delim('(') => {
+                    *cursor += 1;
+                    let group = Self::parse_at_query_list(tokens, cursor)?;
+                    items.push(AtQuery::Group(group));
+                }
+
+                Token::Delim(')') => {
+                    *cursor += 1;
+                    break;
+                }
+
+                Token::Ident(_) => {
+                    items.push(Self::parse_at_query_item(tokens, cursor)?);
+                }
+
+                _ => {
+                    *cursor += 1;
+                }
+            }
+        }
+
+        Ok(items)
+    }
+
+    fn parse_at_query_item(tokens: &[Token], cursor: &mut usize) -> ParseResult<AtQuery> {
+        let name = match &tokens[*cursor] {
+            Token::Ident(s) => s.clone(),
+            _ => unreachable!(),
+        };
+        *cursor += 1;
+
+        if matches!(tokens.get(*cursor), Some(Token::Delim(':'))) {
+            *cursor += 1;
+            let value = Self::parse_at_query_value(tokens, cursor)?;
+            Ok(AtQuery::Condition { name, value })
+        } else {
+            Ok(AtQuery::Keyword(name))
+        }
+    }
+
+    fn parse_at_query_value(tokens: &[Token], cursor: &mut usize) -> ParseResult<CssValue> {
+        let mut buf = Vec::new();
+        let mut paren_depth = 0;
+
+        while *cursor < tokens.len() {
+            match &tokens[*cursor] {
+                Token::Delim('(') => {
+                    paren_depth += 1;
+                    buf.push(tokens[*cursor].clone());
+                    *cursor += 1;
+                }
+                Token::Delim(')') if paren_depth == 0 => break,
+                Token::Delim(')') => {
+                    paren_depth -= 1;
+                    buf.push(tokens[*cursor].clone());
+                    *cursor += 1;
+                }
+                _ => {
+                    buf.push(tokens[*cursor].clone());
+                    *cursor += 1;
+                }
+            }
+        }
+
+        Self::parse_tokens_to_css_value(buf)
     }
 
     /// Parse a qualified rule (e.g., `div { color: red; }`).
