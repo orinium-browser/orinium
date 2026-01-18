@@ -620,6 +620,7 @@ fn resolve_css_color(css_color: &CssValue) -> Option<Color> {
 
             // Special keyword
             "transparent" => Some(Color(0, 0, 0, 0)),
+            "initial" => Some(Color(0, 0, 0, 255)),
 
             _ => {
                 log::error!(
