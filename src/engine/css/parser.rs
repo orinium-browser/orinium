@@ -374,7 +374,9 @@ impl<'a> Parser<'a> {
         };
 
         // 4. Convert prelude tokens to CssValue (handles functions and nested parentheses)
-        let params = Self::parse_at_query(prelude)?;
+        let params = Self::parse_at_query(prelude).map_err(|e| {
+            e.with_context("parse_at_rule: failed to parse params via parse_at_query")
+        })?;
 
         Ok(CssNode {
             node: CssNodeType::AtRule {
@@ -758,7 +760,11 @@ impl<'a> Parser<'a> {
                     for t in func_tokens {
                         if t == Token::Delim(',') {
                             if !buffer.is_empty() {
-                                let val = Self::parse_tokens_to_css_value(buffer)?;
+                                let val = Self::parse_tokens_to_css_value(buffer).map_err(|e| {
+                                    e.with_context(
+                                        "parse_tokens_to_css_value: failed to parse function arg",
+                                    )
+                                })?;
                                 match val {
                                     CssValue::List(list) => args.extend(list),
                                     other => args.push(other),
