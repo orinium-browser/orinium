@@ -44,7 +44,7 @@ impl Default for BrowserApp {
 
 impl BrowserApp {
     /// ブラウザのメインループを開始
-    pub fn run(self) -> Result<()> {
+    pub async fn run(self) -> Result<()> {
         let event_loop =
             winit::event_loop::EventLoop::<crate::platform::system::State>::with_user_event()
                 .build()?;

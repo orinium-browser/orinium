@@ -206,7 +206,7 @@ async fn main() -> Result<()> {
 
                     browser.add_tab(tab);
 
-                    browser.run()?
+                    browser.run().await?
                 } else {
                     eprintln!("Please provide a URL for simple rendering test.");
                 }

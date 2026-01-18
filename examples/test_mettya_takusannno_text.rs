@@ -102,7 +102,7 @@ async fn main() -> Result<()> {
 
     browser.add_tab(tab);
 
-    browser.run()?;
+    browser.run().await?;
 
     Ok(())
 }
