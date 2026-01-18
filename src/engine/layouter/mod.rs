@@ -589,6 +589,7 @@ fn resolve_css_color(css_color: &CssValue) -> Option<Color> {
             "blue" => Some(Color(0, 0, 255, 255)),
             "yellow" => Some(Color(255, 255, 0, 255)),
             "gray" | "grey" => Some(Color(128, 128, 128, 255)),
+            "transparent" => Some(Color(0, 0, 0, 0)),
             _ => {
                 log::error!(target: "Layouter", "Unknown color keyword: {}", keyword);
                 None
