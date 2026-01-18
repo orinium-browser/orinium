@@ -53,12 +53,14 @@ impl DomTree {
                 && t.eq_ignore_ascii_case(tag_name)
             {
                 let children = n.children();
+                let mut text_of_this_node = String::new();
                 for child in children {
                     let child_ref = child.borrow();
                     if let HtmlNodeType::Text(content) = &child_ref.value {
-                        texts.push(content.clone());
+                        text_of_this_node.push_str(content);
                     }
                 }
+                texts.push(text_of_this_node);
             }
         });
 
@@ -71,6 +73,7 @@ pub struct Parser<'a> {
     tree: DomTree,
     stack: Vec<Rc<RefCell<TreeNode<HtmlNodeType>>>>,
     tag_stack: Vec<String>,
+    special_text_mode: Option<String>, // script/style 用
 }
 
 impl<'a> Parser<'a> {
@@ -82,6 +85,7 @@ impl<'a> Parser<'a> {
             tree: document.clone(),
             stack: vec![document.root.clone()],
             tag_stack: vec![],
+            special_text_mode: None,
         }
     }
 
@@ -109,6 +113,13 @@ impl<'a> Parser<'a> {
         } = token
         {
             let mut parent = Rc::clone(self.stack.last().unwrap());
+            if self.special_text_mode.is_some() {
+                // TODO:
+                // attributes, self_closing
+                TreeNode::add_child_value(&parent, HtmlNodeType::Text(format!("<{}>", name)));
+                return;
+            }
+
             while self.check_start_tag_with_invalid_nesting(&name, &parent) {
                 if let HtmlNodeType::Element { tag_name, .. } = &parent.borrow().value {
                     log::info!(target:"HtmlParser::AutoClosing" ,"Auto-closing tag: <{}> to allow <{}> inside it.", tag_name, name);
@@ -127,6 +138,11 @@ impl<'a> Parser<'a> {
                 },
             );
 
+            // script/style は special mode に
+            if name == "script" || name == "style" {
+                self.special_text_mode = Some(name.clone());
+            }
+
             // Self-closing タグは stack に push しない
             if !self_closing {
                 self.tag_stack.push(name.clone());
@@ -138,6 +154,17 @@ impl<'a> Parser<'a> {
 
     fn handle_end_tag(&mut self, token: Token) {
         if let Token::EndTag { ref name } = token {
+            // special mode を解除
+            if self.special_text_mode.as_deref() == Some(name.as_str()) {
+                self.special_text_mode = None;
+            }
+
+            if self.special_text_mode.is_some() {
+                let parent = Rc::clone(self.stack.last().unwrap());
+                TreeNode::add_child_value(&parent, HtmlNodeType::Text(format!("</{}>", name)));
+                return;
+            }
+
             let name = name.clone();
             if self.tag_stack.contains(&name) {
                 while let Some(top) = self.stack.pop() {
@@ -168,6 +195,13 @@ impl<'a> Parser<'a> {
     fn handle_text(&mut self, token: Token) {
         if let Token::Text(data) = token {
             let parent = Rc::clone(self.stack.last().unwrap());
+
+            // special mode 中はそのままテキスト追加
+            if self.special_text_mode.is_some() {
+                TreeNode::add_child_value(&parent, HtmlNodeType::Text(data));
+                return;
+            }
+
             // 親ノードが pre, textarea, script, style でない場合、空白改行を無視する
             if let Some(parent_node) = parent.borrow().parent() {
                 let parent_node_borrow = parent_node.borrow();
