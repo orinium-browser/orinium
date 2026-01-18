@@ -688,9 +688,20 @@ impl<'a> Parser<'a> {
                     parsing_name = true;
                 }
                 Token::Delim('}') | Token::EOF => {
-                    // Stop parsing declarations, do not consume `}` here
+                    if !parsing_name && !name.is_empty() {
+                        declarations.push(CssNode {
+                            node: CssNodeType::Declaration {
+                                name: std::mem::take(&mut name),
+                                value: Self::parse_tokens_to_css_value(std::mem::take(
+                                    &mut value_tokens,
+                                ))?,
+                            },
+                            children: vec![],
+                        });
+                    }
                     break;
                 }
+
                 Token::Ident(s) if parsing_name => {
                     name.push_str(&s);
                     self.consume_token();
