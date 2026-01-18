@@ -18,12 +18,20 @@ pub struct RenderState {
     pub scale_factor: f64,
 }
 
+#[derive(Default)]
+pub struct InputState {
+    // Add fields to track input state, e.g., mouse position, pressed keys, etc.
+    pub mouse_position: (f64, f64),
+}
+
 pub struct BrowserApp {
     tabs: Vec<Tab>,
     active_tab: usize,
 
     render: RenderState,
     window_title: String,
+
+    input: InputState,
 
     network: Arc<BrowserResourceLoader>,
 }
@@ -63,6 +71,7 @@ impl BrowserApp {
             },
             window_title,
             network,
+            input: InputState::default(),
         }
     }
 
@@ -129,6 +138,25 @@ impl BrowserApp {
                 BrowserCommand::RequestRedraw
             }
 
+            WindowEvent::CursorMoved { position, .. } => {
+                self.input.mouse_position = (position.x, position.y);
+                BrowserCommand::None
+            }
+
+            WindowEvent::MouseInput { button, .. } => match button {
+                winit::event::MouseButton::Left => {
+                    let (x, y) = self.input.mouse_position;
+                    let sf = self.render.scale_factor;
+                    if let Some(tab) = self.active_tab_mut() {
+                        Self::handle_mouse_click(tab, (x / sf) as f32, (y / sf) as f32);
+                        BrowserCommand::RequestRedraw
+                    } else {
+                        BrowserCommand::None
+                    }
+                }
+                _ => BrowserCommand::None,
+            },
+
             _ => BrowserCommand::None,
         }
     }
@@ -153,6 +181,28 @@ impl BrowserApp {
                     // 上下限のチェック（簡易）
                     *scroll_offset_y = scroll_offset_y.clamp(0.0, std::f32::MAX);
                 }
+            }
+        }
+    }
+
+    pub fn handle_mouse_click(tab: &mut Tab, x: f32, y: f32) {
+        println!("clicked");
+        let hit_path = if let Some((layout, info)) = tab.layout_and_info() {
+            crate::engine::input::hit_test(layout, info, x, y)
+        } else {
+            return;
+        };
+        if let Some(hit) = hit_path
+            .iter()
+            .find(|&e| matches!(e.info.kind, layouter::NodeKind::Link { .. }))
+        {
+            match &hit.info.kind {
+                layouter::NodeKind::Link { href, .. } => {
+                    let href = href.clone();
+                    println!("リンククリック: {}", href);
+                }
+
+                _ => unreachable!(),
             }
         }
     }

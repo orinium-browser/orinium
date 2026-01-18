@@ -32,6 +32,10 @@ pub enum NodeKind {
         text: String,
         style: TextStyle,
     },
+    Link {
+        href: String,
+        style: ContainerStyle,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -253,12 +257,22 @@ pub fn build_layout_and_info(
         style.size.height = Length::Px(h);
         kind
     } else {
-        NodeKind::Container {
-            scroll_x: false,
-            scroll_y: false,
-            scroll_offset_x: 0.0,
-            scroll_offset_y: 0.0,
-            style: container_style,
+        if let Some(name) = &html_node.tag_name()
+            && name == "a"
+            && let Some(href) = html_node.get_attr("href")
+        {
+            NodeKind::Link {
+                href,
+                style: container_style,
+            }
+        } else {
+            NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: container_style,
+            }
         }
     };
 
@@ -865,6 +879,25 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
                 dy: -*scroll_offset_y,
             });
         }
+        NodeKind::Link { style, .. } => {
+            commands.push(DrawCommand::PushTransform {
+                dx: abs_x,
+                dy: abs_y,
+            });
+            commands.push(DrawCommand::PushClip {
+                x: 0.0,
+                y: 0.0,
+                width: rect.width,
+                height: rect.height,
+            });
+            commands.push(DrawCommand::DrawRect {
+                x: 0.0,
+                y: 0.0,
+                width: rect.width,
+                height: rect.height,
+                color: style.background_color,
+            });
+        }
     }
 
     for (child_layout, child_info) in layout.children.iter().zip(&info.children) {
@@ -873,6 +906,9 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
 
     if matches!(info.kind, NodeKind::Container { .. }) {
         commands.push(DrawCommand::PopTransform);
+        commands.push(DrawCommand::PopClip);
+        commands.push(DrawCommand::PopTransform);
+    } else if matches!(info.kind, NodeKind::Link { .. }) {
         commands.push(DrawCommand::PopClip);
         commands.push(DrawCommand::PopTransform);
     }
