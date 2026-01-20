@@ -1,5 +1,6 @@
 use crate::engine::layouter::DrawCommand;
 use anyhow::Result;
+use std::env;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 use winit::window::Window;
@@ -73,7 +74,7 @@ impl GpuRenderer {
         // GPUドライバとの通信インスタンス
         // wgpuインスタンスの作成
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::PRIMARY,
+            backends: select_wgpu_backends(),
             ..Default::default()
         });
 
@@ -811,4 +812,27 @@ impl GpuRenderer {
     pub fn set_scale_factor(&mut self, scale_factor: f64) {
         self.scale_factor = scale_factor;
     }
+}
+
+fn select_wgpu_backends() -> wgpu::Backends {
+    if let Ok(value) = env::var("ORINIUM_WGPU_BACKEND") {
+        match value.to_lowercase().as_str() {
+            "gl" | "opengl" => return wgpu::Backends::GL,
+            "vulkan" | "vk" => return wgpu::Backends::VULKAN,
+            "metal" => return wgpu::Backends::METAL,
+            "dx12" | "d3d12" => return wgpu::Backends::DX12,
+            "primary" => return wgpu::Backends::PRIMARY,
+            _ => {}
+        }
+    }
+
+    let is_wsl = env::var_os("WSL_DISTRO_NAME").is_some() || env::var_os("WSL_INTEROP").is_some();
+    let is_wayland = env::var_os("WAYLAND_DISPLAY").is_some();
+
+    if is_wsl && is_wayland {
+        // WSLg + Wayland can be unstable with Vulkan; prefer GL by default.
+        return wgpu::Backends::GL;
+    }
+
+    wgpu::Backends::PRIMARY
 }
