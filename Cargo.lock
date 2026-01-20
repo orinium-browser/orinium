@@ -2236,6 +2236,7 @@ dependencies = [
  "rustls",
  "rustls-native-certs",
  "strsim",
+ "tokio",
  "tokio-rustls",
  "ui_layout",
  "url",

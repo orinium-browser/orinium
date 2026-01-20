@@ -2,7 +2,7 @@ use anyhow::Result;
 use orinium_browser::browser::{BrowserApp, Tab};
 use std::env;
 
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     let _font_path = if args.len() > 1 {
         Some(args[1].clone())
@@ -15,12 +15,11 @@ async fn main() -> Result<()> {
     let mut browser = BrowserApp::default();
 
     let mut tab = Tab::new(browser.network());
-    tab.load_from_url("resource:///test/compatibility_test.html")
-        .await?;
+    pollster::block_on(tab.load_from_url("resource:///test/compatibility_test.html"))?;
 
     browser.add_tab(tab);
 
-    browser.run().await?;
+    browser.run()?;
 
     Ok(())
 }

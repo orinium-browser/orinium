@@ -47,8 +47,8 @@ impl Default for BrowserApp {
 
 impl BrowserApp {
     /// Starts the main browser event loop asynchronously.
-    pub async fn run(self) -> Result<()> {
-        run_with_winit_backend(self).await
+    pub fn run(self) -> Result<()> {
+        run_with_winit_backend(self)
     }
 
     /// Creates a new browser instance with the given window size and title.
@@ -247,16 +247,16 @@ impl BrowserApp {
     }
 }
 
-async fn run_with_winit_backend(app: BrowserApp) -> Result<()> {
+fn run_with_winit_backend(app: BrowserApp) -> Result<()> {
     configure_winit_backend_for_wslg();
     if env::var_os("ORINIUM_FORCE_X11").is_some() {
         configure_winit_backend_forced_x11();
     }
 
-    run_event_loop(app).await
+    run_event_loop(app)
 }
 
-async fn run_event_loop(app: BrowserApp) -> Result<()> {
+fn run_event_loop(app: BrowserApp) -> Result<()> {
     let event_loop =
         winit::event_loop::EventLoop::<crate::platform::system::State>::with_user_event()
             .build()?;
@@ -277,9 +277,7 @@ fn configure_winit_backend_forced_x11() {
             env::set_var("WINIT_UNIX_BACKEND", "x11");
             env::remove_var("WAYLAND_DISPLAY");
         }
-        log::info!(
-            "Forcing X11 (WINIT_UNIX_BACKEND=x11, WAYLAND_DISPLAY cleared)"
-        );
+        log::info!("Forcing X11 (WINIT_UNIX_BACKEND=x11, WAYLAND_DISPLAY cleared)");
     }
 }
 

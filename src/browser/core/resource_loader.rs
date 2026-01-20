@@ -20,7 +20,7 @@ impl BrowserResourceLoader {
     pub async fn fetch(&self, url: &str) -> Result<BrowserResponse> {
         if url.starts_with("resource:///") {
             // Load resource from platform IO
-            let data = ResourceURI::load(url).await?;
+            let data = ResourceURI::load(url)?;
             Ok(BrowserResponse {
                 status: StatusCode::OK,
                 body: data,
@@ -34,7 +34,7 @@ impl BrowserResourceLoader {
                 .ok_or_else(|| anyhow!("NetworkCore not available for URL: {}", url))?;
 
             // Fetch via network
-            let resp = network.fetch_url(url).await.map_err(|e| anyhow!(e))?;
+            let resp = network.fetch(url).map_err(|e| anyhow!(e))?;
             Ok(BrowserResponse {
                 status: resp.status,
                 body: resp.body,
@@ -57,10 +57,10 @@ pub struct ResourceURI;
 impl ResourceURI {
     /// Load a resource by its URL.
     /// Only supports `resource:///` scheme for now.
-    pub async fn load(url: &str) -> Result<Vec<u8>, anyhow::Error> {
+    pub fn load(url: &str) -> Result<Vec<u8>, anyhow::Error> {
         use crate::platform::io;
         if let Some(path) = url.strip_prefix("resource:///") {
-            io::load_resource(path).await
+            io::load_resource(path)
         } else {
             Err(anyhow!("Unsupported scheme: {}", url))
         }
