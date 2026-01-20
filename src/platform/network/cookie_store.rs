@@ -1,6 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use url::Url;
 
 #[allow(dead_code)]
@@ -31,8 +30,8 @@ impl CookieStore {
         }
     }
 
-    pub async fn set_cookies(&self, url: &Url, cookie_headers: &[String]) {
-        let mut store = self.store.write().await;
+    pub fn set_cookies(&self, url: &Url, cookie_headers: &[String]) {
+        let mut store = self.store.write().expect("RwLock poisoned");
         let domain = url.host_str().unwrap_or_default().to_string();
         let entry = store.entry(domain.clone()).or_insert_with(Vec::new);
 
@@ -49,19 +48,18 @@ impl CookieStore {
         }
     }
 
-    pub async fn get_cookie_header(&self, url: &Url) -> Option<String> {
-        let store = self.store.read().await;
+    pub fn get_cookie_header(&self, url: &Url) -> Option<String> {
+        let store = self.store.read().ok()?;
         let domain = url.host_str().unwrap_or_default();
-        if let Some(cookies) = store.get(domain) {
-            let cookie_str = cookies
+
+        store.get(domain).and_then(|cookies| {
+            let s = cookies
                 .iter()
                 .map(|c| format!("{}={}", c.name, c.value))
                 .collect::<Vec<_>>()
                 .join("; ");
-            if !cookie_str.is_empty() {
-                return Some(cookie_str);
-            }
-        }
-        None
+
+            if s.is_empty() { None } else { Some(s) }
+        })
     }
 }
