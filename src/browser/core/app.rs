@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::env;
 use std::sync::Arc;
 use winit::event::WindowEvent;
 
@@ -47,13 +48,7 @@ impl Default for BrowserApp {
 impl BrowserApp {
     /// Starts the main browser event loop asynchronously.
     pub async fn run(self) -> Result<()> {
-        let event_loop =
-            winit::event_loop::EventLoop::<crate::platform::system::State>::with_user_event()
-                .build()?;
-
-        let mut app = App::new(self);
-        event_loop.run_app(&mut app)?;
-        Ok(())
+        run_with_winit_backend(self).await
     }
 
     /// Creates a new browser instance with the given window size and title.
@@ -249,5 +244,67 @@ impl BrowserApp {
     /// Sets the current scale factor for rendering.
     pub fn set_scale_factor(&mut self, sf: f64) {
         self.render.scale_factor = sf;
+    }
+}
+
+async fn run_with_winit_backend(app: BrowserApp) -> Result<()> {
+    configure_winit_backend_for_wslg();
+    if env::var_os("ORINIUM_FORCE_X11").is_some() {
+        configure_winit_backend_forced_x11();
+    }
+
+    run_event_loop(app).await
+}
+
+async fn run_event_loop(app: BrowserApp) -> Result<()> {
+    let event_loop =
+        winit::event_loop::EventLoop::<crate::platform::system::State>::with_user_event()
+            .build()?;
+    let mut app = App::new(app);
+    event_loop.run_app(&mut app)?;
+    Ok(())
+}
+
+fn configure_winit_backend_forced_x11() {
+    let current = env::var("WINIT_UNIX_BACKEND").ok();
+    let should_force_x11 = match current.as_deref() {
+        Some("x11") => false,
+        _ => true,
+    };
+
+    if should_force_x11 {
+        unsafe {
+            env::set_var("WINIT_UNIX_BACKEND", "x11");
+            env::remove_var("WAYLAND_DISPLAY");
+        }
+        log::info!(
+            "Forcing X11 (WINIT_UNIX_BACKEND=x11, WAYLAND_DISPLAY cleared)"
+        );
+    }
+}
+
+fn configure_winit_backend_for_wslg() {
+    let is_wsl = env::var_os("WSL_DISTRO_NAME").is_some() || env::var_os("WSL_INTEROP").is_some();
+    if !is_wsl {
+        return;
+    }
+
+    // On WSLg, Wayland is often unstable; default to X11 unless explicitly requested.
+    if env::var_os("ORINIUM_PREFER_WAYLAND").is_some() {
+        return;
+    }
+
+    let current = env::var("WINIT_UNIX_BACKEND").ok();
+    let should_force_x11 = match current.as_deref() {
+        Some("x11") => false,
+        _ => true,
+    };
+
+    if should_force_x11 {
+        unsafe {
+            env::set_var("WINIT_UNIX_BACKEND", "x11");
+            env::remove_var("WAYLAND_DISPLAY");
+        }
+        log::info!("WSLg detected: defaulting to X11 backend for stability");
     }
 }
