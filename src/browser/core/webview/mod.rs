@@ -64,18 +64,19 @@ impl WebView {
     /// - `<link rel="stylesheet">` を解決して CSS を取得
     /// - Style Tree を構築
     /// - Render Tree を構築
-    pub async fn load_from_url(
+    pub fn load_from_url(
         &mut self,
         url: &str,
         net: Arc<BrowserResourceLoader>,
     ) -> anyhow::Result<()> {
-        // --- HTML をロード ---
-        let html_bytes = net
+        let resp = net
             .fetch(url)
-            .await
             .map_err(|e| anyhow::Error::msg(e.to_string()))?;
 
-        let html_source = String::from_utf8_lossy(&html_bytes.body).to_string();
+        self.url = Some(dbg!(resp.url));
+
+        // --- HTML をロード ---
+        let html_source = String::from_utf8_lossy(&resp.body).to_string();
 
         // --- DOM パース ---
         let mut parser = HtmlParser::new(&html_source);
@@ -106,7 +107,7 @@ impl WebView {
             {
                 let css_url = resolve_url(url, &href);
 
-                if let Ok(res) = net.fetch(&css_url).await {
+                if let Ok(res) = net.fetch(&css_url) {
                     let bytes = res.body;
                     if let Ok(text) = String::from_utf8(bytes) {
                         css_sources.push(text);
@@ -157,6 +158,15 @@ impl WebView {
         self.needs_redraw = true;
 
         Ok(())
+    }
+
+    pub fn move_to(&mut self, href: &str, net: Arc<BrowserResourceLoader>) -> anyhow::Result<()> {
+        let base = self
+            .url
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("current URL is not set"))?;
+        let url = resolve_url(base, href);
+        self.load_from_url(&url, net)
     }
 }
 

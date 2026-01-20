@@ -71,7 +71,7 @@ fn main() -> Result<()> {
                     println!("Parsing DOM for URL: {}", url);
                     let net = NetworkCore::new();
                     let loader = BrowserResourceLoader::new(Some(Arc::new(net)));
-                    let resp = pollster::block_on(loader.fetch(url)).expect("Failed to fetch URL");
+                    let resp = loader.fetch(url).expect("Failed to fetch URL");
                     let html = String::from_utf8_lossy(&resp.body).to_string();
                     println!(
                         "Fetched HTML (first 50 chars):\n{}",
@@ -120,7 +120,7 @@ fn main() -> Result<()> {
                     println!("Parsing CSSOM for URL: {}", url);
                     let net = NetworkCore::new();
                     let loader = BrowserResourceLoader::new(Some(Arc::new(net)));
-                    let resp = pollster::block_on(loader.fetch(url)).expect("Failed to fetch URL");
+                    let resp = loader.fetch(url).expect("Failed to fetch URL");
                     let css = String::from_utf8_lossy(&resp.body).to_string();
                     println!(
                         "Fetched CSS (first 50 chars):\n{}",
@@ -206,7 +206,7 @@ fn main() -> Result<()> {
                     let net = browser.network();
 
                     let mut tab = Tab::new(net);
-                    pollster::block_on(tab.load_from_url(&url))?;
+                    tab.load_from_url(&url)?;
 
                     browser.add_tab(tab);
 

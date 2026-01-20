@@ -15,7 +15,7 @@ fn main() -> Result<()> {
     let mut browser = BrowserApp::default();
 
     let mut tab = Tab::new(browser.network());
-    pollster::block_on(tab.load_from_url("resource:///test/compatibility_test.html"))?;
+    tab.load_from_url("resource:///test/compatibility_test.html")?;
 
     browser.add_tab(tab);
 

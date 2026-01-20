@@ -50,6 +50,7 @@ impl AsyncNetworkCore {
 
 /// HTTP response
 pub struct Response {
+    pub url: String,
     pub status: hyper::StatusCode,
     pub reason_phrase: String,
     pub headers: Vec<(String, String)>,
@@ -149,7 +150,7 @@ impl NetworkInner {
             }
         };
 
-        let response = Self::collect_response(&mut res).await?;
+        let response = Self::collect_response(uri.to_string(), &mut res).await?;
 
         self.sender_pool
             .write()
@@ -160,6 +161,7 @@ impl NetworkInner {
     }
 
     async fn collect_response(
+        url: String,
         res: &mut hyper::Response<Incoming>,
     ) -> Result<Response, NetworkError> {
         let status = res.status();
@@ -180,6 +182,7 @@ impl NetworkInner {
         }
 
         Ok(Response {
+            url,
             status,
             reason_phrase,
             headers,

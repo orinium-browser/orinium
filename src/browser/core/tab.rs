@@ -45,13 +45,25 @@ impl Tab {
         }
     }
 
-    pub async fn load_from_url(&mut self, url: &str) -> anyhow::Result<()> {
+    pub fn load_from_url(&mut self, url: &str) -> anyhow::Result<()> {
         let net = self.net.clone();
         let mut view = WebView::new();
-        view.load_from_url(url, net).await?;
+        view.load_from_url(url, net)?;
         self.title = view.title.clone();
 
         self.webview = Some(view);
+        Ok(())
+    }
+
+    pub fn move_to(&mut self, href: &str) -> anyhow::Result<()> {
+        let net = self.net.clone();
+        match self.webview.as_mut() {
+            Some(view) => {
+                view.move_to(href, net)?;
+                self.title = view.title.clone();
+            }
+            None => {}
+        }
         Ok(())
     }
 

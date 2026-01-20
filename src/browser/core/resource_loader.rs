@@ -17,11 +17,12 @@ impl BrowserResourceLoader {
     /// Fetch a resource by URL
     /// - `resource:///` URLs are loaded via platform IO
     /// - HTTP/HTTPS URLs are fetched via NetworkCore
-    pub async fn fetch(&self, url: &str) -> Result<BrowserResponse> {
+    pub fn fetch(&self, url: &str) -> Result<BrowserResponse> {
         if url.starts_with("resource:///") {
             // Load resource from platform IO
             let data = ResourceURI::load(url)?;
             Ok(BrowserResponse {
+                url: url.to_string(),
                 status: StatusCode::OK,
                 body: data,
                 headers: vec![],
@@ -36,6 +37,7 @@ impl BrowserResourceLoader {
             // Fetch via network
             let resp = network.fetch(url).map_err(|e| anyhow!(e))?;
             Ok(BrowserResponse {
+                url: resp.url,
                 status: resp.status,
                 body: resp.body,
                 headers: resp.headers,
@@ -46,6 +48,7 @@ impl BrowserResourceLoader {
 
 /// Unified response type for both network and resource URLs
 pub struct BrowserResponse {
+    pub url: String,
     pub status: StatusCode,
     pub body: Vec<u8>,
     pub headers: Vec<(String, String)>,

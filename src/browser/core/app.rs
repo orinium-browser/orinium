@@ -194,13 +194,27 @@ impl BrowserApp {
             None => return,
         };
 
-        if let Some(hit) = hit_path
-            .iter()
-            .find(|e| matches!(e.info.kind, layouter::NodeKind::Link { .. }))
-        {
-            if let layouter::NodeKind::Link { href, .. } = &hit.info.kind {
-                println!("Link clicked: {}", href);
+        let href_opt = {
+            if let Some(hit) = hit_path
+                .iter()
+                .find(|e| matches!(e.info.kind, layouter::NodeKind::Link { .. }))
+            {
+                if let layouter::NodeKind::Link { href, .. } = &hit.info.kind {
+                    println!("Link clicked: {}", href);
+                    Some(href.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
             }
+        };
+
+        match href_opt {
+            Some(href) => {
+                let _ = tab.move_to(&href);
+            }
+            None => return,
         }
     }
 
