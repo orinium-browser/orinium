@@ -1,4 +1,4 @@
-use super::layouter::{InfoNode, NodeKind};
+use super::layouter::types::{InfoNode, NodeKind};
 use ui_layout::LayoutNode;
 
 /// ヒットしたノード情報

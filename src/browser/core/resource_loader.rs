@@ -1,4 +1,4 @@
-use crate::network::NetworkCore;
+use crate::network::{NetworkCore, NetworkError};
 use anyhow::{Result, anyhow};
 use hyper::StatusCode;
 use std::sync::Arc;
@@ -9,17 +9,40 @@ pub struct BrowserResourceLoader {
 }
 
 impl BrowserResourceLoader {
-    /// Create a new loader with optional NetworkCore
     pub fn new(network: Option<Arc<NetworkCore>>) -> Self {
         Self { network }
     }
 
-    /// Fetch a resource by URL
-    /// - `resource:///` URLs are loaded via platform IO
-    /// - HTTP/HTTPS URLs are fetched via NetworkCore
-    pub fn fetch(&self, url: &str) -> Result<BrowserResponse> {
+    /// 非同期 fetch: URL と Tab ID を送信するだけ
+    pub fn fetch_async(&self, url: String, tab_id: usize) {
+        if let Some(net) = &self.network {
+            net.fetch_async(url, tab_id);
+        }
+    }
+
+    /// UIスレッドから呼ぶ: 受信済みネットワーク結果を取り込む
+    pub fn try_receive(&self) -> Vec<BrowserNetworkMessage> {
+        if let Some(net) = &self.network {
+            net.try_receive()
+                .into_iter()
+                .map(|msg| BrowserNetworkMessage {
+                    tab_id: msg.tab_id,
+                    response: msg.response.map(|resp| BrowserResponse {
+                        url: resp.url,
+                        status: resp.status,
+                        body: resp.body,
+                        headers: resp.headers,
+                    }),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// resource:/// のみ同期ロード
+    pub fn load_resource_sync(&self, url: &str) -> Result<BrowserResponse> {
         if url.starts_with("resource:///") {
-            // Load resource from platform IO
             let data = ResourceURI::load(url)?;
             Ok(BrowserResponse {
                 url: url.to_string(),
@@ -28,25 +51,12 @@ impl BrowserResourceLoader {
                 headers: vec![],
             })
         } else {
-            // Ensure network is available
-            let network = self
-                .network
-                .as_ref()
-                .ok_or_else(|| anyhow!("NetworkCore not available for URL: {}", url))?;
-
-            // Fetch via network
-            let resp = network.fetch(url).map_err(|e| anyhow!(e))?;
-            Ok(BrowserResponse {
-                url: resp.url,
-                status: resp.status,
-                body: resp.body,
-                headers: resp.headers,
-            })
+            Err(anyhow!("Cannot synchronously fetch network URL: {}", url))
         }
     }
 }
 
-/// Unified response type for both network and resource URLs
+/// 統一レスポンス
 pub struct BrowserResponse {
     pub url: String,
     pub status: StatusCode,
@@ -54,12 +64,16 @@ pub struct BrowserResponse {
     pub headers: Vec<(String, String)>,
 }
 
-/// Resource Manager for `resource:///` scheme
+/// ネットワーク結果を UI スレッドで受け取るためのラッパー
+pub struct BrowserNetworkMessage {
+    pub tab_id: usize,
+    pub response: Result<BrowserResponse, NetworkError>,
+}
+
+/// resource:/// 専用
 pub struct ResourceURI;
 
 impl ResourceURI {
-    /// Load a resource by its URL.
-    /// Only supports `resource:///` scheme for now.
     pub fn load(url: &str) -> Result<Vec<u8>, anyhow::Error> {
         use crate::platform::io;
         if let Some(path) = url.strip_prefix("resource:///") {

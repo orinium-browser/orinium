@@ -20,58 +20,64 @@ use core::AsyncNetworkCore;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
-enum NetworkCommand {
-    Fetch {
-        url: String,
-        reply: Sender<Result<Response, NetworkError>>,
-    },
+pub enum NetworkCommand {
+    Fetch { url: String, tab_id: usize },
     SetConfig(NetworkConfig),
 }
 
+pub struct NetworkMessage {
+    pub tab_id: usize,
+    pub response: Result<Response, NetworkError>,
+}
+
 pub struct NetworkCore {
-    tx: mpsc::Sender<NetworkCommand>,
+    cmd_tx: Sender<NetworkCommand>,
+    msg_rx: Receiver<NetworkMessage>, // UI スレッド用
 }
 
 impl NetworkCore {
     pub fn new() -> Self {
-        let (tx, rx) = mpsc::channel();
-        spawn_network_thread(rx);
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let (msg_tx, msg_rx) = mpsc::channel();
 
-        Self { tx }
+        thread::spawn(move || spawn_network_thread(cmd_rx, msg_tx));
+
+        Self { cmd_tx, msg_rx }
     }
 
-    pub fn set_network_config(&self, config: NetworkConfig) {
-        let _ = self.tx.send(NetworkCommand::SetConfig(config));
+    pub fn set_network_config(&self, cfg: NetworkConfig) {
+        let _ = self.cmd_tx.send(NetworkCommand::SetConfig(cfg));
     }
 
-    pub fn fetch(&self, url: &str) -> Result<Response, NetworkError> {
-        let (res_tx, res_rx) = mpsc::channel();
+    /// 非同期送信のみ。結果は try_receive で取得
+    pub fn fetch_async(&self, url: String, tab_id: usize) {
+        let _ = self.cmd_tx.send(NetworkCommand::Fetch { url, tab_id });
+    }
 
-        self.tx
-            .send(NetworkCommand::Fetch {
-                url: url.to_string(),
-                reply: res_tx,
-            })
-            .map_err(|_| NetworkError::Disconnected)?;
-
-        res_rx.recv().map_err(|_| NetworkError::Disconnected)?
+    /// UIスレッドから呼ぶ: 完了しているメッセージを取り込む
+    pub fn try_receive(&self) -> Vec<NetworkMessage> {
+        let mut msgs = Vec::new();
+        while let Ok(msg) = self.msg_rx.try_recv() {
+            msgs.push(msg);
+        }
+        msgs
     }
 }
 
-fn spawn_network_thread(rx: Receiver<NetworkCommand>) {
-    thread::spawn(move || {
-        let mut core = AsyncNetworkCore::new();
+/// ネットワークスレッド
+fn spawn_network_thread(rx: Receiver<NetworkCommand>, tx: Sender<NetworkMessage>) {
+    let mut core = AsyncNetworkCore::new();
 
-        while let Ok(cmd) = rx.recv() {
-            match cmd {
-                NetworkCommand::Fetch { url, reply } => {
-                    let res = core.fetch_blocking(&url);
-                    let _ = reply.send(res);
-                }
-                NetworkCommand::SetConfig(cfg) => {
-                    core.set_network_config(cfg);
-                }
+    for cmd in rx {
+        match cmd {
+            NetworkCommand::SetConfig(cfg) => core.set_network_config(cfg),
+            NetworkCommand::Fetch { url, tab_id } => {
+                let res = core.fetch_blocking(&url);
+                let _ = tx.send(NetworkMessage {
+                    tab_id,
+                    response: res,
+                });
             }
         }
-    });
+    }
 }

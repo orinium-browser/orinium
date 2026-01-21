@@ -3,7 +3,7 @@ use std::sync::Arc;
 use super::resource_loader::BrowserResourceLoader;
 use crate::network::NetworkCore;
 
-use crate::engine::layouter::InfoNode;
+use crate::engine::layouter::types::InfoNode;
 use ui_layout::LayoutNode;
 
 use super::webview::WebView;

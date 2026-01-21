@@ -6,7 +6,8 @@ use winit::event::WindowEvent;
 use super::tab::Tab;
 // use super::ui::init_browser_ui;
 use super::{BrowserCommand, resource_loader::BrowserResourceLoader};
-use crate::engine::layouter::{self, DrawCommand};
+use crate::engine::layouter;
+use crate::engine::renderer_model::{self, DrawCommand};
 use crate::platform::network::NetworkCore;
 use crate::platform::renderer::gpu::GpuRenderer;
 use crate::system::App;
@@ -98,7 +99,7 @@ impl BrowserApp {
         };
 
         ui_layout::LayoutEngine::layout(layout, size.0 / sf, size.1 / sf);
-        self.render.draw_commands = layouter::generate_draw_commands(layout, info);
+        self.render.draw_commands = renderer_model::generate_draw_commands(layout, info);
 
         if let Some(t) = title {
             self.window_title = t;
@@ -176,7 +177,7 @@ impl BrowserApp {
 
         if let Some(tab) = self.active_tab_mut() {
             if let Some((_layout, info)) = tab.layout_and_info() {
-                if let layouter::NodeKind::Container {
+                if let layouter::types::NodeKind::Container {
                     scroll_offset_y, ..
                 } = &mut info.kind
                 {
@@ -197,9 +198,9 @@ impl BrowserApp {
         let href_opt = {
             if let Some(hit) = hit_path
                 .iter()
-                .find(|e| matches!(e.info.kind, layouter::NodeKind::Link { .. }))
+                .find(|e| matches!(e.info.kind, layouter::types::NodeKind::Link { .. }))
             {
-                if let layouter::NodeKind::Link { href, .. } = &hit.info.kind {
+                if let layouter::types::NodeKind::Link { href, .. } = &hit.info.kind {
                     println!("Link clicked: {}", href);
                     Some(href.clone())
                 } else {
