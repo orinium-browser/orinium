@@ -14,6 +14,7 @@
 
 mod builder;
 pub mod css_resolver;
+mod diff;
 pub mod types;
 
 pub use builder::build_layout_and_info;
