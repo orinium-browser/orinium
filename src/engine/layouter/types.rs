@@ -4,7 +4,7 @@ pub struct InfoNode {
     pub children: Vec<InfoNode>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum NodeKind {
     Container {
         scroll_x: bool,
@@ -16,6 +16,7 @@ pub enum NodeKind {
     Text {
         text: String,
         style: TextStyle,
+        measured: Option<MeasureCache>,
     },
     Link {
         href: String,
@@ -23,7 +24,11 @@ pub enum NodeKind {
     },
 }
 
-#[derive(Debug, Clone, Copy)]
+// =========================
+//          Color
+// =========================
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Color(pub u8, pub u8, pub u8, pub u8);
 
 impl Color {
@@ -55,9 +60,32 @@ impl TryFrom<(u8, u8, u8, f32)> for Color {
     }
 }
 
-#[derive(Debug, Clone)]
+// =========================
+//        Cantainer
+// =========================
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct ContainerStyle {
     pub background_color: Color,
+}
+
+// =========================
+//           Text
+// =========================
+
+#[derive(Hash)]
+struct TextMeasureHashKey<'a> {
+    text: &'a str,
+    font_size: u32,
+    font_weight: u16,
+    font_style: FontStyle,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeasureCache {
+    pub hash: u64,
+    pub width: f32,
+    pub height: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -77,7 +105,7 @@ pub enum TextDecoration {
     Overline,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub enum FontStyle {
     #[default]
     Normal,
@@ -85,7 +113,7 @@ pub enum FontStyle {
     Oblique,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FontWeight(pub u16);
 
 impl FontWeight {
@@ -101,7 +129,7 @@ impl Default for FontWeight {
     }
 }
 
-#[derive(Copy, Debug, Clone, Default)]
+#[derive(Copy, Debug, Clone, Default, PartialEq)]
 pub struct TextStyle {
     pub font_size: f32,
     pub text_align: TextAlign,

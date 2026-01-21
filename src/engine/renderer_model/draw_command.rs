@@ -52,7 +52,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
     let abs_y = rect.y;
 
     match &info.kind {
-        NodeKind::Text { text, style } => {
+        NodeKind::Text { text, style, .. } => {
             /*
             commands.push(DrawCommand::DrawRect {
                 x: abs_x,

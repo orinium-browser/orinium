@@ -5,15 +5,17 @@ use crate::engine::css::{
 };
 use crate::engine::tree::TreeNode;
 use crate::html::HtmlNodeType;
+
 use std::cell::RefCell;
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use ui_layout::{Display, FlexDirection, LayoutNode, Length, Style};
 
 use super::css_resolver::ResolvedStyles;
 use super::types::{
-    Color, ContainerStyle, FontStyle, FontWeight, InfoNode, NodeKind, TextAlign, TextDecoration,
-    TextStyle,
+    Color, ContainerStyle, FontStyle, FontWeight, InfoNode, MeasureCache, NodeKind, TextAlign,
+    TextDecoration, TextStyle,
 };
 
 /// Builds a layout tree (`LayoutNode`) and a render info tree (`InfoNode`) from the DOM.
@@ -126,25 +128,15 @@ pub fn build_layout_and_info(
 
     let kind = if let HtmlNodeType::Text(t) = &html_node {
         let t = normalize_whitespace(t);
-        let kind = NodeKind::Text {
+
+        let mut kind = NodeKind::Text {
             text: t.clone(),
             style: text_style,
+            measured: None,
         };
 
-        let req = text::TextMeasureRequest {
-            text: t.clone(),
-            style: text_style,
-            max_width: None,
-            wrap: false,
-        };
+        ensure_text_measured(&mut style, &mut kind, measurer);
 
-        let (w, h) = measurer
-            .measure(&req)
-            .map(|m| (m.width, m.height))
-            .unwrap_or((800.0, text_style.font_size * 1.2));
-
-        style.size.width = Length::Px(w);
-        style.size.height = Length::Px(h);
         kind
     } else if let Some(name) = &html_node.tag_name()
         && name == "a"
@@ -214,6 +206,63 @@ pub fn build_layout_and_info(
     };
 
     (layout, info)
+}
+
+fn calc_text_measure_hash(text: &str, style: &TextStyle) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+
+    let mut hasher = DefaultHasher::new();
+
+    text.hash(&mut hasher);
+    style.font_size.to_bits().hash(&mut hasher);
+    style.font_weight.hash(&mut hasher);
+    style.font_style.hash(&mut hasher);
+
+    hasher.finish()
+}
+
+fn ensure_text_measured(
+    node_style: &mut Style,
+    kind: &mut NodeKind,
+    measurer: &dyn text::TextMeasurer<TextStyle>,
+) {
+    let NodeKind::Text {
+        text,
+        style,
+        measured,
+    } = kind
+    else {
+        return;
+    };
+
+    let hash = calc_text_measure_hash(text, style);
+
+    let needs_measure = measured.as_ref().map(|m| m.hash != hash).unwrap_or(true);
+
+    if !needs_measure {
+        return;
+    }
+
+    let req = text::TextMeasureRequest {
+        text: text.clone(),
+        style: *style,
+        max_width: None,
+        wrap: false,
+    };
+
+    let (width, height) = measurer
+        .measure(&req)
+        .map(|m| (m.width, m.height))
+        .unwrap_or((800.0, style.font_size * 1.2));
+
+    *measured = Some(MeasureCache {
+        hash,
+        width,
+        height,
+    });
+
+    node_style.size.width = Length::Px(width);
+    node_style.size.height = Length::Px(height);
 }
 
 fn normalize_whitespace(text: &str) -> String {
