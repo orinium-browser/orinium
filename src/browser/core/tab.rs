@@ -6,7 +6,7 @@ use crate::network::NetworkCore;
 use crate::engine::layouter::types::InfoNode;
 use ui_layout::LayoutNode;
 
-use super::webview::WebView;
+use super::webview::{WebView, WebViewTask};
 
 /// Tab はブラウザで開かれた 1 つのページを表す構造体です。
 ///
@@ -45,32 +45,46 @@ impl Tab {
         }
     }
 
-    pub fn load_from_url(&mut self, url: &str) -> anyhow::Result<()> {
-        let net = self.net.clone();
-        let mut view = WebView::new();
-        view.load_from_url(url, net)?;
-        self.title = view.title.clone();
+    /// Tab 内の状態を 1 ステップ進める
+    ///
+    /// - WebView.tick() を呼び出す
+    /// - 発生した Task を BrowserApp に返す
+    pub fn tick(&mut self) -> Vec<WebViewTask> {
+        let Some(webview) = self.webview.as_mut() else {
+            return Vec::new();
+        };
 
-        self.webview = Some(view);
-        Ok(())
+        webview.tick()
     }
 
-    pub fn move_to(&mut self, href: &str) -> anyhow::Result<()> {
-        let net = self.net.clone();
-        match self.webview.as_mut() {
-            Some(view) => {
-                view.move_to(href, net)?;
-                self.title = view.title.clone();
-            }
-            None => {}
+    /// BrowserApp から HTML fetch 完了を通知
+    pub fn on_html_fetched(&mut self, html: String, base_url: &str) {
+        if let Some(webview) = self.webview.as_mut() {
+            self.url = Some(base_url.to_string());
+            webview.on_html_fetched(html, base_url);
+
+            // title は WebView から吸い上げる
+            self.title = webview.title().cloned();
         }
-        Ok(())
     }
 
-    pub fn layout_and_info(&mut self) -> Option<&mut (LayoutNode, InfoNode)> {
-        self.webview
-            .as_mut()
-            .and_then(|wv| wv.layout_and_info.as_mut())
+    /// BrowserApp から CSS fetch 完了を通知
+    pub fn on_css_fetched(&mut self, css: String) {
+        if let Some(webview) = self.webview.as_mut() {
+            webview.on_css_fetched(css);
+        }
+    }
+
+    /// 初回ナビゲーション開始
+    pub fn navigate(&mut self, url: String) -> Vec<WebViewTask> {
+        self.url = Some(url.clone());
+        self.webview = Some(WebView::new());
+
+        // 最初の HTML fetch 要求をそのまま上に投げる
+        vec![WebViewTask::Fetch {
+            url,
+            kind: super::webview::FetchKind::Html,
+        }]
     }
 
     pub fn title(&self) -> Option<String> {
@@ -79,5 +93,22 @@ impl Tab {
 
     pub fn url(&self) -> Option<String> {
         self.url.clone()
+    }
+
+    pub fn layout_and_info(&self) -> Option<&(LayoutNode, InfoNode)> {
+        self.webview.as_ref().and_then(|wv| wv.layout_and_info())
+    }
+
+    pub fn needs_redraw(&self) -> bool {
+        self.webview
+            .as_ref()
+            .map(|wv| wv.needs_redraw())
+            .unwrap_or(false)
+    }
+
+    pub fn clear_redraw_flag(&mut self) {
+        if let Some(wv) = self.webview.as_mut() {
+            wv.clear_redraw_flag();
+        }
     }
 }
