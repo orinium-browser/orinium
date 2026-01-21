@@ -1,46 +1,33 @@
 //! Minimal diff utilities for layout and render-info trees.
-//!
-//! Design goals:
-//! - Deterministic
-//! - Thread-safe (pure functions)
-//! - Cheap to run
-//!
-//! Non-goals:
-//! - Smart reconciliation
-//! - Node reordering
-//! - Partial property updates
 
 use crate::engine::layouter::types::InfoNode;
 use ui_layout::LayoutNode;
 
 /// Result of a diff operation.
-pub enum DiffResult<T> {
+pub enum DiffResult {
     /// Reuse the previous node as-is.
     Reuse,
 
-    /// Replace the previous node with a new one.
-    Replace(T),
+    /// Replace the previous node.
+    Replace,
 }
 
 /* =========================
 LayoutNode diff
 ========================= */
 
-pub fn diff_layout(old: &LayoutNode, new: LayoutNode) -> DiffResult<LayoutNode> {
-    // If node-level properties differ, replace entirely.
+pub fn diff_layout(old: &LayoutNode, new: &LayoutNode) -> DiffResult {
     if old.style != new.style {
-        return DiffResult::Replace(new);
+        return DiffResult::Replace;
     }
 
     if old.children.len() != new.children.len() {
-        return DiffResult::Replace(new);
+        return DiffResult::Replace;
     }
 
-    // Check children recursively
     for (old_child, new_child) in old.children.iter().zip(new.children.iter()) {
-        match diff_layout(old_child, new_child.clone()) {
-            DiffResult::Reuse => {}
-            DiffResult::Replace(_) => return DiffResult::Replace(new),
+        if matches!(diff_layout(old_child, new_child), DiffResult::Replace) {
+            return DiffResult::Replace;
         }
     }
 
@@ -51,19 +38,18 @@ pub fn diff_layout(old: &LayoutNode, new: LayoutNode) -> DiffResult<LayoutNode> 
 InfoNode diff
 ========================= */
 
-pub fn diff_info(old: &InfoNode, new: InfoNode) -> DiffResult<InfoNode> {
+pub fn diff_info(old: &InfoNode, new: &InfoNode) -> DiffResult {
     if old.kind != new.kind {
-        return DiffResult::Replace(new);
+        return DiffResult::Replace;
     }
 
     if old.children.len() != new.children.len() {
-        return DiffResult::Replace(new);
+        return DiffResult::Replace;
     }
 
     for (old_child, new_child) in old.children.iter().zip(new.children.iter()) {
-        match diff_info(old_child, new_child.clone()) {
-            DiffResult::Reuse => {}
-            DiffResult::Replace(_) => return DiffResult::Replace(new),
+        if matches!(diff_info(old_child, new_child), DiffResult::Replace) {
+            return DiffResult::Replace;
         }
     }
 
