@@ -3,7 +3,10 @@ use std::sync::Arc;
 use crate::engine::{
     css::parser::Parser as CssParser,
     html::parser::{DomTree, Parser as HtmlParser},
-    layouter::{self, InfoNode},
+    layouter::{
+        self,
+        types::{InfoNode, TextStyle},
+    },
 };
 use ui_layout::LayoutNode;
 
@@ -142,7 +145,7 @@ impl WebView {
             &dom_tree.root,
             &resolved_styles,
             &measurer.unwrap(),
-            layouter::TextStyle {
+            TextStyle {
                 font_size: 16.0,
                 ..Default::default()
             },
