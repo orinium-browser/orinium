@@ -305,15 +305,13 @@ impl BrowserApp {
             winit::event::MouseScrollDelta::PixelDelta(pos) => -pos.y as f32,
         };
 
-        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
-            if let Some((_layout, info)) = tab.layout_and_info_mut() {
-                if let layouter::types::NodeKind::Container {
-                    scroll_offset_y, ..
-                } = &mut info.kind
-                {
-                    *scroll_offset_y = (*scroll_offset_y + scroll_amount).clamp(0.0, f32::MAX);
-                }
-            }
+        if let Some(tab) = self.tabs.get_mut(self.active_tab)
+            && let Some((_layout, info)) = tab.layout_and_info_mut()
+            && let layouter::types::NodeKind::Container {
+                scroll_offset_y, ..
+            } = &mut info.kind
+        {
+            *scroll_offset_y = (*scroll_offset_y + scroll_amount).clamp(0.0, f32::MAX);
         }
     }
 
@@ -343,7 +341,7 @@ impl BrowserApp {
 
         match href_opt {
             Some(href) => tab.move_to(&href),
-            None => return,
+            None => (),
         }
     }
 

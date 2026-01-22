@@ -33,7 +33,7 @@ impl CookieStore {
     pub fn set_cookies(&self, url: &Url, cookie_headers: &[String]) {
         let mut store = self.store.write().expect("RwLock poisoned");
         let domain = url.host_str().unwrap_or_default().to_string();
-        let entry = store.entry(domain.clone()).or_insert_with(Vec::new);
+        let entry = store.entry(domain.clone()).or_default();
 
         for hdr in cookie_headers {
             if let Some((name, value)) = hdr.split_once('=') {

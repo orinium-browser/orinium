@@ -209,7 +209,7 @@ impl WebView {
     }
 
     pub fn title(&self) -> Option<&String> {
-        self.docment_info.as_ref().and_then(|d| Some(&d.title))
+        self.docment_info.as_ref().map(|d| &d.title)
     }
 
     pub fn relayout(&mut self, viewport: (f32, f32)) {
@@ -248,7 +248,7 @@ impl WebView {
 
 fn parse_html(html: &str, document_url: Url) -> ParsedDocument {
     // --- DOM パース ---
-    let mut parser = HtmlParser::new(&html);
+    let mut parser = HtmlParser::new(html);
     let dom = parser.parse();
 
     // --- base_url ---

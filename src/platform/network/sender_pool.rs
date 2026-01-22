@@ -42,7 +42,7 @@ impl SenderPool {
     }
 
     pub fn add_connection(&mut self, key: HostKey, conn: HttpSender) {
-        let entry = self.pool.entry(key).or_insert_with(Vec::new);
+        let entry = self.pool.entry(key).or_default();
         if entry.len() < self.max_connections_per_host {
             entry.push(conn);
         }

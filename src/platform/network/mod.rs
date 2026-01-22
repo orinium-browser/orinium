@@ -35,6 +35,12 @@ pub struct NetworkCore {
     msg_rx: Receiver<NetworkMessage>, // UI スレッド用
 }
 
+impl Default for NetworkCore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NetworkCore {
     pub fn new() -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel();

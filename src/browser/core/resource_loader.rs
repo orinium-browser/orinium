@@ -21,7 +21,7 @@ impl BrowserResourceLoader {
     /// 非同期 fetch: URL と Tab ID を送信するだけ
     pub fn fetch_async(&mut self, url: Url, id: usize) {
         if url.scheme() == ("resource") {
-            let data = ResourceURI::load(&url.to_string());
+            let data = ResourceURI::load(url.as_ref());
             let msg = BrowserNetworkMessage {
                 id,
                 response: data
@@ -31,7 +31,7 @@ impl BrowserResourceLoader {
                         body: data,
                         headers: vec![],
                     })
-                    .map_err(|e| BrowserNetworkError::AnyhowError(e)),
+                    .map_err(BrowserNetworkError::AnyhowError),
             };
             self.immediate_pool.push(msg);
         } else if let Some(net) = &self.network {
@@ -69,7 +69,7 @@ impl BrowserResourceLoader {
                             body: resp.body,
                             headers: resp.headers,
                         })
-                        .map_err(|e| BrowserNetworkError::NetworkError(e)),
+                        .map_err(BrowserNetworkError::NetworkError),
                 })
                 .collect()
         } else {
