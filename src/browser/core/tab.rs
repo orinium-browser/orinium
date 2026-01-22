@@ -134,16 +134,20 @@ impl Tab {
         }
     }
 
+    /// Returns layout_and_info
+    /// Only InfoNode will be mutable.
     pub fn layout_and_info_mut(&mut self) -> Option<(&LayoutNode, &mut InfoNode)> {
         self.webview
             .as_mut()
             .and_then(|wv| wv.layout_and_info_mut())
     }
 
+    /// Returns title of the document
     pub fn title(&self) -> Option<String> {
         self.title.clone()
     }
 
+    /// Returns document url
     pub fn document_url(&self) -> Option<Url> {
         self.docment_url.clone()
     }
