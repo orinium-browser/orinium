@@ -71,7 +71,9 @@ fn main() -> Result<()> {
                     println!("Parsing DOM for URL: {}", url);
                     let net = NetworkCore::new();
                     let loader = BrowserResourceLoader::new(Some(Arc::new(net)));
-                    let resp = loader.fetch(url).expect("Failed to fetch URL");
+                    let resp = loader
+                        .fetch_blocking(url.clone())
+                        .expect("Failed to fetch URL");
                     let html = String::from_utf8_lossy(&resp.body).to_string();
                     println!(
                         "Fetched HTML (first 50 chars):\n{}",
@@ -120,7 +122,9 @@ fn main() -> Result<()> {
                     println!("Parsing CSSOM for URL: {}", url);
                     let net = NetworkCore::new();
                     let loader = BrowserResourceLoader::new(Some(Arc::new(net)));
-                    let resp = loader.fetch(url).expect("Failed to fetch URL");
+                    let resp = loader
+                        .fetch_blocking(url.clone())
+                        .expect("Failed to fetch URL");
                     let css = String::from_utf8_lossy(&resp.body).to_string();
                     println!(
                         "Fetched CSS (first 50 chars):\n{}",
@@ -153,7 +157,7 @@ fn main() -> Result<()> {
                         follow_redirects: false,
                         ..Default::default()
                     });
-                    match net.fetch(url) {
+                    match net.fetch_blocking(url) {
                         Ok(resp) => {
                             println!("Response Status: {}", resp.status);
                             println!("Response Headers:");
@@ -177,7 +181,7 @@ fn main() -> Result<()> {
                     let url = &args[2];
                     println!("Fetching URL: {}", url);
                     let net = NetworkCore::new();
-                    match net.fetch(url) {
+                    match net.fetch_blocking(url) {
                         Ok(resp) => {
                             println!("Response Reason_phrase: {}", resp.reason_phrase);
                             println!("Response Headers:");
@@ -203,10 +207,8 @@ fn main() -> Result<()> {
 
                     let mut browser = BrowserApp::default();
 
-                    let net = browser.network();
-
-                    let mut tab = Tab::new(net);
-                    tab.load_from_url(&url)?;
+                    let mut tab = Tab::new();
+                    tab.navigate(url.parse()?);
 
                     browser.add_tab(tab);
 

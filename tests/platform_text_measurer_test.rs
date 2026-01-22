@@ -1,5 +1,5 @@
 use orinium_browser::engine::bridge::text::{TextMeasureRequest, TextMeasurer};
-use orinium_browser::engine::layouter::TextStyle;
+use orinium_browser::engine::layouter::types::TextStyle;
 use orinium_browser::platform::renderer::text_measurer::PlatformTextMeasurer;
 
 #[test]

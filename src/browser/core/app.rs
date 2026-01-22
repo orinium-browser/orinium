@@ -1,9 +1,13 @@
 use anyhow::Result;
+use std::collections::{HashMap, hash_map::DefaultHasher};
 use std::env;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+use url::Url;
 use winit::event::WindowEvent;
 
-use super::tab::Tab;
+use super::tab::{FetchKind, Tab, TabTask};
 // use super::ui::init_browser_ui;
 use super::{BrowserCommand, resource_loader::BrowserResourceLoader};
 use crate::engine::layouter;
@@ -29,6 +33,52 @@ pub struct InputState {
     pub mouse_position: (f64, f64),
 }
 
+pub struct PendingFetches {
+    /// Maps (id) to (tab_id, FetchKind)
+    /// Id is used to track pending fetch requests.
+    map: HashMap<usize, (usize, FetchKind)>,
+    counter: usize,
+}
+
+impl PendingFetches {
+    pub fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+            counter: 0,
+        }
+    }
+
+    /// URLとFetchKindを受け取り、一意IDを生成して登録
+    pub fn insert(&mut self, tab_id: usize, kind: FetchKind, url: Url) -> usize {
+        self.counter += 1;
+
+        let id = self.generate_id(&url);
+
+        self.map.insert(id, (tab_id, kind));
+        dbg!(id)
+    }
+
+    fn generate_id(&self, url: &Url) -> usize {
+        // URLをハッシュ化
+        let mut hasher = DefaultHasher::new();
+        url.hash(&mut hasher);
+        let url_hash = hasher.finish() as usize;
+
+        // 現在時刻ナノ秒
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Time went backwards")
+            .as_nanos() as usize;
+
+        // ナノ秒 XOR カウンタ XOR URLハッシュ
+        now ^ self.counter ^ url_hash
+    }
+
+    pub fn remove(&mut self, id: usize) -> Option<(usize, FetchKind)> {
+        self.map.remove(&id)
+    }
+}
+
 /// Main browser application struct.
 /// Holds tabs, rendering state, input state, and network resources.
 pub struct BrowserApp {
@@ -37,7 +87,8 @@ pub struct BrowserApp {
     render: RenderState,
     window_title: String,
     input: InputState,
-    network: Arc<BrowserResourceLoader>,
+    network: BrowserResourceLoader,
+    pending_fetches: PendingFetches,
 }
 
 impl Default for BrowserApp {
@@ -54,9 +105,7 @@ impl BrowserApp {
 
     /// Creates a new browser instance with the given window size and title.
     pub fn new(window_size: (u32, u32), window_title: String) -> Self {
-        let network = Arc::new(BrowserResourceLoader::new(Some(Arc::new(
-            NetworkCore::new(),
-        ))));
+        let network = BrowserResourceLoader::new(Some(Arc::new(NetworkCore::new())));
 
         Self {
             tabs: vec![],
@@ -69,6 +118,73 @@ impl BrowserApp {
             window_title,
             input: InputState::default(),
             network,
+            pending_fetches: PendingFetches::new(),
+        }
+    }
+
+    pub fn tick(&mut self) -> BrowserCommand {
+        let tab_id = self.active_tab;
+
+        self.handle_network_messages();
+
+        let Some(tab) = self.tabs.get_mut(tab_id) else {
+            return BrowserCommand::None;
+        };
+
+        for task in tab.tick() {
+            match task {
+                TabTask::Fetch { url, kind } => {
+                    println!("Fetch requested in App: url={}", url);
+                    let id = self.pending_fetches.insert(tab_id, kind, url.clone());
+                    self.network.fetch_async(url, id);
+                }
+                TabTask::NeedsRedraw => {
+                    return BrowserCommand::RequestRedraw;
+                }
+            }
+        }
+
+        BrowserCommand::None
+    }
+
+    fn handle_network_messages(&mut self) {
+        let messages = self.network.try_receive();
+
+        for msg in messages {
+            println!("Network message received in App for fetch_id={}", msg.id);
+
+            // pending_fetches から fetch 情報を取得
+            let Some((tab_id, kind)) = self.pending_fetches.remove(msg.id) else {
+                println!("No pending fetch found for fetch_id={}", msg.id);
+                continue;
+            };
+
+            // Tab を取得
+            let Some(tab) = self.tabs.get_mut(tab_id) else {
+                println!("There is no Tab called id={}", tab_id);
+                continue;
+            };
+
+            match msg.response {
+                Ok(resp) => {
+                    println!("Fetch Done in App for tab_id={}", tab_id);
+
+                    match kind {
+                        FetchKind::Html => {
+                            let html = String::from_utf8_lossy(&resp.body).to_string();
+                            tab.on_fetch_succeeded_html(html);
+                        }
+                        FetchKind::Css => {
+                            let css = String::from_utf8_lossy(&resp.body).to_string();
+                            tab.on_fetch_succeeded_css(css);
+                        }
+                    }
+                }
+                Err(err) => {
+                    println!("NetworkError: {}", err);
+                    tab.on_fetch_failed(err);
+                }
+            }
         }
     }
 
@@ -79,30 +195,34 @@ impl BrowserApp {
 
     /// Rebuilds the render tree for the active tab and generates draw commands.
     fn rebuild_render_tree(&mut self) {
-        let size = self.window_size();
-        let sf = self.render.scale_factor as f32;
+        let (title, draw_commands) = {
+            let sf = self.render.scale_factor as f32;
+            let viewport = (
+                self.render.window_size.0 as f32 / sf,
+                self.render.window_size.1 as f32 / sf,
+            );
 
-        let (layout, info, title) = match self.active_tab_mut() {
-            Some(tab) => {
-                let title = tab
-                    .title()
-                    .filter(|t| !t.is_empty())
-                    .or_else(|| tab.url().filter(|u| !u.is_empty()));
+            let Some(tab) = self.active_tab_mut() else {
+                return;
+            };
 
-                if let Some((layout, info)) = tab.layout_and_info() {
-                    (layout, info, title)
-                } else {
-                    return;
-                }
-            }
-            None => return,
+            tab.relayout(viewport);
+
+            let Some((layout, info)) = tab.layout_and_info() else {
+                println!("No layout/info available for active tab");
+                return;
+            };
+
+            let title = tab.title();
+            let draw_commands = renderer_model::generate_draw_commands(layout, info);
+
+            (title, draw_commands)
         };
 
-        ui_layout::LayoutEngine::layout(layout, size.0 / sf, size.1 / sf);
-        self.render.draw_commands = renderer_model::generate_draw_commands(layout, info);
+        self.render.draw_commands = draw_commands;
 
-        if let Some(t) = title {
-            self.window_title = t;
+        if let Some(title) = title {
+            self.window_title = title;
         }
     }
 
@@ -112,7 +232,7 @@ impl BrowserApp {
         event: WindowEvent,
         gpu: &mut GpuRenderer,
     ) -> BrowserCommand {
-        match event {
+        let browser_cmd = match event {
             WindowEvent::CloseRequested => BrowserCommand::Exit,
 
             WindowEvent::RedrawRequested => {
@@ -147,6 +267,16 @@ impl BrowserApp {
             WindowEvent::MouseInput { button, .. } => self.handle_mouse_input(button),
 
             _ => BrowserCommand::None,
+        };
+        let cmd_from_tick = self.tick();
+        match browser_cmd {
+            BrowserCommand::None => {
+                if matches!(cmd_from_tick, BrowserCommand::RequestRedraw) {
+                    self.redraw(gpu);
+                }
+                cmd_from_tick
+            }
+            _ => browser_cmd,
         }
     }
 
@@ -175,8 +305,8 @@ impl BrowserApp {
             winit::event::MouseScrollDelta::PixelDelta(pos) => -pos.y as f32,
         };
 
-        if let Some(tab) = self.active_tab_mut() {
-            if let Some((_layout, info)) = tab.layout_and_info() {
+        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+            if let Some((_layout, info)) = tab.layout_and_info_mut() {
                 if let layouter::types::NodeKind::Container {
                     scroll_offset_y, ..
                 } = &mut info.kind
@@ -212,19 +342,18 @@ impl BrowserApp {
         };
 
         match href_opt {
-            Some(href) => {
-                let _ = tab.move_to(&href);
-            }
+            Some(href) => tab.move_to(&href),
             None => return,
         }
     }
 
     /// Rebuilds the render tree and sends draw commands to the GPU.
     pub fn redraw(&mut self, gpu: &mut GpuRenderer) {
+        println!("Redrawing browser window");
         self.rebuild_render_tree();
         self.apply_draw_commands(gpu);
         if let Err(e) = gpu.render() {
-            log::error!("Render error occurred: {}", e);
+            log::error!(target: "BrowserApp::redraw", "Render error occurred: {}", e);
         }
     }
 
@@ -251,11 +380,6 @@ impl BrowserApp {
         self.window_title.clone()
     }
 
-    /// Returns a clone of the browser's network resource loader.
-    pub fn network(&self) -> Arc<BrowserResourceLoader> {
-        Arc::clone(&self.network)
-    }
-
     /// Sets the current scale factor for rendering.
     pub fn set_scale_factor(&mut self, sf: f64) {
         self.render.scale_factor = sf;
@@ -275,6 +399,7 @@ fn run_event_loop(app: BrowserApp) -> Result<()> {
     let event_loop =
         winit::event_loop::EventLoop::<crate::platform::system::State>::with_user_event()
             .build()?;
+    event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
     let mut app = App::new(app);
     event_loop.run_app(&mut app)?;
     Ok(())

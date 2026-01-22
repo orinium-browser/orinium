@@ -14,8 +14,8 @@ fn main() -> Result<()> {
 
     let mut browser = BrowserApp::default();
 
-    let mut tab = Tab::new(browser.network());
-    tab.load_from_url("resource:///test/compatibility_test.html")?;
+    let mut tab = Tab::new();
+    tab.navigate("resource:///test/compatibility_test.html".parse()?);
 
     browser.add_tab(tab);
 

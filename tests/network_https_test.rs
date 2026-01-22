@@ -9,7 +9,7 @@ fn test_https_connection() -> Result<(), Box<dyn Error + Send + Sync + 'static>>
     let url = "https://www.google.com";
     println!("Fetching URL: {}", url);
 
-    let response = network_core.fetch(url)?;
+    let response = network_core.fetch_blocking(url)?;
 
     assert!(
         response.status.is_success(),
@@ -35,10 +35,10 @@ fn test_http_and_https_comparison() -> Result<(), Box<dyn Error>> {
     let https_url = "https://httpbin.org/get";
 
     println!("Fetching HTTP URL: {}", http_url);
-    let http_response = network_core.fetch(http_url)?;
+    let http_response = network_core.fetch_blocking(http_url)?;
 
     println!("Fetching HTTPS URL: {}", https_url);
-    let https_response = network_core.fetch(https_url)?;
+    let https_response = network_core.fetch_blocking(https_url)?;
 
     assert!(http_response.status.is_success());
     assert!(https_response.status.is_success());
@@ -58,7 +58,7 @@ fn test_https_redirect() -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
     let url = "https://www.github.com";
     println!("Fetching URL with expected redirect: {}", url);
 
-    let response = network_core.fetch(url)?;
+    let response = network_core.fetch_blocking(url)?;
 
     assert!(
         response.status.is_success() || response.status.is_redirection(),
@@ -89,7 +89,7 @@ fn test_secure_site_certificate() -> Result<(), Box<dyn Error + Send + Sync + 's
     for url in &urls {
         println!("Testing secure connection to: {}", url);
 
-        let response = network_core.fetch(url)?;
+        let response = network_core.fetch_blocking(url)?;
 
         assert!(
             response.status.is_success() || response.status.is_redirection(),

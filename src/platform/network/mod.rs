@@ -21,12 +21,12 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
 pub enum NetworkCommand {
-    Fetch { url: String, tab_id: usize },
+    Fetch { url: String, msg_id: usize },
     SetConfig(NetworkConfig),
 }
 
 pub struct NetworkMessage {
-    pub tab_id: usize,
+    pub msg_id: usize,
     pub response: Result<Response, NetworkError>,
 }
 
@@ -50,17 +50,28 @@ impl NetworkCore {
     }
 
     /// 非同期送信のみ。結果は try_receive で取得
-    pub fn fetch_async(&self, url: String, tab_id: usize) {
-        let _ = self.cmd_tx.send(NetworkCommand::Fetch { url, tab_id });
+    pub fn fetch_async(&self, url: String, msg_id: usize) {
+        let _ = self.cmd_tx.send(NetworkCommand::Fetch { url, msg_id });
     }
 
     /// UIスレッドから呼ぶ: 完了しているメッセージを取り込む
     pub fn try_receive(&self) -> Vec<NetworkMessage> {
         let mut msgs = Vec::new();
         while let Ok(msg) = self.msg_rx.try_recv() {
+            println!("NetworkCore: received message for msg_id={}", msg.msg_id);
             msgs.push(msg);
         }
         msgs
+    }
+
+    pub fn fetch_blocking(&self, url: &str) -> Result<Response, NetworkError> {
+        self.fetch_async(url.to_string(), 0);
+        loop {
+            if let Some(v) = self.try_receive().into_iter().next() {
+                return v.response;
+            }
+            std::thread::yield_now();
+        }
     }
 }
 
@@ -71,10 +82,11 @@ fn spawn_network_thread(rx: Receiver<NetworkCommand>, tx: Sender<NetworkMessage>
     for cmd in rx {
         match cmd {
             NetworkCommand::SetConfig(cfg) => core.set_network_config(cfg),
-            NetworkCommand::Fetch { url, tab_id } => {
+            NetworkCommand::Fetch { url, msg_id } => {
                 let res = core.fetch_blocking(&url);
+                println!("NetworkCore: fetched URL for msg_id={}", msg_id);
                 let _ = tx.send(NetworkMessage {
-                    tab_id,
+                    msg_id,
                     response: res,
                 });
             }
