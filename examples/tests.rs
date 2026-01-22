@@ -9,7 +9,7 @@ use orinium_browser::{
 use colored::*;
 
 use anyhow::Result;
-use std::{env, sync::Arc};
+use std::{env, rc::Rc};
 
 fn main() -> Result<()> {
     env_logger::init();
