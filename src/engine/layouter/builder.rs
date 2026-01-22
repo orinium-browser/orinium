@@ -605,6 +605,11 @@ fn resolve_css_color(css_color: &CssValue) -> Option<Color> {
             "transparent" => Some(Color(0, 0, 0, 0)),
             "initial" => Some(Color(0, 0, 0, 255)),
 
+            // CSS Level 4 system colors (approximate)
+            // stub implementations
+            "buttonface" => Some(Color(240, 240, 240, 255)),
+            "buttontext" => Some(Color(0, 0, 0, 255)),
+
             _ => {
                 log::error!(
                     target: "Layouter",
