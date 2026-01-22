@@ -346,7 +346,6 @@ impl BrowserApp {
 
     /// Rebuilds the render tree and sends draw commands to the GPU.
     pub fn redraw(&mut self, gpu: &mut GpuRenderer) {
-        println!("Redrawing browser window");
         self.rebuild_render_tree();
         self.apply_draw_commands(gpu);
         if let Err(e) = gpu.render() {
