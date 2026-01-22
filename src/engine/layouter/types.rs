@@ -73,6 +73,9 @@ pub struct ContainerStyle {
 //           Text
 // =========================
 
+/// TODO
+/// - Add cache logic
+#[allow(dead_code)]
 #[derive(Hash)]
 struct TextMeasureHashKey<'a> {
     text: &'a str,
