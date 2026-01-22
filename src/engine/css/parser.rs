@@ -767,14 +767,28 @@ impl<'a> Parser<'a> {
 
         while let Some(token) = iter.next() {
             log::debug!(target: "CssParser", "parse_tokens_to_css_value: token={:?}", token);
+
             match token {
                 Token::Ident(s) => values.push(CssValue::Keyword(s)),
-                Token::Delim(',') | Token::Delim('(') | Token::Delim(')') => {
+
+                Token::Delim(',') => {
+                    // List separator（後段で List にする）
                     continue;
                 }
-                Token::Delim(c) => values.push(CssValue::Keyword(c.into())),
+
+                Token::Delim('(') | Token::Delim(')') => {
+                    // Function の構文用なので無視
+                    continue;
+                }
+
+                Token::Delim(c) => {
+                    values.push(CssValue::Keyword(c.to_string()));
+                }
+
                 Token::Number(n) => values.push(CssValue::Number(n)),
+
                 Token::String(s) => values.push(CssValue::String(s)),
+
                 Token::Dimension(value, unit) => {
                     let unit = match unit.as_str() {
                         "px" => Unit::Px,
@@ -787,10 +801,11 @@ impl<'a> Parser<'a> {
                     };
                     values.push(CssValue::Length(value, unit));
                 }
+
                 Token::Hash(s) => values.push(CssValue::Color(s)),
 
                 Token::Function(name) => {
-                    // Collect args
+                    // () の中をそのまま集める
                     let mut depth = 0;
                     let mut func_tokens = vec![];
 
@@ -801,47 +816,23 @@ impl<'a> Parser<'a> {
                                 func_tokens.push(tok);
                             }
                             Token::Delim(')') => {
+                                func_tokens.push(tok);
+                                depth -= 1;
                                 if depth == 0 {
                                     break;
-                                } else {
-                                    depth -= 1;
-                                    func_tokens.push(tok);
                                 }
                             }
                             _ => func_tokens.push(tok),
                         }
                     }
 
-                    let mut args = vec![];
-                    let mut buffer = vec![];
+                    let arg_value = Self::parse_tokens_to_css_value(func_tokens)
+                        .map_err(|e| e.with_context("parse function args"))?;
 
-                    for t in func_tokens {
-                        if t == Token::Delim(',') {
-                            if !buffer.is_empty() {
-                                let val = Self::parse_tokens_to_css_value(buffer).map_err(|e| {
-                                    e.with_context(
-                                        "parse_tokens_to_css_value: failed to parse function arg",
-                                    )
-                                })?;
-                                match val {
-                                    CssValue::List(list) => args.extend(list),
-                                    other => args.push(other),
-                                }
-                                buffer = vec![];
-                            }
-                        } else {
-                            buffer.push(t);
-                        }
-                    }
-
-                    // 最後のバッファを処理
-                    if !buffer.is_empty() {
-                        let val = Self::parse_tokens_to_css_value(buffer)?;
-                        match val {
-                            CssValue::List(list) => args.extend(list),
-                            other => args.push(other),
-                        }
-                    }
+                    let args = match arg_value {
+                        CssValue::List(list) => list,
+                        other => vec![other],
+                    };
 
                     values.push(CssValue::Function(name, args));
                 }
@@ -850,11 +841,12 @@ impl<'a> Parser<'a> {
             }
         }
 
-        if values.len() == 1 {
-            Ok(values.into_iter().next().unwrap())
-        } else {
-            Ok(CssValue::List(values))
-        }
+        // 複数値なら List、単数ならそのまま
+        Ok(match values.len() {
+            0 => CssValue::Keyword(String::new()),
+            1 => values.remove(0),
+            _ => CssValue::List(values),
+        })
     }
 }
 
