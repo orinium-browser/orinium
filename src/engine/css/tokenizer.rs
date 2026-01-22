@@ -328,7 +328,10 @@ fn is_ident_continue(c: char) -> bool {
 /// Returns true if the character is a CSS number start.
 ///
 /// - ASCII digits (0-9)
-/// - Dot (`.`)
+/// - A dot followed by a digit (e.g. `.5`)
+/// - A hyphen followed by a digit or dot (e.g. `-1`, `-.5`)
 fn is_number_start(current: char, next: Option<char>) -> bool {
-    current.is_ascii_digit() || (current == '.' && matches!(next, Some(c) if c.is_ascii_digit()))
+    current.is_ascii_digit()
+        || (current == '.' && matches!(next, Some(c) if c.is_ascii_digit()))
+        || (current == '-' && matches!(next, Some(c) if c.is_ascii_digit() || c == '.'))
 }
