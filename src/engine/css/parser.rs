@@ -766,8 +766,13 @@ impl<'a> Parser<'a> {
         let mut iter = tokens.into_iter().peekable();
 
         while let Some(token) = iter.next() {
+            log::debug!(target: "CssParser", "parse_tokens_to_css_value: token={:?}", token);
             match token {
                 Token::Ident(s) => values.push(CssValue::Keyword(s)),
+                Token::Delim(',') | Token::Delim('(') | Token::Delim(')') => {
+                    continue;
+                }
+                Token::Delim(c) => values.push(CssValue::Keyword(c.into())),
                 Token::Number(n) => values.push(CssValue::Number(n)),
                 Token::String(s) => values.push(CssValue::String(s)),
                 Token::Dimension(value, unit) => {
@@ -839,10 +844,6 @@ impl<'a> Parser<'a> {
                     }
 
                     values.push(CssValue::Function(name, args));
-                }
-
-                Token::Delim(',') => {
-                    continue;
                 }
 
                 _ => continue,
