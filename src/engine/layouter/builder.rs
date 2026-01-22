@@ -10,7 +10,7 @@ use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
-use ui_layout::{Display, FlexDirection, LayoutNode, Length, Style};
+use ui_layout::{AlignItems, Display, FlexDirection, JustifyContent, LayoutNode, Length, Style};
 
 use super::css_resolver::ResolvedStyles;
 use super::types::{
@@ -484,21 +484,35 @@ fn apply_declaration(
         /* ======================
          * Flex
          * ====================== */
-        ("flex-direction", CssValue::Keyword(v)) if v == "row" => {
-            if let Display::Flex {
-                ref mut flex_direction,
-            } = style.display
-            {
-                *flex_direction = FlexDirection::Row;
+        ("flex-direction", CssValue::Keyword(v)) => {
+            if let Display::Flex { flex_direction } = &mut style.display {
+                *flex_direction = match v.as_str() {
+                    "row" => FlexDirection::Row,
+                    "column" => FlexDirection::Column,
+                    _ => return None,
+                };
             }
         }
-        ("flex-direction", CssValue::Keyword(v)) if v == "column" => {
-            if let Display::Flex {
-                ref mut flex_direction,
-            } = style.display
-            {
-                *flex_direction = FlexDirection::Column;
-            }
+
+        ("justify-content", CssValue::Keyword(v)) => {
+            style.justify_content = match v.as_str() {
+                "flex-start" => JustifyContent::Start,
+                "center" => JustifyContent::Center,
+                "flex-end" => JustifyContent::End,
+                "space-between" => JustifyContent::SpaceBetween,
+                "space-around" => JustifyContent::SpaceAround,
+                _ => return None,
+            };
+        }
+
+        ("align-items", CssValue::Keyword(v)) => {
+            style.align_items = match v.as_str() {
+                "stretch" => AlignItems::Stretch,
+                "flex-start" => AlignItems::Start,
+                "center" => AlignItems::Center,
+                "flex-end" => AlignItems::End,
+                _ => return None,
+            };
         }
 
         _ => {}
