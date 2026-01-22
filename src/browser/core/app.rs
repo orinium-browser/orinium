@@ -339,9 +339,8 @@ impl BrowserApp {
             }
         };
 
-        match href_opt {
-            Some(href) => tab.move_to(&href),
-            None => (),
+        if let Some(href) = href_opt {
+            tab.move_to(&href)
         }
     }
 
@@ -405,10 +404,7 @@ fn run_event_loop(app: BrowserApp) -> Result<()> {
 
 fn configure_winit_backend_forced_x11() {
     let current = env::var("WINIT_UNIX_BACKEND").ok();
-    let should_force_x11 = match current.as_deref() {
-        Some("x11") => false,
-        _ => true,
-    };
+    let should_force_x11 = !matches!(current.as_deref(), Some("x11"));
 
     if should_force_x11 {
         unsafe {
@@ -431,10 +427,7 @@ fn configure_winit_backend_for_wslg() {
     }
 
     let current = env::var("WINIT_UNIX_BACKEND").ok();
-    let should_force_x11 = match current.as_deref() {
-        Some("x11") => false,
-        _ => true,
-    };
+    let should_force_x11 = !matches!(current.as_deref(), Some("x11"));
 
     if should_force_x11 {
         unsafe {
