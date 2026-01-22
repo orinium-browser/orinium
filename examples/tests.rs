@@ -2,6 +2,7 @@ use orinium_browser::{
     browser::{BrowserApp, Tab, core::resource_loader::BrowserResourceLoader},
     engine::html::parser::Parser as HtmlParser,
     html::HtmlNodeType,
+    network::NetworkConfig,
     platform::network::NetworkCore,
 };
 
@@ -10,8 +11,7 @@ use colored::*;
 use anyhow::Result;
 use std::{env, sync::Arc};
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     env_logger::init();
 
     let args: Vec<String> = env::args().collect::<Vec<String>>();
@@ -71,7 +71,9 @@ async fn main() -> Result<()> {
                     println!("Parsing DOM for URL: {}", url);
                     let net = NetworkCore::new();
                     let loader = BrowserResourceLoader::new(Some(Arc::new(net)));
-                    let resp = loader.fetch(url).await.expect("Failed to fetch URL");
+                    let resp = loader
+                        .fetch_blocking(url.clone())
+                        .expect("Failed to fetch URL");
                     let html = String::from_utf8_lossy(&resp.body).to_string();
                     println!(
                         "Fetched HTML (first 50 chars):\n{}",
@@ -120,7 +122,9 @@ async fn main() -> Result<()> {
                     println!("Parsing CSSOM for URL: {}", url);
                     let net = NetworkCore::new();
                     let loader = BrowserResourceLoader::new(Some(Arc::new(net)));
-                    let resp = loader.fetch(url).await.expect("Failed to fetch URL");
+                    let resp = loader
+                        .fetch_blocking(url.clone())
+                        .expect("Failed to fetch URL");
                     let css = String::from_utf8_lossy(&resp.body).to_string();
                     println!(
                         "Fetched CSS (first 50 chars):\n{}",
@@ -149,7 +153,11 @@ async fn main() -> Result<()> {
                     let url = &args[2];
                     println!("Sending request to URL: {}", url);
                     let net = NetworkCore::new();
-                    match net.send_request(url, hyper::Method::GET).await {
+                    net.set_network_config(NetworkConfig {
+                        follow_redirects: false,
+                        ..Default::default()
+                    });
+                    match net.fetch_blocking(url) {
                         Ok(resp) => {
                             println!("Response Status: {}", resp.status);
                             println!("Response Headers:");
@@ -173,7 +181,7 @@ async fn main() -> Result<()> {
                     let url = &args[2];
                     println!("Fetching URL: {}", url);
                     let net = NetworkCore::new();
-                    match net.fetch_url(url).await {
+                    match net.fetch_blocking(url) {
                         Ok(resp) => {
                             println!("Response Reason_phrase: {}", resp.reason_phrase);
                             println!("Response Headers:");
@@ -199,14 +207,12 @@ async fn main() -> Result<()> {
 
                     let mut browser = BrowserApp::default();
 
-                    let net = browser.network();
-
-                    let mut tab = Tab::new(net);
-                    tab.load_from_url(&url).await?;
+                    let mut tab = Tab::new();
+                    tab.navigate(url.parse()?);
 
                     browser.add_tab(tab);
 
-                    browser.run().await?
+                    browser.run()?
                 } else {
                     eprintln!("Please provide a URL for simple rendering test.");
                 }

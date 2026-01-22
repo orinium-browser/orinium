@@ -2,8 +2,7 @@ use anyhow::Result;
 use orinium_browser::browser::{BrowserApp, Tab};
 use std::env;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     let _font_path = if args.len() > 1 {
         Some(args[1].clone())
@@ -15,13 +14,12 @@ async fn main() -> Result<()> {
 
     let mut browser = BrowserApp::default();
 
-    let mut tab = Tab::new(browser.network());
-    tab.load_from_url("resource:///test/compatibility_test.html")
-        .await?;
+    let mut tab = Tab::new();
+    tab.navigate("resource:///test/compatibility_test.html".parse()?);
 
     browser.add_tab(tab);
 
-    browser.run().await?;
+    browser.run()?;
 
     Ok(())
 }
