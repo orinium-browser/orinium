@@ -772,7 +772,7 @@ impl<'a> Parser<'a> {
                 Token::Ident(s) => values.push(CssValue::Keyword(s)),
 
                 Token::Delim(',') => {
-                    // List separator（後段で List にする）
+                    // List separator
                     continue;
                 }
 
