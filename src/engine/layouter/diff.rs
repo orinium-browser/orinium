@@ -1,4 +1,5 @@
 //! Minimal diff utilities for layout and render-info trees.
+#![allow(dead_code)]
 
 use crate::engine::layouter::types::InfoNode;
 use ui_layout::LayoutNode;
