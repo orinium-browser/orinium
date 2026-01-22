@@ -77,6 +77,14 @@ impl CssResolver {
                 }
             }
 
+            CssValue::Function(name, args) => {
+                let resolved_args = args
+                    .iter()
+                    .map(|v| Self::resolve_var(v, custom_props))
+                    .collect::<Option<Vec<_>>>()?;
+                Some(CssValue::Function(name.clone(), resolved_args))
+            }
+
             CssValue::List(list) => {
                 let resolved = list
                     .iter()
