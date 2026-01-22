@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::collections::{HashMap, hash_map::DefaultHasher};
 use std::env;
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use url::Url;
 use winit::event::WindowEvent;
@@ -105,7 +105,7 @@ impl BrowserApp {
 
     /// Creates a new browser instance with the given window size and title.
     pub fn new(window_size: (u32, u32), window_title: String) -> Self {
-        let network = BrowserResourceLoader::new(Some(Arc::new(NetworkCore::new())));
+        let network = BrowserResourceLoader::new(Some(Rc::new(NetworkCore::new())));
 
         Self {
             tabs: vec![],

@@ -70,7 +70,7 @@ fn main() -> Result<()> {
                     let url = &args[2];
                     println!("Parsing DOM for URL: {}", url);
                     let net = NetworkCore::new();
-                    let loader = BrowserResourceLoader::new(Some(Arc::new(net)));
+                    let loader = BrowserResourceLoader::new(Some(Rc::new(net)));
                     let resp = loader
                         .fetch_blocking(url.clone())
                         .expect("Failed to fetch URL");
@@ -121,7 +121,7 @@ fn main() -> Result<()> {
                     let url = &args[2];
                     println!("Parsing CSSOM for URL: {}", url);
                     let net = NetworkCore::new();
-                    let loader = BrowserResourceLoader::new(Some(Arc::new(net)));
+                    let loader = BrowserResourceLoader::new(Some(Rc::new(net)));
                     let resp = loader
                         .fetch_blocking(url.clone())
                         .expect("Failed to fetch URL");

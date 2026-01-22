@@ -1,17 +1,17 @@
 use crate::network::{NetworkCore, NetworkError};
 use anyhow::{Result, anyhow};
 use hyper::StatusCode;
-use std::{fmt, sync::Arc};
+use std::{fmt, rc::Rc};
 use url::Url;
 
 /// Unified resource loader for `resource:///` and HTTP/HTTPS URLs
 pub struct BrowserResourceLoader {
-    network: Option<Arc<NetworkCore>>,
+    network: Option<Rc<NetworkCore>>,
     immediate_pool: Vec<BrowserNetworkMessage>,
 }
 
 impl BrowserResourceLoader {
-    pub fn new(network: Option<Arc<NetworkCore>>) -> Self {
+    pub fn new(network: Option<Rc<NetworkCore>>) -> Self {
         Self {
             network,
             immediate_pool: vec![],
