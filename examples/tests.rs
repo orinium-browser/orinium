@@ -72,7 +72,7 @@ fn main() -> Result<()> {
                     let net = NetworkCore::new();
                     let loader = BrowserResourceLoader::new(Some(Rc::new(net)));
                     let resp = loader
-                        .fetch_blocking(url.clone())
+                        .fetch_blocking(url.parse()?)
                         .expect("Failed to fetch URL");
                     let html = String::from_utf8_lossy(&resp.body).to_string();
                     println!(
@@ -123,7 +123,7 @@ fn main() -> Result<()> {
                     let net = NetworkCore::new();
                     let loader = BrowserResourceLoader::new(Some(Rc::new(net)));
                     let resp = loader
-                        .fetch_blocking(url.clone())
+                        .fetch_blocking(url.parse()?)
                         .expect("Failed to fetch URL");
                     let css = String::from_utf8_lossy(&resp.body).to_string();
                     println!(

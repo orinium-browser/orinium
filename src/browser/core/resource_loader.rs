@@ -39,9 +39,17 @@ impl BrowserResourceLoader {
         }
     }
 
-    pub fn fetch_blocking(&self, url: String) -> Result<BrowserResponse> {
-        if let Some(net) = &self.network {
-            net.fetch_blocking(&url)
+    pub fn fetch_blocking(&self, url: Url) -> Result<BrowserResponse> {
+        if url.scheme() == ("resource") {
+            let data = ResourceURI::load(url.as_ref());
+            data.map(|data| BrowserResponse {
+                url: url.to_string(),
+                status: StatusCode::OK,
+                body: data,
+                headers: vec![],
+            })
+        } else if let Some(net) = &self.network {
+            net.fetch_blocking(url.as_str())
                 .map(|resp| BrowserResponse {
                     url: resp.url,
                     status: resp.status,
