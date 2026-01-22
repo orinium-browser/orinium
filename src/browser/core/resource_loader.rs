@@ -18,7 +18,7 @@ impl BrowserResourceLoader {
         }
     }
 
-    /// 非同期 fetch: URL と Tab ID を送信するだけ
+    /// 非同期 fetch: URL と ID を送信するだけ
     pub fn fetch_async(&mut self, url: Url, id: usize) {
         if url.scheme() == ("resource") {
             let data = ResourceURI::load(url.as_ref());
