@@ -64,9 +64,58 @@ impl TryFrom<(u8, u8, u8, f32)> for Color {
 //        Cantainer
 // =========================
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BorderStyle {
+    #[default]
+    None,
+    Solid,
+    Dashed,
+    Dotted,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BorderColor {
+    pub top: Color,
+    pub right: Color,
+    pub bottom: Color,
+    pub left: Color,
+}
+
+impl Default for BorderColor {
+    fn default() -> Self {
+        let c = Color(0, 0, 0, 255);
+        Self {
+            top: c,
+            right: c,
+            bottom: c,
+            left: c,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct BorderStyles {
+    pub top: BorderStyle,
+    pub right: BorderStyle,
+    pub bottom: BorderStyle,
+    pub left: BorderStyle,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContainerStyle {
     pub background_color: Color,
+    pub border_color: BorderColor,
+    pub border_style: BorderStyles,
+}
+
+impl Default for ContainerStyle {
+    fn default() -> Self {
+        Self {
+            background_color: Color(0, 0, 0, 0),
+            border_color: BorderColor::default(),
+            border_style: BorderStyles::default(),
+        }
+    }
 }
 
 // =========================

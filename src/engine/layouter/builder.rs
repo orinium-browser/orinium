@@ -16,8 +16,8 @@ use ui_layout::{
 
 use super::css_resolver::ResolvedStyles;
 use super::types::{
-    Color, ContainerStyle, FontStyle, FontWeight, InfoNode, MeasureCache, NodeKind, TextAlign,
-    TextDecoration, TextStyle,
+    BorderStyle, Color, ContainerStyle, FontStyle, FontWeight, InfoNode, MeasureCache, NodeKind,
+    TextAlign, TextDecoration, TextStyle,
 };
 
 /// Builds a layout tree (`LayoutNode`) and a render info tree (`InfoNode`) from the DOM.
@@ -75,9 +75,7 @@ pub fn build_layout_and_info(
     let mut style = Style::default();
 
     let mut text_style = parent_text_style;
-    let mut container_style = ContainerStyle {
-        background_color: Color(0, 0, 0, 0),
-    };
+    let mut container_style = ContainerStyle::default();
 
     /* -----------------------------
        Apply resolved CSS
@@ -461,6 +459,21 @@ fn apply_declaration(
                 "border-box" => BoxSizing::BorderBox,
                 _ => BoxSizing::ContentBox,
             };
+        }
+
+        ("border-style", CssValue::Keyword(v)) => {
+            let s = match v.as_str() {
+                "none" => BorderStyle::None,
+                "solid" => BorderStyle::Solid,
+                "dashed" => BorderStyle::Dashed,
+                "dotted" => BorderStyle::Dotted,
+                _ => BorderStyle::None,
+            };
+
+            container_style.border_style.top = s;
+            container_style.border_style.right = s;
+            container_style.border_style.bottom = s;
+            container_style.border_style.left = s;
         }
 
         ("margin", v) => {
