@@ -114,6 +114,10 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
                 color: style.background_color,
             });
             commands.push(DrawCommand::PushTransform {
+                dx: layout.box_model.content_box.x - rect.x,
+                dy: layout.box_model.content_box.y - rect.y,
+            });
+            commands.push(DrawCommand::PushTransform {
                 dx: *scroll_offset_x,
                 dy: -*scroll_offset_y,
             });
@@ -136,6 +140,10 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
                 height: rect.height,
                 color: style.background_color,
             });
+            commands.push(DrawCommand::PushTransform {
+                dx: layout.box_model.content_box.x - rect.x,
+                dy: layout.box_model.content_box.y - rect.y,
+            });
         }
     }
 
@@ -145,9 +153,11 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
 
     if matches!(info.kind, NodeKind::Container { .. }) {
         commands.push(DrawCommand::PopTransform);
+        commands.push(DrawCommand::PopTransform);
         commands.push(DrawCommand::PopClip);
         commands.push(DrawCommand::PopTransform);
     } else if matches!(info.kind, NodeKind::Link { .. }) {
+        commands.push(DrawCommand::PopTransform);
         commands.push(DrawCommand::PopClip);
         commands.push(DrawCommand::PopTransform);
     }
