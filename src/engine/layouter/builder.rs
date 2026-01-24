@@ -10,7 +10,9 @@ use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
-use ui_layout::{AlignItems, Display, FlexDirection, JustifyContent, LayoutNode, Length, Style};
+use ui_layout::{
+    AlignItems, BoxSizing, Display, FlexDirection, JustifyContent, LayoutNode, Length, Style,
+};
 
 use super::css_resolver::ResolvedStyles;
 use super::types::{
@@ -453,6 +455,14 @@ fn apply_declaration(
         /* ======================
          * Box Model
          * ====================== */
+        ("box-sizing", CssValue::Keyword(v)) => {
+            style.box_sizing = match v.as_str() {
+                "content-box" => BoxSizing::ContentBox,
+                "border-box" => BoxSizing::BorderBox,
+                _ => BoxSizing::ContentBox,
+            };
+        }
+
         ("margin", v) => {
             expand_box(v, text_style, &resolve_css_len, |t, r, b, l| {
                 style.spacing.margin_top = t;
