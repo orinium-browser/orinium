@@ -12,7 +12,7 @@ pub type HitPath<'a> = Vec<HitItem<'a>>;
 
 /// x, y: グローバル座標
 pub fn hit_test<'a>(layout: &'a LayoutNode, info: &'a InfoNode, x: f32, y: f32) -> HitPath<'a> {
-    let rect = layout.rect;
+    let rect = layout.box_model.padding_box;
 
     // 1. rect 外ならヒットなし
     if x < rect.x || y < rect.y || x > rect.x + rect.width || y > rect.y + rect.height {

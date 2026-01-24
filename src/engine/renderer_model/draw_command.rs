@@ -46,7 +46,7 @@ pub enum DrawCommand {
 pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawCommand> {
     let mut commands = Vec::new();
 
-    let rect = layout.rect;
+    let rect = layout.box_model.padding_box;
 
     let abs_x = rect.x;
     let abs_y = rect.y;
