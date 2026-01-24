@@ -437,15 +437,6 @@ fn apply_declaration(
                 style.spacing.margin_left = l;
             })?;
         }
-        ("padding", v) => {
-            expand_box(v, text_style, &resolve_css_len, |t, r, b, l| {
-                style.spacing.padding_top = t;
-                style.spacing.padding_right = r;
-                style.spacing.padding_bottom = b;
-                style.spacing.padding_left = l;
-            })?;
-        }
-
         ("margin-top", _) => {
             style.spacing.margin_top = resolve_css_len(value, text_style)?;
         }
@@ -457,6 +448,48 @@ fn apply_declaration(
         }
         ("margin-left", _) => {
             style.spacing.margin_left = resolve_css_len(value, text_style)?;
+        }
+
+        ("broder", v) => {
+            expand_box(v, text_style, &resolve_css_len, |t, r, b, l| {
+                style.spacing.border_top = t;
+                style.spacing.border_right = r;
+                style.spacing.border_bottom = b;
+                style.spacing.border_left = l;
+            })?;
+        }
+        ("border-top", _) => {
+            style.spacing.border_top = resolve_css_len(value, text_style)?;
+        }
+        ("border-right", _) => {
+            style.spacing.border_right = resolve_css_len(value, text_style)?;
+        }
+        ("border-bottom", _) => {
+            style.spacing.border_bottom = resolve_css_len(value, text_style)?;
+        }
+        ("border-left", _) => {
+            style.spacing.border_left = resolve_css_len(value, text_style)?;
+        }
+
+        ("padding", v) => {
+            expand_box(v, text_style, &resolve_css_len, |t, r, b, l| {
+                style.spacing.padding_top = t;
+                style.spacing.padding_right = r;
+                style.spacing.padding_bottom = b;
+                style.spacing.padding_left = l;
+            })?;
+        }
+        ("padding-top", _) => {
+            style.spacing.padding_top = resolve_css_len(value, text_style)?;
+        }
+        ("padding-right", _) => {
+            style.spacing.padding_right = resolve_css_len(value, text_style)?;
+        }
+        ("padding-bottom", _) => {
+            style.spacing.padding_bottom = resolve_css_len(value, text_style)?;
+        }
+        ("padding-left", _) => {
+            style.spacing.padding_left = resolve_css_len(value, text_style)?;
         }
 
         /* ======================
