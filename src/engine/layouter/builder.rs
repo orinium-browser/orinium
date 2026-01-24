@@ -165,6 +165,10 @@ pub fn build_layout_and_info(
     // block 要素の直下に text ノードが存在する場合、
     // 親を flex(row) として扱うことで inline flow を暫定的に再現する。
     // 将来的には LineBox 実装に置き換える。
+    //
+    // Table 要素も未実装。
+    // Table 要素は暫定的に Flex に置き換える。
+    // 将来的には TableLayout 実装に置き換える。
     let mut layout_children = Vec::new();
     let mut info_children = Vec::new();
 
@@ -183,6 +187,26 @@ pub fn build_layout_and_info(
             style.display = Display::Flex {
                 flex_direction: FlexDirection::Row,
             };
+        }
+
+        // Table 要素は暫定的に Flex に置き換える。
+        match &html_node {
+            HtmlNodeType::Element { tag_name, .. }
+                if tag_name == "table"
+                    || tag_name == "tbody"
+                    || tag_name == "thead"
+                    || tag_name == "tfoot" =>
+            {
+                style.display = Display::Flex {
+                    flex_direction: FlexDirection::Column,
+                };
+            }
+            HtmlNodeType::Element { tag_name, .. } if tag_name == "tr" => {
+                style.display = Display::Flex {
+                    flex_direction: FlexDirection::Row,
+                };
+            }
+            _ => {}
         }
 
         for child_dom in dom.borrow().children() {
