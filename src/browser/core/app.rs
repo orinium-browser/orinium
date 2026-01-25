@@ -327,7 +327,8 @@ impl BrowserApp {
             if let Some(hit) = hit_path.iter().find(|e| {
                 matches!(
                     e.info.kind,
-                    layouter::types::NodeKind::Container { ref role, .. } if matches!(role, layouter::types::ContainerRole::Link { .. })
+                    layouter::types::NodeKind::Container { ref role, .. }
+                        if matches!(role, layouter::types::ContainerRole::Link { .. })
                 )
             }) {
                 if let layouter::types::NodeKind::Container { role, .. } = &hit.info.kind
