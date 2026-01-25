@@ -37,10 +37,10 @@ impl CssResolver {
 
         // 1. custom property を先に集める
         for child in rule_node.children() {
-            if let CssNodeType::Declaration { name, value } = &child.node() {
-                if name.starts_with("--") {
-                    custom_props.insert(name.clone(), value.clone());
-                }
+            if let CssNodeType::Declaration { name, value } = &child.node()
+                && name.starts_with("--")
+            {
+                custom_props.insert(name.clone(), value.clone());
             }
         }
 
@@ -63,7 +63,7 @@ impl CssResolver {
         match value {
             CssValue::Function(name, args) if name == "var" => {
                 // var(--x [, fallback])
-                let var_name = match args.get(0) {
+                let var_name = match args.first() {
                     Some(CssValue::Keyword(name)) => name,
                     _ => return None,
                 };
