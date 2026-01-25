@@ -5,6 +5,12 @@ pub struct InfoNode {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum ContainerRole {
+    Normal,
+    Link { href: String },
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum NodeKind {
     Container {
         scroll_x: bool,
@@ -12,15 +18,12 @@ pub enum NodeKind {
         scroll_offset_x: f32,
         scroll_offset_y: f32,
         style: ContainerStyle,
+        role: ContainerRole,
     },
     Text {
         text: String,
         style: TextStyle,
         measured: Option<MeasureCache>,
-    },
-    Link {
-        href: String,
-        style: ContainerStyle,
     },
 }
 

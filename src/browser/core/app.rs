@@ -324,11 +324,15 @@ impl BrowserApp {
         };
 
         let href_opt = {
-            if let Some(hit) = hit_path
-                .iter()
-                .find(|e| matches!(e.info.kind, layouter::types::NodeKind::Link { .. }))
-            {
-                if let layouter::types::NodeKind::Link { href, .. } = &hit.info.kind {
+            if let Some(hit) = hit_path.iter().find(|e| {
+                matches!(
+                    e.info.kind,
+                    layouter::types::NodeKind::Container { ref role, .. } if matches!(role, layouter::types::ContainerRole::Link { .. })
+                )
+            }) {
+                if let layouter::types::NodeKind::Container { role, .. } = &hit.info.kind
+                    && let layouter::types::ContainerRole::Link { href } = role
+                {
                     println!("Link clicked: {}", href);
                     Some(href.clone())
                 } else {

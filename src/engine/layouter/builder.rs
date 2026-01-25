@@ -16,8 +16,8 @@ use ui_layout::{
 
 use super::css_resolver::ResolvedStyles;
 use super::types::{
-    BorderStyle, Color, ContainerStyle, FontStyle, FontWeight, InfoNode, MeasureCache, NodeKind,
-    TextAlign, TextDecoration, TextStyle,
+    BorderStyle, Color, ContainerRole, ContainerStyle, FontStyle, FontWeight, InfoNode,
+    MeasureCache, NodeKind, TextAlign, TextDecoration, TextStyle,
 };
 
 /// Builds a layout tree (`LayoutNode`) and a render info tree (`InfoNode`) from the DOM.
@@ -142,9 +142,13 @@ pub fn build_layout_and_info(
         && name == "a"
         && let Some(href) = html_node.get_attr("href")
     {
-        NodeKind::Link {
-            href,
+        NodeKind::Container {
+            scroll_x: false,
+            scroll_y: false,
+            scroll_offset_x: 0.0,
+            scroll_offset_y: 0.0,
             style: container_style,
+            role: ContainerRole::Link { href },
         }
     } else {
         NodeKind::Container {
@@ -153,6 +157,7 @@ pub fn build_layout_and_info(
             scroll_offset_x: 0.0,
             scroll_offset_y: 0.0,
             style: container_style,
+            role: ContainerRole::Normal,
         }
     };
 
