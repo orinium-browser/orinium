@@ -28,7 +28,7 @@ rustls-native-certs = "0.8.3"
 tokio-rustls = "0.26.4"
 hyper = { version = "1", features = ["client", "http1", "http2"] }
 http-body-util = "0.1"
-hyper-util = { version = "0.1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
 image = "0.25.9"
 ui_layout = "0.8.0"
 
