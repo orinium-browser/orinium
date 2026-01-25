@@ -206,7 +206,11 @@ impl BrowserApp {
                 return;
             };
 
+            use std::time::Instant;
+            let start = Instant::now();
             tab.relayout(viewport);
+            let duration = start.elapsed();
+            println!("Relayout took: {:?}", duration);
 
             let Some((layout, info)) = tab.layout_and_info() else {
                 println!("No layout/info available for active tab");
