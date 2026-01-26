@@ -1,5 +1,6 @@
 use crate::{
-    browser::core::resource_loader::BrowserNetworkError, engine::layouter::types::InfoNode,
+    browser::core::resource_loader::BrowserNetworkError,
+    engine::{html::HtmlNodeType, layouter::types::InfoNode, tree::TreeNode},
 };
 use ui_layout::LayoutNode;
 use url::Url;
@@ -9,6 +10,16 @@ pub use super::webview::{FetchKind, WebView, WebViewTask};
 pub enum TabTask {
     Fetch { url: Url, kind: FetchKind },
     NeedsRedraw,
+}
+
+enum TabError {
+    NetworkError(BrowserNetworkError),
+}
+
+enum TabState {
+    Loading,
+    Loaded,
+    Error(TabError),
 }
 
 /// Tab はブラウザで開かれた 1 つのページを表す構造体です。
@@ -27,6 +38,7 @@ pub struct Tab {
     base_url: Option<Url>,
     docment_url: Option<Url>,
     webview: Option<WebView>,
+    state: TabState,
 }
 
 impl Default for Tab {
@@ -42,6 +54,7 @@ impl Tab {
             base_url: None,
             docment_url: None,
             webview: None,
+            state: TabState::Loading,
         }
     }
 
@@ -96,6 +109,24 @@ impl Tab {
         let base_url = wv.base_url().unwrap().clone();
         println!("HTML fetched, base_url={}", base_url);
         self.base_url = Some(base_url);
+
+        if let TabState::Error(TabError::NetworkError(err)) = &self.state {
+            let error_message_element = wv
+                .document_info()
+                .unwrap()
+                .dom
+                .get_elements_by_class_name("error-message");
+            let error_message_element = error_message_element.iter().next().unwrap();
+            let new_child =
+                TreeNode::new(HtmlNodeType::Text(format!("Failed to load page: {}", err)));
+            TreeNode::replace_child(error_message_element, 0, new_child);
+
+            // Update page to show error message
+            // This is a stub implementation for now as you can see in WebView.update_page().
+            wv.update_page();
+        } else {
+            self.state = TabState::Loaded;
+        }
     }
 
     pub fn on_fetch_succeeded_css(&mut self, css: String) {
@@ -106,14 +137,18 @@ impl Tab {
         wv.on_css_fetched(css);
     }
 
-    /// Stub
-    pub fn on_fetch_failed(&mut self, _err: BrowserNetworkError) {}
+    /// Display error page on fetch failure
+    pub fn on_fetch_failed(&mut self, err: BrowserNetworkError) {
+        self.navigate("resource:///error.html".parse().unwrap());
+        self.state = TabState::Error(TabError::NetworkError(err));
+    }
 
     pub fn navigate(&mut self, url: Url) {
         self.docment_url = Some(url.clone());
         let mut webview = WebView::new();
         webview.navigate();
         self.webview = Some(webview);
+        self.state = TabState::Loading;
     }
 
     pub fn move_to(&mut self, href: &str) {

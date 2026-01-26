@@ -50,11 +50,11 @@ pub struct WebView {
     needs_redraw: bool,
 }
 
-struct DocumentInfo {
+pub struct DocumentInfo {
     document_url: Url,
     base_url: Url,
     title: String,
-    dom: DomTree,
+    pub dom: DomTree,
 }
 
 struct ParsedDocument {
@@ -167,6 +167,15 @@ impl WebView {
         }
     }
 
+    /// Update page (e.g. DOM changed)
+    ///
+    /// This is a stub method for now.
+    pub fn update_page(&mut self) {
+        let measurer = PlatformTextMeasurer::new().unwrap();
+
+        self.update_layout_and_info(measurer);
+    }
+
     fn apply_css_and_relayout(&mut self) {
         self.resolved_styles
             .extend(resolve_all_css(&self.loaded_css));
@@ -227,6 +236,11 @@ impl WebView {
 
     pub fn layout_and_info_mut(&mut self) -> Option<(&LayoutNode, &mut InfoNode)> {
         self.layout_and_info.as_mut().map(|(l, i)| (&*l, i))
+    }
+
+    /// Returns document info
+    pub fn document_info(&self) -> Option<&DocumentInfo> {
+        self.docment_info.as_ref()
     }
 
     pub fn document_url(&self) -> Option<&Url> {
