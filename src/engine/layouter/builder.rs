@@ -754,6 +754,7 @@ fn resolve_css_color(css_color: &CssValue) -> Option<Color> {
             // stub implementations
             "buttonface" => Some(Color(240, 240, 240, 255)),
             "buttontext" => Some(Color(0, 0, 0, 255)),
+            "linktext" => Some(Color(0, 0, 255, 255)),
 
             _ => {
                 log::error!(
