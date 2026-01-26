@@ -7,6 +7,7 @@ use crate::engine::tree::TreeNode;
 use crate::html::HtmlNodeType;
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
@@ -111,18 +112,14 @@ pub fn build_layout_and_info(
             },
         );
 
-        for (selector, declarations) in resolved_styles {
-            if selector.matches(&chain) {
-                for (name, value) in declarations {
-                    apply_declaration(
-                        name,
-                        value,
-                        &mut style,
-                        &mut container_style,
-                        &mut text_style,
-                    );
-                }
-            }
+        for (name, (value, _, _)) in collect_candidates(resolved_styles, &chain) {
+            apply_declaration(
+                &name,
+                &value,
+                &mut style,
+                &mut container_style,
+                &mut text_style,
+            );
         }
     }
 
@@ -311,6 +308,35 @@ fn normalize_whitespace(text: &str) -> String {
     }
 
     result
+}
+
+fn collect_candidates(
+    resolved_styles: &ResolvedStyles,
+    chain: &ElementChain,
+) -> HashMap<String, (CssValue, (u32, u32, u32), usize)> {
+    let mut candidates: HashMap<String, (CssValue, (u32, u32, u32), usize)> = HashMap::new();
+
+    for decl in resolved_styles {
+        if decl.selector.matches(&chain) {
+            let entry = candidates.get(&decl.name);
+
+            let should_replace = match entry {
+                None => true,
+                Some((_, spec, order)) => {
+                    decl.specificity > *spec || (decl.specificity == *spec && decl.order > *order)
+                }
+            };
+
+            if should_replace {
+                candidates.insert(
+                    decl.name.clone(),
+                    (decl.value.clone(), decl.specificity, decl.order),
+                );
+            }
+        }
+    }
+
+    candidates
 }
 
 fn apply_declaration(

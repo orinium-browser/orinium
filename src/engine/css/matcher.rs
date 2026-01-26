@@ -85,4 +85,24 @@ impl ComplexSelector {
             None => false,
         }
     }
+
+    pub fn specificity(&self) -> (u32, u32, u32) {
+        let mut a = 0; // id
+        let mut b = 0; // class / attr / pseudo-class
+        let mut c = 0; // tag / pseudo-element
+
+        for part in &self.parts {
+            let sel = &part.selector;
+
+            if sel.id.is_some() {
+                a += 1;
+            }
+            b += sel.classes.len() as u32;
+            if sel.tag.is_some() {
+                c += 1;
+            }
+        }
+
+        (a, b, c)
+    }
 }

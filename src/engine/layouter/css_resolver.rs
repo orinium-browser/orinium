@@ -5,29 +5,49 @@ use std::collections::HashMap;
 
 type CustomProperties = HashMap<String, CssValue>;
 
-/// complex selector -> declarations
-pub type ResolvedStyles = Vec<(ComplexSelector, Vec<(String, CssValue)>)>;
+#[derive(Debug, Clone)]
+pub struct ResolvedDeclaration {
+    pub selector: ComplexSelector,
+    pub name: String,
+    pub value: CssValue,
+    pub specificity: (u32, u32, u32),
+    pub order: usize,
+}
+
+pub type ResolvedStyles = Vec<ResolvedDeclaration>;
 
 pub struct CssResolver;
 
 impl CssResolver {
-    pub fn resolve(stylecheet: &CssNode) -> ResolvedStyles {
+    pub fn resolve(stylesheet: &CssNode) -> ResolvedStyles {
         let mut styles = Vec::new();
-        Self::walk(stylecheet, &mut styles);
+        let mut order = 0;
+        Self::walk(stylesheet, &mut styles, &mut order);
         styles
     }
 
-    fn walk(node: &CssNode, styles: &mut ResolvedStyles) {
+    fn walk(node: &CssNode, styles: &mut ResolvedStyles, order: &mut usize) {
         if let CssNodeType::Rule { selectors } = &node.node() {
             let declarations = Self::collect_declarations(node);
 
             for selector in selectors {
-                styles.push((selector.clone(), declarations.clone()));
+                let specificity = selector.specificity();
+
+                for (name, value) in &declarations {
+                    styles.push(ResolvedDeclaration {
+                        selector: selector.clone(),
+                        name: name.clone(),
+                        value: value.clone(),
+                        specificity,
+                        order: *order,
+                    });
+                    *order += 1;
+                }
             }
         }
 
         for child in node.children() {
-            Self::walk(child, styles);
+            Self::walk(child, styles, order);
         }
     }
 
