@@ -63,6 +63,22 @@ impl<T> TreeNode<T> {
         child
     }
 
+    /// Replace child at given index
+    pub fn replace_child(
+        parent: &NodeRef<T>,
+        index: usize,
+        new_child: NodeRef<T>,
+    ) -> Option<NodeRef<T>> {
+        let mut p = parent.borrow_mut();
+        if index < p.children.len() {
+            let old_child = std::mem::replace(&mut p.children[index], new_child);
+            old_child.borrow_mut().parent = None;
+            Some(old_child)
+        } else {
+            None
+        }
+    }
+
     /// Find direct children matching predicate
     pub fn find_children_by<F>(&self, predicate: F) -> Vec<NodeRef<T>>
     where
@@ -73,6 +89,28 @@ impl<T> TreeNode<T> {
             .filter(|c| predicate(&c.borrow().value))
             .cloned()
             .collect()
+    }
+
+    /// Clone node (optionally deep)
+    pub fn clone_node(&self, deep: bool) -> NodeRef<T>
+    where
+        T: Clone,
+    {
+        let new_node = Rc::new(RefCell::new(TreeNode {
+            value: self.value.clone(),
+            children: Vec::new(),
+            parent: None,
+        }));
+
+        if deep {
+            for child in &self.children {
+                let child_clone = child.borrow().clone_node(true);
+                child_clone.borrow_mut().parent = Some(Rc::downgrade(&new_node));
+                new_node.borrow_mut().children.push(child_clone);
+            }
+        }
+
+        new_node
     }
 }
 
