@@ -404,22 +404,19 @@ fn apply_declaration(
         /* ======================
          * Display
          * ====================== */
-        ("display", CssValue::Keyword(v)) if v == "block" => {
-            style.display = Display::Block;
-        }
-        ("display", CssValue::Keyword(v)) if v == "flex" => {
-            style.display = Display::Flex {
-                flex_direction: FlexDirection::Row,
+        ("display", CssValue::Keyword(v)) => {
+            style.display = match v.as_str() {
+                "block" => Display::Block,
+                "flex" => Display::Flex {
+                    flex_direction: FlexDirection::Row,
+                },
+                "inline" => Display::Flex {
+                    // tmp：inline = row flex
+                    flex_direction: FlexDirection::Row,
+                },
+                "none" => Display::None,
+                _ => style.display,
             };
-        }
-        ("display", CssValue::Keyword(v)) if v == "inline" => {
-            // tmp：inline = row flex
-            style.display = Display::Flex {
-                flex_direction: FlexDirection::Row,
-            };
-        }
-        ("display", CssValue::Keyword(v)) if v == "none" => {
-            style.display = Display::None;
         }
 
         /* ======================
