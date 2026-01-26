@@ -309,13 +309,18 @@ impl BrowserApp {
             winit::event::MouseScrollDelta::PixelDelta(pos) => -pos.y as f32,
         };
 
+        let window_size = self.window_size();
+
         if let Some(tab) = self.tabs.get_mut(self.active_tab)
-            && let Some((_layout, info)) = tab.layout_and_info_mut()
+            && let Some((layout, info)) = tab.layout_and_info_mut()
             && let layouter::types::NodeKind::Container {
                 scroll_offset_y, ..
             } = &mut info.kind
         {
-            *scroll_offset_y = (*scroll_offset_y + scroll_amount).clamp(0.0, f32::MAX);
+            *scroll_offset_y = (*scroll_offset_y + scroll_amount).clamp(
+                0.0,
+                (layout.box_model.children_box.height - (window_size.1 / 2.0)).max(0.0),
+            );
         }
     }
 
