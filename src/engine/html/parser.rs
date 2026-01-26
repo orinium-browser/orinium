@@ -22,19 +22,19 @@ pub enum HtmlNodeType {
 }
 
 impl HtmlNodeType {
-    pub fn tag_name(&self) -> Option<String> {
+    pub fn tag_name(&self) -> Option<&str> {
         match self {
-            HtmlNodeType::Element { tag_name, .. } => Some(tag_name.clone()),
+            HtmlNodeType::Element { tag_name, .. } => Some(tag_name),
             _ => None,
         }
     }
 
-    pub fn get_attr(&self, name: &str) -> Option<String> {
+    pub fn get_attr(&self, name: &str) -> Option<&str> {
         match self {
             HtmlNodeType::Element { attributes, .. } => attributes
                 .iter()
                 .find(|attr| attr.name == name)
-                .map(|attr| attr.value.clone()),
+                .map(|attr| attr.value.as_str()),
             _ => None,
         }
     }

@@ -95,11 +95,7 @@ fn main() -> Result<()> {
                             let mut node = n.borrow_mut();
 
                             if hide_tag_names.iter().any(|hide| {
-                                hide == &node
-                                    .value
-                                    .tag_name()
-                                    .unwrap_or("".to_string())
-                                    .to_ascii_lowercase()
+                                hide == &node.value.tag_name().unwrap_or("").to_ascii_lowercase()
                             }) {
                                 node.children_mut().clear();
                             }

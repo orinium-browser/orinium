@@ -253,7 +253,7 @@ fn parse_html(html: &str, document_url: Url) -> ParsedDocument {
 
     // --- base_url ---
     let base_url = dom
-        .find_all(|n| n.tag_name() == Some("base".to_string()))
+        .find_all(|n| n.tag_name() == Some("base"))
         .iter()
         .filter_map(|node_ref| {
             let html_node = &node_ref.borrow().value;
@@ -272,7 +272,7 @@ fn parse_html(html: &str, document_url: Url) -> ParsedDocument {
 
     // --- Style links ---
     // <link rel="stylesheet" href="...">
-    let link_nodes = dom.find_all(|n| n.tag_name() == Some("link".to_string()));
+    let link_nodes = dom.find_all(|n| n.tag_name() == Some("link"));
     let mut style_links = Vec::new();
 
     for node in link_nodes {

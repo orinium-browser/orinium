@@ -135,7 +135,7 @@ pub fn build_layout_and_info(
         ensure_text_measured(&mut style, &mut kind, measurer);
 
         kind
-    } else if let Some(name) = &html_node.tag_name()
+    } else if let Some(name) = html_node.tag_name()
         && name == "a"
         && let Some(href) = html_node.get_attr("href")
     {
@@ -145,7 +145,9 @@ pub fn build_layout_and_info(
             scroll_offset_x: 0.0,
             scroll_offset_y: 0.0,
             style: container_style,
-            role: ContainerRole::Link { href },
+            role: ContainerRole::Link {
+                href: href.to_string(),
+            },
         }
     } else {
         NodeKind::Container {
