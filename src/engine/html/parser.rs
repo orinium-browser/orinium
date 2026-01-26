@@ -78,19 +78,24 @@ impl DomTree {
     pub fn collect_text_by_tag(&self, tag_name: &str) -> Vec<String> {
         let mut texts = Vec::new();
 
-        self.traverse(&mut |node| {
+        self.traverse(|node| {
             let n = node.borrow();
             if let HtmlNodeType::Element { tag_name: t, .. } = &n.value
                 && t.eq_ignore_ascii_case(tag_name)
             {
-                let children = n.children();
-                let mut text_of_this_node = String::new();
-                for child in children {
-                    let child_ref = child.borrow();
-                    if let HtmlNodeType::Text(content) = &child_ref.value {
-                        text_of_this_node.push_str(content);
-                    }
-                }
+                let text_of_this_node: String = n
+                    .children()
+                    .iter()
+                    .filter_map(|child| {
+                        let child_ref = child.borrow();
+                        if let HtmlNodeType::Text(content) = &child_ref.value {
+                            Some(content.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
                 texts.push(text_of_this_node);
             }
         });
@@ -365,7 +370,7 @@ impl<'a> Parser<'a> {
                 public_id: None,
                 system_id: None,
             });
-            TreeNode::add_child_at_first(&root, Rc::clone(&doctype_node));
+            TreeNode::insert_child_at(&root, 0, Rc::clone(&doctype_node));
         }
 
         if !has_html {

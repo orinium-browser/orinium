@@ -1,6 +1,6 @@
 use orinium_browser::{
     browser::{BrowserApp, Tab, core::resource_loader::BrowserResourceLoader},
-    engine::html::parser::Parser as HtmlParser,
+    engine::{html::parser::Parser as HtmlParser, tree::NodeRef},
     html::HtmlNodeType,
     network::NetworkConfig,
     platform::network::NetworkCore,
@@ -91,19 +91,22 @@ fn main() -> Result<()> {
                             false
                         };
 
-                        dom.traverse(&mut |n| {
-                            let mut node = n.borrow_mut();
+                        dom.traverse(&mut |node_rc: &NodeRef<HtmlNodeType>| {
+                            let mut node = node_rc.borrow_mut();
 
-                            if hide_tag_names.iter().any(|hide| {
-                                hide == &node.value.tag_name().unwrap_or("").to_ascii_lowercase()
-                            }) {
-                                node.children_mut().clear();
+                            if let Some(tag_name) = node.value.tag_name() {
+                                if hide_tag_names
+                                    .iter()
+                                    .any(|hide: &String| hide == &tag_name.to_ascii_lowercase())
+                                {
+                                    node.clear_children();
+                                }
                             }
 
-                            if let HtmlNodeType::Element { attributes, .. } = &mut node.value
-                                && hidden_attr
-                            {
-                                attributes.clear();
+                            if hidden_attr {
+                                if let HtmlNodeType::Element { attributes, .. } = &mut node.value {
+                                    attributes.clear();
+                                }
                             }
                         });
                     }
