@@ -482,6 +482,9 @@ fn apply_declaration(
                 _ => text_style.font_weight,
             };
         }
+        ("font-weight", CssValue::Number(v)) => {
+            text_style.font_weight = FontWeight(*v as u16);
+        }
 
         ("font-style", CssValue::Keyword(v)) => {
             text_style.font_style = match v.as_str() {
