@@ -478,21 +478,21 @@ fn apply_declaration(
             text_style.font_size = px;
         }
 
-        ("font-weight", CssValue::Keyword(v)) if v == "normal" => {
-            text_style.font_weight = FontWeight::NORMAL;
-        }
-        ("font-weight", CssValue::Keyword(v)) if v == "bold" => {
-            text_style.font_weight = FontWeight::BOLD;
+        ("font-weight", CssValue::Keyword(v)) => {
+            text_style.font_weight = match v.as_str() {
+                "normal" => FontWeight::NORMAL,
+                "bold" => FontWeight::BOLD,
+                _ => text_style.font_weight,
+            };
         }
 
-        ("font-style", CssValue::Keyword(v)) if v == "normal" => {
-            text_style.font_style = FontStyle::Normal;
-        }
-        ("font-style", CssValue::Keyword(v)) if v == "italic" => {
-            text_style.font_style = FontStyle::Italic;
-        }
-        ("font-style", CssValue::Keyword(v)) if v == "oblique" => {
-            text_style.font_style = FontStyle::Oblique;
+        ("font-style", CssValue::Keyword(v)) => {
+            text_style.font_style = match v.as_str() {
+                "normal" => FontStyle::Normal,
+                "italic" => FontStyle::Italic,
+                "oblique" => FontStyle::Oblique,
+                _ => text_style.font_style,
+            };
         }
 
         ("text-decoration", CssValue::Keyword(v)) => {
