@@ -42,26 +42,16 @@ pub enum DrawCommand {
 }
 
 /// LayoutNode + InfoNode → DrawCommand
-/// TODO: Support TextDecoration.
 pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawCommand> {
     let mut commands = Vec::new();
 
-    let rect = layout.box_model.padding_box;
-
-    let abs_x = rect.x;
-    let abs_y = rect.y;
-
     match &info.kind {
         NodeKind::Text { text, style, .. } => {
-            /*
-            commands.push(DrawCommand::DrawRect {
-                x: abs_x,
-                y: abs_y,
-                width: rect.width,
-                height: rect.height,
-                color: Color(255, 0, 0, 255),
-            });
-            */
+            let rect = layout.box_model.padding_box;
+
+            let abs_x = rect.x;
+            let abs_y = rect.y;
+
             commands.push(DrawCommand::DrawText {
                 x: abs_x,
                 y: abs_y,
@@ -96,26 +86,80 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
             style,
             ..
         } => {
+            let border_box_rect = layout.box_model.border_box;
+            let padding_box_rect = layout.box_model.padding_box;
+
+            // ===== border (solid only for now) =====
             commands.push(DrawCommand::PushTransform {
-                dx: abs_x,
-                dy: abs_y,
+                dx: border_box_rect.x,
+                dy: border_box_rect.y,
             });
-            commands.push(DrawCommand::PushClip {
-                x: 0.0,
-                y: 0.0,
-                width: rect.width,
-                height: rect.height,
-            });
+
+            let bc = &style.border_color;
+
+            // top
+            let border_width = border_box_rect.y - padding_box_rect.y;
             commands.push(DrawCommand::DrawRect {
                 x: 0.0,
                 y: 0.0,
-                width: rect.width,
-                height: rect.height,
+                width: border_box_rect.width,
+                height: border_width,
+                color: bc.top,
+            });
+
+            // bottom
+            let border_width = border_box_rect.y + border_box_rect.height
+                - (padding_box_rect.y + padding_box_rect.height);
+            commands.push(DrawCommand::DrawRect {
+                x: 0.0,
+                y: border_box_rect.height - border_width,
+                width: border_box_rect.width,
+                height: border_width,
+                color: bc.bottom,
+            });
+
+            // left
+            let border_width = border_box_rect.x - padding_box_rect.x;
+            commands.push(DrawCommand::DrawRect {
+                x: 0.0,
+                y: 0.0,
+                width: border_width,
+                height: border_box_rect.height,
+                color: bc.left,
+            });
+
+            // right
+            let border_width = border_box_rect.x + border_box_rect.width
+                - (padding_box_rect.x + padding_box_rect.width);
+            commands.push(DrawCommand::DrawRect {
+                x: border_box_rect.width - border_width,
+                y: 0.0,
+                width: border_width,
+                height: border_box_rect.height,
+                color: bc.right,
+            });
+
+            // ===== clip + background + content =====
+            commands.push(DrawCommand::PushClip {
+                x: padding_box_rect.x - border_box_rect.x,
+                y: padding_box_rect.y - border_box_rect.y,
+                width: padding_box_rect.width,
+                height: padding_box_rect.height,
+            });
+
+            // background
+            commands.push(DrawCommand::DrawRect {
+                x: padding_box_rect.x - border_box_rect.x,
+                y: padding_box_rect.y - border_box_rect.y,
+                width: padding_box_rect.width,
+                height: padding_box_rect.height,
                 color: style.background_color,
             });
+
+            // content + scroll
             commands.push(DrawCommand::PushTransform {
-                dx: layout.box_model.content_box.x - rect.x,
-                dy: layout.box_model.content_box.y - rect.y,
+                dx: layout.box_model.content_box.x - border_box_rect.x,
+                dy: layout.box_model.content_box.y - border_box_rect.y,
             });
             commands.push(DrawCommand::PushTransform {
                 dx: *scroll_offset_x,
