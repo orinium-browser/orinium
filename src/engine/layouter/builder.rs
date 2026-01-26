@@ -123,7 +123,7 @@ pub fn build_layout_and_info(
         }
     }
 
-    let kind = if let HtmlNodeType::Text(t) = &html_node {
+    let mut kind = if let HtmlNodeType::Text(t) = &html_node {
         let t = normalize_whitespace(t);
 
         let mut kind = NodeKind::Text {
@@ -221,6 +221,25 @@ pub fn build_layout_and_info(
                 text_style,
                 chain.clone(),
             );
+
+            if dom.borrow().value.tag_name() == Some("html")
+                && child_dom.borrow().value.tag_name() == Some("body")
+            {
+                if let NodeKind::Container { style, .. } = &mut kind {
+                    if style.background_color == Color(0, 0, 0, 0) {
+                        let background_color = {
+                            let NodeKind::Container { style, .. } = &child_info.kind else {
+                                continue;
+                            };
+                            style.background_color
+                        };
+                        // html 要素の body 子要素に背景色が指定されていない場合、
+                        // body の背景色を html の背景色で上書きする
+                        style.background_color = background_color;
+                    }
+                }
+            }
+
             layout_children.push(child_layout);
             info_children.push(child_info);
         }
