@@ -74,6 +74,74 @@ impl HtmlNodeType {
 pub type DomTree = Tree<HtmlNodeType>;
 
 impl DomTree {
+    /// Returns all elements with the given tag name
+    pub fn get_elements_by_tag_name(&self, tag_name: &str) -> Vec<NodeRef<HtmlNodeType>> {
+        self.find_all(|n| {
+            if let HtmlNodeType::Element { tag_name: t, .. } = n {
+                t.eq_ignore_ascii_case(tag_name)
+            } else {
+                false
+            }
+        })
+    }
+
+    /// Returns the element with the given id
+    pub fn get_element_by_id(&self, id: &str) -> Option<NodeRef<HtmlNodeType>> {
+        self.find_all(|n| {
+            if let HtmlNodeType::Element { attributes, .. } = n {
+                attributes
+                    .iter()
+                    .any(|attr| attr.name == "id" && attr.value == id)
+            } else {
+                false
+            }
+        })
+        .into_iter()
+        .next()
+    }
+
+    /// Returns all elements that have the given class
+    pub fn get_elements_by_class_name(&self, class_name: &str) -> Vec<NodeRef<HtmlNodeType>> {
+        self.find_all(|n| {
+            if let HtmlNodeType::Element { attributes, .. } = n {
+                attributes.iter().any(|attr| {
+                    attr.name == "class" && attr.value.split_whitespace().any(|c| c == class_name)
+                })
+            } else {
+                false
+            }
+        })
+    }
+
+    /// Returns the concatenated text content of this node (including children)
+    pub fn inner_text(node: &NodeRef<HtmlNodeType>) -> String {
+        let n = node.borrow();
+        match &n.value {
+            HtmlNodeType::Text(content) => content.clone(),
+            HtmlNodeType::Element { .. } => n
+                .children()
+                .iter()
+                .map(|child| DomTree::inner_text(child))
+                .collect(),
+            _ => "".to_string(),
+        }
+    }
+
+    /// Replace all text content of this node with the given string
+    pub fn set_text_content(node: &NodeRef<HtmlNodeType>, new_text: &str) {
+        let mut n = node.borrow_mut();
+        match &mut n.value {
+            HtmlNodeType::Text(content) => *content = new_text.to_string(),
+            HtmlNodeType::Element { .. } => {
+                // remove all children and add a single Text node
+                n.clear_children();
+                let text_node = TreeNode::new(HtmlNodeType::Text(new_text.to_string()));
+                TreeNode::add_child(node, text_node);
+            }
+            _ => { /* do nothing */ }
+        }
+    }
+
     /// 指定したタグ名の要素のテキストノードをすべて集める
     pub fn collect_text_by_tag(&self, tag_name: &str) -> Vec<String> {
         let mut texts = Vec::new();
