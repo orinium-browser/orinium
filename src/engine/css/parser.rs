@@ -663,6 +663,7 @@ impl<'a> Parser<'a> {
                             combinator: current_combinator.take(),
                         });
                     }
+                    parts.reverse();
                     selectors.push(ComplexSelector {
                         parts: parts.clone(),
                     });
@@ -683,6 +684,7 @@ impl<'a> Parser<'a> {
                         });
                     }
                     if !parts.is_empty() {
+                        parts.reverse();
                         selectors.push(ComplexSelector { parts });
                     }
                     break;
