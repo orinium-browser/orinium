@@ -38,6 +38,37 @@ impl HtmlNodeType {
             _ => None,
         }
     }
+    pub fn set_attr(&mut self, name: &str, value: String) {
+        if let HtmlNodeType::Element { attributes, .. } = self {
+            if let Some(attr) = attributes.iter_mut().find(|attr| attr.name == name) {
+                attr.value = value;
+            } else {
+                attributes.push(Attribute {
+                    name: name.to_string(),
+                    value,
+                });
+            }
+        }
+    }
+    pub fn remove_attr(&mut self, name: &str) -> Option<String> {
+        if let HtmlNodeType::Element { attributes, .. } = self {
+            if let Some(pos) = attributes.iter().position(|attr| attr.name == name) {
+                Some(attributes.remove(pos).value)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+    pub fn has_attr(&self, name: &str) -> bool {
+        match self {
+            HtmlNodeType::Element { attributes, .. } => {
+                attributes.iter().any(|attr| attr.name == name)
+            }
+            _ => false,
+        }
+    }
 }
 
 pub type DomTree = Tree<HtmlNodeType>;
