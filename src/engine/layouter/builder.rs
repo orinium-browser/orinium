@@ -660,6 +660,30 @@ fn apply_declaration(
             };
         }
 
+        ("gap", _) => {
+            let gap = resolve_css_len(value, text_style)?;
+            style.row_gap = gap.clone();
+            style.column_gap = gap;
+        }
+
+        ("align-self", CssValue::Keyword(v)) => {
+            style.item_style.align_self = match v.as_str() {
+                "stretch" => Some(AlignItems::Stretch),
+                "flex-start" => Some(AlignItems::Start),
+                "center" => Some(AlignItems::Center),
+                "flex-end" => Some(AlignItems::End),
+                _ => return None,
+            };
+        }
+
+        ("flex-grow", CssValue::Number(v)) => {
+            style.item_style.flex_grow = *v;
+        }
+
+        ("flex-basis", _) => {
+            style.item_style.flex_basis = resolve_css_len(value, text_style)?;
+        }
+
         _ => {}
     }
     Some(())
