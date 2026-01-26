@@ -417,6 +417,19 @@ fn apply_declaration(
             };
         }
 
+        ("background", _) => {
+            container_style.background_color = match value {
+                CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("inherit") => {
+                    // inherit: use parent's text color
+                    text_style.color
+                }
+                CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentColor") => {
+                    text_style.color
+                }
+                _ => resolve_css_color(value)?,
+            };
+        }
+
         ("color", _) => {
             text_style.color = match value {
                 CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("inherit") => {
