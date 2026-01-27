@@ -792,7 +792,7 @@ fn resolve_css_color(css_color: &CssValue) -> Option<Color> {
     }
 
     /// Convert HSL to RGB (0..255)
-    fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
+    fn hsla_to_rgba(h: f32, s: f32, l: f32, a: f32) -> (u8, u8, u8, u8) {
         // 1. Compute Chroma
         let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
         let h_prime = h / 60.0;
@@ -814,8 +814,9 @@ fn resolve_css_color(css_color: &CssValue) -> Option<Color> {
         let r = ((r1 + m) * 255.0).round().clamp(0.0, 255.0) as u8;
         let g = ((g1 + m) * 255.0).round().clamp(0.0, 255.0) as u8;
         let b = ((b1 + m) * 255.0).round().clamp(0.0, 255.0) as u8;
+        let a = (a * 255.0).round().clamp(0.0, 255.0) as u8;
 
-        (r, g, b)
+        (r, g, b, a)
     }
 
     match css_color {
@@ -869,8 +870,24 @@ fn resolve_css_color(css_color: &CssValue) -> Option<Color> {
             if let (CssValue::Number(h), CssValue::Number(s), CssValue::Number(l)) =
                 (&args[0], &args[1], &args[2])
             {
-                let (r, g, b) = hsl_to_rgb(*h, *s, *l);
-                Some(Color(r, g, b, 255))
+                let (r, g, b, a) = hsla_to_rgba(*h, *s, *l, 1.0);
+                Some(Color(r, g, b, a))
+            } else {
+                None
+            }
+        }
+
+        // hsla(h,s,l,a)
+        CssValue::Function(func, args) if func == "hsla" && args.len() == 4 => {
+            if let (
+                CssValue::Number(h),
+                CssValue::Number(s),
+                CssValue::Number(l),
+                CssValue::Number(a),
+            ) = (&args[0], &args[1], &args[2], &args[3])
+            {
+                let (r, g, b, a) = hsla_to_rgba(*h, *s, *l, *a);
+                Some(Color(r, g, b, a))
             } else {
                 None
             }
