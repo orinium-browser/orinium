@@ -130,7 +130,7 @@ impl WebView {
 
                 // CSS fetch を要求
                 for url in &self.pending_css_urls {
-                    println!("Fetch requested in WebView: url={}", url);
+                    log::info!("Fetch requested in WebView: url={}", url);
                     tasks.push(WebViewTask::Fetch {
                         url: url.clone(),
                         kind: FetchKind::Css,
@@ -153,7 +153,7 @@ impl WebView {
     }
 
     pub fn on_html_fetched(&mut self, html: String, document_url: Url) {
-        println!("Fetched HTML: {}", document_url);
+        log::info!("Fetched HTML: {}", document_url);
         let parsed = parse_html(&html, document_url);
 
         self.pending_css_urls = parsed.style_links;

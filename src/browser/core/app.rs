@@ -134,7 +134,7 @@ impl BrowserApp {
         for task in tab.tick() {
             match task {
                 TabTask::Fetch { url, kind } => {
-                    println!("Fetch requested in App: url={}", url);
+                    log::info!("Fetch requested in App: url={}", url);
                     let id = self.pending_fetches.insert(tab_id, kind, url.clone());
                     self.network.fetch_async(url, id);
                 }
@@ -151,23 +151,23 @@ impl BrowserApp {
         let messages = self.network.try_receive();
 
         for msg in messages {
-            println!("Network message received in App for fetch_id={}", msg.id);
+            log::info!("Network message received in App for fetch_id={}", msg.id);
 
             // pending_fetches から fetch 情報を取得
             let Some((tab_id, kind)) = self.pending_fetches.remove(msg.id) else {
-                println!("No pending fetch found for fetch_id={}", msg.id);
+                log::warn!("No pending fetch found for fetch_id={}", msg.id);
                 continue;
             };
 
             // Tab を取得
             let Some(tab) = self.tabs.get_mut(tab_id) else {
-                println!("There is no Tab called id={}", tab_id);
+                log::warn!("There is no Tab called id={}", tab_id);
                 continue;
             };
 
             match msg.response {
                 Ok(resp) => {
-                    println!("Fetch Done in App for tab_id={}", tab_id);
+                    log::info!("Fetch Done in App for tab_id={}", tab_id);
 
                     match kind {
                         FetchKind::Html => {
@@ -181,7 +181,7 @@ impl BrowserApp {
                     }
                 }
                 Err(err) => {
-                    println!("NetworkError: {}", err);
+                    log::error!("NetworkError: {}", err);
                     tab.on_fetch_failed(err);
                 }
             }
@@ -209,7 +209,7 @@ impl BrowserApp {
             tab.relayout(viewport);
 
             let Some((layout, info)) = tab.layout_and_info() else {
-                println!("No layout/info available for active tab");
+                log::debug!("No layout/info available for active tab");
                 return;
             };
 
@@ -323,7 +323,6 @@ impl BrowserApp {
 
     /// Handles a mouse click in the given tab at the specified coordinates.
     pub fn handle_mouse_click(tab: &mut Tab, x: f32, y: f32) {
-        println!("clicked");
         let hit_path = match tab.layout_and_info() {
             Some((layout, info)) => crate::engine::input::hit_test(layout, info, x, y),
             None => return,
@@ -340,7 +339,6 @@ impl BrowserApp {
                 if let layouter::types::NodeKind::Container { role, .. } = &hit.info.kind
                     && let layouter::types::ContainerRole::Link { href } = role
                 {
-                    println!("Link clicked: {}", href);
                     Some(href.clone())
                 } else {
                     None

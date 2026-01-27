@@ -64,7 +64,7 @@ impl NetworkCore {
     pub fn try_receive(&self) -> Vec<NetworkMessage> {
         let mut msgs = Vec::new();
         while let Ok(msg) = self.msg_rx.try_recv() {
-            println!("NetworkCore: received message for msg_id={}", msg.msg_id);
+            log::info!("NetworkCore: received message for msg_id={}", msg.msg_id);
             msgs.push(msg);
         }
         msgs
@@ -90,7 +90,7 @@ fn spawn_network_thread(rx: Receiver<NetworkCommand>, tx: Sender<NetworkMessage>
             NetworkCommand::SetConfig(cfg) => core.set_network_config(cfg),
             NetworkCommand::Fetch { url, msg_id } => {
                 let res = core.fetch_blocking(&url);
-                println!("NetworkCore: fetched URL for msg_id={}", msg_id);
+                log::info!("NetworkCore: fetched URL for msg_id={}", msg_id);
                 let _ = tx.send(NetworkMessage {
                     msg_id,
                     response: res,

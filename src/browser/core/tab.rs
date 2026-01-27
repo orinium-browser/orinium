@@ -71,7 +71,7 @@ impl Tab {
         for task in wv.tick() {
             match task {
                 WebViewTask::Fetch { url, kind } => {
-                    println!("Fetch requested in Tab: url={}", url);
+                    log::info!("Fetch requested in Tab: url={}", url);
                     tasks.push(TabTask::Fetch { url, kind });
                 }
                 WebViewTask::AskTabHtml => {
@@ -92,7 +92,7 @@ impl Tab {
 
     /// BrowserApp から CSS fetch 完了を通知
     pub fn on_css_fetched(&mut self, css: String) {
-        println!("CSS fetched in Tab");
+        log::info!("CSS fetched in Tab");
         if let Some(webview) = self.webview.as_mut() {
             webview.on_css_fetched(css);
         }
@@ -107,7 +107,7 @@ impl Tab {
         wv.on_html_fetched(html, self.docment_url.as_ref().unwrap().clone());
         self.title = wv.title().cloned();
         let base_url = wv.base_url().unwrap().clone();
-        println!("HTML fetched, base_url={}", base_url);
+        log::info!("HTML fetched, base_url={}", base_url);
         self.base_url = Some(base_url);
 
         if let TabState::Error(TabError::NetworkError(err)) = &self.state {
