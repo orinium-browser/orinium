@@ -5,12 +5,42 @@ use std::collections::HashMap;
 
 type CustomProperties = HashMap<String, CssValue>;
 
+/// A single CSS declaration after selector resolution and value processing.
+///
+/// `ResolvedDeclaration` represents one property-value pair that has been
+/// fully associated with a selector and enriched with all information
+/// required for CSS cascade resolution.
+///
+/// This structure is produced after:
+/// - Parsing selectors
+/// - Resolving `var()` using custom properties
+/// - Computing selector specificity
+///
+/// During the cascade phase, multiple `ResolvedDeclaration`s with the same
+/// property name may compete. The winner is determined by comparing:
+///
+/// 1. `specificity` (higher specificity wins)
+/// 2. `order` (later declarations win)
 #[derive(Debug, Clone)]
 pub struct ResolvedDeclaration {
+    /// The selector this declaration originates from.
     pub selector: ComplexSelector,
+
+    /// The CSS property name (e.g. `"color"`, `"margin-top"`).
     pub name: String,
+
+    /// The resolved CSS value for the property.
+    /// This value has already had `var()` functions expanded.
     pub value: CssValue,
+
+    /// The specificity of the selector, represented as (a, b, c).
+    /// - a: ID selectors
+    /// - b: class, attribute, and pseudo-class selectors
+    /// - c: type and pseudo-element selectors
     pub specificity: (u32, u32, u32),
+
+    /// The source order of the declaration.
+    /// Higher values indicate declarations that appear later in the stylesheet.
     pub order: usize,
 }
 
