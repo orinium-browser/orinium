@@ -30,7 +30,7 @@ hyper = { version = "1", features = ["client", "http1", "http2"] }
 http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["tokio"] }
 image = "0.25.9"
-ui_layout = "0.8.2"
+ui_layout = "0.8.3"
 
 [dev-dependencies]
 colored = "3.1.1" # コマンドラインハイライト用
