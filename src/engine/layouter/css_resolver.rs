@@ -66,14 +66,14 @@ impl CssResolver {
             for selector in selectors {
                 let specificity = selector.specificity();
 
-                for (name, value) in &declarations {
+                for (name, value, important) in &declarations {
                     styles.push(ResolvedDeclaration {
                         selector: selector.clone(),
                         name: name.clone(),
                         value: value.clone(),
                         specificity,
                         order: *order,
-                        important: false, // TODO: handle !important
+                        important: *important,
                     });
                     *order += 1;
                 }
@@ -85,7 +85,7 @@ impl CssResolver {
         }
     }
 
-    fn collect_declarations(rule_node: &CssNode) -> Vec<(String, CssValue)> {
+    fn collect_declarations(rule_node: &CssNode) -> Vec<(String, CssValue, bool)> {
         let mut result = Vec::new();
         let mut custom_props: CustomProperties = HashMap::new();
 
@@ -101,16 +101,40 @@ impl CssResolver {
         // 2. 通常の declaration を var 解決して追加
         for child in rule_node.children() {
             if let CssNodeType::Declaration { name, value } = &child.node() {
+                let (raw_value, important) = Self::extract_important(value);
+
                 if name.starts_with("--") {
-                    // custom property 自体も残す（後続フェーズ用）
-                    result.push((name.clone(), value.clone()));
-                } else if let Some(resolved) = Self::resolve_var(value, &custom_props) {
-                    result.push((name.clone(), resolved));
+                    result.push((name.clone(), raw_value, important));
+                } else if let Some(resolved) = Self::resolve_var(&raw_value, &custom_props) {
+                    result.push((name.clone(), resolved, important));
                 }
             }
         }
 
         result
+    }
+
+    fn extract_important(value: &CssValue) -> (CssValue, bool) {
+        match value {
+            CssValue::List(list) if list.len() >= 2 => {
+                let len = list.len();
+                let is_important = matches!(
+                    (&list[len - 2], &list[len - 1]),
+                    (
+                        CssValue::Keyword(bang),
+                        CssValue::Keyword(ident)
+                    )
+                    if bang == "!" && ident.eq_ignore_ascii_case("important")
+                );
+
+                if is_important {
+                    return (CssValue::List(list[..len - 2].to_vec()), true);
+                }
+
+                (value.clone(), false)
+            }
+            _ => (value.clone(), false),
+        }
     }
 
     fn resolve_var(value: &CssValue, custom_props: &CustomProperties) -> Option<CssValue> {
