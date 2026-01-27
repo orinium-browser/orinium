@@ -128,7 +128,12 @@ impl CssResolver {
                 );
 
                 if is_important {
-                    return (CssValue::List(list[..len - 2].to_vec()), true);
+                    let value = if len - 2 == 1 {
+                        list.iter().next().unwrap().clone()
+                    } else {
+                        CssValue::List(list[..len - 2].to_vec())
+                    };
+                    return (value, true);
                 }
 
                 (value.clone(), false)
