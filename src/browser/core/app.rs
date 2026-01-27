@@ -306,6 +306,7 @@ impl BrowserApp {
         };
 
         let window_size = self.window_size();
+        let sf = self.render.scale_factor as f32;
 
         if let Some(tab) = self.tabs.get_mut(self.active_tab)
             && let Some((layout, info)) = tab.layout_and_info_mut()
@@ -315,7 +316,7 @@ impl BrowserApp {
         {
             *scroll_offset_y = (*scroll_offset_y + scroll_amount).clamp(
                 0.0,
-                (layout.box_model.children_box.height - (window_size.1 / 2.0)).max(0.0),
+                (layout.box_model.children_box.height - (window_size.1 / sf)).max(0.0),
             );
         }
     }
