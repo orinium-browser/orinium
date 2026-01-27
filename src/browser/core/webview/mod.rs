@@ -50,6 +50,13 @@ pub struct WebView {
     needs_redraw: bool,
 }
 
+/// DocumentInfo holds basic information about the HTML document.
+/// It includes the document URL, base URL, title, and DOM tree.
+///
+/// - document_url: The URL of the document.
+/// - base_url: The base URL for resolving relative URLs.
+/// - title: The title of the document.
+/// - dom: The DOM tree of the document.
 pub struct DocumentInfo {
     document_url: Url,
     base_url: Url,
@@ -57,6 +64,15 @@ pub struct DocumentInfo {
     pub dom: DomTree,
 }
 
+/// ParsedDocument holds the result of parsing an HTML document.
+/// It includes the document URL, base URL, DOM tree, title, style links, and inline styles.
+///
+/// - document_url: The URL of the document.
+/// - base_url: The base URL for resolving relative URLs.
+/// - dom: The DOM tree of the document.
+/// - title: The title of the document.
+/// - style_links: A list of URLs for linked stylesheets.
+/// - inline_styles: A list of inline CSS styles.
 struct ParsedDocument {
     document_url: Url,
     base_url: Url,
