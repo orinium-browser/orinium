@@ -42,6 +42,9 @@ pub struct ResolvedDeclaration {
     /// The source order of the declaration.
     /// Higher values indicate declarations that appear later in the stylesheet.
     pub order: usize,
+
+    /// Whether this declaration is marked as `!important`.
+    pub important: bool,
 }
 
 pub type ResolvedStyles = Vec<ResolvedDeclaration>;
@@ -70,6 +73,7 @@ impl CssResolver {
                         value: value.clone(),
                         specificity,
                         order: *order,
+                        important: false, // TODO: handle !important
                     });
                     *order += 1;
                 }
