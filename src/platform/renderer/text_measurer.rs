@@ -1,7 +1,7 @@
 use crate::engine::bridge::text::{
     TextMeasureError, TextMeasureRequest, TextMeasurer, TextMetrics,
 };
-use crate::engine::layouter::TextStyle;
+use crate::engine::layouter::types::TextStyle;
 
 use std::env;
 use std::sync::{Arc, Mutex};

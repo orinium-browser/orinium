@@ -9,7 +9,7 @@ resolver = "3"
 
 [dependencies]
 anyhow = "1.0"
-tokio = { version = "1.49.0", features = ["full"] }
+tokio = { version = "1", features = ["rt", "net", "time", "io-std", "fs"] }
 pollster = "0.4"
 env_logger = "0.11.8"
 log = "0.4.29"
@@ -23,15 +23,15 @@ fontdue = "0.9.3"
 ab_glyph = "0.2"
 bytemuck = { version = "1.24", features = ["derive"] }
 url = "2.5"
-rustls = { version = "0.23.35", default-features = false, features = ["tls12"] }
+rustls = { version = "0.23.36", default-features = false, features = ["tls12"] }
 rustls-native-certs = "0.8.3"
 tokio-rustls = "0.26.4"
-hyper = { version = "1", features = ["full"] }
+hyper = { version = "1", features = ["client", "http1", "http2"] }
 http-body-util = "0.1"
-hyper-util = { version = "0.1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
 image = "0.25.9"
-ui_layout = "0.5.0"
+ui_layout = "0.8.2"
 
 [dev-dependencies]
-colored = "3.0.0" # コマンドラインハイライト用
+colored = "3.1.1" # コマンドラインハイライト用
 strsim = "0.11.1"

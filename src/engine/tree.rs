@@ -1,130 +1,157 @@
-//! DomTreeやRenderTreeで使用する汎用ツリー構造の実装
+//! Generic tree structure for DOM, render tree, or other hierarchical data.
 //!
-//! # 概要
-//! `TreeNode` はノードの値・子ノード・親ノードを持ち、  
-//! `Tree` はルートノードを保持する汎用的な木構造を表します。
-//!
-//! DOMツリー、レンダーツリーなどに再利用可能です。
+//! # Overview
+//! - `TreeNode<T>` stores a node value, parent, and children.
+//! - `Tree<T>` stores a root node and provides traversal, mapping, and searching utilities.
 
 use std::cell::RefCell;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::rc::{Rc, Weak};
 
-/// ツリーノード
+/// Alias for a reference-counted tree node
+pub type NodeRef<T> = Rc<RefCell<TreeNode<T>>>;
+
+/// A single tree node
 #[derive(Clone)]
 pub struct TreeNode<T> {
     pub value: T,
-    children: Vec<Rc<RefCell<TreeNode<T>>>>,
     parent: Option<Weak<RefCell<TreeNode<T>>>>,
+    children: Vec<NodeRef<T>>,
 }
 
 impl<T> TreeNode<T> {
-    /// 新しいノードを作成
-    pub fn new(value: T) -> Rc<RefCell<Self>> {
-        Rc::new(RefCell::new(TreeNode {
+    /// Create a new node wrapped in Rc<RefCell<_>>
+    pub fn new(value: T) -> NodeRef<T> {
+        Rc::new(RefCell::new(Self {
             value,
-            children: Vec::new(),
             parent: None,
+            children: Vec::new(),
         }))
     }
 
-    pub fn children(&self) -> &Vec<Rc<RefCell<TreeNode<T>>>> {
+    /// Returns the parent node, if any
+    pub fn parent(&self) -> Option<NodeRef<T>> {
+        self.parent.as_ref().and_then(|w| w.upgrade())
+    }
+
+    /// Returns slice of child nodes
+    pub fn children(&self) -> &[NodeRef<T>] {
         &self.children
     }
 
-    pub fn children_mut(&mut self) -> &mut Vec<Rc<RefCell<TreeNode<T>>>> {
-        &mut self.children
+    /// Remove all children of this node
+    pub fn clear_children(&mut self) {
+        self.children.clear();
     }
 
-    pub fn parent(&self) -> Option<Rc<RefCell<TreeNode<T>>>> {
-        self.parent.as_ref().and_then(|weak| weak.upgrade())
-    }
-
-    /// 子ノードを追加
-    pub fn add_child(parent: &Rc<RefCell<Self>>, child: Rc<RefCell<Self>>) {
+    /// Add a child node
+    pub fn add_child(parent: &NodeRef<T>, child: NodeRef<T>) {
         child.borrow_mut().parent = Some(Rc::downgrade(parent));
         parent.borrow_mut().children.push(child);
     }
 
-    pub fn add_child_at_first(parent: &Rc<RefCell<Self>>, child: Rc<RefCell<Self>>) {
+    /// Insert a child at a given position
+    pub fn insert_child_at(parent: &NodeRef<T>, index: usize, child: NodeRef<T>) {
         child.borrow_mut().parent = Some(Rc::downgrade(parent));
-        parent.borrow_mut().children.insert(0, child);
+        parent.borrow_mut().children.insert(index, child);
     }
 
-    /// 子ノードを作ってそのまま追加する
-    pub fn add_child_value(parent: &Rc<RefCell<Self>>, value: T) -> Rc<RefCell<Self>> {
-        let child = TreeNode::new(value);
-        TreeNode::add_child(parent, Rc::clone(&child));
+    /// Create a child with value and add it to parent
+    pub fn add_child_value(parent: &NodeRef<T>, value: T) -> NodeRef<T> {
+        let child = Self::new(value);
+        Self::add_child(parent, Rc::clone(&child));
         child
     }
 
-    /// 指定条件で子ノードを探索
-    pub fn find_children_by<F>(&self, predicate: F) -> Vec<Rc<RefCell<TreeNode<T>>>>
+    /// Replace child at given index
+    pub fn replace_child(
+        parent: &NodeRef<T>,
+        index: usize,
+        new_child: NodeRef<T>,
+    ) -> Option<NodeRef<T>> {
+        let mut p = parent.borrow_mut();
+        if index < p.children.len() {
+            let old_child = std::mem::replace(&mut p.children[index], new_child);
+            old_child.borrow_mut().parent = None;
+            Some(old_child)
+        } else {
+            None
+        }
+    }
+
+    /// Find direct children matching predicate
+    pub fn find_children_by<F>(&self, predicate: F) -> Vec<NodeRef<T>>
     where
         F: Fn(&T) -> bool,
     {
         self.children
             .iter()
-            .filter(|child| predicate(&child.borrow().value))
+            .filter(|c| predicate(&c.borrow().value))
             .cloned()
             .collect()
     }
-}
 
-impl<T: Debug + Clone> Display for TreeNode<T> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        fmt_tree_node(&Rc::new(RefCell::new(self.clone())), f, &[])
+    /// Clone node (optionally deep)
+    pub fn clone_node(&self, deep: bool) -> NodeRef<T>
+    where
+        T: Clone,
+    {
+        let new_node = Rc::new(RefCell::new(TreeNode {
+            value: self.value.clone(),
+            children: Vec::new(),
+            parent: None,
+        }));
+
+        if deep {
+            for child in &self.children {
+                let child_clone = child.borrow().clone_node(true);
+                child_clone.borrow_mut().parent = Some(Rc::downgrade(&new_node));
+                new_node.borrow_mut().children.push(child_clone);
+            }
+        }
+
+        new_node
     }
 }
 
-impl<T: Clone + Debug> Debug for TreeNode<T> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        // Display実装を流用して文字列化
-        write!(f, "{}", self)
-    }
-}
-
-/// ツリー本体
-#[derive(Debug, Clone)]
-pub struct Tree<T: Clone> {
-    pub root: Rc<RefCell<TreeNode<T>>>,
+/// Represents a tree with a single root node
+#[derive(Clone)]
+pub struct Tree<T> {
+    pub root: NodeRef<T>,
 }
 
 impl<T: Clone> Tree<T> {
+    /// Create a new tree with root value
     pub fn new(root_value: T) -> Self {
-        Tree {
+        Self {
             root: TreeNode::new(root_value),
         }
     }
 
-    /// ツリーを再帰的に走査して処理
-    pub fn traverse<F>(&self, f: &mut F)
+    /// Recursively traverse all nodes, applying a function
+    pub fn traverse<F>(&self, mut f: F)
     where
-        F: FnMut(&Rc<RefCell<TreeNode<T>>>),
+        F: FnMut(&NodeRef<T>),
     {
-        fn visit<T, F>(node: &Rc<RefCell<TreeNode<T>>>, f: &mut F)
+        fn visit<T, F>(node: &NodeRef<T>, f: &mut F)
         where
-            F: FnMut(&Rc<RefCell<TreeNode<T>>>),
+            F: FnMut(&NodeRef<T>),
         {
             f(node);
             for child in &node.borrow().children {
                 visit(child, f);
             }
         }
-        visit(&self.root, f);
+        visit(&self.root, &mut f);
     }
 
-    /// 各ノードの値を別の型に変換して新しいツリーを作成
-    pub fn map<U, F>(&self, f: &F) -> Tree<U>
+    /// Map each node value to another type, returning a new Tree
+    pub fn map<U, F>(&self, f: F) -> Tree<U>
     where
         F: Fn(&T) -> U,
         U: Clone,
     {
-        #[rustfmt::skip]
-        fn map_node<T, U, F>(
-            node: &Rc<RefCell<TreeNode<T>>>,
-            f: &F,
-        ) -> Rc<RefCell<TreeNode<U>>>
+        fn map_node<T, U, F>(node: &NodeRef<T>, f: &F) -> NodeRef<U>
         where
             F: Fn(&T) -> U,
             U: Clone,
@@ -139,22 +166,19 @@ impl<T: Clone> Tree<T> {
         }
 
         Tree {
-            root: map_node(&self.root, f),
+            root: map_node(&self.root, &f),
         }
     }
 
-    pub fn map_with_node<U, F>(&self, f: &F) -> Tree<U>
+    /// Map using the NodeRef itself (for access to parent/children)
+    pub fn map_with_node<U, F>(&self, f: F) -> Tree<U>
     where
-        F: Fn(&Rc<RefCell<TreeNode<T>>>) -> U,
+        F: Fn(&NodeRef<T>) -> U,
         U: Clone,
     {
-        #[rustfmt::skip]
-        fn map_node<T, U, F>(
-            node: &Rc<RefCell<TreeNode<T>>>,
-            f: &F,
-        ) -> Rc<RefCell<TreeNode<U>>>
+        fn map_node<T, U, F>(node: &NodeRef<T>, f: &F) -> NodeRef<U>
         where
-            F: Fn(&Rc<RefCell<TreeNode<T>>>) -> U,
+            F: Fn(&NodeRef<T>) -> U,
             U: Clone,
         {
             let new_node = TreeNode::new(f(node));
@@ -166,48 +190,56 @@ impl<T: Clone> Tree<T> {
         }
 
         Tree {
-            root: map_node(&self.root, f),
+            root: map_node(&self.root, &f),
         }
     }
+
+    /// Find all nodes in the tree that satisfy a predicate
+    pub fn find_all<F>(&self, predicate: F) -> Vec<NodeRef<T>>
+    where
+        F: Fn(&T) -> bool,
+    {
+        let mut result = Vec::new();
+        self.traverse(|node| {
+            if predicate(&node.borrow().value) {
+                result.push(Rc::clone(node));
+            }
+        });
+        result
+    }
 }
 
-impl<T: Debug + Clone> Display for Tree<T> {
+impl<T: Clone + Debug> Display for Tree<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        fmt_tree_node(&self.root, f, &[])
+        fn fmt_node<T: Clone + Debug>(
+            node: &NodeRef<T>,
+            f: &mut Formatter<'_>,
+            prefix: &str,
+            is_last: bool,
+        ) -> fmt::Result {
+            let n = node.borrow();
+            let connector = if prefix.is_empty() {
+                ""
+            } else if is_last {
+                "└── "
+            } else {
+                "├── "
+            };
+            writeln!(f, "{}{}{:?}", prefix, connector, n.value)?;
+            let child_count = n.children.len();
+            for (i, child) in n.children.iter().enumerate() {
+                let mut new_prefix = prefix.to_string();
+                new_prefix.push_str(if is_last { "    " } else { "│   " });
+                fmt_node(child, f, &new_prefix, i == child_count - 1)?;
+            }
+            Ok(())
+        }
+        fmt_node(&self.root, f, "", true)
     }
 }
 
-/// 再帰的にツリーを表示するヘルパー関数
-fn fmt_tree_node<T: Debug + Clone>(
-    node: &Rc<RefCell<TreeNode<T>>>,
-    f: &mut Formatter<'_>,
-    ancestors_last: &[bool],
-) -> fmt::Result {
-    let n = node.borrow();
-
-    let is_last = *ancestors_last.last().unwrap_or(&true);
-    let connector = if ancestors_last.is_empty() {
-        ""
-    } else if is_last {
-        "└── "
-    } else {
-        "├── "
-    };
-
-    let mut prefix = String::new();
-    for &ancestor_last in &ancestors_last[..ancestors_last.len().saturating_sub(1)] {
-        prefix.push_str(if ancestor_last { "    " } else { "│   " });
+impl<T: Clone + Debug> Debug for Tree<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self)
     }
-
-    writeln!(f, "{}{}{:?}", prefix, connector, n.value)?;
-
-    let child_count = n.children.len();
-    for (i, child) in n.children.iter().enumerate() {
-        let child_is_last = i == child_count - 1;
-        let mut new_ancestors = ancestors_last.to_vec();
-        new_ancestors.push(child_is_last);
-        fmt_tree_node(child, f, &new_ancestors)?;
-    }
-
-    Ok(())
 }

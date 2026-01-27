@@ -22,20 +22,51 @@ pub enum HtmlNodeType {
 }
 
 impl HtmlNodeType {
-    pub fn tag_name(&self) -> Option<String> {
+    pub fn tag_name(&self) -> Option<&str> {
         match self {
-            HtmlNodeType::Element { tag_name, .. } => Some(tag_name.clone()),
+            HtmlNodeType::Element { tag_name, .. } => Some(tag_name),
             _ => None,
         }
     }
 
-    pub fn get_attr(&self, name: &str) -> Option<String> {
+    pub fn get_attr(&self, name: &str) -> Option<&str> {
         match self {
             HtmlNodeType::Element { attributes, .. } => attributes
                 .iter()
                 .find(|attr| attr.name == name)
-                .map(|attr| attr.value.clone()),
+                .map(|attr| attr.value.as_str()),
             _ => None,
+        }
+    }
+    pub fn set_attr(&mut self, name: &str, value: String) {
+        if let HtmlNodeType::Element { attributes, .. } = self {
+            if let Some(attr) = attributes.iter_mut().find(|attr| attr.name == name) {
+                attr.value = value;
+            } else {
+                attributes.push(Attribute {
+                    name: name.to_string(),
+                    value,
+                });
+            }
+        }
+    }
+    pub fn remove_attr(&mut self, name: &str) -> Option<String> {
+        if let HtmlNodeType::Element { attributes, .. } = self {
+            if let Some(pos) = attributes.iter().position(|attr| attr.name == name) {
+                Some(attributes.remove(pos).value)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+    pub fn has_attr(&self, name: &str) -> bool {
+        match self {
+            HtmlNodeType::Element { attributes, .. } => {
+                attributes.iter().any(|attr| attr.name == name)
+            }
+            _ => false,
         }
     }
 }
@@ -43,22 +74,97 @@ impl HtmlNodeType {
 pub type DomTree = Tree<HtmlNodeType>;
 
 impl DomTree {
+    /// Returns all elements with the given tag name
+    pub fn get_elements_by_tag_name(&self, tag_name: &str) -> Vec<NodeRef<HtmlNodeType>> {
+        self.find_all(|n| {
+            if let HtmlNodeType::Element { tag_name: t, .. } = n {
+                t.eq_ignore_ascii_case(tag_name)
+            } else {
+                false
+            }
+        })
+    }
+
+    /// Returns the element with the given id
+    pub fn get_element_by_id(&self, id: &str) -> Option<NodeRef<HtmlNodeType>> {
+        self.find_all(|n| {
+            if let HtmlNodeType::Element { attributes, .. } = n {
+                attributes
+                    .iter()
+                    .any(|attr| attr.name == "id" && attr.value == id)
+            } else {
+                false
+            }
+        })
+        .into_iter()
+        .next()
+    }
+
+    /// Returns all elements that have the given class
+    pub fn get_elements_by_class_name(&self, class_name: &str) -> Vec<NodeRef<HtmlNodeType>> {
+        self.find_all(|n| {
+            if let HtmlNodeType::Element { attributes, .. } = n {
+                attributes.iter().any(|attr| {
+                    attr.name == "class" && attr.value.split_whitespace().any(|c| c == class_name)
+                })
+            } else {
+                false
+            }
+        })
+    }
+
+    /// Returns the concatenated text content of this node (including children)
+    pub fn inner_text(node: &NodeRef<HtmlNodeType>) -> String {
+        let n = node.borrow();
+        match &n.value {
+            HtmlNodeType::Text(content) => content.clone(),
+            HtmlNodeType::Element { .. } => n
+                .children()
+                .iter()
+                .map(|child| DomTree::inner_text(child))
+                .collect(),
+            _ => "".to_string(),
+        }
+    }
+
+    /// Replace all text content of this node with the given string
+    pub fn set_text_content(node: &NodeRef<HtmlNodeType>, new_text: &str) {
+        let mut n = node.borrow_mut();
+        match &mut n.value {
+            HtmlNodeType::Text(content) => *content = new_text.to_string(),
+            HtmlNodeType::Element { .. } => {
+                // remove all children and add a single Text node
+                n.clear_children();
+                let text_node = TreeNode::new(HtmlNodeType::Text(new_text.to_string()));
+                TreeNode::add_child(node, text_node);
+            }
+            _ => { /* do nothing */ }
+        }
+    }
+
     /// 指定したタグ名の要素のテキストノードをすべて集める
     pub fn collect_text_by_tag(&self, tag_name: &str) -> Vec<String> {
         let mut texts = Vec::new();
 
-        self.traverse(&mut |node| {
+        self.traverse(|node| {
             let n = node.borrow();
             if let HtmlNodeType::Element { tag_name: t, .. } = &n.value
                 && t.eq_ignore_ascii_case(tag_name)
             {
-                let children = n.children();
-                for child in children {
-                    let child_ref = child.borrow();
-                    if let HtmlNodeType::Text(content) = &child_ref.value {
-                        texts.push(content.clone());
-                    }
-                }
+                let text_of_this_node: String = n
+                    .children()
+                    .iter()
+                    .filter_map(|child| {
+                        let child_ref = child.borrow();
+                        if let HtmlNodeType::Text(content) = &child_ref.value {
+                            Some(content.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                texts.push(text_of_this_node);
             }
         });
 
@@ -71,6 +177,7 @@ pub struct Parser<'a> {
     tree: DomTree,
     stack: Vec<Rc<RefCell<TreeNode<HtmlNodeType>>>>,
     tag_stack: Vec<String>,
+    special_text_mode: Option<String>, // script/style 用
 }
 
 impl<'a> Parser<'a> {
@@ -82,6 +189,7 @@ impl<'a> Parser<'a> {
             tree: document.clone(),
             stack: vec![document.root.clone()],
             tag_stack: vec![],
+            special_text_mode: None,
         }
     }
 
@@ -108,8 +216,14 @@ impl<'a> Parser<'a> {
             self_closing,
         } = token
         {
-            self.tag_stack.push(name.clone());
             let mut parent = Rc::clone(self.stack.last().unwrap());
+            if self.special_text_mode.is_some() {
+                // TODO:
+                // attributes, self_closing
+                TreeNode::add_child_value(&parent, HtmlNodeType::Text(format!("<{}>", name)));
+                return;
+            }
+
             while self.check_start_tag_with_invalid_nesting(&name, &parent) {
                 if let HtmlNodeType::Element { tag_name, .. } = &parent.borrow().value {
                     log::info!(target:"HtmlParser::AutoClosing" ,"Auto-closing tag: <{}> to allow <{}> inside it.", tag_name, name);
@@ -128,8 +242,14 @@ impl<'a> Parser<'a> {
                 },
             );
 
+            // script/style は special mode に
+            if name == "script" || name == "style" {
+                self.special_text_mode = Some(name.clone());
+            }
+
             // Self-closing タグは stack に push しない
             if !self_closing {
+                self.tag_stack.push(name.clone());
                 self.stack.push(new_node);
                 log::debug!(target:"HtmlParser::Stack" ,"Stack len: {}, +Pushed <{}> to stack.", self.stack.len(), name);
             }
@@ -138,11 +258,22 @@ impl<'a> Parser<'a> {
 
     fn handle_end_tag(&mut self, token: Token) {
         if let Token::EndTag { ref name } = token {
+            // special mode を解除
+            if self.special_text_mode.as_deref() == Some(name.as_str()) {
+                self.special_text_mode = None;
+            }
+
+            if self.special_text_mode.is_some() {
+                let parent = Rc::clone(self.stack.last().unwrap());
+                TreeNode::add_child_value(&parent, HtmlNodeType::Text(format!("</{}>", name)));
+                return;
+            }
+
             let name = name.clone();
             if self.tag_stack.contains(&name) {
                 while let Some(top) = self.stack.pop() {
-                    self.tag_stack.pop();
                     if let HtmlNodeType::Element { tag_name, .. } = &top.borrow().value {
+                        self.tag_stack.pop();
                         if tag_name == &name {
                             log::debug!(target:"HtmlParser::Stack" ,"Stack len: {}, -Popped </{}> from stack.", self.stack.len(), name);
                             break;
@@ -168,6 +299,13 @@ impl<'a> Parser<'a> {
     fn handle_text(&mut self, token: Token) {
         if let Token::Text(data) = token {
             let parent = Rc::clone(self.stack.last().unwrap());
+
+            // special mode 中はそのままテキスト追加
+            if self.special_text_mode.is_some() {
+                TreeNode::add_child_value(&parent, HtmlNodeType::Text(data));
+                return;
+            }
+
             // 親ノードが pre, textarea, script, style でない場合、空白改行を無視する
             if let Some(parent_node) = parent.borrow().parent() {
                 let parent_node_borrow = parent_node.borrow();
@@ -300,7 +438,7 @@ impl<'a> Parser<'a> {
                 public_id: None,
                 system_id: None,
             });
-            TreeNode::add_child_at_first(&root, Rc::clone(&doctype_node));
+            TreeNode::insert_child_at(&root, 0, Rc::clone(&doctype_node));
         }
 
         if !has_html {
