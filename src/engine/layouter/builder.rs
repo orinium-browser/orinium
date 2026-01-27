@@ -780,6 +780,9 @@ fn resolve_css_color(css_color: &CssValue) -> Option<Color> {
             "buttontext" => Some(Color(0, 0, 0, 255)),
             "linktext" => Some(Color(0, 0, 255, 255)),
 
+            // Stub for none keyword (e.g. border-color: none, background: none, etc.)
+            "none" => Some(Color(0, 0, 0, 0)),
+
             _ => {
                 log::error!(
                     target: "Layouter",
