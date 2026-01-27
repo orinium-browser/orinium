@@ -20,8 +20,8 @@ pub fn hit_test<'a>(layout: &'a LayoutNode, info: &'a InfoNode, x: f32, y: f32) 
     }
 
     // 2. ローカル座標に変換（スクロールオフセット考慮）
-    let mut local_x = x - rect.x;
-    let mut local_y = y - rect.y;
+    let mut local_x = x - layout.box_model.content_box.x;
+    let mut local_y = y - layout.box_model.content_box.y;
 
     if let NodeKind::Container {
         scroll_offset_x,
