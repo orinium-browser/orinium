@@ -1,15 +1,25 @@
+/// InfoNode represents a node in the layout tree.
+/// It can be either a Container or Text node, each with its own properties and styles.
 #[derive(Debug, Clone)]
 pub struct InfoNode {
     pub kind: NodeKind,
     pub children: Vec<InfoNode>,
 }
 
+/// Role of Container
+///
+/// - Normal: A standard container with no special role.
+/// - Link: A container that acts as a hyperlink, containing a URL.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ContainerRole {
     Normal,
     Link { href: String },
 }
 
+/// Node kind of InfoNode
+///
+/// - Container: A container node that can hold other nodes and has scrolling capabilities.
+/// - Text: A text node that contains text content and styling information.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeKind {
     Container {
