@@ -117,9 +117,9 @@ impl<'a> Tokenizer<'a> {
     pub fn next_token(&mut self) -> Token {
         let token = match self.peek() {
             Some(c) if c.is_whitespace() => self.consume_whitespace(),
+            Some(c) if is_number_start(c, self.peek_next()) => self.consume_number_like(),
             Some(c) if is_ident_start(c) => self.consume_ident_like(),
             Some(c) if is_string_delimiter(c) => self.consume_string_like(),
-            Some(c) if is_number_start(c, self.peek_next()) => self.consume_number_like(),
             Some('/') => {
                 if self.peek_next() == Some('*') {
                     self.bump(); // consume '/'
