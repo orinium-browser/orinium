@@ -172,7 +172,7 @@ pub fn build_layout_and_info(
     //
     // Table 要素も未実装。
     // Table 要素は暫定的に Flex に置き換える。
-    // 将来的には TableLayout 実装に置き換える。
+    // TODO: 将来的には TableLayout 実装に置き換える。
     let mut layout_children = Vec::new();
     let mut info_children = Vec::new();
 
