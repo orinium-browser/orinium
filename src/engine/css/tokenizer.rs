@@ -236,6 +236,11 @@ impl<'a> Tokenizer<'a> {
             false
         };
 
+        if self.peek() == Some('-') {
+            buf.push('-');
+            self.bump();
+        }
+
         while let Some(c) = self.peek() {
             if c.is_ascii_digit() {
                 buf.push(c);
