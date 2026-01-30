@@ -9,9 +9,6 @@ use crate::platform::os::windows;
 #[cfg(target_os = "macos")]
 use crate::platform::os::macos;
 
-#[cfg(target_os = "linux")]
-use crate::platform::os::linux;
-
 #[allow(unreachable_code)]
 pub fn system_font_candidates() -> Result<Vec<PathBuf>> {
     #[cfg(target_os = "windows")]

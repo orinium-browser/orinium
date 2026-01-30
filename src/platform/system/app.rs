@@ -52,6 +52,8 @@ impl ApplicationHandler<State> for App {
         // 初回描画
         if let Some(state) = &mut self.state {
             self.browser_app
+                .set_scale_factor(state.window.scale_factor());
+            self.browser_app
                 .apply_draw_commands(&mut state.gpu_renderer);
             state.window.request_redraw();
         }

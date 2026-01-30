@@ -1,13 +1,11 @@
-use crate::engine::layouter::DrawCommand;
+use crate::engine::renderer_model::DrawCommand;
 use anyhow::Result;
+use std::env;
 use std::sync::Arc;
-use std::collections::HashMap;
-use std::mem::size_of;
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
 use super::glyph::text::{TextRenderer, TextSection};
-use crate::platform::renderer::image::ImageManager;
 
 /// GPU描画コンテキスト
 pub struct GpuRenderer {
@@ -25,43 +23,24 @@ pub struct GpuRenderer {
     scale_factor: f64,
     /// RenderPipelin（頂点 to ピクセル）
     render_pipeline: wgpu::RenderPipeline,
-    /// テクスチャ用の bind group layout
-    texture_bind_group_layout: wgpu::BindGroupLayout,
-    /// デフォルト（白）テクスチャの bind_group
-    default_texture_bind_group: wgpu::BindGroup,
-    /// キャッシュされたテクスチャ用 bind groups (image_id -> bind_group)
-    texture_bind_groups: HashMap<u64, wgpu::BindGroup>,
     /// 頂点バッファ
     vertex_buffer: Option<wgpu::Buffer>,
     /// 頂点
     vertices: Vec<Vertex>,
     /// 頂点数
     num_vertices: u32,
-    /// バッチ情報 (texture_id, start_vertex, vertex_count)
-    batches: Vec<(u64, u32, u32)>,
 
     /// テキスト描画用ラッパー
     text_renderer: Option<TextRenderer>,
-    /// 最後のフレーム時刻（アニメーション計算用）
-    last_frame: Option<std::time::Instant>,
 
     /// テキストカリングを有効にする
     enable_text_culling: bool,
-
-    /// テクスチャ管理
-    image_manager: ImageManager,
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
-    /// 位置
     position: [f32; 3],
-    /// UV座標
-    uv: [f32; 2],
-    /// テクスチャインデックス
-    tex_index: u32,
-    /// 頂点カラー
     color: [f32; 4],
 }
 
@@ -79,16 +58,6 @@ impl Vertex {
                 wgpu::VertexAttribute {
                     offset: size_of::<[f32; 3]>() as wgpu::BufferAddress,
                     shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x2,
-                },
-                wgpu::VertexAttribute {
-                    offset: (size_of::<[f32; 3]>() + size_of::<[f32; 2]>()) as wgpu::BufferAddress,
-                    shader_location: 2,
-                    format: wgpu::VertexFormat::Uint32,
-                },
-                wgpu::VertexAttribute {
-                    offset: (size_of::<[f32; 3]>() + size_of::<[f32; 2]>() + size_of::<u32>()) as wgpu::BufferAddress,
-                    shader_location: 3,
                     format: wgpu::VertexFormat::Float32x4,
                 },
             ],
@@ -105,13 +74,15 @@ impl GpuRenderer {
         // GPUドライバとの通信インスタンス
         // wgpuインスタンスの作成
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::PRIMARY,
+            backends: select_wgpu_backends(),
             ..Default::default()
         });
 
-        // --- surface / adapter / device / queue (existing) ---
+        // OSウィンドウとGPUの描画対象（サーフェス）を関連付ける
+        // サーフェスの作成
         let surface = instance.create_surface(window.clone())?;
 
+        // 利用可能なGPU（物理デバイス）アダプターの取得
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::default(),
@@ -120,6 +91,7 @@ impl GpuRenderer {
             })
             .await?;
 
+        // デバイスとキューの作成
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: None,
@@ -131,7 +103,8 @@ impl GpuRenderer {
             })
             .await?;
 
-        // Surface config (existing)
+        // サーフェス設定
+        // フレームバッファ設定（解像度・フォーマットなど）
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps
             .formats
@@ -153,40 +126,19 @@ impl GpuRenderer {
         surface.configure(&device, &config);
 
         // シェーダーの読み込み
+        // シェーダーモジュールの作成
+        // vertex/fragment for main pipeline
         let main_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Main Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shader/main.wgsl").into()),
         });
 
-        // create texture bind group layout (texture + sampler)
-        let texture_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("texture_bind_group_layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-
-        // pipeline layout: include texture bind group layout
+        // --- レンダーパイプライン（頂点→ピクセル変換のルール）の作成 ---
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[&texture_bind_group_layout],
-                ..Default::default()
+                bind_group_layouts: &[],
+                immediate_size: 0,
             });
 
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -213,7 +165,7 @@ impl GpuRenderer {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
+                cull_mode: None, // 三角扇がカリングで消えちゃう...
                 polygon_mode: wgpu::PolygonMode::Fill,
                 unclipped_depth: false,
                 conservative: false,
@@ -226,36 +178,9 @@ impl GpuRenderer {
             },
             multiview_mask: None,
         });
+        // --- レンダーパイプライン作成終了 ---
 
-        // create default 1x1 white texture and bind group
-        let default_tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("default_white_tex"),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: config.format,
-            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: &default_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-            &[255u8, 255u8, 255u8, 255u8],
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
-            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-        );
-        let default_view = default_tex.create_view(&wgpu::TextureViewDescriptor::default());
-        let default_sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
-        let default_texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("default_texture_bind_group"),
-            layout: &texture_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&default_view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&default_sampler) },
-            ],
-        });
-
-        // テキスト描画用ラッパーの初期化（既存）
+        // テキスト描画用ラッパーの初期化。引数で渡されたフォントパスがあればそれを優先して読み込む。
         let text_renderer = if let Some(p) = font_path {
             match std::fs::read(p) {
                 Ok(bytes) => {
@@ -295,17 +220,11 @@ impl GpuRenderer {
             size,
             scale_factor,
             render_pipeline,
-            texture_bind_group_layout,
-            default_texture_bind_group,
-            texture_bind_groups: HashMap::new(),
             vertex_buffer: None,
             vertices: vec![],
             num_vertices: 0,
-            batches: Vec::new(),
             text_renderer,
-            last_frame: None,
             enable_text_culling,
-            image_manager: ImageManager::new(),
         })
     }
 
@@ -341,7 +260,7 @@ impl GpuRenderer {
         let screen_height = self.size.height as f32;
 
         // --- 頂点データ ---
-        // vertices are collected into `batches` (per-texture). No single `vertices` var needed.
+        let mut vertices = Vec::new();
         // --- Text ---
         let mut sections: Vec<TextSection> = Vec::new();
         // --- scale_factor ---
@@ -372,9 +291,6 @@ impl GpuRenderer {
             h: screen_height,
         }];
         let current_clip = |stack: &Vec<ClipRect>| -> ClipRect { *stack.last().unwrap() };
-
-        // We'll batch vertices per texture id (0 = default white)
-        let mut batches: std::collections::HashMap<u64, Vec<Vertex>> = HashMap::new();
 
         for command in commands {
             match command {
@@ -432,7 +348,6 @@ impl GpuRenderer {
                     width: w,
                     height: h,
                     color,
-                    texture_id,
                 } => {
                     // transform
                     let (tdx, tdy) = current_transform(&transform_stack);
@@ -459,7 +374,7 @@ impl GpuRenderer {
                     x2 = x2.min((clip.x + clip.w) * sf);
                     y2 = y2.min((clip.y + clip.h) * sf);
 
-                    // NDC helper
+                    // NDC
                     let ndc = |v, max| (v / max) * 2.0 - 1.0;
 
                     let px1 = ndc(x1, screen_width);
@@ -469,47 +384,21 @@ impl GpuRenderer {
 
                     let color = color.to_f32_array();
 
-                    // Determine which batch (texture) to push to
-                    let tex_key = texture_id.unwrap_or(0);
-
-                    // compute UVs: full quad by default
-                    let (u0, v0, u1, v1) = if tex_key == 0 {
-                        (0.0_f32, 0.0_f32, 1.0_f32, 1.0_f32)
-                    } else if let Some((tw, th)) = self.image_manager.get_size(tex_key) {
-                        // Cover logic: scale image to cover the rect and compute cropped UVs
-                        let rect_w = (x2 - x1) / sf; // logical
-                        let rect_h = (y2 - y1) / sf; // logical
-                        let tw = tw as f32;
-                        let th = th as f32;
-                        let scale = (rect_w / tw).max(rect_h / th);
-                        let src_w = rect_w / scale;
-                        let src_h = rect_h / scale;
-                        let u_off = (tw - src_w) / 2.0 / tw;
-                        let v_off = (th - src_h) / 2.0 / th;
-                        let u0 = u_off;
-                        let v0 = v_off;
-                        let u1 = u_off + src_w / tw;
-                        let v1 = v_off + src_h / th;
-                        (u0, v0, u1, v1)
-                    } else {
-                        (0.0_f32, 0.0_f32, 1.0_f32, 1.0_f32)
-                    };
-
-                    let verts = &mut batches.entry(tex_key).or_insert_with(Vec::new);
-
                     #[rustfmt::skip]
-                    verts.extend_from_slice(&[
-                        Vertex { position: [px1, py1, 0.0], uv: [u0, v0], tex_index: tex_key as u32, color },
-                        Vertex { position: [px1, py2, 0.0], uv: [u0, v1], tex_index: tex_key as u32, color },
-                        Vertex { position: [px2, py1, 0.0], uv: [u1, v0], tex_index: tex_key as u32, color },
+                    vertices.extend_from_slice(&[
+                        Vertex { position: [px1, py1, 0.0], color },
+                        Vertex { position: [px1, py2, 0.0], color },
+                        Vertex { position: [px2, py1, 0.0], color },
 
-                        Vertex { position: [px2, py1, 0.0], uv: [u1, v0], tex_index: tex_key as u32, color },
-                        Vertex { position: [px1, py2, 0.0], uv: [u0, v1], tex_index: tex_key as u32, color },
-                        Vertex { position: [px2, py2, 0.0], uv: [u1, v1], tex_index: tex_key as u32, color },
+                        Vertex { position: [px2, py1, 0.0], color },
+                        Vertex { position: [px1, py2, 0.0], color },
+                        Vertex { position: [px2, py2, 0.0], color },
                     ]);
                 }
 
-                // Text handling (unchanged)
+                // Text
+                // TODO:
+                // - Clip 用の width （描画限界）と改行用の max_width を分けて扱う
                 DrawCommand::DrawText {
                     x,
                     y,
@@ -587,7 +476,7 @@ impl GpuRenderer {
                 }
 
                 // Polygon
-                DrawCommand::DrawPolygon { points, color, texture_id: _texture_id } => {
+                DrawCommand::DrawPolygon { points, color } => {
                     // transform
                     let (tdx, tdy) = current_transform(&transform_stack);
                     let transformed_points: Vec<(f32, f32)> = points
@@ -754,33 +643,16 @@ impl GpuRenderer {
                             let px3 = ndc(p3.0, screen_width);
                             let py3 = -ndc(p3.1, screen_height);
 
-                            // compute UVs based on polygon bbox (normalized)
-                            let denom_x = (max_x - min_x).max(1.0);
-                            let denom_y = (max_y - min_y).max(1.0);
-                            let ux1 = (p1.0 - min_x) / denom_x;
-                            let uy1 = (p1.1 - min_y) / denom_y;
-                            let ux2 = (p2.0 - min_x) / denom_x;
-                            let uy2 = (p2.1 - min_y) / denom_y;
-                            let ux3 = (p3.0 - min_x) / denom_x;
-                            let uy3 = (p3.1 - min_y) / denom_y;
-
-                            let verts = &mut batches.entry(0).or_insert_with(Vec::new);
-                            verts.push(Vertex {
+                            vertices.push(Vertex {
                                 position: [px1, py1, 0.0],
-                                uv: [ux1, uy1],
-                                tex_index: 0,
                                 color: color_arr,
                             });
-                            verts.push(Vertex {
+                            vertices.push(Vertex {
                                 position: [px2, py2, 0.0],
-                                uv: [ux2, uy2],
-                                tex_index: 0,
                                 color: color_arr,
                             });
-                            verts.push(Vertex {
+                            vertices.push(Vertex {
                                 position: [px3, py3, 0.0],
-                                uv: [ux3, uy3],
-                                tex_index: 0,
                                 color: color_arr,
                             });
                         }
@@ -808,50 +680,24 @@ impl GpuRenderer {
             }
         }
 
-        // Produce concatenated vertex list and batch ranges
-        self.batches.clear();
-        let mut all_vertices: Vec<Vertex> = Vec::new();
-        let mut offset = 0u32;
-        // iterate keys in sorted order for determinism
-        let mut keys: Vec<u64> = batches.keys().copied().collect();
-        keys.sort();
-        for k in keys {
-            if let Some(verts) = batches.remove(&k) {
-                let count = verts.len() as u32;
-                all_vertices.extend(verts);
-                self.batches.push((k, offset, count));
-                offset += count;
-            }
-        }
-        self.set_vertex_buffer(all_vertices);
+        self.set_vertex_buffer(vertices);
 
-        // store text sections somewhere for render; reuse existing sections handling earlier (text_renderer queue in render)
-        // For now, store sections in a local variable by moving into self via a temporary field if needed. We'll queue text in render by passing sections to text_renderer via its API when render() is called.
-        // To keep changes minimal, we'll queue text now if text_renderer exists.
+        // テキストセクションをキューに追加
         if let Some(tr) = &mut self.text_renderer {
-            tr.queue(&self.device, &self.queue, &sections).ok();
+            tr.queue(&self.device, &self.queue, &sections).unwrap();
         }
     }
 
     /// フレームを描画
-    pub fn render(&mut self) -> Result<bool> {
+    pub fn render(&mut self) -> Result<()> {
         // 描画するフレームバッファを取得
         let output = self.surface.get_current_texture()?;
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
-        // text_scroll を target_text_scroll に向かって進める
-        let now = std::time::Instant::now();
-        let dt = if let Some(prev) = self.last_frame {
-            now.duration_since(prev).as_secs_f32()
-        } else {
-            1.0 / 60.0
-        };
-        self.last_frame = Some(now);
-
-        let smoothing_speed = 15.0_f32;
-        let _alpha = 1.0 - (-smoothing_speed * dt).exp();
-
-        let animating = false;
+        // アニメーション中はテキストブラシが更新位置を反映できるようにセクションを再キューする必要がある
+        // 補足: 呼び出し元（UI層）も各フレームで描画コマンドを再キューしているため、ここではアニメーション状態を返り値で通知するだけ
 
         // GPUコマンドのエンコーダーの作成
         let mut encoder = self
@@ -887,37 +733,10 @@ impl GpuRenderer {
 
             // 使用するシェーダー・設定をセット
             render_pass.set_pipeline(&self.render_pipeline);
-
-            // set full vertex buffer
-            if let Some(ref vb) = self.vertex_buffer {
-                render_pass.set_vertex_buffer(0, vb.slice(..));
-
-                // iterate batches and draw ranges
-                for (tex_key, start, count) in &self.batches {
-                    // ensure bind group exists
-                    if *tex_key != 0 && !self.texture_bind_groups.contains_key(tex_key) {
-                        if let Some((view_ref, sampler_ref)) = self.image_manager.get_view_sampler(*tex_key) {
-                            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                                label: Some("texture_bind_group"),
-                                layout: &self.texture_bind_group_layout,
-                                entries: &[
-                                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view_ref) },
-                                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler_ref) },
-                                ],
-                            });
-                            self.texture_bind_groups.insert(*tex_key, bind_group);
-                        }
-                    }
-
-                    let bg = if *tex_key == 0 {
-                        &self.default_texture_bind_group
-                    } else {
-                        self.texture_bind_groups.get(tex_key).unwrap_or(&self.default_texture_bind_group)
-                    };
-
-                    render_pass.set_bind_group(0, bg, &[]);
-                    render_pass.draw(*start..(*start + *count), 0..1);
-                }
+            // 頂点バッファをセットして描画
+            if let Some(ref vertex_buffer) = self.vertex_buffer {
+                render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                render_pass.draw(0..self.num_vertices, 0..1);
             }
         }
 
@@ -948,7 +767,7 @@ impl GpuRenderer {
         // フレームを画面に表示
         output.present();
 
-        Ok(animating)
+        Ok(())
     }
 
     fn update_vertices(
@@ -993,4 +812,27 @@ impl GpuRenderer {
     pub fn set_scale_factor(&mut self, scale_factor: f64) {
         self.scale_factor = scale_factor;
     }
+}
+
+fn select_wgpu_backends() -> wgpu::Backends {
+    if let Ok(value) = env::var("ORINIUM_WGPU_BACKEND") {
+        match value.to_lowercase().as_str() {
+            "gl" | "opengl" => return wgpu::Backends::GL,
+            "vulkan" | "vk" => return wgpu::Backends::VULKAN,
+            "metal" => return wgpu::Backends::METAL,
+            "dx12" | "d3d12" => return wgpu::Backends::DX12,
+            "primary" => return wgpu::Backends::PRIMARY,
+            _ => {}
+        }
+    }
+
+    let is_wsl = env::var_os("WSL_DISTRO_NAME").is_some() || env::var_os("WSL_INTEROP").is_some();
+    let is_wayland = env::var_os("WAYLAND_DISPLAY").is_some();
+
+    if is_wsl && is_wayland {
+        // WSLg + Wayland can be unstable with Vulkan; prefer GL by default.
+        return wgpu::Backends::GL;
+    }
+
+    wgpu::Backends::PRIMARY
 }

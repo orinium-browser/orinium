@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 /// ネットワーク層全体の設定
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct NetworkConfig {
     /// User-Agent文字列

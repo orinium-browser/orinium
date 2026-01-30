@@ -1,6 +1,6 @@
 use std::{env, sync::Arc};
 
-use crate::engine::layouter::{FontStyle, TextAlign, TextStyle};
+use crate::engine::layouter::types::{FontStyle, TextAlign, TextStyle};
 use glyphon::{
     Attrs, Buffer, Cache, Color as GlyphColor, FontSystem, Metrics, PrepareError, Resolution,
     Shaping, Style, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer as TextBrush,

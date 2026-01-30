@@ -1,41 +1,85 @@
-use std::sync::Arc;
-
 use crate::engine::{
-    css::cssom::Parser as CssParser,
+    css::parser::Parser as CssParser,
     html::parser::{DomTree, Parser as HtmlParser},
-    layouter::{self, InfoNode},
+    layouter::{
+        self,
+        types::{InfoNode, TextStyle},
+    },
 };
+use crate::platform::renderer::text_measurer::PlatformTextMeasurer;
 use ui_layout::LayoutNode;
-
-use super::resource_loader::BrowserResourceLoader;
+use url::Url;
 
 const USER_AGENT_CSS: &str = include_str!("../../../../resource/user-agent.css");
 
-/// WebView は 1 つのウェブページの表示・レイアウト・描画を管理する構造体です。
-///
-/// 主に以下の責務を持ちます:
-/// - HTML の読み込み・DOM ツリーの構築
-/// - CSS の適用・Style Tree の生成
-/// - レンダーツリー(RenderTree)の構築とレイアウト計算
-/// - DrawCommand の生成による描画準備
-/// - スクロールやビューポート等のページ固有の状態管理
-///
-/// WebView はタブ(Tab)の内部に持たれ、BrowserApp から更新・描画処理が呼ばれます。
-/// 1 WebView = 1 ページ(ドキュメント) と対応します。
+pub enum WebViewTask {
+    AskTabHtml,
+    Fetch { url: Url, kind: FetchKind },
+}
+
+/// TODO:
+/// - Root Document fetch
+/// - Image fetch
+/// - JS fetch
+/// - その他リソース fetch
+pub enum FetchKind {
+    Html,
+    Css,
+}
+
+#[derive(Debug, PartialEq)]
+enum PagePhase {
+    Init,
+    BeforeHtmlParsing,
+    HtmlParsed,
+    CssPending,
+    CssApplied,
+}
+
 pub struct WebView {
-    pub url: Option<String>,
+    phase: PagePhase,
 
-    pub title: Option<String>,
+    docment_info: Option<DocumentInfo>,
 
-    // Core trees
-    pub dom: Option<DomTree>,
-    pub layout_and_info: Option<(LayoutNode, InfoNode)>,
+    pending_css_urls: Vec<Url>,
+    loaded_css: Vec<String>,
 
-    // Viewport
-    pub scroll_x: f32,
-    pub scroll_y: f32,
+    resolved_styles: layouter::css_resolver::ResolvedStyles,
+    layout_and_info: Option<(LayoutNode, InfoNode)>,
 
-    pub needs_redraw: bool,
+    needs_redraw: bool,
+}
+
+/// DocumentInfo holds basic information about the HTML document.
+/// It includes the document URL, base URL, title, and DOM tree.
+///
+/// - document_url: The URL of the document.
+/// - base_url: The base URL for resolving relative URLs.
+/// - title: The title of the document.
+/// - dom: The DOM tree of the document.
+pub struct DocumentInfo {
+    document_url: Url,
+    base_url: Url,
+    title: String,
+    pub dom: DomTree,
+}
+
+/// ParsedDocument holds the result of parsing an HTML document.
+/// It includes the document URL, base URL, DOM tree, title, style links, and inline styles.
+///
+/// - document_url: The URL of the document.
+/// - base_url: The base URL for resolving relative URLs.
+/// - dom: The DOM tree of the document.
+/// - title: The title of the document.
+/// - style_links: A list of URLs for linked stylesheets.
+/// - inline_styles: A list of inline CSS styles.
+struct ParsedDocument {
+    document_url: Url,
+    base_url: Url,
+    dom: DomTree,
+    title: String,
+    style_links: Vec<Url>,
+    inline_styles: Vec<String>,
 }
 
 impl Default for WebView {
@@ -47,170 +91,272 @@ impl Default for WebView {
 impl WebView {
     pub fn new() -> Self {
         Self {
-            url: None,
-            title: None,
-            dom: None,
+            phase: PagePhase::Init,
+
+            docment_info: None,
+
+            pending_css_urls: Vec::new(),
+            loaded_css: Vec::new(),
+
+            resolved_styles: layouter::css_resolver::ResolvedStyles::default(),
             layout_and_info: None,
-            scroll_x: 0.0,
-            scroll_y: 0.0,
-            needs_redraw: true,
+
+            needs_redraw: false,
         }
     }
 
-    /// ロード → DOM/CSS/Layout のフルパイプライン
-    ///
-    /// TODO:
-    /// - dom_tree をクローンするコストを削減
-    /// - cssソースの適応
-    /// - cssをstyle element から適応
-    pub fn load_from_raw_source(&mut self, html_source: &str, _css_source: Option<&str>) {
-        // DOM
-        let mut parser = HtmlParser::new(html_source);
-        let dom_tree = parser.parse();
-        self.dom = Some(dom_tree.clone());
+    pub fn tick(&mut self) -> Vec<WebViewTask> {
+        let mut tasks = Vec::new();
 
-        self.title = dom_tree.collect_text_by_tag("title").first().cloned();
+        match self.phase {
+            PagePhase::Init => {
+                self.resolved_styles
+                    .extend(layouter::css_resolver::CssResolver::resolve(
+                        &CssParser::new(USER_AGENT_CSS).parse().unwrap(),
+                    ));
 
-        let measurer = crate::platform::renderer::text_measurer::PlatformTextMeasurer::new();
+                tasks.push(WebViewTask::AskTabHtml);
 
-        // Layout and Info
-        self.layout_and_info = Some(layouter::build_layout_and_info(
-            &dom_tree.root,
-            &layouter::css_resolver::CssResolver::resolve(
-                &CssParser::new(USER_AGENT_CSS).parse().unwrap(),
-            ),
-            &measurer.unwrap(),
-            layouter::TextStyle {
-                font_size: 16.0,
-                ..Default::default()
-            },
-            Vec::new(),
-        ));
+                self.phase = PagePhase::BeforeHtmlParsing;
+            }
 
-        self.needs_redraw = true;
-    }
+            PagePhase::BeforeHtmlParsing => {}
 
-    /// URL を使った本格的なページロード
-    ///
-    /// - HTML を取得
-    /// - DOM パース
-    /// - `<link rel="stylesheet">` を解決して CSS を取得
-    /// - Style Tree を構築
-    /// - Render Tree を構築
-    pub async fn load_from_url(
-        &mut self,
-        url: &str,
-        net: Arc<BrowserResourceLoader>,
-    ) -> anyhow::Result<()> {
-        // --- HTML をロード ---
-        let html_bytes = net
-            .fetch(url)
-            .await
-            .map_err(|e| anyhow::Error::msg(e.to_string()))?;
+            PagePhase::HtmlParsed => {
+                // Phase 1: UA.css only layout
+                let measurer = PlatformTextMeasurer::new().unwrap();
 
-        let html_source = String::from_utf8_lossy(&html_bytes.body).to_string();
+                self.update_layout_and_info(measurer);
 
-        // --- DOM パース ---
-        let mut parser = HtmlParser::new(&html_source);
-        let dom_tree = parser.parse();
-        self.dom = Some(dom_tree.clone());
-
-        // --- title 抽出 ---
-        self.title = dom_tree.collect_text_by_tag("title").first().cloned();
-
-        // --- CSS リンクを解決 ---
-        let mut css_sources: Vec<String> = Vec::new();
-
-        // <link rel="stylesheet" href="...">
-        let link_nodes: Vec<_> = {
-            let root = dom_tree.root.borrow();
-            root.find_children_by(|n| n.tag_name() == Some("link".to_string()))
-                .into_iter()
-                .collect()
-        };
-
-        for node in link_nodes {
-            let (rel, href) = {
-                let node_ref = node.borrow();
-                let html_node = &node_ref.value;
-
-                let rel = html_node.get_attr("rel").map(|s| s.to_string());
-                let href = html_node.get_attr("href").map(|s| s.to_string());
-                (rel, href)
-            };
-
-            if let (Some(rel), Some(href)) = (rel, href)
-                && rel == "stylesheet"
-            {
-                let css_url = resolve_url(url, &href);
-
-                if let Ok(res) = net.fetch(&css_url).await {
-                    let bytes = res.body;
-                    if let Ok(text) = String::from_utf8(bytes) {
-                        css_sources.push(text);
-                    }
+                // CSS fetch を要求
+                for url in &self.pending_css_urls {
+                    log::info!("Fetch requested in WebView: url={}", url);
+                    tasks.push(WebViewTask::Fetch {
+                        url: url.clone(),
+                        kind: FetchKind::Css,
+                    });
                 }
+
+                self.phase = PagePhase::CssPending;
+            }
+
+            PagePhase::CssPending => {
+                // CSS が揃うまで待つ
+            }
+
+            PagePhase::CssApplied => {
+                // 安定状態
             }
         }
 
-        // style タグから読み取る
-        for css_text in dom_tree.collect_text_by_tag("style") {
-            css_sources.push(css_text);
+        tasks
+    }
+
+    pub fn on_html_fetched(&mut self, html: String, document_url: Url) {
+        log::info!("Fetched HTML: {}", document_url);
+        let parsed = parse_html(&html, document_url);
+
+        self.pending_css_urls = parsed.style_links;
+
+        let docment_info = DocumentInfo {
+            document_url: parsed.document_url,
+            base_url: parsed.base_url,
+            dom: parsed.dom,
+            title: parsed.title,
+        };
+        self.docment_info = Some(docment_info);
+
+        self.resolved_styles
+            .extend(resolve_all_css(&parsed.inline_styles));
+
+        self.phase = PagePhase::HtmlParsed;
+    }
+
+    pub fn on_css_fetched(&mut self, css: String) {
+        self.loaded_css.push(css);
+
+        if self.loaded_css.len() == self.pending_css_urls.len() {
+            print!("Apply");
+            self.apply_css_and_relayout();
+            self.phase = PagePhase::CssApplied;
+            self.needs_redraw = true;
         }
+    }
 
-        // --- CSSOM を構築 ---
-        let mut cssoms = Vec::with_capacity(css_sources.len() + 1);
-        cssoms.push(CssParser::new(USER_AGENT_CSS).parse()?);
-        for css_text in css_sources {
-            let mut css_parser = CssParser::new(&css_text);
-            let cssom = css_parser.parse()?;
-            cssoms.push(cssom);
-        }
+    /// Update page (e.g. DOM changed)
+    ///
+    /// This is a stub method for now.
+    pub fn update_page(&mut self) {
+        let measurer = PlatformTextMeasurer::new().unwrap();
 
-        let mut resolved_styles = layouter::css_resolver::ResolvedStyles::new();
-        for cssom in cssoms {
-            resolved_styles.extend(layouter::css_resolver::CssResolver::resolve(&cssom));
-        }
+        self.update_layout_and_info(measurer);
+    }
 
-        let measurer = crate::platform::renderer::text_measurer::PlatformTextMeasurer::new();
+    fn apply_css_and_relayout(&mut self) {
+        self.resolved_styles
+            .extend(resolve_all_css(&self.loaded_css));
 
-        // Layout and Info
+        let measurer = PlatformTextMeasurer::new().unwrap();
+
+        self.update_layout_and_info(measurer);
+    }
+
+    fn update_layout_and_info(&mut self, measurer: PlatformTextMeasurer) {
         self.layout_and_info = Some(layouter::build_layout_and_info(
-            &dom_tree.root,
-            &resolved_styles,
-            &measurer.unwrap(),
-            layouter::TextStyle {
+            &self.docment_info.as_ref().unwrap().dom.root,
+            &self.resolved_styles,
+            &measurer,
+            TextStyle {
                 font_size: 16.0,
                 ..Default::default()
             },
             Vec::new(),
         ));
-
-        log::debug!(
-            target: "WebView::LayoutInfo",
-            "Layouted the page:\n {:?}",
-            self.layout_and_info.as_ref().unwrap()
-        );
-
         self.needs_redraw = true;
-
-        Ok(())
     }
 
-    pub fn scroll_page(&mut self, delta_x: f32, delta_y: f32) {
-        self.scroll_x += delta_x;
-        self.scroll_y += delta_y;
-        self.needs_redraw = true;
+    pub fn navigate(&mut self) {
+        self.reset_for_navigation();
+    }
+
+    fn reset_for_navigation(&mut self) {
+        if self.phase != PagePhase::Init {
+            self.phase = PagePhase::BeforeHtmlParsing;
+        }
+
+        self.docment_info = None;
+        self.pending_css_urls.clear();
+        self.loaded_css.clear();
+        self.resolved_styles.clear();
+        self.layout_and_info = None;
+
+        self.needs_redraw = false;
+    }
+
+    pub fn title(&self) -> Option<&String> {
+        self.docment_info.as_ref().map(|d| &d.title)
+    }
+
+    pub fn relayout(&mut self, viewport: (f32, f32)) {
+        let Some((layout, _info)) = self.layout_and_info.as_mut() else {
+            return;
+        };
+
+        ui_layout::LayoutEngine::layout(layout, viewport.0, viewport.1);
+    }
+
+    /// 現在描画可能な Layout / Info を返す（なければ None）
+    pub fn layout_and_info(&self) -> Option<(&LayoutNode, &InfoNode)> {
+        self.layout_and_info.as_ref().map(|(l, i)| (l, i))
+    }
+
+    pub fn layout_and_info_mut(&mut self) -> Option<(&LayoutNode, &mut InfoNode)> {
+        self.layout_and_info.as_mut().map(|(l, i)| (&*l, i))
+    }
+
+    /// Returns document info
+    pub fn document_info(&self) -> Option<&DocumentInfo> {
+        self.docment_info.as_ref()
+    }
+
+    pub fn document_url(&self) -> Option<&Url> {
+        self.docment_info.as_ref().map(|info| &info.document_url)
+    }
+
+    pub fn base_url(&self) -> Option<&Url> {
+        self.docment_info.as_ref().map(|info| &info.base_url)
+    }
+
+    pub fn needs_redraw(&self) -> bool {
+        self.needs_redraw
+    }
+
+    pub fn clear_redraw_flag(&mut self) {
+        self.needs_redraw = false;
     }
 }
 
-fn resolve_url(base: &str, path: &str) -> String {
-    if path.starts_with("http://")
-        || path.starts_with("https://")
-        || path.starts_with("resource:///")
-    {
-        return path.to_string();
+fn parse_html(html: &str, document_url: Url) -> ParsedDocument {
+    // --- DOM パース ---
+    let mut parser = HtmlParser::new(html);
+    let dom = parser.parse();
+
+    // --- base_url ---
+    let base_url = dom
+        .find_all(|n| n.tag_name() == Some("base"))
+        .iter()
+        .filter_map(|node_ref| {
+            let html_node = &node_ref.borrow().value;
+            let href = html_node.get_attr("href")?;
+            document_url.join(&href).ok()
+        })
+        .next()
+        .unwrap_or_else(|| document_url.clone());
+
+    // --- title 抽出 ---
+    let title = dom
+        .collect_text_by_tag("title")
+        .first()
+        .cloned()
+        .unwrap_or("".into());
+
+    // --- Style links ---
+    // <link rel="stylesheet" href="...">
+    let link_nodes = dom.find_all(|n| n.tag_name() == Some("link"));
+    let mut style_links = Vec::new();
+
+    for node in link_nodes {
+        let (rel, href) = {
+            let node_ref = node.borrow();
+            let html_node = &node_ref.value;
+
+            let rel = html_node.get_attr("rel").map(|s| s.to_string());
+            let href = html_node.get_attr("href").map(|s| s.to_string());
+            (rel, href)
+        };
+
+        if let (Some(rel), Some(href)) = (rel, href)
+            && rel == "stylesheet"
+        {
+            let css_url = match resolve_url(&base_url, &href) {
+                Ok(url) => url,
+                Err(_) => continue,
+            };
+            style_links.push(css_url);
+        }
     }
-    let base_url = url::Url::parse(base).unwrap();
-    base_url.join(path).unwrap().to_string()
+
+    // --- Inline styles ---
+    let inline_styles = dom.collect_text_by_tag("style");
+
+    ParsedDocument {
+        document_url,
+        base_url,
+        dom,
+        title,
+        style_links,
+        inline_styles,
+    }
+}
+
+fn resolve_all_css(css_sources: &[String]) -> layouter::css_resolver::ResolvedStyles {
+    let mut resolved = layouter::css_resolver::ResolvedStyles::default();
+
+    for css in css_sources {
+        let sheet = CssParser::new(css).parse().unwrap();
+
+        resolved.extend(layouter::css_resolver::CssResolver::resolve(&sheet));
+    }
+
+    resolved
+}
+
+pub fn resolve_url(base_url: &Url, path: &str) -> Result<Url, url::ParseError> {
+    // absolute URL（scheme を持つ）
+    if let Ok(url) = Url::parse(path) {
+        return Ok(url);
+    }
+
+    // relative URL
+    base_url.join(path)
 }

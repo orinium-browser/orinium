@@ -2,8 +2,7 @@ use anyhow::Result;
 use orinium_browser::browser::{BrowserApp, Tab};
 use std::env;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     let _font_path = if args.len() > 1 {
         Some(args[1].clone())
@@ -13,33 +12,10 @@ async fn main() -> Result<()> {
 
     env_logger::init();
 
-    // テスト用のHTML
-    let html = r#"
-        <!DOCTYPE html>
-        <html>
-            <head>
-                <title>Test Page</title>
-            </head>
-            <body>
-                <h1>Hello, Orinium Browser!</h1>
-                <p>This is a test paragraph.</p>
-                <p>日本語テスト</p>
-                <div>
-                    <p>Nested paragraph in a div.</p>
-                    <p>Span inside a paragraph: <span>Span Text</span></p>
-                    <p>&amp; &lt; &gt; &quot; &#65; &#x41;</p>
-                </div>
-                <p>Very long text to test wrapping behavior. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>
-                <p>Button below:</p>
-                <button>Click Me!</button>
-            </body>
-        </html>
-    "#;
-
     let mut browser = BrowserApp::default();
 
-    let mut tab = Tab::new(browser.network());
-    tab.load_from_raw_html(html);
+    let mut tab = Tab::new();
+    tab.navigate("resource:///test/compatibility_test.html".parse()?);
 
     browser.add_tab(tab);
 
