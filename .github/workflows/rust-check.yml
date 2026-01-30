@@ -22,5 +22,11 @@ jobs:
       - name: Add Windows target
         run: rustup target add x86_64-pc-windows-gnu
 
-      - name: Check (Windows)
+      - name: Check
         run: cargo check --target x86_64-pc-windows-gnu
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+
+      - name: Cargo audit
+        run: cargo audit
