@@ -23,7 +23,7 @@ fn main() -> Result<()> {
             Ok(x) => x,
             Err(_) => panic!("Failed to lock SoundManager"),
         };
-        sm.play_from_uri(audio_file).expect("Failed to play audio");
+        sm.play_from_local_uri(audio_file).expect("Failed to play audio");
     }
 
     browser.run()?;

@@ -130,7 +130,10 @@ impl SoundManager {
     }
 
     /// URIから音声を再生する（resourceまたはfileスキームに対応）
-    pub fn play_from_uri(&mut self, uri: &str) -> Result<()> {
+    ///
+    /// 通常の再生には `play_from_bytes` を使用してください。
+    /// これはテスト用メソッドです
+    pub fn play_from_local_uri(&mut self, uri: &str) -> Result<()> {
         if uri.starts_with("resource:") {
             let rel = uri
                 .trim_start_matches("resource:///")
