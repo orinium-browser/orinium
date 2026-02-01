@@ -17,6 +17,7 @@
             body {
                 margin: 0;
                 font-family: sans-serif;
+                padding: 16px;
             }
 
             /* --- ナビゲーション（flex確認用） --- */
@@ -59,6 +60,21 @@
             .hidden {
                 display: none;
             }
+
+            /* === Border tests === */
+            .test-box { margin: 10px 0; padding: 12px; background: white; }
+
+            /* keyword widths */
+            .border-thin { border: thin solid #333; }
+            .border-medium { border: medium dashed #0066cc; }
+            .border-thick { border: thick dotted #cc0000; }
+
+            /* misspelling 'midium' (should be treated like medium) */
+            .border-midium { border: medium solid #444; }
+
+            /* use CSS variable (user-agent or author) */
+            .border-var { border: var(--border-medium) solid #228833; }
+
         </style>
     </head>
     <body>
@@ -76,6 +92,15 @@
             <p class="highlight">この行は赤く太字になるはず</p>
 
             <div class="hidden">このテキストは表示されないはず</div>
+
+            <h2>Border shorthand テスト</h2>
+
+            <div class="test-box border-thin">border: thin solid #333; (expected ~1px)</div>
+            <div class="test-box border-medium">border: medium dashed #0066cc; (expected ~3px)</div>
+            <div class="test-box border-thick">border: thick dotted #cc0000; (expected ~5px)</div>
+            <div class="test-box border-midium">border: medium solid #444; (typo corrected: midium -> medium)</div>
+            <div class="test-box border-var">border: var(--border-medium) solid #228833; (from CSS variable)</div>
+
         </main>
     </body>
 </html>
