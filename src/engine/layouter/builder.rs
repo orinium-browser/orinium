@@ -114,27 +114,11 @@ pub fn build_layout_and_info(
 
         let candidates = collect_candidates(resolved_styles, &chain);
 
-        // Extract custom properties (--*) so they can be referenced via var(--name)
-        let mut custom_props: std::collections::HashMap<String, CssValue> = HashMap::new();
-        for (name, (value, _, _)) in &candidates {
-            if name.starts_with("--") {
-                custom_props.insert(name.clone(), value.clone());
-            }
-        }
-
         for (name, (value, _, _)) in candidates {
-            // Skip custom properties (they are stored in custom_props)
             if name.starts_with("--") {
                 continue;
             }
-            apply_declaration(
-                &name,
-                &value,
-                &mut style,
-                &mut container_style,
-                &mut text_style,
-                &custom_props,
-            );
+            apply_declaration(&name, &value, &mut style, &mut container_style, &mut text_style);
         }
     }
 
@@ -381,7 +365,6 @@ fn apply_declaration(
     style: &mut Style,
     container_style: &mut ContainerStyle,
     text_style: &mut TextStyle,
-    custom_props: &std::collections::HashMap<String, CssValue>,
 ) -> Option<()> {
     fn expand_box<F>(
         value: &CssValue,
@@ -420,7 +403,6 @@ fn apply_declaration(
     fn parse_border_shorthand(
         value: &CssValue,
         text_style: &TextStyle,
-        custom_props: &std::collections::HashMap<String, CssValue>,
     ) -> Option<(Option<Length>, Option<BorderStyle>, Option<Color>)> {
         let mut width: Option<Length> = None;
         let mut style_v: Option<BorderStyle> = None;
@@ -432,21 +414,8 @@ fn apply_declaration(
         };
 
         for v in items {
-            // resolve var(--*) when present
-            let v_resolved: Option<CssValue> = match v {
-                CssValue::Function(fname, args) if fname == "var" && !args.is_empty() => {
-                    // first arg is expected to be Keyword("--name") or Keyword("--name", ...)
-                    match &args[0] {
-                        CssValue::Keyword(k) if k.starts_with("--") => {
-                            custom_props.get(k).cloned()
-                        }
-                        _ => None,
-                    }
-                }
-                _ => None,
-            };
+            let token = v;
 
-            let token = v_resolved.as_ref().unwrap_or(v);
             // try as length (numeric lengths)
             if width.is_none() {
                 if let Some(l) = resolve_css_len(token, text_style) {
@@ -664,7 +633,7 @@ fn apply_declaration(
         }
 
         ("border", v) => {
-            let (maybe_width, maybe_style, maybe_color) = parse_border_shorthand(v, text_style, custom_props)?;
+            let (maybe_width, maybe_style, maybe_color) = parse_border_shorthand(v, text_style)?;
 
             if let Some(w) = maybe_width {
                 style.spacing.border_top = w.clone();
@@ -689,7 +658,7 @@ fn apply_declaration(
         }
         ("border-top", _) => {
             if let CssValue::List(_) = value {
-                let (maybe_width, maybe_style, maybe_color) = parse_border_shorthand(value, text_style, custom_props)?;
+                let (maybe_width, maybe_style, maybe_color) = parse_border_shorthand(value, text_style)?;
                 if let Some(w) = maybe_width { style.spacing.border_top = w; }
                 if let Some(s) = maybe_style { container_style.border_style.top = s; }
                 if let Some(c) = maybe_color { container_style.border_color.top = c; }
@@ -699,7 +668,7 @@ fn apply_declaration(
         }
         ("border-right", _) => {
             if let CssValue::List(_) = value {
-                let (maybe_width, maybe_style, maybe_color) = parse_border_shorthand(value, text_style, custom_props)?;
+                let (maybe_width, maybe_style, maybe_color) = parse_border_shorthand(value, text_style)?;
                 if let Some(w) = maybe_width { style.spacing.border_right = w; }
                 if let Some(s) = maybe_style { container_style.border_style.right = s; }
                 if let Some(c) = maybe_color { container_style.border_color.right = c; }
@@ -709,7 +678,7 @@ fn apply_declaration(
         }
         ("border-bottom", _) => {
             if let CssValue::List(_) = value {
-                let (maybe_width, maybe_style, maybe_color) = parse_border_shorthand(value, text_style, custom_props)?;
+                let (maybe_width, maybe_style, maybe_color) = parse_border_shorthand(value, text_style)?;
                 if let Some(w) = maybe_width { style.spacing.border_bottom = w; }
                 if let Some(s) = maybe_style { container_style.border_style.bottom = s; }
                 if let Some(c) = maybe_color { container_style.border_color.bottom = c; }
@@ -719,7 +688,7 @@ fn apply_declaration(
         }
         ("border-left", _) => {
             if let CssValue::List(_) = value {
-                let (maybe_width, maybe_style, maybe_color) = parse_border_shorthand(value, text_style, custom_props)?;
+                let (maybe_width, maybe_style, maybe_color) = parse_border_shorthand(value, text_style)?;
                 if let Some(w) = maybe_width { style.spacing.border_left = w; }
                 if let Some(s) = maybe_style { container_style.border_style.left = s; }
                 if let Some(c) = maybe_color { container_style.border_color.left = c; }
