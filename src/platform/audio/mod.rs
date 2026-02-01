@@ -151,7 +151,7 @@ impl SoundManager {
     }
 }
 
-/// 音声をでコードする
+/// 音声をデコードする
 fn decode(data: &[u8]) -> Result<(Vec<f32>, usize, u32)> {
     let cursor = Cursor::new(data.to_vec());
     let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
