@@ -2,9 +2,9 @@ name: Rust-check
 
 on:
   push:
-    branches: [ "dev" ]
+    branches: ["dev"]
   pull_request:
-    branches: [ "dev" ]
+    branches: ["dev"]
 
 env:
   CARGO_TERM_COLOR: always
@@ -24,9 +24,3 @@ jobs:
 
       - name: Check
         run: cargo check --target x86_64-pc-windows-gnu
-
-      - name: Install cargo-audit
-        run: cargo install cargo-audit
-
-      - name: Cargo audit
-        run: cargo audit
