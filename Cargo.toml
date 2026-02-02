@@ -21,7 +21,7 @@ wgpu-types = "28.0.0"
 glyphon = { git = "https://github.com/grovesNL/glyphon", rev = "37b973d" }
 fontdue = "0.9.3"
 ab_glyph = "0.2"
-bytemuck = { version = "1.24", features = ["derive"] }
+bytemuck = { version = "1.25", features = ["derive"] }
 url = "2.5"
 rustls = { version = "0.23.36", default-features = false, features = ["tls12"] }
 rustls-native-certs = "0.8.3"
