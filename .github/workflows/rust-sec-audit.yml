@@ -7,6 +7,10 @@ on:
 jobs:
   security_audit:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      checks: write
     steps:
       - uses: actions/checkout@v4
       - uses: rustsec/audit-check@v2.0.0
