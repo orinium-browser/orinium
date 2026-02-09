@@ -98,7 +98,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
             let bc = &style.border_color;
 
             // top
-            let border_width = border_box_rect.y - padding_box_rect.y;
+            let border_width = (padding_box_rect.y - border_box_rect.y).max(0.0);
             commands.push(DrawCommand::DrawRect {
                 x: 0.0,
                 y: 0.0,
@@ -108,8 +108,8 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
             });
 
             // bottom
-            let border_width = border_box_rect.y + border_box_rect.height
-                - (padding_box_rect.y + padding_box_rect.height);
+            let border_width = (border_box_rect.y + border_box_rect.height
+                - (padding_box_rect.y + padding_box_rect.height)).max(0.0);
             commands.push(DrawCommand::DrawRect {
                 x: 0.0,
                 y: border_box_rect.height - border_width,
@@ -119,7 +119,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
             });
 
             // left
-            let border_width = border_box_rect.x - padding_box_rect.x;
+            let border_width = (padding_box_rect.x - border_box_rect.x).max(0.0);
             commands.push(DrawCommand::DrawRect {
                 x: 0.0,
                 y: 0.0,
@@ -129,8 +129,8 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
             });
 
             // right
-            let border_width = border_box_rect.x + border_box_rect.width
-                - (padding_box_rect.x + padding_box_rect.width);
+            let border_width = (border_box_rect.x + border_box_rect.width
+                - (padding_box_rect.x + padding_box_rect.width)).max(0.0);
             commands.push(DrawCommand::DrawRect {
                 x: border_box_rect.width - border_width,
                 y: 0.0,
