@@ -9,6 +9,9 @@ on:
 jobs:
   warn:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     env:
       AUTHOR: ${{ github.event.pull_request.user.login }}
       TITLE: ${{ github.event.pull_request.title }}
