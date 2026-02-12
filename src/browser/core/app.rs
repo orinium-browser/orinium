@@ -316,7 +316,13 @@ impl BrowserApp {
         {
             *scroll_offset_y = (*scroll_offset_y + scroll_amount).clamp(
                 0.0,
-                (layout.box_model.children_box.height - (window_size.1 / sf)).max(0.0),
+                (layout
+                    .layout_boxes
+                    .iter()
+                    .map(|l| l.children_box.height)
+                    .sum::<f32>()
+                    - (window_size.1 / sf))
+                    .max(0.0),
             );
         }
     }
