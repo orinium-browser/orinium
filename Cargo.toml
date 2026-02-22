@@ -31,7 +31,7 @@ http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["tokio"] }
 image = "0.25.9"
 ui_layout = "0.8.3"
-cpal = "0.17.1"
+cpal = "0.17.3"
 symphonia = { version = "0.5.5", features = ["aac", "flac", "mp3", "vorbis", "wav"] }
 
 [dev-dependencies]
