@@ -2,19 +2,28 @@ name: Rust-check
 
 on:
   push:
-    branches: [ "dev" ]
+    branches: ["dev"]
   pull_request:
-    branches: [ "dev" ]
+    branches: ["dev"]
+
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-
+  check:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Check
-      run: cargo check
+      - uses: actions/checkout@v4
+
+      - name: Install MinGW
+        run: sudo apt-get update && sudo apt-get install -y mingw-w64
+
+      - name: Add Windows target
+        run: rustup target add x86_64-pc-windows-gnu
+
+      - name: Check
+        run: cargo check --target x86_64-pc-windows-gnu

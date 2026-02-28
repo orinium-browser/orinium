@@ -16,7 +16,6 @@ fn vs_main(model: VertexInput) -> VertexOutput {
     return out;
 }
 
-// Fragment shader
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     return in.color;
