@@ -164,8 +164,13 @@ fn main() -> Result<()> {
                                 println!("{}: {}", key, value);
                             }
                             println!("Response Body:");
-                            let body_str = String::from_utf8_lossy(&resp.body);
-                            println!("{}", body_str);
+                            println!("Body size: {} bytes", resp.body.len());
+
+                            if let Ok(text) =
+                                std::str::from_utf8(&resp.body[..resp.body.len().min(1024)])
+                            {
+                                println!("Preview:\n{}", text);
+                            }
                         }
                         Err(e) => {
                             eprintln!("Failed to send request: {}", e);
@@ -188,8 +193,13 @@ fn main() -> Result<()> {
                                 println!("{}: {}", key, value);
                             }
                             println!("Response Body:");
-                            let body_str = String::from_utf8_lossy(&resp.body);
-                            println!("{}", body_str);
+                            println!("Body size: {} bytes", resp.body.len());
+
+                            if let Ok(text) =
+                                std::str::from_utf8(&resp.body[..resp.body.len().min(1024)])
+                            {
+                                println!("Preview:\n{}", text);
+                            }
                         }
                         Err(e) => {
                             eprintln!("Failed to fetch URL: {}", e);
