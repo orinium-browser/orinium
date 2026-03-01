@@ -181,7 +181,7 @@ impl BrowserApp {
                     }
                 }
                 Err(err) => {
-                    log::error!("NetworkError: {};", err);
+                    log::error!("NetworkError: {}", err);
                     tab.on_fetch_failed(err, url);
                 }
             }
