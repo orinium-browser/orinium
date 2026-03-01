@@ -22,6 +22,7 @@ pub struct SoundManager {
     /// ソースのチャンネル数
     src_channels: usize,
     /// ソースのサンプルレート
+    // TODO: Hzを考慮したコンバーターを実装する
     src_sample_rate: u32,
     /// cpalのストリーム
     stream: Option<cpal::Stream>,
