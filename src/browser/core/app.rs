@@ -36,7 +36,7 @@ pub struct InputState {
 pub struct PendingFetches {
     /// Maps (id) to (tab_id, FetchKind)
     /// Id is used to track pending fetch requests.
-    map: HashMap<usize, (usize, FetchKind)>,
+    map: HashMap<usize, (usize, FetchKind, Url)>,
     counter: usize,
 }
 
@@ -54,7 +54,7 @@ impl PendingFetches {
 
         let id = self.generate_id(&url);
 
-        self.map.insert(id, (tab_id, kind));
+        self.map.insert(id, (tab_id, kind, url));
         dbg!(id)
     }
 
@@ -74,7 +74,7 @@ impl PendingFetches {
         now ^ self.counter ^ url_hash
     }
 
-    pub fn remove(&mut self, id: usize) -> Option<(usize, FetchKind)> {
+    pub fn remove(&mut self, id: usize) -> Option<(usize, FetchKind, Url)> {
         self.map.remove(&id)
     }
 }
@@ -154,7 +154,7 @@ impl BrowserApp {
             log::info!("Network message received in App for fetch_id={}", msg.id);
 
             // pending_fetches から fetch 情報を取得
-            let Some((tab_id, kind)) = self.pending_fetches.remove(msg.id) else {
+            let Some((tab_id, kind, url)) = self.pending_fetches.remove(msg.id) else {
                 log::warn!("No pending fetch found for fetch_id={}", msg.id);
                 continue;
             };
@@ -181,8 +181,8 @@ impl BrowserApp {
                     }
                 }
                 Err(err) => {
-                    log::error!("NetworkError: {}", err);
-                    tab.on_fetch_failed(err);
+                    log::error!("NetworkError: {};", err);
+                    tab.on_fetch_failed(err, url);
                 }
             }
         }
