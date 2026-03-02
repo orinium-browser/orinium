@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -58,7 +60,8 @@ impl ImageManager {
         let mut path = PathBuf::from("resource");
         path.push(rel);
 
-        let bytes = std::fs::read(&path).with_context(|| format!("failed to read resource file: {}", path.display()))?;
+        let bytes = std::fs::read(&path)
+            .with_context(|| format!("failed to read resource file: {}", path.display()))?;
         let img = image::load_from_memory(&bytes).context("failed to decode image")?;
         let rgba = img.to_rgba8();
         let (width, height) = rgba.dimensions();
@@ -119,7 +122,13 @@ impl ImageManager {
             },
         );
 
-        Ok(ImageHandle { id, width, height, view, sampler })
+        Ok(ImageHandle {
+            id,
+            width,
+            height,
+            view,
+            sampler,
+        })
     }
 
     /// 画像のサイズを取得

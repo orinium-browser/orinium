@@ -45,14 +45,22 @@ pub enum NodeKind {
 pub struct Color(pub u8, pub u8, pub u8, pub u8);
 
 impl Color {
-    /// u8 RGBA -> [f32; 4] RGBA (0.0~1.0)
-    pub fn to_f32_array(&self) -> [f32; 4] {
-        [
-            self.0 as f32 / 255.0,
-            self.1 as f32 / 255.0,
-            self.2 as f32 / 255.0,
-            self.3 as f32 / 255.0,
-        ]
+    /// Convert sRGB (0..255) to linear RGB (0..1)
+    pub fn to_linear_f32_array(&self) -> [f32; 4] {
+        let r = Self::srgb_to_linear(self.0 as f32 / 255.0);
+        let g = Self::srgb_to_linear(self.1 as f32 / 255.0);
+        let b = Self::srgb_to_linear(self.2 as f32 / 255.0);
+        let a = self.3 as f32 / 255.0; // alpha is linear
+        [r, g, b, a]
+    }
+
+    /// Convert sRGB (0..1) to linear RGB
+    fn srgb_to_linear(c: f32) -> f32 {
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
     }
 }
 

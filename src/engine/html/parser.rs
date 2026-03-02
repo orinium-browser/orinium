@@ -52,11 +52,10 @@ impl HtmlNodeType {
     }
     pub fn remove_attr(&mut self, name: &str) -> Option<String> {
         if let HtmlNodeType::Element { attributes, .. } = self {
-            if let Some(pos) = attributes.iter().position(|attr| attr.name == name) {
-                Some(attributes.remove(pos).value)
-            } else {
-                None
-            }
+            attributes
+                .iter()
+                .position(|attr| attr.name == name)
+                .map(|pos| attributes.remove(pos).value)
         } else {
             None
         }
@@ -118,11 +117,7 @@ impl DomTree {
         let n = node.borrow();
         match &n.value {
             HtmlNodeType::Text(content) => content.clone(),
-            HtmlNodeType::Element { .. } => n
-                .children()
-                .iter()
-                .map(|child| DomTree::inner_text(child))
-                .collect(),
+            HtmlNodeType::Element { .. } => n.children().iter().map(DomTree::inner_text).collect(),
             _ => "".to_string(),
         }
     }

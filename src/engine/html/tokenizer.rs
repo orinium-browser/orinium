@@ -32,6 +32,8 @@ pub enum Token {
 #[derive(Debug, PartialEq)]
 pub enum TokenizerState {
     Data,
+    ScriptData,
+    StyleData,
     EscapeDecoding,
     TagOpen,
     EndTagOpen,
@@ -139,7 +141,21 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
+    fn handle_special_tag_state_transition(&mut self, token: &Token) {
+        if let Token::StartTag { name, .. } = token {
+            // Switch to ScriptData or StyleData state if we encounter <script> or <style> start tags
+            match name.to_lowercase().as_str() {
+                "script" => self.state = TokenizerState::ScriptData,
+                "style" => self.state = TokenizerState::StyleData,
+                _ => self.state = TokenizerState::Data,
+            }
+        } else {
+            // Do nothing. We only switch to ScriptData or StyleData on StartTag, and we return to Data on EndTag.
+        }
+    }
+
     /// Debug log for emitted tokens
+    #[inline(always)]
     fn debug_emit(&self, token: &Token) {
         #[cfg(debug_assertions)]
         match token {
@@ -165,7 +181,9 @@ impl<'a> Tokenizer<'a> {
             log::debug!(target:"HtmlTokenizer::Char", "State: {:?}, Char: '{}'", self.state, c);
 
             match self.state {
-                TokenizerState::Data => self.state_data(c),
+                TokenizerState::Data | TokenizerState::StyleData | TokenizerState::ScriptData => {
+                    self.state_data(c)
+                }
                 TokenizerState::EscapeDecoding => self.state_escape_decoding(c),
                 _ if self.state.is_doctype() => self.state_doctype(c),
                 TokenizerState::TagOpen => self.state_tag_open(c),
@@ -183,13 +201,14 @@ impl<'a> Tokenizer<'a> {
                 TokenizerState::EndTagOpen => self.state_end_tag_open(c),
                 _ if self.state.is_comment() => self.state_comment(c),
                 _ => {
-                    log::warn!(target:"HtmlTokenizer::State", "Unimplemented state: {:?}, returning to Data state", self.state);
+                    log::error!(target:"HtmlTokenizer::State", "Unimplemented state: {:?}, returning to Data state", self.state);
                     self.state = TokenizerState::Data;
                 }
             }
 
             if let Some(token) = self.token.take() {
                 self.debug_emit(&token);
+                self.handle_special_tag_state_transition(&token);
                 return Some(token);
             }
         }
@@ -217,7 +236,8 @@ impl<'a> Tokenizer<'a> {
                 self.commit_token();
                 self.state = TokenizerState::TagOpen;
             }
-            '&' => {
+            // Handle escape entities only in Data. Not in ScriptData, and StyleData states.
+            '&' if self.state == TokenizerState::Data => {
                 self.buffer.push('&');
                 self.state = TokenizerState::EscapeDecoding;
             }

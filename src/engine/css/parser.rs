@@ -526,7 +526,14 @@ impl<'a> Parser<'a> {
                         expected: "{",
                         found: format!("{:?}", token),
                     },
-                    context: vec![],
+                    context: vec![format!(
+                        "While parsing rule with selectors: {}",
+                        selectors
+                            .iter()
+                            .map(|s| format!("{:?}", s))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )],
                 });
             }
         }

@@ -112,7 +112,12 @@ pub fn build_layout_and_info(
             },
         );
 
-        for (name, (value, _, _)) in collect_candidates(resolved_styles, &chain) {
+        let candidates = collect_candidates(resolved_styles, &chain);
+
+        for (name, (value, _, _)) in candidates {
+            if name.starts_with("--") {
+                continue;
+            }
             apply_declaration(
                 &name,
                 &value,
@@ -224,20 +229,18 @@ pub fn build_layout_and_info(
 
             if dom.borrow().value.tag_name() == Some("html")
                 && child_dom.borrow().value.tag_name() == Some("body")
+                && let NodeKind::Container { style, .. } = &mut kind
+                && style.background_color == Color(0, 0, 0, 0)
             {
-                if let NodeKind::Container { style, .. } = &mut kind {
-                    if style.background_color == Color(0, 0, 0, 0) {
-                        let background_color = {
-                            let NodeKind::Container { style, .. } = &child_info.kind else {
-                                continue;
-                            };
-                            style.background_color
-                        };
-                        // html 要素の body 子要素に背景色が指定されていない場合、
-                        // body の背景色を html の背景色で上書きする
-                        style.background_color = background_color;
-                    }
-                }
+                let background_color = {
+                    let NodeKind::Container { style, .. } = &child_info.kind else {
+                        continue;
+                    };
+                    style.background_color
+                };
+                // html 要素の body 子要素に背景色が指定されていない場合、
+                // body の背景色を html の背景色で上書きする
+                style.background_color = background_color;
             }
 
             layout_children.push(child_layout);
@@ -338,7 +341,7 @@ fn collect_candidates(
     let mut candidates: HashMap<String, (CssValue, (u32, u32, u32), usize)> = HashMap::new();
 
     for decl in resolved_styles {
-        if decl.selector.matches(&chain) {
+        if decl.selector.matches(chain) {
             let entry = candidates.get(&decl.name);
 
             let should_replace = match entry {
@@ -398,6 +401,88 @@ fn apply_declaration(
         }
 
         Some(())
+    }
+
+    fn parse_border_shorthand(
+        value: &CssValue,
+        text_style: &TextStyle,
+    ) -> Option<(Option<Length>, Option<BorderStyle>, Option<Color>)> {
+        let mut width: Option<Length> = None;
+        let mut style_v: Option<BorderStyle> = None;
+        let mut color_v: Option<Color> = None;
+
+        let items: Vec<&CssValue> = match value {
+            CssValue::List(values) => values.iter().collect(),
+            _ => vec![value],
+        };
+
+        for v in items {
+            let token = v;
+
+            // try as length (numeric lengths)
+            if width.is_none()
+                && let Some(l) = resolve_css_len(token, text_style)
+            {
+                width = Some(l);
+                continue;
+            }
+
+            // try as width keyword (thin/medium/thick). Check keywords before style keywords.
+            if width.is_none()
+                && let CssValue::Keyword(s) = token
+            {
+                match s.as_str().to_ascii_lowercase().as_str() {
+                    "thin" => {
+                        width = Some(Length::Px(1.0));
+                        continue;
+                    }
+                    "medium" => {
+                        width = Some(Length::Px(3.0));
+                        continue;
+                    }
+                    "midium" => {
+                        width = Some(Length::Px(3.0));
+                        continue;
+                    } // common misspelling
+                    "thick" => {
+                        width = Some(Length::Px(5.0));
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+
+            // try as style keyword
+            if style_v.is_none()
+                && let CssValue::Keyword(s) = token
+            {
+                let s_lower = s.as_str();
+                let parsed = match s_lower {
+                    "none" => Some(BorderStyle::None),
+                    "solid" => Some(BorderStyle::Solid),
+                    "dashed" => Some(BorderStyle::Dashed),
+                    "dotted" => Some(BorderStyle::Dotted),
+                    _ => None,
+                };
+
+                if let Some(p) = parsed {
+                    style_v = Some(p);
+                    continue;
+                }
+            }
+
+            // try as color
+            if color_v.is_none()
+                && let Some(c) = resolve_css_color(token)
+            {
+                color_v = Some(c);
+                continue;
+            }
+
+            // unknown token: ignore
+        }
+
+        Some((width, style_v, color_v))
     }
 
     match (name, value) {
@@ -562,25 +647,97 @@ fn apply_declaration(
             style.spacing.margin_left = resolve_css_len(value, text_style)?;
         }
 
-        ("broder", v) => {
-            expand_box(v, text_style, &resolve_css_len, |t, r, b, l| {
-                style.spacing.border_top = t;
-                style.spacing.border_right = r;
-                style.spacing.border_bottom = b;
-                style.spacing.border_left = l;
-            })?;
+        ("border", v) => {
+            let (maybe_width, maybe_style, maybe_color) = parse_border_shorthand(v, text_style)?;
+
+            if let Some(w) = maybe_width {
+                style.spacing.border_top = w.clone();
+                style.spacing.border_right = w.clone();
+                style.spacing.border_bottom = w.clone();
+                style.spacing.border_left = w;
+            }
+
+            if let Some(s) = maybe_style {
+                container_style.border_style.top = s;
+                container_style.border_style.right = s;
+                container_style.border_style.bottom = s;
+                container_style.border_style.left = s;
+            }
+
+            if let Some(c) = maybe_color {
+                container_style.border_color.top = c;
+                container_style.border_color.right = c;
+                container_style.border_color.bottom = c;
+                container_style.border_color.left = c;
+            }
         }
         ("border-top", _) => {
-            style.spacing.border_top = resolve_css_len(value, text_style)?;
+            if let CssValue::List(_) = value {
+                let (maybe_width, maybe_style, maybe_color) =
+                    parse_border_shorthand(value, text_style)?;
+                if let Some(w) = maybe_width {
+                    style.spacing.border_top = w;
+                }
+                if let Some(s) = maybe_style {
+                    container_style.border_style.top = s;
+                }
+                if let Some(c) = maybe_color {
+                    container_style.border_color.top = c;
+                }
+            } else {
+                style.spacing.border_top = resolve_css_len(value, text_style)?;
+            }
         }
         ("border-right", _) => {
-            style.spacing.border_right = resolve_css_len(value, text_style)?;
+            if let CssValue::List(_) = value {
+                let (maybe_width, maybe_style, maybe_color) =
+                    parse_border_shorthand(value, text_style)?;
+                if let Some(w) = maybe_width {
+                    style.spacing.border_right = w;
+                }
+                if let Some(s) = maybe_style {
+                    container_style.border_style.right = s;
+                }
+                if let Some(c) = maybe_color {
+                    container_style.border_color.right = c;
+                }
+            } else {
+                style.spacing.border_right = resolve_css_len(value, text_style)?;
+            }
         }
         ("border-bottom", _) => {
-            style.spacing.border_bottom = resolve_css_len(value, text_style)?;
+            if let CssValue::List(_) = value {
+                let (maybe_width, maybe_style, maybe_color) =
+                    parse_border_shorthand(value, text_style)?;
+                if let Some(w) = maybe_width {
+                    style.spacing.border_bottom = w;
+                }
+                if let Some(s) = maybe_style {
+                    container_style.border_style.bottom = s;
+                }
+                if let Some(c) = maybe_color {
+                    container_style.border_color.bottom = c;
+                }
+            } else {
+                style.spacing.border_bottom = resolve_css_len(value, text_style)?;
+            }
         }
         ("border-left", _) => {
-            style.spacing.border_left = resolve_css_len(value, text_style)?;
+            if let CssValue::List(_) = value {
+                let (maybe_width, maybe_style, maybe_color) =
+                    parse_border_shorthand(value, text_style)?;
+                if let Some(w) = maybe_width {
+                    style.spacing.border_left = w;
+                }
+                if let Some(s) = maybe_style {
+                    container_style.border_style.left = s;
+                }
+                if let Some(c) = maybe_color {
+                    container_style.border_color.left = c;
+                }
+            } else {
+                style.spacing.border_left = resolve_css_len(value, text_style)?;
+            }
         }
 
         ("padding", v) => {
@@ -706,25 +863,48 @@ fn resolve_css_len(css_len: &CssValue, text_style: &TextStyle) -> Option<Length>
             "auto" => Some(Length::Auto),
             _ => None,
         },
-        CssValue::Function(name, args) if name == "calc" && args.len() == 3 => {
-            let mut args = args.iter();
-            let a = args.next().unwrap();
-            let op = args.next().unwrap();
-            let b = args.next().unwrap();
-            match op {
-                CssValue::Keyword(o) if o == "+" => Some(Length::Add(
-                    Box::new(resolve_css_len(a, text_style)?),
-                    Box::new(resolve_css_len(b, text_style)?),
-                )),
-                CssValue::Keyword(o) if o == "-" => Some(Length::Sub(
-                    Box::new(resolve_css_len(a, text_style)?),
-                    Box::new(resolve_css_len(b, text_style)?),
-                )),
-                _ => {
-                    log::error!(target: "Layouter", "Unknown operator for calc function: {:?}", op);
-                    None
+        CssValue::Function(name, args) if name == "calc" && !args.is_empty() => {
+            let mut iter = args.iter();
+            let mut result = resolve_css_len(iter.next().unwrap(), text_style)?;
+
+            while let (Some(op), Some(val)) = (iter.next(), iter.next()) {
+                match op {
+                    CssValue::Keyword(o) if o == "+" => {
+                        let val_resolved = resolve_css_len(val, text_style)?;
+                        result = Length::Add(Box::new(result), Box::new(val_resolved));
+                    }
+                    CssValue::Keyword(o) if o == "-" => {
+                        let val_resolved = resolve_css_len(val, text_style)?;
+                        result = Length::Sub(Box::new(result), Box::new(val_resolved));
+                    }
+                    CssValue::Keyword(o) if o == "*" => {
+                        if let CssValue::Number(factor) = val {
+                            result = Length::Mul(Box::new(result), *factor);
+                        } else {
+                            log::error!(target: "Layouter", "Invalid operand for multiplication in calc(): {:?}", val);
+                            return None;
+                        }
+                    }
+                    CssValue::Keyword(o) if o == "/" => {
+                        if let CssValue::Number(factor) = val {
+                            if *factor == 0.0 {
+                                log::error!(target: "Layouter", "Division by zero in calc()");
+                                return None;
+                            }
+                            result = Length::Div(Box::new(result), *factor);
+                        } else {
+                            log::error!(target: "Layouter", "Invalid operand for division in calc(): {:?}", val);
+                            return None;
+                        }
+                    }
+                    _ => {
+                        log::error!(target: "Layouter", "Unknown operator for calc function: {:?}", op);
+                        return None;
+                    }
                 }
             }
+
+            Some(result)
         }
         _ => {
             log::error!(target: "Layouter", "Unknown CSS Length type: {:?}", css_len);
@@ -784,11 +964,7 @@ fn resolve_css_color(css_color: &CssValue) -> Option<Color> {
             "none" => Some(Color(0, 0, 0, 0)),
 
             _ => {
-                log::error!(
-                    target: "Layouter",
-                    "Unknown CSS color keyword: {}",
-                    keyword
-                );
+                log::error!(target: "Layouter", "Unknown CSS color keyword: {}", keyword);
                 None
             }
         }
@@ -832,68 +1008,74 @@ fn resolve_css_color(css_color: &CssValue) -> Option<Color> {
         // Named color keyword
         CssValue::Keyword(value) => keyword_color_to_color(value),
 
-        // rgba(r,g,b,a)
-        CssValue::Function(func, args) if func == "rgba" && args.len() == 4 => {
-            if let (
-                CssValue::Number(r),
-                CssValue::Number(g),
-                CssValue::Number(b),
-                CssValue::Number(a),
-            ) = (&args[0], &args[1], &args[2], &args[3])
-            {
-                Some(Color(
-                    (*r * 255.0).round() as u8,
-                    (*g * 255.0).round() as u8,
-                    (*b * 255.0).round() as u8,
-                    (*a * 255.0).round() as u8,
-                ))
-            } else {
-                None
+        // rgb() / rgba() unified
+        CssValue::Function(func, args) if func == "rgb" || func == "rgba" => {
+            // Extract numeric components, ignoring commas and handling '/'
+            let mut numbers = Vec::new();
+            let mut alpha: Option<f32> = None;
+            let mut after_slash = false;
+
+            for arg in args {
+                match arg {
+                    CssValue::Keyword(k) if k == "/" => {
+                        after_slash = true;
+                    }
+                    CssValue::Number(n) => {
+                        if after_slash {
+                            alpha = Some(*n);
+                        } else {
+                            numbers.push(*n);
+                        }
+                    }
+                    _ => return None,
+                }
             }
+
+            if numbers.len() != 3 {
+                return None;
+            }
+
+            let a = alpha.unwrap_or(1.0);
+
+            Some(Color(
+                (numbers[0] * 255.0).round() as u8,
+                (numbers[1] * 255.0).round() as u8,
+                (numbers[2] * 255.0).round() as u8,
+                (a * 255.0).round() as u8,
+            ))
         }
 
-        // rgb(r,g,b)
-        CssValue::Function(func, args) if func == "rgb" && args.len() == 3 => {
-            if let (CssValue::Number(r), CssValue::Number(g), CssValue::Number(b)) =
-                (&args[0], &args[1], &args[2])
-            {
-                Some(Color(
-                    (*r * 255.0).round() as u8,
-                    (*g * 255.0).round() as u8,
-                    (*b * 255.0).round() as u8,
-                    255,
-                ))
-            } else {
-                None
-            }
-        }
+        // hsl() / hsla() unified
+        CssValue::Function(func, args) if func == "hsl" || func == "hsla" => {
+            // Collect h, s, l and optional alpha
+            let mut numbers = Vec::new();
+            let mut alpha: Option<f32> = None;
+            let mut after_slash = false;
 
-        // hsl(h,s,l)
-        CssValue::Function(func, args) if func == "hsl" && args.len() == 3 => {
-            if let (CssValue::Number(h), CssValue::Number(s), CssValue::Number(l)) =
-                (&args[0], &args[1], &args[2])
-            {
-                let (r, g, b, a) = hsla_to_rgba(*h, *s, *l, 1.0);
-                Some(Color(r, g, b, a))
-            } else {
-                None
+            for arg in args {
+                match arg {
+                    CssValue::Keyword(k) if k == "/" => {
+                        after_slash = true;
+                    }
+                    CssValue::Number(n) => {
+                        if after_slash {
+                            alpha = Some(*n);
+                        } else {
+                            numbers.push(*n);
+                        }
+                    }
+                    _ => return None,
+                }
             }
-        }
 
-        // hsla(h,s,l,a)
-        CssValue::Function(func, args) if func == "hsla" && args.len() == 4 => {
-            if let (
-                CssValue::Number(h),
-                CssValue::Number(s),
-                CssValue::Number(l),
-                CssValue::Number(a),
-            ) = (&args[0], &args[1], &args[2], &args[3])
-            {
-                let (r, g, b, a) = hsla_to_rgba(*h, *s, *l, *a);
-                Some(Color(r, g, b, a))
-            } else {
-                None
+            if numbers.len() != 3 {
+                return None;
             }
+
+            let a = alpha.unwrap_or(1.0);
+            let (r, g, b, a) = hsla_to_rgba(numbers[0], numbers[1], numbers[2], a);
+
+            Some(Color(r, g, b, a))
         }
 
         // Any other value reaching here is a pipeline error

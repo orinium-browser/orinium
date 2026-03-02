@@ -95,6 +95,7 @@ fn copy_dir_if_newer(root: &Path, current: &Path, dst_root: &Path) -> io::Result
     }
     Ok(())
 }
+
 /// target/{profile}/build.logにビルドログを書き込む
 fn build_log(args: std::fmt::Arguments) {
     use std::io::Write;
