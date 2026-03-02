@@ -1008,40 +1008,41 @@ fn resolve_css_color(css_color: &CssValue) -> Option<Color> {
         // Named color keyword
         CssValue::Keyword(value) => keyword_color_to_color(value),
 
-        // rgba(r,g,b,a)
-        CssValue::Function(func, args) if func == "rgba" && args.len() == 4 => {
-            if let (
-                CssValue::Number(r),
-                CssValue::Number(g),
-                CssValue::Number(b),
-                CssValue::Number(a),
-            ) = (&args[0], &args[1], &args[2], &args[3])
-            {
-                Some(Color(
-                    (*r * 255.0).round() as u8,
-                    (*g * 255.0).round() as u8,
-                    (*b * 255.0).round() as u8,
-                    (*a * 255.0).round() as u8,
-                ))
-            } else {
-                None
-            }
-        }
+        // rgb() / rgba() unified
+        CssValue::Function(func, args) if func == "rgb" || func == "rgba" => {
+            // Extract numeric components, ignoring commas and handling '/'
+            let mut numbers = Vec::new();
+            let mut alpha: Option<f32> = None;
+            let mut after_slash = false;
 
-        // rgb(r,g,b)
-        CssValue::Function(func, args) if func == "rgb" && args.len() == 3 => {
-            if let (CssValue::Number(r), CssValue::Number(g), CssValue::Number(b)) =
-                (&args[0], &args[1], &args[2])
-            {
-                Some(Color(
-                    (*r * 255.0).round() as u8,
-                    (*g * 255.0).round() as u8,
-                    (*b * 255.0).round() as u8,
-                    255,
-                ))
-            } else {
-                None
+            for arg in args {
+                match arg {
+                    CssValue::Keyword(k) if k == "/" => {
+                        after_slash = true;
+                    }
+                    CssValue::Number(n) => {
+                        if after_slash {
+                            alpha = Some(*n);
+                        } else {
+                            numbers.push(*n);
+                        }
+                    }
+                    _ => return None,
+                }
             }
+
+            if numbers.len() != 3 {
+                return None;
+            }
+
+            let a = alpha.unwrap_or(1.0);
+
+            Some(Color(
+                (numbers[0] * 255.0).round() as u8,
+                (numbers[1] * 255.0).round() as u8,
+                (numbers[2] * 255.0).round() as u8,
+                (a * 255.0).round() as u8,
+            ))
         }
 
         // hsl(h,s,l)
