@@ -343,7 +343,13 @@ fn resolve_all_css(css_sources: &[String]) -> layouter::css_resolver::ResolvedSt
     let mut resolved = layouter::css_resolver::ResolvedStyles::default();
 
     for css in css_sources {
-        let sheet = CssParser::new(css).parse().unwrap();
+        let sheet = match CssParser::new(css).parse() {
+            Ok(sheet) => sheet,
+            Err(err) => {
+                log::error!("Failed to parse CSS: {}", err);
+                continue;
+            }
+        };
 
         resolved.extend(layouter::css_resolver::CssResolver::resolve(&sheet));
     }
