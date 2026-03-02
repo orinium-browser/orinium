@@ -112,7 +112,12 @@ pub fn build_layout_and_info(
             },
         );
 
-        for (name, (value, _, _)) in collect_candidates(resolved_styles, &chain) {
+        let candidates = collect_candidates(resolved_styles, &chain);
+
+        for (name, (value, _, _)) in candidates {
+            if name.starts_with("--") {
+                continue;
+            }
             apply_declaration(
                 &name,
                 &value,
@@ -400,6 +405,88 @@ fn apply_declaration(
         Some(())
     }
 
+    fn parse_border_shorthand(
+        value: &CssValue,
+        text_style: &TextStyle,
+    ) -> Option<(Option<Length>, Option<BorderStyle>, Option<Color>)> {
+        let mut width: Option<Length> = None;
+        let mut style_v: Option<BorderStyle> = None;
+        let mut color_v: Option<Color> = None;
+
+        let items: Vec<&CssValue> = match value {
+            CssValue::List(values) => values.iter().collect(),
+            _ => vec![value],
+        };
+
+        for v in items {
+            let token = v;
+
+            // try as length (numeric lengths)
+            if width.is_none() {
+                if let Some(l) = resolve_css_len(token, text_style) {
+                    width = Some(l);
+                    continue;
+                }
+            }
+
+            // try as width keyword (thin/medium/thick). Check keywords before style keywords.
+            if width.is_none() {
+                if let CssValue::Keyword(s) = token {
+                    match s.as_str().to_ascii_lowercase().as_str() {
+                        "thin" => {
+                            width = Some(Length::Px(1.0));
+                            continue;
+                        }
+                        "medium" => {
+                            width = Some(Length::Px(3.0));
+                            continue;
+                        }
+                        "midium" => {
+                            width = Some(Length::Px(3.0));
+                            continue;
+                        } // common misspelling
+                        "thick" => {
+                            width = Some(Length::Px(5.0));
+                            continue;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            // try as style keyword
+            if style_v.is_none() {
+                if let CssValue::Keyword(s) = token {
+                    let s_lower = s.as_str();
+                    let parsed = match s_lower {
+                        "none" => Some(BorderStyle::None),
+                        "solid" => Some(BorderStyle::Solid),
+                        "dashed" => Some(BorderStyle::Dashed),
+                        "dotted" => Some(BorderStyle::Dotted),
+                        _ => None,
+                    };
+
+                    if let Some(p) = parsed {
+                        style_v = Some(p);
+                        continue;
+                    }
+                }
+            }
+
+            // try as color
+            if color_v.is_none() {
+                if let Some(c) = resolve_css_color(token) {
+                    color_v = Some(c);
+                    continue;
+                }
+            }
+
+            // unknown token: ignore
+        }
+
+        Some((width, style_v, color_v))
+    }
+
     match (name, value) {
         /* ======================
          * Display
@@ -562,25 +649,97 @@ fn apply_declaration(
             style.spacing.margin_left = resolve_css_len(value, text_style)?;
         }
 
-        ("broder", v) => {
-            expand_box(v, text_style, &resolve_css_len, |t, r, b, l| {
-                style.spacing.border_top = t;
-                style.spacing.border_right = r;
-                style.spacing.border_bottom = b;
-                style.spacing.border_left = l;
-            })?;
+        ("border", v) => {
+            let (maybe_width, maybe_style, maybe_color) = parse_border_shorthand(v, text_style)?;
+
+            if let Some(w) = maybe_width {
+                style.spacing.border_top = w.clone();
+                style.spacing.border_right = w.clone();
+                style.spacing.border_bottom = w.clone();
+                style.spacing.border_left = w;
+            }
+
+            if let Some(s) = maybe_style {
+                container_style.border_style.top = s;
+                container_style.border_style.right = s;
+                container_style.border_style.bottom = s;
+                container_style.border_style.left = s;
+            }
+
+            if let Some(c) = maybe_color {
+                container_style.border_color.top = c.clone();
+                container_style.border_color.right = c.clone();
+                container_style.border_color.bottom = c.clone();
+                container_style.border_color.left = c;
+            }
         }
         ("border-top", _) => {
-            style.spacing.border_top = resolve_css_len(value, text_style)?;
+            if let CssValue::List(_) = value {
+                let (maybe_width, maybe_style, maybe_color) =
+                    parse_border_shorthand(value, text_style)?;
+                if let Some(w) = maybe_width {
+                    style.spacing.border_top = w;
+                }
+                if let Some(s) = maybe_style {
+                    container_style.border_style.top = s;
+                }
+                if let Some(c) = maybe_color {
+                    container_style.border_color.top = c;
+                }
+            } else {
+                style.spacing.border_top = resolve_css_len(value, text_style)?;
+            }
         }
         ("border-right", _) => {
-            style.spacing.border_right = resolve_css_len(value, text_style)?;
+            if let CssValue::List(_) = value {
+                let (maybe_width, maybe_style, maybe_color) =
+                    parse_border_shorthand(value, text_style)?;
+                if let Some(w) = maybe_width {
+                    style.spacing.border_right = w;
+                }
+                if let Some(s) = maybe_style {
+                    container_style.border_style.right = s;
+                }
+                if let Some(c) = maybe_color {
+                    container_style.border_color.right = c;
+                }
+            } else {
+                style.spacing.border_right = resolve_css_len(value, text_style)?;
+            }
         }
         ("border-bottom", _) => {
-            style.spacing.border_bottom = resolve_css_len(value, text_style)?;
+            if let CssValue::List(_) = value {
+                let (maybe_width, maybe_style, maybe_color) =
+                    parse_border_shorthand(value, text_style)?;
+                if let Some(w) = maybe_width {
+                    style.spacing.border_bottom = w;
+                }
+                if let Some(s) = maybe_style {
+                    container_style.border_style.bottom = s;
+                }
+                if let Some(c) = maybe_color {
+                    container_style.border_color.bottom = c;
+                }
+            } else {
+                style.spacing.border_bottom = resolve_css_len(value, text_style)?;
+            }
         }
         ("border-left", _) => {
-            style.spacing.border_left = resolve_css_len(value, text_style)?;
+            if let CssValue::List(_) = value {
+                let (maybe_width, maybe_style, maybe_color) =
+                    parse_border_shorthand(value, text_style)?;
+                if let Some(w) = maybe_width {
+                    style.spacing.border_left = w;
+                }
+                if let Some(s) = maybe_style {
+                    container_style.border_style.left = s;
+                }
+                if let Some(c) = maybe_color {
+                    container_style.border_color.left = c;
+                }
+            } else {
+                style.spacing.border_left = resolve_css_len(value, text_style)?;
+            }
         }
 
         ("padding", v) => {
@@ -784,11 +943,7 @@ fn resolve_css_color(css_color: &CssValue) -> Option<Color> {
             "none" => Some(Color(0, 0, 0, 0)),
 
             _ => {
-                log::error!(
-                    target: "Layouter",
-                    "Unknown CSS color keyword: {}",
-                    keyword
-                );
+                log::error!(target: "Layouter", "Unknown CSS color keyword: {}", keyword);
                 None
             }
         }

@@ -96,7 +96,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
                 let padding_box = box_model.padding_box;
                 let content_box = box_model.content_box;
 
-                // コンテナ全体を移動
+                // ===== border (solid only for now) =====
                 commands.push(DrawCommand::PushTransform {
                     dx: border_box.x,
                     dy: border_box.y,
@@ -104,57 +104,51 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
 
                 let bc = &style.border_color;
 
-                // border (top)
-                let top_width = padding_box.y - border_box.y;
-                if top_width > 0.0 {
-                    commands.push(DrawCommand::DrawRect {
-                        x: 0.0,
-                        y: 0.0,
-                        width: border_box.width,
-                        height: top_width,
-                        color: bc.top,
-                    });
-                }
+                // top
+                let border_width = (padding_box.y - border_box.y).max(0.0);
+                commands.push(DrawCommand::DrawRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: border_box.width,
+                    height: border_width,
+                    color: bc.top,
+                });
 
                 // bottom
-                let bottom_width =
-                    border_box.height - (padding_box.y - border_box.y + padding_box.height);
-                if bottom_width > 0.0 {
-                    commands.push(DrawCommand::DrawRect {
-                        x: 0.0,
-                        y: border_box.height - bottom_width,
-                        width: border_box.width,
-                        height: bottom_width,
-                        color: bc.bottom,
-                    });
-                }
+                let border_width = (border_box.y + border_box.height
+                    - (padding_box.y + padding_box.height))
+                    .max(0.0);
+                commands.push(DrawCommand::DrawRect {
+                    x: 0.0,
+                    y: border_box.height - border_width,
+                    width: border_box.width,
+                    height: border_width,
+                    color: bc.bottom,
+                });
 
                 // left
-                let left_width = padding_box.x - border_box.x;
-                if left_width > 0.0 {
-                    commands.push(DrawCommand::DrawRect {
-                        x: 0.0,
-                        y: 0.0,
-                        width: left_width,
-                        height: border_box.height,
-                        color: bc.left,
-                    });
-                }
+                let border_width = (padding_box.x - border_box.x).max(0.0);
+                commands.push(DrawCommand::DrawRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: border_width,
+                    height: border_box.height,
+                    color: bc.left,
+                });
 
                 // right
-                let right_width =
-                    border_box.width - (padding_box.x - border_box.x + padding_box.width);
-                if right_width > 0.0 {
-                    commands.push(DrawCommand::DrawRect {
-                        x: border_box.width - right_width,
-                        y: 0.0,
-                        width: right_width,
-                        height: border_box.height,
-                        color: bc.right,
-                    });
-                }
+                let border_width = (border_box.x + border_box.width
+                    - (padding_box.x + padding_box.width))
+                    .max(0.0);
+                commands.push(DrawCommand::DrawRect {
+                    x: border_box.width - border_width,
+                    y: 0.0,
+                    width: border_width,
+                    height: border_box.height,
+                    color: bc.right,
+                });
 
-                // clip
+                // ===== clip + background + content =====
                 commands.push(DrawCommand::PushClip {
                     x: padding_box.x - border_box.x,
                     y: padding_box.y - border_box.y,

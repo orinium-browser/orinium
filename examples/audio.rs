@@ -1,7 +1,7 @@
 use anyhow::Result;
 use orinium_browser::browser::BrowserApp;
-use std::env;
 use orinium_browser::platform::audio::SoundManager;
+use std::env;
 
 fn main() -> Result<()> {
     let audio_file = "resource:///audio/birds.mp3";
@@ -23,7 +23,8 @@ fn main() -> Result<()> {
             Ok(x) => x,
             Err(_) => panic!("Failed to lock SoundManager"),
         };
-        sm.play_from_local_uri(audio_file).expect("Failed to play audio");
+        sm.play_from_local_uri(audio_file)
+            .expect("Failed to play audio");
     }
 
     browser.run()?;
