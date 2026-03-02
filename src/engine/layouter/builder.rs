@@ -1045,32 +1045,37 @@ fn resolve_css_color(css_color: &CssValue) -> Option<Color> {
             ))
         }
 
-        // hsl(h,s,l)
-        CssValue::Function(func, args) if func == "hsl" && args.len() == 3 => {
-            if let (CssValue::Number(h), CssValue::Number(s), CssValue::Number(l)) =
-                (&args[0], &args[1], &args[2])
-            {
-                let (r, g, b, a) = hsla_to_rgba(*h, *s, *l, 1.0);
-                Some(Color(r, g, b, a))
-            } else {
-                None
-            }
-        }
+        // hsl() / hsla() unified
+        CssValue::Function(func, args) if func == "hsl" || func == "hsla" => {
+            // Collect h, s, l and optional alpha
+            let mut numbers = Vec::new();
+            let mut alpha: Option<f32> = None;
+            let mut after_slash = false;
 
-        // hsla(h,s,l,a)
-        CssValue::Function(func, args) if func == "hsla" && args.len() == 4 => {
-            if let (
-                CssValue::Number(h),
-                CssValue::Number(s),
-                CssValue::Number(l),
-                CssValue::Number(a),
-            ) = (&args[0], &args[1], &args[2], &args[3])
-            {
-                let (r, g, b, a) = hsla_to_rgba(*h, *s, *l, *a);
-                Some(Color(r, g, b, a))
-            } else {
-                None
+            for arg in args {
+                match arg {
+                    CssValue::Keyword(k) if k == "/" => {
+                        after_slash = true;
+                    }
+                    CssValue::Number(n) => {
+                        if after_slash {
+                            alpha = Some(*n);
+                        } else {
+                            numbers.push(*n);
+                        }
+                    }
+                    _ => return None,
+                }
             }
+
+            if numbers.len() != 3 {
+                return None;
+            }
+
+            let a = alpha.unwrap_or(1.0);
+            let (r, g, b, a) = hsla_to_rgba(numbers[0], numbers[1], numbers[2], a);
+
+            Some(Color(r, g, b, a))
         }
 
         // Any other value reaching here is a pipeline error
