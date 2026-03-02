@@ -183,7 +183,7 @@ impl<'a> Tokenizer<'a> {
                 TokenizerState::EndTagOpen => self.state_end_tag_open(c),
                 _ if self.state.is_comment() => self.state_comment(c),
                 _ => {
-                    log::warn!(target:"HtmlTokenizer::State", "Unimplemented state: {:?}, returning to Data state", self.state);
+                    log::error!(target:"HtmlTokenizer::State", "Unimplemented state: {:?}, returning to Data state", self.state);
                     self.state = TokenizerState::Data;
                 }
             }
