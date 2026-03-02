@@ -382,7 +382,7 @@ impl GpuRenderer {
                     let px2 = ndc(x2, screen_width);
                     let py2 = -ndc(y2, screen_height);
 
-                    let color = color.to_f32_array();
+                    let color = color.to_linear_f32_array();
 
                     #[rustfmt::skip]
                     vertices.extend_from_slice(&[
@@ -606,7 +606,7 @@ impl GpuRenderer {
                     // NDC helper
                     let ndc = |v: f32, max: f32| (v / max) * 2.0 - 1.0;
 
-                    let color_arr = color.to_f32_array();
+                    let color_arr = color.to_linear_f32_array();
 
                     let v0 = transformed_points[0];
                     for i in 1..(transformed_points.len() - 1) {
