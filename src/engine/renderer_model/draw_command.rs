@@ -98,53 +98,53 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
 
                 // ===== border (solid only for now) =====
                 commands.push(DrawCommand::PushTransform {
-                    dx: border_box_rect.x,
-                    dy: border_box_rect.y,
+                    dx: border_box.x,
+                    dy: border_box.y,
                 });
 
                 let bc = &style.border_color;
 
                 // top
-                let border_width = (padding_box_rect.y - border_box_rect.y).max(0.0);
+                let border_width = (padding_box.y - border_box.y).max(0.0);
                 commands.push(DrawCommand::DrawRect {
                     x: 0.0,
                     y: 0.0,
-                    width: border_box_rect.width,
+                    width: border_box.width,
                     height: border_width,
                     color: bc.top,
                 });
 
                 // bottom
-                let border_width = (border_box_rect.y + border_box_rect.height
-                    - (padding_box_rect.y + padding_box_rect.height))
+                let border_width = (border_box.y + border_box.height
+                    - (padding_box.y + padding_box.height))
                     .max(0.0);
                 commands.push(DrawCommand::DrawRect {
                     x: 0.0,
-                    y: border_box_rect.height - border_width,
-                    width: border_box_rect.width,
+                    y: border_box.height - border_width,
+                    width: border_box.width,
                     height: border_width,
                     color: bc.bottom,
                 });
 
                 // left
-                let border_width = (padding_box_rect.x - border_box_rect.x).max(0.0);
+                let border_width = (padding_box.x - border_box.x).max(0.0);
                 commands.push(DrawCommand::DrawRect {
                     x: 0.0,
                     y: 0.0,
                     width: border_width,
-                    height: border_box_rect.height,
+                    height: border_box.height,
                     color: bc.left,
                 });
 
                 // right
-                let border_width = (border_box_rect.x + border_box_rect.width
-                    - (padding_box_rect.x + padding_box_rect.width))
+                let border_width = (border_box.x + border_box.width
+                    - (padding_box.x + padding_box.width))
                     .max(0.0);
                 commands.push(DrawCommand::DrawRect {
-                    x: border_box_rect.width - border_width,
+                    x: border_box.width - border_width,
                     y: 0.0,
                     width: border_width,
-                    height: border_box_rect.height,
+                    height: border_box.height,
                     color: bc.right,
                 });
 
