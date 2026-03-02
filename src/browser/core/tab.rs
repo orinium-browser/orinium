@@ -19,7 +19,7 @@ enum TabError {
 enum TabState {
     Loading,
     Loaded,
-    Error(TabError),
+    Error(TabError, Option<Url>), // エラーの種類と、失敗した URL（ある場合）
 }
 
 /// Tab はブラウザで開かれた 1 つのページを表す構造体です。
@@ -110,15 +110,19 @@ impl Tab {
         log::info!("HTML fetched, base_url={}", base_url);
         self.base_url = Some(base_url);
 
-        if let TabState::Error(TabError::NetworkError(err)) = &self.state {
+        if let TabState::Error(TabError::NetworkError(err), url_opt) = &self.state {
+            let error_message = match url_opt {
+                Some(url) => format!("Failed to load {}: {}", url, err),
+                None => format!("Failed to load page: {}", err),
+            };
+
             let error_message_element = wv
                 .document_info()
                 .unwrap()
                 .dom
                 .get_elements_by_class_name("error-message");
             let error_message_element = error_message_element.iter().next().unwrap();
-            let new_child =
-                TreeNode::new(HtmlNodeType::Text(format!("Failed to load page: {}", err)));
+            let new_child = TreeNode::new(HtmlNodeType::Text(error_message));
             TreeNode::replace_child(error_message_element, 0, new_child);
 
             // Update page to show error message
@@ -138,9 +142,9 @@ impl Tab {
     }
 
     /// Display error page on fetch failure
-    pub fn on_fetch_failed(&mut self, err: BrowserNetworkError) {
+    pub fn on_fetch_failed(&mut self, err: BrowserNetworkError, failed_url: Url) {
         self.navigate("resource:///error.html".parse().unwrap());
-        self.state = TabState::Error(TabError::NetworkError(err));
+        self.state = TabState::Error(TabError::NetworkError(err), Some(failed_url));
     }
 
     pub fn navigate(&mut self, url: Url) {

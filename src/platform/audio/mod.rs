@@ -22,6 +22,7 @@ pub struct SoundManager {
     /// ソースのチャンネル数
     src_channels: usize,
     /// ソースのサンプルレート
+    // TODO: Hzを考慮したコンバーターを実装する
     src_sample_rate: u32,
     /// cpalのストリーム
     stream: Option<cpal::Stream>,
@@ -154,7 +155,7 @@ impl SoundManager {
     }
 }
 
-/// 音声をでコードする
+/// 音声をデコードする
 fn decode(data: &[u8]) -> Result<(Vec<f32>, usize, u32)> {
     let cursor = Cursor::new(data.to_vec());
     let mss = MediaSourceStream::new(Box::new(cursor), Default::default());

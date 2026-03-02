@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>About OriniumBrowser</title>
+    <style>
+        :root {
+            --bg: #ffffff;
+            --fg: #111827;
+            --muted: #6b7280;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #0b1220;
+                --fg: #e6eef8;
+                --muted: #9aa6b2;
+            }
+        }
+
+        html,
+        body {
+            background:var(--bg);
+            color:var(--fg);
+        }
+
+        .container {
+            max-width:900px;
+            margin:40px auto;
+            padding:24px
+        }
+
+        .version{
+            color:var(--muted);
+            font-size:14px
+        }
+
+        .meta {
+            display:flex;
+            flex-wrap:wrap;
+            gap:12px;
+            color:var(--muted);
+            font-size:14px
+        }
+
+        #license {
+            color:var(--muted);
+            text-decoration:underline
+        }
+
+        footer {
+            margin-top:40px;
+            padding-top:12px;
+            border-top:1px solid rgba(0,0,0,0.06);
+            color:var(--muted);font-size:13px
+        }
+    </style>
+</head>
+<body>
+    <main class="container">
+        <header>
+            <h1>Orinium Browser</h1>
+            <div class="version"><pre class="version">{{VERSION}}</pre></div>
+            <div class="meta">License: <a href="https://www.apache.org/licenses/LICENSE-2.0" target="_blank" id="license">Apache License, Version 2.0</a></div>
+        </header>
+
+        <section id="links">
+            <h2>Links</h2>
+            <ul>
+                <li><a href="https://github.com/orinium-browser/orinium" target="_blank" rel="noopener">GitHub</a></li>
+                <li><a href="./licence/licence.html" target="_blank" rel="noopener">OpenSource License</a></li>
+                <li><a href="https://discord.gg/tMGPgHFsxJ" target="_blank" rel="noopener">Join our Discord community!</a></li>
+            </ul>
+        </section>
+
+        <section id="contributing">
+            <h2>Contributions and Acknowledgements</h2>
+            <p>This project is supported by numerous developers and open-source libraries. If you are interested, we kindly invite you to visit our <a href="https://github.com/orinium-browser/orinium" target="_blank" rel="noopener">GitHub</a> page and join us! ;)</p>
+        </section>
+    </main>
+</body>
+</html>

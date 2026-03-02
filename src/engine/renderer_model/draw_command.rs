@@ -47,49 +47,56 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
 
     match &info.kind {
         NodeKind::Text { text, style, .. } => {
-            let rect = layout.box_model.padding_box;
+            for box_model in &layout.layout_boxes {
+                let rect = box_model.padding_box;
 
-            let abs_x = rect.x;
-            let abs_y = rect.y;
+                let abs_x = rect.x;
+                let abs_y = rect.y;
 
-            commands.push(DrawCommand::DrawText {
-                x: abs_x,
-                y: abs_y,
-                text: text.clone(),
-                style: *style,
-                max_width: rect.width,
-            });
-
-            let font_size = style.font_size;
-            let line_thickness = (font_size * 0.08).max(1.0);
-
-            let (line_y, draw) = match style.text_decoration {
-                TextDecoration::None => (0.0, false),
-                TextDecoration::Underline => (abs_y + font_size, true),
-                TextDecoration::LineThrough => (abs_y + font_size * 0.5, true),
-                TextDecoration::Overline => (abs_y, true),
-            };
-
-            if draw {
-                commands.push(DrawCommand::DrawRect {
+                // テキスト
+                commands.push(DrawCommand::DrawText {
                     x: abs_x,
-                    y: line_y,
-                    width: rect.width,
-                    height: line_thickness,
-                    color: style.color,
+                    y: abs_y,
+                    text: text.clone(),
+                    style: *style,
+                    max_width: rect.width,
                 });
+
+                // テキストデコレーション
+                let font_size = style.font_size;
+                let line_thickness = (font_size * 0.08).max(1.0);
+
+                let (line_y, draw) = match style.text_decoration {
+                    TextDecoration::None => (0.0, false),
+                    TextDecoration::Underline => (abs_y + font_size, true),
+                    TextDecoration::LineThrough => (abs_y + font_size * 0.5, true),
+                    TextDecoration::Overline => (abs_y, true),
+                };
+
+                if draw {
+                    commands.push(DrawCommand::DrawRect {
+                        x: abs_x,
+                        y: line_y,
+                        width: rect.width,
+                        height: line_thickness,
+                        color: style.color,
+                    });
+                }
             }
         }
+
         NodeKind::Container {
             scroll_offset_x,
             scroll_offset_y,
             style,
             ..
         } => {
-            let border_box_rect = layout.box_model.border_box;
-            let padding_box_rect = layout.box_model.padding_box;
+            for box_model in &layout.layout_boxes {
+                let border_box = box_model.border_box;
+                let padding_box = box_model.padding_box;
+                let content_box = box_model.content_box;
 
-            // ===== border (solid only for now) =====
+                // ===== border (solid only for now) =====
             commands.push(DrawCommand::PushTransform {
                 dx: border_box_rect.x,
                 dy: border_box_rect.y,
@@ -140,31 +147,32 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
             });
 
             // ===== clip + background + content =====
-            commands.push(DrawCommand::PushClip {
-                x: padding_box_rect.x - border_box_rect.x,
-                y: padding_box_rect.y - border_box_rect.y,
-                width: padding_box_rect.width,
-                height: padding_box_rect.height,
-            });
+                commands.push(DrawCommand::PushClip {
+                    x: padding_box.x - border_box.x,
+                    y: padding_box.y - border_box.y,
+                    width: padding_box.width,
+                    height: padding_box.height,
+                });
 
-            // background
-            commands.push(DrawCommand::DrawRect {
-                x: padding_box_rect.x - border_box_rect.x,
-                y: padding_box_rect.y - border_box_rect.y,
-                width: padding_box_rect.width,
-                height: padding_box_rect.height,
-                color: style.background_color,
-            });
+                // background
+                commands.push(DrawCommand::DrawRect {
+                    x: padding_box.x - border_box.x,
+                    y: padding_box.y - border_box.y,
+                    width: padding_box.width,
+                    height: padding_box.height,
+                    color: style.background_color,
+                });
 
-            // content + scroll
-            commands.push(DrawCommand::PushTransform {
-                dx: layout.box_model.content_box.x - border_box_rect.x,
-                dy: layout.box_model.content_box.y - border_box_rect.y,
-            });
-            commands.push(DrawCommand::PushTransform {
-                dx: *scroll_offset_x,
-                dy: -*scroll_offset_y,
-            });
+                // content + scroll
+                commands.push(DrawCommand::PushTransform {
+                    dx: content_box.x - border_box.x,
+                    dy: content_box.y - border_box.y,
+                });
+                commands.push(DrawCommand::PushTransform {
+                    dx: *scroll_offset_x,
+                    dy: -*scroll_offset_y,
+                });
+            }
         }
     }
 
@@ -172,11 +180,14 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
         commands.extend(generate_draw_commands(child_layout, child_info));
     }
 
+    // Pop commands for containers
     if matches!(info.kind, NodeKind::Container { .. }) {
-        commands.push(DrawCommand::PopTransform);
-        commands.push(DrawCommand::PopTransform);
-        commands.push(DrawCommand::PopClip);
-        commands.push(DrawCommand::PopTransform);
+        for _ in &layout.layout_boxes {
+            commands.push(DrawCommand::PopTransform);
+            commands.push(DrawCommand::PopTransform);
+            commands.push(DrawCommand::PopClip);
+            commands.push(DrawCommand::PopTransform);
+        }
     }
 
     commands
