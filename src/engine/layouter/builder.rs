@@ -865,25 +865,48 @@ fn resolve_css_len(css_len: &CssValue, text_style: &TextStyle) -> Option<Length>
             "auto" => Some(Length::Auto),
             _ => None,
         },
-        CssValue::Function(name, args) if name == "calc" && args.len() == 3 => {
-            let mut args = args.iter();
-            let a = args.next().unwrap();
-            let op = args.next().unwrap();
-            let b = args.next().unwrap();
-            match op {
-                CssValue::Keyword(o) if o == "+" => Some(Length::Add(
-                    Box::new(resolve_css_len(a, text_style)?),
-                    Box::new(resolve_css_len(b, text_style)?),
-                )),
-                CssValue::Keyword(o) if o == "-" => Some(Length::Sub(
-                    Box::new(resolve_css_len(a, text_style)?),
-                    Box::new(resolve_css_len(b, text_style)?),
-                )),
-                _ => {
-                    log::error!(target: "Layouter", "Unknown operator for calc function: {:?}", op);
-                    None
+        CssValue::Function(name, args) if name == "calc" && !args.is_empty() => {
+            let mut iter = args.iter();
+            let mut result = resolve_css_len(iter.next().unwrap(), text_style)?;
+
+            while let (Some(op), Some(val)) = (iter.next(), iter.next()) {
+                match op {
+                    CssValue::Keyword(o) if o == "+" => {
+                        let val_resolved = resolve_css_len(val, text_style)?;
+                        result = Length::Add(Box::new(result), Box::new(val_resolved));
+                    }
+                    CssValue::Keyword(o) if o == "-" => {
+                        let val_resolved = resolve_css_len(val, text_style)?;
+                        result = Length::Sub(Box::new(result), Box::new(val_resolved));
+                    }
+                    CssValue::Keyword(o) if o == "*" => {
+                        if let CssValue::Number(factor) = val {
+                            result = Length::Mul(Box::new(result), *factor);
+                        } else {
+                            log::error!(target: "Layouter", "Invalid operand for multiplication in calc(): {:?}", val);
+                            return None;
+                        }
+                    }
+                    CssValue::Keyword(o) if o == "/" => {
+                        if let CssValue::Number(factor) = val {
+                            if *factor == 0.0 {
+                                log::error!(target: "Layouter", "Division by zero in calc()");
+                                return None;
+                            }
+                            result = Length::Div(Box::new(result), *factor);
+                        } else {
+                            log::error!(target: "Layouter", "Invalid operand for division in calc(): {:?}", val);
+                            return None;
+                        }
+                    }
+                    _ => {
+                        log::error!(target: "Layouter", "Unknown operator for calc function: {:?}", op);
+                        return None;
+                    }
                 }
             }
+
+            Some(result)
         }
         _ => {
             log::error!(target: "Layouter", "Unknown CSS Length type: {:?}", css_len);
