@@ -15,7 +15,7 @@ fn main() -> Result<()> {
     let mut browser = BrowserApp::default();
 
     let mut tab = Tab::new();
-    tab.navigate("resource:///test/css_apply.html".parse()?);
+    tab.navigate("resource:///test/compatibility_test.html".parse()?);
 
     browser.add_tab(tab);
 
