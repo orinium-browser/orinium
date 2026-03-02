@@ -186,7 +186,11 @@ impl<'a> Tokenizer<'a> {
         let mut ident = String::new();
 
         while let Some(c) = self.peek() {
-            if is_ident_continue(c) {
+            if c == '\\' {
+                if let Some(escaped) = self.consume_escape() {
+                    ident.push(escaped);
+                }
+            } else if is_ident_continue(c) {
                 ident.push(c);
                 self.bump();
             } else {
@@ -212,7 +216,13 @@ impl<'a> Tokenizer<'a> {
                 break;
             }
 
-            // escape / newline handling will go here later
+            if c == '\\' {
+                if let Some(escaped) = self.consume_escape() {
+                    value.push(escaped);
+                }
+                continue;
+            }
+
             value.push(c);
             self.bump();
         }
@@ -297,6 +307,55 @@ impl<'a> Tokenizer<'a> {
 
         Token::Comment(value)
     }
+
+    fn consume_escape(&mut self) -> Option<char> {
+        self.bump(); // consume '\'
+
+        // 1. Line continuation: backslash + newline => nothing
+        match self.peek() {
+            Some('\n') => {
+                self.bump();
+                return None;
+            }
+            Some('\r') => {
+                self.bump();
+                if self.peek() == Some('\n') {
+                    self.bump(); // CRLF
+                }
+                return None;
+            }
+            _ => {}
+        }
+
+        // 2. Unicode escape
+        let mut hex = String::new();
+        for _ in 0..6 {
+            match self.peek() {
+                Some(c) if c.is_ascii_hexdigit() => {
+                    hex.push(c);
+                    self.bump();
+                }
+                _ => break,
+            }
+        }
+
+        if !hex.is_empty() {
+            if matches!(self.peek(), Some(c) if c.is_whitespace()) {
+                self.bump(); // optional whitespace
+            }
+
+            let code = u32::from_str_radix(&hex, 16).ok()?;
+            return std::char::from_u32(code).or(Some('\u{FFFD}'));
+        }
+
+        // 3. Simple escape
+        if let Some(c) = self.peek() {
+            self.bump();
+            Some(c)
+        } else {
+            None
+        }
+    }
 }
 
 /// Returns true if the character can start an identifier.
@@ -308,7 +367,7 @@ impl<'a> Tokenizer<'a> {
 /// - hyphen (`-`)
 /// - non-ASCII characters
 fn is_ident_start(c: char) -> bool {
-    c.is_ascii_alphabetic() || c == '_' || c == '-' || !c.is_ascii()
+    c.is_ascii_alphabetic() || c == '\\' || c == '_' || c == '-' || !c.is_ascii()
 }
 
 /// Returns true if the character is a CSS string delimiter.
