@@ -186,7 +186,7 @@ fn decode(data: &[u8]) -> Result<(Vec<f32>, usize, u32)> {
         .ok_or_else(|| anyhow::anyhow!("No default audio track found"))?;
     let codec_params = &track.codec_params;
     let mut decoder = get_codecs()
-        .make(&codec_params, &DecoderOptions::default())
+        .make(codec_params, &DecoderOptions::default())
         .context("Failed to create decoder")?;
 
     let mut samples: Vec<f32> = Vec::new();

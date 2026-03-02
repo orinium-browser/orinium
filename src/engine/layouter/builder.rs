@@ -229,20 +229,18 @@ pub fn build_layout_and_info(
 
             if dom.borrow().value.tag_name() == Some("html")
                 && child_dom.borrow().value.tag_name() == Some("body")
+                && let NodeKind::Container { style, .. } = &mut kind
+                && style.background_color == Color(0, 0, 0, 0)
             {
-                if let NodeKind::Container { style, .. } = &mut kind {
-                    if style.background_color == Color(0, 0, 0, 0) {
-                        let background_color = {
-                            let NodeKind::Container { style, .. } = &child_info.kind else {
-                                continue;
-                            };
-                            style.background_color
-                        };
-                        // html 要素の body 子要素に背景色が指定されていない場合、
-                        // body の背景色を html の背景色で上書きする
-                        style.background_color = background_color;
-                    }
-                }
+                let background_color = {
+                    let NodeKind::Container { style, .. } = &child_info.kind else {
+                        continue;
+                    };
+                    style.background_color
+                };
+                // html 要素の body 子要素に背景色が指定されていない場合、
+                // body の背景色を html の背景色で上書きする
+                style.background_color = background_color;
             }
 
             layout_children.push(child_layout);
@@ -343,7 +341,7 @@ fn collect_candidates(
     let mut candidates: HashMap<String, (CssValue, (u32, u32, u32), usize)> = HashMap::new();
 
     for decl in resolved_styles {
-        if decl.selector.matches(&chain) {
+        if decl.selector.matches(chain) {
             let entry = candidates.get(&decl.name);
 
             let should_replace = match entry {
@@ -422,63 +420,63 @@ fn apply_declaration(
             let token = v;
 
             // try as length (numeric lengths)
-            if width.is_none() {
-                if let Some(l) = resolve_css_len(token, text_style) {
-                    width = Some(l);
-                    continue;
-                }
+            if width.is_none()
+                && let Some(l) = resolve_css_len(token, text_style)
+            {
+                width = Some(l);
+                continue;
             }
 
             // try as width keyword (thin/medium/thick). Check keywords before style keywords.
-            if width.is_none() {
-                if let CssValue::Keyword(s) = token {
-                    match s.as_str().to_ascii_lowercase().as_str() {
-                        "thin" => {
-                            width = Some(Length::Px(1.0));
-                            continue;
-                        }
-                        "medium" => {
-                            width = Some(Length::Px(3.0));
-                            continue;
-                        }
-                        "midium" => {
-                            width = Some(Length::Px(3.0));
-                            continue;
-                        } // common misspelling
-                        "thick" => {
-                            width = Some(Length::Px(5.0));
-                            continue;
-                        }
-                        _ => {}
+            if width.is_none()
+                && let CssValue::Keyword(s) = token
+            {
+                match s.as_str().to_ascii_lowercase().as_str() {
+                    "thin" => {
+                        width = Some(Length::Px(1.0));
+                        continue;
                     }
+                    "medium" => {
+                        width = Some(Length::Px(3.0));
+                        continue;
+                    }
+                    "midium" => {
+                        width = Some(Length::Px(3.0));
+                        continue;
+                    } // common misspelling
+                    "thick" => {
+                        width = Some(Length::Px(5.0));
+                        continue;
+                    }
+                    _ => {}
                 }
             }
 
             // try as style keyword
-            if style_v.is_none() {
-                if let CssValue::Keyword(s) = token {
-                    let s_lower = s.as_str();
-                    let parsed = match s_lower {
-                        "none" => Some(BorderStyle::None),
-                        "solid" => Some(BorderStyle::Solid),
-                        "dashed" => Some(BorderStyle::Dashed),
-                        "dotted" => Some(BorderStyle::Dotted),
-                        _ => None,
-                    };
+            if style_v.is_none()
+                && let CssValue::Keyword(s) = token
+            {
+                let s_lower = s.as_str();
+                let parsed = match s_lower {
+                    "none" => Some(BorderStyle::None),
+                    "solid" => Some(BorderStyle::Solid),
+                    "dashed" => Some(BorderStyle::Dashed),
+                    "dotted" => Some(BorderStyle::Dotted),
+                    _ => None,
+                };
 
-                    if let Some(p) = parsed {
-                        style_v = Some(p);
-                        continue;
-                    }
+                if let Some(p) = parsed {
+                    style_v = Some(p);
+                    continue;
                 }
             }
 
             // try as color
-            if color_v.is_none() {
-                if let Some(c) = resolve_css_color(token) {
-                    color_v = Some(c);
-                    continue;
-                }
+            if color_v.is_none()
+                && let Some(c) = resolve_css_color(token)
+            {
+                color_v = Some(c);
+                continue;
             }
 
             // unknown token: ignore
@@ -667,9 +665,9 @@ fn apply_declaration(
             }
 
             if let Some(c) = maybe_color {
-                container_style.border_color.top = c.clone();
-                container_style.border_color.right = c.clone();
-                container_style.border_color.bottom = c.clone();
+                container_style.border_color.top = c;
+                container_style.border_color.right = c;
+                container_style.border_color.bottom = c;
                 container_style.border_color.left = c;
             }
         }

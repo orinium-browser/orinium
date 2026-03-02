@@ -288,7 +288,7 @@ fn parse_html(html: &str, document_url: Url) -> ParsedDocument {
         .filter_map(|node_ref| {
             let html_node = &node_ref.borrow().value;
             let href = html_node.get_attr("href")?;
-            document_url.join(&href).ok()
+            document_url.join(href).ok()
         })
         .next()
         .unwrap_or_else(|| document_url.clone());

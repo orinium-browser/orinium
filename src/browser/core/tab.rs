@@ -121,7 +121,7 @@ impl Tab {
                 .unwrap()
                 .dom
                 .get_elements_by_class_name("error-message");
-            let error_message_element = error_message_element.iter().next().unwrap();
+            let error_message_element = error_message_element.first().unwrap();
             let new_child = TreeNode::new(HtmlNodeType::Text(error_message));
             TreeNode::replace_child(error_message_element, 0, new_child);
 
