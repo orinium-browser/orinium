@@ -118,7 +118,13 @@ pub fn build_layout_and_info(
             if name.starts_with("--") {
                 continue;
             }
-            apply_declaration(&name, &value, &mut style, &mut container_style, &mut text_style);
+            apply_declaration(
+                &name,
+                &value,
+                &mut style,
+                &mut container_style,
+                &mut text_style,
+            );
         }
     }
 
@@ -397,7 +403,6 @@ fn apply_declaration(
         }
 
         Some(())
-
     }
 
     fn parse_border_shorthand(
@@ -428,10 +433,22 @@ fn apply_declaration(
             if width.is_none() {
                 if let CssValue::Keyword(s) = token {
                     match s.as_str().to_ascii_lowercase().as_str() {
-                        "thin" => { width = Some(Length::Px(1.0)); continue; }
-                        "medium" => { width = Some(Length::Px(3.0)); continue; }
-                        "midium" => { width = Some(Length::Px(3.0)); continue; } // common misspelling
-                        "thick" => { width = Some(Length::Px(5.0)); continue; }
+                        "thin" => {
+                            width = Some(Length::Px(1.0));
+                            continue;
+                        }
+                        "medium" => {
+                            width = Some(Length::Px(3.0));
+                            continue;
+                        }
+                        "midium" => {
+                            width = Some(Length::Px(3.0));
+                            continue;
+                        } // common misspelling
+                        "thick" => {
+                            width = Some(Length::Px(5.0));
+                            continue;
+                        }
                         _ => {}
                     }
                 }
@@ -658,40 +675,68 @@ fn apply_declaration(
         }
         ("border-top", _) => {
             if let CssValue::List(_) = value {
-                let (maybe_width, maybe_style, maybe_color) = parse_border_shorthand(value, text_style)?;
-                if let Some(w) = maybe_width { style.spacing.border_top = w; }
-                if let Some(s) = maybe_style { container_style.border_style.top = s; }
-                if let Some(c) = maybe_color { container_style.border_color.top = c; }
+                let (maybe_width, maybe_style, maybe_color) =
+                    parse_border_shorthand(value, text_style)?;
+                if let Some(w) = maybe_width {
+                    style.spacing.border_top = w;
+                }
+                if let Some(s) = maybe_style {
+                    container_style.border_style.top = s;
+                }
+                if let Some(c) = maybe_color {
+                    container_style.border_color.top = c;
+                }
             } else {
                 style.spacing.border_top = resolve_css_len(value, text_style)?;
             }
         }
         ("border-right", _) => {
             if let CssValue::List(_) = value {
-                let (maybe_width, maybe_style, maybe_color) = parse_border_shorthand(value, text_style)?;
-                if let Some(w) = maybe_width { style.spacing.border_right = w; }
-                if let Some(s) = maybe_style { container_style.border_style.right = s; }
-                if let Some(c) = maybe_color { container_style.border_color.right = c; }
+                let (maybe_width, maybe_style, maybe_color) =
+                    parse_border_shorthand(value, text_style)?;
+                if let Some(w) = maybe_width {
+                    style.spacing.border_right = w;
+                }
+                if let Some(s) = maybe_style {
+                    container_style.border_style.right = s;
+                }
+                if let Some(c) = maybe_color {
+                    container_style.border_color.right = c;
+                }
             } else {
                 style.spacing.border_right = resolve_css_len(value, text_style)?;
             }
         }
         ("border-bottom", _) => {
             if let CssValue::List(_) = value {
-                let (maybe_width, maybe_style, maybe_color) = parse_border_shorthand(value, text_style)?;
-                if let Some(w) = maybe_width { style.spacing.border_bottom = w; }
-                if let Some(s) = maybe_style { container_style.border_style.bottom = s; }
-                if let Some(c) = maybe_color { container_style.border_color.bottom = c; }
+                let (maybe_width, maybe_style, maybe_color) =
+                    parse_border_shorthand(value, text_style)?;
+                if let Some(w) = maybe_width {
+                    style.spacing.border_bottom = w;
+                }
+                if let Some(s) = maybe_style {
+                    container_style.border_style.bottom = s;
+                }
+                if let Some(c) = maybe_color {
+                    container_style.border_color.bottom = c;
+                }
             } else {
                 style.spacing.border_bottom = resolve_css_len(value, text_style)?;
             }
         }
         ("border-left", _) => {
             if let CssValue::List(_) = value {
-                let (maybe_width, maybe_style, maybe_color) = parse_border_shorthand(value, text_style)?;
-                if let Some(w) = maybe_width { style.spacing.border_left = w; }
-                if let Some(s) = maybe_style { container_style.border_style.left = s; }
-                if let Some(c) = maybe_color { container_style.border_color.left = c; }
+                let (maybe_width, maybe_style, maybe_color) =
+                    parse_border_shorthand(value, text_style)?;
+                if let Some(w) = maybe_width {
+                    style.spacing.border_left = w;
+                }
+                if let Some(s) = maybe_style {
+                    container_style.border_style.left = s;
+                }
+                if let Some(c) = maybe_color {
+                    container_style.border_color.left = c;
+                }
             } else {
                 style.spacing.border_left = resolve_css_len(value, text_style)?;
             }

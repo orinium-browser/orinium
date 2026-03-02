@@ -97,56 +97,58 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
                 let content_box = box_model.content_box;
 
                 // ===== border (solid only for now) =====
-            commands.push(DrawCommand::PushTransform {
-                dx: border_box_rect.x,
-                dy: border_box_rect.y,
-            });
+                commands.push(DrawCommand::PushTransform {
+                    dx: border_box_rect.x,
+                    dy: border_box_rect.y,
+                });
 
-            let bc = &style.border_color;
+                let bc = &style.border_color;
 
-            // top
-            let border_width = (padding_box_rect.y - border_box_rect.y).max(0.0);
-            commands.push(DrawCommand::DrawRect {
-                x: 0.0,
-                y: 0.0,
-                width: border_box_rect.width,
-                height: border_width,
-                color: bc.top,
-            });
+                // top
+                let border_width = (padding_box_rect.y - border_box_rect.y).max(0.0);
+                commands.push(DrawCommand::DrawRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: border_box_rect.width,
+                    height: border_width,
+                    color: bc.top,
+                });
 
-            // bottom
-            let border_width = (border_box_rect.y + border_box_rect.height
-                - (padding_box_rect.y + padding_box_rect.height)).max(0.0);
-            commands.push(DrawCommand::DrawRect {
-                x: 0.0,
-                y: border_box_rect.height - border_width,
-                width: border_box_rect.width,
-                height: border_width,
-                color: bc.bottom,
-            });
+                // bottom
+                let border_width = (border_box_rect.y + border_box_rect.height
+                    - (padding_box_rect.y + padding_box_rect.height))
+                    .max(0.0);
+                commands.push(DrawCommand::DrawRect {
+                    x: 0.0,
+                    y: border_box_rect.height - border_width,
+                    width: border_box_rect.width,
+                    height: border_width,
+                    color: bc.bottom,
+                });
 
-            // left
-            let border_width = (padding_box_rect.x - border_box_rect.x).max(0.0);
-            commands.push(DrawCommand::DrawRect {
-                x: 0.0,
-                y: 0.0,
-                width: border_width,
-                height: border_box_rect.height,
-                color: bc.left,
-            });
+                // left
+                let border_width = (padding_box_rect.x - border_box_rect.x).max(0.0);
+                commands.push(DrawCommand::DrawRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: border_width,
+                    height: border_box_rect.height,
+                    color: bc.left,
+                });
 
-            // right
-            let border_width = (border_box_rect.x + border_box_rect.width
-                - (padding_box_rect.x + padding_box_rect.width)).max(0.0);
-            commands.push(DrawCommand::DrawRect {
-                x: border_box_rect.width - border_width,
-                y: 0.0,
-                width: border_width,
-                height: border_box_rect.height,
-                color: bc.right,
-            });
+                // right
+                let border_width = (border_box_rect.x + border_box_rect.width
+                    - (padding_box_rect.x + padding_box_rect.width))
+                    .max(0.0);
+                commands.push(DrawCommand::DrawRect {
+                    x: border_box_rect.width - border_width,
+                    y: 0.0,
+                    width: border_width,
+                    height: border_box_rect.height,
+                    color: bc.right,
+                });
 
-            // ===== clip + background + content =====
+                // ===== clip + background + content =====
                 commands.push(DrawCommand::PushClip {
                     x: padding_box.x - border_box.x,
                     y: padding_box.y - border_box.y,

@@ -1,3 +1,4 @@
+use crate::platform::io as platform_io;
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, StreamConfig};
@@ -11,7 +12,6 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::default::{get_codecs, get_probe};
-use crate::platform::io as platform_io;
 
 /// 音声の管理を行う構造体
 pub struct SoundManager {
@@ -51,7 +51,9 @@ impl SoundManager {
         let device = host
             .default_output_device()
             .context("No default output device available")?;
-        let supported_cfg = device.default_output_config().context("Failed to get default output config")?;
+        let supported_cfg = device
+            .default_output_config()
+            .context("Failed to get default output config")?;
         let config: StreamConfig = supported_cfg.clone().into();
         let sample_format = supported_cfg.sample_format();
         let output_channels = config.channels as usize;
@@ -89,7 +91,11 @@ impl SoundManager {
                 err_fn,
                 latency,
             )?,
-            _ => return Err(anyhow::anyhow!("Unsupported sample format from output device")),
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "Unsupported sample format from output device"
+                ));
+            }
         };
 
         stream.play()?;
@@ -126,7 +132,8 @@ impl SoundManager {
 
     /// ローカルファイルから音声を再生する
     pub fn play_from_file(&mut self, path: &str) -> Result<()> {
-        let data = platform_io::load_local_file(path).with_context(|| format!("Failed to read local file: {}", path))?;
+        let data = platform_io::load_local_file(path)
+            .with_context(|| format!("Failed to read local file: {}", path))?;
         self.play_from_bytes(&data)
     }
 
@@ -142,15 +149,18 @@ impl SoundManager {
                 .trim_start_matches("resource:/")
                 .trim_start_matches("resource:");
             let rel = rel.trim_start_matches('/');
-            let data = platform_io::load_resource(rel).with_context(|| format!("Failed to load resource: {}", rel))?;
+            let data = platform_io::load_resource(rel)
+                .with_context(|| format!("Failed to load resource: {}", rel))?;
             return self.play_from_bytes(&data);
         }
         if uri.starts_with("file://") {
             let p = uri.trim_start_matches("file://");
-            let data = platform_io::load_local_file(p).with_context(|| format!("Failed to read local file from URI: {}", p))?;
+            let data = platform_io::load_local_file(p)
+                .with_context(|| format!("Failed to read local file from URI: {}", p))?;
             return self.play_from_bytes(&data);
         }
-        let data = platform_io::load_local_file(uri).with_context(|| format!("Failed to read local file: {}", uri))?;
+        let data = platform_io::load_local_file(uri)
+            .with_context(|| format!("Failed to read local file: {}", uri))?;
         self.play_from_bytes(&data)
     }
 }
@@ -161,13 +171,23 @@ fn decode(data: &[u8]) -> Result<(Vec<f32>, usize, u32)> {
     let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
 
     let hint = Hint::new();
-    let probed = get_probe().format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+    let probed = get_probe()
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .context("Failed to probe media format")?;
 
     let mut format = probed.format;
-    let track = format.default_track().ok_or_else(|| anyhow::anyhow!("No default audio track found"))?;
+    let track = format
+        .default_track()
+        .ok_or_else(|| anyhow::anyhow!("No default audio track found"))?;
     let codec_params = &track.codec_params;
-    let mut decoder = get_codecs().make(&codec_params, &DecoderOptions::default()).context("Failed to create decoder")?;
+    let mut decoder = get_codecs()
+        .make(&codec_params, &DecoderOptions::default())
+        .context("Failed to create decoder")?;
 
     let mut samples: Vec<f32> = Vec::new();
     let mut channels: usize = codec_params.channels.map(|c| c.count()).unwrap_or(1);
@@ -251,10 +271,20 @@ fn decode(data: &[u8]) -> Result<(Vec<f32>, usize, u32)> {
 }
 
 /// 出力バッファに音声データを書き込む（f32）
-fn write_output_f32(output: &mut [f32], src_channels: usize, out_channels: usize, samples: &Arc<Mutex<Vec<f32>>>, pos: &Arc<Mutex<usize>>) {
+fn write_output_f32(
+    output: &mut [f32],
+    src_channels: usize,
+    out_channels: usize,
+    samples: &Arc<Mutex<Vec<f32>>>,
+    pos: &Arc<Mutex<usize>>,
+) {
     let mut p = pos.lock().unwrap();
     let buf = samples.lock().unwrap();
-    let total_frames = if src_channels > 0 { buf.len() / src_channels } else { 0 };
+    let total_frames = if src_channels > 0 {
+        buf.len() / src_channels
+    } else {
+        0
+    };
 
     if out_channels == 0 {
         return;
@@ -282,17 +312,31 @@ fn write_output_f32(output: &mut [f32], src_channels: usize, out_channels: usize
 }
 
 /// 出力バッファに音声データを書き込む（i16）
-fn write_output_i16(output: &mut [i16], src_channels: usize, out_channels: usize, samples: &Arc<Mutex<Vec<f32>>>, pos: &Arc<Mutex<usize>>) {
+fn write_output_i16(
+    output: &mut [i16],
+    src_channels: usize,
+    out_channels: usize,
+    samples: &Arc<Mutex<Vec<f32>>>,
+    pos: &Arc<Mutex<usize>>,
+) {
     let mut p = pos.lock().unwrap();
     let buf = samples.lock().unwrap();
-    let total_frames = if src_channels > 0 { buf.len() / src_channels } else { 0 };
+    let total_frames = if src_channels > 0 {
+        buf.len() / src_channels
+    } else {
+        0
+    };
 
-    if out_channels == 0 { return; }
+    if out_channels == 0 {
+        return;
+    }
     let frames_to_write = output.len() / out_channels;
 
     for frame in 0..frames_to_write {
         if total_frames == 0 || *p >= total_frames {
-            for ch in 0..out_channels { output[frame * out_channels + ch] = 0; }
+            for ch in 0..out_channels {
+                output[frame * out_channels + ch] = 0;
+            }
             continue;
         }
         for ch in 0..out_channels {
@@ -309,17 +353,31 @@ fn write_output_i16(output: &mut [i16], src_channels: usize, out_channels: usize
 }
 
 /// 出力バッファに音声データを書き込む（u16）
-fn write_output_u16(output: &mut [u16], src_channels: usize, out_channels: usize, samples: &Arc<Mutex<Vec<f32>>>, pos: &Arc<Mutex<usize>>) {
+fn write_output_u16(
+    output: &mut [u16],
+    src_channels: usize,
+    out_channels: usize,
+    samples: &Arc<Mutex<Vec<f32>>>,
+    pos: &Arc<Mutex<usize>>,
+) {
     let mut p = pos.lock().unwrap();
     let buf = samples.lock().unwrap();
-    let total_frames = if src_channels > 0 { buf.len() / src_channels } else { 0 };
+    let total_frames = if src_channels > 0 {
+        buf.len() / src_channels
+    } else {
+        0
+    };
 
-    if out_channels == 0 { return; }
+    if out_channels == 0 {
+        return;
+    }
     let frames_to_write = output.len() / out_channels;
 
     for frame in 0..frames_to_write {
         if total_frames == 0 || *p >= total_frames {
-            for ch in 0..out_channels { output[frame * out_channels + ch] = 0; }
+            for ch in 0..out_channels {
+                output[frame * out_channels + ch] = 0;
+            }
             continue;
         }
         for ch in 0..out_channels {
