@@ -45,8 +45,7 @@ impl ApplicationHandler for App {
         );
         let window_id = window.id();
         let scale_factor = window.scale_factor();
-        let gpu_renderer =
-            pollster::block_on(GpuRenderer::new(window.clone(), None)).unwrap();
+        let gpu_renderer = pollster::block_on(GpuRenderer::new(window.clone(), None)).unwrap();
 
         self.browser_app.open_window(
             window_id,
@@ -56,7 +55,10 @@ impl ApplicationHandler for App {
             0,
         );
 
-        let mut state = WindowState { window, gpu_renderer };
+        let mut state = WindowState {
+            window,
+            gpu_renderer,
+        };
 
         // 初回描画
         self.browser_app

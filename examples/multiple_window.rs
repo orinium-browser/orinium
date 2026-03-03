@@ -91,9 +91,8 @@ impl ApplicationHandler for MultiWindowApp {
             let window_id = window.id();
             let scale_factor = window.scale_factor();
 
-            let gpu_renderer =
-                pollster::block_on(GpuRenderer::new(window.clone(), None))
-                    .expect("failed to create GPU renderer");
+            let gpu_renderer = pollster::block_on(GpuRenderer::new(window.clone(), None))
+                .expect("failed to create GPU renderer");
 
             self.browser.open_window(
                 window_id,
@@ -103,7 +102,10 @@ impl ApplicationHandler for MultiWindowApp {
                 tab_id,
             );
 
-            let mut state = WindowState { window, gpu_renderer };
+            let mut state = WindowState {
+                window,
+                gpu_renderer,
+            };
 
             // Request initial draw.
             self.browser
@@ -142,12 +144,16 @@ impl ApplicationHandler for MultiWindowApp {
             BrowserCommand::RequestRedraw => {
                 if let Some(state) = self.windows.get(&window_id) {
                     state.window.request_redraw();
-                    state.window.set_title(&self.browser.window_title(window_id));
+                    state
+                        .window
+                        .set_title(&self.browser.window_title(window_id));
                 }
             }
             BrowserCommand::RenameWindowTitle => {
                 if let Some(state) = self.windows.get(&window_id) {
-                    state.window.set_title(&self.browser.window_title(window_id));
+                    state
+                        .window
+                        .set_title(&self.browser.window_title(window_id));
                 }
             }
             BrowserCommand::None => {}

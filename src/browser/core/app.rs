@@ -364,13 +364,12 @@ impl BrowserApp {
             return BrowserCommand::None;
         }
 
-        let (x, y, sf) = match (
-            self.inputs.get(&window_id),
-            self.renders.get(&window_id),
-        ) {
-            (Some(input), Some(render)) => {
-                (input.mouse_position.0, input.mouse_position.1, render.scale_factor)
-            }
+        let (x, y, sf) = match (self.inputs.get(&window_id), self.renders.get(&window_id)) {
+            (Some(input), Some(render)) => (
+                input.mouse_position.0,
+                input.mouse_position.1,
+                render.scale_factor,
+            ),
             _ => return BrowserCommand::None,
         };
 
