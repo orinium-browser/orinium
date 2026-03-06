@@ -1,3 +1,5 @@
+//! Browser resource loading process, supports HTTP and resource:/// schemes.
+
 use crate::platform::network::{NetworkCore, NetworkError};
 use anyhow::{Result, anyhow};
 use hyper::StatusCode;
