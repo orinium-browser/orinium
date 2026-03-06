@@ -1,3 +1,5 @@
+//! CSSの値を表す構造体と列挙型
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Unit {
     Px,
