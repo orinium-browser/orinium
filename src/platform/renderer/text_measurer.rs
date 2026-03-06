@@ -1,3 +1,5 @@
+//! Text measurement interface and implementations.
+
 use crate::engine::bridge::text::{
     TextMeasureError, TextMeasureRequest, TextMeasurer, TextMetrics,
 };

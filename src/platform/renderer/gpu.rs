@@ -1,3 +1,5 @@
+//! wgpuを使用してGPUで描画するためのコンテキストと処理を提供するモジュール
+
 use crate::engine::renderer_model::DrawCommand;
 use anyhow::Result;
 use std::env;
