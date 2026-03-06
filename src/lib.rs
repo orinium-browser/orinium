@@ -1,6 +1,9 @@
-//! #OriniumBrowser
+//! # OriniumBrowser
 //!
 //! ## 最小実行
+//!
+//! [`browser::BrowserApp`] を通じて Window が作成されます。
+//! 詳細については、 [`browser::BrowserApp`] のドキュメントを参照してください。
 //!
 //! ```no_run
 //! use orinium_browser::browser::BrowserApp;
