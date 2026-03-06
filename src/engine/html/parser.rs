@@ -1,3 +1,5 @@
+//! HTMLパーサー。トークンストリームをDOMツリーに変換する。
+
 use crate::engine::html::tokenizer::{Attribute, Token, Tokenizer};
 use crate::engine::html::util as html_util;
 use crate::engine::tree::*;

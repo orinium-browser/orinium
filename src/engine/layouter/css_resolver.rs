@@ -1,3 +1,5 @@
+//! A CSS resolver that handles selector matching and value resolution.
+
 use crate::engine::css::parser::{ComplexSelector, CssNode, CssNodeType};
 use crate::engine::css::values::CssValue;
 

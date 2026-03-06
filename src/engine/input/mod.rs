@@ -1,3 +1,5 @@
+//! 入力処理とヒットテスト。クリック位置の要素判定を行う。
+
 use super::layouter::types::{InfoNode, NodeKind};
 use ui_layout::LayoutNode;
 

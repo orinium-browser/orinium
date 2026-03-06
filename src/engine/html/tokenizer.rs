@@ -1,3 +1,5 @@
+//! HTML tokenizer. Converts raw HTML input into token stream.
+
 use super::util::decode_entity;
 
 /// Represents a single HTML attribute

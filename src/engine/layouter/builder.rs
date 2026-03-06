@@ -1,3 +1,5 @@
+//! Layout builder, which transforms a DOM tree into a UI layout.
+
 use crate::engine::bridge::text;
 use crate::engine::css::{
     matcher::{ElementChain, ElementInfo},
