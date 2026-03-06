@@ -1,3 +1,14 @@
+//! #OriniumBrowser
+//!
+//! ## 最小実行
+//!
+//! ```rs
+//! use orinium_browser::browser::BrowserApp;
+//!
+//! let browser = BrowserApp::default();
+//! browser.run();
+//! ```
+
 /// ブラウザ関連のモジュールをまとめたトップレベルモジュール
 pub mod browser;
 
