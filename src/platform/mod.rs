@@ -1,3 +1,5 @@
+//! Platform abstraction layer. OS-specific implementations.
+
 pub mod io;
 pub mod network;
 pub mod renderer;

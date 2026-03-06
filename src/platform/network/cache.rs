@@ -1,3 +1,5 @@
+//! HTTP response caching with TTL support.
+
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};

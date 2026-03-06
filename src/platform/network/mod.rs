@@ -1,3 +1,5 @@
+//! Network processing module, providing HTTP communication, cache, and cookie management.
+
 pub mod cache;
 pub mod config;
 pub mod cookie_store;

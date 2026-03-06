@@ -1,3 +1,5 @@
+//! Layout tree node types. Styles, text, and container definitions.
+
 /// InfoNode represents a node in the layout tree.
 /// It can be either a Container or Text node, each with its own properties and styles.
 #[derive(Debug, Clone)]
