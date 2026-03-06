@@ -1,4 +1,33 @@
-//! Browser application main component. Window and rendering management.
+//! Browser core: application entry and lifecycle manager.
+//!
+//! Responsibilities:
+//! - Manage Browser lifetime, window, and tab collection.
+//! - Coordinate network/resource loading and map responses to tabs.
+//! - Drive the engine pipeline: schedule layout, collect draw commands, and hand them to the platform renderer.
+//! - Handle input and window events and dispatch them to tabs/UI.
+//!
+//! Processing flow (high-level):
+//! 1. Initialize platform components (system window, GPU renderer, network core).
+//! 2. Create and register `Tab` instances and navigate to initial URLs.
+//! 3. Enter event loop: handle events -> update state -> request layout -> generate draw commands -> render.
+//! 4. Manage asynchronous fetches and inject resources into the engine when they arrive.
+//!
+//! Example (for contributors / local testing):
+//! ```no_run
+//! use orinium_browser::browser::BrowserApp;
+//! use orinium_browser::browser::Tab;
+//!
+//! let mut app = BrowserApp::default();
+//! let mut tab = Tab::new();
+//! tab.navigate("resource:///test/compatibility_test.html".parse().unwrap());
+//! app.add_tab(tab);
+//! app.run().unwrap();
+//! ```
+//!
+//! Developer notes:
+//! - For parsing and layout details see `engine::html`, `engine::css`, and `engine::layouter`.
+//! - For platform integration see `platform::{network, renderer, system}`.
+//! - Keep public API small and document invariants for Tab lifecycle and fetch handling.
 
 use anyhow::Result;
 use std::collections::{HashMap, hash_map::DefaultHasher};
@@ -82,7 +111,38 @@ impl PendingFetches {
 }
 
 /// Main browser application struct.
-/// Holds tabs, rendering state, input state, and network resources.
+///
+/// Responsibilities:
+/// - Manage collection of `Tab` instances and the active tab index.
+/// - Coordinate resource loading and pending fetch lifecycle.
+/// - Orchestrate engine work (layout/draw-command generation) and submit commands to the renderer.
+/// - Process input and window events and propagate them to tabs/UI.
+///
+/// Typical lifecycle:
+/// 1. Construct `BrowserApp::new(...)`, which wires platform components (network, renderer, system).
+/// 2. Create `Tab` objects and call `add_tab` / `navigate` as needed.
+/// 3. Call `run()` to start the event loop. Each loop iteration:
+///    - Poll platform events (keyboard/mouse/window).
+///    - Update input state and dispatch to the active tab.
+///    - If DOM/CSS changes occurred, request layout and regenerate draw commands.
+///    - Submit draw commands to the platform-specific renderer.
+/// 4. Manage asynchronous resource fetches: match responses to pending fetch IDs and notify tabs.
+///
+/// Example usage:
+/// ```no_run
+/// use orinium_browser::browser::BrowserApp;
+/// use orinium_browser::browser::Tab;
+///
+/// let mut app = BrowserApp::default();
+/// let mut tab = Tab::new();
+/// tab.navigate("resource:///test/compatibility_test.html".parse().unwrap());
+/// app.add_tab(tab);
+/// app.run().unwrap();
+/// ```
+///
+/// Contributor guidance:
+/// - Add small unit tests to validate tab lifecycle, fetch handling, and draw-command generation.
+/// - Prefer adding examples under `examples/` to demonstrate end-to-end behavior.
 pub struct BrowserApp {
     tabs: Vec<Tab>,
     active_tab: usize,
