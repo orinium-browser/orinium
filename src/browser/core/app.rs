@@ -14,7 +14,7 @@ use crate::engine::layouter;
 use crate::engine::renderer_model::{self, DrawCommand};
 use crate::platform::network::NetworkCore;
 use crate::platform::renderer::gpu::GpuRenderer;
-use crate::system::App;
+use crate::platform::system::App;
 
 /// Stores rendering-related state for the browser window.
 pub struct RenderState {

@@ -4,7 +4,7 @@ use crate::engine::css::{
     values::{CssValue, Unit},
 };
 use crate::engine::tree::TreeNode;
-use crate::html::HtmlNodeType;
+use crate::engine::html::HtmlNodeType;
 
 use std::cell::RefCell;
 use std::collections::HashMap;

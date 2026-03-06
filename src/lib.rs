@@ -24,8 +24,3 @@ pub mod engine;
 /// このモジュールには、ネットワーク処理、レンダリング、UI表示、
 /// ファイルI/Oなどプラットフォーム固有の実装が含まれます。
 pub mod platform;
-
-pub use engine::html;
-pub use engine::html::parser;
-pub use platform::network;
-pub use platform::system;

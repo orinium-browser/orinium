@@ -1,4 +1,4 @@
-use crate::network::{NetworkCore, NetworkError};
+use crate::platform::network::{NetworkCore, NetworkError};
 use anyhow::{Result, anyhow};
 use hyper::StatusCode;
 use std::{fmt, rc::Rc};
