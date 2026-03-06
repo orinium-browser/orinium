@@ -3,8 +3,8 @@ use crate::engine::css::{
     matcher::{ElementChain, ElementInfo},
     values::{CssValue, Unit},
 };
-use crate::engine::tree::TreeNode;
 use crate::engine::html::HtmlNodeType;
+use crate::engine::tree::TreeNode;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
