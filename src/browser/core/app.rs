@@ -1,3 +1,5 @@
+//! Browser application main component. Window and rendering management.
+
 use anyhow::Result;
 use std::collections::{HashMap, hash_map::DefaultHasher};
 use std::env;
