@@ -2,7 +2,7 @@
 //!
 //! ## 最小実行
 //!
-//! ```
+//! ```no_run
 //! use orinium_browser::browser::BrowserApp;
 //!
 //! let browser = BrowserApp::default();
