@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["DrawCommand"],"fn":["generate_draw_commands"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["decode_entity","element_category","is_block_level_element","is_inline_element"]};

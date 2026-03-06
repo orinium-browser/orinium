@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["AtQuery","Combinator","CssNodeType","ParserErrorKind"],"struct":["ComplexSelector","CssNode","Parser","ParserError","Selector","SelectorPart"],"type":["ParseResult"]};

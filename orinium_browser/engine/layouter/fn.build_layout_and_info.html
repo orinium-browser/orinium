@@ -1,0 +1,55 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Builds a layout tree (`LayoutNode`) and a render info tree (`InfoNode`) from the DOM."><title>build_layout_and_info in orinium_browser::engine::layouter - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="orinium_browser" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.1 (01f6ddf75 2026-02-11)" data-channel="1.93.1" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-a3946164.js" data-settings-js="settings-c38705f0.js" ><script src="../../../static.files/storage-e2aeef58.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../../static.files/main-a410ff4d.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc fn"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">build_layout_and_info</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../../orinium_browser/index.html">orinium_<wbr>browser</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">build_<wbr>layout_<wbr>and_<wbr>info</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#overview" title="Overview">Overview</a></li><li><a href="#style-resolution-order-low--high-priority" title="Style resolution order (low → high priority)">Style resolution order (low → high priority)</a></li><li><a href="#inherited-properties" title="Inherited properties">Inherited properties</a></li><li><a href="#parameters" title="Parameters">Parameters</a></li><li><a href="#returns" title="Returns">Returns</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="index.html">In orinium_<wbr>browser::<wbr>engine::<wbr>layouter</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../../index.html">orinium_browser</a>::<wbr><a href="../index.html">engine</a>::<wbr><a href="index.html">layouter</a></div><h1>Function <span class="fn">build_<wbr>layout_<wbr>and_<wbr>info</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../../src/orinium_browser/engine/layouter/builder.rs.html#64-259">Source</a> </span></div><pre class="rust item-decl"><code>pub fn build_layout_and_info(
+    dom: &amp;<a class="struct" href="https://doc.rust-lang.org/1.93.1/alloc/rc/struct.Rc.html" title="struct alloc::rc::Rc">Rc</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.93.1/core/cell/struct.RefCell.html" title="struct core::cell::RefCell">RefCell</a>&lt;<a class="struct" href="../tree/struct.TreeNode.html" title="struct orinium_browser::engine::tree::TreeNode">TreeNode</a>&lt;<a class="enum" href="../html/parser/enum.HtmlNodeType.html" title="enum orinium_browser::engine::html::parser::HtmlNodeType">HtmlNodeType</a>&gt;&gt;&gt;,
+    resolved_styles: &amp;<a class="type" href="css_resolver/type.ResolvedStyles.html" title="type orinium_browser::engine::layouter::css_resolver::ResolvedStyles">ResolvedStyles</a>,
+    measurer: &amp;dyn <a class="trait" href="../bridge/text/trait.TextMeasurer.html" title="trait orinium_browser::engine::bridge::text::TextMeasurer">TextMeasurer</a>&lt;<a class="struct" href="types/struct.TextStyle.html" title="struct orinium_browser::engine::layouter::types::TextStyle">TextStyle</a>&gt;,
+    parent_text_style: <a class="struct" href="types/struct.TextStyle.html" title="struct orinium_browser::engine::layouter::types::TextStyle">TextStyle</a>,
+    chain: <a class="type" href="../css/matcher/type.ElementChain.html" title="type orinium_browser::engine::css::matcher::ElementChain">ElementChain</a>,
+) -&gt; (LayoutNode, <a class="struct" href="types/struct.InfoNode.html" title="struct orinium_browser::engine::layouter::types::InfoNode">InfoNode</a>)</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Builds a layout tree (<code>LayoutNode</code>) and a render info tree (<code>InfoNode</code>) from the DOM.</p>
+<h2 id="overview"><a class="doc-anchor" href="#overview">§</a>Overview</h2>
+<ul>
+<li>Recursively traverses the HTML DOM</li>
+<li>Applies resolved CSS declarations</li>
+<li>Computes layout-related styles</li>
+<li>Collects render-time information (color, font size, text)</li>
+</ul>
+<h2 id="style-resolution-order-low--high-priority"><a class="doc-anchor" href="#style-resolution-order-low--high-priority">§</a>Style resolution order (low → high priority)</h2>
+<ol>
+<li>
+<p><strong>Inherited values from parent</strong></p>
+<ul>
+<li><code>text_style</code></li>
+</ul>
+</li>
+<li>
+<p><strong>Resolved CSS declarations</strong></p>
+<ul>
+<li>Overrides inherited values when specified</li>
+</ul>
+</li>
+<li>
+<p><strong>HTML defaults / semantics</strong></p>
+<ul>
+<li><code>display</code> (block, inline, etc.)</li>
+<li>Text measurement for text nodes</li>
+</ul>
+</li>
+</ol>
+<h2 id="inherited-properties"><a class="doc-anchor" href="#inherited-properties">§</a>Inherited properties</h2>
+<p>Only the following properties are inherited explicitly:</p>
+<ul>
+<li><code>text_style</code></li>
+</ul>
+<p>All other style fields are initialized per node and are <strong>not inherited</strong>.</p>
+<h2 id="parameters"><a class="doc-anchor" href="#parameters">§</a>Parameters</h2>
+<ul>
+<li><code>parent_text_style</code></li>
+</ul>
+<p>These values must be passed from the computed result of the parent when
+calling this function recursively.</p>
+<h2 id="returns"><a class="doc-anchor" href="#returns">§</a>Returns</h2>
+<p>A tuple of:</p>
+<ul>
+<li><code>LayoutNode</code>: used by the layout engine</li>
+<li><code>InfoNode</code>: used for rendering (text, color, font size)</li>
+</ul>
+</div></details></section></div></main></body></html>

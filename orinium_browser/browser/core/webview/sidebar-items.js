@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["FetchKind","WebViewTask"],"fn":["resolve_url"],"struct":["DocumentInfo","WebView"]};
