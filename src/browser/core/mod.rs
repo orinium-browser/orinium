@@ -1,3 +1,5 @@
+//! A module that provides the core functionality of the browser.
+
 mod app;
 mod command;
 pub mod resource_loader;
