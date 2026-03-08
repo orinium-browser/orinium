@@ -1,3 +1,4 @@
+//! テクスチャ（画像）の管理と読み込みのモジュール
 #![allow(dead_code)]
 
 use anyhow::{Context, Result};
