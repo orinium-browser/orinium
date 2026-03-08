@@ -1,3 +1,5 @@
+//! 音声データの管理と再生を行う
+
 use crate::platform::io as platform_io;
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
