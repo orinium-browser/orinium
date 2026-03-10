@@ -25,6 +25,45 @@ impl App {
             browser_app,
         }
     }
+
+    fn open_new_window(&mut self, event_loop: &ActiveEventLoop, tab_id: usize) {
+        let default_size = self.browser_app.default_window_size();
+        let default_title = self.browser_app.default_window_title();
+        let window = Arc::new(
+            event_loop
+                .create_window(
+                    Window::default_attributes()
+                        .with_inner_size(winit::dpi::PhysicalSize::new(
+                            default_size.0,
+                            default_size.1,
+                        ))
+                        .with_title(&default_title),
+                )
+                .unwrap(),
+        );
+        let window_id = window.id();
+        let scale_factor = window.scale_factor();
+        let gpu_renderer = pollster::block_on(GpuRenderer::new(window.clone(), None)).unwrap();
+
+        self.browser_app.open_window(
+            window_id,
+            (default_size.0 as u32, default_size.1 as u32),
+            default_title,
+            scale_factor,
+            tab_id,
+        );
+
+        let mut state = WindowState {
+            window,
+            gpu_renderer,
+        };
+
+        self.browser_app
+            .apply_draw_commands(window_id, &mut state.gpu_renderer);
+        state.window.request_redraw();
+
+        self.windows.insert(window_id, state);
+    }
 }
 
 impl ApplicationHandler for App {
@@ -106,6 +145,9 @@ impl ApplicationHandler for App {
                         .window
                         .set_title(&self.browser_app.window_title(window_id));
                 }
+            }
+            BrowserCommand::OpenNewWindow { tab_id } => {
+                self.open_new_window(event_loop, tab_id);
             }
             BrowserCommand::None => {}
         }

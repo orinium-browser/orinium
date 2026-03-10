@@ -32,6 +32,8 @@ pub struct RenderState {
 pub struct InputState {
     /// Current mouse position in window coordinates.
     pub mouse_position: (f64, f64),
+    /// Current keyboard modifier state (Ctrl, Shift, Alt, etc.).
+    pub modifiers: winit::keyboard::ModifiersState,
 }
 
 pub struct PendingFetches {
@@ -242,6 +244,7 @@ impl BrowserApp {
         }
     }
 
+    #[allow(dead_code)]
     /// Returns a mutable reference to the currently active tab, if any.
     fn active_tab_mut(&mut self) -> Option<&mut Tab> {
         self.tabs.get_mut(self.active_tab)
@@ -340,6 +343,17 @@ impl BrowserApp {
 
             WindowEvent::MouseInput { button, .. } => self.handle_mouse_input(window_id, button),
 
+            WindowEvent::ModifiersChanged(modifiers) => {
+                if let Some(input) = self.inputs.get_mut(&window_id) {
+                    input.modifiers = modifiers.state();
+                }
+                BrowserCommand::None
+            }
+
+            WindowEvent::KeyboardInput { event, .. } => {
+                self.handle_keyboard_input(window_id, event)
+            }
+
             _ => BrowserCommand::None,
         };
         let cmd_from_tick = self.tick();
@@ -352,6 +366,43 @@ impl BrowserApp {
             }
             _ => browser_cmd,
         }
+    }
+
+    /// Handles keyboard input events and returns a `BrowserCommand`.
+    fn handle_keyboard_input(
+        &mut self,
+        window_id: WindowId,
+        event: winit::event::KeyEvent,
+    ) -> BrowserCommand {
+        // TODO: あとで消す
+        const KEY_NEW_WINDOW: &str = "n";
+
+        if event.state != winit::event::ElementState::Pressed {
+            return BrowserCommand::None;
+        }
+
+        let ctrl = self
+            .inputs
+            .get(&window_id)
+            .map(|i| i.modifiers.control_key())
+            .unwrap_or(false);
+
+        if ctrl {
+            if let winit::keyboard::Key::Character(ch) = &event.logical_key {
+                if ch.as_str().eq_ignore_ascii_case(KEY_NEW_WINDOW) {
+                    let tab_id = self.new_empty_tab();
+                    return BrowserCommand::OpenNewWindow { tab_id };
+                }
+            }
+        }
+
+        BrowserCommand::None
+    }
+
+    /// Adds a new empty tab and returns its index.
+    pub fn new_empty_tab(&mut self) -> usize {
+        self.tabs.push(Tab::new());
+        self.tabs.len() - 1
     }
 
     /// Handles mouse input events, mainly left-clicks for the active tab.
