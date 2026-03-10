@@ -1,0 +1,39 @@
+name: Deploy Rust Docs
+
+on:
+  push:
+    branches:
+      - dev
+
+permissions:
+  contents: write
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MinGW
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64
+
+      - name: Add Windows target
+        run: rustup target add x86_64-pc-windows-gnu
+
+      - name: Build docs
+        run: cargo doc --no-deps --target x86_64-pc-windows-gnu
+
+      - name: Prepare pages
+        run: |
+          mkdir public
+          cp -r target/x86_64-pc-windows-gnu/doc/* public
+          touch public/.nojekyll
+
+      - name: Deploy
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./public

@@ -1,3 +1,5 @@
+//! Manages the application lifecycle, including window creation and event handling.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use winit::application::ApplicationHandler;

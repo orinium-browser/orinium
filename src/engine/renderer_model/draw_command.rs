@@ -1,3 +1,5 @@
+//! Draw command definition for rendering, which represents drawing instructions.
+
 use crate::engine::layouter::types::{Color, InfoNode, NodeKind, TextDecoration, TextStyle};
 use ui_layout::LayoutNode;
 

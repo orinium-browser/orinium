@@ -1,3 +1,5 @@
+//! ブラウザのタブ機能。WebView を保持し、ページのタイトルや URL などのメタ情報を管理する。
+
 use crate::{
     browser::core::resource_loader::BrowserNetworkError,
     engine::{html::HtmlNodeType, layouter::types::InfoNode, tree::TreeNode},

@@ -1,3 +1,6 @@
+//! HTTP Sender Pool.
+//! HTTP/1 と HTTP/2 の Sender を統一的に管理できるプール。
+
 use http_body_util::Empty;
 use hyper::{
     body::Bytes,

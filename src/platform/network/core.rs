@@ -1,3 +1,6 @@
+//! ネットワークコア
+//! HTTP通信とレスポンス処理を担当する。
+
 use super::{HostKey, HttpSender, NetworkConfig, NetworkError, SenderPool};
 
 use http_body_util::{BodyExt, Empty};

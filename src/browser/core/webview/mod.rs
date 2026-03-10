@@ -1,3 +1,5 @@
+//! ブラウザのwebview機能。タスクとレンダリング情報の管理を行う。
+
 use crate::engine::{
     css::parser::Parser as CssParser,
     html::parser::{DomTree, Parser as HtmlParser},

@@ -1,3 +1,5 @@
+//! ファイルI/O関連の機能を提供するモジュール
+
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::PathBuf;

@@ -1,3 +1,5 @@
+//! Fallback text measurer without font engine dependency.
+
 use super::{TextMeasureError, TextMeasureRequest, TextMeasurer, TextMetrics};
 use crate::engine::layouter::types::TextStyle;
 

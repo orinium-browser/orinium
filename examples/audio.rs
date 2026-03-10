@@ -1,3 +1,5 @@
+//! Audio playback example. Demonstrates sound manager integration.
+
 use anyhow::Result;
 use orinium_browser::browser::BrowserApp;
 use orinium_browser::platform::audio::SoundManager;

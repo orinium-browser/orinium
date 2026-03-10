@@ -1,9 +1,10 @@
 use orinium_browser::{
     browser::{BrowserApp, Tab, core::resource_loader::BrowserResourceLoader},
-    engine::{html::parser::Parser as HtmlParser, tree::NodeRef},
-    html::HtmlNodeType,
-    network::NetworkConfig,
-    platform::network::NetworkCore,
+    engine::{
+        html::{HtmlNodeType, parser::Parser as HtmlParser},
+        tree::NodeRef,
+    },
+    platform::network::{NetworkConfig, NetworkCore},
 };
 
 use colored::*;

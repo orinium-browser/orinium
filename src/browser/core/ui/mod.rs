@@ -1,3 +1,5 @@
+//! Browser UI components. WIP stub for future UI development.
+
 /*
 use crate::renderer::{DrawCommand, RenderTree, RenderNode};
 

@@ -1,3 +1,5 @@
+//! CSSセレクターマッチング処理。DOM要素とセレクターの照合を行う。
+
 use super::parser::{Combinator, ComplexSelector, Selector};
 
 #[derive(Debug, Clone)]

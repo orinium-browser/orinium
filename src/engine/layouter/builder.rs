@@ -1,10 +1,12 @@
+//! Layout builder, which transforms a DOM tree into a UI layout.
+
 use crate::engine::bridge::text;
 use crate::engine::css::{
     matcher::{ElementChain, ElementInfo},
     values::{CssValue, Unit},
 };
+use crate::engine::html::HtmlNodeType;
 use crate::engine::tree::TreeNode;
-use crate::html::HtmlNodeType;
 
 use std::cell::RefCell;
 use std::collections::HashMap;

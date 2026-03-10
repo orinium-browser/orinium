@@ -1,3 +1,5 @@
+//! Glyphonを使用してテキストを描画する。
+
 use std::{env, sync::Arc};
 
 use crate::engine::layouter::types::{FontStyle, TextAlign, TextStyle};

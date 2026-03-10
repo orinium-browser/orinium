@@ -1,3 +1,5 @@
+//! Cookie storage and management for HTTP requests.
+
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use url::Url;

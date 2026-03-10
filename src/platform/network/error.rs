@@ -1,3 +1,5 @@
+//! Network error types.
+
 #[derive(Debug)]
 pub enum NetworkError {
     // Request / protocol
