@@ -34,7 +34,7 @@ pub enum NodeKind {
     },
     Text {
         /// Text corresponding to the fragment
-        text: Vec<String>,
+        texts: Vec<String>,
         style: TextStyle,
         measured: Option<MeasureCache>,
     },
