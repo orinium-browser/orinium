@@ -450,13 +450,12 @@ impl BrowserApp {
             .map(|i| i.modifiers.control_key())
             .unwrap_or(false);
 
-        if ctrl {
-            if let winit::keyboard::Key::Character(ch) = &event.logical_key {
-                if ch.as_str().eq_ignore_ascii_case(KEY_NEW_WINDOW) {
-                    let tab_id = self.new_empty_tab();
-                    return BrowserCommand::OpenNewWindow { tab_id };
-                }
-            }
+        if ctrl
+            && let winit::keyboard::Key::Character(ch) = &event.logical_key
+            && ch.as_str().eq_ignore_ascii_case(KEY_NEW_WINDOW)
+        {
+            let tab_id = self.new_empty_tab();
+            return BrowserCommand::OpenNewWindow { tab_id };
         }
 
         BrowserCommand::None
