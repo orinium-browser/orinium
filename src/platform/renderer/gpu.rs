@@ -399,25 +399,12 @@ impl GpuRenderer {
                 }
 
                 // Text
-                // TODO:
-                // - Clip 用の width （描画限界）と改行用の max_width を分けて扱う
-                DrawCommand::DrawText {
-                    x,
-                    y,
-                    text,
-                    style,
-                    max_width,
-                } => {
+                DrawCommand::DrawText { x, y, text, style } => {
                     let (tdx, tdy) = current_transform(&transform_stack);
 
                     let clip = current_clip(&clip_stack);
 
-                    let tw = if (tdx + x + max_width) < (clip.x + clip.w) {
-                        (tdx + x + max_width) - clip.x
-                    } else {
-                        clip.w
-                    };
-
+                    let tw = clip.w;
                     let th = clip.h;
 
                     let font_size = &style.font_size;
