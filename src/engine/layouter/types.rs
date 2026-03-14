@@ -36,7 +36,6 @@ pub enum NodeKind {
         /// Text corresponding to the fragment
         texts: Vec<String>,
         style: TextStyle,
-        measured: Option<MeasureCache>,
     },
 }
 
@@ -148,7 +147,6 @@ impl Default for ContainerStyle {
 
 /// TODO
 /// - Add cache logic
-#[allow(dead_code)]
 #[derive(Hash)]
 struct TextMeasureHashKey<'a> {
     text: &'a str,
