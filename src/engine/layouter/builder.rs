@@ -10,17 +10,17 @@ use crate::engine::tree::TreeNode;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use ui_layout::{
-    AlignItems, BoxSizing, Display, FlexDirection, JustifyContent, LayoutNode, Length, Style,
+    AlignItems, BoxSizing, Display, FlexDirection, Fragment, ItemFragment, JustifyContent,
+    LayoutNode, Length, Style,
 };
 
 use super::css_resolver::ResolvedStyles;
 use super::types::{
-    BorderStyle, Color, ContainerRole, ContainerStyle, FontStyle, FontWeight, InfoNode,
-    MeasureCache, NodeKind, TextAlign, TextDecoration, TextStyle,
+    BorderStyle, Color, ContainerRole, ContainerStyle, FontStyle, FontWeight, InfoNode, NodeKind,
+    TextAlign, TextDecoration, TextStyle,
 };
 
 /// Builds a layout tree (`LayoutNode`) and a render info tree (`InfoNode`) from the DOM.
@@ -130,191 +130,190 @@ pub fn build_layout_and_info(
         }
     }
 
-    let mut kind = if let HtmlNodeType::Text(t) = &html_node {
+    let (mut kind, inline_fragments_opt) = if let HtmlNodeType::Text(t) = &html_node {
         let t = normalize_whitespace(t);
 
         let mut kind = NodeKind::Text {
-            text: t.clone(),
+            texts: split_fragments(&t),
             style: text_style,
-            measured: None,
         };
 
-        ensure_text_measured(&mut style, &mut kind, measurer);
+        let inline_fragments = build_inline_fragments(&mut kind, measurer);
 
-        kind
+        (kind, Some(inline_fragments))
     } else if let Some(name) = html_node.tag_name()
         && name == "a"
         && let Some(href) = html_node.get_attr("href")
     {
-        NodeKind::Container {
-            scroll_x: false,
-            scroll_y: false,
-            scroll_offset_x: 0.0,
-            scroll_offset_y: 0.0,
-            style: container_style,
-            role: ContainerRole::Link {
-                href: href.to_string(),
+        (
+            NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: container_style,
+                role: ContainerRole::Link {
+                    href: href.to_string(),
+                },
             },
-        }
+            None,
+        )
     } else {
-        NodeKind::Container {
-            scroll_x: false,
-            scroll_y: false,
-            scroll_offset_x: 0.0,
-            scroll_offset_y: 0.0,
-            style: container_style,
-            role: ContainerRole::Normal,
-        }
+        (
+            NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: container_style,
+                role: ContainerRole::Normal,
+            },
+            None,
+        )
     };
 
-    /* -----------------------------
-       Children
-    ----------------------------- */
+    // Process Children if there are no inline fragments (i.e. text nodes).
+    let (layout, info) = if let Some(inline_fragments) = inline_fragments_opt {
+        /* -----------------------------
+           Text Node with inline fragments
+        ----------------------------- */
 
-    // NOTE:
-    // Inline / LineBox は未実装。
-    // block 要素の直下に text ノードが存在する場合、
-    // 親を flex(row) として扱うことで inline flow を暫定的に再現する。
-    // 将来的には LineBox 実装に置き換える。
-    //
-    // Table 要素も未実装。
-    // Table 要素は暫定的に Flex に置き換える。
-    // TODO: 将来的には TableLayout 実装に置き換える。
-    let mut layout_children = Vec::new();
-    let mut info_children = Vec::new();
+        let mut layout = LayoutNode::new(style);
 
-    if !matches!(style.display, Display::None) {
-        let mut has_text_child = false;
+        layout.set_fragments(inline_fragments);
 
-        for child_dom in dom.borrow().children() {
-            if matches!(child_dom.borrow().value, HtmlNodeType::Text(_)) {
-                has_text_child = true;
-                break;
+        let info = InfoNode {
+            kind,
+            children: vec![],
+        };
+
+        (layout, info)
+    } else {
+        /* -----------------------------
+           Children
+        ----------------------------- */
+
+        // NOTE:
+        // Table 要素は未実装。
+        // 暫定的に Flex に置き換える。
+        // TODO: 将来的には TableLayout 実装に置き換える。
+        let mut layout_children = Vec::new();
+        let mut info_children = Vec::new();
+
+        if !matches!(style.display, Display::None) {
+            let mut has_text_child = false;
+
+            for child_dom in dom.borrow().children() {
+                if matches!(child_dom.borrow().value, HtmlNodeType::Text(_)) {
+                    has_text_child = true;
+                    break;
+                }
             }
-        }
 
-        // 子に TextNode がある Block 要素は Flex(row) に変換
-        if has_text_child && matches!(style.display, Display::Block) {
-            style.display = Display::Flex {
-                flex_direction: FlexDirection::Row,
-            };
-        }
-
-        // Table 要素は暫定的に Flex に置き換える。
-        match &html_node {
-            HtmlNodeType::Element { tag_name, .. }
-                if tag_name == "table"
-                    || tag_name == "tbody"
-                    || tag_name == "thead"
-                    || tag_name == "tfoot" =>
-            {
-                style.display = Display::Flex {
-                    flex_direction: FlexDirection::Column,
-                };
-            }
-            HtmlNodeType::Element { tag_name, .. } if tag_name == "tr" => {
+            // 子に TextNode がある Block 要素は Flex(row) に変換
+            if has_text_child && matches!(style.display, Display::Block) {
                 style.display = Display::Flex {
                     flex_direction: FlexDirection::Row,
                 };
             }
-            _ => {}
-        }
 
-        for child_dom in dom.borrow().children() {
-            let (child_layout, child_info) = build_layout_and_info(
-                child_dom,
-                resolved_styles,
-                measurer,
-                text_style,
-                chain.clone(),
-            );
-
-            if dom.borrow().value.tag_name() == Some("html")
-                && child_dom.borrow().value.tag_name() == Some("body")
-                && let NodeKind::Container { style, .. } = &mut kind
-                && style.background_color == Color(0, 0, 0, 0)
-            {
-                let background_color = {
-                    let NodeKind::Container { style, .. } = &child_info.kind else {
-                        continue;
+            // Table 要素は暫定的に Flex に置き換える。
+            match &html_node {
+                HtmlNodeType::Element { tag_name, .. }
+                    if tag_name == "table"
+                        || tag_name == "tbody"
+                        || tag_name == "thead"
+                        || tag_name == "tfoot" =>
+                {
+                    style.display = Display::Flex {
+                        flex_direction: FlexDirection::Column,
                     };
-                    style.background_color
-                };
-                // html 要素の body 子要素に背景色が指定されていない場合、
-                // body の背景色を html の背景色で上書きする
-                style.background_color = background_color;
+                }
+                HtmlNodeType::Element { tag_name, .. } if tag_name == "tr" => {
+                    style.display = Display::Flex {
+                        flex_direction: FlexDirection::Row,
+                    };
+                }
+                _ => {}
             }
 
-            layout_children.push(child_layout);
-            info_children.push(child_info);
+            for child_dom in dom.borrow().children() {
+                let (child_layout, child_info) = build_layout_and_info(
+                    child_dom,
+                    resolved_styles,
+                    measurer,
+                    text_style,
+                    chain.clone(),
+                );
+
+                if dom.borrow().value.tag_name() == Some("html")
+                    && child_dom.borrow().value.tag_name() == Some("body")
+                    && let NodeKind::Container { style, .. } = &mut kind
+                    && style.background_color == Color(0, 0, 0, 0)
+                {
+                    let background_color = {
+                        let NodeKind::Container { style, .. } = &child_info.kind else {
+                            continue;
+                        };
+                        style.background_color
+                    };
+                    // html 要素の body 子要素に背景色が指定されていない場合、
+                    // body の背景色を html の背景色で上書きする
+                    style.background_color = background_color;
+                }
+
+                layout_children.push(child_layout);
+                info_children.push(child_info);
+            }
         }
-    }
 
-    let layout = LayoutNode::with_children(style, layout_children);
+        let layout = LayoutNode::with_children(style, layout_children);
 
-    let info = InfoNode {
-        kind,
-        children: info_children,
+        let info = InfoNode {
+            kind,
+            children: info_children,
+        };
+
+        (layout, info)
     };
 
     (layout, info)
 }
 
-fn calc_text_measure_hash(text: &str, style: &TextStyle) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-
-    let mut hasher = DefaultHasher::new();
-
-    text.hash(&mut hasher);
-    style.font_size.to_bits().hash(&mut hasher);
-    style.font_weight.hash(&mut hasher);
-    style.font_style.hash(&mut hasher);
-
-    hasher.finish()
+/// Splits text into text fragments for measurement. Each fragment is a word or a space.
+fn split_fragments(text: &str) -> Vec<String> {
+    text.split_inclusive(' ').map(|s| s.to_string()).collect()
 }
 
-fn ensure_text_measured(
-    node_style: &mut Style,
+fn build_inline_fragments(
     kind: &mut NodeKind,
     measurer: &dyn text::TextMeasurer<TextStyle>,
-) {
-    let NodeKind::Text {
-        text,
-        style,
-        measured,
-    } = kind
-    else {
-        return;
+) -> Vec<ItemFragment> {
+    let NodeKind::Text { texts, style } = kind else {
+        return vec![];
     };
 
-    let hash = calc_text_measure_hash(text, style);
+    let mut inline_fragments = Vec::with_capacity(texts.len());
 
-    let needs_measure = measured.as_ref().map(|m| m.hash != hash).unwrap_or(true);
+    for text in texts {
+        let req = text::TextMeasureRequest {
+            text: text.clone(),
+            style: *style,
+            max_width: None,
+            wrap: false,
+        };
 
-    if !needs_measure {
-        return;
+        let (width, height) = measurer
+            .measure(&req)
+            .map(|m| (m.width, m.height))
+            .unwrap_or((800.0, style.font_size * 1.2));
+
+        let fragment = ItemFragment::Fragment(Fragment { width, height });
+
+        inline_fragments.push(fragment);
     }
 
-    let req = text::TextMeasureRequest {
-        text: text.clone(),
-        style: *style,
-        max_width: None,
-        wrap: false,
-    };
-
-    let (width, height) = measurer
-        .measure(&req)
-        .map(|m| (m.width, m.height))
-        .unwrap_or((800.0, style.font_size * 1.2));
-
-    *measured = Some(MeasureCache {
-        hash,
-        width,
-        height,
-    });
-
-    node_style.size.width = Length::Px(width);
-    node_style.size.height = Length::Px(height);
+    inline_fragments
 }
 
 fn normalize_whitespace(text: &str) -> String {
