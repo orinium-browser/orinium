@@ -33,7 +33,8 @@ pub enum NodeKind {
         role: ContainerRole,
     },
     Text {
-        text: String,
+        /// Text corresponding to the fragment
+        text: Vec<String>,
         style: TextStyle,
         measured: Option<MeasureCache>,
     },
