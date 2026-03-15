@@ -33,9 +33,9 @@ pub enum NodeKind {
         role: ContainerRole,
     },
     Text {
-        text: String,
+        /// Text corresponding to the fragment
+        texts: Vec<String>,
         style: TextStyle,
-        measured: Option<MeasureCache>,
     },
 }
 
@@ -144,24 +144,6 @@ impl Default for ContainerStyle {
 // =========================
 //           Text
 // =========================
-
-/// TODO
-/// - Add cache logic
-#[allow(dead_code)]
-#[derive(Hash)]
-struct TextMeasureHashKey<'a> {
-    text: &'a str,
-    font_size: u32,
-    font_weight: u16,
-    font_style: FontStyle,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct MeasureCache {
-    pub hash: u64,
-    pub width: f32,
-    pub height: f32,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TextAlign {

@@ -10,7 +10,6 @@ pub enum DrawCommand {
         y: f32,
         text: String,
         style: TextStyle,
-        max_width: f32,
     },
     DrawRect {
         x: f32,
@@ -48,12 +47,23 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
     let mut commands = Vec::new();
 
     match &info.kind {
-        NodeKind::Text { text, style, .. } => {
-            for box_model in &layout.layout_boxes {
-                let rect = box_model.padding_box;
-
-                let abs_x = rect.x;
-                let abs_y = rect.y;
+        NodeKind::Text { texts, style, .. } => {
+            debug_assert_eq!(
+                texts.len(),
+                layout.self_fragments.len(),
+                "`generate_draw_commands` may be called before layout is complete."
+            );
+            debug_assert_eq!(
+                layout.self_fragments.len(),
+                layout.placements.len(),
+                "Layout should have placements for all self fragments."
+            );
+            for ((text, placement), fragment) in texts
+                .iter()
+                .zip(&layout.placements)
+                .zip(&layout.self_fragments)
+            {
+                let (abs_x, abs_y) = placement.offset;
 
                 // テキスト
                 commands.push(DrawCommand::DrawText {
@@ -61,7 +71,6 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
                     y: abs_y,
                     text: text.clone(),
                     style: *style,
-                    max_width: rect.width,
                 });
 
                 // テキストデコレーション
@@ -79,7 +88,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
                     commands.push(DrawCommand::DrawRect {
                         x: abs_x,
                         y: line_y,
-                        width: rect.width,
+                        width: fragment.width(),
                         height: line_thickness,
                         color: style.color,
                     });
