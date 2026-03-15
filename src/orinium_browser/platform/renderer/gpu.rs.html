@@ -399,443 +399,430 @@
 <a href=#399 id=399 data-nosnippet>399</a>                }
 <a href=#400 id=400 data-nosnippet>400</a>
 <a href=#401 id=401 data-nosnippet>401</a>                <span class="comment">// Text
-<a href=#402 id=402 data-nosnippet>402</a>                // TODO:
-<a href=#403 id=403 data-nosnippet>403</a>                // - Clip 用の width （描画限界）と改行用の max_width を分けて扱う
-<a href=#404 id=404 data-nosnippet>404</a>                </span>DrawCommand::DrawText {
-<a href=#405 id=405 data-nosnippet>405</a>                    x,
-<a href=#406 id=406 data-nosnippet>406</a>                    y,
-<a href=#407 id=407 data-nosnippet>407</a>                    text,
-<a href=#408 id=408 data-nosnippet>408</a>                    style,
-<a href=#409 id=409 data-nosnippet>409</a>                    max_width,
-<a href=#410 id=410 data-nosnippet>410</a>                } =&gt; {
-<a href=#411 id=411 data-nosnippet>411</a>                    <span class="kw">let </span>(tdx, tdy) = current_transform(<span class="kw-2">&amp;</span>transform_stack);
-<a href=#412 id=412 data-nosnippet>412</a>
-<a href=#413 id=413 data-nosnippet>413</a>                    <span class="kw">let </span>clip = current_clip(<span class="kw-2">&amp;</span>clip_stack);
-<a href=#414 id=414 data-nosnippet>414</a>
-<a href=#415 id=415 data-nosnippet>415</a>                    <span class="kw">let </span>tw = <span class="kw">if </span>(tdx + x + max_width) &lt; (clip.x + clip.w) {
-<a href=#416 id=416 data-nosnippet>416</a>                        (tdx + x + max_width) - clip.x
-<a href=#417 id=417 data-nosnippet>417</a>                    } <span class="kw">else </span>{
-<a href=#418 id=418 data-nosnippet>418</a>                        clip.w
-<a href=#419 id=419 data-nosnippet>419</a>                    };
-<a href=#420 id=420 data-nosnippet>420</a>
-<a href=#421 id=421 data-nosnippet>421</a>                    <span class="kw">let </span>th = clip.h;
-<a href=#422 id=422 data-nosnippet>422</a>
-<a href=#423 id=423 data-nosnippet>423</a>                    <span class="kw">let </span>font_size = <span class="kw-2">&amp;</span>style.font_size;
-<a href=#424 id=424 data-nosnippet>424</a>
-<a href=#425 id=425 data-nosnippet>425</a>                    <span class="comment">// Text culling: if enabled and the text's bounding box is fully outside current clip, skip creating buffer
-<a href=#426 id=426 data-nosnippet>426</a>                    </span><span class="kw">let </span><span class="kw-2">mut </span>skip_text = <span class="bool-val">false</span>;
-<a href=#427 id=427 data-nosnippet>427</a>                    <span class="kw">if </span><span class="self">self</span>.enable_text_culling {
-<a href=#428 id=428 data-nosnippet>428</a>                        <span class="comment">// compute screen-space bbox
-<a href=#429 id=429 data-nosnippet>429</a>                        </span><span class="kw">let </span>sx1 = (x + tdx) * sf;
-<a href=#430 id=430 data-nosnippet>430</a>                        <span class="kw">let </span>sy1 = (y + tdy) * sf;
-<a href=#431 id=431 data-nosnippet>431</a>                        <span class="comment">// if width/height are zero or NaN, estimate from font size and line count
-<a href=#432 id=432 data-nosnippet>432</a>                        </span><span class="kw">let </span>est_w = <span class="kw">if </span>!tw.is_finite() || tw &lt;= <span class="number">0.0 </span>{
-<a href=#433 id=433 data-nosnippet>433</a>                            <span class="comment">// fall back: estimate width as font_size * 10.0 * approximate_chars
-<a href=#434 id=434 data-nosnippet>434</a>                            </span>(<span class="kw-2">*</span>font_size * sf) * (text.len().max(<span class="number">1</span>) <span class="kw">as </span>f32) * <span class="number">0.5
-<a href=#435 id=435 data-nosnippet>435</a>                        </span>} <span class="kw">else </span>{
-<a href=#436 id=436 data-nosnippet>436</a>                            tw * sf
-<a href=#437 id=437 data-nosnippet>437</a>                        };
-<a href=#438 id=438 data-nosnippet>438</a>                        <span class="kw">let </span>est_h = <span class="kw">if </span>!th.is_finite() || th &lt;= <span class="number">0.0 </span>{
-<a href=#439 id=439 data-nosnippet>439</a>                            <span class="comment">// estimate height as font_size * 1.2 * lines
-<a href=#440 id=440 data-nosnippet>440</a>                            </span>(<span class="kw-2">*</span>font_size * sf) * <span class="number">1.2 </span>* (text.lines().count() <span class="kw">as </span>f32).max(<span class="number">1.0</span>)
-<a href=#441 id=441 data-nosnippet>441</a>                        } <span class="kw">else </span>{
-<a href=#442 id=442 data-nosnippet>442</a>                            th * sf
-<a href=#443 id=443 data-nosnippet>443</a>                        };
-<a href=#444 id=444 data-nosnippet>444</a>                        <span class="kw">let </span>sx2 = sx1 + est_w;
-<a href=#445 id=445 data-nosnippet>445</a>                        <span class="kw">let </span>sy2 = sy1 + est_h;
-<a href=#446 id=446 data-nosnippet>446</a>
-<a href=#447 id=447 data-nosnippet>447</a>                        <span class="kw">let </span>clip_l = clip.x * sf;
-<a href=#448 id=448 data-nosnippet>448</a>                        <span class="kw">let </span>clip_t = clip.y * sf;
-<a href=#449 id=449 data-nosnippet>449</a>                        <span class="kw">let </span>clip_r = (clip.x + clip.w) * sf;
-<a href=#450 id=450 data-nosnippet>450</a>                        <span class="kw">let </span>clip_b = (clip.y + clip.h) * sf;
-<a href=#451 id=451 data-nosnippet>451</a>
-<a href=#452 id=452 data-nosnippet>452</a>                        <span class="kw">if </span>sx2 &lt;= clip_l || sx1 &gt;= clip_r || sy2 &lt;= clip_t || sy1 &gt;= clip_b {
-<a href=#453 id=453 data-nosnippet>453</a>                            skip_text = <span class="bool-val">true</span>;
-<a href=#454 id=454 data-nosnippet>454</a>                        }
-<a href=#455 id=455 data-nosnippet>455</a>                    }
-<a href=#456 id=456 data-nosnippet>456</a>
-<a href=#457 id=457 data-nosnippet>457</a>                    <span class="kw">if </span>skip_text {
-<a href=#458 id=458 data-nosnippet>458</a>                        <span class="kw">continue</span>;
-<a href=#459 id=459 data-nosnippet>459</a>                    }
-<a href=#460 id=460 data-nosnippet>460</a>
-<a href=#461 id=461 data-nosnippet>461</a>                    <span class="comment">// Use TextRenderer helper to create a Buffer with correct FontSystem handling
-<a href=#462 id=462 data-nosnippet>462</a>                    </span><span class="kw">let </span>section = <span class="kw">if let </span><span class="prelude-val">Some</span>(tr) = <span class="kw-2">&amp;mut </span><span class="self">self</span>.text_renderer {
-<a href=#463 id=463 data-nosnippet>463</a>                        <span class="kw">let </span><span class="kw-2">mut </span>render_text_style = <span class="kw-2">*</span>style;
-<a href=#464 id=464 data-nosnippet>464</a>                        render_text_style.font_size = <span class="kw-2">*</span>font_size * sf;
-<a href=#465 id=465 data-nosnippet>465</a>                        <span class="kw">let </span>buffer = tr.create_buffer_for_text(text, render_text_style);
+<a href=#402 id=402 data-nosnippet>402</a>                </span>DrawCommand::DrawText { x, y, text, style } =&gt; {
+<a href=#403 id=403 data-nosnippet>403</a>                    <span class="kw">let </span>(tdx, tdy) = current_transform(<span class="kw-2">&amp;</span>transform_stack);
+<a href=#404 id=404 data-nosnippet>404</a>
+<a href=#405 id=405 data-nosnippet>405</a>                    <span class="kw">let </span>clip = current_clip(<span class="kw-2">&amp;</span>clip_stack);
+<a href=#406 id=406 data-nosnippet>406</a>
+<a href=#407 id=407 data-nosnippet>407</a>                    <span class="kw">let </span>tw = clip.w;
+<a href=#408 id=408 data-nosnippet>408</a>                    <span class="kw">let </span>th = clip.h;
+<a href=#409 id=409 data-nosnippet>409</a>
+<a href=#410 id=410 data-nosnippet>410</a>                    <span class="kw">let </span>font_size = <span class="kw-2">&amp;</span>style.font_size;
+<a href=#411 id=411 data-nosnippet>411</a>
+<a href=#412 id=412 data-nosnippet>412</a>                    <span class="comment">// Text culling: if enabled and the text's bounding box is fully outside current clip, skip creating buffer
+<a href=#413 id=413 data-nosnippet>413</a>                    </span><span class="kw">let </span><span class="kw-2">mut </span>skip_text = <span class="bool-val">false</span>;
+<a href=#414 id=414 data-nosnippet>414</a>                    <span class="kw">if </span><span class="self">self</span>.enable_text_culling {
+<a href=#415 id=415 data-nosnippet>415</a>                        <span class="comment">// compute screen-space bbox
+<a href=#416 id=416 data-nosnippet>416</a>                        </span><span class="kw">let </span>sx1 = (x + tdx) * sf;
+<a href=#417 id=417 data-nosnippet>417</a>                        <span class="kw">let </span>sy1 = (y + tdy) * sf;
+<a href=#418 id=418 data-nosnippet>418</a>                        <span class="comment">// if width/height are zero or NaN, estimate from font size and line count
+<a href=#419 id=419 data-nosnippet>419</a>                        </span><span class="kw">let </span>est_w = <span class="kw">if </span>!tw.is_finite() || tw &lt;= <span class="number">0.0 </span>{
+<a href=#420 id=420 data-nosnippet>420</a>                            <span class="comment">// fall back: estimate width as font_size * 10.0 * approximate_chars
+<a href=#421 id=421 data-nosnippet>421</a>                            </span>(<span class="kw-2">*</span>font_size * sf) * (text.len().max(<span class="number">1</span>) <span class="kw">as </span>f32) * <span class="number">0.5
+<a href=#422 id=422 data-nosnippet>422</a>                        </span>} <span class="kw">else </span>{
+<a href=#423 id=423 data-nosnippet>423</a>                            tw * sf
+<a href=#424 id=424 data-nosnippet>424</a>                        };
+<a href=#425 id=425 data-nosnippet>425</a>                        <span class="kw">let </span>est_h = <span class="kw">if </span>!th.is_finite() || th &lt;= <span class="number">0.0 </span>{
+<a href=#426 id=426 data-nosnippet>426</a>                            <span class="comment">// estimate height as font_size * 1.2 * lines
+<a href=#427 id=427 data-nosnippet>427</a>                            </span>(<span class="kw-2">*</span>font_size * sf) * <span class="number">1.2 </span>* (text.lines().count() <span class="kw">as </span>f32).max(<span class="number">1.0</span>)
+<a href=#428 id=428 data-nosnippet>428</a>                        } <span class="kw">else </span>{
+<a href=#429 id=429 data-nosnippet>429</a>                            th * sf
+<a href=#430 id=430 data-nosnippet>430</a>                        };
+<a href=#431 id=431 data-nosnippet>431</a>                        <span class="kw">let </span>sx2 = sx1 + est_w;
+<a href=#432 id=432 data-nosnippet>432</a>                        <span class="kw">let </span>sy2 = sy1 + est_h;
+<a href=#433 id=433 data-nosnippet>433</a>
+<a href=#434 id=434 data-nosnippet>434</a>                        <span class="kw">let </span>clip_l = clip.x * sf;
+<a href=#435 id=435 data-nosnippet>435</a>                        <span class="kw">let </span>clip_t = clip.y * sf;
+<a href=#436 id=436 data-nosnippet>436</a>                        <span class="kw">let </span>clip_r = (clip.x + clip.w) * sf;
+<a href=#437 id=437 data-nosnippet>437</a>                        <span class="kw">let </span>clip_b = (clip.y + clip.h) * sf;
+<a href=#438 id=438 data-nosnippet>438</a>
+<a href=#439 id=439 data-nosnippet>439</a>                        <span class="kw">if </span>sx2 &lt;= clip_l || sx1 &gt;= clip_r || sy2 &lt;= clip_t || sy1 &gt;= clip_b {
+<a href=#440 id=440 data-nosnippet>440</a>                            skip_text = <span class="bool-val">true</span>;
+<a href=#441 id=441 data-nosnippet>441</a>                        }
+<a href=#442 id=442 data-nosnippet>442</a>                    }
+<a href=#443 id=443 data-nosnippet>443</a>
+<a href=#444 id=444 data-nosnippet>444</a>                    <span class="kw">if </span>skip_text {
+<a href=#445 id=445 data-nosnippet>445</a>                        <span class="kw">continue</span>;
+<a href=#446 id=446 data-nosnippet>446</a>                    }
+<a href=#447 id=447 data-nosnippet>447</a>
+<a href=#448 id=448 data-nosnippet>448</a>                    <span class="comment">// Use TextRenderer helper to create a Buffer with correct FontSystem handling
+<a href=#449 id=449 data-nosnippet>449</a>                    </span><span class="kw">let </span>section = <span class="kw">if let </span><span class="prelude-val">Some</span>(tr) = <span class="kw-2">&amp;mut </span><span class="self">self</span>.text_renderer {
+<a href=#450 id=450 data-nosnippet>450</a>                        <span class="kw">let </span><span class="kw-2">mut </span>render_text_style = <span class="kw-2">*</span>style;
+<a href=#451 id=451 data-nosnippet>451</a>                        render_text_style.font_size = <span class="kw-2">*</span>font_size * sf;
+<a href=#452 id=452 data-nosnippet>452</a>                        <span class="kw">let </span>buffer = tr.create_buffer_for_text(text, render_text_style);
+<a href=#453 id=453 data-nosnippet>453</a>
+<a href=#454 id=454 data-nosnippet>454</a>                        TextSection {
+<a href=#455 id=455 data-nosnippet>455</a>                            screen_position: ((<span class="kw-2">*</span>x + tdx) * sf, (<span class="kw-2">*</span>y + tdy) * sf),
+<a href=#456 id=456 data-nosnippet>456</a>                            clip_origin: (clip.x * sf, clip.y * sf),
+<a href=#457 id=457 data-nosnippet>457</a>                            bounds: (tw * sf, th * sf),
+<a href=#458 id=458 data-nosnippet>458</a>                            buffer,
+<a href=#459 id=459 data-nosnippet>459</a>                        }
+<a href=#460 id=460 data-nosnippet>460</a>                    } <span class="kw">else </span>{
+<a href=#461 id=461 data-nosnippet>461</a>                        <span class="comment">// No text renderer available; skip
+<a href=#462 id=462 data-nosnippet>462</a>                        </span><span class="kw">continue</span>;
+<a href=#463 id=463 data-nosnippet>463</a>                    };
+<a href=#464 id=464 data-nosnippet>464</a>                    sections.push(section);
+<a href=#465 id=465 data-nosnippet>465</a>                }
 <a href=#466 id=466 data-nosnippet>466</a>
-<a href=#467 id=467 data-nosnippet>467</a>                        TextSection {
-<a href=#468 id=468 data-nosnippet>468</a>                            screen_position: ((<span class="kw-2">*</span>x + tdx) * sf, (<span class="kw-2">*</span>y + tdy) * sf),
-<a href=#469 id=469 data-nosnippet>469</a>                            clip_origin: (clip.x * sf, clip.y * sf),
-<a href=#470 id=470 data-nosnippet>470</a>                            bounds: (tw * sf, th * sf),
-<a href=#471 id=471 data-nosnippet>471</a>                            buffer,
-<a href=#472 id=472 data-nosnippet>472</a>                        }
-<a href=#473 id=473 data-nosnippet>473</a>                    } <span class="kw">else </span>{
-<a href=#474 id=474 data-nosnippet>474</a>                        <span class="comment">// No text renderer available; skip
-<a href=#475 id=475 data-nosnippet>475</a>                        </span><span class="kw">continue</span>;
-<a href=#476 id=476 data-nosnippet>476</a>                    };
-<a href=#477 id=477 data-nosnippet>477</a>                    sections.push(section);
-<a href=#478 id=478 data-nosnippet>478</a>                }
-<a href=#479 id=479 data-nosnippet>479</a>
-<a href=#480 id=480 data-nosnippet>480</a>                <span class="comment">// Polygon
-<a href=#481 id=481 data-nosnippet>481</a>                </span>DrawCommand::DrawPolygon { points, color } =&gt; {
-<a href=#482 id=482 data-nosnippet>482</a>                    <span class="comment">// transform
-<a href=#483 id=483 data-nosnippet>483</a>                    </span><span class="kw">let </span>(tdx, tdy) = current_transform(<span class="kw-2">&amp;</span>transform_stack);
-<a href=#484 id=484 data-nosnippet>484</a>                    <span class="kw">let </span>transformed_points: Vec&lt;(f32, f32)&gt; = points
-<a href=#485 id=485 data-nosnippet>485</a>                        .iter()
-<a href=#486 id=486 data-nosnippet>486</a>                        .map(|(px, py)| ((px + tdx) * sf, (py + tdy) * sf))
-<a href=#487 id=487 data-nosnippet>487</a>                        .collect();
-<a href=#488 id=488 data-nosnippet>488</a>
-<a href=#489 id=489 data-nosnippet>489</a>                    <span class="comment">// clip 取得
-<a href=#490 id=490 data-nosnippet>490</a>                    </span><span class="kw">let </span>clip = current_clip(<span class="kw-2">&amp;</span>clip_stack);
-<a href=#491 id=491 data-nosnippet>491</a>                    <span class="comment">// clip in scaled (screen) coords
-<a href=#492 id=492 data-nosnippet>492</a>                    </span><span class="kw">let </span>clip_l = clip.x * sf;
-<a href=#493 id=493 data-nosnippet>493</a>                    <span class="kw">let </span>clip_t = clip.y * sf;
-<a href=#494 id=494 data-nosnippet>494</a>                    <span class="kw">let </span>clip_r = (clip.x + clip.w) * sf;
-<a href=#495 id=495 data-nosnippet>495</a>                    <span class="kw">let </span>clip_b = (clip.y + clip.h) * sf;
-<a href=#496 id=496 data-nosnippet>496</a>
-<a href=#497 id=497 data-nosnippet>497</a>                    <span class="comment">// Quick reject by bounding box
-<a href=#498 id=498 data-nosnippet>498</a>                    </span><span class="kw">let </span><span class="kw-2">mut </span>min_x = f32::INFINITY;
-<a href=#499 id=499 data-nosnippet>499</a>                    <span class="kw">let </span><span class="kw-2">mut </span>min_y = f32::INFINITY;
-<a href=#500 id=500 data-nosnippet>500</a>                    <span class="kw">let </span><span class="kw-2">mut </span>max_x = f32::NEG_INFINITY;
-<a href=#501 id=501 data-nosnippet>501</a>                    <span class="kw">let </span><span class="kw-2">mut </span>max_y = f32::NEG_INFINITY;
-<a href=#502 id=502 data-nosnippet>502</a>                    <span class="kw">for </span>(x, y) <span class="kw">in </span>transformed_points.iter() {
-<a href=#503 id=503 data-nosnippet>503</a>                        min_x = min_x.min(<span class="kw-2">*</span>x);
-<a href=#504 id=504 data-nosnippet>504</a>                        min_y = min_y.min(<span class="kw-2">*</span>y);
-<a href=#505 id=505 data-nosnippet>505</a>                        max_x = max_x.max(<span class="kw-2">*</span>x);
-<a href=#506 id=506 data-nosnippet>506</a>                        max_y = max_y.max(<span class="kw-2">*</span>y);
-<a href=#507 id=507 data-nosnippet>507</a>                    }
-<a href=#508 id=508 data-nosnippet>508</a>                    <span class="kw">if </span>max_x &lt;= clip_l || min_x &gt;= clip_r || max_y &lt;= clip_t || min_y &gt;= clip_b {
-<a href=#509 id=509 data-nosnippet>509</a>                        <span class="comment">// fully outside
-<a href=#510 id=510 data-nosnippet>510</a>                        </span><span class="kw">continue</span>;
-<a href=#511 id=511 data-nosnippet>511</a>                    }
-<a href=#512 id=512 data-nosnippet>512</a>
-<a href=#513 id=513 data-nosnippet>513</a>                    <span class="comment">// Helper: Sutherland–Hodgman polygon clipping against an axis-aligned edge
-<a href=#514 id=514 data-nosnippet>514</a>                    </span><span class="kw">let </span>clip_against_edge = |poly: <span class="kw-2">&amp;</span>Vec&lt;(f32, f32)&gt;, edge: u8| -&gt; Vec&lt;(f32, f32)&gt; {
-<a href=#515 id=515 data-nosnippet>515</a>                        <span class="comment">// edge: 0=left,1=right,2=top,3=bottom
-<a href=#516 id=516 data-nosnippet>516</a>                        </span><span class="kw">let </span><span class="kw-2">mut </span>out: Vec&lt;(f32, f32)&gt; = Vec::new();
-<a href=#517 id=517 data-nosnippet>517</a>                        <span class="kw">if </span>poly.is_empty() {
-<a href=#518 id=518 data-nosnippet>518</a>                            <span class="kw">return </span>out;
-<a href=#519 id=519 data-nosnippet>519</a>                        }
-<a href=#520 id=520 data-nosnippet>520</a>                        <span class="kw">let </span>len = poly.len();
-<a href=#521 id=521 data-nosnippet>521</a>                        <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..len {
-<a href=#522 id=522 data-nosnippet>522</a>                            <span class="kw">let </span>(sx, sy) = poly[i];
-<a href=#523 id=523 data-nosnippet>523</a>                            <span class="kw">let </span>(ex, ey) = poly[(i + <span class="number">1</span>) % len];
-<a href=#524 id=524 data-nosnippet>524</a>                            <span class="comment">// inside test
-<a href=#525 id=525 data-nosnippet>525</a>                            </span><span class="kw">let </span>inside = |x: f32, y: f32| -&gt; bool {
-<a href=#526 id=526 data-nosnippet>526</a>                                <span class="kw">match </span>edge {
-<a href=#527 id=527 data-nosnippet>527</a>                                    <span class="number">0 </span>=&gt; x &gt;= clip_l, <span class="comment">// left
-<a href=#528 id=528 data-nosnippet>528</a>                                    </span><span class="number">1 </span>=&gt; x &lt;= clip_r, <span class="comment">// right
-<a href=#529 id=529 data-nosnippet>529</a>                                    </span><span class="number">2 </span>=&gt; y &gt;= clip_t, <span class="comment">// top
-<a href=#530 id=530 data-nosnippet>530</a>                                    </span><span class="number">3 </span>=&gt; y &lt;= clip_b, <span class="comment">// bottom
-<a href=#531 id=531 data-nosnippet>531</a>                                    </span><span class="kw">_ </span>=&gt; <span class="bool-val">true</span>,
-<a href=#532 id=532 data-nosnippet>532</a>                                }
-<a href=#533 id=533 data-nosnippet>533</a>                            };
-<a href=#534 id=534 data-nosnippet>534</a>                            <span class="kw">let </span>s_in = inside(sx, sy);
-<a href=#535 id=535 data-nosnippet>535</a>                            <span class="kw">let </span>e_in = inside(ex, ey);
-<a href=#536 id=536 data-nosnippet>536</a>
-<a href=#537 id=537 data-nosnippet>537</a>                            <span class="kw">if </span>s_in &amp;&amp; e_in {
-<a href=#538 id=538 data-nosnippet>538</a>                                <span class="comment">// both inside
-<a href=#539 id=539 data-nosnippet>539</a>                                </span>out.push((ex, ey));
-<a href=#540 id=540 data-nosnippet>540</a>                            } <span class="kw">else if </span>s_in &amp;&amp; !e_in {
-<a href=#541 id=541 data-nosnippet>541</a>                                <span class="comment">// going out: add intersection
-<a href=#542 id=542 data-nosnippet>542</a>                                // compute intersection between segment and clipping line
-<a href=#543 id=543 data-nosnippet>543</a>                                </span><span class="kw">let </span>(ix, iy) = <span class="kw">match </span>edge {
-<a href=#544 id=544 data-nosnippet>544</a>                                    <span class="number">0 </span>| <span class="number">1 </span>=&gt; {
-<a href=#545 id=545 data-nosnippet>545</a>                                        <span class="comment">// vertical line x = clip_l or clip_r
-<a href=#546 id=546 data-nosnippet>546</a>                                        </span><span class="kw">let </span>x_edge = <span class="kw">if </span>edge == <span class="number">0 </span>{ clip_l } <span class="kw">else </span>{ clip_r };
-<a href=#547 id=547 data-nosnippet>547</a>                                        <span class="kw">let </span>dx = ex - sx;
-<a href=#548 id=548 data-nosnippet>548</a>                                        <span class="kw">if </span>dx.abs() &lt; f32::EPSILON {
-<a href=#549 id=549 data-nosnippet>549</a>                                            (x_edge, sy)
-<a href=#550 id=550 data-nosnippet>550</a>                                        } <span class="kw">else </span>{
-<a href=#551 id=551 data-nosnippet>551</a>                                            <span class="kw">let </span>t = (x_edge - sx) / dx;
-<a href=#552 id=552 data-nosnippet>552</a>                                            (x_edge, sy + t * (ey - sy))
-<a href=#553 id=553 data-nosnippet>553</a>                                        }
-<a href=#554 id=554 data-nosnippet>554</a>                                    }
-<a href=#555 id=555 data-nosnippet>555</a>                                    <span class="number">2 </span>| <span class="number">3 </span>=&gt; {
-<a href=#556 id=556 data-nosnippet>556</a>                                        <span class="comment">// horizontal line y = clip_t or clip_b
-<a href=#557 id=557 data-nosnippet>557</a>                                        </span><span class="kw">let </span>y_edge = <span class="kw">if </span>edge == <span class="number">2 </span>{ clip_t } <span class="kw">else </span>{ clip_b };
-<a href=#558 id=558 data-nosnippet>558</a>                                        <span class="kw">let </span>dy = ey - sy;
-<a href=#559 id=559 data-nosnippet>559</a>                                        <span class="kw">if </span>dy.abs() &lt; f32::EPSILON {
-<a href=#560 id=560 data-nosnippet>560</a>                                            (sx, y_edge)
-<a href=#561 id=561 data-nosnippet>561</a>                                        } <span class="kw">else </span>{
-<a href=#562 id=562 data-nosnippet>562</a>                                            <span class="kw">let </span>t = (y_edge - sy) / dy;
-<a href=#563 id=563 data-nosnippet>563</a>                                            (sx + t * (ex - sx), y_edge)
-<a href=#564 id=564 data-nosnippet>564</a>                                        }
-<a href=#565 id=565 data-nosnippet>565</a>                                    }
-<a href=#566 id=566 data-nosnippet>566</a>                                    <span class="kw">_ </span>=&gt; (ex, ey),
-<a href=#567 id=567 data-nosnippet>567</a>                                };
-<a href=#568 id=568 data-nosnippet>568</a>                                out.push((ix, iy));
-<a href=#569 id=569 data-nosnippet>569</a>                            } <span class="kw">else if </span>!s_in &amp;&amp; e_in {
-<a href=#570 id=570 data-nosnippet>570</a>                                <span class="comment">// entering: add intersection then end point
-<a href=#571 id=571 data-nosnippet>571</a>                                </span><span class="kw">let </span>(ix, iy) = <span class="kw">match </span>edge {
-<a href=#572 id=572 data-nosnippet>572</a>                                    <span class="number">0 </span>| <span class="number">1 </span>=&gt; {
-<a href=#573 id=573 data-nosnippet>573</a>                                        <span class="kw">let </span>x_edge = <span class="kw">if </span>edge == <span class="number">0 </span>{ clip_l } <span class="kw">else </span>{ clip_r };
-<a href=#574 id=574 data-nosnippet>574</a>                                        <span class="kw">let </span>dx = ex - sx;
-<a href=#575 id=575 data-nosnippet>575</a>                                        <span class="kw">if </span>dx.abs() &lt; f32::EPSILON {
-<a href=#576 id=576 data-nosnippet>576</a>                                            (x_edge, sy)
-<a href=#577 id=577 data-nosnippet>577</a>                                        } <span class="kw">else </span>{
-<a href=#578 id=578 data-nosnippet>578</a>                                            <span class="kw">let </span>t = (x_edge - sx) / dx;
-<a href=#579 id=579 data-nosnippet>579</a>                                            (x_edge, sy + t * (ey - sy))
-<a href=#580 id=580 data-nosnippet>580</a>                                        }
-<a href=#581 id=581 data-nosnippet>581</a>                                    }
-<a href=#582 id=582 data-nosnippet>582</a>                                    <span class="number">2 </span>| <span class="number">3 </span>=&gt; {
-<a href=#583 id=583 data-nosnippet>583</a>                                        <span class="kw">let </span>y_edge = <span class="kw">if </span>edge == <span class="number">2 </span>{ clip_t } <span class="kw">else </span>{ clip_b };
-<a href=#584 id=584 data-nosnippet>584</a>                                        <span class="kw">let </span>dy = ey - sy;
-<a href=#585 id=585 data-nosnippet>585</a>                                        <span class="kw">if </span>dy.abs() &lt; f32::EPSILON {
-<a href=#586 id=586 data-nosnippet>586</a>                                            (sx, y_edge)
-<a href=#587 id=587 data-nosnippet>587</a>                                        } <span class="kw">else </span>{
-<a href=#588 id=588 data-nosnippet>588</a>                                            <span class="kw">let </span>t = (y_edge - sy) / dy;
-<a href=#589 id=589 data-nosnippet>589</a>                                            (sx + t * (ex - sx), y_edge)
-<a href=#590 id=590 data-nosnippet>590</a>                                        }
-<a href=#591 id=591 data-nosnippet>591</a>                                    }
-<a href=#592 id=592 data-nosnippet>592</a>                                    <span class="kw">_ </span>=&gt; (ex, ey),
-<a href=#593 id=593 data-nosnippet>593</a>                                };
-<a href=#594 id=594 data-nosnippet>594</a>                                out.push((ix, iy));
-<a href=#595 id=595 data-nosnippet>595</a>                                out.push((ex, ey));
-<a href=#596 id=596 data-nosnippet>596</a>                            } <span class="kw">else </span>{
-<a href=#597 id=597 data-nosnippet>597</a>                                <span class="comment">// both outside: do nothing
-<a href=#598 id=598 data-nosnippet>598</a>                            </span>}
-<a href=#599 id=599 data-nosnippet>599</a>                        }
-<a href=#600 id=600 data-nosnippet>600</a>                        out
-<a href=#601 id=601 data-nosnippet>601</a>                    };
-<a href=#602 id=602 data-nosnippet>602</a>
-<a href=#603 id=603 data-nosnippet>603</a>                    <span class="comment">// Triangulate polygon into fan triangles from vertex 0, clip each triangle, and push resulting triangles
-<a href=#604 id=604 data-nosnippet>604</a>                    </span><span class="kw">if </span>transformed_points.len() &lt; <span class="number">3 </span>{
-<a href=#605 id=605 data-nosnippet>605</a>                        <span class="kw">continue</span>;
-<a href=#606 id=606 data-nosnippet>606</a>                    }
-<a href=#607 id=607 data-nosnippet>607</a>
-<a href=#608 id=608 data-nosnippet>608</a>                    <span class="comment">// NDC helper
-<a href=#609 id=609 data-nosnippet>609</a>                    </span><span class="kw">let </span>ndc = |v: f32, max: f32| (v / max) * <span class="number">2.0 </span>- <span class="number">1.0</span>;
-<a href=#610 id=610 data-nosnippet>610</a>
-<a href=#611 id=611 data-nosnippet>611</a>                    <span class="kw">let </span>color_arr = color.to_linear_f32_array();
-<a href=#612 id=612 data-nosnippet>612</a>
-<a href=#613 id=613 data-nosnippet>613</a>                    <span class="kw">let </span>v0 = transformed_points[<span class="number">0</span>];
-<a href=#614 id=614 data-nosnippet>614</a>                    <span class="kw">for </span>i <span class="kw">in </span><span class="number">1</span>..(transformed_points.len() - <span class="number">1</span>) {
-<a href=#615 id=615 data-nosnippet>615</a>                        <span class="kw">let </span>tri = <span class="macro">vec!</span>[v0, transformed_points[i], transformed_points[i + <span class="number">1</span>]];
-<a href=#616 id=616 data-nosnippet>616</a>                        <span class="comment">// clip triangle against rect using Sutherland–Hodgman (4 edges)
-<a href=#617 id=617 data-nosnippet>617</a>                        </span><span class="kw">let </span><span class="kw-2">mut </span>poly = tri;
-<a href=#618 id=618 data-nosnippet>618</a>                        poly = clip_against_edge(<span class="kw-2">&amp;</span>poly, <span class="number">0</span>); <span class="comment">// left
-<a href=#619 id=619 data-nosnippet>619</a>                        </span><span class="kw">if </span>poly.is_empty() {
-<a href=#620 id=620 data-nosnippet>620</a>                            <span class="kw">continue</span>;
-<a href=#621 id=621 data-nosnippet>621</a>                        }
-<a href=#622 id=622 data-nosnippet>622</a>                        poly = clip_against_edge(<span class="kw-2">&amp;</span>poly, <span class="number">1</span>); <span class="comment">// right
-<a href=#623 id=623 data-nosnippet>623</a>                        </span><span class="kw">if </span>poly.is_empty() {
-<a href=#624 id=624 data-nosnippet>624</a>                            <span class="kw">continue</span>;
-<a href=#625 id=625 data-nosnippet>625</a>                        }
-<a href=#626 id=626 data-nosnippet>626</a>                        poly = clip_against_edge(<span class="kw-2">&amp;</span>poly, <span class="number">2</span>); <span class="comment">// top
-<a href=#627 id=627 data-nosnippet>627</a>                        </span><span class="kw">if </span>poly.is_empty() {
-<a href=#628 id=628 data-nosnippet>628</a>                            <span class="kw">continue</span>;
-<a href=#629 id=629 data-nosnippet>629</a>                        }
-<a href=#630 id=630 data-nosnippet>630</a>                        poly = clip_against_edge(<span class="kw-2">&amp;</span>poly, <span class="number">3</span>); <span class="comment">// bottom
-<a href=#631 id=631 data-nosnippet>631</a>                        </span><span class="kw">if </span>poly.is_empty() {
-<a href=#632 id=632 data-nosnippet>632</a>                            <span class="kw">continue</span>;
-<a href=#633 id=633 data-nosnippet>633</a>                        }
+<a href=#467 id=467 data-nosnippet>467</a>                <span class="comment">// Polygon
+<a href=#468 id=468 data-nosnippet>468</a>                </span>DrawCommand::DrawPolygon { points, color } =&gt; {
+<a href=#469 id=469 data-nosnippet>469</a>                    <span class="comment">// transform
+<a href=#470 id=470 data-nosnippet>470</a>                    </span><span class="kw">let </span>(tdx, tdy) = current_transform(<span class="kw-2">&amp;</span>transform_stack);
+<a href=#471 id=471 data-nosnippet>471</a>                    <span class="kw">let </span>transformed_points: Vec&lt;(f32, f32)&gt; = points
+<a href=#472 id=472 data-nosnippet>472</a>                        .iter()
+<a href=#473 id=473 data-nosnippet>473</a>                        .map(|(px, py)| ((px + tdx) * sf, (py + tdy) * sf))
+<a href=#474 id=474 data-nosnippet>474</a>                        .collect();
+<a href=#475 id=475 data-nosnippet>475</a>
+<a href=#476 id=476 data-nosnippet>476</a>                    <span class="comment">// clip 取得
+<a href=#477 id=477 data-nosnippet>477</a>                    </span><span class="kw">let </span>clip = current_clip(<span class="kw-2">&amp;</span>clip_stack);
+<a href=#478 id=478 data-nosnippet>478</a>                    <span class="comment">// clip in scaled (screen) coords
+<a href=#479 id=479 data-nosnippet>479</a>                    </span><span class="kw">let </span>clip_l = clip.x * sf;
+<a href=#480 id=480 data-nosnippet>480</a>                    <span class="kw">let </span>clip_t = clip.y * sf;
+<a href=#481 id=481 data-nosnippet>481</a>                    <span class="kw">let </span>clip_r = (clip.x + clip.w) * sf;
+<a href=#482 id=482 data-nosnippet>482</a>                    <span class="kw">let </span>clip_b = (clip.y + clip.h) * sf;
+<a href=#483 id=483 data-nosnippet>483</a>
+<a href=#484 id=484 data-nosnippet>484</a>                    <span class="comment">// Quick reject by bounding box
+<a href=#485 id=485 data-nosnippet>485</a>                    </span><span class="kw">let </span><span class="kw-2">mut </span>min_x = f32::INFINITY;
+<a href=#486 id=486 data-nosnippet>486</a>                    <span class="kw">let </span><span class="kw-2">mut </span>min_y = f32::INFINITY;
+<a href=#487 id=487 data-nosnippet>487</a>                    <span class="kw">let </span><span class="kw-2">mut </span>max_x = f32::NEG_INFINITY;
+<a href=#488 id=488 data-nosnippet>488</a>                    <span class="kw">let </span><span class="kw-2">mut </span>max_y = f32::NEG_INFINITY;
+<a href=#489 id=489 data-nosnippet>489</a>                    <span class="kw">for </span>(x, y) <span class="kw">in </span>transformed_points.iter() {
+<a href=#490 id=490 data-nosnippet>490</a>                        min_x = min_x.min(<span class="kw-2">*</span>x);
+<a href=#491 id=491 data-nosnippet>491</a>                        min_y = min_y.min(<span class="kw-2">*</span>y);
+<a href=#492 id=492 data-nosnippet>492</a>                        max_x = max_x.max(<span class="kw-2">*</span>x);
+<a href=#493 id=493 data-nosnippet>493</a>                        max_y = max_y.max(<span class="kw-2">*</span>y);
+<a href=#494 id=494 data-nosnippet>494</a>                    }
+<a href=#495 id=495 data-nosnippet>495</a>                    <span class="kw">if </span>max_x &lt;= clip_l || min_x &gt;= clip_r || max_y &lt;= clip_t || min_y &gt;= clip_b {
+<a href=#496 id=496 data-nosnippet>496</a>                        <span class="comment">// fully outside
+<a href=#497 id=497 data-nosnippet>497</a>                        </span><span class="kw">continue</span>;
+<a href=#498 id=498 data-nosnippet>498</a>                    }
+<a href=#499 id=499 data-nosnippet>499</a>
+<a href=#500 id=500 data-nosnippet>500</a>                    <span class="comment">// Helper: Sutherland–Hodgman polygon clipping against an axis-aligned edge
+<a href=#501 id=501 data-nosnippet>501</a>                    </span><span class="kw">let </span>clip_against_edge = |poly: <span class="kw-2">&amp;</span>Vec&lt;(f32, f32)&gt;, edge: u8| -&gt; Vec&lt;(f32, f32)&gt; {
+<a href=#502 id=502 data-nosnippet>502</a>                        <span class="comment">// edge: 0=left,1=right,2=top,3=bottom
+<a href=#503 id=503 data-nosnippet>503</a>                        </span><span class="kw">let </span><span class="kw-2">mut </span>out: Vec&lt;(f32, f32)&gt; = Vec::new();
+<a href=#504 id=504 data-nosnippet>504</a>                        <span class="kw">if </span>poly.is_empty() {
+<a href=#505 id=505 data-nosnippet>505</a>                            <span class="kw">return </span>out;
+<a href=#506 id=506 data-nosnippet>506</a>                        }
+<a href=#507 id=507 data-nosnippet>507</a>                        <span class="kw">let </span>len = poly.len();
+<a href=#508 id=508 data-nosnippet>508</a>                        <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..len {
+<a href=#509 id=509 data-nosnippet>509</a>                            <span class="kw">let </span>(sx, sy) = poly[i];
+<a href=#510 id=510 data-nosnippet>510</a>                            <span class="kw">let </span>(ex, ey) = poly[(i + <span class="number">1</span>) % len];
+<a href=#511 id=511 data-nosnippet>511</a>                            <span class="comment">// inside test
+<a href=#512 id=512 data-nosnippet>512</a>                            </span><span class="kw">let </span>inside = |x: f32, y: f32| -&gt; bool {
+<a href=#513 id=513 data-nosnippet>513</a>                                <span class="kw">match </span>edge {
+<a href=#514 id=514 data-nosnippet>514</a>                                    <span class="number">0 </span>=&gt; x &gt;= clip_l, <span class="comment">// left
+<a href=#515 id=515 data-nosnippet>515</a>                                    </span><span class="number">1 </span>=&gt; x &lt;= clip_r, <span class="comment">// right
+<a href=#516 id=516 data-nosnippet>516</a>                                    </span><span class="number">2 </span>=&gt; y &gt;= clip_t, <span class="comment">// top
+<a href=#517 id=517 data-nosnippet>517</a>                                    </span><span class="number">3 </span>=&gt; y &lt;= clip_b, <span class="comment">// bottom
+<a href=#518 id=518 data-nosnippet>518</a>                                    </span><span class="kw">_ </span>=&gt; <span class="bool-val">true</span>,
+<a href=#519 id=519 data-nosnippet>519</a>                                }
+<a href=#520 id=520 data-nosnippet>520</a>                            };
+<a href=#521 id=521 data-nosnippet>521</a>                            <span class="kw">let </span>s_in = inside(sx, sy);
+<a href=#522 id=522 data-nosnippet>522</a>                            <span class="kw">let </span>e_in = inside(ex, ey);
+<a href=#523 id=523 data-nosnippet>523</a>
+<a href=#524 id=524 data-nosnippet>524</a>                            <span class="kw">if </span>s_in &amp;&amp; e_in {
+<a href=#525 id=525 data-nosnippet>525</a>                                <span class="comment">// both inside
+<a href=#526 id=526 data-nosnippet>526</a>                                </span>out.push((ex, ey));
+<a href=#527 id=527 data-nosnippet>527</a>                            } <span class="kw">else if </span>s_in &amp;&amp; !e_in {
+<a href=#528 id=528 data-nosnippet>528</a>                                <span class="comment">// going out: add intersection
+<a href=#529 id=529 data-nosnippet>529</a>                                // compute intersection between segment and clipping line
+<a href=#530 id=530 data-nosnippet>530</a>                                </span><span class="kw">let </span>(ix, iy) = <span class="kw">match </span>edge {
+<a href=#531 id=531 data-nosnippet>531</a>                                    <span class="number">0 </span>| <span class="number">1 </span>=&gt; {
+<a href=#532 id=532 data-nosnippet>532</a>                                        <span class="comment">// vertical line x = clip_l or clip_r
+<a href=#533 id=533 data-nosnippet>533</a>                                        </span><span class="kw">let </span>x_edge = <span class="kw">if </span>edge == <span class="number">0 </span>{ clip_l } <span class="kw">else </span>{ clip_r };
+<a href=#534 id=534 data-nosnippet>534</a>                                        <span class="kw">let </span>dx = ex - sx;
+<a href=#535 id=535 data-nosnippet>535</a>                                        <span class="kw">if </span>dx.abs() &lt; f32::EPSILON {
+<a href=#536 id=536 data-nosnippet>536</a>                                            (x_edge, sy)
+<a href=#537 id=537 data-nosnippet>537</a>                                        } <span class="kw">else </span>{
+<a href=#538 id=538 data-nosnippet>538</a>                                            <span class="kw">let </span>t = (x_edge - sx) / dx;
+<a href=#539 id=539 data-nosnippet>539</a>                                            (x_edge, sy + t * (ey - sy))
+<a href=#540 id=540 data-nosnippet>540</a>                                        }
+<a href=#541 id=541 data-nosnippet>541</a>                                    }
+<a href=#542 id=542 data-nosnippet>542</a>                                    <span class="number">2 </span>| <span class="number">3 </span>=&gt; {
+<a href=#543 id=543 data-nosnippet>543</a>                                        <span class="comment">// horizontal line y = clip_t or clip_b
+<a href=#544 id=544 data-nosnippet>544</a>                                        </span><span class="kw">let </span>y_edge = <span class="kw">if </span>edge == <span class="number">2 </span>{ clip_t } <span class="kw">else </span>{ clip_b };
+<a href=#545 id=545 data-nosnippet>545</a>                                        <span class="kw">let </span>dy = ey - sy;
+<a href=#546 id=546 data-nosnippet>546</a>                                        <span class="kw">if </span>dy.abs() &lt; f32::EPSILON {
+<a href=#547 id=547 data-nosnippet>547</a>                                            (sx, y_edge)
+<a href=#548 id=548 data-nosnippet>548</a>                                        } <span class="kw">else </span>{
+<a href=#549 id=549 data-nosnippet>549</a>                                            <span class="kw">let </span>t = (y_edge - sy) / dy;
+<a href=#550 id=550 data-nosnippet>550</a>                                            (sx + t * (ex - sx), y_edge)
+<a href=#551 id=551 data-nosnippet>551</a>                                        }
+<a href=#552 id=552 data-nosnippet>552</a>                                    }
+<a href=#553 id=553 data-nosnippet>553</a>                                    <span class="kw">_ </span>=&gt; (ex, ey),
+<a href=#554 id=554 data-nosnippet>554</a>                                };
+<a href=#555 id=555 data-nosnippet>555</a>                                out.push((ix, iy));
+<a href=#556 id=556 data-nosnippet>556</a>                            } <span class="kw">else if </span>!s_in &amp;&amp; e_in {
+<a href=#557 id=557 data-nosnippet>557</a>                                <span class="comment">// entering: add intersection then end point
+<a href=#558 id=558 data-nosnippet>558</a>                                </span><span class="kw">let </span>(ix, iy) = <span class="kw">match </span>edge {
+<a href=#559 id=559 data-nosnippet>559</a>                                    <span class="number">0 </span>| <span class="number">1 </span>=&gt; {
+<a href=#560 id=560 data-nosnippet>560</a>                                        <span class="kw">let </span>x_edge = <span class="kw">if </span>edge == <span class="number">0 </span>{ clip_l } <span class="kw">else </span>{ clip_r };
+<a href=#561 id=561 data-nosnippet>561</a>                                        <span class="kw">let </span>dx = ex - sx;
+<a href=#562 id=562 data-nosnippet>562</a>                                        <span class="kw">if </span>dx.abs() &lt; f32::EPSILON {
+<a href=#563 id=563 data-nosnippet>563</a>                                            (x_edge, sy)
+<a href=#564 id=564 data-nosnippet>564</a>                                        } <span class="kw">else </span>{
+<a href=#565 id=565 data-nosnippet>565</a>                                            <span class="kw">let </span>t = (x_edge - sx) / dx;
+<a href=#566 id=566 data-nosnippet>566</a>                                            (x_edge, sy + t * (ey - sy))
+<a href=#567 id=567 data-nosnippet>567</a>                                        }
+<a href=#568 id=568 data-nosnippet>568</a>                                    }
+<a href=#569 id=569 data-nosnippet>569</a>                                    <span class="number">2 </span>| <span class="number">3 </span>=&gt; {
+<a href=#570 id=570 data-nosnippet>570</a>                                        <span class="kw">let </span>y_edge = <span class="kw">if </span>edge == <span class="number">2 </span>{ clip_t } <span class="kw">else </span>{ clip_b };
+<a href=#571 id=571 data-nosnippet>571</a>                                        <span class="kw">let </span>dy = ey - sy;
+<a href=#572 id=572 data-nosnippet>572</a>                                        <span class="kw">if </span>dy.abs() &lt; f32::EPSILON {
+<a href=#573 id=573 data-nosnippet>573</a>                                            (sx, y_edge)
+<a href=#574 id=574 data-nosnippet>574</a>                                        } <span class="kw">else </span>{
+<a href=#575 id=575 data-nosnippet>575</a>                                            <span class="kw">let </span>t = (y_edge - sy) / dy;
+<a href=#576 id=576 data-nosnippet>576</a>                                            (sx + t * (ex - sx), y_edge)
+<a href=#577 id=577 data-nosnippet>577</a>                                        }
+<a href=#578 id=578 data-nosnippet>578</a>                                    }
+<a href=#579 id=579 data-nosnippet>579</a>                                    <span class="kw">_ </span>=&gt; (ex, ey),
+<a href=#580 id=580 data-nosnippet>580</a>                                };
+<a href=#581 id=581 data-nosnippet>581</a>                                out.push((ix, iy));
+<a href=#582 id=582 data-nosnippet>582</a>                                out.push((ex, ey));
+<a href=#583 id=583 data-nosnippet>583</a>                            } <span class="kw">else </span>{
+<a href=#584 id=584 data-nosnippet>584</a>                                <span class="comment">// both outside: do nothing
+<a href=#585 id=585 data-nosnippet>585</a>                            </span>}
+<a href=#586 id=586 data-nosnippet>586</a>                        }
+<a href=#587 id=587 data-nosnippet>587</a>                        out
+<a href=#588 id=588 data-nosnippet>588</a>                    };
+<a href=#589 id=589 data-nosnippet>589</a>
+<a href=#590 id=590 data-nosnippet>590</a>                    <span class="comment">// Triangulate polygon into fan triangles from vertex 0, clip each triangle, and push resulting triangles
+<a href=#591 id=591 data-nosnippet>591</a>                    </span><span class="kw">if </span>transformed_points.len() &lt; <span class="number">3 </span>{
+<a href=#592 id=592 data-nosnippet>592</a>                        <span class="kw">continue</span>;
+<a href=#593 id=593 data-nosnippet>593</a>                    }
+<a href=#594 id=594 data-nosnippet>594</a>
+<a href=#595 id=595 data-nosnippet>595</a>                    <span class="comment">// NDC helper
+<a href=#596 id=596 data-nosnippet>596</a>                    </span><span class="kw">let </span>ndc = |v: f32, max: f32| (v / max) * <span class="number">2.0 </span>- <span class="number">1.0</span>;
+<a href=#597 id=597 data-nosnippet>597</a>
+<a href=#598 id=598 data-nosnippet>598</a>                    <span class="kw">let </span>color_arr = color.to_linear_f32_array();
+<a href=#599 id=599 data-nosnippet>599</a>
+<a href=#600 id=600 data-nosnippet>600</a>                    <span class="kw">let </span>v0 = transformed_points[<span class="number">0</span>];
+<a href=#601 id=601 data-nosnippet>601</a>                    <span class="kw">for </span>i <span class="kw">in </span><span class="number">1</span>..(transformed_points.len() - <span class="number">1</span>) {
+<a href=#602 id=602 data-nosnippet>602</a>                        <span class="kw">let </span>tri = <span class="macro">vec!</span>[v0, transformed_points[i], transformed_points[i + <span class="number">1</span>]];
+<a href=#603 id=603 data-nosnippet>603</a>                        <span class="comment">// clip triangle against rect using Sutherland–Hodgman (4 edges)
+<a href=#604 id=604 data-nosnippet>604</a>                        </span><span class="kw">let </span><span class="kw-2">mut </span>poly = tri;
+<a href=#605 id=605 data-nosnippet>605</a>                        poly = clip_against_edge(<span class="kw-2">&amp;</span>poly, <span class="number">0</span>); <span class="comment">// left
+<a href=#606 id=606 data-nosnippet>606</a>                        </span><span class="kw">if </span>poly.is_empty() {
+<a href=#607 id=607 data-nosnippet>607</a>                            <span class="kw">continue</span>;
+<a href=#608 id=608 data-nosnippet>608</a>                        }
+<a href=#609 id=609 data-nosnippet>609</a>                        poly = clip_against_edge(<span class="kw-2">&amp;</span>poly, <span class="number">1</span>); <span class="comment">// right
+<a href=#610 id=610 data-nosnippet>610</a>                        </span><span class="kw">if </span>poly.is_empty() {
+<a href=#611 id=611 data-nosnippet>611</a>                            <span class="kw">continue</span>;
+<a href=#612 id=612 data-nosnippet>612</a>                        }
+<a href=#613 id=613 data-nosnippet>613</a>                        poly = clip_against_edge(<span class="kw-2">&amp;</span>poly, <span class="number">2</span>); <span class="comment">// top
+<a href=#614 id=614 data-nosnippet>614</a>                        </span><span class="kw">if </span>poly.is_empty() {
+<a href=#615 id=615 data-nosnippet>615</a>                            <span class="kw">continue</span>;
+<a href=#616 id=616 data-nosnippet>616</a>                        }
+<a href=#617 id=617 data-nosnippet>617</a>                        poly = clip_against_edge(<span class="kw-2">&amp;</span>poly, <span class="number">3</span>); <span class="comment">// bottom
+<a href=#618 id=618 data-nosnippet>618</a>                        </span><span class="kw">if </span>poly.is_empty() {
+<a href=#619 id=619 data-nosnippet>619</a>                            <span class="kw">continue</span>;
+<a href=#620 id=620 data-nosnippet>620</a>                        }
+<a href=#621 id=621 data-nosnippet>621</a>
+<a href=#622 id=622 data-nosnippet>622</a>                        <span class="comment">// triangulate resulting polygon as fan
+<a href=#623 id=623 data-nosnippet>623</a>                        </span><span class="kw">for </span>j <span class="kw">in </span><span class="number">1</span>..(poly.len() - <span class="number">1</span>) {
+<a href=#624 id=624 data-nosnippet>624</a>                            <span class="kw">let </span>p1 = poly[<span class="number">0</span>];
+<a href=#625 id=625 data-nosnippet>625</a>                            <span class="kw">let </span>p2 = poly[j];
+<a href=#626 id=626 data-nosnippet>626</a>                            <span class="kw">let </span>p3 = poly[j + <span class="number">1</span>];
+<a href=#627 id=627 data-nosnippet>627</a>
+<a href=#628 id=628 data-nosnippet>628</a>                            <span class="kw">let </span>px1 = ndc(p1.<span class="number">0</span>, screen_width);
+<a href=#629 id=629 data-nosnippet>629</a>                            <span class="kw">let </span>py1 = -ndc(p1.<span class="number">1</span>, screen_height);
+<a href=#630 id=630 data-nosnippet>630</a>                            <span class="kw">let </span>px2 = ndc(p2.<span class="number">0</span>, screen_width);
+<a href=#631 id=631 data-nosnippet>631</a>                            <span class="kw">let </span>py2 = -ndc(p2.<span class="number">1</span>, screen_height);
+<a href=#632 id=632 data-nosnippet>632</a>                            <span class="kw">let </span>px3 = ndc(p3.<span class="number">0</span>, screen_width);
+<a href=#633 id=633 data-nosnippet>633</a>                            <span class="kw">let </span>py3 = -ndc(p3.<span class="number">1</span>, screen_height);
 <a href=#634 id=634 data-nosnippet>634</a>
-<a href=#635 id=635 data-nosnippet>635</a>                        <span class="comment">// triangulate resulting polygon as fan
-<a href=#636 id=636 data-nosnippet>636</a>                        </span><span class="kw">for </span>j <span class="kw">in </span><span class="number">1</span>..(poly.len() - <span class="number">1</span>) {
-<a href=#637 id=637 data-nosnippet>637</a>                            <span class="kw">let </span>p1 = poly[<span class="number">0</span>];
-<a href=#638 id=638 data-nosnippet>638</a>                            <span class="kw">let </span>p2 = poly[j];
-<a href=#639 id=639 data-nosnippet>639</a>                            <span class="kw">let </span>p3 = poly[j + <span class="number">1</span>];
-<a href=#640 id=640 data-nosnippet>640</a>
-<a href=#641 id=641 data-nosnippet>641</a>                            <span class="kw">let </span>px1 = ndc(p1.<span class="number">0</span>, screen_width);
-<a href=#642 id=642 data-nosnippet>642</a>                            <span class="kw">let </span>py1 = -ndc(p1.<span class="number">1</span>, screen_height);
-<a href=#643 id=643 data-nosnippet>643</a>                            <span class="kw">let </span>px2 = ndc(p2.<span class="number">0</span>, screen_width);
-<a href=#644 id=644 data-nosnippet>644</a>                            <span class="kw">let </span>py2 = -ndc(p2.<span class="number">1</span>, screen_height);
-<a href=#645 id=645 data-nosnippet>645</a>                            <span class="kw">let </span>px3 = ndc(p3.<span class="number">0</span>, screen_width);
-<a href=#646 id=646 data-nosnippet>646</a>                            <span class="kw">let </span>py3 = -ndc(p3.<span class="number">1</span>, screen_height);
-<a href=#647 id=647 data-nosnippet>647</a>
-<a href=#648 id=648 data-nosnippet>648</a>                            vertices.push(Vertex {
-<a href=#649 id=649 data-nosnippet>649</a>                                position: [px1, py1, <span class="number">0.0</span>],
-<a href=#650 id=650 data-nosnippet>650</a>                                color: color_arr,
-<a href=#651 id=651 data-nosnippet>651</a>                            });
-<a href=#652 id=652 data-nosnippet>652</a>                            vertices.push(Vertex {
-<a href=#653 id=653 data-nosnippet>653</a>                                position: [px2, py2, <span class="number">0.0</span>],
-<a href=#654 id=654 data-nosnippet>654</a>                                color: color_arr,
-<a href=#655 id=655 data-nosnippet>655</a>                            });
-<a href=#656 id=656 data-nosnippet>656</a>                            vertices.push(Vertex {
-<a href=#657 id=657 data-nosnippet>657</a>                                position: [px3, py3, <span class="number">0.0</span>],
-<a href=#658 id=658 data-nosnippet>658</a>                                color: color_arr,
-<a href=#659 id=659 data-nosnippet>659</a>                            });
-<a href=#660 id=660 data-nosnippet>660</a>                        }
-<a href=#661 id=661 data-nosnippet>661</a>                    }
-<a href=#662 id=662 data-nosnippet>662</a>                }
+<a href=#635 id=635 data-nosnippet>635</a>                            vertices.push(Vertex {
+<a href=#636 id=636 data-nosnippet>636</a>                                position: [px1, py1, <span class="number">0.0</span>],
+<a href=#637 id=637 data-nosnippet>637</a>                                color: color_arr,
+<a href=#638 id=638 data-nosnippet>638</a>                            });
+<a href=#639 id=639 data-nosnippet>639</a>                            vertices.push(Vertex {
+<a href=#640 id=640 data-nosnippet>640</a>                                position: [px2, py2, <span class="number">0.0</span>],
+<a href=#641 id=641 data-nosnippet>641</a>                                color: color_arr,
+<a href=#642 id=642 data-nosnippet>642</a>                            });
+<a href=#643 id=643 data-nosnippet>643</a>                            vertices.push(Vertex {
+<a href=#644 id=644 data-nosnippet>644</a>                                position: [px3, py3, <span class="number">0.0</span>],
+<a href=#645 id=645 data-nosnippet>645</a>                                color: color_arr,
+<a href=#646 id=646 data-nosnippet>646</a>                            });
+<a href=#647 id=647 data-nosnippet>647</a>                        }
+<a href=#648 id=648 data-nosnippet>648</a>                    }
+<a href=#649 id=649 data-nosnippet>649</a>                }
+<a href=#650 id=650 data-nosnippet>650</a>
+<a href=#651 id=651 data-nosnippet>651</a>                <span class="comment">// Ellipse
+<a href=#652 id=652 data-nosnippet>652</a>                </span><span class="attr">#[allow(unused)]
+<a href=#653 id=653 data-nosnippet>653</a>                </span>DrawCommand::DrawEllipse {
+<a href=#654 id=654 data-nosnippet>654</a>                    center,
+<a href=#655 id=655 data-nosnippet>655</a>                    radius_x,
+<a href=#656 id=656 data-nosnippet>656</a>                    radius_y,
+<a href=#657 id=657 data-nosnippet>657</a>                    color,
+<a href=#658 id=658 data-nosnippet>658</a>                } =&gt; {
+<a href=#659 id=659 data-nosnippet>659</a>                    <span class="comment">// transform
+<a href=#660 id=660 data-nosnippet>660</a>                    </span><span class="kw">let </span>(tdx, tdy) = current_transform(<span class="kw-2">&amp;</span>transform_stack);
+<a href=#661 id=661 data-nosnippet>661</a>                    <span class="kw">let </span>cx = center.<span class="number">0 </span>+ tdx;
+<a href=#662 id=662 data-nosnippet>662</a>                    <span class="kw">let </span>cy = center.<span class="number">1 </span>+ tdy;
 <a href=#663 id=663 data-nosnippet>663</a>
-<a href=#664 id=664 data-nosnippet>664</a>                <span class="comment">// Ellipse
-<a href=#665 id=665 data-nosnippet>665</a>                </span><span class="attr">#[allow(unused)]
-<a href=#666 id=666 data-nosnippet>666</a>                </span>DrawCommand::DrawEllipse {
-<a href=#667 id=667 data-nosnippet>667</a>                    center,
-<a href=#668 id=668 data-nosnippet>668</a>                    radius_x,
-<a href=#669 id=669 data-nosnippet>669</a>                    radius_y,
-<a href=#670 id=670 data-nosnippet>670</a>                    color,
-<a href=#671 id=671 data-nosnippet>671</a>                } =&gt; {
-<a href=#672 id=672 data-nosnippet>672</a>                    <span class="comment">// transform
-<a href=#673 id=673 data-nosnippet>673</a>                    </span><span class="kw">let </span>(tdx, tdy) = current_transform(<span class="kw-2">&amp;</span>transform_stack);
-<a href=#674 id=674 data-nosnippet>674</a>                    <span class="kw">let </span>cx = center.<span class="number">0 </span>+ tdx;
-<a href=#675 id=675 data-nosnippet>675</a>                    <span class="kw">let </span>cy = center.<span class="number">1 </span>+ tdy;
-<a href=#676 id=676 data-nosnippet>676</a>
-<a href=#677 id=677 data-nosnippet>677</a>                    <span class="comment">// clip 取得
-<a href=#678 id=678 data-nosnippet>678</a>                    </span><span class="kw">let </span>clip = current_clip(<span class="kw-2">&amp;</span>clip_stack);
+<a href=#664 id=664 data-nosnippet>664</a>                    <span class="comment">// clip 取得
+<a href=#665 id=665 data-nosnippet>665</a>                    </span><span class="kw">let </span>clip = current_clip(<span class="kw-2">&amp;</span>clip_stack);
+<a href=#666 id=666 data-nosnippet>666</a>
+<a href=#667 id=667 data-nosnippet>667</a>                    <span class="macro">todo!</span>(<span class="string">"Ellipse drawing with clipping is not implemented yet"</span>);
+<a href=#668 id=668 data-nosnippet>668</a>                }
+<a href=#669 id=669 data-nosnippet>669</a>            }
+<a href=#670 id=670 data-nosnippet>670</a>        }
+<a href=#671 id=671 data-nosnippet>671</a>
+<a href=#672 id=672 data-nosnippet>672</a>        <span class="self">self</span>.set_vertex_buffer(vertices);
+<a href=#673 id=673 data-nosnippet>673</a>
+<a href=#674 id=674 data-nosnippet>674</a>        <span class="comment">// テキストセクションをキューに追加
+<a href=#675 id=675 data-nosnippet>675</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(tr) = <span class="kw-2">&amp;mut </span><span class="self">self</span>.text_renderer {
+<a href=#676 id=676 data-nosnippet>676</a>            tr.queue(<span class="kw-2">&amp;</span><span class="self">self</span>.device, <span class="kw-2">&amp;</span><span class="self">self</span>.queue, <span class="kw-2">&amp;</span>sections).unwrap();
+<a href=#677 id=677 data-nosnippet>677</a>        }
+<a href=#678 id=678 data-nosnippet>678</a>    }
 <a href=#679 id=679 data-nosnippet>679</a>
-<a href=#680 id=680 data-nosnippet>680</a>                    <span class="macro">todo!</span>(<span class="string">"Ellipse drawing with clipping is not implemented yet"</span>);
-<a href=#681 id=681 data-nosnippet>681</a>                }
-<a href=#682 id=682 data-nosnippet>682</a>            }
-<a href=#683 id=683 data-nosnippet>683</a>        }
-<a href=#684 id=684 data-nosnippet>684</a>
-<a href=#685 id=685 data-nosnippet>685</a>        <span class="self">self</span>.set_vertex_buffer(vertices);
-<a href=#686 id=686 data-nosnippet>686</a>
-<a href=#687 id=687 data-nosnippet>687</a>        <span class="comment">// テキストセクションをキューに追加
-<a href=#688 id=688 data-nosnippet>688</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(tr) = <span class="kw-2">&amp;mut </span><span class="self">self</span>.text_renderer {
-<a href=#689 id=689 data-nosnippet>689</a>            tr.queue(<span class="kw-2">&amp;</span><span class="self">self</span>.device, <span class="kw-2">&amp;</span><span class="self">self</span>.queue, <span class="kw-2">&amp;</span>sections).unwrap();
-<a href=#690 id=690 data-nosnippet>690</a>        }
-<a href=#691 id=691 data-nosnippet>691</a>    }
-<a href=#692 id=692 data-nosnippet>692</a>
-<a href=#693 id=693 data-nosnippet>693</a>    <span class="doccomment">/// フレームを描画
-<a href=#694 id=694 data-nosnippet>694</a>    </span><span class="kw">pub fn </span>render(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#695 id=695 data-nosnippet>695</a>        <span class="comment">// 描画するフレームバッファを取得
-<a href=#696 id=696 data-nosnippet>696</a>        </span><span class="kw">let </span>output = <span class="self">self</span>.surface.get_current_texture()<span class="question-mark">?</span>;
-<a href=#697 id=697 data-nosnippet>697</a>        <span class="kw">let </span>view = output
-<a href=#698 id=698 data-nosnippet>698</a>            .texture
-<a href=#699 id=699 data-nosnippet>699</a>            .create_view(<span class="kw-2">&amp;</span>wgpu::TextureViewDescriptor::default());
-<a href=#700 id=700 data-nosnippet>700</a>
-<a href=#701 id=701 data-nosnippet>701</a>        <span class="comment">// アニメーション中はテキストブラシが更新位置を反映できるようにセクションを再キューする必要がある
-<a href=#702 id=702 data-nosnippet>702</a>        // 補足: 呼び出し元（UI層）も各フレームで描画コマンドを再キューしているため、ここではアニメーション状態を返り値で通知するだけ
-<a href=#703 id=703 data-nosnippet>703</a>
-<a href=#704 id=704 data-nosnippet>704</a>        // GPUコマンドのエンコーダーの作成
-<a href=#705 id=705 data-nosnippet>705</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>encoder = <span class="self">self
-<a href=#706 id=706 data-nosnippet>706</a>            </span>.device
-<a href=#707 id=707 data-nosnippet>707</a>            .create_command_encoder(<span class="kw-2">&amp;</span>wgpu::CommandEncoderDescriptor {
-<a href=#708 id=708 data-nosnippet>708</a>                label: <span class="prelude-val">Some</span>(<span class="string">"Render Encoder"</span>),
-<a href=#709 id=709 data-nosnippet>709</a>            });
-<a href=#710 id=710 data-nosnippet>710</a>
-<a href=#711 id=711 data-nosnippet>711</a>        <span class="comment">// 描画パスの開始
-<a href=#712 id=712 data-nosnippet>712</a>        </span>{
-<a href=#713 id=713 data-nosnippet>713</a>            <span class="kw">let </span><span class="kw-2">mut </span>render_pass = encoder.begin_render_pass(<span class="kw-2">&amp;</span>wgpu::RenderPassDescriptor {
-<a href=#714 id=714 data-nosnippet>714</a>                label: <span class="prelude-val">Some</span>(<span class="string">"Render Pass"</span>),
-<a href=#715 id=715 data-nosnippet>715</a>                color_attachments: <span class="kw-2">&amp;</span>[<span class="prelude-val">Some</span>(wgpu::RenderPassColorAttachment {
-<a href=#716 id=716 data-nosnippet>716</a>                    view: <span class="kw-2">&amp;</span>view,
-<a href=#717 id=717 data-nosnippet>717</a>                    resolve_target: <span class="prelude-val">None</span>,
-<a href=#718 id=718 data-nosnippet>718</a>                    ops: wgpu::Operations {
-<a href=#719 id=719 data-nosnippet>719</a>                        <span class="comment">// 背景色をクリア
-<a href=#720 id=720 data-nosnippet>720</a>                        </span>load: wgpu::LoadOp::Clear(wgpu::Color {
-<a href=#721 id=721 data-nosnippet>721</a>                            r: <span class="number">1.0</span>,
-<a href=#722 id=722 data-nosnippet>722</a>                            g: <span class="number">1.0</span>,
-<a href=#723 id=723 data-nosnippet>723</a>                            b: <span class="number">1.0</span>,
-<a href=#724 id=724 data-nosnippet>724</a>                            a: <span class="number">1.0</span>,
-<a href=#725 id=725 data-nosnippet>725</a>                        }),
-<a href=#726 id=726 data-nosnippet>726</a>                        store: wgpu::StoreOp::Store,
-<a href=#727 id=727 data-nosnippet>727</a>                    },
-<a href=#728 id=728 data-nosnippet>728</a>                    depth_slice: <span class="prelude-val">None</span>,
-<a href=#729 id=729 data-nosnippet>729</a>                })],
-<a href=#730 id=730 data-nosnippet>730</a>                depth_stencil_attachment: <span class="prelude-val">None</span>,
-<a href=#731 id=731 data-nosnippet>731</a>                occlusion_query_set: <span class="prelude-val">None</span>,
-<a href=#732 id=732 data-nosnippet>732</a>                timestamp_writes: <span class="prelude-val">None</span>,
-<a href=#733 id=733 data-nosnippet>733</a>                multiview_mask: <span class="prelude-val">None</span>,
-<a href=#734 id=734 data-nosnippet>734</a>            });
-<a href=#735 id=735 data-nosnippet>735</a>
-<a href=#736 id=736 data-nosnippet>736</a>            <span class="comment">// 使用するシェーダー・設定をセット
-<a href=#737 id=737 data-nosnippet>737</a>            </span>render_pass.set_pipeline(<span class="kw-2">&amp;</span><span class="self">self</span>.render_pipeline);
-<a href=#738 id=738 data-nosnippet>738</a>            <span class="comment">// 頂点バッファをセットして描画
-<a href=#739 id=739 data-nosnippet>739</a>            </span><span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>vertex_buffer) = <span class="self">self</span>.vertex_buffer {
-<a href=#740 id=740 data-nosnippet>740</a>                render_pass.set_vertex_buffer(<span class="number">0</span>, vertex_buffer.slice(..));
-<a href=#741 id=741 data-nosnippet>741</a>                render_pass.draw(<span class="number">0</span>..<span class="self">self</span>.num_vertices, <span class="number">0</span>..<span class="number">1</span>);
-<a href=#742 id=742 data-nosnippet>742</a>            }
-<a href=#743 id=743 data-nosnippet>743</a>        }
-<a href=#744 id=744 data-nosnippet>744</a>
-<a href=#745 id=745 data-nosnippet>745</a>        <span class="comment">// テキストをレンダリング
-<a href=#746 id=746 data-nosnippet>746</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(tr) = <span class="kw-2">&amp;mut </span><span class="self">self</span>.text_renderer {
-<a href=#747 id=747 data-nosnippet>747</a>            <span class="kw">let </span><span class="kw-2">mut </span>rpass = encoder.begin_render_pass(<span class="kw-2">&amp;</span>wgpu::RenderPassDescriptor {
-<a href=#748 id=748 data-nosnippet>748</a>                label: <span class="prelude-val">Some</span>(<span class="string">"Text Render Pass"</span>),
-<a href=#749 id=749 data-nosnippet>749</a>                color_attachments: <span class="kw-2">&amp;</span>[<span class="prelude-val">Some</span>(wgpu::RenderPassColorAttachment {
-<a href=#750 id=750 data-nosnippet>750</a>                    view: <span class="kw-2">&amp;</span>view,
-<a href=#751 id=751 data-nosnippet>751</a>                    resolve_target: <span class="prelude-val">None</span>,
-<a href=#752 id=752 data-nosnippet>752</a>                    ops: wgpu::Operations {
-<a href=#753 id=753 data-nosnippet>753</a>                        load: wgpu::LoadOp::Load,
-<a href=#754 id=754 data-nosnippet>754</a>                        store: wgpu::StoreOp::Store,
-<a href=#755 id=755 data-nosnippet>755</a>                    },
-<a href=#756 id=756 data-nosnippet>756</a>                    depth_slice: <span class="prelude-val">None</span>,
-<a href=#757 id=757 data-nosnippet>757</a>                })],
-<a href=#758 id=758 data-nosnippet>758</a>                depth_stencil_attachment: <span class="prelude-val">None</span>,
-<a href=#759 id=759 data-nosnippet>759</a>                occlusion_query_set: <span class="prelude-val">None</span>,
-<a href=#760 id=760 data-nosnippet>760</a>                timestamp_writes: <span class="prelude-val">None</span>,
-<a href=#761 id=761 data-nosnippet>761</a>                multiview_mask: <span class="prelude-val">None</span>,
-<a href=#762 id=762 data-nosnippet>762</a>            });
-<a href=#763 id=763 data-nosnippet>763</a>            tr.draw(<span class="kw-2">&amp;mut </span>rpass);
-<a href=#764 id=764 data-nosnippet>764</a>        }
-<a href=#765 id=765 data-nosnippet>765</a>
-<a href=#766 id=766 data-nosnippet>766</a>        <span class="comment">// コマンドをGPUに送信
-<a href=#767 id=767 data-nosnippet>767</a>        </span><span class="self">self</span>.queue.submit(std::iter::once(encoder.finish()));
-<a href=#768 id=768 data-nosnippet>768</a>
-<a href=#769 id=769 data-nosnippet>769</a>        <span class="comment">// フレームを画面に表示
-<a href=#770 id=770 data-nosnippet>770</a>        </span>output.present();
+<a href=#680 id=680 data-nosnippet>680</a>    <span class="doccomment">/// フレームを描画
+<a href=#681 id=681 data-nosnippet>681</a>    </span><span class="kw">pub fn </span>render(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#682 id=682 data-nosnippet>682</a>        <span class="comment">// 描画するフレームバッファを取得
+<a href=#683 id=683 data-nosnippet>683</a>        </span><span class="kw">let </span>output = <span class="self">self</span>.surface.get_current_texture()<span class="question-mark">?</span>;
+<a href=#684 id=684 data-nosnippet>684</a>        <span class="kw">let </span>view = output
+<a href=#685 id=685 data-nosnippet>685</a>            .texture
+<a href=#686 id=686 data-nosnippet>686</a>            .create_view(<span class="kw-2">&amp;</span>wgpu::TextureViewDescriptor::default());
+<a href=#687 id=687 data-nosnippet>687</a>
+<a href=#688 id=688 data-nosnippet>688</a>        <span class="comment">// アニメーション中はテキストブラシが更新位置を反映できるようにセクションを再キューする必要がある
+<a href=#689 id=689 data-nosnippet>689</a>        // 補足: 呼び出し元（UI層）も各フレームで描画コマンドを再キューしているため、ここではアニメーション状態を返り値で通知するだけ
+<a href=#690 id=690 data-nosnippet>690</a>
+<a href=#691 id=691 data-nosnippet>691</a>        // GPUコマンドのエンコーダーの作成
+<a href=#692 id=692 data-nosnippet>692</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>encoder = <span class="self">self
+<a href=#693 id=693 data-nosnippet>693</a>            </span>.device
+<a href=#694 id=694 data-nosnippet>694</a>            .create_command_encoder(<span class="kw-2">&amp;</span>wgpu::CommandEncoderDescriptor {
+<a href=#695 id=695 data-nosnippet>695</a>                label: <span class="prelude-val">Some</span>(<span class="string">"Render Encoder"</span>),
+<a href=#696 id=696 data-nosnippet>696</a>            });
+<a href=#697 id=697 data-nosnippet>697</a>
+<a href=#698 id=698 data-nosnippet>698</a>        <span class="comment">// 描画パスの開始
+<a href=#699 id=699 data-nosnippet>699</a>        </span>{
+<a href=#700 id=700 data-nosnippet>700</a>            <span class="kw">let </span><span class="kw-2">mut </span>render_pass = encoder.begin_render_pass(<span class="kw-2">&amp;</span>wgpu::RenderPassDescriptor {
+<a href=#701 id=701 data-nosnippet>701</a>                label: <span class="prelude-val">Some</span>(<span class="string">"Render Pass"</span>),
+<a href=#702 id=702 data-nosnippet>702</a>                color_attachments: <span class="kw-2">&amp;</span>[<span class="prelude-val">Some</span>(wgpu::RenderPassColorAttachment {
+<a href=#703 id=703 data-nosnippet>703</a>                    view: <span class="kw-2">&amp;</span>view,
+<a href=#704 id=704 data-nosnippet>704</a>                    resolve_target: <span class="prelude-val">None</span>,
+<a href=#705 id=705 data-nosnippet>705</a>                    ops: wgpu::Operations {
+<a href=#706 id=706 data-nosnippet>706</a>                        <span class="comment">// 背景色をクリア
+<a href=#707 id=707 data-nosnippet>707</a>                        </span>load: wgpu::LoadOp::Clear(wgpu::Color {
+<a href=#708 id=708 data-nosnippet>708</a>                            r: <span class="number">1.0</span>,
+<a href=#709 id=709 data-nosnippet>709</a>                            g: <span class="number">1.0</span>,
+<a href=#710 id=710 data-nosnippet>710</a>                            b: <span class="number">1.0</span>,
+<a href=#711 id=711 data-nosnippet>711</a>                            a: <span class="number">1.0</span>,
+<a href=#712 id=712 data-nosnippet>712</a>                        }),
+<a href=#713 id=713 data-nosnippet>713</a>                        store: wgpu::StoreOp::Store,
+<a href=#714 id=714 data-nosnippet>714</a>                    },
+<a href=#715 id=715 data-nosnippet>715</a>                    depth_slice: <span class="prelude-val">None</span>,
+<a href=#716 id=716 data-nosnippet>716</a>                })],
+<a href=#717 id=717 data-nosnippet>717</a>                depth_stencil_attachment: <span class="prelude-val">None</span>,
+<a href=#718 id=718 data-nosnippet>718</a>                occlusion_query_set: <span class="prelude-val">None</span>,
+<a href=#719 id=719 data-nosnippet>719</a>                timestamp_writes: <span class="prelude-val">None</span>,
+<a href=#720 id=720 data-nosnippet>720</a>                multiview_mask: <span class="prelude-val">None</span>,
+<a href=#721 id=721 data-nosnippet>721</a>            });
+<a href=#722 id=722 data-nosnippet>722</a>
+<a href=#723 id=723 data-nosnippet>723</a>            <span class="comment">// 使用するシェーダー・設定をセット
+<a href=#724 id=724 data-nosnippet>724</a>            </span>render_pass.set_pipeline(<span class="kw-2">&amp;</span><span class="self">self</span>.render_pipeline);
+<a href=#725 id=725 data-nosnippet>725</a>            <span class="comment">// 頂点バッファをセットして描画
+<a href=#726 id=726 data-nosnippet>726</a>            </span><span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>vertex_buffer) = <span class="self">self</span>.vertex_buffer {
+<a href=#727 id=727 data-nosnippet>727</a>                render_pass.set_vertex_buffer(<span class="number">0</span>, vertex_buffer.slice(..));
+<a href=#728 id=728 data-nosnippet>728</a>                render_pass.draw(<span class="number">0</span>..<span class="self">self</span>.num_vertices, <span class="number">0</span>..<span class="number">1</span>);
+<a href=#729 id=729 data-nosnippet>729</a>            }
+<a href=#730 id=730 data-nosnippet>730</a>        }
+<a href=#731 id=731 data-nosnippet>731</a>
+<a href=#732 id=732 data-nosnippet>732</a>        <span class="comment">// テキストをレンダリング
+<a href=#733 id=733 data-nosnippet>733</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(tr) = <span class="kw-2">&amp;mut </span><span class="self">self</span>.text_renderer {
+<a href=#734 id=734 data-nosnippet>734</a>            <span class="kw">let </span><span class="kw-2">mut </span>rpass = encoder.begin_render_pass(<span class="kw-2">&amp;</span>wgpu::RenderPassDescriptor {
+<a href=#735 id=735 data-nosnippet>735</a>                label: <span class="prelude-val">Some</span>(<span class="string">"Text Render Pass"</span>),
+<a href=#736 id=736 data-nosnippet>736</a>                color_attachments: <span class="kw-2">&amp;</span>[<span class="prelude-val">Some</span>(wgpu::RenderPassColorAttachment {
+<a href=#737 id=737 data-nosnippet>737</a>                    view: <span class="kw-2">&amp;</span>view,
+<a href=#738 id=738 data-nosnippet>738</a>                    resolve_target: <span class="prelude-val">None</span>,
+<a href=#739 id=739 data-nosnippet>739</a>                    ops: wgpu::Operations {
+<a href=#740 id=740 data-nosnippet>740</a>                        load: wgpu::LoadOp::Load,
+<a href=#741 id=741 data-nosnippet>741</a>                        store: wgpu::StoreOp::Store,
+<a href=#742 id=742 data-nosnippet>742</a>                    },
+<a href=#743 id=743 data-nosnippet>743</a>                    depth_slice: <span class="prelude-val">None</span>,
+<a href=#744 id=744 data-nosnippet>744</a>                })],
+<a href=#745 id=745 data-nosnippet>745</a>                depth_stencil_attachment: <span class="prelude-val">None</span>,
+<a href=#746 id=746 data-nosnippet>746</a>                occlusion_query_set: <span class="prelude-val">None</span>,
+<a href=#747 id=747 data-nosnippet>747</a>                timestamp_writes: <span class="prelude-val">None</span>,
+<a href=#748 id=748 data-nosnippet>748</a>                multiview_mask: <span class="prelude-val">None</span>,
+<a href=#749 id=749 data-nosnippet>749</a>            });
+<a href=#750 id=750 data-nosnippet>750</a>            tr.draw(<span class="kw-2">&amp;mut </span>rpass);
+<a href=#751 id=751 data-nosnippet>751</a>        }
+<a href=#752 id=752 data-nosnippet>752</a>
+<a href=#753 id=753 data-nosnippet>753</a>        <span class="comment">// コマンドをGPUに送信
+<a href=#754 id=754 data-nosnippet>754</a>        </span><span class="self">self</span>.queue.submit(std::iter::once(encoder.finish()));
+<a href=#755 id=755 data-nosnippet>755</a>
+<a href=#756 id=756 data-nosnippet>756</a>        <span class="comment">// フレームを画面に表示
+<a href=#757 id=757 data-nosnippet>757</a>        </span>output.present();
+<a href=#758 id=758 data-nosnippet>758</a>
+<a href=#759 id=759 data-nosnippet>759</a>        <span class="prelude-val">Ok</span>(())
+<a href=#760 id=760 data-nosnippet>760</a>    }
+<a href=#761 id=761 data-nosnippet>761</a>
+<a href=#762 id=762 data-nosnippet>762</a>    <span class="kw">fn </span>update_vertices(
+<a href=#763 id=763 data-nosnippet>763</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#764 id=764 data-nosnippet>764</a>        old_size: winit::dpi::PhysicalSize&lt;u32&gt;,
+<a href=#765 id=765 data-nosnippet>765</a>        new_size: winit::dpi::PhysicalSize&lt;u32&gt;,
+<a href=#766 id=766 data-nosnippet>766</a>    ) {
+<a href=#767 id=767 data-nosnippet>767</a>        <span class="kw">let </span>old_w = old_size.width <span class="kw">as </span>f32;
+<a href=#768 id=768 data-nosnippet>768</a>        <span class="kw">let </span>old_h = old_size.height <span class="kw">as </span>f32;
+<a href=#769 id=769 data-nosnippet>769</a>        <span class="kw">let </span>new_w = new_size.width <span class="kw">as </span>f32;
+<a href=#770 id=770 data-nosnippet>770</a>        <span class="kw">let </span>new_h = new_size.height <span class="kw">as </span>f32;
 <a href=#771 id=771 data-nosnippet>771</a>
-<a href=#772 id=772 data-nosnippet>772</a>        <span class="prelude-val">Ok</span>(())
-<a href=#773 id=773 data-nosnippet>773</a>    }
-<a href=#774 id=774 data-nosnippet>774</a>
-<a href=#775 id=775 data-nosnippet>775</a>    <span class="kw">fn </span>update_vertices(
-<a href=#776 id=776 data-nosnippet>776</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#777 id=777 data-nosnippet>777</a>        old_size: winit::dpi::PhysicalSize&lt;u32&gt;,
-<a href=#778 id=778 data-nosnippet>778</a>        new_size: winit::dpi::PhysicalSize&lt;u32&gt;,
-<a href=#779 id=779 data-nosnippet>779</a>    ) {
-<a href=#780 id=780 data-nosnippet>780</a>        <span class="kw">let </span>old_w = old_size.width <span class="kw">as </span>f32;
-<a href=#781 id=781 data-nosnippet>781</a>        <span class="kw">let </span>old_h = old_size.height <span class="kw">as </span>f32;
-<a href=#782 id=782 data-nosnippet>782</a>        <span class="kw">let </span>new_w = new_size.width <span class="kw">as </span>f32;
-<a href=#783 id=783 data-nosnippet>783</a>        <span class="kw">let </span>new_h = new_size.height <span class="kw">as </span>f32;
-<a href=#784 id=784 data-nosnippet>784</a>
-<a href=#785 id=785 data-nosnippet>785</a>        <span class="kw">let </span><span class="kw-2">mut </span>new_vertices = <span class="self">self</span>.vertices.clone();
-<a href=#786 id=786 data-nosnippet>786</a>
-<a href=#787 id=787 data-nosnippet>787</a>        <span class="kw">for </span>vertex <span class="kw">in </span>new_vertices.iter_mut() {
-<a href=#788 id=788 data-nosnippet>788</a>            <span class="comment">// old NDC -&gt; logical
-<a href=#789 id=789 data-nosnippet>789</a>            </span><span class="kw">let </span>logical_x = (vertex.position[<span class="number">0</span>] + <span class="number">1.0</span>) / <span class="number">2.0 </span>* old_w;
-<a href=#790 id=790 data-nosnippet>790</a>            <span class="kw">let </span>logical_y = -(vertex.position[<span class="number">1</span>] - <span class="number">1.0</span>) / <span class="number">2.0 </span>* old_h;
-<a href=#791 id=791 data-nosnippet>791</a>
-<a href=#792 id=792 data-nosnippet>792</a>            <span class="comment">// logical -&gt; new NDC
-<a href=#793 id=793 data-nosnippet>793</a>            </span>vertex.position[<span class="number">0</span>] = (logical_x / new_w) * <span class="number">2.0 </span>- <span class="number">1.0</span>;
-<a href=#794 id=794 data-nosnippet>794</a>            vertex.position[<span class="number">1</span>] = -((logical_y / new_h) * <span class="number">2.0 </span>- <span class="number">1.0</span>);
-<a href=#795 id=795 data-nosnippet>795</a>        }
-<a href=#796 id=796 data-nosnippet>796</a>        <span class="self">self</span>.set_vertex_buffer(new_vertices);
-<a href=#797 id=797 data-nosnippet>797</a>    }
-<a href=#798 id=798 data-nosnippet>798</a>
-<a href=#799 id=799 data-nosnippet>799</a>    <span class="kw">fn </span>set_vertex_buffer(<span class="kw-2">&amp;mut </span><span class="self">self</span>, vertices: Vec&lt;Vertex&gt;) {
-<a href=#800 id=800 data-nosnippet>800</a>        <span class="comment">// 頂点バッファを登録
-<a href=#801 id=801 data-nosnippet>801</a>        </span><span class="kw">if </span>!vertices.is_empty() {
-<a href=#802 id=802 data-nosnippet>802</a>            <span class="self">self</span>.vertex_buffer = <span class="prelude-val">Some</span>(<span class="self">self</span>.device.create_buffer_init(
-<a href=#803 id=803 data-nosnippet>803</a>                <span class="kw-2">&amp;</span>wgpu::util::BufferInitDescriptor {
-<a href=#804 id=804 data-nosnippet>804</a>                    label: <span class="prelude-val">Some</span>(<span class="string">"Vertex Buffer"</span>),
-<a href=#805 id=805 data-nosnippet>805</a>                    contents: bytemuck::cast_slice(<span class="kw-2">&amp;</span>vertices),
-<a href=#806 id=806 data-nosnippet>806</a>                    usage: wgpu::BufferUsages::VERTEX,
-<a href=#807 id=807 data-nosnippet>807</a>                },
-<a href=#808 id=808 data-nosnippet>808</a>            ));
-<a href=#809 id=809 data-nosnippet>809</a>            <span class="self">self</span>.num_vertices = vertices.len() <span class="kw">as </span>u32;
-<a href=#810 id=810 data-nosnippet>810</a>        }
-<a href=#811 id=811 data-nosnippet>811</a>        <span class="self">self</span>.vertices = vertices;
-<a href=#812 id=812 data-nosnippet>812</a>    }
-<a href=#813 id=813 data-nosnippet>813</a>
-<a href=#814 id=814 data-nosnippet>814</a>    <span class="kw">pub fn </span>set_scale_factor(<span class="kw-2">&amp;mut </span><span class="self">self</span>, scale_factor: f64) {
-<a href=#815 id=815 data-nosnippet>815</a>        <span class="self">self</span>.scale_factor = scale_factor;
+<a href=#772 id=772 data-nosnippet>772</a>        <span class="kw">let </span><span class="kw-2">mut </span>new_vertices = <span class="self">self</span>.vertices.clone();
+<a href=#773 id=773 data-nosnippet>773</a>
+<a href=#774 id=774 data-nosnippet>774</a>        <span class="kw">for </span>vertex <span class="kw">in </span>new_vertices.iter_mut() {
+<a href=#775 id=775 data-nosnippet>775</a>            <span class="comment">// old NDC -&gt; logical
+<a href=#776 id=776 data-nosnippet>776</a>            </span><span class="kw">let </span>logical_x = (vertex.position[<span class="number">0</span>] + <span class="number">1.0</span>) / <span class="number">2.0 </span>* old_w;
+<a href=#777 id=777 data-nosnippet>777</a>            <span class="kw">let </span>logical_y = -(vertex.position[<span class="number">1</span>] - <span class="number">1.0</span>) / <span class="number">2.0 </span>* old_h;
+<a href=#778 id=778 data-nosnippet>778</a>
+<a href=#779 id=779 data-nosnippet>779</a>            <span class="comment">// logical -&gt; new NDC
+<a href=#780 id=780 data-nosnippet>780</a>            </span>vertex.position[<span class="number">0</span>] = (logical_x / new_w) * <span class="number">2.0 </span>- <span class="number">1.0</span>;
+<a href=#781 id=781 data-nosnippet>781</a>            vertex.position[<span class="number">1</span>] = -((logical_y / new_h) * <span class="number">2.0 </span>- <span class="number">1.0</span>);
+<a href=#782 id=782 data-nosnippet>782</a>        }
+<a href=#783 id=783 data-nosnippet>783</a>        <span class="self">self</span>.set_vertex_buffer(new_vertices);
+<a href=#784 id=784 data-nosnippet>784</a>    }
+<a href=#785 id=785 data-nosnippet>785</a>
+<a href=#786 id=786 data-nosnippet>786</a>    <span class="kw">fn </span>set_vertex_buffer(<span class="kw-2">&amp;mut </span><span class="self">self</span>, vertices: Vec&lt;Vertex&gt;) {
+<a href=#787 id=787 data-nosnippet>787</a>        <span class="comment">// 頂点バッファを登録
+<a href=#788 id=788 data-nosnippet>788</a>        </span><span class="kw">if </span>!vertices.is_empty() {
+<a href=#789 id=789 data-nosnippet>789</a>            <span class="self">self</span>.vertex_buffer = <span class="prelude-val">Some</span>(<span class="self">self</span>.device.create_buffer_init(
+<a href=#790 id=790 data-nosnippet>790</a>                <span class="kw-2">&amp;</span>wgpu::util::BufferInitDescriptor {
+<a href=#791 id=791 data-nosnippet>791</a>                    label: <span class="prelude-val">Some</span>(<span class="string">"Vertex Buffer"</span>),
+<a href=#792 id=792 data-nosnippet>792</a>                    contents: bytemuck::cast_slice(<span class="kw-2">&amp;</span>vertices),
+<a href=#793 id=793 data-nosnippet>793</a>                    usage: wgpu::BufferUsages::VERTEX,
+<a href=#794 id=794 data-nosnippet>794</a>                },
+<a href=#795 id=795 data-nosnippet>795</a>            ));
+<a href=#796 id=796 data-nosnippet>796</a>            <span class="self">self</span>.num_vertices = vertices.len() <span class="kw">as </span>u32;
+<a href=#797 id=797 data-nosnippet>797</a>        }
+<a href=#798 id=798 data-nosnippet>798</a>        <span class="self">self</span>.vertices = vertices;
+<a href=#799 id=799 data-nosnippet>799</a>    }
+<a href=#800 id=800 data-nosnippet>800</a>
+<a href=#801 id=801 data-nosnippet>801</a>    <span class="kw">pub fn </span>set_scale_factor(<span class="kw-2">&amp;mut </span><span class="self">self</span>, scale_factor: f64) {
+<a href=#802 id=802 data-nosnippet>802</a>        <span class="self">self</span>.scale_factor = scale_factor;
+<a href=#803 id=803 data-nosnippet>803</a>    }
+<a href=#804 id=804 data-nosnippet>804</a>}
+<a href=#805 id=805 data-nosnippet>805</a>
+<a href=#806 id=806 data-nosnippet>806</a><span class="kw">fn </span>select_wgpu_backends() -&gt; wgpu::Backends {
+<a href=#807 id=807 data-nosnippet>807</a>    <span class="kw">if let </span><span class="prelude-val">Ok</span>(value) = env::var(<span class="string">"ORINIUM_WGPU_BACKEND"</span>) {
+<a href=#808 id=808 data-nosnippet>808</a>        <span class="kw">match </span>value.to_lowercase().as_str() {
+<a href=#809 id=809 data-nosnippet>809</a>            <span class="string">"gl" </span>| <span class="string">"opengl" </span>=&gt; <span class="kw">return </span>wgpu::Backends::GL,
+<a href=#810 id=810 data-nosnippet>810</a>            <span class="string">"vulkan" </span>| <span class="string">"vk" </span>=&gt; <span class="kw">return </span>wgpu::Backends::VULKAN,
+<a href=#811 id=811 data-nosnippet>811</a>            <span class="string">"metal" </span>=&gt; <span class="kw">return </span>wgpu::Backends::METAL,
+<a href=#812 id=812 data-nosnippet>812</a>            <span class="string">"dx12" </span>| <span class="string">"d3d12" </span>=&gt; <span class="kw">return </span>wgpu::Backends::DX12,
+<a href=#813 id=813 data-nosnippet>813</a>            <span class="string">"primary" </span>=&gt; <span class="kw">return </span>wgpu::Backends::PRIMARY,
+<a href=#814 id=814 data-nosnippet>814</a>            <span class="kw">_ </span>=&gt; {}
+<a href=#815 id=815 data-nosnippet>815</a>        }
 <a href=#816 id=816 data-nosnippet>816</a>    }
-<a href=#817 id=817 data-nosnippet>817</a>}
-<a href=#818 id=818 data-nosnippet>818</a>
-<a href=#819 id=819 data-nosnippet>819</a><span class="kw">fn </span>select_wgpu_backends() -&gt; wgpu::Backends {
-<a href=#820 id=820 data-nosnippet>820</a>    <span class="kw">if let </span><span class="prelude-val">Ok</span>(value) = env::var(<span class="string">"ORINIUM_WGPU_BACKEND"</span>) {
-<a href=#821 id=821 data-nosnippet>821</a>        <span class="kw">match </span>value.to_lowercase().as_str() {
-<a href=#822 id=822 data-nosnippet>822</a>            <span class="string">"gl" </span>| <span class="string">"opengl" </span>=&gt; <span class="kw">return </span>wgpu::Backends::GL,
-<a href=#823 id=823 data-nosnippet>823</a>            <span class="string">"vulkan" </span>| <span class="string">"vk" </span>=&gt; <span class="kw">return </span>wgpu::Backends::VULKAN,
-<a href=#824 id=824 data-nosnippet>824</a>            <span class="string">"metal" </span>=&gt; <span class="kw">return </span>wgpu::Backends::METAL,
-<a href=#825 id=825 data-nosnippet>825</a>            <span class="string">"dx12" </span>| <span class="string">"d3d12" </span>=&gt; <span class="kw">return </span>wgpu::Backends::DX12,
-<a href=#826 id=826 data-nosnippet>826</a>            <span class="string">"primary" </span>=&gt; <span class="kw">return </span>wgpu::Backends::PRIMARY,
-<a href=#827 id=827 data-nosnippet>827</a>            <span class="kw">_ </span>=&gt; {}
-<a href=#828 id=828 data-nosnippet>828</a>        }
-<a href=#829 id=829 data-nosnippet>829</a>    }
-<a href=#830 id=830 data-nosnippet>830</a>
-<a href=#831 id=831 data-nosnippet>831</a>    <span class="kw">let </span>is_wsl = env::var_os(<span class="string">"WSL_DISTRO_NAME"</span>).is_some() || env::var_os(<span class="string">"WSL_INTEROP"</span>).is_some();
-<a href=#832 id=832 data-nosnippet>832</a>    <span class="kw">let </span>is_wayland = env::var_os(<span class="string">"WAYLAND_DISPLAY"</span>).is_some();
-<a href=#833 id=833 data-nosnippet>833</a>
-<a href=#834 id=834 data-nosnippet>834</a>    <span class="kw">if </span>is_wsl &amp;&amp; is_wayland {
-<a href=#835 id=835 data-nosnippet>835</a>        <span class="comment">// WSLg + Wayland can be unstable with Vulkan; prefer GL by default.
-<a href=#836 id=836 data-nosnippet>836</a>        </span><span class="kw">return </span>wgpu::Backends::GL;
-<a href=#837 id=837 data-nosnippet>837</a>    }
-<a href=#838 id=838 data-nosnippet>838</a>
-<a href=#839 id=839 data-nosnippet>839</a>    wgpu::Backends::PRIMARY
-<a href=#840 id=840 data-nosnippet>840</a>}
+<a href=#817 id=817 data-nosnippet>817</a>
+<a href=#818 id=818 data-nosnippet>818</a>    <span class="kw">let </span>is_wsl = env::var_os(<span class="string">"WSL_DISTRO_NAME"</span>).is_some() || env::var_os(<span class="string">"WSL_INTEROP"</span>).is_some();
+<a href=#819 id=819 data-nosnippet>819</a>    <span class="kw">let </span>is_wayland = env::var_os(<span class="string">"WAYLAND_DISPLAY"</span>).is_some();
+<a href=#820 id=820 data-nosnippet>820</a>
+<a href=#821 id=821 data-nosnippet>821</a>    <span class="kw">if </span>is_wsl &amp;&amp; is_wayland {
+<a href=#822 id=822 data-nosnippet>822</a>        <span class="comment">// WSLg + Wayland can be unstable with Vulkan; prefer GL by default.
+<a href=#823 id=823 data-nosnippet>823</a>        </span><span class="kw">return </span>wgpu::Backends::GL;
+<a href=#824 id=824 data-nosnippet>824</a>    }
+<a href=#825 id=825 data-nosnippet>825</a>
+<a href=#826 id=826 data-nosnippet>826</a>    wgpu::Backends::PRIMARY
+<a href=#827 id=827 data-nosnippet>827</a>}
 </code></pre></div></section></main></body></html>

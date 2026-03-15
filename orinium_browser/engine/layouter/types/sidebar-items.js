@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["BorderStyle","ContainerRole","FontStyle","NodeKind","TextAlign","TextDecoration"],"struct":["BorderColor","BorderStyles","Color","ContainerStyle","FontWeight","InfoNode","MeasureCache","TextStyle"]};
+window.SIDEBAR_ITEMS = {"enum":["BorderStyle","ContainerRole","FontStyle","NodeKind","TextAlign","TextDecoration"],"struct":["BorderColor","BorderStyles","Color","ContainerStyle","FontWeight","InfoNode","TextStyle"]};
