@@ -287,7 +287,23 @@ pub fn build_layout_and_info(
 
 /// Splits text into text fragments for measurement. Each fragment is a word or a space.
 fn split_fragments(text: &str) -> Vec<String> {
-    text.split_inclusive(' ').map(|s| s.to_string()).collect()
+    let mut out = Vec::new();
+    let mut buf = String::new();
+
+    for c in text.chars() {
+        buf.push(c);
+
+        if c.is_whitespace() || c == '-' || !c.is_ascii() {
+            out.push(buf.clone());
+            buf.clear();
+        }
+    }
+
+    if !buf.is_empty() {
+        out.push(buf);
+    }
+
+    out
 }
 
 fn build_inline_fragments(
