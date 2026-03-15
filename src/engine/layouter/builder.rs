@@ -178,6 +178,11 @@ pub fn build_layout_and_info(
            Text Node with inline fragments
         ----------------------------- */
 
+        let style = Style {
+            display: Display::Inline,
+            ..style
+        };
+
         let mut layout = LayoutNode::new(style);
 
         layout.set_fragments(inline_fragments);
@@ -496,10 +501,7 @@ fn apply_declaration(
                 "flex" => Display::Flex {
                     flex_direction: FlexDirection::Row,
                 },
-                "inline" => Display::Flex {
-                    // tmp：inline = row flex
-                    flex_direction: FlexDirection::Row,
-                },
+                "inline" => Display::Inline,
                 "none" => Display::None,
                 _ => style.display,
             };
