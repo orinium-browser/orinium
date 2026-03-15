@@ -48,6 +48,16 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
 
     match &info.kind {
         NodeKind::Text { texts, style, .. } => {
+            debug_assert_eq!(
+                texts.len(),
+                layout.self_fragments.len(),
+                "`generate_draw_commands` may be called before layout is complete."
+            );
+            debug_assert_eq!(
+                layout.self_fragments.len(),
+                layout.placements.len(),
+                "Layout should have placements for all self fragments."
+            );
             for ((text, placement), fragment) in texts
                 .iter()
                 .zip(&layout.placements)
