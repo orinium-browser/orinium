@@ -39,7 +39,8 @@ use url::Url;
 use winit::event::WindowEvent;
 
 use super::tab::{FetchKind, Tab, TabTask};
-// use super::ui::init_browser_ui;
+use super::ui::compoments::{self, Compoments};
+use super::ui::{BrowserUi, init_browser_ui};
 use super::{BrowserCommand, resource_loader::BrowserResourceLoader};
 use crate::engine::layouter;
 use crate::engine::renderer_model::{self, DrawCommand};
@@ -147,6 +148,7 @@ pub struct BrowserApp {
     tabs: Vec<Tab>,
     active_tab: usize,
     render: RenderState,
+    ui: BrowserUi,
     window_title: String,
     input: InputState,
     network: BrowserResourceLoader,
@@ -168,6 +170,7 @@ impl BrowserApp {
     /// Creates a new browser instance with the given window size and title.
     pub fn new(window_size: (u32, u32), window_title: String) -> Self {
         let network = BrowserResourceLoader::new(Some(Rc::new(NetworkCore::new())));
+        let ui = init_browser_ui(window_size);
 
         Self {
             tabs: vec![],
@@ -177,6 +180,7 @@ impl BrowserApp {
                 window_size,
                 scale_factor: 1.0,
             },
+            ui,
             window_title,
             input: InputState::default(),
             network,
@@ -263,6 +267,7 @@ impl BrowserApp {
                 self.render.window_size.0 as f32 / sf,
                 self.render.window_size.1 as f32 / sf,
             );
+            self.ui.relayout(viewport);
 
             let Some(tab) = self.active_tab_mut() else {
                 return;
@@ -276,7 +281,8 @@ impl BrowserApp {
             };
 
             let title = tab.title();
-            let draw_commands = renderer_model::generate_draw_commands(layout, info);
+            let mut draw_commands = renderer_model::generate_draw_commands(layout, info);
+            draw_commands.extend(self.ui.draw_commands());
 
             (title, draw_commands)
         };
@@ -350,8 +356,16 @@ impl BrowserApp {
 
         let (x, y) = self.input.mouse_position;
         let sf = self.render.scale_factor;
+        let click_x = (x / sf) as f32;
+        let click_y = (y / sf) as f32;
+
+        if let Some(button_index) = self.ui.hit_button_index(click_x, click_y) {
+            let _ = self.ui.notify_pointer_down(button_index, click_x, click_y);
+            return BrowserCommand::RequestRedraw;
+        }
+
         if let Some(tab) = self.active_tab_mut() {
-            Self::handle_mouse_click(tab, (x / sf) as f32, (y / sf) as f32);
+            Self::handle_mouse_click(tab, click_x, click_y);
             BrowserCommand::RequestRedraw
         } else {
             BrowserCommand::None
@@ -395,6 +409,18 @@ impl BrowserApp {
             Some((layout, info)) => crate::engine::input::hit_test(layout, info, x, y),
             None => return,
         };
+
+        if hit_path.iter().any(|e| {
+            matches!(
+                e.info.kind,
+                layouter::types::NodeKind::UiPart {
+                    ref compoment
+                } if matches!(compoment, Compoments::Button)
+            )
+        }) {
+            compoments::button::handle_pointer_down(x, y);
+            return;
+        }
 
         let href_opt = {
             if let Some(hit) = hit_path.iter().find(|e| {

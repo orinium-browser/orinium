@@ -1,5 +1,6 @@
 //! Draw command definition for rendering, which represents drawing instructions.
 
+use crate::browser::core::ui::compoments::{self, Compoments};
 use crate::engine::layouter::types::{Color, InfoNode, NodeKind, TextDecoration, TextStyle};
 use ui_layout::LayoutNode;
 
@@ -178,6 +179,12 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
                 });
             }
         }
+        NodeKind::UiPart { compoment } => match compoment {
+            Compoments::Button => {
+                commands.extend(compoments::button::draw_from_layout(layout));
+            }
+            _ => {}
+        },
     }
 
     for (child_layout, child_info) in layout.children.iter().zip(&info.children) {

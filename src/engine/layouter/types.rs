@@ -24,6 +24,7 @@ pub enum ContainerRole {
 ///
 /// - Container: A container node that can hold other nodes and has scrolling capabilities.
 /// - Text: A text node that contains text content and styling information.
+/// - UiPart: A node representing a UI component, such as an input field or button.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeKind {
     Container {
@@ -33,13 +34,15 @@ pub enum NodeKind {
         scroll_offset_y: f32,
         style: ContainerStyle,
         role: ContainerRole,
-        compoments: Compoments,
     },
     Text {
         text: String,
         style: TextStyle,
         measured: Option<MeasureCache>,
     },
+    UiPart {
+        compoment: Compoments,
+    }
 }
 
 // =========================
