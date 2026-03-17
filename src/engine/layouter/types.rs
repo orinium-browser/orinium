@@ -1,5 +1,7 @@
 //! Layout tree node types. Styles, text, and container definitions.
 
+use crate::browser::core::ui::compoments::Compoments;
+
 /// InfoNode represents a node in the layout tree.
 /// It can be either a Container or Text node, each with its own properties and styles.
 #[derive(Debug, Clone)]
@@ -31,6 +33,7 @@ pub enum NodeKind {
         scroll_offset_y: f32,
         style: ContainerStyle,
         role: ContainerRole,
+        compoments: Compoments,
     },
     Text {
         text: String,
