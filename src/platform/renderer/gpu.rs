@@ -75,9 +75,15 @@ impl GpuRenderer {
 
         // GPUドライバとの通信インスタンス
         // wgpuインスタンスの作成
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        //
+        // [`InstanceDescriptor::new_with_out_display_hundler`] の実装を参考に
+        // backends 選択は [`select_wgpu_backends`] を使った実装。
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: select_wgpu_backends(),
-            ..Default::default()
+            flags: Default::default(),
+            memory_budget_thresholds: Default::default(),
+            backend_options: Default::default(),
+            display: None,
         });
 
         // OSウィンドウとGPUの描画対象（サーフェス）を関連付ける
