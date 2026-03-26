@@ -1,0 +1,52 @@
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>Inline Layout Test</title>
+<style>
+body {
+  font-size: 20px;
+  width: 300px;
+  line-height: 1.5;
+}
+
+/* outer */
+.outer {
+  background: rgba(0, 128, 255, 0.2);
+  border: 2px solid blue;
+  padding: 10px;
+}
+
+/* inner */
+.inner {
+  background: rgba(255, 0, 0, 0.2);
+  border: 2px solid red;
+  padding: 5px;
+
+  margin-left: 20px;
+  margin-right: 20px;
+
+  margin-top: 20px;
+  margin-bottom: 20px;
+}
+
+.marker {
+  background: yellow;
+}
+</style>
+</head>
+<body>
+
+<span class="outer">
+  <span class="marker">A</span>
+
+  <span class="inner">
+    INNER INNER INNER INNER INNER
+  </span>
+
+  <span class="marker">B</span>
+</span>
+
+</body>
+</html>
