@@ -2,8 +2,8 @@
 
 use crate::engine::renderer_model::DrawCommand;
 use anyhow::Result;
-use std::env;
 use std::sync::Arc;
+use std::{env, fmt::Debug};
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
@@ -686,7 +686,16 @@ impl GpuRenderer {
     /// フレームを描画
     pub fn render(&mut self) -> Result<()> {
         // 描画するフレームバッファを取得
-        let output = self.surface.get_current_texture()?;
+        let current_surface_texture = self.surface.get_current_texture();
+
+        let output = if let wgpu::CurrentSurfaceTexture::Success(frame) = current_surface_texture {
+            frame
+        } else {
+            anyhow::bail!(
+                "`surface.get_current_texture` hasn't succeeded: {:?}.",
+                current_surface_texture
+            );
+        };
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
