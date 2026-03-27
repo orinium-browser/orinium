@@ -10,7 +10,6 @@ allow = [
     "CC0-1.0",
     "NCSA",
     "Apache-2.0 WITH LLVM-exception",
-    "OpenSSL",
     "MPL-2.0",
 ]
 confidence-threshold = 0.8
