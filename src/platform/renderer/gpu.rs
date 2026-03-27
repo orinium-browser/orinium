@@ -684,6 +684,10 @@ impl GpuRenderer {
     }
 
     /// フレームを描画
+    ///
+    /// TODO:
+    /// [`wgpu::CurrentSurfaceTexture`] をよりよく処理する必要があります。
+    /// 現在は、 Success 時以外の結果を無視し、Errorにまとめて返す挙動をします。
     pub fn render(&mut self) -> Result<()> {
         // 描画するフレームバッファを取得
         let current_surface_texture = self.surface.get_current_texture();
