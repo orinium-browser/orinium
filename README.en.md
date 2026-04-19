@@ -15,6 +15,11 @@
 > [!NOTE]
 > This project is still under development and does not yet function as a browser.
 
+> [!TIP]
+> The code documentation is below. We always keep it up-to-date on the dev branch.
+> 
+> https://orinium-browser.github.io/orinium/orinium_browser/
+
 ## An Independent Browser Free from Google
 The source code of this browser engine **does not depend on Google**.  
 Except for a few browsers like Firefox, most browsers in the world rely on Google’s Chromium.  
