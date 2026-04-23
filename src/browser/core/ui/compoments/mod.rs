@@ -1,12 +1,12 @@
-//! UIコンポーメントの定義
+//! UIコンポーネントの定義
 
 pub mod button;
 pub use button::Button;
 use crate::engine::renderer_model::DrawCommand;
 
-/// UIコンポーメントのイベント
+/// UIコンポーネントのイベント
 #[derive(Clone, Debug)]
-pub enum CompomentEvent {
+pub enum ComponentEvent {
     PointerDown { x: f32, y: f32 },
 }
 
@@ -14,10 +14,10 @@ pub trait DrawCommandEmitter {
     fn draw_commands(&self) -> Vec<DrawCommand>;
 }
 
-/// UIコンポーメント一覧
+/// UIコンポーネント一覧
 #[derive(Clone, Debug)]
 #[derive(PartialEq)]
-pub enum Compoments {
+pub enum Components {
     Button,
     Input(InputKind),
     Audio,
@@ -35,6 +35,6 @@ pub enum InputKind {
 /// UIコンポーメントの管理
 #[derive(Clone, Debug)]
 #[derive(PartialEq)]
-pub struct Compoment {
-    pub kind: Compoments,
+pub struct Component {
+    pub kind: Components,
 }

@@ -36,10 +36,10 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use url::Url;
-use winit::event::WindowEvent;
+use winit::event::{WindowEvent, ElementState};
 
 use super::tab::{FetchKind, Tab, TabTask};
-use super::ui::compoments::{self, Compoments};
+use super::ui::compoments::{self, Components};
 use super::ui::{BrowserUi, init_browser_ui};
 use super::{BrowserCommand, resource_loader::BrowserResourceLoader};
 use crate::engine::layouter;
@@ -415,7 +415,7 @@ impl BrowserApp {
                 e.info.kind,
                 layouter::types::NodeKind::UiPart {
                     ref compoment
-                } if matches!(compoment, Compoments::Button)
+                } if matches!(compoment, Components::Button)
             )
         }) {
             compoments::button::handle_pointer_down(x, y);
@@ -464,6 +464,11 @@ impl BrowserApp {
     /// Adds a new tab to the browser.
     pub fn add_tab(&mut self, tab: Tab) {
         self.tabs.push(tab);
+    }
+
+    /// Adds a UI button programmatically to the browser UI.
+    pub fn add_ui_button(&mut self, id: impl Into<String>, label: impl Into<String>, x: f32, y: f32, width: f32, height: f32) {
+        self.ui.add_button(id, label, x, y, width, height);
     }
 
     /// Returns the current window size as `(width, height)` in floating-point pixels.

@@ -1,14 +1,17 @@
-use super::{CompomentEvent, DrawCommandEmitter};
+use super::{ComponentEvent, DrawCommandEmitter};
 use crate::engine::layouter::types::{Color, FontWeight, TextStyle};
 use crate::engine::renderer_model::DrawCommand;
 use ui_layout::LayoutNode;
 
-/// ボタンコンポーメントの定義
+/// ボタンコンポーネントの定義
 #[derive(Debug)]
 pub struct Button {
     pub id: String,
     pub label: String,
     pub layout: LayoutNode,
+    pub hovered: bool,
+    pub active: bool,
+    pub focused: bool,
 }
 
 impl Button {
@@ -17,6 +20,9 @@ impl Button {
             id: id.into(),
             label: label.into(),
             layout,
+            hovered: false,
+            active: false,
+            focused: false,
         }
     }
 
@@ -27,10 +33,11 @@ impl Button {
         })
     }
 
-    pub fn on_event(&mut self, event: CompomentEvent) -> bool {
+    pub fn on_event(&mut self, event: ComponentEvent) -> bool {
         match event {
-            CompomentEvent::PointerDown { x, y } => {
+            ComponentEvent::PointerDown { x, y } => {
                 log::info!("Button {} handled PointerDown at ({}, {})", self.id, x, y);
+                self.active = true;
                 true
             }
         }
@@ -49,19 +56,39 @@ impl DrawCommandEmitter for Button {
 
         for box_model in &self.layout.layout_boxes {
             let rect = box_model.padding_box;
+            // border
+            let border_color = if self.focused {
+                Color(255, 200, 0, 255)
+            } else {
+                Color(10, 10, 10, 255)
+            };
+            commands.push(DrawCommand::DrawRect {
+                x: rect.x - 2.0,
+                y: rect.y - 2.0,
+                width: rect.width + 4.0,
+                height: rect.height + 4.0,
+                color: border_color,
+            });
+            let fill_color = if self.active {
+                Color(20, 90, 200, 255)
+            } else if self.hovered {
+                Color(60, 140, 255, 255)
+            } else {
+                Color(40, 120, 240, 255)
+            };
             commands.push(DrawCommand::DrawRect {
                 x: rect.x,
                 y: rect.y,
                 width: rect.width,
                 height: rect.height,
-                color: Color(40, 120, 240, 255),
+                color: fill_color,
             });
             commands.push(DrawCommand::DrawText {
-                x: rect.x + 12.0,
-                y: rect.y + 10.0,
+                x: rect.x + rect.width / 2.0,
+                y: rect.y + rect.height / 2.0 - 8.0,
                 text: self.label.clone(),
                 style: text_style,
-                max_width: (rect.width - 24.0).max(0.0),
+                max_width: rect.width - 16.0,
             });
         }
 
