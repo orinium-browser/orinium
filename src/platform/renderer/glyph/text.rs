@@ -3,12 +3,13 @@
 use std::{env, sync::Arc};
 
 use crate::engine::layouter::types::{FontStyle, TextAlign, TextStyle};
+use crate::browser::core::ui;
 use glyphon::{
     Attrs, Buffer, Cache, Color as GlyphColor, FontSystem, Metrics, PrepareError, Resolution,
     Shaping, Style, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer as TextBrush,
     Viewport, Weight, cosmic_text::Align, fontdb,
 };
-
+use crate::browser::core::ui::notice;
 use crate::platform::font;
 
 /// テキストセクション位置・クリップ・描画するBufferをまとめた構造体
@@ -56,6 +57,7 @@ impl TextRenderer {
             }
         }
 
+        notice::show_error_window("No system font found".to_string(), "System font not found. Browser cannot be launched.".to_string());
         anyhow::bail!("no system font found");
     }
 
@@ -144,23 +146,31 @@ impl TextRenderer {
         let mut text_areas: Vec<TextArea<'a>> = Vec::with_capacity(sections.len());
 
         for s in sections.iter() {
+            // Add a small horizontal padding to the TextArea bounds to account for glyph left-side bearings
+            // (some glyphs extend slightly left of the drawing origin). This prevents left-edge clipping like
+            // the reported truncated 'e'. Padding is proportional to the text bounds height but has a minimum.
+            let horiz_pad = (s.bounds.1 * 0.12).max(2.0); // 12% of bounds height or at least 2px
+
             let bounds = TextBounds {
-                // Use screen_position as the left/top of the TextArea bounds so clipping aligns with
-                // the text drawing origin. Previously clip_origin was used which could be different
-                // from screen_position and caused glyphs to be clipped unexpectedly (e.g., trailing 'e').
-                left: s.screen_position.0.round() as i32,
+                left: (s.screen_position.0 - horiz_pad).round() as i32,
                 top: s.screen_position.1.round() as i32,
-                right: (s.screen_position.0 + s.bounds.0).round() as i32,
+                right: (s.screen_position.0 + s.bounds.0 + horiz_pad).round() as i32,
                 bottom: (s.screen_position.1 + s.bounds.1).round() as i32,
             };
 
             // デフォルト色は Buffer 内の属性が優先されるため適当で良い
             let default_color = GlyphColor::rgba(0, 0, 0, 255);
 
+            // Align TextArea.left/top with the integer bounds left/top (use float values)
+            // so that glyph positioning and clipping use the same origin. We compute the
+            // float clip origin that corresponds to the rounded bounds above.
+            let clip_left_f = bounds.left as f32;
+            let clip_top_f = bounds.top as f32;
+
             let area = TextArea {
                 buffer: &s.buffer,
-                left: s.screen_position.0,
-                top: s.screen_position.1,
+                left: clip_left_f,
+                top: clip_top_f,
                 scale: 1.0,
                 bounds,
                 default_color,
