@@ -42,7 +42,7 @@ pub enum NodeKind {
     },
     UiPart {
         compoment: Components,
-    }
+    },
 }
 
 // =========================

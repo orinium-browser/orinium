@@ -1,8 +1,8 @@
 //! UIコンポーネントの定義
 
 pub mod button;
-pub use button::Button;
 use crate::engine::renderer_model::DrawCommand;
+pub use button::Button;
 
 /// UIコンポーネントのイベント
 #[derive(Clone, Debug)]
@@ -16,8 +16,7 @@ pub trait DrawCommandEmitter {
 }
 
 /// UIコンポーネント一覧
-#[derive(Clone, Debug)]
-#[derive(PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Components {
     Button,
     Input(InputKind),
@@ -34,8 +33,7 @@ pub enum InputKind {
 }
 
 /// UIコンポーメントの管理
-#[derive(Clone, Debug)]
-#[derive(PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Component {
     pub kind: Components,
 }

@@ -400,7 +400,11 @@ impl GpuRenderer {
                     let height_px = (y2 - y1).max(1.0);
                     let max_dim = width_px.max(height_px);
                     let r_px = radius * sf;
-                    let r_norm = if max_dim > 0.0 { (r_px / max_dim).min(0.5) } else { 0.0 };
+                    let r_norm = if max_dim > 0.0 {
+                        (r_px / max_dim).min(0.5)
+                    } else {
+                        0.0
+                    };
 
                     #[rustfmt::skip]
                     vertices.extend_from_slice(&[

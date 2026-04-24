@@ -81,72 +81,82 @@ impl DrawCommandEmitter for Button {
                 let r = 6.0_f32; // smoother radius
                 let border_thickness = 1.0_f32;
 
-                let rounded_rect = |w: f32, h: f32, radius: f32, segments_per_corner: usize| -> Vec<(f32, f32)> {
-                    use std::f32::consts::PI;
-                    let seg = segments_per_corner.max(1) as f32;
-                    let mut pts: Vec<(f32, f32)> = Vec::new();
+                let rounded_rect =
+                    |w: f32, h: f32, radius: f32, segments_per_corner: usize| -> Vec<(f32, f32)> {
+                        use std::f32::consts::PI;
+                        let seg = segments_per_corner.max(1) as f32;
+                        let mut pts: Vec<(f32, f32)> = Vec::new();
 
-                    // Top-left corner: arc from 180deg to 270deg
-                    let tl_cx = radius;
-                    let tl_cy = radius;
-                    for i in 0..segments_per_corner {
-                        let t = i as f32 / seg;
-                        let angle = PI + t * (PI / 2.0);
-                        pts.push((tl_cx + radius * angle.cos(), tl_cy + radius * angle.sin()));
-                    }
-                    // Top edge between corners
-                    pts.push((w - radius, 0.0));
+                        // Top-left corner: arc from 180deg to 270deg
+                        let tl_cx = radius;
+                        let tl_cy = radius;
+                        for i in 0..segments_per_corner {
+                            let t = i as f32 / seg;
+                            let angle = PI + t * (PI / 2.0);
+                            pts.push((tl_cx + radius * angle.cos(), tl_cy + radius * angle.sin()));
+                        }
+                        // Top edge between corners
+                        pts.push((w - radius, 0.0));
 
-                    // Top-right corner: arc from 270deg to 360deg
-                    let tr_cx = w - radius;
-                    let tr_cy = radius;
-                    for i in 0..segments_per_corner {
-                        let t = i as f32 / seg;
-                        let angle = 3.0 * PI / 2.0 + t * (PI / 2.0);
-                        pts.push((tr_cx + radius * angle.cos(), tr_cy + radius * angle.sin()));
-                    }
-                    // Right edge
-                    pts.push((w, h - radius));
+                        // Top-right corner: arc from 270deg to 360deg
+                        let tr_cx = w - radius;
+                        let tr_cy = radius;
+                        for i in 0..segments_per_corner {
+                            let t = i as f32 / seg;
+                            let angle = 3.0 * PI / 2.0 + t * (PI / 2.0);
+                            pts.push((tr_cx + radius * angle.cos(), tr_cy + radius * angle.sin()));
+                        }
+                        // Right edge
+                        pts.push((w, h - radius));
 
-                    // Bottom-right corner: arc from 0deg to 90deg
-                    let br_cx = w - radius;
-                    let br_cy = h - radius;
-                    for i in 0..segments_per_corner {
-                        let t = i as f32 / seg;
-                        let angle = 0.0 + t * (PI / 2.0);
-                        pts.push((br_cx + radius * angle.cos(), br_cy + radius * angle.sin()));
-                    }
-                    // Bottom edge
-                    pts.push((radius, h));
+                        // Bottom-right corner: arc from 0deg to 90deg
+                        let br_cx = w - radius;
+                        let br_cy = h - radius;
+                        for i in 0..segments_per_corner {
+                            let t = i as f32 / seg;
+                            let angle = 0.0 + t * (PI / 2.0);
+                            pts.push((br_cx + radius * angle.cos(), br_cy + radius * angle.sin()));
+                        }
+                        // Bottom edge
+                        pts.push((radius, h));
 
-                    // Bottom-left corner: arc from 90deg to 180deg
-                    let bl_cx = radius;
-                    let bl_cy = h - radius;
-                    for i in 0..segments_per_corner {
-                        let t = i as f32 / seg;
-                        let angle = PI / 2.0 + t * (PI / 2.0);
-                        pts.push((bl_cx + radius * angle.cos(), bl_cy + radius * angle.sin()));
-                    }
-                    pts
-                };
+                        // Bottom-left corner: arc from 90deg to 180deg
+                        let bl_cx = radius;
+                        let bl_cy = h - radius;
+                        for i in 0..segments_per_corner {
+                            let t = i as f32 / seg;
+                            let angle = PI / 2.0 + t * (PI / 2.0);
+                            pts.push((bl_cx + radius * angle.cos(), bl_cy + radius * angle.sin()));
+                        }
+                        pts
+                    };
 
                 let ow = rect.width;
                 let oh = rect.height;
                 let segments_per_corner = 8;
-                let outer_poly = rounded_rect(ow, oh, r.min(ow * 0.5).min(oh * 0.5), segments_per_corner);
+                let outer_poly =
+                    rounded_rect(ow, oh, r.min(ow * 0.5).min(oh * 0.5), segments_per_corner);
 
                 // inner polygon (fill shape) inset by border_thickness
                 let inset = border_thickness;
                 let iw = (ow - inset * 2.0).max(0.0);
                 let ih = (oh - inset * 2.0).max(0.0);
                 let inner_r = (r - inset).max(0.0);
-                let inner_poly = rounded_rect(iw, ih, inner_r.min(iw * 0.5).min(ih * 0.5), segments_per_corner)
-                    .into_iter()
-                    .map(|(x, y)| (x + inset, y + inset))
-                    .collect::<Vec<_>>();
+                let inner_poly = rounded_rect(
+                    iw,
+                    ih,
+                    inner_r.min(iw * 0.5).min(ih * 0.5),
+                    segments_per_corner,
+                )
+                .into_iter()
+                .map(|(x, y)| (x + inset, y + inset))
+                .collect::<Vec<_>>();
 
                 vec![
-                    DrawCommand::PushTransform { dx: rect.x, dy: rect.y },
+                    DrawCommand::PushTransform {
+                        dx: rect.x,
+                        dy: rect.y,
+                    },
                     // subtle shadow under button
                     DrawCommand::DrawRect {
                         x: 0.0,
@@ -156,7 +166,6 @@ impl DrawCommandEmitter for Button {
                         color: Color(0, 0, 0, 40),
                         radius: r,
                     },
-
                     // border as polygon
                     DrawCommand::DrawPolygon {
                         points: outer_poly.clone(),
@@ -167,7 +176,12 @@ impl DrawCommandEmitter for Button {
                         points: inner_poly.clone(),
                         color: fill_color,
                     },
-                    DrawCommand::PushClip { x: 0.0, y: 0.0, width: ow, height: oh },
+                    DrawCommand::PushClip {
+                        x: 0.0,
+                        y: 0.0,
+                        width: ow,
+                        height: oh,
+                    },
                     DrawCommand::DrawText {
                         x: 0.0,
                         y: (oh - text_style.font_size) / 2.0 - 3.0,
@@ -192,18 +206,31 @@ impl DrawCommandEmitter for Button {
 pub fn find_first_text(info: &crate::engine::layouter::types::InfoNode) -> Option<String> {
     match &info.kind {
         crate::engine::layouter::types::NodeKind::Text { text, .. } => Some(text.clone()),
-        _ => info.children.iter().filter_map(|c| find_first_text(c)).next(),
+        _ => info
+            .children
+            .iter()
+            .filter_map(|c| find_first_text(c))
+            .next(),
     }
 }
 
 fn find_first_text_style(info: &crate::engine::layouter::types::InfoNode) -> Option<TextStyle> {
     match &info.kind {
         crate::engine::layouter::types::NodeKind::Text { style, .. } => Some(*style),
-        _ => info.children.iter().filter_map(|c| find_first_text_style(c)).next(),
+        _ => info
+            .children
+            .iter()
+            .filter_map(|c| find_first_text_style(c))
+            .next(),
     }
 }
 
-pub fn draw_from_layout(layout: &LayoutNode, info: &crate::engine::layouter::types::InfoNode, pointer_pos: Option<(f32, f32)>, pointer_down_pos: Option<(f32, f32)>) -> Vec<DrawCommand> {
+pub fn draw_from_layout(
+    layout: &LayoutNode,
+    info: &crate::engine::layouter::types::InfoNode,
+    pointer_pos: Option<(f32, f32)>,
+    pointer_down_pos: Option<(f32, f32)>,
+) -> Vec<DrawCommand> {
     let default_font_size = 14.0;
 
     layout
@@ -228,19 +255,29 @@ pub fn draw_from_layout(layout: &LayoutNode, info: &crate::engine::layouter::typ
 
             // determine hover state from pointer_pos (pointer_pos in logical coords)
             let hovered = if let Some((px, py)) = pointer_pos {
-                px >= outer.x && px <= outer.x + outer.width && py >= outer.y && py <= outer.y + outer.height
+                px >= outer.x
+                    && px <= outer.x + outer.width
+                    && py >= outer.y
+                    && py <= outer.y + outer.height
             } else {
                 false
             };
 
             // determine active (pressed) state from pointer_down_pos
             let active = if let Some((dx, dy)) = pointer_down_pos {
-                dx >= outer.x && dx <= outer.x + outer.width && dy >= outer.y && dy <= outer.y + outer.height
+                dx >= outer.x
+                    && dx <= outer.x + outer.width
+                    && dy >= outer.y
+                    && dy <= outer.y + outer.height
             } else {
                 false
             };
 
-            let border_col = if hovered { Color(175, 175, 175, 255) } else { Color(200, 200, 200, 255) };
+            let border_col = if hovered {
+                Color(175, 175, 175, 255)
+            } else {
+                Color(200, 200, 200, 255)
+            };
             let fill_col = if active {
                 // slightly lighter active color for DOM buttons
                 Color(180, 180, 180, 255)
@@ -281,8 +318,10 @@ pub fn draw_from_layout(layout: &LayoutNode, info: &crate::engine::layouter::typ
             ];
 
             vec![
-                DrawCommand::PushTransform { dx: outer.x, dy: outer.y },
-
+                DrawCommand::PushTransform {
+                    dx: outer.x,
+                    dy: outer.y,
+                },
                 DrawCommand::DrawRect {
                     x: 0.0,
                     y: 1.0,
@@ -291,11 +330,20 @@ pub fn draw_from_layout(layout: &LayoutNode, info: &crate::engine::layouter::typ
                     color: Color(0, 0, 0, 40),
                     radius: r,
                 },
-
-                DrawCommand::DrawPolygon { points: outer_poly.clone(), color: border_col },
-                DrawCommand::DrawPolygon { points: inner_poly.clone(), color: fill_col },
-
-                DrawCommand::PushClip { x: clip_x_rel, y: clip_y_rel, width: content.width, height: content.height },
+                DrawCommand::DrawPolygon {
+                    points: outer_poly.clone(),
+                    color: border_col,
+                },
+                DrawCommand::DrawPolygon {
+                    points: inner_poly.clone(),
+                    color: fill_col,
+                },
+                DrawCommand::PushClip {
+                    x: clip_x_rel,
+                    y: clip_y_rel,
+                    width: content.width,
+                    height: content.height,
+                },
                 DrawCommand::DrawText {
                     x: clip_x_rel,
                     y: text_y,
@@ -317,5 +365,9 @@ pub fn draw_from_layout(layout: &LayoutNode, info: &crate::engine::layouter::typ
 }
 
 pub fn handle_pointer_down(x: f32, y: f32) {
-    log::info!("HTML <button> component handled PointerDown at ({}, {})", x, y);
+    log::info!(
+        "HTML <button> component handled PointerDown at ({}, {})",
+        x,
+        y
+    );
 }

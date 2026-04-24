@@ -46,7 +46,12 @@ pub enum DrawCommand {
 }
 
 /// LayoutNode + InfoNode → DrawCommand
-pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode, pointer_pos: Option<(f32, f32)>, pointer_down_pos: Option<(f32, f32)>) -> Vec<DrawCommand> {
+pub fn generate_draw_commands(
+    layout: &LayoutNode,
+    info: &InfoNode,
+    pointer_pos: Option<(f32, f32)>,
+    pointer_down_pos: Option<(f32, f32)>,
+) -> Vec<DrawCommand> {
     let mut commands = Vec::new();
 
     match &info.kind {
@@ -188,7 +193,12 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode, pointer_pos:
         }
         NodeKind::UiPart { compoment } => match compoment {
             Components::Button => {
-                commands.extend(compoments::button::draw_from_layout(layout, info, pointer_pos, pointer_down_pos));
+                commands.extend(compoments::button::draw_from_layout(
+                    layout,
+                    info,
+                    pointer_pos,
+                    pointer_down_pos,
+                ));
             }
             _ => {}
         },
@@ -199,7 +209,12 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode, pointer_pos:
     // representation (including any text). Recursing would double-draw text.
     if !matches!(info.kind, NodeKind::UiPart { .. }) {
         for (child_layout, child_info) in layout.children.iter().zip(&info.children) {
-            commands.extend(generate_draw_commands(child_layout, child_info, pointer_pos, pointer_down_pos));
+            commands.extend(generate_draw_commands(
+                child_layout,
+                child_info,
+                pointer_pos,
+                pointer_down_pos,
+            ));
         }
     }
 

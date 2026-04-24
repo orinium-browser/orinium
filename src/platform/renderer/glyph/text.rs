@@ -5,9 +5,9 @@ use std::{env, sync::Arc};
 use crate::engine::layouter::types::{FontStyle, TextAlign, TextStyle};
 use crate::platform::font;
 use glyphon::{
-    cosmic_text::Align, fontdb, Attrs, Buffer, Cache, Color as GlyphColor, FontSystem, Metrics,
-    PrepareError, Resolution, Shaping, Style, SwashCache, TextArea, TextAtlas,
-    TextBounds, TextRenderer as TextBrush, Viewport, Weight,
+    Attrs, Buffer, Cache, Color as GlyphColor, FontSystem, Metrics, PrepareError, Resolution,
+    Shaping, Style, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer as TextBrush,
+    Viewport, Weight, cosmic_text::Align, fontdb,
 };
 
 /// テキストセクション位置・クリップ・描画するBufferをまとめた構造体

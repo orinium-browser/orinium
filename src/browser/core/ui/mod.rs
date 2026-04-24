@@ -30,7 +30,10 @@ impl BrowserUi {
     }
 
     pub fn draw_commands(&self) -> Vec<DrawCommand> {
-        self.buttons.iter().flat_map(|button| button.draw_commands()).collect()
+        self.buttons
+            .iter()
+            .flat_map(|button| button.draw_commands())
+            .collect()
     }
 
     pub fn hit_button_index(&self, x: f32, y: f32) -> Option<usize> {
@@ -45,7 +48,10 @@ impl BrowserUi {
         let handled = button.on_event(ComponentEvent::PointerDown { x, y });
         if handled {
             self.focused = Some(button_index);
-            self.buttons.iter_mut().enumerate().for_each(|(i, b)| b.focused = i == button_index);
+            self.buttons
+                .iter_mut()
+                .enumerate()
+                .for_each(|(i, b)| b.focused = i == button_index);
         }
         handled
     }
@@ -58,12 +64,23 @@ impl BrowserUi {
         let handled = button.on_event(ComponentEvent::PointerUp { x, y });
         if handled {
             // clear focus and active state if desired; keep focused for keyboard focus
-            self.buttons.iter_mut().enumerate().for_each(|(i, b)| b.focused = i == self.focused.unwrap_or(usize::MAX));
+            self.buttons
+                .iter_mut()
+                .enumerate()
+                .for_each(|(i, b)| b.focused = i == self.focused.unwrap_or(usize::MAX));
         }
         handled
     }
 
-    pub fn add_button(&mut self, id: impl Into<String>, label: impl Into<String>, x: f32, y: f32, width: f32, height: f32) {
+    pub fn add_button(
+        &mut self,
+        id: impl Into<String>,
+        label: impl Into<String>,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) {
         let layout = create_button_layout(x, y, width, height);
         let btn = Button::new(id.into(), label.into(), layout);
         self.buttons.push(btn);
@@ -79,7 +96,10 @@ impl BrowserUi {
             None => 0,
         };
         self.focused = Some(next);
-        self.buttons.iter_mut().enumerate().for_each(|(i, b)| b.focused = i == next);
+        self.buttons
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, b)| b.focused = i == next);
     }
 
     pub fn activate_focused(&mut self) {
@@ -97,7 +117,6 @@ impl BrowserUi {
         }
     }
 }
-
 
 fn create_button_layout(x: f32, y: f32, width: f32, height: f32) -> LayoutNode {
     let mut style = Style::default();

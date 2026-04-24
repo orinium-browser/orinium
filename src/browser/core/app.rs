@@ -264,7 +264,10 @@ impl BrowserApp {
 
     /// Rebuilds the render tree for the active tab and generates draw commands.
     fn rebuild_render_tree(&mut self) {
-        let pointer_pos = Some((self.input.mouse_position.0 as f32 / self.render.scale_factor as f32, self.input.mouse_position.1 as f32 / self.render.scale_factor as f32));
+        let pointer_pos = Some((
+            self.input.mouse_position.0 as f32 / self.render.scale_factor as f32,
+            self.input.mouse_position.1 as f32 / self.render.scale_factor as f32,
+        ));
         // copy transient pointer_down so we don't hold &mut self while generating commands
         let last_pointer_down = self.last_pointer_down;
 
@@ -289,7 +292,12 @@ impl BrowserApp {
 
             let title = tab.title();
 
-            let mut draw_commands = renderer_model::generate_draw_commands(layout, info, pointer_pos, last_pointer_down);
+            let mut draw_commands = renderer_model::generate_draw_commands(
+                layout,
+                info,
+                pointer_pos,
+                last_pointer_down,
+            );
             draw_commands.extend(self.ui.draw_commands());
 
             (title, draw_commands)
@@ -372,7 +380,11 @@ impl BrowserApp {
     }
 
     /// Handles mouse input events, mainly left-clicks for the active tab.
-    fn handle_mouse_input(&mut self, state: winit::event::ElementState, button: winit::event::MouseButton) -> BrowserCommand {
+    fn handle_mouse_input(
+        &mut self,
+        state: winit::event::ElementState,
+        button: winit::event::MouseButton,
+    ) -> BrowserCommand {
         if button != winit::event::MouseButton::Left {
             return BrowserCommand::None;
         }
@@ -532,7 +544,15 @@ impl BrowserApp {
     }
 
     /// Adds a UI button programmatically to the browser UI.
-    pub fn add_ui_button(&mut self, id: impl Into<String>, label: impl Into<String>, x: f32, y: f32, width: f32, height: f32) {
+    pub fn add_ui_button(
+        &mut self,
+        id: impl Into<String>,
+        label: impl Into<String>,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) {
         self.ui.add_button(id, label, x, y, width, height);
     }
 

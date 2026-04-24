@@ -157,7 +157,9 @@ pub fn build_layout_and_info(
                 href: href.to_string(),
             },
         }
-    } else if let Some(name) = html_node.tag_name() && name == "button" {
+    } else if let Some(name) = html_node.tag_name()
+        && name == "button"
+    {
         // Map <button> to a UiPart so components can render and handle events
         NodeKind::UiPart {
             compoment: Components::Button,
