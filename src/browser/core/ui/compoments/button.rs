@@ -130,8 +130,6 @@ pub fn draw_from_layout(layout: &LayoutNode, info: &crate::engine::layouter::typ
         .layout_boxes
         .iter()
         .flat_map(|box_model| {
-            // Use padding_box as the outer drawing origin, but derive the content area from ui_layout so
-            // text is laid out and clipped precisely inside the content_box (respecting padding/border).
             let outer = box_model.padding_box;
             let content = box_model.content_box;
             let label = find_first_text(info).unwrap_or_else(|| "".to_string());
@@ -141,7 +139,7 @@ pub fn draw_from_layout(layout: &LayoutNode, info: &crate::engine::layouter::typ
             });
             let font_size = text_style.font_size.max(10.0);
 
-            // clip coordinates relative to the transform origin (outer.x/outer.y)
+            // clip coordinates relative to the transform origin
             let clip_x_rel = content.x - outer.x;
             let clip_y_rel = content.y - outer.y;
 
@@ -174,11 +172,9 @@ pub fn draw_from_layout(layout: &LayoutNode, info: &crate::engine::layouter::typ
                     height: outer.height + 2.0,
                     color: Color(200, 200, 200, 255),
                 },
-                // clip to content box and draw text inside
+
                 DrawCommand::PushClip { x: clip_x_rel, y: clip_y_rel, width: content.width, height: content.height },
                 DrawCommand::DrawText {
-                    // x is relative to current transform origin; use clip_x_rel so that the text's layout
-                    // origin aligns with the content box's left edge (so center alignment centers inside content)
                     x: clip_x_rel,
                     y: text_y,
                     text: label.clone(),

@@ -354,20 +354,30 @@ impl BrowserApp {
             return BrowserCommand::None;
         }
 
+        // Log mouse click for debugging hit-testing
         let (x, y) = self.input.mouse_position;
         let sf = self.render.scale_factor;
         let click_x = (x / sf) as f32;
         let click_y = (y / sf) as f32;
+        log::debug!(target: "BrowserApp::input", "MouseInput: raw=({:.1},{:.1}) sf={} -> logical=({:.2},{:.2})", x, y, sf, click_x, click_y);
 
+        // First check programmatic UI buttons
         if let Some(button_index) = self.ui.hit_button_index(click_x, click_y) {
-            let _ = self.ui.notify_pointer_down(button_index, click_x, click_y);
+            log::debug!(target: "BrowserApp::input", "Hit UI button index={}", button_index);
+            let handled = self.ui.notify_pointer_down(button_index, click_x, click_y);
+            log::debug!(target: "BrowserApp::input", "UI button handled={}", handled);
             return BrowserCommand::RequestRedraw;
+        } else {
+            log::debug!(target: "BrowserApp::input", "No UI button hit at ({:.2},{:.2})", click_x, click_y);
         }
 
+        // Fallback: dispatch to page/tab
         if let Some(tab) = self.active_tab_mut() {
+            log::debug!(target: "BrowserApp::input", "Dispatching click to active tab at ({:.2},{:.2})", click_x, click_y);
             Self::handle_mouse_click(tab, click_x, click_y);
             BrowserCommand::RequestRedraw
         } else {
+            log::debug!(target: "BrowserApp::input", "No active tab to dispatch click");
             BrowserCommand::None
         }
     }
@@ -407,8 +417,16 @@ impl BrowserApp {
     pub fn handle_mouse_click(tab: &mut Tab, x: f32, y: f32) {
         let hit_path = match tab.layout_and_info() {
             Some((layout, info)) => crate::engine::input::hit_test(layout, info, x, y),
-            None => return,
+            None => {
+                log::debug!(target: "BrowserApp::input", "handle_mouse_click: no layout/info available");
+                return;
+            }
         };
+
+        log::debug!(target: "BrowserApp::input", "handle_mouse_click: hit_path length = {}", hit_path.len());
+        for (i, item) in hit_path.iter().enumerate() {
+            log::debug!(target: "BrowserApp::input", "hit_path[{}] kind={:?}", i, item.info.kind);
+        }
 
         if hit_path.iter().any(|e| {
             matches!(
@@ -418,6 +436,7 @@ impl BrowserApp {
                 } if matches!(compoment, Components::Button)
             )
         }) {
+            log::debug!(target: "BrowserApp::input", "Hit a UiPart(Button) in hit_path - invoking component handler");
             compoments::button::handle_pointer_down(x, y);
             return;
         }
@@ -443,6 +462,7 @@ impl BrowserApp {
         };
 
         if let Some(href) = href_opt {
+            log::debug!(target: "BrowserApp::input", "Hit a link role - navigating to {}", href);
             tab.move_to(&href)
         }
     }
