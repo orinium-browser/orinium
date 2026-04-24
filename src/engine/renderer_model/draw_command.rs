@@ -45,7 +45,7 @@ pub enum DrawCommand {
 }
 
 /// LayoutNode + InfoNode → DrawCommand
-pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawCommand> {
+pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode, pointer_pos: Option<(f32, f32)>) -> Vec<DrawCommand> {
     let mut commands = Vec::new();
 
     match &info.kind {
@@ -181,7 +181,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
         }
         NodeKind::UiPart { compoment } => match compoment {
             Components::Button => {
-                commands.extend(compoments::button::draw_from_layout(layout, info));
+                commands.extend(compoments::button::draw_from_layout(layout, info, pointer_pos));
             }
             _ => {}
         },
@@ -192,7 +192,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
     // representation (including any text). Recursing would double-draw text.
     if !matches!(info.kind, NodeKind::UiPart { .. }) {
         for (child_layout, child_info) in layout.children.iter().zip(&info.children) {
-            commands.extend(generate_draw_commands(child_layout, child_info));
+            commands.extend(generate_draw_commands(child_layout, child_info, pointer_pos));
         }
     }
 

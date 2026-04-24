@@ -123,7 +123,7 @@ fn find_first_text_style(info: &crate::engine::layouter::types::InfoNode) -> Opt
     }
 }
 
-pub fn draw_from_layout(layout: &LayoutNode, info: &crate::engine::layouter::types::InfoNode) -> Vec<DrawCommand> {
+pub fn draw_from_layout(layout: &LayoutNode, info: &crate::engine::layouter::types::InfoNode, pointer_pos: Option<(f32, f32)>) -> Vec<DrawCommand> {
     let default_font_size = 14.0;
 
     layout
@@ -146,6 +146,17 @@ pub fn draw_from_layout(layout: &LayoutNode, info: &crate::engine::layouter::typ
             // center text vertically inside content box
             let text_y = clip_y_rel + (content.height - font_size) / 2.0;
 
+            // determine hover state from pointer_pos (pointer_pos in logical coords)
+            let hovered = if let Some((px, py)) = pointer_pos {
+                px >= outer.x && px <= outer.x + outer.width && py >= outer.y && py <= outer.y + outer.height
+            } else {
+                false
+            };
+
+            // colors
+            let border_col = if hovered { Color(150, 160, 180, 255) } else { Color(200, 200, 200, 255) };
+            let fill_col = if hovered { Color(240, 246, 255, 255) } else { Color(255, 255, 255, 255) };
+
             vec![
                 DrawCommand::PushTransform { dx: outer.x, dy: outer.y },
 
@@ -162,7 +173,7 @@ pub fn draw_from_layout(layout: &LayoutNode, info: &crate::engine::layouter::typ
                     y: 0.0,
                     width: outer.width,
                     height: outer.height,
-                    color: Color(255, 255, 255, 255),
+                    color: fill_col,
                 },
                 // border (drawn after fill so it appears on top)
                 DrawCommand::DrawRect {
@@ -170,7 +181,7 @@ pub fn draw_from_layout(layout: &LayoutNode, info: &crate::engine::layouter::typ
                     y: -1.0,
                     width: outer.width + 2.0,
                     height: outer.height + 2.0,
-                    color: Color(200, 200, 200, 255),
+                    color: border_col,
                 },
 
                 DrawCommand::PushClip { x: clip_x_rel, y: clip_y_rel, width: content.width, height: content.height },

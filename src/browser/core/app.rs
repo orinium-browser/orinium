@@ -261,6 +261,8 @@ impl BrowserApp {
 
     /// Rebuilds the render tree for the active tab and generates draw commands.
     fn rebuild_render_tree(&mut self) {
+        let pointer_pos = Some((self.input.mouse_position.0 as f32 / self.render.scale_factor as f32, self.input.mouse_position.1 as f32 / self.render.scale_factor as f32));
+
         let (title, draw_commands) = {
             let sf = self.render.scale_factor as f32;
             let viewport = (
@@ -281,7 +283,8 @@ impl BrowserApp {
             };
 
             let title = tab.title();
-            let mut draw_commands = renderer_model::generate_draw_commands(layout, info);
+
+            let mut draw_commands = renderer_model::generate_draw_commands(layout, info, pointer_pos);
             draw_commands.extend(self.ui.draw_commands());
 
             (title, draw_commands)
@@ -329,7 +332,22 @@ impl BrowserApp {
 
             WindowEvent::CursorMoved { position, .. } => {
                 self.input.mouse_position = (position.x, position.y);
-                BrowserCommand::None
+
+                let sf = self.render.scale_factor;
+                let lx = (position.x / sf) as f32;
+                let ly = (position.y / sf) as f32;
+
+                let prev_hover = self.ui.buttons.iter().position(|b| b.hovered);
+                let new_hover = self.ui.hit_button_index(lx, ly);
+
+                if prev_hover != new_hover {
+                    self.ui.buttons.iter_mut().enumerate().for_each(|(i, b)| {
+                        b.hovered = new_hover.map_or(false, |idx| idx == i);
+                    });
+                    BrowserCommand::RequestRedraw
+                } else {
+                    BrowserCommand::None
+                }
             }
 
             WindowEvent::MouseInput { button, .. } => self.handle_mouse_input(button),

@@ -29,7 +29,7 @@ fn main() -> Result<()> {
         bail!("no UiPart(Button) node exists in info tree");
     }
 
-    let page_commands = generate_draw_commands(layout, info);
+    let page_commands = generate_draw_commands(layout, info, None);
 
     let Some((cx, cy)) = find_button_center(layout, info) else {
         bail!("UiPart(Button) exists but has no layout box after relayout");
