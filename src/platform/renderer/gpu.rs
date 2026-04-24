@@ -412,13 +412,17 @@ impl GpuRenderer {
 
                     let clip = current_clip(&clip_stack);
 
-                    let tw = if (tdx + x + max_width) < (clip.x + clip.w) {
-                        (tdx + x + max_width) - clip.x
-                    } else {
-                        clip.w
-                    };
+                    // Absolute text origin in layout coords
+                    let text_x = tdx + x;
+                    let text_y = tdy + y;
 
-                    let th = clip.h;
+                    // Available width/height inside current clip from text origin
+                    let available_w = (clip.x + clip.w) - text_x;
+                    let available_h = (clip.y + clip.h) - text_y;
+
+                    // Use provided max_width as requested buffer width; ensure non-negative and not larger than available
+                    let tw = max_width.max(0.0).min(available_w.max(0.0));
+                    let th = available_h.max(0.0);
 
                     let font_size = &style.font_size;
 
@@ -426,21 +430,22 @@ impl GpuRenderer {
                     let mut skip_text = false;
                     if self.enable_text_culling {
                         // compute screen-space bbox
-                        let sx1 = (x + tdx) * sf;
-                        let sy1 = (y + tdy) * sf;
-                        // if width/height are zero or NaN, estimate from font size and line count
+                        let sx1 = text_x * sf;
+                        let sy1 = text_y * sf;
+
+                        // estimate width/height to check against clip
                         let est_w = if !tw.is_finite() || tw <= 0.0 {
-                            // fall back: estimate width as font_size * 10.0 * approximate_chars
+                            // fall back: estimate width from font size and character count
                             (*font_size * sf) * (text.len().max(1) as f32) * 0.5
                         } else {
                             tw * sf
                         };
                         let est_h = if !th.is_finite() || th <= 0.0 {
-                            // estimate height as font_size * 1.2 * lines
                             (*font_size * sf) * 1.2 * (text.lines().count() as f32).max(1.0)
                         } else {
                             th * sf
                         };
+
                         let sx2 = sx1 + est_w;
                         let sy2 = sy1 + est_h;
 
@@ -461,13 +466,34 @@ impl GpuRenderer {
                     // Use TextRenderer helper to create a Buffer with correct FontSystem handling
                     let section = if let Some(tr) = &mut self.text_renderer {
                         let mut render_text_style = *style;
+                        // render_text_style.font_size is in screen pixels
                         render_text_style.font_size = *font_size * sf;
                         let buffer = tr.create_buffer_for_text(text, render_text_style);
 
+                        // Ensure the text bounds are large enough to contain ascenders/descenders.
+                        // Use a minimum height based on font size and the line-height multiplier (1.2 used in TextRenderer).
+                        let min_text_h_px = (*font_size * sf) * 1.2;
+                        let mut bounds_h = th * sf;
+                        if bounds_h < min_text_h_px {
+                            bounds_h = min_text_h_px + 2.0; // small padding to be safe
+                        }
+
+                        // For width, keep the computed tw but ensure at least some minimal width to avoid zero-sized bounds
+                        let mut bounds_w = tw * sf;
+                        if bounds_w < 1.0 {
+                            bounds_w = (*font_size * sf) * 0.5;
+                        }
+
+                        // Compute an upward padding for the clip so ascenders are not clipped at the top.
+                        // Do NOT modify the screen_position; instead expand the clip origin upward and increase bounds height.
+                        let ascent_pad_px = (*font_size * sf) * 0.25; // 25% of font size as safety margin
+                        let clip_origin_y = (clip.y * sf - ascent_pad_px).max(0.0);
+                        let bounds_h = bounds_h + ascent_pad_px;
+
                         TextSection {
-                            screen_position: ((*x + tdx) * sf, (*y + tdy) * sf),
-                            clip_origin: (clip.x * sf, clip.y * sf),
-                            bounds: (tw * sf, th * sf),
+                            screen_position: (text_x * sf, text_y * sf),
+                            clip_origin: (clip.x * sf, clip_origin_y),
+                            bounds: (bounds_w, bounds_h),
                             buffer,
                         }
                     } else {

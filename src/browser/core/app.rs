@@ -36,7 +36,7 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use url::Url;
-use winit::event::{WindowEvent, ElementState};
+use winit::event::WindowEvent;
 
 use super::tab::{FetchKind, Tab, TabTask};
 use super::ui::compoments::{self, Components};

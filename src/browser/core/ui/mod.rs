@@ -13,33 +13,22 @@ pub struct BrowserUi {
     pub focused: Option<usize>,
 }
 
-pub fn init_browser_ui(window_size: (u32, u32)) -> BrowserUi {
-    let mut ui = BrowserUi {
+pub fn init_browser_ui(_window_size: (u32, u32)) -> BrowserUi {
+    BrowserUi {
         buttons: Vec::new(),
         focused: None,
-    };
-    let button = Button::new(
-        "default",
-        "Click",
-        create_button_layout(window_size.0 as f32 - 140.0, 16.0, 120.0, 36.0),
-    );
-    ui.buttons.push(button);
-    ui
+    }
 }
 
 impl BrowserUi {
     pub fn relayout(&mut self, viewport: (f32, f32)) {
-        for button in &mut self.buttons {
+        self.buttons.iter_mut().for_each(|button| {
             LayoutEngine::layout(&mut button.layout, viewport.0, viewport.1);
-        }
+        });
     }
 
     pub fn draw_commands(&self) -> Vec<DrawCommand> {
-        let mut commands = Vec::new();
-        for button in &self.buttons {
-            commands.extend(button.draw_commands());
-        }
-        commands
+        self.buttons.iter().flat_map(|button| button.draw_commands()).collect()
     }
 
     pub fn hit_button_index(&self, x: f32, y: f32) -> Option<usize> {
@@ -54,9 +43,7 @@ impl BrowserUi {
         let handled = button.on_event(ComponentEvent::PointerDown { x, y });
         if handled {
             self.focused = Some(button_index);
-            for (i, b) in self.buttons.iter_mut().enumerate() {
-                b.focused = i == button_index;
-            }
+            self.buttons.iter_mut().enumerate().for_each(|(i, b)| b.focused = i == button_index);
         }
         handled
     }
@@ -77,20 +64,20 @@ impl BrowserUi {
             None => 0,
         };
         self.focused = Some(next);
-        for (i, b) in self.buttons.iter_mut().enumerate() {
-            b.focused = i == next;
-        }
+        self.buttons.iter_mut().enumerate().for_each(|(i, b)| b.focused = i == next);
     }
 
     pub fn activate_focused(&mut self) {
         if let Some(idx) = self.focused {
-            if let Some(b) = self.buttons.get(idx) {
-                if let Some(box_model) = b.layout.layout_boxes.get(0) {
-                    let rect = box_model.padding_box;
-                    let cx = rect.x + rect.width / 2.0;
-                    let cy = rect.y + rect.height / 2.0;
-                    let _ = self.notify_pointer_down(idx, cx, cy);
-                }
+            // extract rect coordinates without holding an immutable borrow across a mutable call
+            if let Some(rect) = self
+                .buttons
+                .get(idx)
+                .and_then(|b| b.layout.layout_boxes.iter().next().map(|bm| bm.padding_box))
+            {
+                let cx = rect.x + rect.width / 2.0;
+                let cy = rect.y + rect.height / 2.0;
+                let _ = self.notify_pointer_down(idx, cx, cy);
             }
         }
     }

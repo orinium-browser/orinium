@@ -3,7 +3,7 @@ use crate::engine::layouter::types::{Color, FontWeight, TextStyle};
 use crate::engine::renderer_model::DrawCommand;
 use ui_layout::LayoutNode;
 
-/// ボタンコンポーネントの定義
+/// Button
 #[derive(Debug)]
 pub struct Button {
     pub id: String,
@@ -52,63 +52,137 @@ impl DrawCommandEmitter for Button {
             color: Color(255, 255, 255, 255),
             ..Default::default()
         };
-        let mut commands = Vec::new();
 
-        for box_model in &self.layout.layout_boxes {
-            let rect = box_model.padding_box;
-            // border
-            let border_color = if self.focused {
-                Color(255, 200, 0, 255)
-            } else {
-                Color(10, 10, 10, 255)
-            };
-            commands.push(DrawCommand::DrawRect {
-                x: rect.x - 2.0,
-                y: rect.y - 2.0,
-                width: rect.width + 4.0,
-                height: rect.height + 4.0,
-                color: border_color,
-            });
-            let fill_color = if self.active {
-                Color(20, 90, 200, 255)
-            } else if self.hovered {
-                Color(60, 140, 255, 255)
-            } else {
-                Color(40, 120, 240, 255)
-            };
-            commands.push(DrawCommand::DrawRect {
-                x: rect.x,
-                y: rect.y,
-                width: rect.width,
-                height: rect.height,
-                color: fill_color,
-            });
-            commands.push(DrawCommand::DrawText {
-                x: rect.x + rect.width / 2.0,
-                y: rect.y + rect.height / 2.0 - 8.0,
-                text: self.label.clone(),
-                style: text_style,
-                max_width: rect.width - 16.0,
-            });
-        }
+        self.layout
+            .layout_boxes
+            .iter()
+            .flat_map(|box_model| {
+                let rect = box_model.padding_box;
+                let border_color = if self.focused {
+                    Color(20, 20, 20, 255)
+                } else {
+                    Color(10, 10, 10, 255)
+                };
+                let fill_color = if self.active {
+                    Color(20, 90, 200, 255)
+                } else if self.hovered {
+                    Color(60, 140, 255, 255)
+                } else {
+                    Color(40, 120, 240, 255)
+                };
 
-        commands
+                vec![
+                    DrawCommand::PushTransform { dx: rect.x, dy: rect.y },
+                    DrawCommand::DrawRect {
+                        x: -2.0,
+                        y: -2.0,
+                        width: rect.width + 4.0,
+                        height: rect.height + 4.0,
+                        color: border_color,
+                    },
+                    DrawCommand::DrawRect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: rect.width,
+                        height: rect.height,
+                        color: fill_color,
+                    },
+                    DrawCommand::PushClip { x: 0.0, y: 0.0, width: rect.width, height: rect.height },
+                    DrawCommand::DrawText {
+                        x: 0.0,
+                        y: (rect.height - text_style.font_size) / 2.0 - 3.0,
+                        text: self.label.clone(),
+                        style: TextStyle {
+                            font_size: text_style.font_size,
+                            font_weight: text_style.font_weight,
+                            color: text_style.color,
+                            text_align: crate::engine::layouter::types::TextAlign::Center,
+                            ..Default::default()
+                        },
+                        max_width: rect.width * 2.0,
+                    },
+                    DrawCommand::PopClip,
+                    DrawCommand::PopTransform,
+                ]
+            })
+            .collect()
     }
 }
 
-pub fn draw_from_layout(layout: &LayoutNode) -> Vec<DrawCommand> {
+pub fn find_first_text(info: &crate::engine::layouter::types::InfoNode) -> Option<String> {
+    match &info.kind {
+        crate::engine::layouter::types::NodeKind::Text { text, .. } => Some(text.clone()),
+        _ => info.children.iter().filter_map(|c| find_first_text(c)).next(),
+    }
+}
+
+fn find_first_text_style(info: &crate::engine::layouter::types::InfoNode) -> Option<TextStyle> {
+    match &info.kind {
+        crate::engine::layouter::types::NodeKind::Text { style, .. } => Some(*style),
+        _ => info.children.iter().filter_map(|c| find_first_text_style(c)).next(),
+    }
+}
+
+pub fn draw_from_layout(layout: &LayoutNode, info: &crate::engine::layouter::types::InfoNode) -> Vec<DrawCommand> {
+    let default_font_size = 14.0;
+
     layout
         .layout_boxes
         .iter()
-        .map(|box_model| {
+        .flat_map(|box_model| {
             let rect = box_model.padding_box;
-            DrawCommand::DrawRect {
-                x: rect.x,
-                y: rect.y,
-                width: rect.width,
-                height: rect.height,
-                color: Color(230, 230, 230, 255),
-            }
+            let label = find_first_text(info).unwrap_or_else(|| "".to_string());
+            let text_style = find_first_text_style(info).unwrap_or(TextStyle {
+                font_size: default_font_size,
+                ..Default::default()
+            });
+            let font_size = text_style.font_size.max(10.0);
+
+
+            vec![
+                DrawCommand::PushTransform { dx: rect.x, dy: rect.y },
+
+                DrawCommand::DrawRect {
+                    x: 0.0,
+                    y: 1.0,
+                    width: rect.width,
+                    height: rect.height,
+                    color: Color(0, 0, 0, 40),
+                },
+                // fill
+                DrawCommand::DrawRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: rect.width,
+                    height: rect.height,
+                    color: Color(255, 255, 255, 255),
+                },
+                // border (drawn after fill so it appears on top)
+                DrawCommand::DrawRect {
+                    x: -1.0,
+                    y: -1.0,
+                    width: rect.width + 2.0,
+                    height: rect.height + 2.0,
+                    color: Color(200, 200, 200, 255),
+                },
+                // clip to content box and draw text inside
+                DrawCommand::PushClip { x: 0.0, y: 0.0, width: rect.width, height: rect.height },
+                DrawCommand::DrawText {
+                    x: 0.0,
+                    y: (rect.height - font_size) / 2.0 - 2.0,
+                    text: label.clone(),
+                    style: TextStyle {
+                        font_size,
+                        font_weight: FontWeight::BOLD,
+                        color: Color(30, 30, 30, 255),
+                        text_align: crate::engine::layouter::types::TextAlign::Center,
+                        ..Default::default()
+                    },
+                    max_width: rect.width,
+                },
+                DrawCommand::PopClip,
+                DrawCommand::PopTransform,
+            ]
         })
         .collect()
 }

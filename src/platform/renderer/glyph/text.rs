@@ -145,10 +145,13 @@ impl TextRenderer {
 
         for s in sections.iter() {
             let bounds = TextBounds {
-                left: s.clip_origin.0.round() as i32,
-                top: s.clip_origin.1.round() as i32,
-                right: (s.clip_origin.0 + s.bounds.0).round() as i32,
-                bottom: (s.clip_origin.1 + s.bounds.1).round() as i32,
+                // Use screen_position as the left/top of the TextArea bounds so clipping aligns with
+                // the text drawing origin. Previously clip_origin was used which could be different
+                // from screen_position and caused glyphs to be clipped unexpectedly (e.g., trailing 'e').
+                left: s.screen_position.0.round() as i32,
+                top: s.screen_position.1.round() as i32,
+                right: (s.screen_position.0 + s.bounds.0).round() as i32,
+                bottom: (s.screen_position.1 + s.bounds.1).round() as i32,
             };
 
             // デフォルト色は Buffer 内の属性が優先されるため適当で良い

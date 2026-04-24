@@ -22,6 +22,7 @@ use super::types::{
     BorderStyle, Color, ContainerRole, ContainerStyle, FontStyle, FontWeight, InfoNode,
     MeasureCache, NodeKind, TextAlign, TextDecoration, TextStyle,
 };
+use crate::browser::core::ui::compoments::Components;
 
 /// Builds a layout tree (`LayoutNode`) and a render info tree (`InfoNode`) from the DOM.
 ///
@@ -155,6 +156,11 @@ pub fn build_layout_and_info(
             role: ContainerRole::Link {
                 href: href.to_string(),
             },
+        }
+    } else if let Some(name) = html_node.tag_name() && name == "button" {
+        // Map <button> to a UiPart so components can render and handle events
+        NodeKind::UiPart {
+            compoment: Components::Button,
         }
     } else {
         NodeKind::Container {

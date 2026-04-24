@@ -181,14 +181,19 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
         }
         NodeKind::UiPart { compoment } => match compoment {
             Components::Button => {
-                commands.extend(compoments::button::draw_from_layout(layout));
+                commands.extend(compoments::button::draw_from_layout(layout, info));
             }
             _ => {}
         },
     }
 
-    for (child_layout, child_info) in layout.children.iter().zip(&info.children) {
-        commands.extend(generate_draw_commands(child_layout, child_info));
+    // For UiPart nodes we intentionally do NOT recurse into children because
+    // the component renderer takes responsibility for drawing the visual
+    // representation (including any text). Recursing would double-draw text.
+    if !matches!(info.kind, NodeKind::UiPart { .. }) {
+        for (child_layout, child_info) in layout.children.iter().zip(&info.children) {
+            commands.extend(generate_draw_commands(child_layout, child_info));
+        }
     }
 
     // Pop commands for containers
