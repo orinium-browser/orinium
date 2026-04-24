@@ -130,7 +130,10 @@ pub fn draw_from_layout(layout: &LayoutNode, info: &crate::engine::layouter::typ
         .layout_boxes
         .iter()
         .flat_map(|box_model| {
-            let rect = box_model.padding_box;
+            // Use padding_box as the outer drawing origin, but derive the content area from ui_layout so
+            // text is laid out and clipped precisely inside the content_box (respecting padding/border).
+            let outer = box_model.padding_box;
+            let content = box_model.content_box;
             let label = find_first_text(info).unwrap_or_else(|| "".to_string());
             let text_style = find_first_text_style(info).unwrap_or(TextStyle {
                 font_size: default_font_size,
@@ -138,38 +141,46 @@ pub fn draw_from_layout(layout: &LayoutNode, info: &crate::engine::layouter::typ
             });
             let font_size = text_style.font_size.max(10.0);
 
+            // clip coordinates relative to the transform origin (outer.x/outer.y)
+            let clip_x_rel = content.x - outer.x;
+            let clip_y_rel = content.y - outer.y;
+
+            // center text vertically inside content box
+            let text_y = clip_y_rel + (content.height - font_size) / 2.0;
 
             vec![
-                DrawCommand::PushTransform { dx: rect.x, dy: rect.y },
+                DrawCommand::PushTransform { dx: outer.x, dy: outer.y },
 
                 DrawCommand::DrawRect {
                     x: 0.0,
                     y: 1.0,
-                    width: rect.width,
-                    height: rect.height,
+                    width: outer.width,
+                    height: outer.height,
                     color: Color(0, 0, 0, 40),
                 },
-                // fill
+                // fill (background)
                 DrawCommand::DrawRect {
                     x: 0.0,
                     y: 0.0,
-                    width: rect.width,
-                    height: rect.height,
+                    width: outer.width,
+                    height: outer.height,
                     color: Color(255, 255, 255, 255),
                 },
                 // border (drawn after fill so it appears on top)
                 DrawCommand::DrawRect {
                     x: -1.0,
                     y: -1.0,
-                    width: rect.width + 2.0,
-                    height: rect.height + 2.0,
+                    width: outer.width + 2.0,
+                    height: outer.height + 2.0,
                     color: Color(200, 200, 200, 255),
                 },
                 // clip to content box and draw text inside
-                DrawCommand::PushClip { x: 0.0, y: 0.0, width: rect.width, height: rect.height },
+                DrawCommand::PushClip { x: clip_x_rel, y: clip_y_rel, width: content.width, height: content.height },
                 DrawCommand::DrawText {
-                    x: 0.0,
-                    y: (rect.height - font_size) / 2.0 - 2.0,
+                    // x is relative to current transform origin; use clip_x_rel so that the text's layout
+                    // origin aligns with the content box's left edge (so center alignment centers inside content)
+                    x: clip_x_rel,
+                    y: text_y,
                     text: label.clone(),
                     style: TextStyle {
                         font_size,
@@ -178,7 +189,7 @@ pub fn draw_from_layout(layout: &LayoutNode, info: &crate::engine::layouter::typ
                         text_align: crate::engine::layouter::types::TextAlign::Center,
                         ..Default::default()
                     },
-                    max_width: rect.width,
+                    max_width: content.width,
                 },
                 DrawCommand::PopClip,
                 DrawCommand::PopTransform,

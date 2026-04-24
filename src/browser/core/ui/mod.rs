@@ -5,6 +5,8 @@ use ui_layout::{LayoutEngine, LayoutNode, Length, Style};
 
 /// チェックボックスやラジオボタンなどのUIコンポーネントを定義するモジュール
 pub mod compoments;
+pub mod notice;
+
 use compoments::{Button, ComponentEvent, DrawCommandEmitter};
 
 #[derive(Debug, Default)]
