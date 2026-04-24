@@ -40,6 +40,11 @@ impl Button {
                 self.active = true;
                 true
             }
+            ComponentEvent::PointerUp { x, y } => {
+                log::info!("Button {} handled PointerUp at ({}, {})", self.id, x, y);
+                self.active = false;
+                true
+            }
         }
     }
 }
@@ -61,36 +66,111 @@ impl DrawCommandEmitter for Button {
                 let border_color = if self.focused {
                     Color(20, 20, 20, 255)
                 } else {
-                    Color(10, 10, 10, 255)
+                    Color(200, 200, 200, 255)
                 };
                 let fill_color = if self.active {
-                    Color(20, 90, 200, 255)
+                    // slightly lighter active color
+                    Color(180, 180, 180, 255)
                 } else if self.hovered {
-                    Color(60, 140, 255, 255)
+                    Color(240, 240, 240, 255)
                 } else {
-                    Color(40, 120, 240, 255)
+                    Color(255, 255, 255, 255)
                 };
+
+                // radius and border thickness
+                let r = 6.0_f32; // smoother radius
+                let border_thickness = 1.0_f32;
+
+                let rounded_rect = |w: f32, h: f32, radius: f32, segments_per_corner: usize| -> Vec<(f32, f32)> {
+                    use std::f32::consts::PI;
+                    let seg = segments_per_corner.max(1) as f32;
+                    let mut pts: Vec<(f32, f32)> = Vec::new();
+
+                    // Top-left corner: arc from 180deg to 270deg
+                    let tl_cx = radius;
+                    let tl_cy = radius;
+                    for i in 0..segments_per_corner {
+                        let t = i as f32 / seg;
+                        let angle = PI + t * (PI / 2.0);
+                        pts.push((tl_cx + radius * angle.cos(), tl_cy + radius * angle.sin()));
+                    }
+                    // Top edge between corners
+                    pts.push((w - radius, 0.0));
+
+                    // Top-right corner: arc from 270deg to 360deg
+                    let tr_cx = w - radius;
+                    let tr_cy = radius;
+                    for i in 0..segments_per_corner {
+                        let t = i as f32 / seg;
+                        let angle = 3.0 * PI / 2.0 + t * (PI / 2.0);
+                        pts.push((tr_cx + radius * angle.cos(), tr_cy + radius * angle.sin()));
+                    }
+                    // Right edge
+                    pts.push((w, h - radius));
+
+                    // Bottom-right corner: arc from 0deg to 90deg
+                    let br_cx = w - radius;
+                    let br_cy = h - radius;
+                    for i in 0..segments_per_corner {
+                        let t = i as f32 / seg;
+                        let angle = 0.0 + t * (PI / 2.0);
+                        pts.push((br_cx + radius * angle.cos(), br_cy + radius * angle.sin()));
+                    }
+                    // Bottom edge
+                    pts.push((radius, h));
+
+                    // Bottom-left corner: arc from 90deg to 180deg
+                    let bl_cx = radius;
+                    let bl_cy = h - radius;
+                    for i in 0..segments_per_corner {
+                        let t = i as f32 / seg;
+                        let angle = PI / 2.0 + t * (PI / 2.0);
+                        pts.push((bl_cx + radius * angle.cos(), bl_cy + radius * angle.sin()));
+                    }
+                    pts
+                };
+
+                let ow = rect.width;
+                let oh = rect.height;
+                let segments_per_corner = 8;
+                let outer_poly = rounded_rect(ow, oh, r.min(ow * 0.5).min(oh * 0.5), segments_per_corner);
+
+                // inner polygon (fill shape) inset by border_thickness
+                let inset = border_thickness;
+                let iw = (ow - inset * 2.0).max(0.0);
+                let ih = (oh - inset * 2.0).max(0.0);
+                let inner_r = (r - inset).max(0.0);
+                let inner_poly = rounded_rect(iw, ih, inner_r.min(iw * 0.5).min(ih * 0.5), segments_per_corner)
+                    .into_iter()
+                    .map(|(x, y)| (x + inset, y + inset))
+                    .collect::<Vec<_>>();
 
                 vec![
                     DrawCommand::PushTransform { dx: rect.x, dy: rect.y },
+                    // subtle shadow under button
                     DrawCommand::DrawRect {
-                        x: -2.0,
-                        y: -2.0,
-                        width: rect.width + 4.0,
-                        height: rect.height + 4.0,
+                        x: 0.0,
+                        y: 1.0,
+                        width: ow,
+                        height: oh,
+                        color: Color(0, 0, 0, 40),
+                        radius: r,
+                    },
+
+                    // border as polygon
+                    DrawCommand::DrawPolygon {
+                        points: outer_poly.clone(),
                         color: border_color,
                     },
-                    DrawCommand::DrawRect {
-                        x: 0.0,
-                        y: 0.0,
-                        width: rect.width,
-                        height: rect.height,
+                    // fill as inner polygon so border remains visible
+                    DrawCommand::DrawPolygon {
+                        points: inner_poly.clone(),
                         color: fill_color,
                     },
-                    DrawCommand::PushClip { x: 0.0, y: 0.0, width: rect.width, height: rect.height },
+                    DrawCommand::PushClip { x: 0.0, y: 0.0, width: ow, height: oh },
                     DrawCommand::DrawText {
                         x: 0.0,
-                        y: (rect.height - text_style.font_size) / 2.0 - 3.0,
+                        y: (oh - text_style.font_size) / 2.0 - 3.0,
                         text: self.label.clone(),
                         style: TextStyle {
                             font_size: text_style.font_size,
@@ -99,7 +179,7 @@ impl DrawCommandEmitter for Button {
                             text_align: crate::engine::layouter::types::TextAlign::Center,
                             ..Default::default()
                         },
-                        max_width: rect.width * 2.0,
+                        max_width: ow * 2.0,
                     },
                     DrawCommand::PopClip,
                     DrawCommand::PopTransform,
@@ -123,7 +203,7 @@ fn find_first_text_style(info: &crate::engine::layouter::types::InfoNode) -> Opt
     }
 }
 
-pub fn draw_from_layout(layout: &LayoutNode, info: &crate::engine::layouter::types::InfoNode, pointer_pos: Option<(f32, f32)>) -> Vec<DrawCommand> {
+pub fn draw_from_layout(layout: &LayoutNode, info: &crate::engine::layouter::types::InfoNode, pointer_pos: Option<(f32, f32)>, pointer_down_pos: Option<(f32, f32)>) -> Vec<DrawCommand> {
     let default_font_size = 14.0;
 
     layout
@@ -153,9 +233,52 @@ pub fn draw_from_layout(layout: &LayoutNode, info: &crate::engine::layouter::typ
                 false
             };
 
-            // colors
-            let border_col = if hovered { Color(150, 160, 180, 255) } else { Color(200, 200, 200, 255) };
-            let fill_col = if hovered { Color(240, 246, 255, 255) } else { Color(255, 255, 255, 255) };
+            // determine active (pressed) state from pointer_down_pos
+            let active = if let Some((dx, dy)) = pointer_down_pos {
+                dx >= outer.x && dx <= outer.x + outer.width && dy >= outer.y && dy <= outer.y + outer.height
+            } else {
+                false
+            };
+
+            let border_col = if hovered { Color(175, 175, 175, 255) } else { Color(200, 200, 200, 255) };
+            let fill_col = if active {
+                // slightly lighter active color for DOM buttons
+                Color(180, 180, 180, 255)
+            } else if hovered {
+                Color(245, 245, 245, 255)
+            } else {
+                Color(255, 255, 255, 255)
+            };
+
+            let r = 4.0_f32;
+            let border_thickness = 1.0_f32;
+            let ow = outer.width;
+            let oh = outer.height;
+
+            let outer_poly = vec![
+                (r, 0.0),
+                (ow - r, 0.0),
+                (ow, r),
+                (ow, oh - r),
+                (ow - r, oh),
+                (r, oh),
+                (0.0, oh - r),
+                (0.0, r),
+            ];
+            let inset = border_thickness;
+            let iw = (ow - inset * 2.0).max(0.0);
+            let ih = (oh - inset * 2.0).max(0.0);
+            let ir = (r - inset).max(0.0);
+            let inner_poly = vec![
+                (inset + ir, inset),
+                (inset + iw - ir, inset),
+                (inset + iw, inset + ir),
+                (inset + iw, inset + ih - ir),
+                (inset + iw - ir, inset + ih),
+                (inset + ir, inset + ih),
+                (inset, inset + ih - ir),
+                (inset, inset + ir),
+            ];
 
             vec![
                 DrawCommand::PushTransform { dx: outer.x, dy: outer.y },
@@ -163,26 +286,14 @@ pub fn draw_from_layout(layout: &LayoutNode, info: &crate::engine::layouter::typ
                 DrawCommand::DrawRect {
                     x: 0.0,
                     y: 1.0,
-                    width: outer.width,
-                    height: outer.height,
+                    width: ow,
+                    height: oh,
                     color: Color(0, 0, 0, 40),
+                    radius: r,
                 },
-                // fill (background)
-                DrawCommand::DrawRect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: outer.width,
-                    height: outer.height,
-                    color: fill_col,
-                },
-                // border (drawn after fill so it appears on top)
-                DrawCommand::DrawRect {
-                    x: -1.0,
-                    y: -1.0,
-                    width: outer.width + 2.0,
-                    height: outer.height + 2.0,
-                    color: border_col,
-                },
+
+                DrawCommand::DrawPolygon { points: outer_poly.clone(), color: border_col },
+                DrawCommand::DrawPolygon { points: inner_poly.clone(), color: fill_col },
 
                 DrawCommand::PushClip { x: clip_x_rel, y: clip_y_rel, width: content.width, height: content.height },
                 DrawCommand::DrawText {

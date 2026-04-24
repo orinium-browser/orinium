@@ -3,6 +3,7 @@
 use crate::engine::renderer_model::DrawCommand;
 use anyhow::Result;
 use std::env;
+use std::mem::size_of;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 use winit::window::Window;
@@ -44,6 +45,8 @@ pub struct GpuRenderer {
 struct Vertex {
     position: [f32; 3],
     color: [f32; 4],
+    // params: nx, ny (normalized 0..1 local coords), rnorm (radius normalized by max(width,height))
+    params: [f32; 3],
 }
 
 impl Vertex {
@@ -61,6 +64,11 @@ impl Vertex {
                     offset: size_of::<[f32; 3]>() as wgpu::BufferAddress,
                     shader_location: 1,
                     format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: (size_of::<[f32; 3]>() + size_of::<[f32; 4]>()) as wgpu::BufferAddress,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32x3,
                 },
             ],
         }
@@ -350,6 +358,7 @@ impl GpuRenderer {
                     width: w,
                     height: h,
                     color,
+                    radius,
                 } => {
                     // transform
                     let (tdx, tdy) = current_transform(&transform_stack);
@@ -386,15 +395,22 @@ impl GpuRenderer {
 
                     let color = color.to_linear_f32_array();
 
+                    // compute normalized local coords and normalized radius for fragment shader
+                    let width_px = (x2 - x1).max(1.0);
+                    let height_px = (y2 - y1).max(1.0);
+                    let max_dim = width_px.max(height_px);
+                    let r_px = radius * sf;
+                    let r_norm = if max_dim > 0.0 { (r_px / max_dim).min(0.5) } else { 0.0 };
+
                     #[rustfmt::skip]
                     vertices.extend_from_slice(&[
-                        Vertex { position: [px1, py1, 0.0], color },
-                        Vertex { position: [px1, py2, 0.0], color },
-                        Vertex { position: [px2, py1, 0.0], color },
+                        Vertex { position: [px1, py1, 0.0], color, params: [0.0, 0.0, r_norm] },
+                        Vertex { position: [px1, py2, 0.0], color, params: [0.0, 1.0, r_norm] },
+                        Vertex { position: [px2, py1, 0.0], color, params: [1.0, 0.0, r_norm] },
 
-                        Vertex { position: [px2, py1, 0.0], color },
-                        Vertex { position: [px1, py2, 0.0], color },
-                        Vertex { position: [px2, py2, 0.0], color },
+                        Vertex { position: [px2, py1, 0.0], color, params: [1.0, 0.0, r_norm] },
+                        Vertex { position: [px1, py2, 0.0], color, params: [0.0, 1.0, r_norm] },
+                        Vertex { position: [px2, py2, 0.0], color, params: [1.0, 1.0, r_norm] },
                     ]);
                 }
 
@@ -674,14 +690,17 @@ impl GpuRenderer {
                             vertices.push(Vertex {
                                 position: [px1, py1, 0.0],
                                 color: color_arr,
+                                params: [0.0, 0.0, 0.0],
                             });
                             vertices.push(Vertex {
                                 position: [px2, py2, 0.0],
                                 color: color_arr,
+                                params: [0.0, 0.0, 0.0],
                             });
                             vertices.push(Vertex {
                                 position: [px3, py3, 0.0],
                                 color: color_arr,
+                                params: [0.0, 0.0, 0.0],
                             });
                         }
                     }

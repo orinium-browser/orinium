@@ -8,6 +8,7 @@ use crate::engine::renderer_model::DrawCommand;
 #[derive(Clone, Debug)]
 pub enum ComponentEvent {
     PointerDown { x: f32, y: f32 },
+    PointerUp { x: f32, y: f32 },
 }
 
 pub trait DrawCommandEmitter {

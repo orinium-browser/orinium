@@ -153,6 +153,8 @@ pub struct BrowserApp {
     input: InputState,
     network: BrowserResourceLoader,
     pending_fetches: PendingFetches,
+    // transient pointer down position in logical coords for one redraw
+    last_pointer_down: Option<(f32, f32)>,
 }
 
 impl Default for BrowserApp {
@@ -185,6 +187,7 @@ impl BrowserApp {
             input: InputState::default(),
             network,
             pending_fetches: PendingFetches::new(),
+            last_pointer_down: None,
         }
     }
 
@@ -262,6 +265,8 @@ impl BrowserApp {
     /// Rebuilds the render tree for the active tab and generates draw commands.
     fn rebuild_render_tree(&mut self) {
         let pointer_pos = Some((self.input.mouse_position.0 as f32 / self.render.scale_factor as f32, self.input.mouse_position.1 as f32 / self.render.scale_factor as f32));
+        // copy transient pointer_down so we don't hold &mut self while generating commands
+        let last_pointer_down = self.last_pointer_down;
 
         let (title, draw_commands) = {
             let sf = self.render.scale_factor as f32;
@@ -284,7 +289,7 @@ impl BrowserApp {
 
             let title = tab.title();
 
-            let mut draw_commands = renderer_model::generate_draw_commands(layout, info, pointer_pos);
+            let mut draw_commands = renderer_model::generate_draw_commands(layout, info, pointer_pos, last_pointer_down);
             draw_commands.extend(self.ui.draw_commands());
 
             (title, draw_commands)
@@ -350,7 +355,7 @@ impl BrowserApp {
                 }
             }
 
-            WindowEvent::MouseInput { button, .. } => self.handle_mouse_input(button),
+            WindowEvent::MouseInput { state, button, .. } => self.handle_mouse_input(state, button),
 
             _ => BrowserCommand::None,
         };
@@ -367,7 +372,7 @@ impl BrowserApp {
     }
 
     /// Handles mouse input events, mainly left-clicks for the active tab.
-    fn handle_mouse_input(&mut self, button: winit::event::MouseButton) -> BrowserCommand {
+    fn handle_mouse_input(&mut self, state: winit::event::ElementState, button: winit::event::MouseButton) -> BrowserCommand {
         if button != winit::event::MouseButton::Left {
             return BrowserCommand::None;
         }
@@ -377,26 +382,44 @@ impl BrowserApp {
         let sf = self.render.scale_factor;
         let click_x = (x / sf) as f32;
         let click_y = (y / sf) as f32;
-        log::debug!(target: "BrowserApp::input", "MouseInput: raw=({:.1},{:.1}) sf={} -> logical=({:.2},{:.2})", x, y, sf, click_x, click_y);
+        log::debug!(target: "BrowserApp::input", "MouseInput: state={:?} raw=({:.1},{:.1}) sf={} -> logical=({:.2},{:.2})", state, x, y, sf, click_x, click_y);
 
-        // First check programmatic UI buttons
-        if let Some(button_index) = self.ui.hit_button_index(click_x, click_y) {
-            log::debug!(target: "BrowserApp::input", "Hit UI button index={}", button_index);
-            let handled = self.ui.notify_pointer_down(button_index, click_x, click_y);
-            log::debug!(target: "BrowserApp::input", "UI button handled={}", handled);
-            return BrowserCommand::RequestRedraw;
-        } else {
-            log::debug!(target: "BrowserApp::input", "No UI button hit at ({:.2},{:.2})", click_x, click_y);
-        }
+        match state {
+            winit::event::ElementState::Pressed => {
+                // First check programmatic UI buttons
+                if let Some(button_index) = self.ui.hit_button_index(click_x, click_y) {
+                    log::debug!(target: "BrowserApp::input", "Hit UI button index={}", button_index);
+                    let handled = self.ui.notify_pointer_down(button_index, click_x, click_y);
+                    log::debug!(target: "BrowserApp::input", "UI button handled={}", handled);
+                    // record transient pointer-down for this redraw so UI components can show active state
+                    self.last_pointer_down = Some((click_x, click_y));
+                    return BrowserCommand::RequestRedraw;
+                } else {
+                    log::debug!(target: "BrowserApp::input", "No UI button hit at ({:.2},{:.2})", click_x, click_y);
+                }
 
-        // Fallback: dispatch to page/tab
-        if let Some(tab) = self.active_tab_mut() {
-            log::debug!(target: "BrowserApp::input", "Dispatching click to active tab at ({:.2},{:.2})", click_x, click_y);
-            Self::handle_mouse_click(tab, click_x, click_y);
-            BrowserCommand::RequestRedraw
-        } else {
-            log::debug!(target: "BrowserApp::input", "No active tab to dispatch click");
-            BrowserCommand::None
+                // Fallback: dispatch to page/tab
+                if let Some(tab) = self.active_tab_mut() {
+                    log::debug!(target: "BrowserApp::input", "Dispatching click to active tab at ({:.2},{:.2})", click_x, click_y);
+                    let handled = Self::handle_mouse_click(tab, click_x, click_y);
+                    if handled {
+                        self.last_pointer_down = Some((click_x, click_y));
+                    }
+                    BrowserCommand::RequestRedraw
+                } else {
+                    log::debug!(target: "BrowserApp::input", "No active tab to dispatch click");
+                    BrowserCommand::None
+                }
+            }
+            winit::event::ElementState::Released => {
+                if let Some(button_index) = self.ui.hit_button_index(click_x, click_y) {
+                    let _ = self.ui.notify_pointer_up(button_index, click_x, click_y);
+                } else {
+                    self.ui.buttons.iter_mut().for_each(|b| b.active = false);
+                }
+                self.last_pointer_down = None;
+                BrowserCommand::RequestRedraw
+            }
         }
     }
 
@@ -432,12 +455,12 @@ impl BrowserApp {
     }
 
     /// Handles a mouse click in the given tab at the specified coordinates.
-    pub fn handle_mouse_click(tab: &mut Tab, x: f32, y: f32) {
+    pub fn handle_mouse_click(tab: &mut Tab, x: f32, y: f32) -> bool {
         let hit_path = match tab.layout_and_info() {
             Some((layout, info)) => crate::engine::input::hit_test(layout, info, x, y),
             None => {
                 log::debug!(target: "BrowserApp::input", "handle_mouse_click: no layout/info available");
-                return;
+                return false;
             }
         };
 
@@ -456,7 +479,7 @@ impl BrowserApp {
         }) {
             log::debug!(target: "BrowserApp::input", "Hit a UiPart(Button) in hit_path - invoking component handler");
             compoments::button::handle_pointer_down(x, y);
-            return;
+            return true;
         }
 
         let href_opt = {
@@ -481,8 +504,10 @@ impl BrowserApp {
 
         if let Some(href) = href_opt {
             log::debug!(target: "BrowserApp::input", "Hit a link role - navigating to {}", href);
-            tab.move_to(&href)
+            tab.move_to(&href);
+            return true;
         }
+        false
     }
 
     /// Rebuilds the render tree and sends draw commands to the GPU.
@@ -492,6 +517,8 @@ impl BrowserApp {
         if let Err(e) = gpu.render() {
             log::error!(target: "BrowserApp::redraw", "Render error occurred: {}", e);
         }
+        // clear transient pointer-down after rendering so active state is only shown for the click frame
+        self.last_pointer_down = None;
     }
 
     /// Applies the current draw commands to the GPU renderer.

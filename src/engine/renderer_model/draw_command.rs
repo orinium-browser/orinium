@@ -19,6 +19,7 @@ pub enum DrawCommand {
         width: f32,
         height: f32,
         color: Color,
+        radius: f32,
     },
     DrawPolygon {
         points: Vec<(f32, f32)>,
@@ -45,7 +46,7 @@ pub enum DrawCommand {
 }
 
 /// LayoutNode + InfoNode → DrawCommand
-pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode, pointer_pos: Option<(f32, f32)>) -> Vec<DrawCommand> {
+pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode, pointer_pos: Option<(f32, f32)>, pointer_down_pos: Option<(f32, f32)>) -> Vec<DrawCommand> {
     let mut commands = Vec::new();
 
     match &info.kind {
@@ -83,6 +84,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode, pointer_pos:
                         width: rect.width,
                         height: line_thickness,
                         color: style.color,
+                        radius: 0.0,
                     });
                 }
             }
@@ -115,6 +117,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode, pointer_pos:
                     width: border_box.width,
                     height: border_width,
                     color: bc.top,
+                    radius: 0.0,
                 });
 
                 // bottom
@@ -127,6 +130,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode, pointer_pos:
                     width: border_box.width,
                     height: border_width,
                     color: bc.bottom,
+                    radius: 0.0,
                 });
 
                 // left
@@ -137,6 +141,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode, pointer_pos:
                     width: border_width,
                     height: border_box.height,
                     color: bc.left,
+                    radius: 0.0,
                 });
 
                 // right
@@ -149,6 +154,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode, pointer_pos:
                     width: border_width,
                     height: border_box.height,
                     color: bc.right,
+                    radius: 0.0,
                 });
 
                 // ===== clip + background + content =====
@@ -166,6 +172,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode, pointer_pos:
                     width: padding_box.width,
                     height: padding_box.height,
                     color: style.background_color,
+                    radius: 0.0,
                 });
 
                 // content + scroll
@@ -181,7 +188,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode, pointer_pos:
         }
         NodeKind::UiPart { compoment } => match compoment {
             Components::Button => {
-                commands.extend(compoments::button::draw_from_layout(layout, info, pointer_pos));
+                commands.extend(compoments::button::draw_from_layout(layout, info, pointer_pos, pointer_down_pos));
             }
             _ => {}
         },
@@ -192,7 +199,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode, pointer_pos:
     // representation (including any text). Recursing would double-draw text.
     if !matches!(info.kind, NodeKind::UiPart { .. }) {
         for (child_layout, child_info) in layout.children.iter().zip(&info.children) {
-            commands.extend(generate_draw_commands(child_layout, child_info, pointer_pos));
+            commands.extend(generate_draw_commands(child_layout, child_info, pointer_pos, pointer_down_pos));
         }
     }
 

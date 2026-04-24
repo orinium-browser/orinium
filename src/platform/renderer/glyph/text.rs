@@ -3,16 +3,15 @@
 use std::{env, sync::Arc};
 
 use crate::engine::layouter::types::{FontStyle, TextAlign, TextStyle};
-use crate::browser::core::ui;
-use glyphon::{
-    Attrs, Buffer, Cache, Color as GlyphColor, FontSystem, Metrics, PrepareError, Resolution,
-    Shaping, Style, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer as TextBrush,
-    Viewport, Weight, cosmic_text::Align, fontdb,
-};
-use crate::browser::core::ui::notice;
 use crate::platform::font;
+use glyphon::{
+    cosmic_text::Align, fontdb, Attrs, Buffer, Cache, Color as GlyphColor, FontSystem, Metrics,
+    PrepareError, Resolution, Shaping, Style, SwashCache, TextArea, TextAtlas,
+    TextBounds, TextRenderer as TextBrush, Viewport, Weight,
+};
 
 /// テキストセクション位置・クリップ・描画するBufferをまとめた構造体
+#[allow(unused)]
 pub struct TextSection {
     /// スクリーン上の位置 (左上原点)
     pub screen_position: (f32, f32),

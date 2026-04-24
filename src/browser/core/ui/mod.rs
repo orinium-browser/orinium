@@ -50,6 +50,19 @@ impl BrowserUi {
         handled
     }
 
+    pub fn notify_pointer_up(&mut self, button_index: usize, x: f32, y: f32) -> bool {
+        let Some(button) = self.buttons.get_mut(button_index) else {
+            return false;
+        };
+
+        let handled = button.on_event(ComponentEvent::PointerUp { x, y });
+        if handled {
+            // clear focus and active state if desired; keep focused for keyboard focus
+            self.buttons.iter_mut().enumerate().for_each(|(i, b)| b.focused = i == self.focused.unwrap_or(usize::MAX));
+        }
+        handled
+    }
+
     pub fn add_button(&mut self, id: impl Into<String>, label: impl Into<String>, x: f32, y: f32, width: f32, height: f32) {
         let layout = create_button_layout(x, y, width, height);
         let btn = Button::new(id.into(), label.into(), layout);
