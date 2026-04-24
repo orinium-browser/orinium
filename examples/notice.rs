@@ -1,4 +1,3 @@
-use orinium_browser::browser::core::ui::notice;
 use orinium_browser::browser::core::ui::notice::show_error_window;
 
 fn main() {
