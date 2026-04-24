@@ -57,7 +57,6 @@ impl TextRenderer {
             }
         }
 
-        notice::show_error_window("No system font found".to_string(), "System font not found. Browser cannot be launched.".to_string());
         anyhow::bail!("no system font found");
     }
 
