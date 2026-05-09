@@ -529,13 +529,12 @@ impl<'a> Tokenizer<'a> {
         match c {
             c if c.is_whitespace() => match self.state {
                 TokenizerState::Doctype => self.state = TokenizerState::DoctypeName,
-                TokenizerState::DoctypeName => {
-                    if self.input[self.pos..].to_lowercase().starts_with("public")
-                        || self.input[self.pos..].to_lowercase().starts_with("system")
-                    {
-                        self.pos += 6;
-                        self.state = TokenizerState::BeforeDoctypePublicId;
-                    }
+                TokenizerState::DoctypeName
+                    if (self.input[self.pos..].to_lowercase().starts_with("public")
+                        || self.input[self.pos..].to_lowercase().starts_with("system")) =>
+                {
+                    self.pos += 6;
+                    self.state = TokenizerState::BeforeDoctypePublicId;
                 }
                 TokenizerState::AfterDoctypePublicId => {
                     self.state = TokenizerState::DoctypeSystemId;
