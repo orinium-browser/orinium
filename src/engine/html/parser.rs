@@ -235,7 +235,7 @@ impl<'a> Parser<'a> {
                 &parent,
                 HtmlNodeType::Element {
                     tag_name: name.clone(),
-                    attributes: attributes,
+                    attributes,
                 },
             );
 
