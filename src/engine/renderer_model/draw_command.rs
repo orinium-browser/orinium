@@ -43,9 +43,11 @@ pub enum DrawCommand {
 }
 
 /// LayoutNode + InfoNode → DrawCommand
-pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawCommand> {
-    let mut commands = Vec::new();
-
+pub fn generate_draw_commands(
+    cmd_buf: &mut Vec<DrawCommand>,
+    layout: &LayoutNode,
+    info: &InfoNode,
+) {
     match &info.kind {
         NodeKind::Text { texts, style, .. } => {
             debug_assert_eq!(
@@ -66,7 +68,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
                 let (abs_x, abs_y) = placement.offset;
 
                 // テキスト
-                commands.push(DrawCommand::DrawText {
+                cmd_buf.push(DrawCommand::DrawText {
                     x: abs_x,
                     y: abs_y,
                     text: text.clone(),
@@ -85,7 +87,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
                 };
 
                 if draw {
-                    commands.push(DrawCommand::DrawRect {
+                    cmd_buf.push(DrawCommand::DrawRect {
                         x: abs_x,
                         y: line_y,
                         width: fragment.width(),
@@ -108,7 +110,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
                 let content_box = box_model.content_box;
 
                 // ===== border (solid only for now) =====
-                commands.push(DrawCommand::PushTransform {
+                cmd_buf.push(DrawCommand::PushTransform {
                     dx: border_box.x,
                     dy: border_box.y,
                 });
@@ -117,7 +119,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
 
                 // top
                 let border_width = (padding_box.y - border_box.y).max(0.0);
-                commands.push(DrawCommand::DrawRect {
+                cmd_buf.push(DrawCommand::DrawRect {
                     x: 0.0,
                     y: 0.0,
                     width: border_box.width,
@@ -129,7 +131,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
                 let border_width = (border_box.y + border_box.height
                     - (padding_box.y + padding_box.height))
                     .max(0.0);
-                commands.push(DrawCommand::DrawRect {
+                cmd_buf.push(DrawCommand::DrawRect {
                     x: 0.0,
                     y: border_box.height - border_width,
                     width: border_box.width,
@@ -139,7 +141,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
 
                 // left
                 let border_width = (padding_box.x - border_box.x).max(0.0);
-                commands.push(DrawCommand::DrawRect {
+                cmd_buf.push(DrawCommand::DrawRect {
                     x: 0.0,
                     y: 0.0,
                     width: border_width,
@@ -151,7 +153,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
                 let border_width = (border_box.x + border_box.width
                     - (padding_box.x + padding_box.width))
                     .max(0.0);
-                commands.push(DrawCommand::DrawRect {
+                cmd_buf.push(DrawCommand::DrawRect {
                     x: border_box.width - border_width,
                     y: 0.0,
                     width: border_width,
@@ -160,7 +162,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
                 });
 
                 // ===== clip + background + content =====
-                commands.push(DrawCommand::PushClip {
+                cmd_buf.push(DrawCommand::PushClip {
                     x: padding_box.x - border_box.x,
                     y: padding_box.y - border_box.y,
                     width: padding_box.width,
@@ -168,7 +170,7 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
                 });
 
                 // background
-                commands.push(DrawCommand::DrawRect {
+                cmd_buf.push(DrawCommand::DrawRect {
                     x: padding_box.x - border_box.x,
                     y: padding_box.y - border_box.y,
                     width: padding_box.width,
@@ -177,11 +179,11 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
                 });
 
                 // content + scroll
-                commands.push(DrawCommand::PushTransform {
+                cmd_buf.push(DrawCommand::PushTransform {
                     dx: content_box.x - border_box.x,
                     dy: content_box.y - border_box.y,
                 });
-                commands.push(DrawCommand::PushTransform {
+                cmd_buf.push(DrawCommand::PushTransform {
                     dx: *scroll_offset_x,
                     dy: -*scroll_offset_y,
                 });
@@ -190,18 +192,16 @@ pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawC
     }
 
     for (child_layout, child_info) in layout.children.iter().zip(&info.children) {
-        commands.extend(generate_draw_commands(child_layout, child_info));
+        generate_draw_commands(cmd_buf, child_layout, child_info);
     }
 
     // Pop commands for containers
     if matches!(info.kind, NodeKind::Container { .. }) {
         for _ in &layout.layout_boxes {
-            commands.push(DrawCommand::PopTransform);
-            commands.push(DrawCommand::PopTransform);
-            commands.push(DrawCommand::PopClip);
-            commands.push(DrawCommand::PopTransform);
+            cmd_buf.push(DrawCommand::PopTransform);
+            cmd_buf.push(DrawCommand::PopTransform);
+            cmd_buf.push(DrawCommand::PopClip);
+            cmd_buf.push(DrawCommand::PopTransform);
         }
     }
-
-    commands
 }

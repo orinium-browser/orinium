@@ -320,18 +320,28 @@ impl BrowserApp {
 
     /// Rebuilds the render tree for the window's assigned tab and generates draw commands.
     fn rebuild_render_tree(&mut self, window_id: WindowId) {
-        let Some(render) = self.renders.get(&window_id) else {
-            return;
-        };
-        let sf = render.scale_factor as f32;
-        let viewport = (
-            render.window_size.0 as f32 / sf,
-            render.window_size.1 as f32 / sf,
-        );
-
         let tab_id = self.tab_id_for_window(window_id);
 
-        let (title, draw_commands) = {
+        let (viewport, mut draw_commands) = {
+            let Some(render) = self.renders.get_mut(&window_id) else {
+                return;
+            };
+
+            let sf = render.scale_factor as f32;
+
+            let viewport = (
+                render.window_size.0 as f32 / sf,
+                render.window_size.1 as f32 / sf,
+            );
+
+            // Reuse allocation
+            let mut draw_commands = std::mem::take(&mut render.draw_commands);
+            draw_commands.clear();
+
+            (viewport, draw_commands)
+        };
+
+        let title = {
             let Some(tab) = self.tabs.get_mut(tab_id) else {
                 return;
             };
@@ -343,15 +353,16 @@ impl BrowserApp {
                 return;
             };
 
-            let title = tab.title();
-            let draw_commands = renderer_model::generate_draw_commands(layout, info);
+            renderer_model::generate_draw_commands(&mut draw_commands, layout, info);
 
-            (title, draw_commands)
+            tab.title()
         };
 
         let Some(render) = self.renders.get_mut(&window_id) else {
             return;
         };
+
+        // Return reused buffer
         render.draw_commands = draw_commands;
 
         if let Some(title) = title {
