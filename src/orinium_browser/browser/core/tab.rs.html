@@ -150,7 +150,7 @@
 <a href=#150 id=150 data-nosnippet>150</a>    }
 <a href=#151 id=151 data-nosnippet>151</a>
 <a href=#152 id=152 data-nosnippet>152</a>    <span class="kw">pub fn </span>navigate(<span class="kw-2">&amp;mut </span><span class="self">self</span>, url: Url) {
-<a href=#153 id=153 data-nosnippet>153</a>        <span class="self">self</span>.docment_url = <span class="prelude-val">Some</span>(url.clone());
+<a href=#153 id=153 data-nosnippet>153</a>        <span class="self">self</span>.docment_url = <span class="prelude-val">Some</span>(url);
 <a href=#154 id=154 data-nosnippet>154</a>        <span class="kw">let </span><span class="kw-2">mut </span>webview = WebView::new();
 <a href=#155 id=155 data-nosnippet>155</a>        webview.navigate();
 <a href=#156 id=156 data-nosnippet>156</a>        <span class="self">self</span>.webview = <span class="prelude-val">Some</span>(webview);
@@ -198,16 +198,13 @@
 <a href=#198 id=198 data-nosnippet>198</a>    }
 <a href=#199 id=199 data-nosnippet>199</a>
 <a href=#200 id=200 data-nosnippet>200</a>    <span class="kw">pub fn </span>needs_redraw(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#201 id=201 data-nosnippet>201</a>        <span class="self">self</span>.webview
-<a href=#202 id=202 data-nosnippet>202</a>            .as_ref()
-<a href=#203 id=203 data-nosnippet>203</a>            .map(|wv| wv.needs_redraw())
-<a href=#204 id=204 data-nosnippet>204</a>            .unwrap_or(<span class="bool-val">false</span>)
-<a href=#205 id=205 data-nosnippet>205</a>    }
-<a href=#206 id=206 data-nosnippet>206</a>
-<a href=#207 id=207 data-nosnippet>207</a>    <span class="kw">pub fn </span>clear_redraw_flag(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
-<a href=#208 id=208 data-nosnippet>208</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(wv) = <span class="self">self</span>.webview.as_mut() {
-<a href=#209 id=209 data-nosnippet>209</a>            wv.clear_redraw_flag();
-<a href=#210 id=210 data-nosnippet>210</a>        }
-<a href=#211 id=211 data-nosnippet>211</a>    }
-<a href=#212 id=212 data-nosnippet>212</a>}
+<a href=#201 id=201 data-nosnippet>201</a>        <span class="self">self</span>.webview.as_ref().is_some_and(|wv| wv.needs_redraw())
+<a href=#202 id=202 data-nosnippet>202</a>    }
+<a href=#203 id=203 data-nosnippet>203</a>
+<a href=#204 id=204 data-nosnippet>204</a>    <span class="kw">pub fn </span>clear_redraw_flag(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+<a href=#205 id=205 data-nosnippet>205</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(wv) = <span class="self">self</span>.webview.as_mut() {
+<a href=#206 id=206 data-nosnippet>206</a>            wv.clear_redraw_flag();
+<a href=#207 id=207 data-nosnippet>207</a>        }
+<a href=#208 id=208 data-nosnippet>208</a>    }
+<a href=#209 id=209 data-nosnippet>209</a>}
 </code></pre></div></section></main></body></html>

@@ -137,7 +137,7 @@
 <a href=#137 id=137 data-nosnippet>137</a>
 <a href=#138 id=138 data-nosnippet>138</a>        <span class="kw">let </span>req = Request::builder()
 <a href=#139 id=139 data-nosnippet>139</a>            .method(Method::GET)
-<a href=#140 id=140 data-nosnippet>140</a>            .uri(uri.path_and_query().map(|p| p.as_str()).unwrap_or(<span class="string">"/"</span>))
+<a href=#140 id=140 data-nosnippet>140</a>            .uri(uri.path_and_query().map_or(<span class="string">"/"</span>, |p| p.as_str()))
 <a href=#141 id=141 data-nosnippet>141</a>            .header(<span class="string">"Host"</span>, host)
 <a href=#142 id=142 data-nosnippet>142</a>            .header(<span class="string">"User-Agent"</span>, <span class="self">self</span>.network_config.user_agent.as_str())
 <a href=#143 id=143 data-nosnippet>143</a>            .body(Empty::&lt;Bytes&gt;::new())
@@ -208,7 +208,7 @@
 <a href=#208 id=208 data-nosnippet>208</a>            </span>.map_err(|<span class="kw">_</span>| NetworkError::ConnectionFailed)<span class="question-mark">?</span>;
 <a href=#209 id=209 data-nosnippet>209</a>
 <a href=#210 id=210 data-nosnippet>210</a>        <span class="kw">if </span>key.scheme == Scheme::HTTPS {
-<a href=#211 id=211 data-nosnippet>211</a>            <span class="kw">let </span>tls = TlsConnector::from(<span class="self">self</span>.tls_config.clone());
+<a href=#211 id=211 data-nosnippet>211</a>            <span class="kw">let </span>tls = TlsConnector::from(Arc::clone(<span class="kw-2">&amp;</span><span class="self">self</span>.tls_config));
 <a href=#212 id=212 data-nosnippet>212</a>            <span class="kw">let </span>key = key.clone();
 <a href=#213 id=213 data-nosnippet>213</a>            <span class="kw">let </span>domain = rustls::pki_types::ServerName::try_from(key.host.clone())
 <a href=#214 id=214 data-nosnippet>214</a>                .map_err(|<span class="kw">_</span>| NetworkError::InvalidDnsName)<span class="question-mark">?</span>;
@@ -242,7 +242,7 @@
 <a href=#242 id=242 data-nosnippet>242</a>        &gt;,
 <a href=#243 id=243 data-nosnippet>243</a>        key: HostKey,
 <a href=#244 id=244 data-nosnippet>244</a>    ) {
-<a href=#245 id=245 data-nosnippet>245</a>        <span class="kw">let </span>pool = <span class="self">self</span>.sender_pool.clone();
+<a href=#245 id=245 data-nosnippet>245</a>        <span class="kw">let </span>pool = Arc::clone(<span class="kw-2">&amp;</span><span class="self">self</span>.sender_pool);
 <a href=#246 id=246 data-nosnippet>246</a>        tokio::task::spawn_local(<span class="kw">async move </span>{
 <a href=#247 id=247 data-nosnippet>247</a>            <span class="kw">let _ </span>= conn.<span class="kw">await</span>;
 <a href=#248 id=248 data-nosnippet>248</a>            pool.write().unwrap().remove_connection(<span class="kw-2">&amp;</span>key);
@@ -264,7 +264,7 @@
 <a href=#264 id=264 data-nosnippet>264</a>        <span class="macro">format!</span>(<span class="string">"{scheme}://{}{location}"</span>, authority)
 <a href=#265 id=265 data-nosnippet>265</a>    } <span class="kw">else </span>{
 <a href=#266 id=266 data-nosnippet>266</a>        <span class="kw">let </span>base_path = base.path();
-<a href=#267 id=267 data-nosnippet>267</a>        <span class="kw">let </span>prefix = base_path.rsplit_once(<span class="string">'/'</span>).map(|x| x.<span class="number">0</span>).unwrap_or(<span class="string">""</span>);
+<a href=#267 id=267 data-nosnippet>267</a>        <span class="kw">let </span>prefix = base_path.rsplit_once(<span class="string">'/'</span>).map_or(<span class="string">""</span>, |x| x.<span class="number">0</span>);
 <a href=#268 id=268 data-nosnippet>268</a>        <span class="macro">format!</span>(<span class="string">"{scheme}://{}{prefix}/{location}"</span>, authority)
 <a href=#269 id=269 data-nosnippet>269</a>    };
 <a href=#270 id=270 data-nosnippet>270</a>
