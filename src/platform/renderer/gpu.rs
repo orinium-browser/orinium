@@ -88,7 +88,7 @@ impl GpuRenderer {
 
         // OSウィンドウとGPUの描画対象（サーフェス）を関連付ける
         // サーフェスの作成
-        let surface = instance.create_surface(window.clone())?;
+        let surface = instance.create_surface(Arc::clone(&window))?;
 
         // 利用可能なGPU（物理デバイス）アダプターの取得
         let adapter = instance

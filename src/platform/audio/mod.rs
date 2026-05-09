@@ -60,8 +60,8 @@ impl SoundManager {
         let sample_format = supported_cfg.sample_format();
         let output_channels = config.channels as usize;
 
-        let samples = self.samples.clone();
-        let play_pos = self.play_pos.clone();
+        let samples = Arc::clone(&self.samples);
+        let play_pos = Arc::clone(&self.play_pos);
         let src_channels = self.src_channels;
 
         let err_fn = |err| log::error!("cpal stream error: {}", err);

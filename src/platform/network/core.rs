@@ -208,7 +208,7 @@ impl NetworkInner {
             .map_err(|_| NetworkError::ConnectionFailed)?;
 
         if key.scheme == Scheme::HTTPS {
-            let tls = TlsConnector::from(self.tls_config.clone());
+            let tls = TlsConnector::from(Arc::clone(&self.tls_config));
             let key = key.clone();
             let domain = rustls::pki_types::ServerName::try_from(key.host.clone())
                 .map_err(|_| NetworkError::InvalidDnsName)?;
@@ -242,7 +242,7 @@ impl NetworkInner {
         >,
         key: HostKey,
     ) {
-        let pool = self.sender_pool.clone();
+        let pool = Arc::clone(&self.sender_pool);
         tokio::task::spawn_local(async move {
             let _ = conn.await;
             pool.write().unwrap().remove_connection(&key);
