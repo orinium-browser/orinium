@@ -33,6 +33,10 @@
 #![warn(clippy::ptr_as_ptr)]
 #![warn(clippy::cast_ptr_alignment)]
 
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
 /// ブラウザ関連のモジュールをまとめたトップレベルモジュール
 pub mod browser;
 

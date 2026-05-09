@@ -3,6 +3,9 @@ use orinium_browser::browser::{BrowserApp, Tab};
 use std::env;
 
 fn main() -> Result<()> {
+    #[cfg(feature = "dhat-heap")]
+    let _profiler = dhat::Profiler::new_heap();
+
     let _args: Vec<String> = env::args().collect();
 
     env_logger::init();
