@@ -195,77 +195,74 @@ fn decode(data: &[u8]) -> Result<(Vec<f32>, usize, u32)> {
     let mut channels: usize = codec_params.channels.map(|c| c.count()).unwrap_or(1);
     let mut sample_rate: u32 = codec_params.sample_rate.unwrap_or(44100);
 
-    loop {
-        match format.next_packet() {
-            Ok(packet) => match decoder.decode(&packet) {
-                Ok(audio_buf) => match audio_buf {
-                    AudioBufferRef::U8(buf) => {
-                        let ab = buf.as_ref();
-                        channels = ab.spec().channels.count();
-                        sample_rate = ab.spec().rate;
-                        let frames = ab.frames();
-                        for f in 0..frames {
-                            for ch in 0..channels {
-                                let v = ab.chan(ch)[f] as f32;
-                                samples.push((v - 128.0) / 128.0);
-                            }
+    while let Ok(packet) = format.next_packet() {
+        match decoder.decode(&packet) {
+            Ok(audio_buf) => match audio_buf {
+                AudioBufferRef::U8(buf) => {
+                    let ab = buf.as_ref();
+                    channels = ab.spec().channels.count();
+                    sample_rate = ab.spec().rate;
+                    let frames = ab.frames();
+                    for f in 0..frames {
+                        for ch in 0..channels {
+                            let v = ab.chan(ch)[f] as f32;
+                            samples.push((v - 128.0) / 128.0);
                         }
                     }
-                    AudioBufferRef::U16(buf) => {
-                        let ab = buf.as_ref();
-                        channels = ab.spec().channels.count();
-                        sample_rate = ab.spec().rate;
-                        let frames = ab.frames();
-                        for f in 0..frames {
-                            for ch in 0..channels {
-                                let v = ab.chan(ch)[f] as f32;
-                                samples.push((v - 32768.0) / 32768.0);
-                            }
+                }
+                AudioBufferRef::U16(buf) => {
+                    let ab = buf.as_ref();
+                    channels = ab.spec().channels.count();
+                    sample_rate = ab.spec().rate;
+                    let frames = ab.frames();
+                    for f in 0..frames {
+                        for ch in 0..channels {
+                            let v = ab.chan(ch)[f] as f32;
+                            samples.push((v - 32768.0) / 32768.0);
                         }
                     }
-                    AudioBufferRef::S16(buf) => {
-                        let ab = buf.as_ref();
-                        channels = ab.spec().channels.count();
-                        sample_rate = ab.spec().rate;
-                        let frames = ab.frames();
-                        for f in 0..frames {
-                            for ch in 0..channels {
-                                let v = ab.chan(ch)[f] as f32;
-                                samples.push(v / i16::MAX as f32);
-                            }
+                }
+                AudioBufferRef::S16(buf) => {
+                    let ab = buf.as_ref();
+                    channels = ab.spec().channels.count();
+                    sample_rate = ab.spec().rate;
+                    let frames = ab.frames();
+                    for f in 0..frames {
+                        for ch in 0..channels {
+                            let v = ab.chan(ch)[f] as f32;
+                            samples.push(v / i16::MAX as f32);
                         }
                     }
-                    AudioBufferRef::F32(buf) => {
-                        let ab = buf.as_ref();
-                        channels = ab.spec().channels.count();
-                        sample_rate = ab.spec().rate;
-                        let frames = ab.frames();
-                        for f in 0..frames {
-                            for ch in 0..channels {
-                                let v = ab.chan(ch)[f];
-                                samples.push(v);
-                            }
+                }
+                AudioBufferRef::F32(buf) => {
+                    let ab = buf.as_ref();
+                    channels = ab.spec().channels.count();
+                    sample_rate = ab.spec().rate;
+                    let frames = ab.frames();
+                    for f in 0..frames {
+                        for ch in 0..channels {
+                            let v = ab.chan(ch)[f];
+                            samples.push(v);
                         }
                     }
-                    AudioBufferRef::F64(buf) => {
-                        let ab = buf.as_ref();
-                        channels = ab.spec().channels.count();
-                        sample_rate = ab.spec().rate;
-                        let frames = ab.frames();
-                        for f in 0..frames {
-                            for ch in 0..channels {
-                                let v = ab.chan(ch)[f];
-                                samples.push(v as f32);
-                            }
+                }
+                AudioBufferRef::F64(buf) => {
+                    let ab = buf.as_ref();
+                    channels = ab.spec().channels.count();
+                    sample_rate = ab.spec().rate;
+                    let frames = ab.frames();
+                    for f in 0..frames {
+                        for ch in 0..channels {
+                            let v = ab.chan(ch)[f];
+                            samples.push(v as f32);
                         }
                     }
-                    _ => {
-                        // Unsupported format
-                    }
-                },
-                Err(_) => { /* ignore */ }
+                }
+                _ => {
+                    // Unsupported format
+                }
             },
-            Err(_) => break,
+            Err(_) => { /* ignore */ }
         }
     }
 
