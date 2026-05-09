@@ -19,6 +19,19 @@
 //! - `core` — アプリケーションライフサイクル、タブ管理、イベントループ
 //! - `engine` — パーサ、レイアウト、描画コマンドの生成（仕様中心のロジック）
 //! - `platform` — ネットワーク、フォント、GPU、OS 統合（プラットフォーム依存実装）
+#![warn(clippy::perf)]
+#![warn(clippy::correctness)]
+#![warn(clippy::suspicious)]
+#![warn(clippy::clone_on_ref_ptr)]
+#![warn(clippy::assigning_clones)]
+#![warn(clippy::large_enum_variant)]
+#![warn(clippy::redundant_clone)]
+#![warn(clippy::needless_collect)]
+#![warn(clippy::implicit_clone)]
+#![warn(clippy::manual_memcpy)]
+#![warn(clippy::manual_slice_fill)]
+#![warn(clippy::ptr_as_ptr)]
+#![warn(clippy::cast_ptr_alignment)]
 
 /// ブラウザ関連のモジュールをまとめたトップレベルモジュール
 pub mod browser;
