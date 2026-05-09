@@ -1,6 +1,7 @@
 //! Draw command definition for rendering, which represents drawing instructions.
 
 use crate::engine::layouter::types::{Color, InfoNode, NodeKind, TextDecoration, TextStyle};
+use smol_str::SmolStr;
 use ui_layout::LayoutNode;
 
 #[derive(Debug, Clone)]
@@ -8,7 +9,7 @@ pub enum DrawCommand {
     DrawText {
         x: f32,
         y: f32,
-        text: String,
+        text: SmolStr,
         style: TextStyle,
     },
     DrawRect {
@@ -71,7 +72,7 @@ pub fn generate_draw_commands(
                 cmd_buf.push(DrawCommand::DrawText {
                     x: abs_x,
                     y: abs_y,
-                    text: text.clone(),
+                    text: text.into(),
                     style: *style,
                 });
 

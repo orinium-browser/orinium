@@ -18,6 +18,8 @@
 use std::collections::VecDeque;
 use std::fmt;
 
+use crate::engine::css::values::CssIdent;
+
 use super::tokenizer::{Token, Tokenizer};
 use super::values::{CssValue, Unit};
 
@@ -778,7 +780,7 @@ impl<'a> Parser<'a> {
             log::debug!(target: "CssParser", "parse_tokens_to_css_value: token={:?}", token);
 
             match token {
-                Token::Ident(s) => values.push(CssValue::Keyword(s)),
+                Token::Ident(s) => values.push(CssValue::Keyword(s.into())),
 
                 Token::Delim(',') => {
                     // List separator
@@ -791,7 +793,10 @@ impl<'a> Parser<'a> {
                 }
 
                 Token::Delim(c) => {
-                    values.push(CssValue::Keyword(c.to_string()));
+                    let mut s = [0_u8; 4];
+                    let s = c.encode_utf8(&mut s);
+
+                    values.push(CssValue::Keyword(s.into()));
                 }
 
                 Token::Number(n) => values.push(CssValue::Number(n)),
@@ -852,7 +857,7 @@ impl<'a> Parser<'a> {
 
         // 複数値なら List、単数ならそのまま
         Ok(match values.len() {
-            0 => CssValue::Keyword(String::new()),
+            0 => CssValue::Keyword(CssIdent::new_static("")),
             1 => values.remove(0),
             _ => CssValue::List(values),
         })

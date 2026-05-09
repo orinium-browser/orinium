@@ -1,5 +1,7 @@
 //! CSSの値を表す構造体と列挙型
 
+pub type CssIdent = smol_str::SmolStr;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Unit {
     Px,
@@ -12,7 +14,7 @@ pub enum Unit {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CssValue {
-    Keyword(String),                 // e.g. auto, none
+    Keyword(CssIdent),               // e.g. auto, none
     Length(f32, Unit),               // e.g. 10px
     Number(f32),                     // e.g. 1.5
     String(String),                  // e.g. "http"

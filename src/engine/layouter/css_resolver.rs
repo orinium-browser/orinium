@@ -1,11 +1,11 @@
 //! A CSS resolver that handles selector matching and value resolution.
 
 use crate::engine::css::parser::{ComplexSelector, CssNode, CssNodeType};
-use crate::engine::css::values::CssValue;
+use crate::engine::css::values::{CssIdent, CssValue};
 
 use std::collections::HashMap;
 
-type CustomProperties = HashMap<String, CssValue>;
+type CustomProperties = HashMap<CssIdent, CssValue>;
 
 /// A single CSS declaration after selector resolution and value processing.
 ///
@@ -96,7 +96,7 @@ impl CssResolver {
             if let CssNodeType::Declaration { name, value } = &child.node()
                 && name.starts_with("--")
             {
-                custom_props.insert(name.clone(), value.clone());
+                custom_props.insert(name.into(), value.clone());
             }
         }
 
