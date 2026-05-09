@@ -326,8 +326,7 @@ fn build_inline_fragments(
 
         let (width, height) = measurer
             .measure(&req)
-            .map(|m| (m.width, m.height))
-            .unwrap_or((800.0, style.font_size * 1.2));
+            .map_or((800.0, style.font_size * 1.2), |m| (m.width, m.height));
 
         let fragment = ItemFragment::Fragment(Fragment { width, height });
 

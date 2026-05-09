@@ -150,7 +150,7 @@ impl Tab {
     }
 
     pub fn navigate(&mut self, url: Url) {
-        self.docment_url = Some(url.clone());
+        self.docment_url = Some(url);
         let mut webview = WebView::new();
         webview.navigate();
         self.webview = Some(webview);
@@ -198,10 +198,7 @@ impl Tab {
     }
 
     pub fn needs_redraw(&self) -> bool {
-        self.webview
-            .as_ref()
-            .map(|wv| wv.needs_redraw())
-            .unwrap_or(false)
+        self.webview.as_ref().is_some_and(|wv| wv.needs_redraw())
     }
 
     pub fn clear_redraw_flag(&mut self) {

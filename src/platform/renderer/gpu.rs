@@ -216,9 +216,7 @@ impl GpuRenderer {
         };
 
         // Enable text culling by default, allow override by env var
-        let enable_text_culling = std::env::var("ORINIUM_TEXT_CULL")
-            .map(|v| v != "0")
-            .unwrap_or(true);
+        let enable_text_culling = std::env::var("ORINIUM_TEXT_CULL").map_or(true, |v| v != "0");
 
         Ok(Self {
             surface,

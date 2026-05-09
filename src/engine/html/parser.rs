@@ -184,7 +184,7 @@ impl<'a> Parser<'a> {
         Self {
             tokenizer: Tokenizer::new(input),
             tree: document.clone(),
-            stack: vec![document.root.clone()],
+            stack: vec![document.root],
             tag_stack: vec![],
             special_text_mode: None,
         }
@@ -235,7 +235,7 @@ impl<'a> Parser<'a> {
                 &parent,
                 HtmlNodeType::Element {
                     tag_name: name.clone(),
-                    attributes: attributes.clone(),
+                    attributes: attributes,
                 },
             );
 

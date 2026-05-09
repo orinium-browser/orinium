@@ -137,7 +137,7 @@ impl NetworkInner {
 
         let req = Request::builder()
             .method(Method::GET)
-            .uri(uri.path_and_query().map(|p| p.as_str()).unwrap_or("/"))
+            .uri(uri.path_and_query().map_or("/", |p| p.as_str()))
             .header("Host", host)
             .header("User-Agent", self.network_config.user_agent.as_str())
             .body(Empty::<Bytes>::new())
@@ -264,7 +264,7 @@ fn resolve_redirect(base: &Uri, location: &str) -> Result<Uri, NetworkError> {
         format!("{scheme}://{}{location}", authority)
     } else {
         let base_path = base.path();
-        let prefix = base_path.rsplit_once('/').map(|x| x.0).unwrap_or("");
+        let prefix = base_path.rsplit_once('/').map_or("", |x| x.0);
         format!("{scheme}://{}{prefix}/{location}", authority)
     };
 

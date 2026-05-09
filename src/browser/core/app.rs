@@ -447,8 +447,7 @@ impl BrowserApp {
         let ctrl = self
             .inputs
             .get(&window_id)
-            .map(|i| i.modifiers.control_key())
-            .unwrap_or(false);
+            .is_some_and(|i| i.modifiers.control_key());
 
         if ctrl
             && let winit::keyboard::Key::Character(ch) = &event.logical_key

@@ -192,7 +192,7 @@ fn decode(data: &[u8]) -> Result<(Vec<f32>, usize, u32)> {
         .context("Failed to create decoder")?;
 
     let mut samples: Vec<f32> = Vec::new();
-    let mut channels: usize = codec_params.channels.map(|c| c.count()).unwrap_or(1);
+    let mut channels: usize = codec_params.channels.map_or(1, |c| c.count());
     let mut sample_rate: u32 = codec_params.sample_rate.unwrap_or(44100);
 
     while let Ok(packet) = format.next_packet() {
