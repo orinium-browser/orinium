@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["CssValue","Unit"]};
+window.SIDEBAR_ITEMS = {"enum":["CssValue","Unit"],"type":["CssIdent"]};
