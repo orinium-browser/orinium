@@ -13,6 +13,9 @@ use anyhow::Result;
 use std::{env, rc::Rc};
 
 fn main() -> Result<()> {
+    #[cfg(feature = "dhat-heap")]
+    let _profiler = dhat::Profiler::new_heap();
+
     env_logger::init();
 
     let args: Vec<String> = env::args().collect();
