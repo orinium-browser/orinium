@@ -7,12 +7,14 @@ use cpal::{SampleFormat, StreamConfig};
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use symphonia::core::audio::{AudioBufferRef, Signal};
-use symphonia::core::codecs::DecoderOptions;
+use symphonia::core::audio::sample::Sample;
+use symphonia::core::codecs::audio::AudioDecoderOptions;
+use symphonia::core::errors::Error;
 use symphonia::core::formats::FormatOptions;
+use symphonia::core::formats::TrackType;
+use symphonia::core::formats::probe::Hint;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
 use symphonia::default::{get_codecs, get_probe};
 
 /// 音声の管理を行う構造体
@@ -173,96 +175,64 @@ fn decode(data: &[u8]) -> Result<(Vec<f32>, usize, u32)> {
     let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
 
     let hint = Hint::new();
-    let probed = get_probe()
-        .format(
-            &hint,
-            mss,
-            &FormatOptions::default(),
-            &MetadataOptions::default(),
-        )
+    let fmt_opts: FormatOptions = Default::default();
+    let meta_opts: MetadataOptions = Default::default();
+    let dec_opts: AudioDecoderOptions = Default::default();
+
+    let mut format = get_probe()
+        .probe(&hint, mss, fmt_opts, meta_opts)
         .context("Failed to probe media format")?;
 
-    let mut format = probed.format;
     let track = format
-        .default_track()
+        .default_track(TrackType::Audio)
         .ok_or_else(|| anyhow::anyhow!("No default audio track found"))?;
-    let codec_params = &track.codec_params;
+
+    let track_id = track.id;
+
+    let audio_params = track
+        .codec_params
+        .as_ref()
+        .and_then(|p| p.audio())
+        .ok_or_else(|| anyhow::anyhow!("Default track has no audio codec parameters"))?;
+
     let mut decoder = get_codecs()
-        .make(codec_params, &DecoderOptions::default())
-        .context("Failed to create decoder")?;
+        .make_audio_decoder(audio_params, &dec_opts)
+        .context("Failed to create audio decoder")?;
 
-    let mut samples: Vec<f32> = Vec::new();
-    let mut channels: usize = codec_params.channels.map_or(1, |c| c.count());
-    let mut sample_rate: u32 = codec_params.sample_rate.unwrap_or(44100);
+    let mut samples = Vec::<f32>::new();
+    let mut channels = audio_params
+        .channels
+        .as_ref()
+        .map_or(1, |c| c.count());
 
-    while let Ok(packet) = format.next_packet() {
+    let mut sample_rate = audio_params.sample_rate.unwrap_or(44100);
+
+    loop {
+        let packet = match format.next_packet() {
+            Ok(Some(packet)) => packet,
+            Ok(None) => break,
+            Err(err) => return Err(err).context("Failed to read media packet"),
+        };
+
+        if packet.track_id != track_id {
+            continue;
+        }
+
         match decoder.decode(&packet) {
-            Ok(audio_buf) => match audio_buf {
-                AudioBufferRef::U8(buf) => {
-                    let ab = buf.as_ref();
-                    channels = ab.spec().channels.count();
-                    sample_rate = ab.spec().rate;
-                    let frames = ab.frames();
-                    for f in 0..frames {
-                        for ch in 0..channels {
-                            let v = ab.chan(ch)[f] as f32;
-                            samples.push((v - 128.0) / 128.0);
-                        }
-                    }
-                }
-                AudioBufferRef::U16(buf) => {
-                    let ab = buf.as_ref();
-                    channels = ab.spec().channels.count();
-                    sample_rate = ab.spec().rate;
-                    let frames = ab.frames();
-                    for f in 0..frames {
-                        for ch in 0..channels {
-                            let v = ab.chan(ch)[f] as f32;
-                            samples.push((v - 32768.0) / 32768.0);
-                        }
-                    }
-                }
-                AudioBufferRef::S16(buf) => {
-                    let ab = buf.as_ref();
-                    channels = ab.spec().channels.count();
-                    sample_rate = ab.spec().rate;
-                    let frames = ab.frames();
-                    for f in 0..frames {
-                        for ch in 0..channels {
-                            let v = ab.chan(ch)[f] as f32;
-                            samples.push(v / i16::MAX as f32);
-                        }
-                    }
-                }
-                AudioBufferRef::F32(buf) => {
-                    let ab = buf.as_ref();
-                    channels = ab.spec().channels.count();
-                    sample_rate = ab.spec().rate;
-                    let frames = ab.frames();
-                    for f in 0..frames {
-                        for ch in 0..channels {
-                            let v = ab.chan(ch)[f];
-                            samples.push(v);
-                        }
-                    }
-                }
-                AudioBufferRef::F64(buf) => {
-                    let ab = buf.as_ref();
-                    channels = ab.spec().channels.count();
-                    sample_rate = ab.spec().rate;
-                    let frames = ab.frames();
-                    for f in 0..frames {
-                        for ch in 0..channels {
-                            let v = ab.chan(ch)[f];
-                            samples.push(v as f32);
-                        }
-                    }
-                }
-                _ => {
-                    // Unsupported format
-                }
-            },
-            Err(_) => { /* ignore */ }
+            Ok(audio_buf) => {
+                channels = audio_buf.spec().channels().count();
+                sample_rate = audio_buf.spec().rate();
+
+                let mut decoded = vec![f32::MID; audio_buf.samples_interleaved()];
+                audio_buf.copy_to_slice_interleaved(&mut decoded);
+                samples.extend_from_slice(&decoded);
+            }
+            Err(Error::DecodeError(_)) => {
+                continue;
+            }
+            Err(err) => {
+                return Err(err).context("Failed to decode audio packet");
+            }
         }
     }
 
