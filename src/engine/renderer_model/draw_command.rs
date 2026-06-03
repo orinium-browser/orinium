@@ -2,7 +2,7 @@
 
 use crate::engine::layouter::types::{Color, InfoNode, NodeKind, TextDecoration, TextStyle};
 use smol_str::SmolStr;
-use ui_layout::LayoutNode;
+use ui_layout::{FragmentNode, LayoutNode};
 
 #[derive(Debug, Clone)]
 pub enum DrawCommand {
@@ -51,21 +51,20 @@ pub fn generate_draw_commands(
 ) {
     match &info.kind {
         NodeKind::Text { texts, style, .. } => {
+            let fragments: Vec<&FragmentNode> = layout
+                .children
+                .iter()
+                .filter_map(|c| c.fragment())
+                .collect();
+
             debug_assert_eq!(
                 texts.len(),
-                layout.self_fragments.len(),
+                fragments.len(),
                 "`generate_draw_commands` may be called before layout is complete."
             );
-            debug_assert_eq!(
-                layout.self_fragments.len(),
-                layout.placements.len(),
-                "Layout should have placements for all self fragments."
-            );
-            for ((text, placement), fragment) in texts
-                .iter()
-                .zip(&layout.placements)
-                .zip(&layout.self_fragments)
-            {
+            for (text, fragment_node) in texts.iter().zip(fragments) {
+                let placement = fragment_node.placement;
+                let fragment = fragment_node.node;
                 let (abs_x, abs_y) = placement.offset;
 
                 // テキスト
@@ -105,7 +104,7 @@ pub fn generate_draw_commands(
             style,
             ..
         } => {
-            for box_model in &layout.layout_boxes {
+            for box_model in &layout.layout_box {
                 let border_box = box_model.border_box;
                 let padding_box = box_model.padding_box;
                 let content_box = box_model.content_box;
@@ -192,13 +191,15 @@ pub fn generate_draw_commands(
         }
     }
 
-    for (child_layout, child_info) in layout.children.iter().zip(&info.children) {
-        generate_draw_commands(cmd_buf, child_layout, child_info);
+    for (child_child, child_info) in layout.children.iter().zip(&info.children) {
+        if let Some(child_layout) = child_child.node() {
+            generate_draw_commands(cmd_buf, child_layout, child_info);
+        }
     }
 
     // Pop commands for containers
     if matches!(info.kind, NodeKind::Container { .. }) {
-        for _ in &layout.layout_boxes {
+        for _ in &layout.layout_box {
             cmd_buf.push(DrawCommand::PopTransform);
             cmd_buf.push(DrawCommand::PopTransform);
             cmd_buf.push(DrawCommand::PopClip);

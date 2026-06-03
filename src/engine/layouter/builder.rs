@@ -13,8 +13,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use ui_layout::{
-    AlignItems, BoxSizing, Display, FlexDirection, Fragment, ItemFragment, JustifyContent,
-    LayoutNode, Length, Style,
+    AlignItems, BoxSizing, Display, FlexDirection, Fragment, InnerDisplay, ItemFragment,
+    JustifyContent, LayoutNode, Length, LengthOrAuto, OuterDisplay, Style,
 };
 
 use super::css_resolver::ResolvedStyles;
@@ -179,13 +179,14 @@ pub fn build_layout_and_info(
         ----------------------------- */
 
         let style = Style {
-            display: Display::Inline,
+            display: Display {
+                outer: OuterDisplay::Inline,
+                inner: InnerDisplay::Flow,
+            },
             ..style
         };
 
-        let mut layout = LayoutNode::new(style);
-
-        layout.set_fragments(inline_fragments);
+        let layout = LayoutNode::with_children(style, inline_fragments);
 
         let info = InfoNode {
             kind,
@@ -205,7 +206,7 @@ pub fn build_layout_and_info(
         let mut layout_children = Vec::new();
         let mut info_children = Vec::new();
 
-        if !matches!(style.display, Display::None) {
+        if style.display.outer != OuterDisplay::None {
             let mut has_text_child = false;
 
             for child_dom in dom.borrow().children() {
@@ -216,10 +217,15 @@ pub fn build_layout_and_info(
             }
 
             // 子に TextNode がある Block 要素は Flex(row) に変換
-            if has_text_child && matches!(style.display, Display::Block) {
-                style.display = Display::Flex {
-                    flex_direction: FlexDirection::Row,
+            if has_text_child
+                && style.display.outer == OuterDisplay::Block
+                && style.display.inner == InnerDisplay::Flow
+            {
+                style.display = Display {
+                    outer: OuterDisplay::Block,
+                    inner: InnerDisplay::Flex,
                 };
+                style.flex_direction = FlexDirection::Row;
             }
 
             // Table 要素は暫定的に Flex に置き換える。
@@ -230,14 +236,18 @@ pub fn build_layout_and_info(
                         || tag_name == "thead"
                         || tag_name == "tfoot" =>
                 {
-                    style.display = Display::Flex {
-                        flex_direction: FlexDirection::Column,
+                    style.display = Display {
+                        outer: OuterDisplay::Block,
+                        inner: InnerDisplay::Flex,
                     };
+                    style.flex_direction = FlexDirection::Column;
                 }
                 HtmlNodeType::Element { tag_name, .. } if tag_name == "tr" => {
-                    style.display = Display::Flex {
-                        flex_direction: FlexDirection::Row,
+                    style.display = Display {
+                        outer: OuterDisplay::Block,
+                        inner: InnerDisplay::Flex,
                     };
+                    style.flex_direction = FlexDirection::Row;
                 }
                 _ => {}
             }
@@ -391,20 +401,20 @@ fn apply_declaration(
     container_style: &mut ContainerStyle,
     text_style: &mut TextStyle,
 ) -> Option<()> {
-    fn expand_box<F>(
+    fn expand_box<T: Clone, F>(
         value: &CssValue,
         text_style: &TextStyle,
-        resolve_css_len: &impl Fn(&CssValue, &TextStyle) -> Option<Length>,
+        resolve: &impl Fn(&CssValue, &TextStyle) -> Option<T>,
         mut set: F,
     ) -> Option<()>
     where
-        F: FnMut(Length, Length, Length, Length),
+        F: FnMut(T, T, T, T),
     {
-        let resolve = |v: &CssValue| -> Option<Length> { resolve_css_len(v, text_style) };
+        let resolve = |v: &CssValue| -> Option<T> { resolve(v, text_style) };
 
         match value {
             CssValue::List(values) => {
-                let vals: Vec<Length> = values.iter().map(resolve).collect::<Option<_>>()?;
+                let vals: Vec<T> = values.iter().map(resolve).collect::<Option<_>>()?;
 
                 match vals.as_slice() {
                     [a] => set(a.clone(), a.clone(), a.clone(), a.clone()),
@@ -416,7 +426,7 @@ fn apply_declaration(
             }
 
             _ => {
-                let v = resolve_css_len(value, text_style)?;
+                let v = resolve(value)?;
                 set(v.clone(), v.clone(), v.clone(), v);
             }
         }
@@ -511,15 +521,12 @@ fn apply_declaration(
          * Display
          * ====================== */
         ("display", CssValue::Keyword(v)) => {
-            style.display = match v.as_str() {
-                "block" => Display::Block,
-                "flex" => Display::Flex {
-                    flex_direction: FlexDirection::Row,
-                },
-                "inline" => Display::Inline,
-                "none" => Display::None,
-                _ => style.display,
-            };
+            if let Some(parsed_display) = Display::from_css_name(v.as_str()) {
+                style.display = parsed_display;
+                if parsed_display.inner == InnerDisplay::Flex {
+                    style.flex_direction = FlexDirection::Row;
+                }
+            }
         }
 
         /* ======================
@@ -645,24 +652,44 @@ fn apply_declaration(
         }
 
         ("margin", v) => {
-            expand_box(v, text_style, &resolve_css_len, |t, r, b, l| {
-                style.spacing.margin_top = t;
-                style.spacing.margin_right = r;
-                style.spacing.margin_bottom = b;
-                style.spacing.margin_left = l;
-            })?;
+            expand_box(
+                v,
+                text_style,
+                &|cv, ts| match cv {
+                    CssValue::Keyword(s) if s == "auto" => Some(ui_layout::LengthOrAuto::Auto),
+                    _ => resolve_css_len(cv, ts).map(ui_layout::LengthOrAuto::Length),
+                },
+                |t, r, b, l| {
+                    style.spacing.margin_top = t;
+                    style.spacing.margin_right = r;
+                    style.spacing.margin_bottom = b;
+                    style.spacing.margin_left = l;
+                },
+            )?;
+        }
+        ("margin-top", CssValue::Keyword(s)) if s == "auto" => {
+            style.spacing.margin_top = LengthOrAuto::Auto;
         }
         ("margin-top", _) => {
-            style.spacing.margin_top = resolve_css_len(value, text_style)?;
+            style.spacing.margin_top = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+        }
+        ("margin-right", CssValue::Keyword(s)) if s == "auto" => {
+            style.spacing.margin_right = LengthOrAuto::Auto;
         }
         ("margin-right", _) => {
-            style.spacing.margin_right = resolve_css_len(value, text_style)?;
+            style.spacing.margin_right = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+        }
+        ("margin-bottom", CssValue::Keyword(s)) if s == "auto" => {
+            style.spacing.margin_bottom = LengthOrAuto::Auto;
         }
         ("margin-bottom", _) => {
-            style.spacing.margin_bottom = resolve_css_len(value, text_style)?;
+            style.spacing.margin_bottom = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+        }
+        ("margin-left", CssValue::Keyword(s)) if s == "auto" => {
+            style.spacing.margin_left = LengthOrAuto::Auto;
         }
         ("margin-left", _) => {
-            style.spacing.margin_left = resolve_css_len(value, text_style)?;
+            style.spacing.margin_left = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
         }
 
         ("border", v) => {
@@ -782,31 +809,49 @@ fn apply_declaration(
         /* ======================
          * Size
          * ====================== */
+        ("width", CssValue::Keyword(s)) if s == "auto" => {
+            style.size.width = LengthOrAuto::Auto;
+        }
         ("width", _) => {
-            style.size.width = resolve_css_len(value, text_style)?;
+            style.size.width = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+        }
+        ("height", CssValue::Keyword(s)) if s == "auto" => {
+            style.size.height = LengthOrAuto::Auto;
         }
         ("height", _) => {
-            style.size.height = resolve_css_len(value, text_style)?;
+            style.size.height = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+        }
+        ("min-width", CssValue::Keyword(s)) if s == "auto" => {
+            style.size.min_width = LengthOrAuto::Auto;
         }
         ("min-width", _) => {
-            style.size.min_width = resolve_css_len(value, text_style)?;
+            style.size.min_width = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+        }
+        ("min-height", CssValue::Keyword(s)) if s == "auto" => {
+            style.size.min_height = LengthOrAuto::Auto;
         }
         ("min-height", _) => {
-            style.size.min_height = resolve_css_len(value, text_style)?;
+            style.size.min_height = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+        }
+        ("max-width", CssValue::Keyword(s)) if s == "auto" => {
+            style.size.max_width = LengthOrAuto::Auto;
         }
         ("max-width", _) => {
-            style.size.max_width = resolve_css_len(value, text_style)?;
+            style.size.max_width = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+        }
+        ("max-height", CssValue::Keyword(s)) if s == "auto" => {
+            style.size.max_height = LengthOrAuto::Auto;
         }
         ("max-height", _) => {
-            style.size.max_height = resolve_css_len(value, text_style)?;
+            style.size.max_height = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
         }
 
         /* ======================
          * Flex
          * ====================== */
         ("flex-direction", CssValue::Keyword(v)) => {
-            if let Display::Flex { flex_direction } = &mut style.display {
-                *flex_direction = match v.as_str() {
+            if style.display.inner == InnerDisplay::Flex {
+                style.flex_direction = match v.as_str() {
                     "row" => FlexDirection::Row,
                     "column" => FlexDirection::Column,
                     _ => return None,
@@ -835,8 +880,12 @@ fn apply_declaration(
             };
         }
 
+        ("gap", CssValue::Keyword(s)) if s == "auto" => {
+            style.row_gap = LengthOrAuto::Auto;
+            style.column_gap = LengthOrAuto::Auto;
+        }
         ("gap", _) => {
-            let gap = resolve_css_len(value, text_style)?;
+            let gap = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
             style.row_gap = gap.clone();
             style.column_gap = gap;
         }
@@ -855,8 +904,11 @@ fn apply_declaration(
             style.item_style.flex_grow = *v;
         }
 
+        ("flex-basis", CssValue::Keyword(s)) if s == "auto" => {
+            style.item_style.flex_basis = LengthOrAuto::Auto;
+        }
         ("flex-basis", _) => {
-            style.item_style.flex_basis = resolve_css_len(value, text_style)?;
+            style.item_style.flex_basis = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
         }
 
         _ => {}
@@ -877,10 +929,7 @@ fn resolve_css_len(css_len: &CssValue, text_style: &TextStyle) -> Option<Length>
             Unit::Em | Unit::Rem => unreachable!(),
         },
         CssValue::Number(0.0) => Some(Length::Px(0.0)),
-        CssValue::Keyword(s) => match s.as_str() {
-            "auto" => Some(Length::Auto),
-            _ => None,
-        },
+        CssValue::Keyword(_) => None,
         CssValue::Function(name, args) if name == "calc" && !args.is_empty() => {
             let mut iter = args.iter();
             let mut result = resolve_css_len(iter.next().unwrap(), text_style)?;
