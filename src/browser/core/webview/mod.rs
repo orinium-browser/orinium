@@ -9,7 +9,7 @@ use crate::engine::{
     },
 };
 use crate::platform::renderer::text_measurer::PlatformTextMeasurer;
-use ui_layout::LayoutNode;
+use ui_layout::{LayoutNode, Length};
 use url::Url;
 
 const USER_AGENT_CSS: &str = include_str!("../../../../resource/user-agent.css");
@@ -212,6 +212,7 @@ impl WebView {
                 font_size: 16.0,
                 ..Default::default()
             },
+            Length::default(),
             Vec::new(),
         ));
         self.needs_redraw = true;

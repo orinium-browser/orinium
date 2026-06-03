@@ -18,6 +18,7 @@
 html {
     display: block;
     font-size: 16px;
+    line-height: normal;
 }
 
 /* --- Document body --- */

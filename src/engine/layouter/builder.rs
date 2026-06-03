@@ -23,6 +23,8 @@ use super::types::{
     TextAlign, TextDecoration, TextStyle,
 };
 
+const DEFAULT_LINE_FACTOR: f32 = 1.2;
+
 /// Builds a layout tree (`LayoutNode`) and a render info tree (`InfoNode`) from the DOM.
 ///
 /// # Overview
@@ -68,6 +70,7 @@ pub fn build_layout_and_info(
     resolved_styles: &ResolvedStyles,
     measurer: &dyn text::TextMeasurer<TextStyle>,
     parent_text_style: TextStyle,
+    parent_line_height: Length,
     mut chain: ElementChain,
 ) -> (LayoutNode, InfoNode) {
     let html_node = dom.borrow().value.clone();
@@ -75,7 +78,10 @@ pub fn build_layout_and_info(
     /* -----------------------------
        Initial values (inheritance)
     ----------------------------- */
-    let mut style = Style::default();
+    let mut style = Style {
+        line_height: parent_line_height,
+        ..Style::default()
+    };
 
     let mut text_style = parent_text_style;
     let mut container_style = ContainerStyle::default();
@@ -258,6 +264,7 @@ pub fn build_layout_and_info(
                     resolved_styles,
                     measurer,
                     text_style,
+                    style.line_height.clone(),
                     chain.clone(),
                 );
 
@@ -583,6 +590,16 @@ fn apply_declaration(
                 }
             };
             text_style.font_size = px;
+        }
+
+        ("line-height", CssValue::Number(factor)) => {
+            style.line_height = Length::Px(text_style.font_size * factor);
+        }
+        ("line-height", CssValue::Keyword(v)) if v == "normal" => {
+            style.line_height = Length::Px(text_style.font_size * DEFAULT_LINE_FACTOR);
+        }
+        ("line-height", _) => {
+            style.line_height = resolve_css_len(value, text_style)?;
         }
 
         ("font-weight", CssValue::Keyword(v)) => {
