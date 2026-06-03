@@ -527,7 +527,7 @@ impl BrowserApp {
             *scroll_offset_y = (*scroll_offset_y + scroll_amount).clamp(
                 0.0,
                 (layout
-                    .layout_boxes
+                    .layout_box
                     .iter()
                     .map(|l| l.children_box.height)
                     .sum::<f32>()
