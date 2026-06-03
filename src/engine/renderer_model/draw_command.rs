@@ -162,12 +162,15 @@ pub fn generate_draw_commands(
                 });
 
                 // ===== clip + background + content =====
-                cmd_buf.push(DrawCommand::PushClip {
-                    x: padding_box.x - border_box.x,
-                    y: padding_box.y - border_box.y,
-                    width: padding_box.width,
-                    height: padding_box.height,
-                });
+                let is_inline = matches!(layout.layout_box, ui_layout::LayoutBox::InlineBox(_));
+                if !is_inline {
+                    cmd_buf.push(DrawCommand::PushClip {
+                        x: padding_box.x - border_box.x,
+                        y: padding_box.y - border_box.y,
+                        width: padding_box.width,
+                        height: padding_box.height,
+                    });
+                }
 
                 // background
                 cmd_buf.push(DrawCommand::DrawRect {
@@ -199,10 +202,13 @@ pub fn generate_draw_commands(
 
     // Pop commands for containers
     if matches!(info.kind, NodeKind::Container { .. }) {
+        let is_inline = matches!(layout.layout_box, ui_layout::LayoutBox::InlineBox(_));
         for _ in &layout.layout_box {
             cmd_buf.push(DrawCommand::PopTransform);
             cmd_buf.push(DrawCommand::PopTransform);
-            cmd_buf.push(DrawCommand::PopClip);
+            if !is_inline {
+                cmd_buf.push(DrawCommand::PopClip);
+            }
             cmd_buf.push(DrawCommand::PopTransform);
         }
     }
