@@ -57,9 +57,8 @@ pub fn generate_draw_commands(
                 .filter_map(|c| c.fragment())
                 .collect();
 
-            debug_assert_eq!(
-                texts.len(),
-                fragments.len(),
+            debug_assert!(
+                texts.len() <= fragments.len(),
                 "`generate_draw_commands` may be called before layout is complete."
             );
             for (text, fragment_node) in texts.iter().zip(fragments) {

@@ -14,7 +14,7 @@ use std::rc::Rc;
 
 use ui_layout::{
     AlignItems, BoxSizing, Display, FlexDirection, Fragment, InnerDisplay, ItemFragment,
-    JustifyContent, LayoutNode, Length, LengthOrAuto, OuterDisplay, Style,
+    JustifyContent, LayoutChild, LayoutNode, Length, LengthOrAuto, OuterDisplay, Style,
 };
 
 use super::css_resolver::ResolvedStyles;
@@ -209,7 +209,7 @@ pub fn build_layout_and_info(
         // Table 要素は未実装。
         // 暫定的に Flex に置き換える。
         // TODO: 将来的には TableLayout 実装に置き換える。
-        let mut layout_children = Vec::new();
+        let mut layout_children: Vec<LayoutChild> = Vec::new();
         let mut info_children = Vec::new();
 
         if style.display.outer != OuterDisplay::None {
@@ -259,33 +259,53 @@ pub fn build_layout_and_info(
             }
 
             for child_dom in dom.borrow().children() {
-                let (child_layout, child_info) = build_layout_and_info(
-                    child_dom,
-                    resolved_styles,
-                    measurer,
-                    text_style,
-                    style.line_height.clone(),
-                    chain.clone(),
-                );
+                let child_node = child_dom.borrow().value.clone();
 
-                if dom.borrow().value.tag_name() == Some("html")
-                    && child_dom.borrow().value.tag_name() == Some("body")
-                    && let NodeKind::Container { style, .. } = &mut kind
-                    && style.background_color == Color(0, 0, 0, 0)
-                {
-                    let background_color = {
-                        let NodeKind::Container { style, .. } = &child_info.kind else {
-                            continue;
-                        };
-                        style.background_color
+                if let HtmlNodeType::Text(t) = &child_node {
+                    let t = normalize_whitespace(t);
+                    let mut text_kind = NodeKind::Text {
+                        texts: split_fragments(&t),
+                        style: text_style,
                     };
-                    // html 要素の body 子要素に背景色が指定されていない場合、
-                    // body の背景色を html の背景色で上書きする
-                    style.background_color = background_color;
-                }
+                    let fragments = build_inline_fragments(&mut text_kind, measurer);
 
-                layout_children.push(child_layout);
-                info_children.push(child_info);
+                    for fragment in fragments {
+                        layout_children.push(fragment.into());
+                    }
+
+                    info_children.push(InfoNode {
+                        kind: text_kind,
+                        children: vec![],
+                    });
+                } else {
+                    let (child_layout, child_info) = build_layout_and_info(
+                        child_dom,
+                        resolved_styles,
+                        measurer,
+                        text_style,
+                        style.line_height.clone(),
+                        chain.clone(),
+                    );
+
+                    if dom.borrow().value.tag_name() == Some("html")
+                        && child_dom.borrow().value.tag_name() == Some("body")
+                        && let NodeKind::Container { style, .. } = &mut kind
+                        && style.background_color == Color(0, 0, 0, 0)
+                    {
+                        let background_color = {
+                            let NodeKind::Container { style, .. } = &child_info.kind else {
+                                continue;
+                            };
+                            style.background_color
+                        };
+                        // html 要素の body 子要素に背景色が指定されていない場合、
+                        // body の背景色を html の背景色で上書きする
+                        style.background_color = background_color;
+                    }
+
+                    layout_children.push(child_layout.into());
+                    info_children.push(child_info);
+                }
             }
         }
 
