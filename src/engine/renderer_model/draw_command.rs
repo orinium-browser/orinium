@@ -2,7 +2,7 @@
 
 use crate::engine::layouter::types::{Color, InfoNode, NodeKind, TextDecoration, TextStyle};
 use smol_str::SmolStr;
-use ui_layout::{FragmentNode, LayoutNode};
+use ui_layout::{FragmentNode, LayoutChild, LayoutNode};
 
 #[derive(Debug, Clone)]
 pub enum DrawCommand {
@@ -194,8 +194,42 @@ pub fn generate_draw_commands(
     }
 
     for (child_child, child_info) in layout.children.iter().zip(&info.children) {
-        if let Some(child_layout) = child_child.node() {
-            generate_draw_commands(cmd_buf, child_layout, child_info);
+        match child_child {
+            LayoutChild::Node(node) => {
+                generate_draw_commands(cmd_buf, node, child_info);
+            }
+            LayoutChild::Fragment(frag_node) => {
+                if let NodeKind::Text { texts, style } = &child_info.kind {
+                    if let Some(text) = texts.first() {
+                        let (x, y) = frag_node.placement.offset;
+
+                        cmd_buf.push(DrawCommand::DrawText {
+                            x,
+                            y,
+                            text: text.into(),
+                            style: *style,
+                        });
+
+                        let font_size = style.font_size;
+                        let line_thickness = (font_size * 0.08).max(1.0);
+                        let (line_y, draw) = match style.text_decoration {
+                            TextDecoration::None => (0.0, false),
+                            TextDecoration::Underline => (y + font_size, true),
+                            TextDecoration::LineThrough => (y + font_size * 0.5, true),
+                            TextDecoration::Overline => (y, true),
+                        };
+                        if draw {
+                            cmd_buf.push(DrawCommand::DrawRect {
+                                x,
+                                y: line_y,
+                                width: frag_node.node.width(),
+                                height: line_thickness,
+                                color: style.color,
+                            });
+                        }
+                    }
+                }
+            }
         }
     }
 
