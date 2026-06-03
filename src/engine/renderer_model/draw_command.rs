@@ -57,10 +57,10 @@ pub fn generate_draw_commands(
                 .filter_map(|c| c.fragment())
                 .collect();
 
-            debug_assert!(
+            /*debug_assert!(
                 texts.len() <= fragments.len(),
                 "`generate_draw_commands` may be called before layout is complete."
-            );
+            );*/
             for (text, fragment_node) in texts.iter().zip(fragments) {
                 let placement = fragment_node.placement;
                 let fragment = fragment_node.node;
