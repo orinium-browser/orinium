@@ -267,7 +267,7 @@ pub fn build_layout_and_info(
                         texts: split_fragments(&t),
                         style: text_style,
                     };
-                    let fragments = build_inline_fragments(&mut text_kind, measurer);
+                    let fragments = build_fragments(&mut text_kind, measurer);
 
                     for fragment in fragments {
                         layout_children.push(fragment.into());
@@ -343,7 +343,7 @@ fn split_fragments(text: &str) -> Vec<String> {
     out
 }
 
-fn build_inline_fragments(
+fn build_fragments(
     kind: &mut NodeKind,
     measurer: &dyn text::TextMeasurer<TextStyle>,
 ) -> Vec<ItemFragment> {
