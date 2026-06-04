@@ -4,12 +4,12 @@ use crate::engine::{
     css::parser::Parser as CssParser,
     html::parser::{DomTree, Parser as HtmlParser},
     layouter::{
-        self,
+        self, InheritedCss,
         types::{InfoNode, TextStyle},
     },
 };
 use crate::platform::renderer::text_measurer::PlatformTextMeasurer;
-use ui_layout::{LayoutNode, Length};
+use ui_layout::LayoutNode;
 use url::Url;
 
 const USER_AGENT_CSS: &str = include_str!("../../../../resource/user-agent.css");
@@ -208,11 +208,12 @@ impl WebView {
             &self.docment_info.as_ref().unwrap().dom.root,
             &self.resolved_styles,
             &measurer,
-            TextStyle {
-                font_size: 16.0,
-                ..Default::default()
+            InheritedCss {
+                text_style: TextStyle {
+                    font_size: 16.0,
+                    ..Default::default()
+                },
             },
-            Length::default(),
             Vec::new(),
         ));
         self.needs_redraw = true;

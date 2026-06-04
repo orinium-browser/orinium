@@ -16,4 +16,4 @@ mod builder;
 pub mod css_resolver;
 pub mod types;
 
-pub use builder::build_layout_and_info;
+pub use builder::{build_layout_and_info, InheritedCss};

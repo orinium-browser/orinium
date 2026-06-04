@@ -19,11 +19,33 @@ use ui_layout::{
 
 use super::css_resolver::ResolvedStyles;
 use super::types::{
-    BorderStyle, Color, ContainerRole, ContainerStyle, FontStyle, FontWeight, InfoNode, NodeKind,
-    TextAlign, TextDecoration, TextStyle,
+    BorderStyle, Color, ContainerRole, ContainerStyle, FontStyle, FontWeight, InfoNode, LineHeight,
+    NodeKind, TextAlign, TextDecoration, TextStyle,
 };
 
 const DEFAULT_LINE_FACTOR: f32 = 1.2;
+
+/// Inherited values from parent, passed down through the tree.
+///
+/// `text_style` carries all inherited text/line-height values.
+/// Add new fields here when additional deferred-resolution properties arise.
+#[derive(Clone, Copy)]
+pub struct InheritedCss {
+    pub text_style: TextStyle,
+}
+
+/// Convert a resolved `Length` to an absolute pixel value for `LineHeight::Px`.
+fn length_to_px(len: &Length, font_size: f32) -> f32 {
+    match len {
+        Length::Px(v) => *v,
+        Length::Percent(v) => v * font_size / 100.0,
+        Length::Add(a, b) => length_to_px(a, font_size) + length_to_px(b, font_size),
+        Length::Sub(a, b) => length_to_px(a, font_size) - length_to_px(b, font_size),
+        Length::Mul(a, f) => length_to_px(a, font_size) * f,
+        Length::Div(a, f) => length_to_px(a, font_size) / f,
+        _ => font_size * DEFAULT_LINE_FACTOR,
+    }
+}
 
 /// Builds a layout tree (`LayoutNode`) and a render info tree (`InfoNode`) from the DOM.
 ///
@@ -69,25 +91,17 @@ pub fn build_layout_and_info(
     dom: &Rc<RefCell<TreeNode<HtmlNodeType>>>,
     resolved_styles: &ResolvedStyles,
     measurer: &dyn text::TextMeasurer<TextStyle>,
-    parent_text_style: TextStyle,
-    parent_line_height: Length,
+    parent: InheritedCss,
     mut chain: ElementChain,
 ) -> (LayoutNode, InfoNode) {
     let html_node = dom.borrow().value.clone();
 
-    /* -----------------------------
-       Initial values (inheritance)
-    ----------------------------- */
-    let mut style = Style {
-        line_height: parent_line_height,
-        ..Style::default()
-    };
-
-    let mut text_style = parent_text_style;
+    let mut text_style = parent.text_style;
     let mut container_style = ContainerStyle::default();
+    let mut style = Style::default();
 
     /* -----------------------------
-       Apply resolved CSS
+       Build element chain
     ----------------------------- */
     if let HtmlNodeType::Element {
         tag_name,
@@ -119,9 +133,22 @@ pub fn build_layout_and_info(
                 classes: class_list,
             },
         );
+    }
 
-        let candidates = collect_candidates(resolved_styles, &chain);
+    /* -----------------------------
+       Collect CSS candidates
+    ----------------------------- */
+    let candidates: Option<HashMap<String, (CssValue, (u32, u32, u32), usize)>> =
+        if let HtmlNodeType::Element { .. } = &html_node {
+            Some(collect_candidates(resolved_styles, &chain))
+        } else {
+            None
+        };
 
+    /* -----------------------------
+       Phase 1: Apply element-specific CSS declarations
+    ----------------------------- */
+    if let Some(candidates) = &candidates {
         for (name, (value, _, _)) in candidates {
             if name.starts_with("--") {
                 continue;
@@ -136,6 +163,20 @@ pub fn build_layout_and_info(
         }
     }
 
+    /* -----------------------------
+       Phase 2: Resolve line-height using final font_size.
+       text_style.line_height was either inherited from parent
+       (via parent.text_style) or set by an explicit declaration
+       in Phase 1 (via apply_declaration).
+    ----------------------------- */
+    style.line_height = match text_style.line_height {
+        LineHeight::Number(factor) => Length::Px(text_style.font_size * factor),
+        LineHeight::Normal => Length::Px(text_style.font_size * DEFAULT_LINE_FACTOR),
+        LineHeight::Px(px) => Length::Px(px),
+    };
+
+    let child = InheritedCss { text_style };
+
     let (mut kind, inline_fragments_opt) = if let HtmlNodeType::Text(t) = &html_node {
         let t = normalize_whitespace(t);
 
@@ -144,7 +185,7 @@ pub fn build_layout_and_info(
             style: text_style,
         };
 
-        let inline_fragments = build_inline_fragments(&mut kind, measurer);
+        let inline_fragments = build_fragments(&mut kind, measurer);
 
         (kind, Some(inline_fragments))
     } else if let Some(name) = html_node.tag_name()
@@ -282,8 +323,7 @@ pub fn build_layout_and_info(
                         child_dom,
                         resolved_styles,
                         measurer,
-                        text_style,
-                        style.line_height.clone(),
+                        child.clone(),
                         chain.clone(),
                     );
 
@@ -613,13 +653,17 @@ fn apply_declaration(
         }
 
         ("line-height", CssValue::Number(factor)) => {
+            text_style.line_height = LineHeight::Number(*factor);
             style.line_height = Length::Px(text_style.font_size * factor);
         }
         ("line-height", CssValue::Keyword(v)) if v == "normal" => {
+            text_style.line_height = LineHeight::Normal;
             style.line_height = Length::Px(text_style.font_size * DEFAULT_LINE_FACTOR);
         }
         ("line-height", _) => {
-            style.line_height = resolve_css_len(value, text_style)?;
+            let len = resolve_css_len(value, text_style)?;
+            text_style.line_height = LineHeight::Px(length_to_px(&len, text_style.font_size));
+            style.line_height = len;
         }
 
         ("font-weight", CssValue::Keyword(v)) => {

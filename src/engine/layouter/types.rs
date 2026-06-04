@@ -186,6 +186,19 @@ impl Default for FontWeight {
     }
 }
 
+/// Line-height representation that preserves raw values for inheritance.
+///
+/// - `Normal` — keyword `normal`, resolved per element's font_size
+/// - `Number(f)` — unitless factor (e.g. 1.5), re-resolved per child's font_size
+/// - `Px(px)` — absolute pixel value (from `<length>`, `<percentage>`, `calc()`)
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub enum LineHeight {
+    #[default]
+    Normal,
+    Number(f32),
+    Px(f32),
+}
+
 #[derive(Copy, Debug, Clone, Default, PartialEq)]
 pub struct TextStyle {
     pub font_size: f32,
@@ -194,4 +207,5 @@ pub struct TextStyle {
     pub font_style: FontStyle,
     pub font_weight: FontWeight,
     pub color: Color,
+    pub line_height: LineHeight,
 }
