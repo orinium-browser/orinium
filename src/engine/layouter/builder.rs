@@ -154,8 +154,8 @@ pub fn build_layout_and_info(
                 continue;
             }
             apply_declaration(
-                &name,
-                &value,
+                name,
+                value,
                 &mut style,
                 &mut container_style,
                 &mut text_style,
@@ -323,7 +323,7 @@ pub fn build_layout_and_info(
                         child_dom,
                         resolved_styles,
                         measurer,
-                        child.clone(),
+                        child,
                         chain.clone(),
                     );
 
