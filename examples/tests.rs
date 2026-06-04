@@ -232,7 +232,7 @@ fn main() -> Result<()> {
                     let (mut layout, _info) = build_layout_info(raw_url)?;
                     LayoutEngine::layout(&mut layout, 800.0, 600.0);
 
-                    println!("\nLayoutNode:\n{:#?}", layout);
+                    println!("\nLayoutNode:\n{:#}", layout);
                 } else {
                     eprintln!("Please provide a URL for dump_layoutnode test.");
                 }
