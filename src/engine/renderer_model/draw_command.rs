@@ -218,14 +218,13 @@ pub fn generate_draw_commands(
         }
     }
 
-    for (child_child, child_info) in layout.children.iter().zip(&info.children) {
-        match child_child {
-            LayoutChild::Node(node) => {
-                generate_draw_commands(cmd_buf, node, child_info);
-            }
-            LayoutChild::Fragment(frag_node) => {
-                if let NodeKind::Text { texts, style } = &child_info.kind {
-                    if let Some(text) = texts.first() {
+    let mut layout_iter = layout.children.iter();
+
+    for child_info in &info.children {
+        match &child_info.kind {
+            NodeKind::Text { texts, style } => {
+                for text in texts {
+                    if let Some(LayoutChild::Fragment(frag_node)) = layout_iter.next() {
                         let (x, y) = frag_node.placement.offset;
 
                         cmd_buf.push(DrawCommand::DrawText {
@@ -243,6 +242,7 @@ pub fn generate_draw_commands(
                             TextDecoration::LineThrough => (y + font_size * 0.5, true),
                             TextDecoration::Overline => (y, true),
                         };
+
                         if draw {
                             cmd_buf.push(DrawCommand::DrawRect {
                                 x,
@@ -253,6 +253,11 @@ pub fn generate_draw_commands(
                             });
                         }
                     }
+                }
+            }
+            _ => {
+                if let Some(LayoutChild::Node(node)) = layout_iter.next() {
+                    generate_draw_commands(cmd_buf, node, child_info);
                 }
             }
         }
