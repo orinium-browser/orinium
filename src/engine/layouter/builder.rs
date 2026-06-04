@@ -254,27 +254,6 @@ pub fn build_layout_and_info(
         let mut info_children = Vec::new();
 
         if style.display.outer != OuterDisplay::None {
-            let mut has_text_child = false;
-
-            for child_dom in dom.borrow().children() {
-                if matches!(child_dom.borrow().value, HtmlNodeType::Text(_)) {
-                    has_text_child = true;
-                    break;
-                }
-            }
-
-            // 子に TextNode がある Block 要素は Flex(row) に変換
-            if has_text_child
-                && style.display.outer == OuterDisplay::Block
-                && style.display.inner == InnerDisplay::Flow
-            {
-                style.display = Display {
-                    outer: OuterDisplay::Block,
-                    inner: InnerDisplay::Flex,
-                };
-                style.flex_direction = FlexDirection::Row;
-            }
-
             // Table 要素は暫定的に Flex に置き換える。
             match &html_node {
                 HtmlNodeType::Element { tag_name, .. }
