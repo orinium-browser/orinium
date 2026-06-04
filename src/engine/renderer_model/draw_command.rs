@@ -43,12 +43,23 @@ pub enum DrawCommand {
     PopTransform,
 }
 
+/// Per-box-model push state for balanced pop generation.
+#[derive(Default, Clone, Copy)]
+struct BoxPushState {
+    border: bool,
+    clip: bool,
+    content: bool,
+    scroll: bool,
+}
+
 /// LayoutNode + InfoNode → DrawCommand
 pub fn generate_draw_commands(
     cmd_buf: &mut Vec<DrawCommand>,
     layout: &LayoutNode,
     info: &InfoNode,
 ) {
+    let mut box_states: Vec<BoxPushState> = Vec::new();
+
     match &info.kind {
         NodeKind::Text { texts, style, .. } => {
             let fragments: Vec<&FragmentNode> = layout
@@ -66,7 +77,6 @@ pub fn generate_draw_commands(
                 let fragment = fragment_node.node;
                 let (abs_x, abs_y) = placement.offset;
 
-                // テキスト
                 cmd_buf.push(DrawCommand::DrawText {
                     x: abs_x,
                     y: abs_y,
@@ -74,7 +84,6 @@ pub fn generate_draw_commands(
                     style: *style,
                 });
 
-                // テキストデコレーション
                 let font_size = style.font_size;
                 let line_thickness = (font_size * 0.08).max(1.0);
 
@@ -107,88 +116,104 @@ pub fn generate_draw_commands(
                 let border_box = box_model.border_box;
                 let padding_box = box_model.padding_box;
                 let content_box = box_model.content_box;
+                let is_inline = matches!(layout.layout_box, ui_layout::LayoutBox::InlineBox(_));
 
-                // ===== border (solid only for now) =====
-                cmd_buf.push(DrawCommand::PushTransform {
-                    dx: border_box.x,
-                    dy: border_box.y,
-                });
+                let mut state = BoxPushState::default();
+
+                if border_box.x != 0.0 || border_box.y != 0.0 {
+                    cmd_buf.push(DrawCommand::PushTransform {
+                        dx: border_box.x,
+                        dy: border_box.y,
+                    });
+                    state.border = true;
+                }
 
                 let bc = &style.border_color;
 
-                // top
-                let border_width = (padding_box.y - border_box.y).max(0.0);
-                cmd_buf.push(DrawCommand::DrawRect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: border_box.width,
-                    height: border_width,
-                    color: bc.top,
-                });
+                let bw_top = (padding_box.y - border_box.y).max(0.0);
+                if bw_top > 0.0 {
+                    cmd_buf.push(DrawCommand::DrawRect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: border_box.width,
+                        height: bw_top,
+                        color: bc.top,
+                    });
+                }
 
-                // bottom
-                let border_width = (border_box.y + border_box.height
+                let bw_bottom = (border_box.y + border_box.height
                     - (padding_box.y + padding_box.height))
                     .max(0.0);
-                cmd_buf.push(DrawCommand::DrawRect {
-                    x: 0.0,
-                    y: border_box.height - border_width,
-                    width: border_box.width,
-                    height: border_width,
-                    color: bc.bottom,
-                });
+                if bw_bottom > 0.0 {
+                    cmd_buf.push(DrawCommand::DrawRect {
+                        x: 0.0,
+                        y: border_box.height - bw_bottom,
+                        width: border_box.width,
+                        height: bw_bottom,
+                        color: bc.bottom,
+                    });
+                }
 
-                // left
-                let border_width = (padding_box.x - border_box.x).max(0.0);
-                cmd_buf.push(DrawCommand::DrawRect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: border_width,
-                    height: border_box.height,
-                    color: bc.left,
-                });
+                let bw_left = (padding_box.x - border_box.x).max(0.0);
+                if bw_left > 0.0 {
+                    cmd_buf.push(DrawCommand::DrawRect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: bw_left,
+                        height: border_box.height,
+                        color: bc.left,
+                    });
+                }
 
-                // right
-                let border_width = (border_box.x + border_box.width
+                let bw_right = (border_box.x + border_box.width
                     - (padding_box.x + padding_box.width))
                     .max(0.0);
-                cmd_buf.push(DrawCommand::DrawRect {
-                    x: border_box.width - border_width,
-                    y: 0.0,
-                    width: border_width,
-                    height: border_box.height,
-                    color: bc.right,
-                });
+                if bw_right > 0.0 {
+                    cmd_buf.push(DrawCommand::DrawRect {
+                        x: border_box.width - bw_right,
+                        y: 0.0,
+                        width: bw_right,
+                        height: border_box.height,
+                        color: bc.right,
+                    });
+                }
 
-                // ===== clip + background + content =====
-                let is_inline = matches!(layout.layout_box, ui_layout::LayoutBox::InlineBox(_));
-                if !is_inline {
+                if !is_inline && padding_box.width > 0.0 && padding_box.height > 0.0 {
                     cmd_buf.push(DrawCommand::PushClip {
                         x: padding_box.x - border_box.x,
                         y: padding_box.y - border_box.y,
                         width: padding_box.width,
                         height: padding_box.height,
                     });
+                    state.clip = true;
                 }
 
-                // background
-                cmd_buf.push(DrawCommand::DrawRect {
-                    x: padding_box.x - border_box.x,
-                    y: padding_box.y - border_box.y,
-                    width: padding_box.width,
-                    height: padding_box.height,
-                    color: style.background_color,
-                });
+                if style.background_color.3 > 0 {
+                    cmd_buf.push(DrawCommand::DrawRect {
+                        x: padding_box.x - border_box.x,
+                        y: padding_box.y - border_box.y,
+                        width: padding_box.width,
+                        height: padding_box.height,
+                        color: style.background_color,
+                    });
+                }
 
-                // content + scroll
-                cmd_buf.push(DrawCommand::PushTransform {
-                    dx: content_box.x - border_box.x,
-                    dy: content_box.y - border_box.y,
-                });
-                cmd_buf.push(DrawCommand::PushTransform {
-                    dx: *scroll_offset_x,
-                    dy: -*scroll_offset_y,
-                });
+                let dx = content_box.x - border_box.x;
+                let dy = content_box.y - border_box.y;
+                if dx != 0.0 || dy != 0.0 {
+                    cmd_buf.push(DrawCommand::PushTransform { dx, dy });
+                    state.content = true;
+                }
+
+                if *scroll_offset_x != 0.0 || *scroll_offset_y != 0.0 {
+                    cmd_buf.push(DrawCommand::PushTransform {
+                        dx: *scroll_offset_x,
+                        dy: -*scroll_offset_y,
+                    });
+                    state.scroll = true;
+                }
+
+                box_states.push(state);
             }
         }
     }
@@ -233,16 +258,21 @@ pub fn generate_draw_commands(
         }
     }
 
-    // Pop commands for containers
+    // Pop commands for containers (reverse order of pushes)
     if matches!(info.kind, NodeKind::Container { .. }) {
-        let is_inline = matches!(layout.layout_box, ui_layout::LayoutBox::InlineBox(_));
-        for _ in &layout.layout_box {
-            cmd_buf.push(DrawCommand::PopTransform);
-            cmd_buf.push(DrawCommand::PopTransform);
-            if !is_inline {
+        for state in box_states.iter().rev() {
+            if state.scroll {
+                cmd_buf.push(DrawCommand::PopTransform);
+            }
+            if state.content {
+                cmd_buf.push(DrawCommand::PopTransform);
+            }
+            if state.clip {
                 cmd_buf.push(DrawCommand::PopClip);
             }
-            cmd_buf.push(DrawCommand::PopTransform);
+            if state.border {
+                cmd_buf.push(DrawCommand::PopTransform);
+            }
         }
     }
 }
