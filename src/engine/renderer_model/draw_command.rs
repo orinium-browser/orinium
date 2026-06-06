@@ -128,54 +128,63 @@ pub fn generate_draw_commands(
                     state.border = true;
                 }
 
-                let bc = &style.border_color;
+                if !is_inline {
+                    // Inline elements are fragmented across lines, so their borders
+                    // cannot be drawn as a single rectangle per box model.
+                    // TODO: support inline borders (draw per fragment).
+                    let bc = &style.border_color;
 
-                let bw_top = (padding_box.y - border_box.y).max(0.0);
-                if bw_top > 0.0 {
-                    cmd_buf.push(DrawCommand::DrawRect {
-                        x: 0.0,
-                        y: 0.0,
-                        width: border_box.width,
-                        height: bw_top,
-                        color: bc.top,
-                    });
-                }
+                    // 各辺の border 幅 = border_box と padding_box の座標差
+                    let bw_top = (padding_box.y - border_box.y).max(0.0);
+                    let bw_bottom = (border_box.y + border_box.height
+                        - (padding_box.y + padding_box.height))
+                        .max(0.0);
+                    let bw_left = (padding_box.x - border_box.x).max(0.0);
+                    let bw_right = (border_box.x + border_box.width
+                        - (padding_box.x + padding_box.width))
+                        .max(0.0);
 
-                let bw_bottom = (border_box.y + border_box.height
-                    - (padding_box.y + padding_box.height))
-                    .max(0.0);
-                if bw_bottom > 0.0 {
-                    cmd_buf.push(DrawCommand::DrawRect {
-                        x: 0.0,
-                        y: border_box.height - bw_bottom,
-                        width: border_box.width,
-                        height: bw_bottom,
-                        color: bc.bottom,
-                    });
-                }
+                    // 上下は full-width、左右は上下と重ならないよう y をずらして高さを詰める。
+                    // CSS 仕様上コーナーでは上下の色が優先される（top > left > bottom > right）。
+                    if bw_top > 0.0 {
+                        cmd_buf.push(DrawCommand::DrawRect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: border_box.width,
+                            height: bw_top,
+                            color: bc.top,
+                        });
+                    }
 
-                let bw_left = (padding_box.x - border_box.x).max(0.0);
-                if bw_left > 0.0 {
-                    cmd_buf.push(DrawCommand::DrawRect {
-                        x: 0.0,
-                        y: 0.0,
-                        width: bw_left,
-                        height: border_box.height,
-                        color: bc.left,
-                    });
-                }
+                    if bw_bottom > 0.0 {
+                        cmd_buf.push(DrawCommand::DrawRect {
+                            x: 0.0,
+                            y: border_box.height - bw_bottom,
+                            width: border_box.width,
+                            height: bw_bottom,
+                            color: bc.bottom,
+                        });
+                    }
 
-                let bw_right = (border_box.x + border_box.width
-                    - (padding_box.x + padding_box.width))
-                    .max(0.0);
-                if bw_right > 0.0 {
-                    cmd_buf.push(DrawCommand::DrawRect {
-                        x: border_box.width - bw_right,
-                        y: 0.0,
-                        width: bw_right,
-                        height: border_box.height,
-                        color: bc.right,
-                    });
+                    if bw_left > 0.0 {
+                        cmd_buf.push(DrawCommand::DrawRect {
+                            x: 0.0,
+                            y: bw_top,
+                            width: bw_left,
+                            height: border_box.height - bw_top - bw_bottom,
+                            color: bc.left,
+                        });
+                    }
+
+                    if bw_right > 0.0 {
+                        cmd_buf.push(DrawCommand::DrawRect {
+                            x: border_box.width - bw_right,
+                            y: bw_top,
+                            width: bw_right,
+                            height: border_box.height - bw_top - bw_bottom,
+                            color: bc.right,
+                        });
+                    }
                 }
 
                 if !is_inline && padding_box.width > 0.0 && padding_box.height > 0.0 {
