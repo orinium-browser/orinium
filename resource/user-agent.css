@@ -191,9 +191,24 @@ pre {
     margin: 1em 0;
 }
 
-code {
+code,
+samp {
     display: inline;
     font-family: monospace;
+}
+
+var {
+    display: inline;
+    font-style: italic;
+}
+
+abbr {
+    display: inline;
+    text-decoration: underline dotted;
+}
+
+time {
+    display: inline;
 }
 
 /* --- Inline helpers --- */
