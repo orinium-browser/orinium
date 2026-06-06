@@ -2,7 +2,7 @@
 
 use crate::engine::layouter::types::{Color, InfoNode, NodeKind, TextDecoration, TextStyle};
 use smol_str::SmolStr;
-use ui_layout::{FragmentNode, LayoutChild, LayoutNode};
+use ui_layout::{LayoutChild, LayoutNode};
 
 #[derive(Debug, Clone)]
 pub enum DrawCommand {
@@ -61,50 +61,7 @@ pub fn generate_draw_commands(
     let mut box_states: Vec<BoxPushState> = Vec::new();
 
     match &info.kind {
-        NodeKind::Text { texts, style, .. } => {
-            let fragments: Vec<&FragmentNode> = layout
-                .children
-                .iter()
-                .filter_map(|c| c.fragment())
-                .collect();
-
-            /*debug_assert!(
-                texts.len() <= fragments.len(),
-                "`generate_draw_commands` may be called before layout is complete."
-            );*/
-            for (text, fragment_node) in texts.iter().zip(fragments) {
-                let placement = fragment_node.placement;
-                let fragment = fragment_node.node;
-                let (abs_x, abs_y) = placement.offset;
-
-                cmd_buf.push(DrawCommand::DrawText {
-                    x: abs_x,
-                    y: abs_y,
-                    text: text.into(),
-                    style: *style,
-                });
-
-                let font_size = style.font_size;
-                let line_thickness = (font_size * 0.08).max(1.0);
-
-                let (line_y, draw) = match style.text_decoration {
-                    TextDecoration::None => (0.0, false),
-                    TextDecoration::Underline => (abs_y + font_size, true),
-                    TextDecoration::LineThrough => (abs_y + font_size * 0.5, true),
-                    TextDecoration::Overline => (abs_y, true),
-                };
-
-                if draw {
-                    cmd_buf.push(DrawCommand::DrawRect {
-                        x: abs_x,
-                        y: line_y,
-                        width: fragment.width(),
-                        height: line_thickness,
-                        color: style.color,
-                    });
-                }
-            }
-        }
+        NodeKind::Text { .. } => unreachable!(),
 
         NodeKind::Container {
             scroll_offset_x,
