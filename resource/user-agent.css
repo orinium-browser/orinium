@@ -116,6 +116,7 @@ dd {
 
 /* --- Links --- */
 a {
+    display: inline;
     color: #0000ee;
     text-decoration: underline;
     cursor: pointer;
@@ -128,37 +129,45 @@ a:visited {
 /* --- Inline text semantics --- */
 strong,
 b {
+    display: inline;
     font-weight: bold;
 }
 
 em,
 i {
+    display: inline;
     font-style: italic;
 }
 
 small {
+    display: inline;
     font-size: 0.8em;
 }
 
 mark {
+    display: inline;
     background-color: yellow;
     color: black;
 }
 
 del {
+    display: inline;
     text-decoration: line-through;
 }
 
 ins {
+    display: inline;
     text-decoration: underline;
 }
 
 sub {
+    display: inline;
     vertical-align: sub;
     font-size: 0.8em;
 }
 
 sup {
+    display: inline;
     vertical-align: super;
     font-size: 0.8em;
 }
@@ -170,6 +179,7 @@ blockquote {
 }
 
 q {
+    display: inline;
     quotes: "“" "”" "‘" "’";
 }
 
@@ -182,6 +192,7 @@ pre {
 }
 
 code {
+    display: inline;
     font-family: monospace;
 }
 
@@ -233,11 +244,8 @@ input,
 textarea,
 select,
 button {
-    font: inherit;
-}
-
-button {
     display: inline-block;
+    font: inherit;
 }
 
 input[type="hidden"] {
