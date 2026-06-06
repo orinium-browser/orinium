@@ -15,12 +15,12 @@ pub type HitPath<'a> = Vec<HitItem<'a>>;
 /// x, y: グローバル座標
 pub fn hit_test<'a>(layout: &'a LayoutNode, info: &'a InfoNode, x: f32, y: f32) -> HitPath<'a> {
     // layout_boxes が空なら何もヒットしない
-    if layout.layout_boxes.is_empty() {
+    if layout.layout_box.is_empty() {
         return Vec::new();
     }
 
     for box_model in layout
-        .layout_boxes
+        .layout_box
         .iter()
         .collect::<Vec<_>>()
         .into_iter()
@@ -50,11 +50,13 @@ pub fn hit_test<'a>(layout: &'a LayoutNode, info: &'a InfoNode, x: f32, y: f32) 
 
         // 3. 子ノードを前面から探索
         for (child_layout, child_info) in layout.children.iter().zip(&info.children).rev() {
-            let mut path = hit_test(child_layout, child_info, local_x, local_y);
-            if !path.is_empty() {
-                // 子がヒット → 自分を末尾に追加
-                path.push(HitItem { layout, info });
-                return path;
+            if let Some(child_node) = child_layout.node() {
+                let mut path = hit_test(child_node, child_info, local_x, local_y);
+                if !path.is_empty() {
+                    // 子がヒット → 自分を末尾に追加
+                    path.push(HitItem { layout, info });
+                    return path;
+                }
             }
         }
 

@@ -13,15 +13,39 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use ui_layout::{
-    AlignItems, BoxSizing, Display, FlexDirection, Fragment, ItemFragment, JustifyContent,
-    LayoutNode, Length, Style,
+    AlignItems, BoxSizing, Display, FlexDirection, Fragment, InnerDisplay, ItemFragment,
+    JustifyContent, LayoutChild, LayoutNode, Length, LengthOrAuto, OuterDisplay, Style,
 };
 
 use super::css_resolver::ResolvedStyles;
 use super::types::{
-    BorderStyle, Color, ContainerRole, ContainerStyle, FontStyle, FontWeight, InfoNode, NodeKind,
-    TextAlign, TextDecoration, TextStyle,
+    BorderStyle, Color, ContainerRole, ContainerStyle, FontStyle, FontWeight, InfoNode, LineHeight,
+    NodeKind, TextAlign, TextDecoration, TextStyle,
 };
+
+const DEFAULT_LINE_FACTOR: f32 = 1.2;
+
+/// Inherited values from parent, passed down through the tree.
+///
+/// `text_style` carries all inherited text/line-height values.
+/// Add new fields here when additional deferred-resolution properties arise.
+#[derive(Clone, Copy)]
+pub struct InheritedCss {
+    pub text_style: TextStyle,
+}
+
+/// Convert a resolved `Length` to an absolute pixel value for `LineHeight::Px`.
+fn length_to_px(len: &Length, font_size: f32) -> f32 {
+    match len {
+        Length::Px(v) => *v,
+        Length::Percent(v) => v * font_size / 100.0,
+        Length::Add(a, b) => length_to_px(a, font_size) + length_to_px(b, font_size),
+        Length::Sub(a, b) => length_to_px(a, font_size) - length_to_px(b, font_size),
+        Length::Mul(a, f) => length_to_px(a, font_size) * f,
+        Length::Div(a, f) => length_to_px(a, font_size) / f,
+        _ => font_size * DEFAULT_LINE_FACTOR,
+    }
+}
 
 /// Builds a layout tree (`LayoutNode`) and a render info tree (`InfoNode`) from the DOM.
 ///
@@ -67,21 +91,17 @@ pub fn build_layout_and_info(
     dom: &Rc<RefCell<TreeNode<HtmlNodeType>>>,
     resolved_styles: &ResolvedStyles,
     measurer: &dyn text::TextMeasurer<TextStyle>,
-    parent_text_style: TextStyle,
+    parent: InheritedCss,
     mut chain: ElementChain,
 ) -> (LayoutNode, InfoNode) {
     let html_node = dom.borrow().value.clone();
 
-    /* -----------------------------
-       Initial values (inheritance)
-    ----------------------------- */
+    let mut text_style = parent.text_style;
+    let mut container_style = ContainerStyle::default();
     let mut style = Style::default();
 
-    let mut text_style = parent_text_style;
-    let mut container_style = ContainerStyle::default();
-
     /* -----------------------------
-       Apply resolved CSS
+       Build element chain
     ----------------------------- */
     if let HtmlNodeType::Element {
         tag_name,
@@ -113,22 +133,49 @@ pub fn build_layout_and_info(
                 classes: class_list,
             },
         );
+    }
 
-        let candidates = collect_candidates(resolved_styles, &chain);
+    /* -----------------------------
+       Collect CSS candidates
+    ----------------------------- */
+    let candidates: Option<HashMap<String, (CssValue, (u32, u32, u32), usize)>> =
+        if let HtmlNodeType::Element { .. } = &html_node {
+            Some(collect_candidates(resolved_styles, &chain))
+        } else {
+            None
+        };
 
+    /* -----------------------------
+       Phase 1: Apply element-specific CSS declarations
+    ----------------------------- */
+    if let Some(candidates) = &candidates {
         for (name, (value, _, _)) in candidates {
             if name.starts_with("--") {
                 continue;
             }
             apply_declaration(
-                &name,
-                &value,
+                name,
+                value,
                 &mut style,
                 &mut container_style,
                 &mut text_style,
             );
         }
     }
+
+    /* -----------------------------
+       Phase 2: Resolve line-height using final font_size.
+       text_style.line_height was either inherited from parent
+       (via parent.text_style) or set by an explicit declaration
+       in Phase 1 (via apply_declaration).
+    ----------------------------- */
+    style.line_height = match text_style.line_height {
+        LineHeight::Number(factor) => Length::Px(text_style.font_size * factor),
+        LineHeight::Normal => Length::Px(text_style.font_size * DEFAULT_LINE_FACTOR),
+        LineHeight::Px(px) => Length::Px(px),
+    };
+
+    let child = InheritedCss { text_style };
 
     let (mut kind, inline_fragments_opt) = if let HtmlNodeType::Text(t) = &html_node {
         let t = normalize_whitespace(t);
@@ -138,7 +185,7 @@ pub fn build_layout_and_info(
             style: text_style,
         };
 
-        let inline_fragments = build_inline_fragments(&mut kind, measurer);
+        let inline_fragments = build_fragments(&mut kind, measurer);
 
         (kind, Some(inline_fragments))
     } else if let Some(name) = html_node.tag_name()
@@ -179,13 +226,14 @@ pub fn build_layout_and_info(
         ----------------------------- */
 
         let style = Style {
-            display: Display::Inline,
+            display: Display {
+                outer: OuterDisplay::Inline,
+                inner: InnerDisplay::Flow,
+            },
             ..style
         };
 
-        let mut layout = LayoutNode::new(style);
-
-        layout.set_fragments(inline_fragments);
+        let layout = LayoutNode::with_children(style, inline_fragments);
 
         let info = InfoNode {
             kind,
@@ -202,26 +250,10 @@ pub fn build_layout_and_info(
         // Table 要素は未実装。
         // 暫定的に Flex に置き換える。
         // TODO: 将来的には TableLayout 実装に置き換える。
-        let mut layout_children = Vec::new();
+        let mut layout_children: Vec<LayoutChild> = Vec::new();
         let mut info_children = Vec::new();
 
-        if !matches!(style.display, Display::None) {
-            let mut has_text_child = false;
-
-            for child_dom in dom.borrow().children() {
-                if matches!(child_dom.borrow().value, HtmlNodeType::Text(_)) {
-                    has_text_child = true;
-                    break;
-                }
-            }
-
-            // 子に TextNode がある Block 要素は Flex(row) に変換
-            if has_text_child && matches!(style.display, Display::Block) {
-                style.display = Display::Flex {
-                    flex_direction: FlexDirection::Row,
-                };
-            }
-
+        if style.display.outer != OuterDisplay::None {
             // Table 要素は暫定的に Flex に置き換える。
             match &html_node {
                 HtmlNodeType::Element { tag_name, .. }
@@ -230,45 +262,69 @@ pub fn build_layout_and_info(
                         || tag_name == "thead"
                         || tag_name == "tfoot" =>
                 {
-                    style.display = Display::Flex {
-                        flex_direction: FlexDirection::Column,
+                    style.display = Display {
+                        outer: OuterDisplay::Block,
+                        inner: InnerDisplay::Flex,
                     };
+                    style.flex_direction = FlexDirection::Column;
                 }
                 HtmlNodeType::Element { tag_name, .. } if tag_name == "tr" => {
-                    style.display = Display::Flex {
-                        flex_direction: FlexDirection::Row,
+                    style.display = Display {
+                        outer: OuterDisplay::Block,
+                        inner: InnerDisplay::Flex,
                     };
+                    style.flex_direction = FlexDirection::Row;
                 }
                 _ => {}
             }
 
             for child_dom in dom.borrow().children() {
-                let (child_layout, child_info) = build_layout_and_info(
-                    child_dom,
-                    resolved_styles,
-                    measurer,
-                    text_style,
-                    chain.clone(),
-                );
+                let child_node = child_dom.borrow().value.clone();
 
-                if dom.borrow().value.tag_name() == Some("html")
-                    && child_dom.borrow().value.tag_name() == Some("body")
-                    && let NodeKind::Container { style, .. } = &mut kind
-                    && style.background_color == Color(0, 0, 0, 0)
-                {
-                    let background_color = {
-                        let NodeKind::Container { style, .. } = &child_info.kind else {
-                            continue;
-                        };
-                        style.background_color
+                if let HtmlNodeType::Text(t) = &child_node {
+                    let t = normalize_whitespace(t);
+                    let mut text_kind = NodeKind::Text {
+                        texts: split_fragments(&t),
+                        style: text_style,
                     };
-                    // html 要素の body 子要素に背景色が指定されていない場合、
-                    // body の背景色を html の背景色で上書きする
-                    style.background_color = background_color;
-                }
+                    let fragments = build_fragments(&mut text_kind, measurer);
 
-                layout_children.push(child_layout);
-                info_children.push(child_info);
+                    for fragment in fragments {
+                        layout_children.push(fragment.into());
+                    }
+
+                    info_children.push(InfoNode {
+                        kind: text_kind,
+                        children: vec![],
+                    });
+                } else {
+                    let (child_layout, child_info) = build_layout_and_info(
+                        child_dom,
+                        resolved_styles,
+                        measurer,
+                        child,
+                        chain.clone(),
+                    );
+
+                    if dom.borrow().value.tag_name() == Some("html")
+                        && child_dom.borrow().value.tag_name() == Some("body")
+                        && let NodeKind::Container { style, .. } = &mut kind
+                        && style.background_color == Color(0, 0, 0, 0)
+                    {
+                        let background_color = {
+                            let NodeKind::Container { style, .. } = &child_info.kind else {
+                                continue;
+                            };
+                            style.background_color
+                        };
+                        // html 要素の body 子要素に背景色が指定されていない場合、
+                        // body の背景色を html の背景色で上書きする
+                        style.background_color = background_color;
+                    }
+
+                    layout_children.push(child_layout.into());
+                    info_children.push(child_info);
+                }
             }
         }
 
@@ -306,7 +362,7 @@ fn split_fragments(text: &str) -> Vec<String> {
     out
 }
 
-fn build_inline_fragments(
+fn build_fragments(
     kind: &mut NodeKind,
     measurer: &dyn text::TextMeasurer<TextStyle>,
 ) -> Vec<ItemFragment> {
@@ -391,20 +447,20 @@ fn apply_declaration(
     container_style: &mut ContainerStyle,
     text_style: &mut TextStyle,
 ) -> Option<()> {
-    fn expand_box<F>(
+    fn expand_box<T: Clone, F>(
         value: &CssValue,
         text_style: &TextStyle,
-        resolve_css_len: &impl Fn(&CssValue, &TextStyle) -> Option<Length>,
+        resolve: &impl Fn(&CssValue, &TextStyle) -> Option<T>,
         mut set: F,
     ) -> Option<()>
     where
-        F: FnMut(Length, Length, Length, Length),
+        F: FnMut(T, T, T, T),
     {
-        let resolve = |v: &CssValue| -> Option<Length> { resolve_css_len(v, text_style) };
+        let resolve = |v: &CssValue| -> Option<T> { resolve(v, text_style) };
 
         match value {
             CssValue::List(values) => {
-                let vals: Vec<Length> = values.iter().map(resolve).collect::<Option<_>>()?;
+                let vals: Vec<T> = values.iter().map(resolve).collect::<Option<_>>()?;
 
                 match vals.as_slice() {
                     [a] => set(a.clone(), a.clone(), a.clone(), a.clone()),
@@ -416,7 +472,7 @@ fn apply_declaration(
             }
 
             _ => {
-                let v = resolve_css_len(value, text_style)?;
+                let v = resolve(value)?;
                 set(v.clone(), v.clone(), v.clone(), v);
             }
         }
@@ -511,15 +567,12 @@ fn apply_declaration(
          * Display
          * ====================== */
         ("display", CssValue::Keyword(v)) => {
-            style.display = match v.as_str() {
-                "block" => Display::Block,
-                "flex" => Display::Flex {
-                    flex_direction: FlexDirection::Row,
-                },
-                "inline" => Display::Inline,
-                "none" => Display::None,
-                _ => style.display,
-            };
+            if let Some(parsed_display) = Display::from_css_name(v.as_str()) {
+                style.display = parsed_display;
+                if parsed_display.inner == InnerDisplay::Flex {
+                    style.flex_direction = FlexDirection::Row;
+                }
+            }
         }
 
         /* ======================
@@ -576,6 +629,20 @@ fn apply_declaration(
                 }
             };
             text_style.font_size = px;
+        }
+
+        ("line-height", CssValue::Number(factor)) => {
+            text_style.line_height = LineHeight::Number(*factor);
+            style.line_height = Length::Px(text_style.font_size * factor);
+        }
+        ("line-height", CssValue::Keyword(v)) if v == "normal" => {
+            text_style.line_height = LineHeight::Normal;
+            style.line_height = Length::Px(text_style.font_size * DEFAULT_LINE_FACTOR);
+        }
+        ("line-height", _) => {
+            let len = resolve_css_len(value, text_style)?;
+            text_style.line_height = LineHeight::Px(length_to_px(&len, text_style.font_size));
+            style.line_height = len;
         }
 
         ("font-weight", CssValue::Keyword(v)) => {
@@ -645,24 +712,44 @@ fn apply_declaration(
         }
 
         ("margin", v) => {
-            expand_box(v, text_style, &resolve_css_len, |t, r, b, l| {
-                style.spacing.margin_top = t;
-                style.spacing.margin_right = r;
-                style.spacing.margin_bottom = b;
-                style.spacing.margin_left = l;
-            })?;
+            expand_box(
+                v,
+                text_style,
+                &|cv, ts| match cv {
+                    CssValue::Keyword(s) if s == "auto" => Some(ui_layout::LengthOrAuto::Auto),
+                    _ => resolve_css_len(cv, ts).map(ui_layout::LengthOrAuto::Length),
+                },
+                |t, r, b, l| {
+                    style.spacing.margin_top = t;
+                    style.spacing.margin_right = r;
+                    style.spacing.margin_bottom = b;
+                    style.spacing.margin_left = l;
+                },
+            )?;
+        }
+        ("margin-top", CssValue::Keyword(s)) if s == "auto" => {
+            style.spacing.margin_top = LengthOrAuto::Auto;
         }
         ("margin-top", _) => {
-            style.spacing.margin_top = resolve_css_len(value, text_style)?;
+            style.spacing.margin_top = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+        }
+        ("margin-right", CssValue::Keyword(s)) if s == "auto" => {
+            style.spacing.margin_right = LengthOrAuto::Auto;
         }
         ("margin-right", _) => {
-            style.spacing.margin_right = resolve_css_len(value, text_style)?;
+            style.spacing.margin_right = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+        }
+        ("margin-bottom", CssValue::Keyword(s)) if s == "auto" => {
+            style.spacing.margin_bottom = LengthOrAuto::Auto;
         }
         ("margin-bottom", _) => {
-            style.spacing.margin_bottom = resolve_css_len(value, text_style)?;
+            style.spacing.margin_bottom = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+        }
+        ("margin-left", CssValue::Keyword(s)) if s == "auto" => {
+            style.spacing.margin_left = LengthOrAuto::Auto;
         }
         ("margin-left", _) => {
-            style.spacing.margin_left = resolve_css_len(value, text_style)?;
+            style.spacing.margin_left = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
         }
 
         ("border", v) => {
@@ -782,31 +869,49 @@ fn apply_declaration(
         /* ======================
          * Size
          * ====================== */
+        ("width", CssValue::Keyword(s)) if s == "auto" => {
+            style.size.width = LengthOrAuto::Auto;
+        }
         ("width", _) => {
-            style.size.width = resolve_css_len(value, text_style)?;
+            style.size.width = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+        }
+        ("height", CssValue::Keyword(s)) if s == "auto" => {
+            style.size.height = LengthOrAuto::Auto;
         }
         ("height", _) => {
-            style.size.height = resolve_css_len(value, text_style)?;
+            style.size.height = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+        }
+        ("min-width", CssValue::Keyword(s)) if s == "auto" => {
+            style.size.min_width = LengthOrAuto::Auto;
         }
         ("min-width", _) => {
-            style.size.min_width = resolve_css_len(value, text_style)?;
+            style.size.min_width = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+        }
+        ("min-height", CssValue::Keyword(s)) if s == "auto" => {
+            style.size.min_height = LengthOrAuto::Auto;
         }
         ("min-height", _) => {
-            style.size.min_height = resolve_css_len(value, text_style)?;
+            style.size.min_height = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+        }
+        ("max-width", CssValue::Keyword(s)) if s == "auto" => {
+            style.size.max_width = LengthOrAuto::Auto;
         }
         ("max-width", _) => {
-            style.size.max_width = resolve_css_len(value, text_style)?;
+            style.size.max_width = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+        }
+        ("max-height", CssValue::Keyword(s)) if s == "auto" => {
+            style.size.max_height = LengthOrAuto::Auto;
         }
         ("max-height", _) => {
-            style.size.max_height = resolve_css_len(value, text_style)?;
+            style.size.max_height = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
         }
 
         /* ======================
          * Flex
          * ====================== */
         ("flex-direction", CssValue::Keyword(v)) => {
-            if let Display::Flex { flex_direction } = &mut style.display {
-                *flex_direction = match v.as_str() {
+            if style.display.inner == InnerDisplay::Flex {
+                style.flex_direction = match v.as_str() {
                     "row" => FlexDirection::Row,
                     "column" => FlexDirection::Column,
                     _ => return None,
@@ -835,8 +940,12 @@ fn apply_declaration(
             };
         }
 
+        ("gap", CssValue::Keyword(s)) if s == "auto" => {
+            style.row_gap = LengthOrAuto::Auto;
+            style.column_gap = LengthOrAuto::Auto;
+        }
         ("gap", _) => {
-            let gap = resolve_css_len(value, text_style)?;
+            let gap = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
             style.row_gap = gap.clone();
             style.column_gap = gap;
         }
@@ -855,8 +964,11 @@ fn apply_declaration(
             style.item_style.flex_grow = *v;
         }
 
+        ("flex-basis", CssValue::Keyword(s)) if s == "auto" => {
+            style.item_style.flex_basis = LengthOrAuto::Auto;
+        }
         ("flex-basis", _) => {
-            style.item_style.flex_basis = resolve_css_len(value, text_style)?;
+            style.item_style.flex_basis = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
         }
 
         _ => {}
@@ -877,10 +989,7 @@ fn resolve_css_len(css_len: &CssValue, text_style: &TextStyle) -> Option<Length>
             Unit::Em | Unit::Rem => unreachable!(),
         },
         CssValue::Number(0.0) => Some(Length::Px(0.0)),
-        CssValue::Keyword(s) => match s.as_str() {
-            "auto" => Some(Length::Auto),
-            _ => None,
-        },
+        CssValue::Keyword(_) => None,
         CssValue::Function(name, args) if name == "calc" && !args.is_empty() => {
             let mut iter = args.iter();
             let mut result = resolve_css_len(iter.next().unwrap(), text_style)?;

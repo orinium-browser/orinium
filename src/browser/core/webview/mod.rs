@@ -4,7 +4,7 @@ use crate::engine::{
     css::parser::Parser as CssParser,
     html::parser::{DomTree, Parser as HtmlParser},
     layouter::{
-        self,
+        self, InheritedCss,
         types::{InfoNode, TextStyle},
     },
 };
@@ -208,9 +208,11 @@ impl WebView {
             &self.docment_info.as_ref().unwrap().dom.root,
             &self.resolved_styles,
             &measurer,
-            TextStyle {
-                font_size: 16.0,
-                ..Default::default()
+            InheritedCss {
+                text_style: TextStyle {
+                    font_size: 16.0,
+                    ..Default::default()
+                },
             },
             Vec::new(),
         ));

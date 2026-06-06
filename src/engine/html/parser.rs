@@ -399,70 +399,65 @@ impl<'a> Parser<'a> {
     /// DOCTYPE宣言、html, head, body 要素が存在しない場合に補完する
     fn autofill_elements(&mut self) {
         let root = Rc::clone(&self.stack[0]);
-        let mut has_doctype = false;
-        let mut has_html = false;
-        let mut has_head = false;
-        let mut has_body = false;
-
-        for child in root.borrow().children() {
-            match &child.borrow().value {
-                HtmlNodeType::Doctype { .. } => has_doctype = true,
-                HtmlNodeType::Element { tag_name, .. } if tag_name.to_lowercase() == "html" => {
-                    has_html = true;
-                    for html_child in child.borrow().children() {
-                        match &html_child.borrow().value {
-                            HtmlNodeType::Element { tag_name, .. }
-                                if tag_name.to_lowercase() == "head" =>
-                            {
-                                has_head = true;
-                            }
-                            HtmlNodeType::Element { tag_name, .. }
-                                if tag_name.to_lowercase() == "body" =>
-                            {
-                                has_body = true;
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        if !has_doctype {
-            let doctype_node = TreeNode::new(HtmlNodeType::Doctype {
-                name: Some("html".to_string()),
-                public_id: None,
-                system_id: None,
-            });
-            TreeNode::insert_child_at(&root, 0, Rc::clone(&doctype_node));
-        }
+        let has_html = root
+            .borrow()
+            .children()
+            .iter()
+            .any(|c| matches!(&c.borrow().value, HtmlNodeType::Element { tag_name, .. } if tag_name.to_lowercase() == "html"));
 
         if !has_html {
-            let html_node = TreeNode::new(HtmlNodeType::Element {
-                tag_name: "html".to_string(),
-                attributes: vec![],
-            });
-            TreeNode::add_child(&root, Rc::clone(&html_node));
+            let mut doctype_node = None;
+            let mut orphan_nodes = Vec::new();
+            for child in root.borrow().children() {
+                match &child.borrow().value {
+                    HtmlNodeType::Doctype { .. } => {
+                        doctype_node = Some(Rc::clone(child));
+                    }
+                    _ => orphan_nodes.push(Rc::clone(child)),
+                }
+            }
 
-            if !has_head {
+            root.borrow_mut().clear_children();
+
+            if let Some(dt) = doctype_node {
+                TreeNode::add_child(&root, dt);
+            } else {
                 TreeNode::add_child_value(
-                    &html_node,
-                    HtmlNodeType::Element {
-                        tag_name: "head".to_string(),
-                        attributes: vec![],
+                    &root,
+                    HtmlNodeType::Doctype {
+                        name: Some("html".to_string()),
+                        public_id: None,
+                        system_id: None,
                     },
                 );
             }
 
-            if !has_body {
-                TreeNode::add_child_value(
-                    &html_node,
-                    HtmlNodeType::Element {
-                        tag_name: "body".to_string(),
-                        attributes: vec![],
-                    },
-                );
+            let html_node = TreeNode::add_child_value(
+                &root,
+                HtmlNodeType::Element {
+                    tag_name: "html".to_string(),
+                    attributes: vec![],
+                },
+            );
+
+            TreeNode::add_child_value(
+                &html_node,
+                HtmlNodeType::Element {
+                    tag_name: "head".to_string(),
+                    attributes: vec![],
+                },
+            );
+
+            let body_node = TreeNode::add_child_value(
+                &html_node,
+                HtmlNodeType::Element {
+                    tag_name: "body".to_string(),
+                    attributes: vec![],
+                },
+            );
+
+            for orphan in orphan_nodes {
+                TreeNode::add_child(&body_node, orphan);
             }
         }
     }

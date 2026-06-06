@@ -200,10 +200,7 @@ fn decode(data: &[u8]) -> Result<(Vec<f32>, usize, u32)> {
         .context("Failed to create audio decoder")?;
 
     let mut samples = Vec::<f32>::new();
-    let mut channels = audio_params
-        .channels
-        .as_ref()
-        .map_or(1, |c| c.count());
+    let mut channels = audio_params.channels.as_ref().map_or(1, |c| c.count());
 
     let mut sample_rate = audio_params.sample_rate.unwrap_or(44100);
 
