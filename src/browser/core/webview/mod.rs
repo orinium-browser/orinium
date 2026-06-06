@@ -178,7 +178,6 @@ impl WebView {
         self.loaded_css.push(css);
 
         if self.loaded_css.len() == self.pending_css_urls.len() {
-            print!("Apply");
             self.apply_css_and_relayout();
             self.phase = PagePhase::CssApplied;
             self.needs_redraw = true;
