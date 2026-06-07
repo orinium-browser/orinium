@@ -180,12 +180,41 @@ pub fn build_layout_and_info(
     let (mut kind, inline_fragments_opt) = if let HtmlNodeType::Text(t) = &html_node {
         let t = normalize_whitespace(t);
 
-        let mut kind = NodeKind::Text {
-            texts: split_fragments(&t),
+        let _t = std::time::Instant::now();
+        let measured = measurer
+            .measure(&text::TextMeasureRequest {
+                text: t.clone(),
+                style: text_style,
+            })
+            .expect("text measure failed");
+        let preview = if t.len() > 40 {
+            let cut = t.floor_char_boundary(40);
+            format!("{}...", &t[..cut])
+        } else {
+            t.clone()
+        };
+        log::info!(
+            target: "Layouter",
+            "measure inline: text={:?} len={} took={:?}",
+            preview,
+            t.len(),
+            _t.elapsed(),
+        );
+
+        let kind = NodeKind::Text {
+            texts: measured.iter().map(|f| f.text.clone()).collect(),
             style: text_style,
         };
 
-        let inline_fragments = build_fragments(&mut kind, measurer);
+        let inline_fragments: Vec<ItemFragment> = measured
+            .into_iter()
+            .map(|f| {
+                ItemFragment::Fragment(Fragment {
+                    width: f.width,
+                    height: f.height,
+                })
+            })
+            .collect();
 
         (kind, Some(inline_fragments))
     } else if let Some(name) = html_node.tag_name()
@@ -283,14 +312,40 @@ pub fn build_layout_and_info(
 
                 if let HtmlNodeType::Text(t) = &child_node {
                     let t = normalize_whitespace(t);
-                    let mut text_kind = NodeKind::Text {
-                        texts: split_fragments(&t),
+                    let _t = std::time::Instant::now();
+                    let measured = measurer
+                        .measure(&text::TextMeasureRequest {
+                            text: t.clone(),
+                            style: text_style,
+                        })
+                        .expect("text measure failed");
+                    let preview = if t.len() > 40 {
+                        let cut = t.floor_char_boundary(40);
+                        format!("{}...", &t[..cut])
+                    } else {
+                        t.clone()
+                    };
+                    log::info!(
+                        target: "Layouter",
+                        "measure child: text={:?} len={} took={:?}",
+                        preview,
+                        t.len(),
+                        _t.elapsed(),
+                    );
+
+                    let text_kind = NodeKind::Text {
+                        texts: measured.iter().map(|f| f.text.clone()).collect(),
                         style: text_style,
                     };
-                    let fragments = build_fragments(&mut text_kind, measurer);
 
-                    for fragment in fragments {
-                        layout_children.push(fragment.into());
+                    for fragment in &measured {
+                        layout_children.push(
+                            ItemFragment::Fragment(Fragment {
+                                width: fragment.width,
+                                height: fragment.height,
+                            })
+                            .into(),
+                        );
                     }
 
                     info_children.push(InfoNode {
@@ -339,57 +394,6 @@ pub fn build_layout_and_info(
     };
 
     (layout, info)
-}
-
-/// Splits text into text fragments for measurement. Each fragment is a word or a space.
-fn split_fragments(text: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut buf = String::new();
-
-    for c in text.chars() {
-        buf.push(c);
-
-        if c.is_whitespace() || c == '-' || !c.is_ascii() {
-            out.push(buf.clone());
-            buf.clear();
-        }
-    }
-
-    if !buf.is_empty() {
-        out.push(buf);
-    }
-
-    out
-}
-
-fn build_fragments(
-    kind: &mut NodeKind,
-    measurer: &dyn text::TextMeasurer<TextStyle>,
-) -> Vec<ItemFragment> {
-    let NodeKind::Text { texts, style } = kind else {
-        return vec![];
-    };
-
-    let mut inline_fragments = Vec::with_capacity(texts.len());
-
-    for text in texts {
-        let req = text::TextMeasureRequest {
-            text: text.clone(),
-            style: *style,
-            max_width: None,
-            wrap: false,
-        };
-
-        let (width, height) = measurer
-            .measure(&req)
-            .map_or((800.0, style.font_size * 1.2), |m| (m.width, m.height));
-
-        let fragment = ItemFragment::Fragment(Fragment { width, height });
-
-        inline_fragments.push(fragment);
-    }
-
-    inline_fragments
 }
 
 fn normalize_whitespace(text: &str) -> String {

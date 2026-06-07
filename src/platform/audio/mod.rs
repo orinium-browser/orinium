@@ -112,18 +112,12 @@ impl SoundManager {
         let (samples, channels, sample_rate) = decode(data)?;
         // replace buffer
         {
-            let mut buf = match self.samples.lock() {
-                Ok(x) => x,
-                Err(_) => todo!(),
-            };
+            let mut buf = self.samples.lock().unwrap_or_else(|e| e.into_inner());
             *buf = samples;
         }
         // reset position
         {
-            let mut pos = match self.play_pos.lock() {
-                Ok(x) => x,
-                Err(_) => todo!(),
-            };
+            let mut pos = self.play_pos.lock().unwrap_or_else(|e| e.into_inner());
             *pos = 0;
         }
         self.src_channels = channels;

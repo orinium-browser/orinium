@@ -40,31 +40,22 @@ pub struct TextMeasureRequest<S> {
 
     /// Opaque, resolved text attributes provided by the caller
     pub style: S,
-
-    /// Maximum line width (None = unconstrained)
-    pub max_width: Option<f32>,
-
-    /// Enable line wrapping
-    pub wrap: bool,
 }
 
 /* ============================
- * Measure Result
+ * Measured Result
  * ============================ */
 
+/// A measured text fragment produced by [`TextMeasurer::measure_fragments`].
+///
+/// Contains the original text segment along with its measured dimensions,
+/// so callers can both retrieve the split text and obtain fragment widths
+/// for inline layout.
 #[derive(Debug, Clone)]
-pub struct TextMetrics {
-    /// Logical width
+pub struct MeasuredFragment {
+    pub text: String,
     pub width: f32,
-
-    /// Logical height
     pub height: f32,
-
-    /// Baseline position from top
-    pub baseline: f32,
-
-    /// Number of layouted lines
-    pub line_count: usize,
 }
 
 /* ============================
@@ -109,7 +100,11 @@ impl std::error::Error for TextMeasureError {}
  * ============================ */
 
 pub trait TextMeasurer<S>: Send + Sync {
-    fn measure(&self, request: &TextMeasureRequest<S>) -> Result<TextMetrics, TextMeasureError>;
+    /// Measure a single block of text and return its metrics.
+    fn measure(
+        &self,
+        request: &TextMeasureRequest<S>,
+    ) -> Result<Vec<MeasuredFragment>, TextMeasureError>;
 }
 
 /* ============================
