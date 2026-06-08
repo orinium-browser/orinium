@@ -37,6 +37,7 @@ pub enum NodeKind {
         texts: Vec<String>,
         style: TextStyle,
     },
+    LineBreak,
 }
 
 // =========================

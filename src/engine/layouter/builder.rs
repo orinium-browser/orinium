@@ -1,6 +1,6 @@
 //! Layout builder, which transforms a DOM tree into a UI layout.
 
-use crate::engine::bridge::text;
+use crate::engine::bridge::text::{self, MeasuredFragment};
 use crate::engine::css::{
     matcher::{ElementChain, ElementInfo},
     values::{CssValue, Unit},
@@ -339,13 +339,7 @@ pub fn build_layout_and_info(
                     };
 
                     for fragment in &measured {
-                        layout_children.push(
-                            ItemFragment::Fragment(Fragment {
-                                width: fragment.width,
-                                height: fragment.height,
-                            })
-                            .into(),
-                        );
+                        layout_children.push(generate_fragment_node(fragment).into());
                     }
 
                     info_children.push(InfoNode {
@@ -353,6 +347,15 @@ pub fn build_layout_and_info(
                         children: vec![],
                     });
                 } else {
+                    if child_dom.borrow().value.tag_name() == Some("br") {
+                        layout_children.push(ItemFragment::LineBreak.into());
+                        info_children.push(InfoNode {
+                            kind: NodeKind::LineBreak,
+                            children: vec![],
+                        });
+                        break;
+                    }
+
                     let (child_layout, child_info) = build_layout_and_info(
                         child_dom,
                         resolved_styles,
@@ -413,6 +416,17 @@ fn normalize_whitespace(text: &str) -> String {
     }
 
     result
+}
+
+fn generate_fragment_node(fragment: &MeasuredFragment) -> ItemFragment {
+    if fragment.text == "\n" {
+        ItemFragment::LineBreak
+    } else {
+        ItemFragment::Fragment(Fragment {
+            width: fragment.width,
+            height: fragment.height,
+        })
+    }
 }
 
 fn collect_candidates(
