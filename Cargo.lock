@@ -2465,7 +2465,6 @@ dependencies = [
 [[package]]
 name = "orinium_text"
 version = "0.1.0"
-source = "git+https://github.com/orinium-browser/orinium_text?rev=27294a184abee6e2b993c25ba3f2678d86644d6a#27294a184abee6e2b993c25ba3f2678d86644d6a"
 dependencies = [
  "fontdb",
  "fontdue",
@@ -4885,7 +4884,3 @@ checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
 dependencies = [
  "zune-core",
 ]
-
-[[patch.unused]]
-name = "orinium_text"
-version = "0.1.0"
