@@ -42,6 +42,7 @@ url = "2.5"
 wgpu = "29.0.1"
 wgpu-types = "29.0.1"
 winit = "0.30.13"
+pixi_byte = { git = "https://github.com/orinium-browser/pixi_byte", branch = "dev" }
 
 [dev-dependencies]
 colored = "3.1.1"  # コマンドラインハイライト用
