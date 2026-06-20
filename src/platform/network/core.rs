@@ -142,15 +142,16 @@ impl NetworkInner {
             .header("User-Agent", self.network_config.user_agent.as_str())
             .body(Empty::<Bytes>::new())
             .map_err(|_| NetworkError::HttpRequestFailed)?;
-
+        
         let mut res = match &mut sender {
             HttpSender::Http1(s) => s
                 .send_request(req)
                 .await
                 .map_err(|_| NetworkError::HttpRequestFailed)?,
-            _ => {
-                return Err(NetworkError::UnsupportedHttpVersion);
-            }
+            HttpSender::Http2(s) => s
+                .send_request(req)
+                .await
+                .map_err(|_| NetworkError::HttpRequestFailed)?,
         };
 
         let response = Self::collect_response(uri.to_string(), &mut res).await?;
