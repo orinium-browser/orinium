@@ -72,7 +72,7 @@
 <a href=#72 id=72 data-nosnippet>72</a>
 <a href=#73 id=73 data-nosnippet>73</a>        <span class="kw">let </span>stream = <span class="kw">match </span>sample_format {
 <a href=#74 id=74 data-nosnippet>74</a>            SampleFormat::F32 =&gt; device.build_output_stream(
-<a href=#75 id=75 data-nosnippet>75</a>                <span class="kw-2">&amp;</span>config,
+<a href=#75 id=75 data-nosnippet>75</a>                config,
 <a href=#76 id=76 data-nosnippet>76</a>                <span class="kw">move </span>|data: <span class="kw-2">&amp;mut </span>[f32], <span class="kw">_</span>| {
 <a href=#77 id=77 data-nosnippet>77</a>                    write_output_f32(data, src_channels, output_channels, <span class="kw-2">&amp;</span>samples, <span class="kw-2">&amp;</span>play_pos)
 <a href=#78 id=78 data-nosnippet>78</a>                },
@@ -80,7 +80,7 @@
 <a href=#80 id=80 data-nosnippet>80</a>                latency,
 <a href=#81 id=81 data-nosnippet>81</a>            )<span class="question-mark">?</span>,
 <a href=#82 id=82 data-nosnippet>82</a>            SampleFormat::I16 =&gt; device.build_output_stream(
-<a href=#83 id=83 data-nosnippet>83</a>                <span class="kw-2">&amp;</span>config,
+<a href=#83 id=83 data-nosnippet>83</a>                config,
 <a href=#84 id=84 data-nosnippet>84</a>                <span class="kw">move </span>|data: <span class="kw-2">&amp;mut </span>[i16], <span class="kw">_</span>| {
 <a href=#85 id=85 data-nosnippet>85</a>                    write_output_i16(data, src_channels, output_channels, <span class="kw-2">&amp;</span>samples, <span class="kw-2">&amp;</span>play_pos)
 <a href=#86 id=86 data-nosnippet>86</a>                },
@@ -88,7 +88,7 @@
 <a href=#88 id=88 data-nosnippet>88</a>                latency,
 <a href=#89 id=89 data-nosnippet>89</a>            )<span class="question-mark">?</span>,
 <a href=#90 id=90 data-nosnippet>90</a>            SampleFormat::U16 =&gt; device.build_output_stream(
-<a href=#91 id=91 data-nosnippet>91</a>                <span class="kw-2">&amp;</span>config,
+<a href=#91 id=91 data-nosnippet>91</a>                config,
 <a href=#92 id=92 data-nosnippet>92</a>                <span class="kw">move </span>|data: <span class="kw-2">&amp;mut </span>[u16], <span class="kw">_</span>| {
 <a href=#93 id=93 data-nosnippet>93</a>                    write_output_u16(data, src_channels, output_channels, <span class="kw-2">&amp;</span>samples, <span class="kw-2">&amp;</span>play_pos)
 <a href=#94 id=94 data-nosnippet>94</a>                },
