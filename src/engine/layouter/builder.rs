@@ -235,10 +235,12 @@ pub fn build_layout_and_info(
 
         let layout = LayoutNode::with_children(style, inline_fragments);
 
-        let info = InfoNode {
-            kind,
-            children: vec![],
-        };
+       let info = InfoNode {
+    id: id.clone(), // Добавь эту строку
+    kind,
+    children: vec![],
+};
+
 
         (layout, info)
     } else {
@@ -330,11 +332,12 @@ pub fn build_layout_and_info(
 
         let layout = LayoutNode::with_children(style, layout_children);
 
-        let info = InfoNode {
-            kind,
-            children: info_children,
-        };
-
+       let info = InfoNode {
+    id: id.clone(), // И здесь тоже обязательно добавь
+    kind,
+    children: info_children,
+};
+        
         (layout, info)
     };
 
