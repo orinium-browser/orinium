@@ -4,6 +4,7 @@
 /// It can be either a Container or Text node, each with its own properties and styles.
 #[derive(Debug, Clone)]
 pub struct InfoNode {
+    pub id: Option<String>, 
     pub kind: NodeKind,
     pub children: Vec<InfoNode>,
 }
