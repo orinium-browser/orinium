@@ -22,8 +22,8 @@ bytemuck = { version = "1.25", features = ["derive"] }
 cpal = "0.17.3"
 entities = "1.0.1"
 env_logger = "0.11.10"
+etagere = "0.3.0"
 fontdue = "0.9.3"
-glyphon = "0.11.0"
 http-body-util = "0.1"
 hyper = { version = "1", features = ["client", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
@@ -42,7 +42,7 @@ tokio = { version = "1.52", features = ["fs", "io-std", "net", "rt", "time"] }
 tokio-rustls = "0.26.4"
 ui_layout = {
   git = "https://github.com/098orin/ui_layout-rs",
-  rev = "c58a2648c8cc75d971e611827819103858ed4cef"
+  rev = "369a67e0a7ce00e51422a164f458f26101165aa3"
 }
 url = "2.5"
 wgpu = "29.0.1"
