@@ -165,7 +165,14 @@ impl Tab {
 
         let url = super::webview::resolve_url(base_url, href).unwrap();
 
-        // navigate と同じ扱い
+        if let Some(doc_url) = &self.docment_url {
+            if doc_url.path() == url.path() && url.fragment().is_some() {
+                let fragment = url.fragment().unwrap();
+                log::info!("Scrolling to fragment: {}", fragment);
+                return;
+            }
+        }
+
         self.navigate(url)
     }
 
