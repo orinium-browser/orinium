@@ -10,11 +10,11 @@ resolver = "3"
 [dependencies]
 dhat = "0.3.3"
 
-orinium_text = { path = "../orinium_text" }
-# orinium_text = {
-#   git = "https://github.com/orinium-browser/orinium_text",
-#   rev = "27294a184abee6e2b993c25ba3f2678d86644d6a",
-# }
+# orinium_text = { path = "../orinium_text" }
+orinium_text = {
+  git = "https://github.com/orinium-browser/orinium_text",
+  rev = "53ed52fb807919a07a6516e05dd6b9c3d81039bb",
+}
 
 ab_glyph = "0.2"
 anyhow = "1.0"
