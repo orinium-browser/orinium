@@ -13,7 +13,7 @@ dhat = "0.3.3"
 ab_glyph = "0.2"
 anyhow = "1.0"
 bytemuck = { version = "1.25", features = ["derive"] }
-cpal = "0.17.3"
+cpal = "0.18.1"
 entities = "1.0.1"
 env_logger = "0.11.10"
 fontdue = "0.9.3"

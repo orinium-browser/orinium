@@ -72,7 +72,7 @@ impl SoundManager {
 
         let stream = match sample_format {
             SampleFormat::F32 => device.build_output_stream(
-                &config,
+                config,
                 move |data: &mut [f32], _| {
                     write_output_f32(data, src_channels, output_channels, &samples, &play_pos)
                 },
@@ -80,7 +80,7 @@ impl SoundManager {
                 latency,
             )?,
             SampleFormat::I16 => device.build_output_stream(
-                &config,
+                config,
                 move |data: &mut [i16], _| {
                     write_output_i16(data, src_channels, output_channels, &samples, &play_pos)
                 },
@@ -88,7 +88,7 @@ impl SoundManager {
                 latency,
             )?,
             SampleFormat::U16 => device.build_output_stream(
-                &config,
+                config,
                 move |data: &mut [u16], _| {
                     write_output_u16(data, src_channels, output_channels, &samples, &play_pos)
                 },
