@@ -1,6 +1,6 @@
 //! Layout builder, which transforms a DOM tree into a UI layout.
 
-use crate::engine::bridge::text::{self, MeasuredFragment};
+use crate::engine::bridge::text::{self, FallbackTextMeasurer, MeasuredFragment, TextMeasurer};
 use crate::engine::css::{
     matcher::{ElementChain, ElementInfo},
     values::{CssValue, Unit},
@@ -313,12 +313,13 @@ pub fn build_layout_and_info(
                 if let HtmlNodeType::Text(t) = &child_node {
                     let t = normalize_whitespace(t);
                     let _t = std::time::Instant::now();
-                    let measured = measurer
-                        .measure(&text::TextMeasureRequest {
-                            text: t.clone(),
-                            style: text_style,
-                        })
-                        .expect("text measure failed");
+                    let request = &text::TextMeasureRequest {
+                        text: t.clone(),
+                        style: text_style,
+                    };
+                    let measured = measurer.measure(request).unwrap_or_else(|_|
+                            // FallbackTextMeasurer won't return any errors.
+                            FallbackTextMeasurer.measure(request).unwrap());
                     let preview = if t.len() > 40 {
                         let cut = t.floor_char_boundary(40);
                         format!("{}...", &t[..cut])
