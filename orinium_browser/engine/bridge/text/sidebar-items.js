@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["TextMeasureError"],"mod":["fallback"],"struct":["GlyphMetrics","TextMeasureRequest","TextMetrics"],"trait":["TextMeasurer"]};
+window.SIDEBAR_ITEMS = {"enum":["TextMeasureError"],"mod":["fallback"],"struct":["GlyphMetrics","MeasuredFragment","TextMeasureRequest"],"trait":["TextMeasurer"]};
