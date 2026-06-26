@@ -50,6 +50,12 @@ cd orinium
 > ```
 Cargo を使って実行可能です。
 
+> [!NOTE]
+> Ubuntu で以下のパッケージのインストールが必要になることが確認されています。
+> ```bash
+> sudo apt install pkg-config libasound2-dev
+> ```
+
 ```bash
 cargo run
 ```
