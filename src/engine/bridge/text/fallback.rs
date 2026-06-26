@@ -1,7 +1,7 @@
 //! Fallback text measurer without font engine dependency.
 
-use super::{TextMeasureError, TextMeasureRequest, TextMeasurer, TextMetrics};
-use crate::engine::layouter::types::TextStyle;
+use super::{TextMeasureError, TextMeasureRequest, TextMeasurer};
+use crate::engine::{bridge::text::MeasuredFragment, layouter::types::TextStyle};
 
 /// Fallback text measurer.
 ///
@@ -15,44 +15,26 @@ impl TextMeasurer<TextStyle> for FallbackTextMeasurer {
     fn measure(
         &self,
         request: &TextMeasureRequest<TextStyle>,
-    ) -> Result<TextMetrics, TextMeasureError> {
+    ) -> Result<Vec<MeasuredFragment>, TextMeasureError> {
         let font_size = request.style.font_size.max(1.0);
 
         // Heuristic constants
         let char_width = font_size * 0.6;
         let line_height = font_size * 1.2;
 
-        let mut current_line_width = 0.0;
-        let mut max_line_width: f32 = 0.0;
-        let mut line_count = 1;
+        let fragments: Vec<MeasuredFragment> = request
+            .text
+            .split('\n')
+            .map(|line| {
+                let w = line.len() as f32 * char_width;
+                MeasuredFragment {
+                    text: line.to_string(),
+                    width: w,
+                    height: line_height,
+                }
+            })
+            .collect();
 
-        for ch in request.text.chars() {
-            if ch == '\n' {
-                max_line_width = max_line_width.max(current_line_width);
-                current_line_width = 0.0;
-                line_count += 1;
-                continue;
-            }
-
-            current_line_width += char_width;
-
-            if request.wrap
-                && let Some(max_width) = request.max_width
-                && current_line_width > max_width
-            {
-                max_line_width = max_line_width.max(current_line_width - char_width);
-                current_line_width = char_width;
-                line_count += 1;
-            }
-        }
-
-        max_line_width = max_line_width.max(current_line_width);
-
-        Ok(TextMetrics {
-            width: max_line_width,
-            height: line_height * line_count as f32,
-            baseline: font_size,
-            line_count,
-        })
+        Ok(fragments)
     }
 }

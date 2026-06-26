@@ -34,12 +34,11 @@ fn platform_text_measurer_from_bytes_smoke() {
             font_size: 16.0,
             ..Default::default()
         },
-        max_width: Some(200.0),
-        wrap: true,
     };
 
     let res = pm.measure(&req).expect("measure");
-    println!("measured w={} h={}", res.width, res.height);
-    assert!(res.width > 0.0);
-    assert!(res.height > 0.0);
+    assert!(!res.is_empty(), "expected at least one fragment");
+    println!("measured w={} h={}", res[0].width, res[0].height);
+    assert!(res[0].width > 0.0);
+    assert!(res[0].height > 0.0);
 }

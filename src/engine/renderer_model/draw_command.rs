@@ -61,7 +61,7 @@ pub fn generate_draw_commands(
     let mut box_states: Vec<BoxPushState> = Vec::new();
 
     match &info.kind {
-        NodeKind::Text { .. } => unreachable!(),
+        NodeKind::Text { .. } | NodeKind::LineBreak => unreachable!(),
 
         NodeKind::Container {
             scroll_offset_x,
@@ -221,7 +221,10 @@ pub fn generate_draw_commands(
                     }
                 }
             }
-            _ => {
+            NodeKind::LineBreak => {
+                layout_iter.next();
+            }
+            NodeKind::Container { .. } => {
                 if let Some(LayoutChild::Node(node)) = layout_iter.next() {
                     generate_draw_commands(cmd_buf, node, child_info);
                 }

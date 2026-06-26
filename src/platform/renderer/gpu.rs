@@ -7,7 +7,7 @@ use std::{env, fmt::Debug};
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
-use super::glyph::text::{TextRenderer, TextSection};
+use super::text::text::{TextRenderer, TextSection};
 
 /// GPU描画コンテキスト
 pub struct GpuRenderer {
@@ -453,13 +453,13 @@ impl GpuRenderer {
                     let section = if let Some(tr) = &mut self.text_renderer {
                         let mut render_text_style = *style;
                         render_text_style.font_size = *font_size * sf;
-                        let buffer = tr.create_buffer_for_text(text, render_text_style);
+                        let layout = tr.create_buffer_for_text(text, render_text_style);
 
                         TextSection {
                             screen_position: ((*x + tdx) * sf, (*y + tdy) * sf),
                             clip_origin: (clip.x * sf, clip.y * sf),
                             bounds: (tw * sf, th * sf),
-                            buffer,
+                            layout,
                         }
                     } else {
                         // No text renderer available; skip
