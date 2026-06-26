@@ -354,7 +354,7 @@ pub fn build_layout_and_info(
                             kind: NodeKind::LineBreak,
                             children: vec![],
                         });
-                        break;
+                        continue;
                     }
 
                     let (child_layout, child_info) = build_layout_and_info(
