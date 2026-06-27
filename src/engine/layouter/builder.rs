@@ -771,7 +771,7 @@ fn apply_declaration(
 
         ("border", v) => {
             let (maybe_width, maybe_style, maybe_color) = if let CssValue::Keyword(k) = v
-                && k.eq_ignore_ascii_case("inset")
+                && (k.eq_ignore_ascii_case("inset") || k.eq_ignore_ascii_case("initial"))
             {
                 (Some(Length::Px(0.0)), None, None)
             } else {
