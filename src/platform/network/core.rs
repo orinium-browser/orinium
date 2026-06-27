@@ -13,6 +13,7 @@ use hyper::{
 use hyper_util::rt::TokioIo;
 use rustls::{ClientConfig, RootCertStore};
 use rustls_native_certs::load_native_certs;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::{net::TcpStream, runtime::Runtime, task::LocalSet};
 use tokio_rustls::TlsConnector;
@@ -51,10 +52,26 @@ impl AsyncNetworkCore {
     }
 }
 
+#[derive(Deserialize, Serialize)]
+pub struct StatusCode(u16);
+
+impl From<hyper::StatusCode> for StatusCode {
+    fn from(value: hyper::StatusCode) -> Self {
+        Self(value.as_u16())
+    }
+}
+
+impl StatusCode {
+    pub fn as_u16(&self) -> u16 {
+        self.0
+    }
+}
+
 /// HTTP response
+#[derive(Deserialize, Serialize)]
 pub struct Response {
     pub url: String,
-    pub status: hyper::StatusCode,
+    pub status: StatusCode,
     pub reason_phrase: String,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
@@ -99,7 +116,11 @@ impl NetworkInner {
         loop {
             let resp = self.send_request(&current).await?;
 
-            if self.network_config.follow_redirects && resp.status.is_redirection() {
+            if self.network_config.follow_redirects
+                && hyper::StatusCode::try_from(resp.status.0)
+                    .map_err(|_| NetworkError::InvalidIpcStatusCode)?
+                    .is_redirection()
+            {
                 if redirects >= 10 {
                     return Err(NetworkError::TooManyRedirects);
                 }
@@ -186,7 +207,7 @@ impl NetworkInner {
 
         Ok(Response {
             url,
-            status,
+            status: status.into(),
             reason_phrase,
             headers,
             body,

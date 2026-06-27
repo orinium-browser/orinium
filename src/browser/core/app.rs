@@ -31,10 +31,10 @@
 
 use anyhow::Result;
 use std::collections::{HashMap, hash_map::DefaultHasher};
-use std::env;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::{env, io};
 use url::Url;
 use winit::event::WindowEvent;
 use winit::window::WindowId;
@@ -165,7 +165,7 @@ pub struct BrowserApp {
 
 impl Default for BrowserApp {
     fn default() -> Self {
-        Self::new((800, 600), "Orinium Browser".to_string())
+        Self::new((800, 600), "Orinium Browser".to_string()).unwrap()
     }
 }
 
@@ -177,10 +177,13 @@ impl BrowserApp {
 
     /// Creates a new browser instance with the given default window size and title.
     /// Windows are registered later via `open_window`.
-    pub fn new(default_window_size: (u32, u32), default_window_title: String) -> Self {
-        let network = BrowserResourceLoader::new(Some(Rc::new(NetworkCore::new())));
+    pub fn new(
+        default_window_size: (u32, u32),
+        default_window_title: String,
+    ) -> Result<Self, io::Error> {
+        let network = BrowserResourceLoader::new(Some(Rc::new(NetworkCore::new()?)));
 
-        Self {
+        Ok(Self {
             tabs: vec![],
             active_tab: 0,
             renders: HashMap::new(),
@@ -190,7 +193,7 @@ impl BrowserApp {
             default_window_title,
             network,
             pending_fetches: PendingFetches::new(),
-        }
+        })
     }
 
     /// Registers a new window with the given id, size, title, scale factor, and associated tab.

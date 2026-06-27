@@ -46,7 +46,8 @@ struct MultiWindowApp {
 
 impl MultiWindowApp {
     fn new() -> Result<Self> {
-        let mut browser = BrowserApp::new((900, 640), "Orinium Browser".to_string());
+        let mut browser = BrowserApp::new((900, 640), "Orinium Browser".into())
+            .expect("Failed to create browser instance");
 
         let mut pending_specs = Vec::new();
         for (i, spec) in WINDOWS.iter().enumerate() {

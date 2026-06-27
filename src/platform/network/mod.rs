@@ -10,46 +10,50 @@ pub mod sender_pool;
 pub use cache::Cache;
 pub use config::NetworkConfig;
 pub use cookie_store::CookieStore;
-pub use core::Response;
+pub use core::{Response, StatusCode};
 pub use error::NetworkError;
-pub use hyper::http::{Request, StatusCode};
+pub use hyper::http::Request;
 pub use sender_pool::HostKey;
 pub use sender_pool::{HttpSender, SenderPool};
 
+use serde::{Deserialize, Serialize};
+
 use core::AsyncNetworkCore;
 
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::thread;
+use ipc_channel::ipc::{self, IpcReceiver, IpcSender};
+use std::{io, thread};
 
+#[derive(Deserialize, Serialize)]
 pub enum NetworkCommand {
     Fetch { url: String, msg_id: usize },
     SetConfig(NetworkConfig),
 }
 
+#[derive(Deserialize, Serialize)]
 pub struct NetworkMessage {
     pub msg_id: usize,
     pub response: Result<Response, NetworkError>,
 }
 
 pub struct NetworkCore {
-    cmd_tx: Sender<NetworkCommand>,
-    msg_rx: Receiver<NetworkMessage>, // UI スレッド用
+    cmd_tx: IpcSender<NetworkCommand>,
+    msg_rx: IpcReceiver<NetworkMessage>, // UI スレッド用
 }
 
 impl Default for NetworkCore {
     fn default() -> Self {
-        Self::new()
+        Self::new().unwrap()
     }
 }
 
 impl NetworkCore {
-    pub fn new() -> Self {
-        let (cmd_tx, cmd_rx) = mpsc::channel();
-        let (msg_tx, msg_rx) = mpsc::channel();
+    pub fn new() -> Result<Self, io::Error> {
+        let (cmd_tx, cmd_rx) = ipc::channel()?;
+        let (msg_tx, msg_rx) = ipc::channel()?;
 
         thread::spawn(move || spawn_network_thread(cmd_rx, msg_tx));
 
-        Self { cmd_tx, msg_rx }
+        Ok(Self { cmd_tx, msg_rx })
     }
 
     pub fn set_network_config(&self, cfg: NetworkConfig) {
@@ -83,10 +87,10 @@ impl NetworkCore {
 }
 
 /// ネットワークスレッド
-fn spawn_network_thread(rx: Receiver<NetworkCommand>, tx: Sender<NetworkMessage>) {
+fn spawn_network_thread(rx: IpcReceiver<NetworkCommand>, tx: IpcSender<NetworkMessage>) {
     let mut core = AsyncNetworkCore::new();
 
-    for cmd in rx {
+    while let Ok(cmd) = rx.recv() {
         match cmd {
             NetworkCommand::SetConfig(cfg) => core.set_network_config(cfg),
             NetworkCommand::Fetch { url, msg_id } => {
