@@ -942,6 +942,7 @@ fn apply_declaration(
                 "flex-end" => JustifyContent::End,
                 "space-between" => JustifyContent::SpaceBetween,
                 "space-around" => JustifyContent::SpaceAround,
+                "space-evenly" => JustifyContent::SpaceEvenly,
                 _ => return None,
             };
         }
