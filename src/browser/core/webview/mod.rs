@@ -64,6 +64,8 @@ pub struct WebView {
 
     needs_redraw: bool,
 
+    text_measurer: Option<PlatformTextMeasurer>,
+
     css_processor: css::processor::CssProcessor,
     css_strategy: CssApplicationStrategy,
     css_results_expected: usize,
@@ -123,6 +125,8 @@ impl WebView {
 
             needs_redraw: false,
 
+            text_measurer: None,
+
             css_processor: css::processor::CssProcessor::new(),
             css_strategy: CssApplicationStrategy::Incremental,
             css_results_expected: 0,
@@ -156,9 +160,8 @@ impl WebView {
 
             PagePhase::HtmlParsed => {
                 // Phase 1: UA.css only layout
-                let measurer = PlatformTextMeasurer::new().unwrap();
-
-                self.update_layout_and_info(measurer);
+                self.ensure_text_measurer();
+                self.update_layout();
 
                 // CSS fetch を要求
                 for url in &self.pending_css_urls {
@@ -238,9 +241,8 @@ impl WebView {
     ///
     /// This is a stub method for now.
     pub fn update_page(&mut self) {
-        let measurer = PlatformTextMeasurer::new().unwrap();
-
-        self.update_layout_and_info(measurer);
+        self.ensure_text_measurer();
+        self.update_layout();
     }
 
     fn apply_resolved_styles_and_relayout(
@@ -248,10 +250,7 @@ impl WebView {
         resolved: layouter::css_resolver::ResolvedStyles,
     ) {
         self.resolved_styles.extend(resolved);
-
-        let measurer = PlatformTextMeasurer::new().unwrap();
-
-        self.update_layout_and_info(measurer);
+        self.update_layout();
     }
 
     fn try_apply_css_results(&mut self) {
@@ -275,11 +274,21 @@ impl WebView {
         }
     }
 
-    fn update_layout_and_info(&mut self, measurer: PlatformTextMeasurer) {
-        self.layout_and_info = Some(layouter::build_layout_and_info(
-            &self.docment_info.as_ref().unwrap().dom.root,
-            &self.resolved_styles,
-            &measurer,
+    fn ensure_text_measurer(&mut self) {
+        if self.text_measurer.is_none() {
+            self.text_measurer = Some(PlatformTextMeasurer::new().unwrap());
+        }
+    }
+
+    fn build_layout(
+        docment_info: &DocumentInfo,
+        resolved_styles: &layouter::css_resolver::ResolvedStyles,
+        measurer: &PlatformTextMeasurer,
+    ) -> (LayoutNode, InfoNode) {
+        layouter::build_layout_and_info(
+            &docment_info.dom.root,
+            resolved_styles,
+            measurer,
             InheritedCss {
                 text_style: TextStyle {
                     font_size: 16.0,
@@ -287,6 +296,19 @@ impl WebView {
                 },
             },
             Vec::new(),
+        )
+    }
+
+    fn update_layout(&mut self) {
+        let doc_info = match self.docment_info.as_ref() {
+            Some(d) => d,
+            None => return,
+        };
+
+        self.layout_and_info = Some(Self::build_layout(
+            doc_info,
+            &self.resolved_styles,
+            self.text_measurer.as_ref().unwrap(),
         ));
         self.needs_redraw = true;
     }
