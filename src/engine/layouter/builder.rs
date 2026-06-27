@@ -783,8 +783,13 @@ fn apply_declaration(
         }
 
         ("border", v) => {
-            let (maybe_width, maybe_style, maybe_color) =
-                parse_border_shorthand(name, v, text_style)?;
+            let (maybe_width, maybe_style, maybe_color) = if let CssValue::Keyword(k) = v
+                && k.eq_ignore_ascii_case("inset")
+            {
+                (Some(Length::Px(0.0)), None, None)
+            } else {
+                parse_border_shorthand(name, v, text_style)?
+            };
 
             if let Some(w) = maybe_width {
                 style.spacing.border_top = w.clone();
