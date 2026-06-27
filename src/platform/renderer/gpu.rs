@@ -1,6 +1,8 @@
 //! wgpuを使用してGPUで描画するためのコンテキストと処理を提供するモジュール
 
-use crate::engine::layouter::types::{Color, ColorStop, Gradient, GradientKind};
+use crate::engine::layouter::types::{
+    Color, ColorStop, Gradient, GradientKind, RadialShape, RadialSizeKind,
+};
 use crate::engine::renderer_model::DrawCommand;
 use anyhow::Result;
 use std::sync::Arc;
@@ -403,7 +405,7 @@ impl GpuRenderer {
                     ]);
                 }
 
-                // Gradient Rectangle (pre-compute vertex colors from gradient definition)
+                // Gradient Rectangle
                 DrawCommand::DrawGradientRect {
                     x,
                     y,
@@ -432,37 +434,42 @@ impl GpuRenderer {
                     x2 = x2.min((clip.x + clip.w) * sf);
                     y2 = y2.min((clip.y + clip.h) * sf);
 
-                    let ndc = |v, max| (v / max) * 2.0 - 1.0;
-
-                    let px1 = ndc(x1, screen_width);
-                    let py1 = -ndc(y1, screen_height);
-                    let px2 = ndc(x2, screen_width);
-                    let py2 = -ndc(y2, screen_height);
-
-                    // Compute 4 corner colors from gradient definition
                     let logical_corners = [
                         ((x + tdx) * sf, (y + tdy) * sf),         // TL
                         ((x + tdx) * sf, (y + tdy + h) * sf),     // BL
                         ((x + tdx + w) * sf, (y + tdy) * sf),     // TR
                         ((x + tdx + w) * sf, (y + tdy + h) * sf), // BR
                     ];
-                    let corner_colors = compute_gradient_corner_colors(gradient, &logical_corners);
 
-                    let c_tl = corner_colors[0].to_linear_f32_array();
-                    let c_bl = corner_colors[1].to_linear_f32_array();
-                    let c_tr = corner_colors[2].to_linear_f32_array();
-                    let c_br = corner_colors[3].to_linear_f32_array();
-
-                    #[rustfmt::skip]
-                    vertices.extend_from_slice(&[
-                        Vertex { position: [px1, py1, 0.0], color: c_tl },
-                        Vertex { position: [px1, py2, 0.0], color: c_bl },
-                        Vertex { position: [px2, py1, 0.0], color: c_tr },
-
-                        Vertex { position: [px2, py1, 0.0], color: c_tr },
-                        Vertex { position: [px1, py2, 0.0], color: c_bl },
-                        Vertex { position: [px2, py2, 0.0], color: c_br },
-                    ]);
+                    match &gradient.kind {
+                        GradientKind::Linear { .. } => {
+                            let corner_colors =
+                                compute_gradient_corner_colors(gradient, &logical_corners);
+                            let colors_lin = [
+                                corner_colors[0].to_linear_f32_array(),
+                                corner_colors[1].to_linear_f32_array(),
+                                corner_colors[2].to_linear_f32_array(),
+                                corner_colors[3].to_linear_f32_array(),
+                            ];
+                            emit_rect_vertices(
+                                &mut vertices,
+                                x1, y1, x2, y2,
+                                screen_width, screen_height,
+                                colors_lin,
+                            );
+                        }
+                        GradientKind::Radial { .. } => {
+                            let (cx, cy, rx, ry) =
+                                compute_radial_params(&gradient.kind, &logical_corners);
+                            emit_radial_gradient_vertices(
+                                &mut vertices,
+                                x1, y1, x2, y2,
+                                screen_width, screen_height,
+                                cx, cy, rx, ry,
+                                &gradient.stops,
+                            );
+                        }
+                    }
                 }
 
                 // Text
@@ -883,70 +890,191 @@ impl GpuRenderer {
     }
 }
 
-/// Compute the 4 corner colors for a gradient rectangle.
+/// Compute the 4 corner colors for a linear gradient rectangle.
 ///
 /// corners layout: [TL, BL, TR, BR] in logical (pre-NDC) screen coordinates.
 fn compute_gradient_corner_colors(gradient: &Gradient, corners: &[(f32, f32); 4]) -> [Color; 4] {
-    match &gradient.kind {
-        GradientKind::Linear { angle } => {
-            let rad = angle.to_radians();
-            let dir_x = rad.sin();
-            let dir_y = -rad.cos();
+    let GradientKind::Linear { angle } = &gradient.kind else {
+        return [Color(0, 0, 0, 0); 4];
+    };
+    let rad = angle.to_radians();
+    let dir_x = rad.sin();
+    let dir_y = -rad.cos();
 
-            let projections: Vec<f32> = corners
-                .iter()
-                .map(|(cx, cy)| cx * dir_x + cy * dir_y)
-                .collect();
-            let min_p = projections.iter().cloned().fold(f32::INFINITY, f32::min);
-            let max_p = projections
-                .iter()
-                .cloned()
-                .fold(f32::NEG_INFINITY, f32::max);
-            let range = max_p - min_p;
+    let projections: Vec<f32> = corners
+        .iter()
+        .map(|(cx, cy)| cx * dir_x + cy * dir_y)
+        .collect();
+    let min_p = projections.iter().cloned().fold(f32::INFINITY, f32::min);
+    let max_p = projections
+        .iter()
+        .cloned()
+        .fold(f32::NEG_INFINITY, f32::max);
+    let range = max_p - min_p;
 
-            let mut colors = [Color(0, 0, 0, 0); 4];
-            for (i, proj) in projections.iter().enumerate() {
-                let t = if range > 0.0 {
-                    (proj - min_p) / range
-                } else {
-                    0.0
-                };
-                colors[i] = sample_gradient_stops(&gradient.stops, t);
-            }
-            colors
+    let mut colors = [Color(0, 0, 0, 0); 4];
+    for (i, proj) in projections.iter().enumerate() {
+        let t = if range > 0.0 {
+            (proj - min_p) / range
+        } else {
+            0.0
+        };
+        colors[i] = sample_gradient_stops(&gradient.stops, t);
+    }
+    colors
+}
+
+fn compute_radial_params(
+    kind: &GradientKind,
+    corners: &[(f32, f32); 4],
+) -> (f32, f32, f32, f32) {
+    let GradientKind::Radial {
+        shape,
+        size,
+        position,
+    } = kind
+    else {
+        return (0.0, 0.0, 1.0, 1.0);
+    };
+
+    let min_x = corners.iter().map(|c| c.0).fold(f32::INFINITY, f32::min);
+    let max_x = corners.iter().map(|c| c.0).fold(f32::NEG_INFINITY, f32::max);
+    let min_y = corners.iter().map(|c| c.1).fold(f32::INFINITY, f32::min);
+    let max_y = corners.iter().map(|c| c.1).fold(f32::NEG_INFINITY, f32::max);
+    let w = max_x - min_x;
+    let h = max_y - min_y;
+    let cx = min_x + w * position.0;
+    let cy = min_y + h * position.1;
+
+    let (rx, ry) = match (shape, size) {
+        (RadialShape::Circle, RadialSizeKind::ClosestSide) => {
+            let d = (cx - min_x).min(max_x - cx).min((cy - min_y).min(max_y - cy));
+            (d, d)
         }
-        GradientKind::Radial { position, .. } => {
-            let (cx, cy) = {
-                let min_x = corners.iter().map(|c| c.0).fold(f32::INFINITY, f32::min);
-                let max_x = corners
-                    .iter()
-                    .map(|c| c.0)
-                    .fold(f32::NEG_INFINITY, f32::max);
-                let min_y = corners.iter().map(|c| c.1).fold(f32::INFINITY, f32::min);
-                let max_y = corners
-                    .iter()
-                    .map(|c| c.1)
-                    .fold(f32::NEG_INFINITY, f32::max);
-                let w = max_x - min_x;
-                let h = max_y - min_y;
-                (min_x + w * position.0, min_y + h * position.1)
-            };
-            let max_radius = corners
+        (RadialShape::Circle, RadialSizeKind::FarthestSide) => {
+            let d = (cx - min_x).max(max_x - cx).max((cy - min_y).max(max_y - cy));
+            (d, d)
+        }
+        (RadialShape::Circle, RadialSizeKind::ClosestCorner) => {
+            let d = corners
+                .iter()
+                .map(|(px, py)| ((px - cx).powi(2) + (py - cy).powi(2)).sqrt())
+                .fold(f32::INFINITY, f32::min);
+            (d, d)
+        }
+        (RadialShape::Circle, RadialSizeKind::FarthestCorner) => {
+            let d = corners
                 .iter()
                 .map(|(px, py)| ((px - cx).powi(2) + (py - cy).powi(2)).sqrt())
                 .fold(0.0f32, f32::max);
-
-            let mut colors = [Color(0, 0, 0, 0); 4];
-            for (i, (px, py)) in corners.iter().enumerate() {
-                let dist = ((px - cx).powi(2) + (py - cy).powi(2)).sqrt();
-                let t = if max_radius > 0.0 {
-                    (dist / max_radius).clamp(0.0, 1.0)
+            (d, d)
+        }
+        (RadialShape::Ellipse, RadialSizeKind::ClosestSide) => {
+            let rx = (cx - min_x).min(max_x - cx);
+            let ry = (cy - min_y).min(max_y - cy);
+            (rx, ry)
+        }
+        (RadialShape::Ellipse, RadialSizeKind::FarthestSide) => {
+            let rx = (cx - min_x).max(max_x - cx);
+            let ry = (cy - min_y).max(max_y - cy);
+            (rx, ry)
+        }
+        (RadialShape::Ellipse, RadialSizeKind::ClosestCorner) => corners
+            .iter()
+            .fold((f32::INFINITY, f32::INFINITY), |acc, (px, py)| {
+                let erx = (px - cx).abs();
+                let ery = (py - cy).abs();
+                let nd = (erx * erx + ery * ery).sqrt();
+                let best_nd = (acc.0 * acc.0 + acc.1 * acc.1).sqrt();
+                if nd < best_nd {
+                    (erx, ery)
                 } else {
-                    0.0
-                };
-                colors[i] = sample_gradient_stops(&gradient.stops, t);
-            }
-            colors
+                    acc
+                }
+            }),
+        (RadialShape::Ellipse, RadialSizeKind::FarthestCorner) => corners
+            .iter()
+            .fold((0.0f32, 0.0f32), |acc, (px, py)| {
+                let erx = (px - cx).abs();
+                let ery = (py - cy).abs();
+                let nd = (erx * erx + ery * ery).sqrt();
+                let best_nd = (acc.0 * acc.0 + acc.1 * acc.1).sqrt();
+                if nd > best_nd {
+                    (erx, ery)
+                } else {
+                    acc
+                }
+            }),
+    };
+
+    (cx, cy, rx.max(0.001), ry.max(0.001))
+}
+
+fn color_at_point(cx: f32, cy: f32, rx: f32, ry: f32, px: f32, py: f32) -> f32 {
+    let dx = px - cx;
+    let dy = py - cy;
+    ((dx / rx).powi(2) + (dy / ry).powi(2))
+        .sqrt()
+        .clamp(0.0, 1.0)
+}
+
+fn emit_rect_vertices(
+    vertices: &mut Vec<Vertex>,
+    x1: f32, y1: f32, x2: f32, y2: f32,
+    screen_width: f32, screen_height: f32,
+    colors: [[f32; 4]; 4],
+) {
+    let ndc = |v: f32, max: f32| (v / max) * 2.0 - 1.0;
+    let px1 = ndc(x1, screen_width);
+    let py1 = -ndc(y1, screen_height);
+    let px2 = ndc(x2, screen_width);
+    let py2 = -ndc(y2, screen_height);
+
+    #[rustfmt::skip]
+    vertices.extend_from_slice(&[
+        Vertex { position: [px1, py1, 0.0], color: colors[0] },
+        Vertex { position: [px1, py2, 0.0], color: colors[1] },
+        Vertex { position: [px2, py1, 0.0], color: colors[2] },
+        Vertex { position: [px2, py1, 0.0], color: colors[2] },
+        Vertex { position: [px1, py2, 0.0], color: colors[1] },
+        Vertex { position: [px2, py2, 0.0], color: colors[3] },
+    ]);
+}
+
+/// Subdivide a radial gradient rectangle into an NxN grid for proper rendering.
+fn emit_radial_gradient_vertices(
+    vertices: &mut Vec<Vertex>,
+    x1: f32, y1: f32, x2: f32, y2: f32,
+    screen_width: f32, screen_height: f32,
+    cx: f32, cy: f32, rx: f32, ry: f32,
+    stops: &[ColorStop],
+) {
+    const SUBDIV: u32 = 32;
+    let rect_w = x2 - x1;
+    let rect_h = y2 - y1;
+    let step_x = rect_w / SUBDIV as f32;
+    let step_y = rect_h / SUBDIV as f32;
+
+    for gy in 0..SUBDIV {
+        for gx in 0..SUBDIV {
+            let sx1 = x1 + gx as f32 * step_x;
+            let sy1 = y1 + gy as f32 * step_y;
+            let sx2 = sx1 + step_x;
+            let sy2 = sy1 + step_y;
+
+            let t_tl = color_at_point(cx, cy, rx, ry, sx1, sy1);
+            let t_bl = color_at_point(cx, cy, rx, ry, sx1, sy2);
+            let t_tr = color_at_point(cx, cy, rx, ry, sx2, sy1);
+            let t_br = color_at_point(cx, cy, rx, ry, sx2, sy2);
+
+            let colors = [
+                sample_gradient_stops(stops, t_tl).to_linear_f32_array(),
+                sample_gradient_stops(stops, t_bl).to_linear_f32_array(),
+                sample_gradient_stops(stops, t_tr).to_linear_f32_array(),
+                sample_gradient_stops(stops, t_br).to_linear_f32_array(),
+            ];
+
+            emit_rect_vertices(vertices, sx1, sy1, sx2, sy2, screen_width, screen_height, colors);
         }
     }
 }

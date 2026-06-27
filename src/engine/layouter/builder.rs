@@ -1091,15 +1091,94 @@ fn parse_linear_direction(args: &[CssValue]) -> (usize, Option<f32>) {
 }
 
 fn parse_radial_gradient(args: &[CssValue], _text_style: &TextStyle) -> Option<Gradient> {
-    let stops = parse_color_stops(args)?;
+    let mut shape = RadialShape::Ellipse;
+    let mut size = RadialSizeKind::default();
+    let mut position = (0.5f32, 0.5f32);
+
+    let mut idx = 0;
+
+    // Consume known radial keywords before color stops
+    while idx < args.len() {
+        if let CssValue::Keyword(k) = &args[idx] {
+            match k.as_str() {
+                "circle" => {
+                    shape = RadialShape::Circle;
+                    idx += 1;
+                    continue;
+                }
+                "ellipse" => {
+                    shape = RadialShape::Ellipse;
+                    idx += 1;
+                    continue;
+                }
+                "closest-side" => {
+                    size = RadialSizeKind::ClosestSide;
+                    idx += 1;
+                    continue;
+                }
+                "farthest-side" => {
+                    size = RadialSizeKind::FarthestSide;
+                    idx += 1;
+                    continue;
+                }
+                "closest-corner" => {
+                    size = RadialSizeKind::ClosestCorner;
+                    idx += 1;
+                    continue;
+                }
+                "farthest-corner" => {
+                    size = RadialSizeKind::FarthestCorner;
+                    idx += 1;
+                    continue;
+                }
+                _ => break,
+            }
+        } else {
+            break;
+        }
+    }
+
+    // Optional "at <position>" — simplified to "at center" / "at top left" etc.
+    if idx < args.len() && args[idx] == CssValue::Keyword("at".into()) {
+        idx += 1; // skip "at"
+        if idx < args.len() {
+            if let CssValue::Keyword(k) = &args[idx] {
+                // Parse position keywords
+                match k.as_str() {
+                    "center" => position = (0.5, 0.5),
+                    "top" => position = (0.5, 0.0),
+                    "bottom" => position = (0.5, 1.0),
+                    "left" => position = (0.0, 0.5),
+                    "right" => position = (1.0, 0.5),
+                    _ => {} // ignore unknown
+                }
+                idx += 1;
+                // Optional second keyword (e.g. "top left")
+                if idx < args.len() {
+                    if let CssValue::Keyword(k2) = &args[idx] {
+                        match (k.as_str(), k2.as_str()) {
+                            ("top", "left") | ("left", "top") => position = (0.0, 0.0),
+                            ("top", "right") | ("right", "top") => position = (1.0, 0.0),
+                            ("bottom", "left") | ("left", "bottom") => position = (0.0, 1.0),
+                            ("bottom", "right") | ("right", "bottom") => position = (1.0, 1.0),
+                            _ => {}
+                        }
+                        idx += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    let stops = parse_color_stops(&args[idx..])?;
     if stops.is_empty() {
         return None;
     }
     Some(Gradient {
         kind: GradientKind::Radial {
-            shape: RadialShape::Ellipse,
-            size: RadialSizeKind::default(),
-            position: (0.5, 0.5),
+            shape,
+            size,
+            position,
         },
         stops,
     })
