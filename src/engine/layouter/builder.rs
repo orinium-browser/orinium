@@ -613,20 +613,7 @@ fn apply_declaration(
         }
 
         ("background", _) => {
-            container_style.background = match value {
-                CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("inherit") => {
-                    Background::Color(text_style.color)
-                }
-                CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentColor") => {
-                    Background::Color(text_style.color)
-                }
-                CssValue::Function(fn_name, args)
-                    if fn_name == "linear-gradient" || fn_name == "radial-gradient" =>
-                {
-                    Background::Gradient(parse_gradient(fn_name, args, text_style)?)
-                }
-                _ => Background::Color(resolve_css_color(name, value)?),
-            };
+            container_style.background = parse_background_shorthand(name, value, text_style)?;
         }
 
         ("color", _) => {
@@ -1001,6 +988,61 @@ fn apply_declaration(
         _ => {}
     }
     Some(())
+}
+
+// =========================
+//   Background Shorthand
+// =========================
+
+fn parse_background_shorthand(
+    name: &str,
+    value: &CssValue,
+    text_style: &TextStyle,
+) -> Option<Background> {
+    let items: Vec<&CssValue> = match value {
+        CssValue::List(values) => values.iter().collect(),
+        _ => vec![value],
+    };
+
+    let mut maybe_color: Option<Color> = None;
+    let mut maybe_gradient: Option<Gradient> = None;
+
+    for v in items {
+        // inherit
+        if let CssValue::Keyword(kw) = v {
+            if kw.eq_ignore_ascii_case("inherit") {
+                maybe_color = Some(text_style.color);
+                continue;
+            }
+            if kw.eq_ignore_ascii_case("currentColor") {
+                maybe_color = Some(text_style.color);
+                continue;
+            }
+        }
+
+        // gradient
+        if let CssValue::Function(fn_name, args) = v {
+            if fn_name == "linear-gradient" || fn_name == "radial-gradient" {
+                maybe_gradient = Some(parse_gradient(fn_name, args, text_style)?);
+                continue;
+            }
+        }
+
+        // color
+        if let Some(c) = resolve_css_color(name, v) {
+            maybe_color = Some(c);
+            continue;
+        }
+    }
+
+    if let Some(g) = maybe_gradient {
+        return Some(Background::Gradient(g));
+    }
+    if let Some(c) = maybe_color {
+        return Some(Background::Color(c));
+    }
+
+    None
 }
 
 // =========================
