@@ -7,7 +7,6 @@ mod core;
 pub mod error;
 pub mod sender_pool;
 
-// 外部公開用
 pub use cache::Cache;
 pub use config::NetworkConfig;
 pub use cookie_store::CookieStore;
