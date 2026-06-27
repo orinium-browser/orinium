@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="ja">
+    <head>
+        <meta charset="UTF-8" />
+        <title>CSS Box Model Test</title>
+        <style>
+            body {
+                font-family: sans-serif;
+                padding: 20px;
+                line-height: 1.6;
+            }
+
+            section {
+                margin-bottom: 40px;
+            }
+
+            h2 {
+                border-bottom: 2px solid #333;
+                padding-bottom: 5px;
+            }
+
+            .container {
+                border: 2px dashed #999;
+                padding: 10px;
+                margin-top: 10px;
+            }
+
+            .box {
+                background: #4a90e2;
+                color: white;
+                width: 120px;
+                height: 60px;
+            }
+
+            /* margin */
+            .m0 {
+                margin: 0;
+            }
+
+            .m10 {
+                margin: 10px;
+            }
+
+            .m-auto {
+                margin: auto;
+            }
+
+            .mt {
+                margin-top: 20px;
+            }
+
+            .mb {
+                margin-bottom: 20px;
+            }
+
+            .ml {
+                margin-left: 40px;
+            }
+
+            .mr {
+                margin-right: 40px;
+            }
+
+            /* padding */
+            .p0 {
+                padding: 0;
+            }
+
+            .p10 {
+                padding: 10px;
+            }
+
+            .pt {
+                padding-top: 20px;
+            }
+
+            .pb {
+                padding-bottom: 20px;
+            }
+
+            .pl {
+                padding-left: 30px;
+            }
+
+            .pr {
+                padding-right: 30px;
+            }
+
+            /* border */
+            .b1 {
+                border: 1px solid red;
+            }
+
+            .b2 {
+                border: 3px solid green;
+            }
+
+            .bdashed {
+                border: 2px dashed blue;
+            }
+
+            .bdotted {
+                border: 2px dotted black;
+            }
+
+            .bradius {
+                border: 2px solid purple;
+                border-radius: 10px;
+            }
+
+            /* box-sizing */
+            .content-box {
+                box-sizing: content-box;
+                border: 10px solid orange;
+                padding: 10px;
+            }
+
+            .border-box {
+                box-sizing: border-box;
+                border: 10px solid orange;
+                padding: 10px;
+            }
+
+            /* display */
+            .block {
+                display: block;
+            }
+
+            .inline {
+                display: inline;
+                background: #e74c3c;
+                color: white;
+            }
+
+            .inline-block {
+                display: inline-block;
+                background: #2ecc71;
+                width: 100px;
+                height: 40px;
+            }
+
+            /* overflow */
+            .overflow {
+                width: 100px;
+                height: 50px;
+                overflow: hidden;
+                background: #333;
+                color: white;
+            }
+
+            .overflow-scroll {
+                width: 100px;
+                height: 50px;
+                overflow: scroll;
+                background: #555;
+                color: white;
+            }
+        </style>
+    </head>
+
+    <body>
+        <h1>CSS Box Model Test</h1>
+
+        <section>
+            <h2>Margin</h2>
+            <div class="container">
+                <div class="box m0">margin 0</div>
+                <div class="box m10">margin 10px</div>
+                <div class="box mt">margin-top</div>
+                <div class="box mb">margin-bottom</div>
+                <div class="box ml">margin-left</div>
+                <div class="box mr">margin-right</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>Padding</h2>
+            <div class="container">
+                <div class="box p0">padding 0</div>
+                <div class="box p10">padding 10px</div>
+                <div class="box pt">padding-top</div>
+                <div class="box pb">padding-bottom</div>
+                <div class="box pl">padding-left</div>
+                <div class="box pr">padding-right</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>Border</h2>
+            <div class="container">
+                <div class="box b1">solid red</div>
+                <div class="box b2">thick green</div>
+                <div class="box bdashed">dashed blue</div>
+                <div class="box bdotted">dotted</div>
+                <div class="box bradius">radius</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>Box Sizing</h2>
+            <div class="container">
+                <div class="box content-box">content-box</div>
+                <div class="box border-box">border-box</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>Display</h2>
+            <div class="container">
+                <div class="block box">block</div>
+                <span class="inline">inline</span>
+                <span class="inline">inline</span>
+                <div class="inline-block">inline-block</div>
+                <div class="inline-block">inline-block</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>Overflow</h2>
+            <div class="container">
+                <div class="overflow">
+                    hidden overflow test text text text text text text
+                </div>
+                <div class="overflow-scroll">
+                    scroll overflow test text text text text text text
+                </div>
+            </div>
+        </section>
+    </body>
+</html>
