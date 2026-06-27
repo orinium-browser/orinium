@@ -1311,6 +1311,7 @@ fn resolve_css_len(name: &str, css_len: &CssValue, text_style: &TextStyle) -> Op
 
             Some(result)
         }
+        CssValue::Color(_) => None,
         _ => {
             log::error!(target: "Layouter", "Unknown CSS Length type for `{}`: {:?}", name, css_len);
             None
