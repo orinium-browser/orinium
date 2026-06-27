@@ -813,71 +813,55 @@ fn apply_declaration(
             }
         }
         ("border-top", _) => {
-            if let CssValue::List(_) = value {
-                let (maybe_width, maybe_style, maybe_color) =
-                    parse_border_shorthand(name, value, text_style)?;
-                if let Some(w) = maybe_width {
-                    style.spacing.border_top = w;
-                }
-                if let Some(s) = maybe_style {
-                    container_style.border_style.top = s;
-                }
-                if let Some(c) = maybe_color {
-                    container_style.border_color.top = c;
-                }
-            } else {
-                style.spacing.border_top = resolve_css_len(name, value, text_style)?;
+            let (maybe_width, maybe_style, maybe_color) =
+                parse_border_shorthand(name, value, text_style)?;
+            if let Some(w) = maybe_width {
+                style.spacing.border_top = w;
+            }
+            if let Some(s) = maybe_style {
+                container_style.border_style.top = s;
+            }
+            if let Some(c) = maybe_color {
+                container_style.border_color.top = c;
             }
         }
         ("border-right", _) => {
-            if let CssValue::List(_) = value {
-                let (maybe_width, maybe_style, maybe_color) =
-                    parse_border_shorthand(name, value, text_style)?;
-                if let Some(w) = maybe_width {
-                    style.spacing.border_right = w;
-                }
-                if let Some(s) = maybe_style {
-                    container_style.border_style.right = s;
-                }
-                if let Some(c) = maybe_color {
-                    container_style.border_color.right = c;
-                }
-            } else {
-                style.spacing.border_right = resolve_css_len(name, value, text_style)?;
+            let (maybe_width, maybe_style, maybe_color) =
+                parse_border_shorthand(name, value, text_style)?;
+            if let Some(w) = maybe_width {
+                style.spacing.border_right = w;
+            }
+            if let Some(s) = maybe_style {
+                container_style.border_style.right = s;
+            }
+            if let Some(c) = maybe_color {
+                container_style.border_color.right = c;
             }
         }
         ("border-bottom", _) => {
-            if let CssValue::List(_) = value {
-                let (maybe_width, maybe_style, maybe_color) =
-                    parse_border_shorthand(name, value, text_style)?;
-                if let Some(w) = maybe_width {
-                    style.spacing.border_bottom = w;
-                }
-                if let Some(s) = maybe_style {
-                    container_style.border_style.bottom = s;
-                }
-                if let Some(c) = maybe_color {
-                    container_style.border_color.bottom = c;
-                }
-            } else {
-                style.spacing.border_bottom = resolve_css_len(name, value, text_style)?;
+            let (maybe_width, maybe_style, maybe_color) =
+                parse_border_shorthand(name, value, text_style)?;
+            if let Some(w) = maybe_width {
+                style.spacing.border_bottom = w;
+            }
+            if let Some(s) = maybe_style {
+                container_style.border_style.bottom = s;
+            }
+            if let Some(c) = maybe_color {
+                container_style.border_color.bottom = c;
             }
         }
         ("border-left", _) => {
-            if let CssValue::List(_) = value {
-                let (maybe_width, maybe_style, maybe_color) =
-                    parse_border_shorthand(name, value, text_style)?;
-                if let Some(w) = maybe_width {
-                    style.spacing.border_left = w;
-                }
-                if let Some(s) = maybe_style {
-                    container_style.border_style.left = s;
-                }
-                if let Some(c) = maybe_color {
-                    container_style.border_color.left = c;
-                }
-            } else {
-                style.spacing.border_left = resolve_css_len(name, value, text_style)?;
+            let (maybe_width, maybe_style, maybe_color) =
+                parse_border_shorthand(name, value, text_style)?;
+            if let Some(w) = maybe_width {
+                style.spacing.border_left = w;
+            }
+            if let Some(s) = maybe_style {
+                container_style.border_style.left = s;
+            }
+            if let Some(c) = maybe_color {
+                container_style.border_color.left = c;
             }
         }
 
