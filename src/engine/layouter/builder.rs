@@ -467,15 +467,16 @@ fn apply_declaration(
     text_style: &mut TextStyle,
 ) -> Option<()> {
     fn expand_box<T: Clone, F>(
+        name: &str,
         value: &CssValue,
         text_style: &TextStyle,
-        resolve: &impl Fn(&CssValue, &TextStyle) -> Option<T>,
+        resolve: &impl Fn(&str, &CssValue, &TextStyle) -> Option<T>,
         mut set: F,
     ) -> Option<()>
     where
         F: FnMut(T, T, T, T),
     {
-        let resolve = |v: &CssValue| -> Option<T> { resolve(v, text_style) };
+        let resolve = |v: &CssValue| -> Option<T> { resolve(name, v, text_style) };
 
         match value {
             CssValue::List(values) => {
@@ -500,6 +501,7 @@ fn apply_declaration(
     }
 
     fn parse_border_shorthand(
+        name: &str,
         value: &CssValue,
         text_style: &TextStyle,
     ) -> Option<(Option<Length>, Option<BorderStyle>, Option<Color>)> {
@@ -517,7 +519,7 @@ fn apply_declaration(
 
             // try as length (numeric lengths)
             if width.is_none()
-                && let Some(l) = resolve_css_len(token, text_style)
+                && let Some(l) = resolve_css_len(name, token, text_style)
             {
                 width = Some(l);
                 continue;
@@ -569,7 +571,7 @@ fn apply_declaration(
 
             // try as color
             if color_v.is_none()
-                && let Some(c) = resolve_css_color(token)
+                && let Some(c) = resolve_css_color(name, token)
             {
                 color_v = Some(c);
                 continue;
@@ -606,7 +608,7 @@ fn apply_declaration(
                 CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentColor") => {
                     text_style.color
                 }
-                _ => resolve_css_color(value)?,
+                _ => resolve_css_color(name, value)?,
             };
         }
 
@@ -619,7 +621,7 @@ fn apply_declaration(
                 CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentColor") => {
                     text_style.color
                 }
-                _ => resolve_css_color(value)?,
+                _ => resolve_css_color(name, value)?,
             };
         }
 
@@ -632,18 +634,18 @@ fn apply_declaration(
                 CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentColor") => {
                     text_style.color
                 }
-                _ => resolve_css_color(value)?,
+                _ => resolve_css_color(name, value)?,
             }
         }
 
         ("font-size", CssValue::Length(_, _)) => {
             // TODO: Add other size
-            let len = resolve_css_len(value, text_style)?;
+            let len = resolve_css_len(name, value, text_style)?;
             let px = match &len {
                 Length::Px(v) => *v,
                 Length::Percent(v) => *v * text_style.font_size / 100.0,
                 _ => {
-                    log::error!(target: "Layouter", "Unknown size type for font-size: {:?}", len);
+                    log::error!(target: "Layouter", "Unknown size type for `{}`: {:?}", name, len);
                     return None;
                 }
             };
@@ -659,7 +661,7 @@ fn apply_declaration(
             style.line_height = Length::Px(text_style.font_size * DEFAULT_LINE_FACTOR);
         }
         ("line-height", _) => {
-            let len = resolve_css_len(value, text_style)?;
+            let len = resolve_css_len(name, value, text_style)?;
             text_style.line_height = LineHeight::Px(length_to_px(&len, text_style.font_size));
             style.line_height = len;
         }
@@ -732,11 +734,12 @@ fn apply_declaration(
 
         ("margin", v) => {
             expand_box(
+                name,
                 v,
                 text_style,
-                &|cv, ts| match cv {
+                &|_, cv, ts| match cv {
                     CssValue::Keyword(s) if s == "auto" => Some(ui_layout::LengthOrAuto::Auto),
-                    _ => resolve_css_len(cv, ts).map(ui_layout::LengthOrAuto::Length),
+                    _ => resolve_css_len(name, cv, ts).map(ui_layout::LengthOrAuto::Length),
                 },
                 |t, r, b, l| {
                     style.spacing.margin_top = t;
@@ -750,29 +753,29 @@ fn apply_declaration(
             style.spacing.margin_top = LengthOrAuto::Auto;
         }
         ("margin-top", _) => {
-            style.spacing.margin_top = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+            style.spacing.margin_top = LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
         }
         ("margin-right", CssValue::Keyword(s)) if s == "auto" => {
             style.spacing.margin_right = LengthOrAuto::Auto;
         }
         ("margin-right", _) => {
-            style.spacing.margin_right = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+            style.spacing.margin_right = LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
         }
         ("margin-bottom", CssValue::Keyword(s)) if s == "auto" => {
             style.spacing.margin_bottom = LengthOrAuto::Auto;
         }
         ("margin-bottom", _) => {
-            style.spacing.margin_bottom = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+            style.spacing.margin_bottom = LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
         }
         ("margin-left", CssValue::Keyword(s)) if s == "auto" => {
             style.spacing.margin_left = LengthOrAuto::Auto;
         }
         ("margin-left", _) => {
-            style.spacing.margin_left = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+            style.spacing.margin_left = LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
         }
 
         ("border", v) => {
-            let (maybe_width, maybe_style, maybe_color) = parse_border_shorthand(v, text_style)?;
+            let (maybe_width, maybe_style, maybe_color) = parse_border_shorthand(name, v, text_style)?;
 
             if let Some(w) = maybe_width {
                 style.spacing.border_top = w.clone();
@@ -798,7 +801,7 @@ fn apply_declaration(
         ("border-top", _) => {
             if let CssValue::List(_) = value {
                 let (maybe_width, maybe_style, maybe_color) =
-                    parse_border_shorthand(value, text_style)?;
+                    parse_border_shorthand(name, value, text_style)?;
                 if let Some(w) = maybe_width {
                     style.spacing.border_top = w;
                 }
@@ -809,13 +812,13 @@ fn apply_declaration(
                     container_style.border_color.top = c;
                 }
             } else {
-                style.spacing.border_top = resolve_css_len(value, text_style)?;
+                style.spacing.border_top = resolve_css_len(name, value, text_style)?;
             }
         }
         ("border-right", _) => {
             if let CssValue::List(_) = value {
                 let (maybe_width, maybe_style, maybe_color) =
-                    parse_border_shorthand(value, text_style)?;
+                    parse_border_shorthand(name, value, text_style)?;
                 if let Some(w) = maybe_width {
                     style.spacing.border_right = w;
                 }
@@ -826,13 +829,13 @@ fn apply_declaration(
                     container_style.border_color.right = c;
                 }
             } else {
-                style.spacing.border_right = resolve_css_len(value, text_style)?;
+                style.spacing.border_right = resolve_css_len(name, value, text_style)?;
             }
         }
         ("border-bottom", _) => {
             if let CssValue::List(_) = value {
                 let (maybe_width, maybe_style, maybe_color) =
-                    parse_border_shorthand(value, text_style)?;
+                    parse_border_shorthand(name, value, text_style)?;
                 if let Some(w) = maybe_width {
                     style.spacing.border_bottom = w;
                 }
@@ -843,13 +846,13 @@ fn apply_declaration(
                     container_style.border_color.bottom = c;
                 }
             } else {
-                style.spacing.border_bottom = resolve_css_len(value, text_style)?;
+                style.spacing.border_bottom = resolve_css_len(name, value, text_style)?;
             }
         }
         ("border-left", _) => {
             if let CssValue::List(_) = value {
                 let (maybe_width, maybe_style, maybe_color) =
-                    parse_border_shorthand(value, text_style)?;
+                    parse_border_shorthand(name, value, text_style)?;
                 if let Some(w) = maybe_width {
                     style.spacing.border_left = w;
                 }
@@ -860,12 +863,12 @@ fn apply_declaration(
                     container_style.border_color.left = c;
                 }
             } else {
-                style.spacing.border_left = resolve_css_len(value, text_style)?;
+                style.spacing.border_left = resolve_css_len(name, value, text_style)?;
             }
         }
 
         ("padding", v) => {
-            expand_box(v, text_style, &resolve_css_len, |t, r, b, l| {
+            expand_box(name, v, text_style, &|_, v, ts| resolve_css_len(name, v, ts), |t, r, b, l| {
                 style.spacing.padding_top = t;
                 style.spacing.padding_right = r;
                 style.spacing.padding_bottom = b;
@@ -873,16 +876,16 @@ fn apply_declaration(
             })?;
         }
         ("padding-top", _) => {
-            style.spacing.padding_top = resolve_css_len(value, text_style)?;
+            style.spacing.padding_top = resolve_css_len(name, value, text_style)?;
         }
         ("padding-right", _) => {
-            style.spacing.padding_right = resolve_css_len(value, text_style)?;
+            style.spacing.padding_right = resolve_css_len(name, value, text_style)?;
         }
         ("padding-bottom", _) => {
-            style.spacing.padding_bottom = resolve_css_len(value, text_style)?;
+            style.spacing.padding_bottom = resolve_css_len(name, value, text_style)?;
         }
         ("padding-left", _) => {
-            style.spacing.padding_left = resolve_css_len(value, text_style)?;
+            style.spacing.padding_left = resolve_css_len(name, value, text_style)?;
         }
 
         /* ======================
@@ -892,37 +895,37 @@ fn apply_declaration(
             style.size.width = LengthOrAuto::Auto;
         }
         ("width", _) => {
-            style.size.width = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+            style.size.width = LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
         }
         ("height", CssValue::Keyword(s)) if s == "auto" => {
             style.size.height = LengthOrAuto::Auto;
         }
         ("height", _) => {
-            style.size.height = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+            style.size.height = LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
         }
         ("min-width", CssValue::Keyword(s)) if s == "auto" => {
             style.size.min_width = LengthOrAuto::Auto;
         }
         ("min-width", _) => {
-            style.size.min_width = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+            style.size.min_width = LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
         }
         ("min-height", CssValue::Keyword(s)) if s == "auto" => {
             style.size.min_height = LengthOrAuto::Auto;
         }
         ("min-height", _) => {
-            style.size.min_height = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+            style.size.min_height = LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
         }
         ("max-width", CssValue::Keyword(s)) if s == "auto" => {
             style.size.max_width = LengthOrAuto::Auto;
         }
         ("max-width", _) => {
-            style.size.max_width = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+            style.size.max_width = LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
         }
         ("max-height", CssValue::Keyword(s)) if s == "auto" => {
             style.size.max_height = LengthOrAuto::Auto;
         }
         ("max-height", _) => {
-            style.size.max_height = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+            style.size.max_height = LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
         }
 
         /* ======================
@@ -964,7 +967,7 @@ fn apply_declaration(
             style.column_gap = LengthOrAuto::Auto;
         }
         ("gap", _) => {
-            let gap = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+            let gap = LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
             style.row_gap = gap.clone();
             style.column_gap = gap;
         }
@@ -987,7 +990,7 @@ fn apply_declaration(
             style.item_style.flex_basis = LengthOrAuto::Auto;
         }
         ("flex-basis", _) => {
-            style.item_style.flex_basis = LengthOrAuto::Length(resolve_css_len(value, text_style)?);
+            style.item_style.flex_basis = LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
         }
 
         _ => {}
@@ -996,7 +999,7 @@ fn apply_declaration(
 }
 
 /// Resolve CssValue to Length.
-fn resolve_css_len(css_len: &CssValue, text_style: &TextStyle) -> Option<Length> {
+fn resolve_css_len(name: &str, css_len: &CssValue, text_style: &TextStyle) -> Option<Length> {
     match &css_len {
         CssValue::Length(v, Unit::Em) => Some(Length::Px(text_style.font_size * v)),
         CssValue::Length(v, Unit::Rem) => Some(Length::Px(16.0 * v)), // html sont-size 仮値
@@ -1009,42 +1012,42 @@ fn resolve_css_len(css_len: &CssValue, text_style: &TextStyle) -> Option<Length>
         },
         CssValue::Number(0.0) => Some(Length::Px(0.0)),
         CssValue::Keyword(_) => None,
-        CssValue::Function(name, args) if name == "calc" && !args.is_empty() => {
+        CssValue::Function(fn_name, args) if fn_name == "calc" && !args.is_empty() => {
             let mut iter = args.iter();
-            let mut result = resolve_css_len(iter.next().unwrap(), text_style)?;
+            let mut result = resolve_css_len(name, iter.next().unwrap(), text_style)?;
 
             while let (Some(op), Some(val)) = (iter.next(), iter.next()) {
                 match op {
                     CssValue::Keyword(o) if o == "+" => {
-                        let val_resolved = resolve_css_len(val, text_style)?;
+                        let val_resolved = resolve_css_len(name, val, text_style)?;
                         result = Length::Add(Box::new(result), Box::new(val_resolved));
                     }
                     CssValue::Keyword(o) if o == "-" => {
-                        let val_resolved = resolve_css_len(val, text_style)?;
+                        let val_resolved = resolve_css_len(name, val, text_style)?;
                         result = Length::Sub(Box::new(result), Box::new(val_resolved));
                     }
                     CssValue::Keyword(o) if o == "*" => {
                         if let CssValue::Number(factor) = val {
                             result = Length::Mul(Box::new(result), *factor);
                         } else {
-                            log::error!(target: "Layouter", "Invalid operand for multiplication in calc(): {:?}", val);
+                            log::error!(target: "Layouter", "Invalid operand for multiplication in calc() for `{}`: {:?}", name, val);
                             return None;
                         }
                     }
                     CssValue::Keyword(o) if o == "/" => {
                         if let CssValue::Number(factor) = val {
                             if *factor == 0.0 {
-                                log::error!(target: "Layouter", "Division by zero in calc()");
+                                log::error!(target: "Layouter", "Division by zero in calc() for `{}`", name);
                                 return None;
                             }
                             result = Length::Div(Box::new(result), *factor);
                         } else {
-                            log::error!(target: "Layouter", "Invalid operand for division in calc(): {:?}", val);
+                            log::error!(target: "Layouter", "Invalid operand for division in calc() for `{}`: {:?}", name, val);
                             return None;
                         }
                     }
                     _ => {
-                        log::error!(target: "Layouter", "Unknown operator for calc function: {:?}", op);
+                        log::error!(target: "Layouter", "Unknown operator in calc() for `{}`: {:?}", name, op);
                         return None;
                     }
                 }
@@ -1053,7 +1056,7 @@ fn resolve_css_len(css_len: &CssValue, text_style: &TextStyle) -> Option<Length>
             Some(result)
         }
         _ => {
-            log::error!(target: "Layouter", "Unknown CSS Length type: {:?}", css_len);
+            log::error!(target: "Layouter", "Unknown CSS Length type for `{}`: {:?}", name, css_len);
             None
         }
     }
@@ -1066,8 +1069,8 @@ fn resolve_css_len(css_len: &CssValue, text_style: &TextStyle) -> Option<Length>
 /// - Keywords like `currentColor`, `inherit`, `initial`, `unset`
 ///   must NOT reach this stage.
 /// - The returned Color is always absolute RGBA.
-fn resolve_css_color(css_color: &CssValue) -> Option<Color> {
-    fn keyword_color_to_color(keyword: &str) -> Option<Color> {
+fn resolve_css_color(name: &str, css_color: &CssValue) -> Option<Color> {
+    fn keyword_color_to_color(name: &str, keyword: &str) -> Option<Color> {
         // NOTE:
         // Keyword matching is case-insensitive according to CSS specs.
         // Keep this list limited to commonly used CSS Color Level 3 keywords.
@@ -1110,7 +1113,7 @@ fn resolve_css_color(css_color: &CssValue) -> Option<Color> {
             "none" => Some(Color(0, 0, 0, 0)),
 
             _ => {
-                log::error!(target: "Layouter", "Unknown CSS color keyword: {}", keyword);
+                log::error!(target: "Layouter", "Unknown CSS color keyword `{}` for `{}`", keyword, name);
                 None
             }
         }
@@ -1152,7 +1155,7 @@ fn resolve_css_color(css_color: &CssValue) -> Option<Color> {
         }
 
         // Named color keyword
-        CssValue::Keyword(value) => keyword_color_to_color(value),
+        CssValue::Keyword(value) => keyword_color_to_color(name, value),
 
         // rgb() / rgba() unified
         CssValue::Function(func, args) if func == "rgb" || func == "rgba" => {
@@ -1228,7 +1231,8 @@ fn resolve_css_color(css_color: &CssValue) -> Option<Color> {
         _ => {
             log::error!(
                 target: "Layouter",
-                "Unexpected CSS color value at layout stage: {:?}",
+                "Unexpected CSS color value for `{}` at layout stage: {:?}",
+                name,
                 css_color
             );
             None
