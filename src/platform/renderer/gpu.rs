@@ -1,5 +1,6 @@
 //! wgpuを使用してGPUで描画するためのコンテキストと処理を提供するモジュール
 
+use crate::engine::layouter::types::{Color, ColorStop, Gradient, GradientKind};
 use crate::engine::renderer_model::DrawCommand;
 use anyhow::Result;
 use std::sync::Arc;
@@ -399,6 +400,68 @@ impl GpuRenderer {
                         Vertex { position: [px2, py1, 0.0], color },
                         Vertex { position: [px1, py2, 0.0], color },
                         Vertex { position: [px2, py2, 0.0], color },
+                    ]);
+                }
+
+                // Gradient Rectangle (pre-compute vertex colors from gradient definition)
+                DrawCommand::DrawGradientRect {
+                    x,
+                    y,
+                    width: w,
+                    height: h,
+                    gradient,
+                } => {
+                    let (tdx, tdy) = current_transform(&transform_stack);
+                    let mut x1 = (x + tdx) * sf;
+                    let mut y1 = (y + tdy) * sf;
+                    let mut x2 = x1 + w * sf;
+                    let mut y2 = y1 + h * sf;
+
+                    let clip = current_clip(&clip_stack);
+
+                    if x2 <= clip.x * sf
+                        || x1 >= (clip.x + clip.w) * sf
+                        || y2 <= clip.y * sf
+                        || y1 >= (clip.y + clip.h) * sf
+                    {
+                        continue;
+                    }
+
+                    x1 = x1.max(clip.x * sf);
+                    y1 = y1.max(clip.y * sf);
+                    x2 = x2.min((clip.x + clip.w) * sf);
+                    y2 = y2.min((clip.y + clip.h) * sf);
+
+                    let ndc = |v, max| (v / max) * 2.0 - 1.0;
+
+                    let px1 = ndc(x1, screen_width);
+                    let py1 = -ndc(y1, screen_height);
+                    let px2 = ndc(x2, screen_width);
+                    let py2 = -ndc(y2, screen_height);
+
+                    // Compute 4 corner colors from gradient definition
+                    let logical_corners = [
+                        ((x + tdx) * sf, (y + tdy) * sf),         // TL
+                        ((x + tdx) * sf, (y + tdy + h) * sf),     // BL
+                        ((x + tdx + w) * sf, (y + tdy) * sf),     // TR
+                        ((x + tdx + w) * sf, (y + tdy + h) * sf), // BR
+                    ];
+                    let corner_colors = compute_gradient_corner_colors(gradient, &logical_corners);
+
+                    let c_tl = corner_colors[0].to_linear_f32_array();
+                    let c_bl = corner_colors[1].to_linear_f32_array();
+                    let c_tr = corner_colors[2].to_linear_f32_array();
+                    let c_br = corner_colors[3].to_linear_f32_array();
+
+                    #[rustfmt::skip]
+                    vertices.extend_from_slice(&[
+                        Vertex { position: [px1, py1, 0.0], color: c_tl },
+                        Vertex { position: [px1, py2, 0.0], color: c_bl },
+                        Vertex { position: [px2, py1, 0.0], color: c_tr },
+
+                        Vertex { position: [px2, py1, 0.0], color: c_tr },
+                        Vertex { position: [px1, py2, 0.0], color: c_bl },
+                        Vertex { position: [px2, py2, 0.0], color: c_br },
                     ]);
                 }
 
@@ -818,6 +881,121 @@ impl GpuRenderer {
     pub fn set_scale_factor(&mut self, scale_factor: f64) {
         self.scale_factor = scale_factor;
     }
+}
+
+/// Compute the 4 corner colors for a gradient rectangle.
+///
+/// corners layout: [TL, BL, TR, BR] in logical (pre-NDC) screen coordinates.
+fn compute_gradient_corner_colors(gradient: &Gradient, corners: &[(f32, f32); 4]) -> [Color; 4] {
+    match &gradient.kind {
+        GradientKind::Linear { angle } => {
+            let rad = angle.to_radians();
+            let dir_x = rad.sin();
+            let dir_y = -rad.cos();
+
+            let projections: Vec<f32> = corners
+                .iter()
+                .map(|(cx, cy)| cx * dir_x + cy * dir_y)
+                .collect();
+            let min_p = projections.iter().cloned().fold(f32::INFINITY, f32::min);
+            let max_p = projections
+                .iter()
+                .cloned()
+                .fold(f32::NEG_INFINITY, f32::max);
+            let range = max_p - min_p;
+
+            let mut colors = [Color(0, 0, 0, 0); 4];
+            for (i, proj) in projections.iter().enumerate() {
+                let t = if range > 0.0 {
+                    (proj - min_p) / range
+                } else {
+                    0.0
+                };
+                colors[i] = sample_gradient_stops(&gradient.stops, t);
+            }
+            colors
+        }
+        GradientKind::Radial { position, .. } => {
+            let (cx, cy) = {
+                let min_x = corners.iter().map(|c| c.0).fold(f32::INFINITY, f32::min);
+                let max_x = corners
+                    .iter()
+                    .map(|c| c.0)
+                    .fold(f32::NEG_INFINITY, f32::max);
+                let min_y = corners.iter().map(|c| c.1).fold(f32::INFINITY, f32::min);
+                let max_y = corners
+                    .iter()
+                    .map(|c| c.1)
+                    .fold(f32::NEG_INFINITY, f32::max);
+                let w = max_x - min_x;
+                let h = max_y - min_y;
+                (min_x + w * position.0, min_y + h * position.1)
+            };
+            let max_radius = corners
+                .iter()
+                .map(|(px, py)| ((px - cx).powi(2) + (py - cy).powi(2)).sqrt())
+                .fold(0.0f32, f32::max);
+
+            let mut colors = [Color(0, 0, 0, 0); 4];
+            for (i, (px, py)) in corners.iter().enumerate() {
+                let dist = ((px - cx).powi(2) + (py - cy).powi(2)).sqrt();
+                let t = if max_radius > 0.0 {
+                    (dist / max_radius).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                colors[i] = sample_gradient_stops(&gradient.stops, t);
+            }
+            colors
+        }
+    }
+}
+
+/// Sample a gradient's color stops at normalized position `t` (0.0–1.0).
+fn sample_gradient_stops(stops: &[ColorStop], t: f32) -> Color {
+    if stops.is_empty() {
+        return Color(0, 0, 0, 0);
+    }
+    if stops.len() == 1 {
+        return stops[0].color;
+    }
+
+    let t = t.clamp(0.0, 1.0);
+    let last = stops.len() - 1;
+
+    for i in 0..last {
+        let pos_i = stops[i]
+            .position
+            .unwrap_or(if i == 0 { 0.0 } else { i as f32 / last as f32 });
+        let pos_j = stops[i + 1].position.unwrap_or(if i + 1 == last {
+            1.0
+        } else {
+            (i + 1) as f32 / last as f32
+        });
+
+        if t >= pos_i && t <= pos_j {
+            let local = if pos_j > pos_i {
+                (t - pos_i) / (pos_j - pos_i)
+            } else {
+                0.0
+            };
+            return lerp_color(stops[i].color, stops[i + 1].color, local);
+        }
+    }
+
+    if t <= stops[0].position.unwrap_or(0.0) {
+        return stops[0].color;
+    }
+    stops[last].color
+}
+
+fn lerp_color(a: Color, b: Color, t: f32) -> Color {
+    Color(
+        (a.0 as f32 + (b.0 as f32 - a.0 as f32) * t).round() as u8,
+        (a.1 as f32 + (b.1 as f32 - a.1 as f32) * t).round() as u8,
+        (a.2 as f32 + (b.2 as f32 - a.2 as f32) * t).round() as u8,
+        (a.3 as f32 + (b.3 as f32 - a.3 as f32) * t).round() as u8,
+    )
 }
 
 fn select_wgpu_backends() -> wgpu::Backends {

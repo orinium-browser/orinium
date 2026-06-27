@@ -85,6 +85,69 @@ impl TryFrom<(u8, u8, u8, f32)> for Color {
 }
 
 // =========================
+//        Background
+// =========================
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Background {
+    Color(Color),
+    Gradient(Gradient),
+}
+
+impl Default for Background {
+    fn default() -> Self {
+        Self::Color(Color(0, 0, 0, 0))
+    }
+}
+
+/// CSS gradient definition.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Gradient {
+    pub kind: GradientKind,
+    pub stops: Vec<ColorStop>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum GradientKind {
+    Linear {
+        angle: f32,
+    },
+    Radial {
+        shape: RadialShape,
+        size: RadialSizeKind,
+        position: (f32, f32),
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RadialShape {
+    Circle,
+    Ellipse,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RadialSizeKind {
+    ClosestSide,
+    FarthestSide,
+    ClosestCorner,
+    FarthestCorner,
+}
+
+impl Default for RadialSizeKind {
+    fn default() -> Self {
+        Self::FarthestCorner
+    }
+}
+
+/// A single color stop in a gradient.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColorStop {
+    pub color: Color,
+    /// Normalized position (0.0–1.0). None means the position is auto-distributed.
+    pub position: Option<f32>,
+}
+
+// =========================
 //        Cantainer
 // =========================
 
@@ -127,7 +190,7 @@ pub struct BorderStyles {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContainerStyle {
-    pub background_color: Color,
+    pub background: Background,
     pub border_color: BorderColor,
     pub border_style: BorderStyles,
 }
@@ -135,7 +198,7 @@ pub struct ContainerStyle {
 impl Default for ContainerStyle {
     fn default() -> Self {
         Self {
-            background_color: Color(0, 0, 0, 0),
+            background: Background::default(),
             border_color: BorderColor::default(),
             border_style: BorderStyles::default(),
         }

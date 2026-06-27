@@ -19,8 +19,9 @@ use ui_layout::{
 
 use super::css_resolver::ResolvedStyles;
 use super::types::{
-    BorderStyle, Color, ContainerRole, ContainerStyle, FontStyle, FontWeight, InfoNode, LineHeight,
-    NodeKind, TextAlign, TextDecoration, TextStyle,
+    Background, BorderStyle, Color, ColorStop, ContainerRole, ContainerStyle, FontStyle,
+    FontWeight, Gradient, GradientKind, InfoNode, LineHeight, NodeKind, RadialShape,
+    RadialSizeKind, TextAlign, TextDecoration, TextStyle,
 };
 
 const DEFAULT_LINE_FACTOR: f32 = 1.2;
@@ -368,17 +369,17 @@ pub fn build_layout_and_info(
                     if dom.borrow().value.tag_name() == Some("html")
                         && child_dom.borrow().value.tag_name() == Some("body")
                         && let NodeKind::Container { style, .. } = &mut kind
-                        && style.background_color == Color(0, 0, 0, 0)
+                        && style.background == Background::Color(Color(0, 0, 0, 0))
                     {
-                        let background_color = {
+                        let background = {
                             let NodeKind::Container { style, .. } = &child_info.kind else {
                                 continue;
                             };
-                            style.background_color
+                            style.background.clone()
                         };
                         // html 要素の body 子要素に背景色が指定されていない場合、
                         // body の背景色を html の背景色で上書きする
-                        style.background_color = background_color;
+                        style.background = background;
                     }
 
                     layout_children.push(child_layout.into());
@@ -600,28 +601,31 @@ fn apply_declaration(
          * Color / Text
          * ====================== */
         ("background-color", _) => {
-            container_style.background_color = match value {
+            container_style.background = match value {
                 CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("inherit") => {
-                    // inherit: use parent's text color
-                    text_style.color
+                    Background::Color(text_style.color)
                 }
                 CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentColor") => {
-                    text_style.color
+                    Background::Color(text_style.color)
                 }
-                _ => resolve_css_color(name, value)?,
+                _ => Background::Color(resolve_css_color(name, value)?),
             };
         }
 
         ("background", _) => {
-            container_style.background_color = match value {
+            container_style.background = match value {
                 CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("inherit") => {
-                    // inherit: use parent's text color
-                    text_style.color
+                    Background::Color(text_style.color)
                 }
                 CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentColor") => {
-                    text_style.color
+                    Background::Color(text_style.color)
                 }
-                _ => resolve_css_color(name, value)?,
+                CssValue::Function(fn_name, args)
+                    if fn_name == "linear-gradient" || fn_name == "radial-gradient" =>
+                {
+                    Background::Gradient(parse_gradient(fn_name, args, text_style)?)
+                }
+                _ => Background::Color(resolve_css_color(name, value)?),
             };
         }
 
@@ -753,29 +757,34 @@ fn apply_declaration(
             style.spacing.margin_top = LengthOrAuto::Auto;
         }
         ("margin-top", _) => {
-            style.spacing.margin_top = LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
+            style.spacing.margin_top =
+                LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
         }
         ("margin-right", CssValue::Keyword(s)) if s == "auto" => {
             style.spacing.margin_right = LengthOrAuto::Auto;
         }
         ("margin-right", _) => {
-            style.spacing.margin_right = LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
+            style.spacing.margin_right =
+                LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
         }
         ("margin-bottom", CssValue::Keyword(s)) if s == "auto" => {
             style.spacing.margin_bottom = LengthOrAuto::Auto;
         }
         ("margin-bottom", _) => {
-            style.spacing.margin_bottom = LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
+            style.spacing.margin_bottom =
+                LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
         }
         ("margin-left", CssValue::Keyword(s)) if s == "auto" => {
             style.spacing.margin_left = LengthOrAuto::Auto;
         }
         ("margin-left", _) => {
-            style.spacing.margin_left = LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
+            style.spacing.margin_left =
+                LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
         }
 
         ("border", v) => {
-            let (maybe_width, maybe_style, maybe_color) = parse_border_shorthand(name, v, text_style)?;
+            let (maybe_width, maybe_style, maybe_color) =
+                parse_border_shorthand(name, v, text_style)?;
 
             if let Some(w) = maybe_width {
                 style.spacing.border_top = w.clone();
@@ -868,12 +877,18 @@ fn apply_declaration(
         }
 
         ("padding", v) => {
-            expand_box(name, v, text_style, &|_, v, ts| resolve_css_len(name, v, ts), |t, r, b, l| {
-                style.spacing.padding_top = t;
-                style.spacing.padding_right = r;
-                style.spacing.padding_bottom = b;
-                style.spacing.padding_left = l;
-            })?;
+            expand_box(
+                name,
+                v,
+                text_style,
+                &|_, v, ts| resolve_css_len(name, v, ts),
+                |t, r, b, l| {
+                    style.spacing.padding_top = t;
+                    style.spacing.padding_right = r;
+                    style.spacing.padding_bottom = b;
+                    style.spacing.padding_left = l;
+                },
+            )?;
         }
         ("padding-top", _) => {
             style.spacing.padding_top = resolve_css_len(name, value, text_style)?;
@@ -990,12 +1005,134 @@ fn apply_declaration(
             style.item_style.flex_basis = LengthOrAuto::Auto;
         }
         ("flex-basis", _) => {
-            style.item_style.flex_basis = LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
+            style.item_style.flex_basis =
+                LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
         }
 
         _ => {}
     }
     Some(())
+}
+
+// =========================
+//   Gradient Parsing
+// =========================
+
+fn parse_gradient(fn_name: &str, args: &[CssValue], text_style: &TextStyle) -> Option<Gradient> {
+    match fn_name {
+        "linear-gradient" => parse_linear_gradient(args, text_style),
+        "radial-gradient" => parse_radial_gradient(args, text_style),
+        _ => None,
+    }
+}
+
+fn parse_linear_gradient(args: &[CssValue], _text_style: &TextStyle) -> Option<Gradient> {
+    if args.is_empty() {
+        return None;
+    }
+
+    let (skip, angle) = parse_linear_direction(args);
+    let angle = angle.unwrap_or(180.0);
+    let stops = parse_color_stops(&args[skip..])?;
+
+    Some(Gradient {
+        kind: GradientKind::Linear { angle },
+        stops,
+    })
+}
+
+/// Returns (number_of_consumed_args, optional_angle_in_degrees).
+fn parse_linear_direction(args: &[CssValue]) -> (usize, Option<f32>) {
+    if args.is_empty() {
+        return (0, None);
+    }
+
+    // <angle>
+    if let CssValue::Length(v, Unit::Deg) = &args[0] {
+        return (1, Some(*v));
+    }
+
+    // "to" <side-or-corner>
+    if let CssValue::Keyword(k) = &args[0] {
+        if k.as_str() == "to" && args.len() > 1 {
+            let mut idx = 1;
+            let mut sides: Vec<&str> = Vec::new();
+            while idx < args.len() {
+                if let CssValue::Keyword(k) = &args[idx] {
+                    match k.as_str() {
+                        "top" | "bottom" | "left" | "right" => {
+                            sides.push(k.as_str());
+                            idx += 1;
+                        }
+                        _ => break,
+                    }
+                } else {
+                    break;
+                }
+            }
+            if !sides.is_empty() {
+                let angle = match sides.as_slice() {
+                    ["top"] => Some(0.0),
+                    ["top", "left"] => Some(315.0),
+                    ["top", "right"] => Some(45.0),
+                    ["bottom"] => Some(180.0),
+                    ["bottom", "left"] => Some(225.0),
+                    ["bottom", "right"] => Some(135.0),
+                    ["left"] => Some(270.0),
+                    ["right"] => Some(90.0),
+                    _ => None,
+                };
+                return (idx, angle);
+            }
+        }
+    }
+
+    (0, None)
+}
+
+fn parse_radial_gradient(args: &[CssValue], _text_style: &TextStyle) -> Option<Gradient> {
+    let stops = parse_color_stops(args)?;
+    if stops.is_empty() {
+        return None;
+    }
+    Some(Gradient {
+        kind: GradientKind::Radial {
+            shape: RadialShape::Ellipse,
+            size: RadialSizeKind::default(),
+            position: (0.5, 0.5),
+        },
+        stops,
+    })
+}
+
+fn parse_color_stops(args: &[CssValue]) -> Option<Vec<ColorStop>> {
+    let mut stops = Vec::new();
+    let mut i = 0;
+
+    while i < args.len() {
+        let color = resolve_css_color("gradient", &args[i])?;
+        i += 1;
+
+        let position = if i < args.len() {
+            match &args[i] {
+                CssValue::Length(v, Unit::Percent) => {
+                    i += 1;
+                    Some((*v / 100.0).clamp(0.0, 1.0))
+                }
+                CssValue::Length(_v, Unit::Px) => {
+                    i += 1;
+                    None
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        stops.push(ColorStop { color, position });
+    }
+
+    Some(stops)
 }
 
 /// Resolve CssValue to Length.
@@ -1009,6 +1146,10 @@ fn resolve_css_len(name: &str, css_len: &CssValue, text_style: &TextStyle) -> Op
             Unit::Vw => Some(Length::Vw(*v)),
             Unit::Vh => Some(Length::Vh(*v)),
             Unit::Em | Unit::Rem => unreachable!(),
+            Unit::Deg => {
+                log::error!(target: "Layouter", "Unexpected deg unit for `{}` (expected length)", name);
+                return None;
+            }
         },
         CssValue::Number(0.0) => Some(Length::Px(0.0)),
         CssValue::Keyword(_) => None,
