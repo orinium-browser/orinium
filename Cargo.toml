@@ -30,6 +30,10 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 image = "0.25.10"
 log = "0.4.32"
 once_cell = "1.21.4"
+pixi_byte = {
+  git = "https://github.com/orinium-browser/pixi_byte",
+  branch = "dev"
+}
 pollster = "0.4"
 rustls = { version = "0.23.40", default-features = false, features = ["tls12"] }
 rustls-native-certs = "0.8.4"
@@ -48,7 +52,6 @@ url = "2.5"
 wgpu = "29.0.1"
 wgpu-types = "29.0.1"
 winit = "0.30.13"
-pixi_byte = { git = "https://github.com/orinium-browser/pixi_byte", branch = "dev" }
 
 [dev-dependencies]
 colored = "3.1.1"  # コマンドラインハイライト用
