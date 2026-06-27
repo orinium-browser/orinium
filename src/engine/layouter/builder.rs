@@ -1020,6 +1020,11 @@ fn parse_background_shorthand(
             }
         }
 
+        if let CssValue::Number(0.0) = v {
+            maybe_color = Some(Color(0, 0, 0, 0));
+            continue;
+        }
+
         // gradient
         if let CssValue::Function(fn_name, args) = v {
             if fn_name == "linear-gradient" || fn_name == "radial-gradient" {
