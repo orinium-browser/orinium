@@ -65,6 +65,19 @@ impl StatusCode {
     pub fn as_u16(&self) -> u16 {
         self.0
     }
+
+    pub fn is_success(&self) -> bool {
+        (200..300).contains(&self.0)
+    }
+
+    pub fn is_redirection(&self) -> bool {
+        (300..400).contains(&self.0)
+    }
+
+    pub fn canonical_reason(&self) -> Option<&'static str> {
+        let hyper_code: hyper::StatusCode = self.as_u16().try_into().ok()?;
+        hyper_code.canonical_reason()
+    }
 }
 
 /// HTTP response

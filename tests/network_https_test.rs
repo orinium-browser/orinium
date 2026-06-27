@@ -4,7 +4,7 @@ use std::error::Error;
 #[ignore]
 #[test]
 fn test_https_connection() -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-    let network_core = NetworkCore::new();
+    let network_core = NetworkCore::new().expect("Failed to create NetworkCore instansce");
 
     let url = "https://www.google.com";
     println!("Fetching URL: {}", url);
@@ -14,7 +14,7 @@ fn test_https_connection() -> Result<(), Box<dyn Error + Send + Sync + 'static>>
     assert!(
         response.status.is_success(),
         "Expected successful status code, got: {}",
-        response.status
+        response.status.as_u16()
     );
 
     assert!(
@@ -29,7 +29,7 @@ fn test_https_connection() -> Result<(), Box<dyn Error + Send + Sync + 'static>>
 #[ignore]
 #[test]
 fn test_http_and_https_comparison() -> Result<(), Box<dyn Error>> {
-    let network_core = NetworkCore::new();
+    let network_core = NetworkCore::new().expect("Failed to create NetworkCore instansce");
 
     let http_url = "http://httpbin.org/get";
     let https_url = "https://httpbin.org/get";
@@ -53,7 +53,7 @@ fn test_http_and_https_comparison() -> Result<(), Box<dyn Error>> {
 #[ignore]
 #[test]
 fn test_https_redirect() -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-    let network_core = NetworkCore::new();
+    let network_core = NetworkCore::new().expect("Failed to create NetworkCore instansce");
 
     let url = "https://www.github.com";
     println!("Fetching URL with expected redirect: {}", url);
@@ -63,7 +63,7 @@ fn test_https_redirect() -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
     assert!(
         response.status.is_success() || response.status.is_redirection(),
         "Expected success or redirection status, got: {}",
-        response.status
+        response.status.as_u16()
     );
 
     println!(
@@ -78,7 +78,7 @@ fn test_https_redirect() -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
 #[ignore]
 #[test]
 fn test_secure_site_certificate() -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-    let network_core = NetworkCore::new();
+    let network_core = NetworkCore::new().expect("Failed to create NetworkCore instansce");
 
     let urls = [
         "https://www.google.com",
@@ -95,7 +95,7 @@ fn test_secure_site_certificate() -> Result<(), Box<dyn Error + Send + Sync + 's
             response.status.is_success() || response.status.is_redirection(),
             "Failed to connect to {} with status: {}",
             url,
-            response.status
+            response.status.as_u16()
         );
 
         println!(
