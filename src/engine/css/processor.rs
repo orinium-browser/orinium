@@ -13,12 +13,6 @@ pub struct CssProcessor {
     result_rx: Receiver<ResolvedStyles>,
 }
 
-impl Drop for CssProcessor {
-    fn drop(&mut self) {
-        // Dropping cmd_tx closes the channel, causing the background thread to exit
-    }
-}
-
 impl CssProcessor {
     pub fn new() -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel::<CssCommand>();
