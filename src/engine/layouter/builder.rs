@@ -1216,41 +1216,131 @@ fn resolve_css_color(name: &str, css_color: &CssValue) -> Option<Color> {
         // Keyword matching is case-insensitive according to CSS specs.
         // Keep this list limited to commonly used CSS Color Level 3 keywords.
         match keyword.to_ascii_lowercase().as_str() {
-            // Basic colors
+            // ===== Basic =====
             "black" => Some(Color(0, 0, 0, 255)),
-            "white" => Some(Color(255, 255, 255, 255)),
-            "red" => Some(Color(255, 0, 0, 255)),
-            "green" => Some(Color(0, 128, 0, 255)),
-            "blue" => Some(Color(0, 0, 255, 255)),
-            "yellow" => Some(Color(255, 255, 0, 255)),
-
-            // Gray variants (US / UK spelling)
+            "silver" => Some(Color(192, 192, 192, 255)),
             "gray" | "grey" => Some(Color(128, 128, 128, 255)),
-            "lightgray" | "lightgrey" => Some(Color(211, 211, 211, 255)),
-            "darkgray" | "darkgrey" => Some(Color(169, 169, 169, 255)),
+            "white" => Some(Color(255, 255, 255, 255)),
 
-            // Frequently used named colors
+            // ===== Red =====
+            "maroon" => Some(Color(128, 0, 0, 255)),
+            "red" => Some(Color(255, 0, 0, 255)),
+            "firebrick" => Some(Color(178, 34, 34, 255)),
+            "crimson" => Some(Color(220, 20, 60, 255)),
+            "indianred" => Some(Color(205, 92, 92, 255)),
+            "lightcoral" => Some(Color(240, 128, 128, 255)),
+            "salmon" => Some(Color(250, 128, 114, 255)),
+            "darksalmon" => Some(Color(233, 150, 122, 255)),
+            "lightsalmon" => Some(Color(255, 160, 122, 255)),
+
+            // ===== Pink =====
+            "pink" => Some(Color(255, 192, 203, 255)),
+            "lightpink" => Some(Color(255, 182, 193, 255)),
+            "hotpink" => Some(Color(255, 105, 180, 255)),
+            "deeppink" => Some(Color(255, 20, 147, 255)),
+            "palevioletred" => Some(Color(219, 112, 147, 255)),
+            "magenta" | "fuchsia" => Some(Color(255, 0, 255, 255)),
+
+            // ===== Orange =====
+            "coral" => Some(Color(255, 127, 80, 255)),
+            "tomato" => Some(Color(255, 99, 71, 255)),
+            "orangered" => Some(Color(255, 69, 0, 255)),
+            "orange" => Some(Color(255, 165, 0, 255)),
+
+            // ===== Yellow =====
+            "gold" => Some(Color(255, 215, 0, 255)),
+            "yellow" => Some(Color(255, 255, 0, 255)),
+            "lightyellow" => Some(Color(255, 255, 224, 255)),
+            "lemonchiffon" => Some(Color(255, 250, 205, 255)),
+            "lightgoldenrodyellow" => Some(Color(250, 250, 210, 255)),
+            "papayawhip" => Some(Color(255, 239, 213, 255)),
+            "moccasin" => Some(Color(255, 228, 181, 255)),
+
+            // ===== Green =====
+            "green" => Some(Color(0, 128, 0, 255)),
+            "darkgreen" => Some(Color(0, 100, 0, 255)),
+            "forestgreen" => Some(Color(34, 139, 34, 255)),
+            "lime" => Some(Color(0, 255, 0, 255)),
+            "limegreen" => Some(Color(50, 205, 50, 255)),
+            "lightgreen" => Some(Color(144, 238, 144, 255)),
+            "palegreen" => Some(Color(152, 251, 152, 255)),
+            "springgreen" => Some(Color(0, 255, 127, 255)),
+            "seagreen" => Some(Color(46, 139, 87, 255)),
+            "mediumseagreen" => Some(Color(60, 179, 113, 255)),
+            "yellowgreen" => Some(Color(154, 205, 50, 255)),
+
+            // ===== Cyan / Aqua =====
+            "aqua" | "cyan" => Some(Color(0, 255, 255, 255)),
+            "lightcyan" => Some(Color(224, 255, 255, 255)),
+            "paleturquoise" => Some(Color(175, 238, 238, 255)),
+            "turquoise" => Some(Color(64, 224, 208, 255)),
+            "mediumturquoise" => Some(Color(72, 209, 204, 255)),
+
+            // ===== Blue =====
+            "blue" => Some(Color(0, 0, 255, 255)),
+            "mediumblue" => Some(Color(0, 0, 205, 255)),
+            "darkblue" => Some(Color(0, 0, 139, 255)),
+            "navy" => Some(Color(0, 0, 128, 255)),
             "royalblue" => Some(Color(65, 105, 225, 255)),
             "cornflowerblue" => Some(Color(100, 149, 237, 255)),
             "skyblue" => Some(Color(135, 206, 235, 255)),
             "lightblue" => Some(Color(173, 216, 230, 255)),
+            "deepskyblue" => Some(Color(0, 191, 255, 255)),
 
-            "orange" => Some(Color(255, 165, 0, 255)),
-            "pink" => Some(Color(255, 192, 203, 255)),
+            // ===== Purple =====
             "purple" => Some(Color(128, 0, 128, 255)),
+            "indigo" => Some(Color(75, 0, 130, 255)),
+            "violet" => Some(Color(238, 130, 238, 255)),
+            "plum" => Some(Color(221, 160, 221, 255)),
+            "orchid" => Some(Color(218, 112, 214, 255)),
+            "mediumpurple" => Some(Color(147, 112, 219, 255)),
+            "rebeccapurple" => Some(Color(102, 51, 153, 255)),
+
+            // ===== Brown =====
             "brown" => Some(Color(165, 42, 42, 255)),
+            "saddlebrown" => Some(Color(139, 69, 19, 255)),
+            "sienna" => Some(Color(160, 82, 45, 255)),
+            "chocolate" => Some(Color(210, 105, 30, 255)),
+            "peru" => Some(Color(205, 133, 63, 255)),
+            "burlywood" => Some(Color(222, 184, 135, 255)),
 
-            // Special keyword
-            "transparent" => Some(Color(0, 0, 0, 0)),
-            "initial" => Some(Color(0, 0, 0, 255)),
+            // ===== White variations =====
+            "snow" => Some(Color(255, 250, 250, 255)),
+            "honeydew" => Some(Color(240, 255, 240, 255)),
+            "mintcream" => Some(Color(245, 255, 250, 255)),
+            "azure" => Some(Color(240, 255, 255, 255)),
+            "aliceblue" => Some(Color(240, 248, 255, 255)),
+            "ghostwhite" => Some(Color(248, 248, 255, 255)),
 
-            // CSS Level 4 system colors (approximate)
-            // stub implementations
+            // ===== Gray scale =====
+            "gainsboro" => Some(Color(220, 220, 220, 255)),
+            "lightgray" | "lightgrey" => Some(Color(211, 211, 211, 255)),
+            "darkgray" | "darkgrey" => Some(Color(169, 169, 169, 255)),
+            "dimgray" | "dimgrey" => Some(Color(105, 105, 105, 255)),
+            "lightslategray" | "lightslategrey" => Some(Color(119, 136, 153, 255)),
+            "slategray" | "slategrey" => Some(Color(112, 128, 144, 255)),
+
+            // ===== CSS System Colors =====
             "buttonface" => Some(Color(240, 240, 240, 255)),
             "buttontext" => Some(Color(0, 0, 0, 255)),
-            "linktext" => Some(Color(0, 0, 255, 255)),
 
-            // Stub for none keyword (e.g. border-color: none, background: none, etc.)
+            "linktext" => Some(Color(0, 0, 238, 255)),
+            "visitedtext" => Some(Color(85, 26, 139, 255)),
+            "activetext" => Some(Color(255, 0, 0, 255)),
+
+            "canvas" => Some(Color(255, 255, 255, 255)),
+            "canvastext" => Some(Color(0, 0, 0, 255)),
+
+            "field" => Some(Color(255, 255, 255, 255)),
+            "fieldtext" => Some(Color(0, 0, 0, 255)),
+
+            "highlight" => Some(Color(0, 120, 215, 255)),
+            "highlighttext" => Some(Color(255, 255, 255, 255)),
+
+            "graytext" => Some(Color(128, 128, 128, 255)),
+
+            // ===== Special =====
+            "transparent" => Some(Color(0, 0, 0, 0)),
             "none" => Some(Color(0, 0, 0, 0)),
 
             _ => {
