@@ -1,7 +1,7 @@
 //! ブラウザのwebview機能。タスクとレンダリング情報の管理を行う。
 
 use crate::engine::{
-    css::parser::Parser as CssParser,
+    css::{self, parser::Parser as CssParser},
     html::parser::{DomTree, Parser as HtmlParser},
     layouter::{
         self, InheritedCss,
@@ -29,12 +29,25 @@ pub enum FetchKind {
     Css,
 }
 
+/// CSS application strategy.
+///
+/// - `Batch`: wait for all external CSS to be fetched, then process everything
+///   at once on a background thread and apply the result.
+/// - `Incremental`: process each CSS file on a background thread as it arrives,
+///   applying results progressively.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CssApplicationStrategy {
+    Batch,
+    Incremental,
+}
+
 #[derive(Debug, PartialEq)]
 enum PagePhase {
     Init,
     BeforeHtmlParsing,
     HtmlParsed,
     CssPending,
+    CssProcessing,
     CssApplied,
 }
 
@@ -50,6 +63,11 @@ pub struct WebView {
     layout_and_info: Option<(LayoutNode, InfoNode)>,
 
     needs_redraw: bool,
+
+    css_processor: css::processor::CssProcessor,
+    css_strategy: CssApplicationStrategy,
+    css_results_expected: usize,
+    css_results_received: usize,
 }
 
 /// DocumentInfo holds basic information about the HTML document.
@@ -104,7 +122,19 @@ impl WebView {
             layout_and_info: None,
 
             needs_redraw: false,
+
+            css_processor: css::processor::CssProcessor::new(),
+            css_strategy: CssApplicationStrategy::Incremental,
+            css_results_expected: 0,
+            css_results_received: 0,
         }
+    }
+
+    /// Set the CSS application strategy.
+    ///
+    /// Default is `Incremental`.
+    pub fn set_css_strategy(&mut self, strategy: CssApplicationStrategy) {
+        self.css_strategy = strategy;
     }
 
     pub fn tick(&mut self) -> Vec<WebViewTask> {
@@ -143,7 +173,13 @@ impl WebView {
             }
 
             PagePhase::CssPending => {
-                // CSS が揃うまで待つ
+                // Poll for CSS processor results (Incremental strategy)
+                self.try_apply_css_results();
+            }
+
+            PagePhase::CssProcessing => {
+                // Poll for the single batch result (Batch strategy)
+                self.try_apply_batch_result();
             }
 
             PagePhase::CssApplied => {
@@ -168,19 +204,33 @@ impl WebView {
         };
         self.docment_info = Some(docment_info);
 
-        self.resolved_styles
-            .extend(resolve_all_css(&parsed.inline_styles));
+        for inline_css in &parsed.inline_styles {
+            if let Ok(sheet) = CssParser::new(inline_css).parse() {
+                self.resolved_styles
+                    .extend(layouter::css_resolver::CssResolver::resolve(&sheet));
+            }
+        }
 
         self.phase = PagePhase::HtmlParsed;
     }
 
     pub fn on_css_fetched(&mut self, css: String) {
-        self.loaded_css.push(css);
+        match self.css_strategy {
+            CssApplicationStrategy::Batch => {
+                self.loaded_css.push(css);
 
-        if self.loaded_css.len() == self.pending_css_urls.len() {
-            self.apply_css_and_relayout();
-            self.phase = PagePhase::CssApplied;
-            self.needs_redraw = true;
+                if self.loaded_css.len() == self.pending_css_urls.len() {
+                    let all_css = std::mem::take(&mut self.loaded_css);
+                    self.css_results_expected = 1;
+                    self.css_results_received = 0;
+                    self.css_processor.process(all_css);
+                    self.phase = PagePhase::CssProcessing;
+                }
+            }
+            CssApplicationStrategy::Incremental => {
+                self.css_results_expected += 1;
+                self.css_processor.process(vec![css]);
+            }
         }
     }
 
@@ -193,13 +243,36 @@ impl WebView {
         self.update_layout_and_info(measurer);
     }
 
-    fn apply_css_and_relayout(&mut self) {
-        self.resolved_styles
-            .extend(resolve_all_css(&self.loaded_css));
+    fn apply_resolved_styles_and_relayout(
+        &mut self,
+        resolved: layouter::css_resolver::ResolvedStyles,
+    ) {
+        self.resolved_styles.extend(resolved);
 
         let measurer = PlatformTextMeasurer::new().unwrap();
 
         self.update_layout_and_info(measurer);
+    }
+
+    fn try_apply_css_results(&mut self) {
+        while let Some(resolved) = self.css_processor.try_receive() {
+            self.css_results_received += 1;
+            self.apply_resolved_styles_and_relayout(resolved);
+            self.needs_redraw = true;
+
+            if self.css_results_received >= self.css_results_expected {
+                self.phase = PagePhase::CssApplied;
+            }
+        }
+    }
+
+    fn try_apply_batch_result(&mut self) {
+        if let Some(resolved) = self.css_processor.try_receive() {
+            self.css_results_received += 1;
+            self.apply_resolved_styles_and_relayout(resolved);
+            self.needs_redraw = true;
+            self.phase = PagePhase::CssApplied;
+        }
     }
 
     fn update_layout_and_info(&mut self, measurer: PlatformTextMeasurer) {
@@ -234,6 +307,10 @@ impl WebView {
         self.layout_and_info = None;
 
         self.needs_redraw = false;
+
+        self.css_processor = css::processor::CssProcessor::new();
+        self.css_results_expected = 0;
+        self.css_results_received = 0;
     }
 
     pub fn title(&self) -> Option<&String> {
@@ -340,24 +417,6 @@ fn parse_html(html: &str, document_url: Url) -> ParsedDocument {
         style_links,
         inline_styles,
     }
-}
-
-fn resolve_all_css(css_sources: &[String]) -> layouter::css_resolver::ResolvedStyles {
-    let mut resolved = layouter::css_resolver::ResolvedStyles::default();
-
-    for css in css_sources {
-        let sheet = match CssParser::new(css).parse() {
-            Ok(sheet) => sheet,
-            Err(err) => {
-                log::error!("Failed to parse CSS: {}", err);
-                continue;
-            }
-        };
-
-        resolved.extend(layouter::css_resolver::CssResolver::resolve(&sheet));
-    }
-
-    resolved
 }
 
 pub fn resolve_url(base_url: &Url, path: &str) -> Result<Url, url::ParseError> {
