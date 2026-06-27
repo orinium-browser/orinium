@@ -169,6 +169,59 @@
                 color: #080;
                 background: currentColor;
             }
+
+            .grad-linear-down {
+                background: linear-gradient(180deg, red, blue);
+                color: white;
+            }
+            .grad-linear-right {
+                background: linear-gradient(90deg, red, blue);
+                color: white;
+            }
+            .grad-linear-diag {
+                background: linear-gradient(135deg, red, blue);
+                color: white;
+            }
+            .grad-linear-multi {
+                background: linear-gradient(
+                    90deg,
+                    red,
+                    yellow,
+                    lime,
+                    cyan,
+                    blue,
+                    magenta
+                );
+                color: white;
+            }
+            .grad-linear-stops {
+                background: linear-gradient(
+                    90deg,
+                    red 0%,
+                    white 50%,
+                    blue 100%
+                );
+            }
+
+            .grad-radial-circle {
+                background: radial-gradient(circle, red, blue);
+                color: white;
+            }
+            .grad-radial-ellipse {
+                background: radial-gradient(ellipse, red, blue);
+                color: white;
+            }
+            .grad-radial-multi {
+                background: radial-gradient(
+                    circle,
+                    red,
+                    yellow,
+                    green,
+                    cyan,
+                    blue
+                );
+                color: white;
+            }
         </style>
     </head>
     <body>
@@ -365,6 +418,71 @@
             <div class="current">
                 currentColor background → should be green (#080)
             </div>
+        </section>
+
+        <section>
+            <h2>Gradients</h2>
+            <table>
+                <tr>
+                    <th>Definition</th>
+                    <th>Swatch</th>
+                </tr>
+                <tr>
+                    <td><code>linear-gradient(180deg, red, blue)</code></td>
+                    <td class="swatch grad-linear-down">to bottom</td>
+                </tr>
+                <tr>
+                    <td><code>linear-gradient(90deg, red, blue)</code></td>
+                    <td class="swatch grad-linear-right">to right</td>
+                </tr>
+                <tr>
+                    <td><code>linear-gradient(135deg, red, blue)</code></td>
+                    <td class="swatch grad-linear-diag">135deg</td>
+                </tr>
+                <tr>
+                    <td>
+                        <code
+                            >linear-gradient(90deg, red, yellow, lime, cyan,
+                            blue, magenta)</code
+                        >
+                    </td>
+                    <td class="swatch grad-linear-multi">multi-stop</td>
+                </tr>
+                <tr>
+                    <td>
+                        <code
+                            >linear-gradient(90deg, red 0%, white 50%, blue
+                            100%)</code
+                        >
+                    </td>
+                    <td class="swatch grad-linear-stops">explicit stops</td>
+                </tr>
+            </table>
+
+            <h3>Radial Gradients</h3>
+            <table>
+                <tr>
+                    <th>Definition</th>
+                    <th>Swatch</th>
+                </tr>
+                <tr>
+                    <td><code>radial-gradient(circle, red, blue)</code></td>
+                    <td class="swatch grad-radial-circle">circle</td>
+                </tr>
+                <tr>
+                    <td><code>radial-gradient(ellipse, red, blue)</code></td>
+                    <td class="swatch grad-radial-ellipse">ellipse</td>
+                </tr>
+                <tr>
+                    <td>
+                        <code
+                            >radial-gradient(circle, red, yellow, green, cyan,
+                            blue)</code
+                        >
+                    </td>
+                    <td class="swatch grad-radial-multi">multi-stop</td>
+                </tr>
+            </table>
         </section>
     </body>
 </html>
