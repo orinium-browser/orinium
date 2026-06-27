@@ -7,7 +7,7 @@ use crate::{
 use ui_layout::LayoutNode;
 use url::Url;
 
-pub use super::webview::{FetchKind, WebView, WebViewTask};
+pub use super::webview::{CssApplicationStrategy, FetchKind, WebView, WebViewTask};
 
 pub enum TabTask {
     Fetch { url: Url, kind: FetchKind },
