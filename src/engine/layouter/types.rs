@@ -57,12 +57,31 @@ impl Color {
         [r, g, b, a]
     }
 
-    /// Convert sRGB (0..1) to linear RGB
-    fn srgb_to_linear(c: f32) -> f32 {
+    /// Convert linear RGB (0..1) to sRGB Color (0..255)
+    pub fn from_linear_f32_array(rgba: [f32; 4]) -> Self {
+        Color(
+            (Self::linear_to_srgb(rgba[0]).clamp(0.0, 1.0) * 255.0).round() as u8,
+            (Self::linear_to_srgb(rgba[1]).clamp(0.0, 1.0) * 255.0).round() as u8,
+            (Self::linear_to_srgb(rgba[2]).clamp(0.0, 1.0) * 255.0).round() as u8,
+            (rgba[3].clamp(0.0, 1.0) * 255.0).round() as u8,
+        )
+    }
+
+    /// Convert sRGB (0..1) to linear RGB (0..1)
+    pub fn srgb_to_linear(c: f32) -> f32 {
         if c <= 0.04045 {
             c / 12.92
         } else {
             ((c + 0.055) / 1.055).powf(2.4)
+        }
+    }
+
+    /// Convert linear RGB (0..1) to sRGB (0..1)
+    pub fn linear_to_srgb(c: f32) -> f32 {
+        if c <= 0.0031308 {
+            c * 12.92
+        } else {
+            1.055 * c.powf(1.0 / 2.4) - 0.055
         }
     }
 }
