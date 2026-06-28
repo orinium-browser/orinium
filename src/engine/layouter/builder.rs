@@ -922,11 +922,21 @@ fn apply_declaration(
             };
         }
 
-        ("gap", _) => {
-            let gap = resolve_css_len_auto(name, value, text_style)?;
-            style.row_gap = gap.clone();
-            style.column_gap = gap;
-        }
+        ("gap", _) => match value {
+            CssValue::List(l) if l.len() == 2 => {
+                let mut l = l.iter();
+                let gap = resolve_css_len_auto(name, l.next()?, text_style)?;
+                style.row_gap = gap;
+                let gap = resolve_css_len_auto(name, l.next()?, text_style)?;
+                style.column_gap = gap;
+            }
+            CssValue::Length(_, _) => {
+                let gap = resolve_css_len_auto(name, value, text_style)?;
+                style.row_gap = gap.clone();
+                style.column_gap = gap;
+            }
+            _ => {}
+        },
 
         ("flex-grow", CssValue::Number(v)) => {
             style.item_style.flex_grow = *v;
