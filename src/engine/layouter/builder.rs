@@ -905,9 +905,9 @@ fn apply_declaration(
 
         ("justify-content", CssValue::Keyword(v)) => {
             style.justify_content = match v.as_str() {
-                "flex-start" => JustifyContent::Start,
+                "flex-start" | "start" => JustifyContent::Start,
                 "center" => JustifyContent::Center,
-                "flex-end" => JustifyContent::End,
+                "flex-end" | "end" => JustifyContent::End,
                 "space-between" => JustifyContent::SpaceBetween,
                 "space-around" => JustifyContent::SpaceAround,
                 "space-evenly" => JustifyContent::SpaceEvenly,
@@ -918,9 +918,9 @@ fn apply_declaration(
         ("align-items", CssValue::Keyword(v)) => {
             style.align_items = match v.as_str() {
                 "stretch" => AlignItems::Stretch,
-                "flex-start" => AlignItems::Start,
+                "flex-start" | "start" => AlignItems::Start,
                 "center" => AlignItems::Center,
-                "flex-end" => AlignItems::End,
+                "flex-end" | "end" => AlignItems::End,
                 _ => return None,
             };
         }
