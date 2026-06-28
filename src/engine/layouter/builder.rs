@@ -743,33 +743,17 @@ fn apply_declaration(
                 },
             )?;
         }
-        ("margin-top", CssValue::Keyword(s)) if s == "auto" => {
-            style.spacing.margin_top = LengthOrAuto::Auto;
-        }
         ("margin-top", _) => {
-            style.spacing.margin_top =
-                LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
-        }
-        ("margin-right", CssValue::Keyword(s)) if s == "auto" => {
-            style.spacing.margin_right = LengthOrAuto::Auto;
+            style.spacing.margin_top = resolve_css_len_auto(name, value, text_style)?;
         }
         ("margin-right", _) => {
-            style.spacing.margin_right =
-                LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
-        }
-        ("margin-bottom", CssValue::Keyword(s)) if s == "auto" => {
-            style.spacing.margin_bottom = LengthOrAuto::Auto;
+            style.spacing.margin_right = resolve_css_len_auto(name, value, text_style)?;
         }
         ("margin-bottom", _) => {
-            style.spacing.margin_bottom =
-                LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
-        }
-        ("margin-left", CssValue::Keyword(s)) if s == "auto" => {
-            style.spacing.margin_left = LengthOrAuto::Auto;
+            style.spacing.margin_bottom = resolve_css_len_auto(name, value, text_style)?;
         }
         ("margin-left", _) => {
-            style.spacing.margin_left =
-                LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
+            style.spacing.margin_left = resolve_css_len_auto(name, value, text_style)?;
         }
 
         ("border", v) => {
@@ -885,41 +869,23 @@ fn apply_declaration(
         /* ======================
          * Size
          * ====================== */
-        ("width", CssValue::Keyword(s)) if s == "auto" => {
-            style.size.width = LengthOrAuto::Auto;
-        }
         ("width", _) => {
-            style.size.width = LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
-        }
-        ("height", CssValue::Keyword(s)) if s == "auto" => {
-            style.size.height = LengthOrAuto::Auto;
+            style.size.width = resolve_css_len_auto(name, value, text_style)?;
         }
         ("height", _) => {
-            style.size.height = LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
-        }
-        ("min-width", CssValue::Keyword(s)) if s == "auto" => {
-            style.size.min_width = LengthOrAuto::Auto;
+            style.size.height = resolve_css_len_auto(name, value, text_style)?;
         }
         ("min-width", _) => {
-            style.size.min_width = LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
-        }
-        ("min-height", CssValue::Keyword(s)) if s == "auto" => {
-            style.size.min_height = LengthOrAuto::Auto;
+            style.size.min_width = resolve_css_len_auto(name, value, text_style)?;
         }
         ("min-height", _) => {
-            style.size.min_height = LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
-        }
-        ("max-width", CssValue::Keyword(s)) if s == "auto" => {
-            style.size.max_width = LengthOrAuto::Auto;
+            style.size.min_height = resolve_css_len_auto(name, value, text_style)?;
         }
         ("max-width", _) => {
-            style.size.max_width = LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
-        }
-        ("max-height", CssValue::Keyword(s)) if s == "auto" => {
-            style.size.max_height = LengthOrAuto::Auto;
+            style.size.max_width = resolve_css_len_auto(name, value, text_style)?;
         }
         ("max-height", _) => {
-            style.size.max_height = LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
+            style.size.max_height = resolve_css_len_auto(name, value, text_style)?;
         }
 
         /* ======================
@@ -957,12 +923,8 @@ fn apply_declaration(
             };
         }
 
-        ("gap", CssValue::Keyword(s)) if s == "auto" => {
-            style.row_gap = LengthOrAuto::Auto;
-            style.column_gap = LengthOrAuto::Auto;
-        }
         ("gap", _) => {
-            let gap = LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
+            let gap = resolve_css_len_auto(name, value, text_style)?;
             style.row_gap = gap.clone();
             style.column_gap = gap;
         }
@@ -981,12 +943,8 @@ fn apply_declaration(
             style.item_style.flex_grow = *v;
         }
 
-        ("flex-basis", CssValue::Keyword(s)) if s == "auto" => {
-            style.item_style.flex_basis = LengthOrAuto::Auto;
-        }
         ("flex-basis", _) => {
-            style.item_style.flex_basis =
-                LengthOrAuto::Length(resolve_css_len(name, value, text_style)?);
+            style.item_style.flex_basis = resolve_css_len_auto(name, value, text_style)?;
         }
 
         _ => {}
@@ -1252,6 +1210,18 @@ fn parse_color_stops(args: &[CssValue]) -> Option<Vec<ColorStop>> {
     }
 
     Some(stops)
+}
+
+/// Resolve CssValue to LengthOrAuto.
+fn resolve_css_len_auto(
+    name: &str,
+    css_len: &CssValue,
+    text_style: &TextStyle,
+) -> Option<LengthOrAuto> {
+    match &css_len {
+        CssValue::Keyword(s) if s == "auto" => Some(LengthOrAuto::Auto),
+        _ => resolve_css_len(name, css_len, text_style).map(|l| l.into()),
+    }
 }
 
 /// Resolve CssValue to Length.
