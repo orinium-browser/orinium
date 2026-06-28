@@ -245,6 +245,14 @@ pub enum TextDecoration {
     Overline,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextTransform {
+    #[default]
+    None,
+    Uppercase,
+    Lowercase,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub enum FontStyle {
     #[default]
@@ -287,6 +295,7 @@ pub struct TextStyle {
     pub font_size: f32,
     pub text_align: TextAlign,
     pub text_decoration: TextDecoration,
+    pub text_transform: TextTransform,
     pub font_style: FontStyle,
     pub font_weight: FontWeight,
     pub color: Color,

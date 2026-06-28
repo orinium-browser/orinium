@@ -21,7 +21,7 @@ use super::css_resolver::ResolvedStyles;
 use super::types::{
     Background, BorderStyle, Color, ColorStop, ContainerRole, ContainerStyle, FontStyle,
     FontWeight, Gradient, GradientKind, InfoNode, LineHeight, NodeKind, RadialShape,
-    RadialSizeKind, TextAlign, TextDecoration, TextStyle,
+    RadialSizeKind, TextAlign, TextDecoration, TextStyle, TextTransform,
 };
 
 const DEFAULT_LINE_FACTOR: f32 = 1.2;
@@ -180,6 +180,11 @@ pub fn build_layout_and_info(
 
     let (mut kind, inline_fragments_opt) = if let HtmlNodeType::Text(t) = &html_node {
         let t = normalize_whitespace(t);
+        let t = match text_style.text_transform {
+            TextTransform::None => t,
+            TextTransform::Uppercase => t.to_ascii_uppercase(),
+            TextTransform::Lowercase => t.to_ascii_lowercase(),
+        };
 
         let _t = std::time::Instant::now();
         let measured = measurer
@@ -313,6 +318,12 @@ pub fn build_layout_and_info(
 
                 if let HtmlNodeType::Text(t) = &child_node {
                     let t = normalize_whitespace(t);
+                    let t = match text_style.text_transform {
+                        TextTransform::None => t,
+                        TextTransform::Uppercase => t.to_ascii_uppercase(),
+                        TextTransform::Lowercase => t.to_ascii_lowercase(),
+                    };
+
                     let _t = std::time::Instant::now();
                     let request = &text::TextMeasureRequest {
                         text: t.clone(),
@@ -689,6 +700,15 @@ fn apply_declaration(
                 "line-through" => TextDecoration::LineThrough,
                 "overline" => TextDecoration::Overline,
                 _ => TextDecoration::None,
+            };
+        }
+
+        ("text-transform", CssValue::Keyword(v)) => {
+            text_style.text_transform = match v.as_str() {
+                "none" => TextTransform::None,
+                "uppercase" => TextTransform::Uppercase,
+                "lowercase" => TextTransform::Lowercase,
+                _ => TextTransform::None,
             };
         }
 
