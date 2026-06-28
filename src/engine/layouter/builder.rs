@@ -591,9 +591,6 @@ fn apply_declaration(
         ("display", CssValue::Keyword(v)) => {
             if let Some(parsed_display) = Display::from_css_name(v.as_str()) {
                 style.display = parsed_display;
-                if parsed_display.inner == InnerDisplay::Flex {
-                    style.flex_direction = FlexDirection::Row;
-                }
             }
         }
 
