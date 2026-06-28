@@ -2403,7 +2403,7 @@ dependencies = [
 [[package]]
 name = "orinium_text"
 version = "0.1.0"
-source = "git+https://github.com/orinium-browser/orinium_text?rev=53ed52fb807919a07a6516e05dd6b9c3d81039bb#53ed52fb807919a07a6516e05dd6b9c3d81039bb"
+source = "git+https://github.com/orinium-browser/orinium_text?rev=63a3bc416597293b63f88dfbd0223a80d2ed67a4#63a3bc416597293b63f88dfbd0223a80d2ed67a4"
 dependencies = [
  "fontdb",
  "fontdue",
