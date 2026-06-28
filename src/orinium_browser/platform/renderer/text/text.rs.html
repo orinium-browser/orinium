@@ -296,170 +296,179 @@
 <a href=#296 id=296 data-nosnippet>296</a>
 <a href=#297 id=297 data-nosnippet>297</a>                    <span class="kw">let </span>gx = base_x + glyph.x;
 <a href=#298 id=298 data-nosnippet>298</a>                    <span class="kw">let </span>gy = base_y + glyph.y;
-<a href=#299 id=299 data-nosnippet>299</a>
-<a href=#300 id=300 data-nosnippet>300</a>                    <span class="comment">// Cull against clip rect
-<a href=#301 id=301 data-nosnippet>301</a>                    </span><span class="kw">if </span>gx + glyph.width &lt;= clip_l
-<a href=#302 id=302 data-nosnippet>302</a>                        || gx &gt;= clip_r
-<a href=#303 id=303 data-nosnippet>303</a>                        || gy + glyph.height &lt;= clip_t
-<a href=#304 id=304 data-nosnippet>304</a>                        || gy &gt;= clip_b
-<a href=#305 id=305 data-nosnippet>305</a>                    {
-<a href=#306 id=306 data-nosnippet>306</a>                        <span class="kw">continue</span>;
-<a href=#307 id=307 data-nosnippet>307</a>                    }
-<a href=#308 id=308 data-nosnippet>308</a>
-<a href=#309 id=309 data-nosnippet>309</a>                    <span class="kw">let </span>(layer, u, v, uw, uh) =
-<a href=#310 id=310 data-nosnippet>310</a>                        <span class="kw">match </span><span class="self">self</span>.atlas.lookup(font_key, glyph.glyph_id, glyph.font_size) {
-<a href=#311 id=311 data-nosnippet>311</a>                            <span class="prelude-val">Some</span>(uv) =&gt; uv,
-<a href=#312 id=312 data-nosnippet>312</a>                            <span class="prelude-val">None </span>=&gt; {
-<a href=#313 id=313 data-nosnippet>313</a>                                <span class="kw">if let </span><span class="prelude-val">Some</span>((metrics, alpha_mask)) =
-<a href=#314 id=314 data-nosnippet>314</a>                                    <span class="self">self</span>.font_sys.get_or_rasterize_with_bitmap(
-<a href=#315 id=315 data-nosnippet>315</a>                                        font_key,
-<a href=#316 id=316 data-nosnippet>316</a>                                        glyph.glyph_id,
-<a href=#317 id=317 data-nosnippet>317</a>                                        glyph.font_size,
-<a href=#318 id=318 data-nosnippet>318</a>                                    )
-<a href=#319 id=319 data-nosnippet>319</a>                                {
-<a href=#320 id=320 data-nosnippet>320</a>                                    <span class="kw">if </span>metrics.width == <span class="number">0 </span>|| metrics.height == <span class="number">0 </span>{
-<a href=#321 id=321 data-nosnippet>321</a>                                        <span class="kw">continue</span>;
-<a href=#322 id=322 data-nosnippet>322</a>                                    }
-<a href=#323 id=323 data-nosnippet>323</a>                                    <span class="kw">let </span>mask_w = metrics.width;
-<a href=#324 id=324 data-nosnippet>324</a>                                    <span class="kw">let </span>mask_h = metrics.height;
-<a href=#325 id=325 data-nosnippet>325</a>                                    <span class="self">self</span>.atlas.upload(
-<a href=#326 id=326 data-nosnippet>326</a>                                        device,
-<a href=#327 id=327 data-nosnippet>327</a>                                        queue,
-<a href=#328 id=328 data-nosnippet>328</a>                                        font_key,
-<a href=#329 id=329 data-nosnippet>329</a>                                        glyph.glyph_id,
-<a href=#330 id=330 data-nosnippet>330</a>                                        glyph.font_size,
-<a href=#331 id=331 data-nosnippet>331</a>                                        <span class="kw-2">&amp;</span>alpha_mask,
-<a href=#332 id=332 data-nosnippet>332</a>                                        mask_w,
-<a href=#333 id=333 data-nosnippet>333</a>                                        mask_h,
-<a href=#334 id=334 data-nosnippet>334</a>                                    )
-<a href=#335 id=335 data-nosnippet>335</a>                                } <span class="kw">else </span>{
-<a href=#336 id=336 data-nosnippet>336</a>                                    <span class="kw">continue</span>;
-<a href=#337 id=337 data-nosnippet>337</a>                                }
-<a href=#338 id=338 data-nosnippet>338</a>                            }
-<a href=#339 id=339 data-nosnippet>339</a>                        };
-<a href=#340 id=340 data-nosnippet>340</a>
-<a href=#341 id=341 data-nosnippet>341</a>                    <span class="comment">// Convert screen coords to NDC
-<a href=#342 id=342 data-nosnippet>342</a>                    </span><span class="kw">let </span>quad_x1 = ndc_x(gx);
-<a href=#343 id=343 data-nosnippet>343</a>                    <span class="kw">let </span>quad_y1 = ndc_y(gy);
-<a href=#344 id=344 data-nosnippet>344</a>                    <span class="kw">let </span>quad_x2 = ndc_x(gx + glyph.width);
-<a href=#345 id=345 data-nosnippet>345</a>                    <span class="kw">let </span>quad_y2 = ndc_y(gy + glyph.height);
-<a href=#346 id=346 data-nosnippet>346</a>
-<a href=#347 id=347 data-nosnippet>347</a>                    <span class="comment">// NDC Y is flipped: upper-left becomes min, lower-right becomes max
-<a href=#348 id=348 data-nosnippet>348</a>                    </span><span class="kw">let </span>(qy1, qy2) = <span class="kw">if </span>quad_y1 &lt; quad_y2 {
-<a href=#349 id=349 data-nosnippet>349</a>                        (quad_y1, quad_y2)
-<a href=#350 id=350 data-nosnippet>350</a>                    } <span class="kw">else </span>{
-<a href=#351 id=351 data-nosnippet>351</a>                        (quad_y2, quad_y1)
-<a href=#352 id=352 data-nosnippet>352</a>                    };
-<a href=#353 id=353 data-nosnippet>353</a>
-<a href=#354 id=354 data-nosnippet>354</a>                    <span class="kw">let </span>idx = <span class="self">self</span>.vertices.len() <span class="kw">as </span>u32;
-<a href=#355 id=355 data-nosnippet>355</a>                    <span class="kw">let </span>layer_f = layer <span class="kw">as </span>f32;
+<a href=#299 id=299 data-nosnippet>299</a>                    <span class="kw">let </span>gw = glyph.width;
+<a href=#300 id=300 data-nosnippet>300</a>                    <span class="kw">let </span>gh = glyph.height;
+<a href=#301 id=301 data-nosnippet>301</a>
+<a href=#302 id=302 data-nosnippet>302</a>                    <span class="comment">// Compute visible portion against clip rect
+<a href=#303 id=303 data-nosnippet>303</a>                    </span><span class="kw">let </span>vis_l = gx.max(clip_l);
+<a href=#304 id=304 data-nosnippet>304</a>                    <span class="kw">let </span>vis_t = gy.max(clip_t);
+<a href=#305 id=305 data-nosnippet>305</a>                    <span class="kw">let </span>vis_r = (gx + gw).min(clip_r);
+<a href=#306 id=306 data-nosnippet>306</a>                    <span class="kw">let </span>vis_b = (gy + gh).min(clip_b);
+<a href=#307 id=307 data-nosnippet>307</a>
+<a href=#308 id=308 data-nosnippet>308</a>                    <span class="kw">if </span>vis_l &gt;= vis_r || vis_t &gt;= vis_b {
+<a href=#309 id=309 data-nosnippet>309</a>                        <span class="kw">continue</span>;
+<a href=#310 id=310 data-nosnippet>310</a>                    }
+<a href=#311 id=311 data-nosnippet>311</a>
+<a href=#312 id=312 data-nosnippet>312</a>                    <span class="kw">let </span>(layer, u, v, uw, uh) =
+<a href=#313 id=313 data-nosnippet>313</a>                        <span class="kw">match </span><span class="self">self</span>.atlas.lookup(font_key, glyph.glyph_id, glyph.font_size) {
+<a href=#314 id=314 data-nosnippet>314</a>                            <span class="prelude-val">Some</span>(uv) =&gt; uv,
+<a href=#315 id=315 data-nosnippet>315</a>                            <span class="prelude-val">None </span>=&gt; {
+<a href=#316 id=316 data-nosnippet>316</a>                                <span class="kw">if let </span><span class="prelude-val">Some</span>((metrics, alpha_mask)) =
+<a href=#317 id=317 data-nosnippet>317</a>                                    <span class="self">self</span>.font_sys.get_or_rasterize_with_bitmap(
+<a href=#318 id=318 data-nosnippet>318</a>                                        font_key,
+<a href=#319 id=319 data-nosnippet>319</a>                                        glyph.glyph_id,
+<a href=#320 id=320 data-nosnippet>320</a>                                        glyph.font_size,
+<a href=#321 id=321 data-nosnippet>321</a>                                    )
+<a href=#322 id=322 data-nosnippet>322</a>                                {
+<a href=#323 id=323 data-nosnippet>323</a>                                    <span class="kw">if </span>metrics.width == <span class="number">0 </span>|| metrics.height == <span class="number">0 </span>{
+<a href=#324 id=324 data-nosnippet>324</a>                                        <span class="kw">continue</span>;
+<a href=#325 id=325 data-nosnippet>325</a>                                    }
+<a href=#326 id=326 data-nosnippet>326</a>                                    <span class="kw">let </span>mask_w = metrics.width;
+<a href=#327 id=327 data-nosnippet>327</a>                                    <span class="kw">let </span>mask_h = metrics.height;
+<a href=#328 id=328 data-nosnippet>328</a>                                    <span class="self">self</span>.atlas.upload(
+<a href=#329 id=329 data-nosnippet>329</a>                                        device,
+<a href=#330 id=330 data-nosnippet>330</a>                                        queue,
+<a href=#331 id=331 data-nosnippet>331</a>                                        font_key,
+<a href=#332 id=332 data-nosnippet>332</a>                                        glyph.glyph_id,
+<a href=#333 id=333 data-nosnippet>333</a>                                        glyph.font_size,
+<a href=#334 id=334 data-nosnippet>334</a>                                        <span class="kw-2">&amp;</span>alpha_mask,
+<a href=#335 id=335 data-nosnippet>335</a>                                        mask_w,
+<a href=#336 id=336 data-nosnippet>336</a>                                        mask_h,
+<a href=#337 id=337 data-nosnippet>337</a>                                    )
+<a href=#338 id=338 data-nosnippet>338</a>                                } <span class="kw">else </span>{
+<a href=#339 id=339 data-nosnippet>339</a>                                    <span class="kw">continue</span>;
+<a href=#340 id=340 data-nosnippet>340</a>                                }
+<a href=#341 id=341 data-nosnippet>341</a>                            }
+<a href=#342 id=342 data-nosnippet>342</a>                        };
+<a href=#343 id=343 data-nosnippet>343</a>
+<a href=#344 id=344 data-nosnippet>344</a>                    <span class="comment">// Convert visible rect to NDC
+<a href=#345 id=345 data-nosnippet>345</a>                    </span><span class="kw">let </span>quad_x1 = ndc_x(vis_l);
+<a href=#346 id=346 data-nosnippet>346</a>                    <span class="kw">let </span>quad_y1 = ndc_y(vis_t);
+<a href=#347 id=347 data-nosnippet>347</a>                    <span class="kw">let </span>quad_x2 = ndc_x(vis_r);
+<a href=#348 id=348 data-nosnippet>348</a>                    <span class="kw">let </span>quad_y2 = ndc_y(vis_b);
+<a href=#349 id=349 data-nosnippet>349</a>
+<a href=#350 id=350 data-nosnippet>350</a>                    <span class="comment">// NDC Y is flipped: upper-left becomes min, lower-right becomes max
+<a href=#351 id=351 data-nosnippet>351</a>                    </span><span class="kw">let </span>(qy1, qy2) = <span class="kw">if </span>quad_y1 &lt; quad_y2 {
+<a href=#352 id=352 data-nosnippet>352</a>                        (quad_y1, quad_y2)
+<a href=#353 id=353 data-nosnippet>353</a>                    } <span class="kw">else </span>{
+<a href=#354 id=354 data-nosnippet>354</a>                        (quad_y2, quad_y1)
+<a href=#355 id=355 data-nosnippet>355</a>                    };
 <a href=#356 id=356 data-nosnippet>356</a>
-<a href=#357 id=357 data-nosnippet>357</a>                    <span class="kw">let </span>color_arr = <span class="kw">crate</span>::engine::layouter::types::Color(
-<a href=#358 id=358 data-nosnippet>358</a>                        glyph.color.<span class="number">0</span>,
-<a href=#359 id=359 data-nosnippet>359</a>                        glyph.color.<span class="number">1</span>,
-<a href=#360 id=360 data-nosnippet>360</a>                        glyph.color.<span class="number">2</span>,
-<a href=#361 id=361 data-nosnippet>361</a>                        glyph.color.<span class="number">3</span>,
-<a href=#362 id=362 data-nosnippet>362</a>                    )
-<a href=#363 id=363 data-nosnippet>363</a>                    .to_linear_f32_array();
-<a href=#364 id=364 data-nosnippet>364</a>
-<a href=#365 id=365 data-nosnippet>365</a>                    <span class="self">self</span>.vertices.extend_from_slice(<span class="kw-2">&amp;</span>[
-<a href=#366 id=366 data-nosnippet>366</a>                        GlyphVertex {
-<a href=#367 id=367 data-nosnippet>367</a>                            position: [quad_x1, qy1],
-<a href=#368 id=368 data-nosnippet>368</a>                            tex_coord: [u, v + uh],
-<a href=#369 id=369 data-nosnippet>369</a>                            layer: layer_f,
-<a href=#370 id=370 data-nosnippet>370</a>                            color: color_arr,
-<a href=#371 id=371 data-nosnippet>371</a>                        },
-<a href=#372 id=372 data-nosnippet>372</a>                        GlyphVertex {
-<a href=#373 id=373 data-nosnippet>373</a>                            position: [quad_x2, qy1],
-<a href=#374 id=374 data-nosnippet>374</a>                            tex_coord: [u + uw, v + uh],
-<a href=#375 id=375 data-nosnippet>375</a>                            layer: layer_f,
-<a href=#376 id=376 data-nosnippet>376</a>                            color: color_arr,
-<a href=#377 id=377 data-nosnippet>377</a>                        },
-<a href=#378 id=378 data-nosnippet>378</a>                        GlyphVertex {
-<a href=#379 id=379 data-nosnippet>379</a>                            position: [quad_x2, qy2],
-<a href=#380 id=380 data-nosnippet>380</a>                            tex_coord: [u + uw, v],
-<a href=#381 id=381 data-nosnippet>381</a>                            layer: layer_f,
-<a href=#382 id=382 data-nosnippet>382</a>                            color: color_arr,
-<a href=#383 id=383 data-nosnippet>383</a>                        },
-<a href=#384 id=384 data-nosnippet>384</a>                        GlyphVertex {
-<a href=#385 id=385 data-nosnippet>385</a>                            position: [quad_x1, qy2],
-<a href=#386 id=386 data-nosnippet>386</a>                            tex_coord: [u, v],
-<a href=#387 id=387 data-nosnippet>387</a>                            layer: layer_f,
-<a href=#388 id=388 data-nosnippet>388</a>                            color: color_arr,
-<a href=#389 id=389 data-nosnippet>389</a>                        },
-<a href=#390 id=390 data-nosnippet>390</a>                    ]);
-<a href=#391 id=391 data-nosnippet>391</a>
-<a href=#392 id=392 data-nosnippet>392</a>                    <span class="self">self</span>.indices
-<a href=#393 id=393 data-nosnippet>393</a>                        .extend_from_slice(<span class="kw-2">&amp;</span>[idx, idx + <span class="number">1</span>, idx + <span class="number">2</span>, idx, idx + <span class="number">2</span>, idx + <span class="number">3</span>]);
-<a href=#394 id=394 data-nosnippet>394</a>                }
-<a href=#395 id=395 data-nosnippet>395</a>            }
-<a href=#396 id=396 data-nosnippet>396</a>        }
-<a href=#397 id=397 data-nosnippet>397</a>
-<a href=#398 id=398 data-nosnippet>398</a>        <span class="self">self</span>.atlas.flush_uploads(queue);
-<a href=#399 id=399 data-nosnippet>399</a>
-<a href=#400 id=400 data-nosnippet>400</a>        <span class="kw">let </span>bind_group = device.create_bind_group(<span class="kw-2">&amp;</span>wgpu::BindGroupDescriptor {
-<a href=#401 id=401 data-nosnippet>401</a>            label: <span class="prelude-val">Some</span>(<span class="string">"Text Bind Group"</span>),
-<a href=#402 id=402 data-nosnippet>402</a>            layout: <span class="kw-2">&amp;</span><span class="self">self</span>.bind_group_layout,
-<a href=#403 id=403 data-nosnippet>403</a>            entries: <span class="kw-2">&amp;</span>[
-<a href=#404 id=404 data-nosnippet>404</a>                wgpu::BindGroupEntry {
-<a href=#405 id=405 data-nosnippet>405</a>                    binding: <span class="number">0</span>,
-<a href=#406 id=406 data-nosnippet>406</a>                    resource: wgpu::BindingResource::TextureView(<span class="self">self</span>.atlas.texture_view()),
-<a href=#407 id=407 data-nosnippet>407</a>                },
-<a href=#408 id=408 data-nosnippet>408</a>                wgpu::BindGroupEntry {
-<a href=#409 id=409 data-nosnippet>409</a>                    binding: <span class="number">1</span>,
-<a href=#410 id=410 data-nosnippet>410</a>                    resource: wgpu::BindingResource::Sampler(<span class="kw-2">&amp;</span><span class="self">self</span>.sampler),
-<a href=#411 id=411 data-nosnippet>411</a>                },
-<a href=#412 id=412 data-nosnippet>412</a>            ],
-<a href=#413 id=413 data-nosnippet>413</a>        });
-<a href=#414 id=414 data-nosnippet>414</a>        <span class="self">self</span>.bind_group = <span class="prelude-val">Some</span>(bind_group);
-<a href=#415 id=415 data-nosnippet>415</a>
-<a href=#416 id=416 data-nosnippet>416</a>        <span class="self">self</span>.num_indices = <span class="self">self</span>.indices.len() <span class="kw">as </span>u32;
-<a href=#417 id=417 data-nosnippet>417</a>        <span class="kw">if </span>!<span class="self">self</span>.vertices.is_empty() {
-<a href=#418 id=418 data-nosnippet>418</a>            <span class="self">self</span>.vertex_buffer = <span class="prelude-val">Some</span>(device.create_buffer_init(
-<a href=#419 id=419 data-nosnippet>419</a>                <span class="kw-2">&amp;</span>wgpu::util::BufferInitDescriptor {
-<a href=#420 id=420 data-nosnippet>420</a>                    label: <span class="prelude-val">Some</span>(<span class="string">"Text Vertex Buffer"</span>),
-<a href=#421 id=421 data-nosnippet>421</a>                    contents: bytemuck::cast_slice(<span class="kw-2">&amp;</span><span class="self">self</span>.vertices),
-<a href=#422 id=422 data-nosnippet>422</a>                    usage: wgpu::BufferUsages::VERTEX,
-<a href=#423 id=423 data-nosnippet>423</a>                },
-<a href=#424 id=424 data-nosnippet>424</a>            ));
-<a href=#425 id=425 data-nosnippet>425</a>        } <span class="kw">else </span>{
-<a href=#426 id=426 data-nosnippet>426</a>            <span class="self">self</span>.vertex_buffer = <span class="prelude-val">None</span>;
-<a href=#427 id=427 data-nosnippet>427</a>        }
-<a href=#428 id=428 data-nosnippet>428</a>        <span class="kw">if </span>!<span class="self">self</span>.indices.is_empty() {
-<a href=#429 id=429 data-nosnippet>429</a>            <span class="self">self</span>.index_buffer = <span class="prelude-val">Some</span>(device.create_buffer_init(
-<a href=#430 id=430 data-nosnippet>430</a>                <span class="kw-2">&amp;</span>wgpu::util::BufferInitDescriptor {
-<a href=#431 id=431 data-nosnippet>431</a>                    label: <span class="prelude-val">Some</span>(<span class="string">"Text Index Buffer"</span>),
-<a href=#432 id=432 data-nosnippet>432</a>                    contents: bytemuck::cast_slice(<span class="kw-2">&amp;</span><span class="self">self</span>.indices),
-<a href=#433 id=433 data-nosnippet>433</a>                    usage: wgpu::BufferUsages::INDEX,
-<a href=#434 id=434 data-nosnippet>434</a>                },
-<a href=#435 id=435 data-nosnippet>435</a>            ));
-<a href=#436 id=436 data-nosnippet>436</a>        } <span class="kw">else </span>{
-<a href=#437 id=437 data-nosnippet>437</a>            <span class="self">self</span>.index_buffer = <span class="prelude-val">None</span>;
-<a href=#438 id=438 data-nosnippet>438</a>        }
-<a href=#439 id=439 data-nosnippet>439</a>
-<a href=#440 id=440 data-nosnippet>440</a>        <span class="prelude-val">Ok</span>(())
-<a href=#441 id=441 data-nosnippet>441</a>    }
-<a href=#442 id=442 data-nosnippet>442</a>
-<a href=#443 id=443 data-nosnippet>443</a>    <span class="doccomment">/// テキストをレンダリングする
-<a href=#444 id=444 data-nosnippet>444</a>    </span><span class="kw">pub fn </span>draw&lt;<span class="lifetime">'a</span>&gt;(<span class="kw-2">&amp;mut </span><span class="self">self</span>, rpass: <span class="kw-2">&amp;mut </span>wgpu::RenderPass&lt;<span class="lifetime">'a</span>&gt;) {
-<a href=#445 id=445 data-nosnippet>445</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>bind_group) = <span class="self">self</span>.bind_group <span class="kw">else </span>{
-<a href=#446 id=446 data-nosnippet>446</a>            <span class="kw">return</span>;
-<a href=#447 id=447 data-nosnippet>447</a>        };
-<a href=#448 id=448 data-nosnippet>448</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>vertex_buffer) = <span class="self">self</span>.vertex_buffer <span class="kw">else </span>{
-<a href=#449 id=449 data-nosnippet>449</a>            <span class="kw">return</span>;
-<a href=#450 id=450 data-nosnippet>450</a>        };
-<a href=#451 id=451 data-nosnippet>451</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>index_buffer) = <span class="self">self</span>.index_buffer <span class="kw">else </span>{
-<a href=#452 id=452 data-nosnippet>452</a>            <span class="kw">return</span>;
-<a href=#453 id=453 data-nosnippet>453</a>        };
-<a href=#454 id=454 data-nosnippet>454</a>        <span class="kw">if </span><span class="self">self</span>.num_indices == <span class="number">0 </span>{
+<a href=#357 id=357 data-nosnippet>357</a>                    <span class="comment">// Compute UVs for the visible portion
+<a href=#358 id=358 data-nosnippet>358</a>                    </span><span class="kw">let </span>u0 = u + (vis_l - gx) / gw * uw;
+<a href=#359 id=359 data-nosnippet>359</a>                    <span class="kw">let </span>u1 = u + (vis_r - gx) / gw * uw;
+<a href=#360 id=360 data-nosnippet>360</a>                    <span class="kw">let </span>v0 = v + (vis_b - gy) / gh * uh;
+<a href=#361 id=361 data-nosnippet>361</a>                    <span class="kw">let </span>v1 = v + (vis_t - gy) / gh * uh;
+<a href=#362 id=362 data-nosnippet>362</a>
+<a href=#363 id=363 data-nosnippet>363</a>                    <span class="kw">let </span>idx = <span class="self">self</span>.vertices.len() <span class="kw">as </span>u32;
+<a href=#364 id=364 data-nosnippet>364</a>                    <span class="kw">let </span>layer_f = layer <span class="kw">as </span>f32;
+<a href=#365 id=365 data-nosnippet>365</a>
+<a href=#366 id=366 data-nosnippet>366</a>                    <span class="kw">let </span>color_arr = <span class="kw">crate</span>::engine::layouter::types::Color(
+<a href=#367 id=367 data-nosnippet>367</a>                        glyph.color.<span class="number">0</span>,
+<a href=#368 id=368 data-nosnippet>368</a>                        glyph.color.<span class="number">1</span>,
+<a href=#369 id=369 data-nosnippet>369</a>                        glyph.color.<span class="number">2</span>,
+<a href=#370 id=370 data-nosnippet>370</a>                        glyph.color.<span class="number">3</span>,
+<a href=#371 id=371 data-nosnippet>371</a>                    )
+<a href=#372 id=372 data-nosnippet>372</a>                    .to_linear_f32_array();
+<a href=#373 id=373 data-nosnippet>373</a>
+<a href=#374 id=374 data-nosnippet>374</a>                    <span class="self">self</span>.vertices.extend_from_slice(<span class="kw-2">&amp;</span>[
+<a href=#375 id=375 data-nosnippet>375</a>                        GlyphVertex {
+<a href=#376 id=376 data-nosnippet>376</a>                            position: [quad_x1, qy1],
+<a href=#377 id=377 data-nosnippet>377</a>                            tex_coord: [u0, v0],
+<a href=#378 id=378 data-nosnippet>378</a>                            layer: layer_f,
+<a href=#379 id=379 data-nosnippet>379</a>                            color: color_arr,
+<a href=#380 id=380 data-nosnippet>380</a>                        },
+<a href=#381 id=381 data-nosnippet>381</a>                        GlyphVertex {
+<a href=#382 id=382 data-nosnippet>382</a>                            position: [quad_x2, qy1],
+<a href=#383 id=383 data-nosnippet>383</a>                            tex_coord: [u1, v0],
+<a href=#384 id=384 data-nosnippet>384</a>                            layer: layer_f,
+<a href=#385 id=385 data-nosnippet>385</a>                            color: color_arr,
+<a href=#386 id=386 data-nosnippet>386</a>                        },
+<a href=#387 id=387 data-nosnippet>387</a>                        GlyphVertex {
+<a href=#388 id=388 data-nosnippet>388</a>                            position: [quad_x2, qy2],
+<a href=#389 id=389 data-nosnippet>389</a>                            tex_coord: [u1, v1],
+<a href=#390 id=390 data-nosnippet>390</a>                            layer: layer_f,
+<a href=#391 id=391 data-nosnippet>391</a>                            color: color_arr,
+<a href=#392 id=392 data-nosnippet>392</a>                        },
+<a href=#393 id=393 data-nosnippet>393</a>                        GlyphVertex {
+<a href=#394 id=394 data-nosnippet>394</a>                            position: [quad_x1, qy2],
+<a href=#395 id=395 data-nosnippet>395</a>                            tex_coord: [u0, v1],
+<a href=#396 id=396 data-nosnippet>396</a>                            layer: layer_f,
+<a href=#397 id=397 data-nosnippet>397</a>                            color: color_arr,
+<a href=#398 id=398 data-nosnippet>398</a>                        },
+<a href=#399 id=399 data-nosnippet>399</a>                    ]);
+<a href=#400 id=400 data-nosnippet>400</a>
+<a href=#401 id=401 data-nosnippet>401</a>                    <span class="self">self</span>.indices
+<a href=#402 id=402 data-nosnippet>402</a>                        .extend_from_slice(<span class="kw-2">&amp;</span>[idx, idx + <span class="number">1</span>, idx + <span class="number">2</span>, idx, idx + <span class="number">2</span>, idx + <span class="number">3</span>]);
+<a href=#403 id=403 data-nosnippet>403</a>                }
+<a href=#404 id=404 data-nosnippet>404</a>            }
+<a href=#405 id=405 data-nosnippet>405</a>        }
+<a href=#406 id=406 data-nosnippet>406</a>
+<a href=#407 id=407 data-nosnippet>407</a>        <span class="self">self</span>.atlas.flush_uploads(queue);
+<a href=#408 id=408 data-nosnippet>408</a>
+<a href=#409 id=409 data-nosnippet>409</a>        <span class="kw">let </span>bind_group = device.create_bind_group(<span class="kw-2">&amp;</span>wgpu::BindGroupDescriptor {
+<a href=#410 id=410 data-nosnippet>410</a>            label: <span class="prelude-val">Some</span>(<span class="string">"Text Bind Group"</span>),
+<a href=#411 id=411 data-nosnippet>411</a>            layout: <span class="kw-2">&amp;</span><span class="self">self</span>.bind_group_layout,
+<a href=#412 id=412 data-nosnippet>412</a>            entries: <span class="kw-2">&amp;</span>[
+<a href=#413 id=413 data-nosnippet>413</a>                wgpu::BindGroupEntry {
+<a href=#414 id=414 data-nosnippet>414</a>                    binding: <span class="number">0</span>,
+<a href=#415 id=415 data-nosnippet>415</a>                    resource: wgpu::BindingResource::TextureView(<span class="self">self</span>.atlas.texture_view()),
+<a href=#416 id=416 data-nosnippet>416</a>                },
+<a href=#417 id=417 data-nosnippet>417</a>                wgpu::BindGroupEntry {
+<a href=#418 id=418 data-nosnippet>418</a>                    binding: <span class="number">1</span>,
+<a href=#419 id=419 data-nosnippet>419</a>                    resource: wgpu::BindingResource::Sampler(<span class="kw-2">&amp;</span><span class="self">self</span>.sampler),
+<a href=#420 id=420 data-nosnippet>420</a>                },
+<a href=#421 id=421 data-nosnippet>421</a>            ],
+<a href=#422 id=422 data-nosnippet>422</a>        });
+<a href=#423 id=423 data-nosnippet>423</a>        <span class="self">self</span>.bind_group = <span class="prelude-val">Some</span>(bind_group);
+<a href=#424 id=424 data-nosnippet>424</a>
+<a href=#425 id=425 data-nosnippet>425</a>        <span class="self">self</span>.num_indices = <span class="self">self</span>.indices.len() <span class="kw">as </span>u32;
+<a href=#426 id=426 data-nosnippet>426</a>        <span class="kw">if </span>!<span class="self">self</span>.vertices.is_empty() {
+<a href=#427 id=427 data-nosnippet>427</a>            <span class="self">self</span>.vertex_buffer = <span class="prelude-val">Some</span>(device.create_buffer_init(
+<a href=#428 id=428 data-nosnippet>428</a>                <span class="kw-2">&amp;</span>wgpu::util::BufferInitDescriptor {
+<a href=#429 id=429 data-nosnippet>429</a>                    label: <span class="prelude-val">Some</span>(<span class="string">"Text Vertex Buffer"</span>),
+<a href=#430 id=430 data-nosnippet>430</a>                    contents: bytemuck::cast_slice(<span class="kw-2">&amp;</span><span class="self">self</span>.vertices),
+<a href=#431 id=431 data-nosnippet>431</a>                    usage: wgpu::BufferUsages::VERTEX,
+<a href=#432 id=432 data-nosnippet>432</a>                },
+<a href=#433 id=433 data-nosnippet>433</a>            ));
+<a href=#434 id=434 data-nosnippet>434</a>        } <span class="kw">else </span>{
+<a href=#435 id=435 data-nosnippet>435</a>            <span class="self">self</span>.vertex_buffer = <span class="prelude-val">None</span>;
+<a href=#436 id=436 data-nosnippet>436</a>        }
+<a href=#437 id=437 data-nosnippet>437</a>        <span class="kw">if </span>!<span class="self">self</span>.indices.is_empty() {
+<a href=#438 id=438 data-nosnippet>438</a>            <span class="self">self</span>.index_buffer = <span class="prelude-val">Some</span>(device.create_buffer_init(
+<a href=#439 id=439 data-nosnippet>439</a>                <span class="kw-2">&amp;</span>wgpu::util::BufferInitDescriptor {
+<a href=#440 id=440 data-nosnippet>440</a>                    label: <span class="prelude-val">Some</span>(<span class="string">"Text Index Buffer"</span>),
+<a href=#441 id=441 data-nosnippet>441</a>                    contents: bytemuck::cast_slice(<span class="kw-2">&amp;</span><span class="self">self</span>.indices),
+<a href=#442 id=442 data-nosnippet>442</a>                    usage: wgpu::BufferUsages::INDEX,
+<a href=#443 id=443 data-nosnippet>443</a>                },
+<a href=#444 id=444 data-nosnippet>444</a>            ));
+<a href=#445 id=445 data-nosnippet>445</a>        } <span class="kw">else </span>{
+<a href=#446 id=446 data-nosnippet>446</a>            <span class="self">self</span>.index_buffer = <span class="prelude-val">None</span>;
+<a href=#447 id=447 data-nosnippet>447</a>        }
+<a href=#448 id=448 data-nosnippet>448</a>
+<a href=#449 id=449 data-nosnippet>449</a>        <span class="prelude-val">Ok</span>(())
+<a href=#450 id=450 data-nosnippet>450</a>    }
+<a href=#451 id=451 data-nosnippet>451</a>
+<a href=#452 id=452 data-nosnippet>452</a>    <span class="doccomment">/// テキストをレンダリングする
+<a href=#453 id=453 data-nosnippet>453</a>    </span><span class="kw">pub fn </span>draw&lt;<span class="lifetime">'a</span>&gt;(<span class="kw-2">&amp;mut </span><span class="self">self</span>, rpass: <span class="kw-2">&amp;mut </span>wgpu::RenderPass&lt;<span class="lifetime">'a</span>&gt;) {
+<a href=#454 id=454 data-nosnippet>454</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>bind_group) = <span class="self">self</span>.bind_group <span class="kw">else </span>{
 <a href=#455 id=455 data-nosnippet>455</a>            <span class="kw">return</span>;
-<a href=#456 id=456 data-nosnippet>456</a>        }
-<a href=#457 id=457 data-nosnippet>457</a>
-<a href=#458 id=458 data-nosnippet>458</a>        rpass.set_pipeline(<span class="kw-2">&amp;</span><span class="self">self</span>.pipeline);
-<a href=#459 id=459 data-nosnippet>459</a>        rpass.set_bind_group(<span class="number">0</span>, bind_group, <span class="kw-2">&amp;</span>[]);
-<a href=#460 id=460 data-nosnippet>460</a>        rpass.set_vertex_buffer(<span class="number">0</span>, vertex_buffer.slice(..));
-<a href=#461 id=461 data-nosnippet>461</a>        rpass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-<a href=#462 id=462 data-nosnippet>462</a>        rpass.draw_indexed(<span class="number">0</span>..<span class="self">self</span>.num_indices, <span class="number">0</span>, <span class="number">0</span>..<span class="number">1</span>);
-<a href=#463 id=463 data-nosnippet>463</a>    }
-<a href=#464 id=464 data-nosnippet>464</a>}
+<a href=#456 id=456 data-nosnippet>456</a>        };
+<a href=#457 id=457 data-nosnippet>457</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>vertex_buffer) = <span class="self">self</span>.vertex_buffer <span class="kw">else </span>{
+<a href=#458 id=458 data-nosnippet>458</a>            <span class="kw">return</span>;
+<a href=#459 id=459 data-nosnippet>459</a>        };
+<a href=#460 id=460 data-nosnippet>460</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>index_buffer) = <span class="self">self</span>.index_buffer <span class="kw">else </span>{
+<a href=#461 id=461 data-nosnippet>461</a>            <span class="kw">return</span>;
+<a href=#462 id=462 data-nosnippet>462</a>        };
+<a href=#463 id=463 data-nosnippet>463</a>        <span class="kw">if </span><span class="self">self</span>.num_indices == <span class="number">0 </span>{
+<a href=#464 id=464 data-nosnippet>464</a>            <span class="kw">return</span>;
+<a href=#465 id=465 data-nosnippet>465</a>        }
+<a href=#466 id=466 data-nosnippet>466</a>
+<a href=#467 id=467 data-nosnippet>467</a>        rpass.set_pipeline(<span class="kw-2">&amp;</span><span class="self">self</span>.pipeline);
+<a href=#468 id=468 data-nosnippet>468</a>        rpass.set_bind_group(<span class="number">0</span>, bind_group, <span class="kw-2">&amp;</span>[]);
+<a href=#469 id=469 data-nosnippet>469</a>        rpass.set_vertex_buffer(<span class="number">0</span>, vertex_buffer.slice(..));
+<a href=#470 id=470 data-nosnippet>470</a>        rpass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+<a href=#471 id=471 data-nosnippet>471</a>        rpass.draw_indexed(<span class="number">0</span>..<span class="self">self</span>.num_indices, <span class="number">0</span>, <span class="number">0</span>..<span class="number">1</span>);
+<a href=#472 id=472 data-nosnippet>472</a>    }
+<a href=#473 id=473 data-nosnippet>473</a>}
 </code></pre></div></section></main></body></html>
