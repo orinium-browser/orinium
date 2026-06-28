@@ -394,15 +394,15 @@ impl GpuRenderer {
                     let color = color.to_linear_f32_array();
 
                     #[rustfmt::skip]
-                    vertices.extend_from_slice(&[
-                        Vertex { position: [px1, py1, 0.0], color },
-                        Vertex { position: [px1, py2, 0.0], color },
-                        Vertex { position: [px2, py1, 0.0], color },
+                vertices.extend_from_slice(&[
+                    Vertex { position: [px1, py1, 0.0], color },
+                    Vertex { position: [px1, py2, 0.0], color },
+                    Vertex { position: [px2, py1, 0.0], color },
 
-                        Vertex { position: [px2, py1, 0.0], color },
-                        Vertex { position: [px1, py2, 0.0], color },
-                        Vertex { position: [px2, py2, 0.0], color },
-                    ]);
+                    Vertex { position: [px2, py1, 0.0], color },
+                    Vertex { position: [px1, py2, 0.0], color },
+                    Vertex { position: [px2, py2, 0.0], color },
+                ]);
                 }
 
                 // Gradient Rectangle
@@ -453,8 +453,12 @@ impl GpuRenderer {
                             ];
                             emit_rect_vertices(
                                 &mut vertices,
-                                x1, y1, x2, y2,
-                                screen_width, screen_height,
+                                x1,
+                                y1,
+                                x2,
+                                y2,
+                                screen_width,
+                                screen_height,
                                 colors_lin,
                             );
                         }
@@ -463,9 +467,16 @@ impl GpuRenderer {
                                 compute_radial_params(&gradient.kind, &logical_corners);
                             emit_radial_gradient_vertices(
                                 &mut vertices,
-                                x1, y1, x2, y2,
-                                screen_width, screen_height,
-                                cx, cy, rx, ry,
+                                x1,
+                                y1,
+                                x2,
+                                y2,
+                                screen_width,
+                                screen_height,
+                                cx,
+                                cy,
+                                rx,
+                                ry,
                                 &gradient.stops,
                             );
                         }
@@ -924,10 +935,7 @@ fn compute_gradient_corner_colors(gradient: &Gradient, corners: &[(f32, f32); 4]
     colors
 }
 
-fn compute_radial_params(
-    kind: &GradientKind,
-    corners: &[(f32, f32); 4],
-) -> (f32, f32, f32, f32) {
+fn compute_radial_params(kind: &GradientKind, corners: &[(f32, f32); 4]) -> (f32, f32, f32, f32) {
     let GradientKind::Radial {
         shape,
         size,
@@ -938,9 +946,15 @@ fn compute_radial_params(
     };
 
     let min_x = corners.iter().map(|c| c.0).fold(f32::INFINITY, f32::min);
-    let max_x = corners.iter().map(|c| c.0).fold(f32::NEG_INFINITY, f32::max);
+    let max_x = corners
+        .iter()
+        .map(|c| c.0)
+        .fold(f32::NEG_INFINITY, f32::max);
     let min_y = corners.iter().map(|c| c.1).fold(f32::INFINITY, f32::min);
-    let max_y = corners.iter().map(|c| c.1).fold(f32::NEG_INFINITY, f32::max);
+    let max_y = corners
+        .iter()
+        .map(|c| c.1)
+        .fold(f32::NEG_INFINITY, f32::max);
     let w = max_x - min_x;
     let h = max_y - min_y;
     let cx = min_x + w * position.0;
@@ -948,11 +962,15 @@ fn compute_radial_params(
 
     let (rx, ry) = match (shape, size) {
         (RadialShape::Circle, RadialSizeKind::ClosestSide) => {
-            let d = (cx - min_x).min(max_x - cx).min((cy - min_y).min(max_y - cy));
+            let d = (cx - min_x)
+                .min(max_x - cx)
+                .min((cy - min_y).min(max_y - cy));
             (d, d)
         }
         (RadialShape::Circle, RadialSizeKind::FarthestSide) => {
-            let d = (cx - min_x).max(max_x - cx).max((cy - min_y).max(max_y - cy));
+            let d = (cx - min_x)
+                .max(max_x - cx)
+                .max((cy - min_y).max(max_y - cy));
             (d, d)
         }
         (RadialShape::Circle, RadialSizeKind::ClosestCorner) => {
@@ -979,32 +997,26 @@ fn compute_radial_params(
             let ry = (cy - min_y).max(max_y - cy);
             (rx, ry)
         }
-        (RadialShape::Ellipse, RadialSizeKind::ClosestCorner) => corners
-            .iter()
-            .fold((f32::INFINITY, f32::INFINITY), |acc, (px, py)| {
+        (RadialShape::Ellipse, RadialSizeKind::ClosestCorner) => {
+            corners
+                .iter()
+                .fold((f32::INFINITY, f32::INFINITY), |acc, (px, py)| {
+                    let erx = (px - cx).abs();
+                    let ery = (py - cy).abs();
+                    let nd = (erx * erx + ery * ery).sqrt();
+                    let best_nd = (acc.0 * acc.0 + acc.1 * acc.1).sqrt();
+                    if nd < best_nd { (erx, ery) } else { acc }
+                })
+        }
+        (RadialShape::Ellipse, RadialSizeKind::FarthestCorner) => {
+            corners.iter().fold((0.0f32, 0.0f32), |acc, (px, py)| {
                 let erx = (px - cx).abs();
                 let ery = (py - cy).abs();
                 let nd = (erx * erx + ery * ery).sqrt();
                 let best_nd = (acc.0 * acc.0 + acc.1 * acc.1).sqrt();
-                if nd < best_nd {
-                    (erx, ery)
-                } else {
-                    acc
-                }
-            }),
-        (RadialShape::Ellipse, RadialSizeKind::FarthestCorner) => corners
-            .iter()
-            .fold((0.0f32, 0.0f32), |acc, (px, py)| {
-                let erx = (px - cx).abs();
-                let ery = (py - cy).abs();
-                let nd = (erx * erx + ery * ery).sqrt();
-                let best_nd = (acc.0 * acc.0 + acc.1 * acc.1).sqrt();
-                if nd > best_nd {
-                    (erx, ery)
-                } else {
-                    acc
-                }
-            }),
+                if nd > best_nd { (erx, ery) } else { acc }
+            })
+        }
     };
 
     (cx, cy, rx.max(0.001), ry.max(0.001))
@@ -1020,8 +1032,12 @@ fn color_at_point(cx: f32, cy: f32, rx: f32, ry: f32, px: f32, py: f32) -> f32 {
 
 fn emit_rect_vertices(
     vertices: &mut Vec<Vertex>,
-    x1: f32, y1: f32, x2: f32, y2: f32,
-    screen_width: f32, screen_height: f32,
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+    screen_width: f32,
+    screen_height: f32,
     colors: [[f32; 4]; 4],
 ) {
     let ndc = |v: f32, max: f32| (v / max) * 2.0 - 1.0;
@@ -1044,9 +1060,16 @@ fn emit_rect_vertices(
 /// Subdivide a radial gradient rectangle into an NxN grid for proper rendering.
 fn emit_radial_gradient_vertices(
     vertices: &mut Vec<Vertex>,
-    x1: f32, y1: f32, x2: f32, y2: f32,
-    screen_width: f32, screen_height: f32,
-    cx: f32, cy: f32, rx: f32, ry: f32,
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+    screen_width: f32,
+    screen_height: f32,
+    cx: f32,
+    cy: f32,
+    rx: f32,
+    ry: f32,
     stops: &[ColorStop],
 ) {
     const SUBDIV: u32 = 32;
@@ -1074,7 +1097,16 @@ fn emit_radial_gradient_vertices(
                 sample_gradient_stops(stops, t_br).to_linear_f32_array(),
             ];
 
-            emit_rect_vertices(vertices, sx1, sy1, sx2, sy2, screen_width, screen_height, colors);
+            emit_rect_vertices(
+                vertices,
+                sx1,
+                sy1,
+                sx2,
+                sy2,
+                screen_width,
+                screen_height,
+                colors,
+            );
         }
     }
 }
