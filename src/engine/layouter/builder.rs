@@ -561,6 +561,11 @@ fn apply_declaration(
                     "solid" => Some(BorderStyle::Solid),
                     "dashed" => Some(BorderStyle::Dashed),
                     "dotted" => Some(BorderStyle::Dotted),
+                    "inset" | "outset" | "groove" | "ridge" | "double" | "hidden" => {
+                        // stub
+                        style_v = Some(BorderStyle::Solid);
+                        continue;
+                    }
                     _ => None,
                 };
 
