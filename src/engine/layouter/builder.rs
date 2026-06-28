@@ -896,6 +896,8 @@ fn apply_declaration(
                 style.flex_direction = match v.as_str() {
                     "row" => FlexDirection::Row,
                     "column" => FlexDirection::Column,
+                    "row-reverse" => FlexDirection::RowReverse,
+                    "column-reverse" => FlexDirection::ColumnReverse,
                     _ => return None,
                 };
             }
