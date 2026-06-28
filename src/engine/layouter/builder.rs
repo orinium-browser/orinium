@@ -889,15 +889,13 @@ fn apply_declaration(
          * Flex
          * ====================== */
         ("flex-direction", CssValue::Keyword(v)) => {
-            if style.display.inner == InnerDisplay::Flex {
-                style.flex_direction = match v.as_str() {
-                    "row" => FlexDirection::Row,
-                    "column" => FlexDirection::Column,
-                    "row-reverse" => FlexDirection::RowReverse,
-                    "column-reverse" => FlexDirection::ColumnReverse,
-                    _ => return None,
-                };
-            }
+            style.flex_direction = match v.as_str() {
+                "row" => FlexDirection::Row,
+                "column" => FlexDirection::Column,
+                "row-reverse" => FlexDirection::RowReverse,
+                "column-reverse" => FlexDirection::ColumnReverse,
+                _ => return None,
+            };
         }
 
         ("justify-content", CssValue::Keyword(v)) => {
