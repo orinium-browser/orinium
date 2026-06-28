@@ -46,7 +46,7 @@ tokio = { version = "1.52", features = ["fs", "io-std", "net", "rt", "time"] }
 tokio-rustls = "0.26.4"
 ui_layout = {
   git = "https://github.com/098orin/ui_layout-rs",
-  rev = "02b4cd54c67347b2434e4f69c98615c9843e3c7a"
+  rev = "ed7bafad9ef4c94dddcefb46c2518409d932b24e"
 }
 url = "2.5"
 wgpu = "29.0.1"
