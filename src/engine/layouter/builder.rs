@@ -946,7 +946,9 @@ fn apply_declaration(
             style.item_style.flex_basis = resolve_css_len_auto(name, value, text_style)?;
         }
 
-        _ => {}
+        _ => {
+            // log::error!("{name}, {value:?}");
+        }
     }
     Some(())
 }
