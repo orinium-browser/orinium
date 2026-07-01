@@ -118,7 +118,7 @@ pub fn network_main(rx: IpcReceiver<NetworkCommand>, tx: IpcSender<NetworkMessag
     let err = rx.recv().err().unwrap();
 
     if matches!(err, IpcError::Disconnected) {
-        println!("IPC channel closed, exiting normally.");
+        log::info!(target: "network", "IPC channel closed, exiting normally.");
         std::process::exit(0)
     } else {
         panic!("IPC channel unexpectedly closed: {err}")
