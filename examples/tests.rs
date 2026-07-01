@@ -1,4 +1,5 @@
 use orinium_browser::{
+    ProcessHandler,
     browser::{BrowserApp, Tab, core::resource_loader::BrowserResourceLoader},
     engine::{
         css::parser::Parser as CssParser,
@@ -26,6 +27,10 @@ use ui_layout::{LayoutEngine, LayoutNode};
 fn main() -> Result<()> {
     #[cfg(feature = "dhat-heap")]
     let _profiler = dhat::Profiler::new_heap();
+
+    if let Some(handler) = ProcessHandler::current() {
+        handler.handle();
+    }
 
     env_logger::init();
 

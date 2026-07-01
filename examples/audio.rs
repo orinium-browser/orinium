@@ -1,11 +1,16 @@
 //! Audio playback example. Demonstrates sound manager integration.
 
 use anyhow::Result;
+use orinium_browser::ProcessHandler;
 use orinium_browser::browser::BrowserApp;
 use orinium_browser::platform::audio::SoundManager;
 use std::env;
 
 fn main() -> Result<()> {
+    if let Some(handler) = ProcessHandler::current() {
+        handler.handle();
+    }
+
     let audio_file = "resource:///audio/birds.mp3";
 
     let args: Vec<String> = env::args().collect();

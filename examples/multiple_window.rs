@@ -1,4 +1,5 @@
 use anyhow::Result;
+use orinium_browser::ProcessHandler;
 use orinium_browser::browser::{BrowserApp, Tab};
 use orinium_browser::platform::renderer::gpu::GpuRenderer;
 use std::collections::HashMap;
@@ -199,6 +200,10 @@ impl ApplicationHandler for MultiWindowApp {
 
 fn main() -> Result<()> {
     env_logger::init();
+
+    if let Some(handler) = ProcessHandler::current() {
+        handler.handle();
+    }
 
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
