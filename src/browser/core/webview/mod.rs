@@ -164,15 +164,19 @@ impl WebView {
                 self.update_layout();
 
                 // CSS fetch を要求
-                for url in &self.pending_css_urls {
-                    log::info!("Fetch requested in WebView: url={}", url);
-                    tasks.push(WebViewTask::Fetch {
-                        url: url.clone(),
-                        kind: FetchKind::Css,
-                    });
-                }
+                if self.pending_css_urls.is_empty() {
+                    self.phase = PagePhase::CssApplied;
+                } else {
+                    for url in &self.pending_css_urls {
+                        log::info!("Fetch requested in WebView: url={}", url);
+                        tasks.push(WebViewTask::Fetch {
+                            url: url.clone(),
+                            kind: FetchKind::Css,
+                        });
+                    }
 
-                self.phase = PagePhase::CssPending;
+                    self.phase = PagePhase::CssPending;
+                }
             }
 
             PagePhase::CssPending => {
@@ -198,6 +202,7 @@ impl WebView {
         let parsed = parse_html(&html, document_url);
 
         self.pending_css_urls = parsed.style_links;
+        self.css_results_expected = self.pending_css_urls.len();
 
         let docment_info = DocumentInfo {
             document_url: parsed.document_url,
@@ -231,7 +236,6 @@ impl WebView {
                 }
             }
             CssApplicationStrategy::Incremental => {
-                self.css_results_expected += 1;
                 self.css_processor.process(vec![css]);
             }
         }
