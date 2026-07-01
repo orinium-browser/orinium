@@ -32,7 +32,7 @@ use url::Url;
 /// use std::rc::Rc;
 /// use orinium_browser::platform::network::NetworkCore;
 ///
-/// let network = Some(Rc::new(NetworkCore::new()));
+/// let network = Some(Rc::new(NetworkCore::new().unwrap()));
 /// let loader = BrowserResourceLoader::new(network);
 ///
 /// // Typical call (pseudocode):
