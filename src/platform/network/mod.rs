@@ -20,8 +20,9 @@ use serde::{Deserialize, Serialize};
 
 use core::AsyncNetworkCore;
 
-use ipc_channel::ipc::{self, IpcReceiver, IpcSender};
-use std::{io, thread};
+use crate::ParentChannels;
+use ipc_channel::ipc::{IpcOneShotServer, IpcReceiver, IpcSender};
+use std::{env, io, process};
 
 #[derive(Deserialize, Serialize)]
 pub enum NetworkCommand {
@@ -48,12 +49,21 @@ impl Default for NetworkCore {
 
 impl NetworkCore {
     pub fn new() -> Result<Self, io::Error> {
-        let (cmd_tx, cmd_rx) = ipc::channel()?;
-        let (msg_tx, msg_rx) = ipc::channel()?;
+        let (server, server_name) =
+            IpcOneShotServer::<ParentChannels<NetworkCommand, NetworkMessage>>::new()?;
 
-        thread::spawn(move || spawn_network_thread(cmd_rx, msg_tx));
+        process::Command::new(env::current_exe()?)
+            .arg("--child")
+            .arg(&server_name)
+            .arg("--type=network")
+            .spawn()?;
 
-        Ok(Self { cmd_tx, msg_rx })
+        let (_, channels) = server.accept().unwrap();
+
+        Ok(Self {
+            cmd_tx: channels.cmd_tx,
+            msg_rx: channels.msg_rx,
+        })
     }
 
     pub fn set_network_config(&self, cfg: NetworkConfig) {
@@ -87,7 +97,7 @@ impl NetworkCore {
 }
 
 /// ネットワークスレッド
-fn spawn_network_thread(rx: IpcReceiver<NetworkCommand>, tx: IpcSender<NetworkMessage>) {
+pub fn network_main(rx: IpcReceiver<NetworkCommand>, tx: IpcSender<NetworkMessage>) -> ! {
     let mut core = AsyncNetworkCore::new();
 
     while let Ok(cmd) = rx.recv() {
@@ -103,4 +113,5 @@ fn spawn_network_thread(rx: IpcReceiver<NetworkCommand>, tx: IpcSender<NetworkMe
             }
         }
     }
+    panic!("Ipc reciever returned an error.")
 }
