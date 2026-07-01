@@ -113,5 +113,5 @@ pub fn network_main(rx: IpcReceiver<NetworkCommand>, tx: IpcSender<NetworkMessag
             }
         }
     }
-    panic!("Ipc reciever returned an error.")
+    panic!("IPC channel closed: {}", rx.recv().err().unwrap())
 }
