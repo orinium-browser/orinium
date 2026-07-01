@@ -13,6 +13,7 @@ pub use cookie_store::CookieStore;
 pub use core::{Response, StatusCode};
 pub use error::NetworkError;
 pub use hyper::http::Request;
+use ipc_channel::IpcError;
 pub use sender_pool::HostKey;
 pub use sender_pool::{HttpSender, SenderPool};
 
@@ -113,5 +114,13 @@ pub fn network_main(rx: IpcReceiver<NetworkCommand>, tx: IpcSender<NetworkMessag
             }
         }
     }
-    panic!("IPC channel closed: {}", rx.recv().err().unwrap())
+
+    let err = rx.recv().err().unwrap();
+
+    if matches!(err, IpcError::Disconnected) {
+        println!("IPC channel closed, exiting normally.");
+        std::process::exit(0)
+    } else {
+        panic!("IPC channel unexpectedly closed: {err}")
+    }
 }
