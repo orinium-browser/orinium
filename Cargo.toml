@@ -32,7 +32,7 @@ log = "0.4.32"
 once_cell = "1.21.4"
 pixi_byte = {
   git = "https://github.com/orinium-browser/pixi_byte",
-  branch = "dev"
+  rev = "9de1b545f412b33d864bb65896ec65d12509865e"
 }
 pollster = "0.4"
 rustls = { version = "0.23.40", default-features = false, features = ["tls12"] }

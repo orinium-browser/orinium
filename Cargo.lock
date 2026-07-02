@@ -2491,7 +2491,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 [[package]]
 name = "pixi_byte"
 version = "0.1.0"
-source = "git+https://github.com/orinium-browser/pixi_byte?branch=dev#680d6994511bc1de38e760cb46a8433d5b12a6ac"
+source = "git+https://github.com/orinium-browser/pixi_byte?rev=9de1b545f412b33d864bb65896ec65d12509865e#9de1b545f412b33d864bb65896ec65d12509865e"
 dependencies = [
  "rustc-hash 2.1.2",
 ]
