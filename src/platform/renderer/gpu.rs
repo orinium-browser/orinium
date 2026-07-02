@@ -99,6 +99,10 @@ impl GpuRenderer {
                 power_preference: wgpu::PowerPreference::default(),
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
+                // This is currently only used for the browser's rendering backend, but we
+                // enable limit bucketing preemptively in case WebGPU is exposed to web content
+                // in the future.
+                apply_limit_buckets: true,
             })
             .await?;
 
@@ -127,6 +131,9 @@ impl GpuRenderer {
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
+            // Use automatic color space selection until browser-level color
+            // management and CSS color spaces are implemented.
+            color_space: wgpu::SurfaceColorSpace::Auto,
             width: size.width,
             height: size.height,
             present_mode: surface_caps.present_modes[0],
@@ -159,7 +166,7 @@ impl GpuRenderer {
             vertex: wgpu::VertexState {
                 module: &main_shader,
                 entry_point: Some("vs_main"),
-                buffers: &[Vertex::desc()],
+                buffers: &[Some(Vertex::desc())],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -857,7 +864,7 @@ impl GpuRenderer {
         self.queue.submit(std::iter::once(encoder.finish()));
 
         // フレームを画面に表示
-        output.present();
+        self.queue.present(output);
 
         Ok(())
     }

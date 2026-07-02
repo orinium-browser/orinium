@@ -49,8 +49,8 @@ ui_layout = {
   rev = "a94e19970e6eb02bee3b369c54bae6103490a3eb"
 }
 url = "2.5"
-wgpu = "29.0.1"
-wgpu-types = "29.0.1"
+wgpu = "30.0.0"
+wgpu-types = "30.0.0"
 winit = "0.30.13"
 
 [dev-dependencies]
