@@ -54,12 +54,33 @@ impl ProcessHandler {
 }
 
 fn network_process_main(name: String) -> ! {
-    let (cmd_tx, cmd_rx) = ipc::channel::<NetworkCommand>().unwrap();
-    let (msg_tx, msg_rx) = ipc::channel::<NetworkMessage>().unwrap();
+    let (cmd_tx, cmd_rx) = ipc::channel::<NetworkCommand>()
+        .inspect_err(|err| {
+            log::error!(target: "NetworkProcess", "Failed to create IPC channel: {err}");
+        })
+        .expect("failed to create network IPC channel");
+    let (msg_tx, msg_rx) = ipc::channel::<NetworkMessage>()
+        .inspect_err(|err| {
+            log::error!(target: "NetworkProcess", "Failed to create IPC channel: {err}");
+        })
+        .expect("failed to create network IPC channel");
 
-    let tx: IpcSender<ParentChannels<NetworkCommand, NetworkMessage>> =
-        IpcSender::connect(name).unwrap();
-    tx.send(ParentChannels { cmd_tx, msg_rx }).unwrap();
+    let tx: IpcSender<ParentChannels<NetworkCommand, NetworkMessage>> = IpcSender::connect(name)
+        .inspect_err(|err| {
+            log::error!(
+                target: "NetworkProcess",
+                "Failed to connect to parent IPC channel: {err}"
+            );
+        })
+        .expect("failed to connect to parent IPC channel");
+    tx.send(ParentChannels { cmd_tx, msg_rx })
+        .inspect_err(|err| {
+            log::error!(
+                target: "NetworkProcess",
+                "Failed to send IPC channels to parent process: {err}"
+            );
+        })
+        .expect("failed to send IPC channels to parent process");
 
     loop {
         crate::platform::network::network_main(cmd_rx, msg_tx);
