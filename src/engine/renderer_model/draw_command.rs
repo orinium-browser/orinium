@@ -1,6 +1,8 @@
 //! Draw command definition for rendering, which represents drawing instructions.
 
-use crate::engine::layouter::types::{Color, InfoNode, NodeKind, TextDecoration, TextStyle};
+use crate::engine::layouter::types::{
+    Background, Color, Gradient, InfoNode, NodeKind, TextDecoration, TextStyle,
+};
 use smol_str::SmolStr;
 use ui_layout::{LayoutChild, LayoutNode};
 
@@ -18,6 +20,13 @@ pub enum DrawCommand {
         width: f32,
         height: f32,
         color: Color,
+    },
+    DrawGradientRect {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        gradient: Gradient,
     },
     DrawPolygon {
         points: Vec<(f32, f32)>,
@@ -154,14 +163,26 @@ pub fn generate_draw_commands(
                     state.clip = true;
                 }
 
-                if style.background_color.3 > 0 {
-                    cmd_buf.push(DrawCommand::DrawRect {
-                        x: padding_box.x - border_box.x,
-                        y: padding_box.y - border_box.y,
-                        width: padding_box.width,
-                        height: padding_box.height,
-                        color: style.background_color,
-                    });
+                match &style.background {
+                    Background::Color(c) if c.3 > 0 => {
+                        cmd_buf.push(DrawCommand::DrawRect {
+                            x: padding_box.x - border_box.x,
+                            y: padding_box.y - border_box.y,
+                            width: padding_box.width,
+                            height: padding_box.height,
+                            color: *c,
+                        });
+                    }
+                    Background::Gradient(g) => {
+                        cmd_buf.push(DrawCommand::DrawGradientRect {
+                            x: padding_box.x - border_box.x,
+                            y: padding_box.y - border_box.y,
+                            width: padding_box.width,
+                            height: padding_box.height,
+                            gradient: g.clone(),
+                        });
+                    }
+                    _ => {}
                 }
 
                 let dx = content_box.x - border_box.x;

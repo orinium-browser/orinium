@@ -811,6 +811,7 @@ impl<'a> Parser<'a> {
                         "%" => Unit::Percent,
                         "vw" => Unit::Vw,
                         "vh" => Unit::Vh,
+                        "deg" => Unit::Deg,
                         _ => Unit::Px,
                     };
                     values.push(CssValue::Length(value, unit));

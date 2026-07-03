@@ -125,7 +125,7 @@ impl TextRenderer {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
+                buffers: &[Some(wgpu::VertexBufferLayout {
                     array_stride: size_of::<GlyphVertex>() as wgpu::BufferAddress,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &[
@@ -151,7 +151,7 @@ impl TextRenderer {
                             shader_location: 3,
                         },
                     ],
-                }],
+                })],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -296,13 +296,16 @@ impl TextRenderer {
 
                     let gx = base_x + glyph.x;
                     let gy = base_y + glyph.y;
+                    let gw = glyph.width;
+                    let gh = glyph.height;
 
-                    // Cull against clip rect
-                    if gx + glyph.width <= clip_l
-                        || gx >= clip_r
-                        || gy + glyph.height <= clip_t
-                        || gy >= clip_b
-                    {
+                    // Compute visible portion against clip rect
+                    let vis_l = gx.max(clip_l);
+                    let vis_t = gy.max(clip_t);
+                    let vis_r = (gx + gw).min(clip_r);
+                    let vis_b = (gy + gh).min(clip_b);
+
+                    if vis_l >= vis_r || vis_t >= vis_b {
                         continue;
                     }
 
@@ -338,11 +341,11 @@ impl TextRenderer {
                             }
                         };
 
-                    // Convert screen coords to NDC
-                    let quad_x1 = ndc_x(gx);
-                    let quad_y1 = ndc_y(gy);
-                    let quad_x2 = ndc_x(gx + glyph.width);
-                    let quad_y2 = ndc_y(gy + glyph.height);
+                    // Convert visible rect to NDC
+                    let quad_x1 = ndc_x(vis_l);
+                    let quad_y1 = ndc_y(vis_t);
+                    let quad_x2 = ndc_x(vis_r);
+                    let quad_y2 = ndc_y(vis_b);
 
                     // NDC Y is flipped: upper-left becomes min, lower-right becomes max
                     let (qy1, qy2) = if quad_y1 < quad_y2 {
@@ -350,6 +353,12 @@ impl TextRenderer {
                     } else {
                         (quad_y2, quad_y1)
                     };
+
+                    // Compute UVs for the visible portion
+                    let u0 = u + (vis_l - gx) / gw * uw;
+                    let u1 = u + (vis_r - gx) / gw * uw;
+                    let v0 = v + (vis_b - gy) / gh * uh;
+                    let v1 = v + (vis_t - gy) / gh * uh;
 
                     let idx = self.vertices.len() as u32;
                     let layer_f = layer as f32;
@@ -365,25 +374,25 @@ impl TextRenderer {
                     self.vertices.extend_from_slice(&[
                         GlyphVertex {
                             position: [quad_x1, qy1],
-                            tex_coord: [u, v + uh],
+                            tex_coord: [u0, v0],
                             layer: layer_f,
                             color: color_arr,
                         },
                         GlyphVertex {
                             position: [quad_x2, qy1],
-                            tex_coord: [u + uw, v + uh],
+                            tex_coord: [u1, v0],
                             layer: layer_f,
                             color: color_arr,
                         },
                         GlyphVertex {
                             position: [quad_x2, qy2],
-                            tex_coord: [u + uw, v],
+                            tex_coord: [u1, v1],
                             layer: layer_f,
                             color: color_arr,
                         },
                         GlyphVertex {
                             position: [quad_x1, qy2],
-                            tex_coord: [u, v],
+                            tex_coord: [u0, v1],
                             layer: layer_f,
                             color: color_arr,
                         },

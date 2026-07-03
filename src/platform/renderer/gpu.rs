@@ -1,5 +1,8 @@
 //! wgpuを使用してGPUで描画するためのコンテキストと処理を提供するモジュール
 
+use crate::engine::layouter::types::{
+    Color, ColorStop, Gradient, GradientKind, RadialShape, RadialSizeKind,
+};
 use crate::engine::renderer_model::DrawCommand;
 use anyhow::Result;
 use std::sync::Arc;
@@ -96,6 +99,10 @@ impl GpuRenderer {
                 power_preference: wgpu::PowerPreference::default(),
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
+                // This is currently only used for the browser's rendering backend, but we
+                // enable limit bucketing preemptively in case WebGPU is exposed to web content
+                // in the future.
+                apply_limit_buckets: true,
             })
             .await?;
 
@@ -124,6 +131,9 @@ impl GpuRenderer {
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
+            // Use automatic color space selection until browser-level color
+            // management and CSS color spaces are implemented.
+            color_space: wgpu::SurfaceColorSpace::Auto,
             width: size.width,
             height: size.height,
             present_mode: surface_caps.present_modes[0],
@@ -156,7 +166,7 @@ impl GpuRenderer {
             vertex: wgpu::VertexState {
                 module: &main_shader,
                 entry_point: Some("vs_main"),
-                buffers: &[Vertex::desc()],
+                buffers: &[Some(Vertex::desc())],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -391,15 +401,98 @@ impl GpuRenderer {
                     let color = color.to_linear_f32_array();
 
                     #[rustfmt::skip]
-                    vertices.extend_from_slice(&[
-                        Vertex { position: [px1, py1, 0.0], color },
-                        Vertex { position: [px1, py2, 0.0], color },
-                        Vertex { position: [px2, py1, 0.0], color },
+                vertices.extend_from_slice(&[
+                    Vertex { position: [px1, py1, 0.0], color },
+                    Vertex { position: [px1, py2, 0.0], color },
+                    Vertex { position: [px2, py1, 0.0], color },
 
-                        Vertex { position: [px2, py1, 0.0], color },
-                        Vertex { position: [px1, py2, 0.0], color },
-                        Vertex { position: [px2, py2, 0.0], color },
-                    ]);
+                    Vertex { position: [px2, py1, 0.0], color },
+                    Vertex { position: [px1, py2, 0.0], color },
+                    Vertex { position: [px2, py2, 0.0], color },
+                ]);
+                }
+
+                // Gradient Rectangle
+                DrawCommand::DrawGradientRect {
+                    x,
+                    y,
+                    width: w,
+                    height: h,
+                    gradient,
+                } => {
+                    let (tdx, tdy) = current_transform(&transform_stack);
+                    let mut x1 = (x + tdx) * sf;
+                    let mut y1 = (y + tdy) * sf;
+                    let mut x2 = x1 + w * sf;
+                    let mut y2 = y1 + h * sf;
+
+                    let clip = current_clip(&clip_stack);
+
+                    if x2 <= clip.x * sf
+                        || x1 >= (clip.x + clip.w) * sf
+                        || y2 <= clip.y * sf
+                        || y1 >= (clip.y + clip.h) * sf
+                    {
+                        continue;
+                    }
+
+                    x1 = x1.max(clip.x * sf);
+                    y1 = y1.max(clip.y * sf);
+                    x2 = x2.min((clip.x + clip.w) * sf);
+                    y2 = y2.min((clip.y + clip.h) * sf);
+
+                    let logical_corners = [
+                        ((x + tdx) * sf, (y + tdy) * sf),         // TL
+                        ((x + tdx) * sf, (y + tdy + h) * sf),     // BL
+                        ((x + tdx + w) * sf, (y + tdy) * sf),     // TR
+                        ((x + tdx + w) * sf, (y + tdy + h) * sf), // BR
+                    ];
+
+                    match &gradient.kind {
+                        GradientKind::Linear { .. } => {
+                            let visible_corners = [(x1, y1), (x1, y2), (x2, y1), (x2, y2)];
+
+                            let corner_colors = compute_gradient_corner_colors_extent(
+                                gradient,
+                                &logical_corners,
+                                &visible_corners,
+                            );
+                            let colors_lin = [
+                                corner_colors[0].to_linear_f32_array(),
+                                corner_colors[1].to_linear_f32_array(),
+                                corner_colors[2].to_linear_f32_array(),
+                                corner_colors[3].to_linear_f32_array(),
+                            ];
+                            emit_rect_vertices(
+                                &mut vertices,
+                                x1,
+                                y1,
+                                x2,
+                                y2,
+                                screen_width,
+                                screen_height,
+                                colors_lin,
+                            );
+                        }
+                        GradientKind::Radial { .. } => {
+                            let (cx, cy, rx, ry) =
+                                compute_radial_params(&gradient.kind, &logical_corners);
+                            emit_radial_gradient_vertices(
+                                &mut vertices,
+                                x1,
+                                y1,
+                                x2,
+                                y2,
+                                screen_width,
+                                screen_height,
+                                cx,
+                                cy,
+                                rx,
+                                ry,
+                                &gradient.stops,
+                            );
+                        }
+                    }
                 }
 
                 // Text
@@ -771,7 +864,7 @@ impl GpuRenderer {
         self.queue.submit(std::iter::once(encoder.finish()));
 
         // フレームを画面に表示
-        output.present();
+        self.queue.present(output);
 
         Ok(())
     }
@@ -820,6 +913,329 @@ impl GpuRenderer {
     }
 }
 
+/// Compute the 4 corner colors for a linear gradient rectangle.
+///
+/// `extent_corners` define the full gradient extent (min/max projection).
+/// `sample_corners` are the actual corners to compute colors for (usually the clipped rect).
+/// corners layout: [TL, BL, TR, BR] in physical (pre-NDC) screen coordinates.
+fn compute_gradient_corner_colors_extent(
+    gradient: &Gradient,
+    extent_corners: &[(f32, f32); 4],
+    sample_corners: &[(f32, f32); 4],
+) -> [Color; 4] {
+    let GradientKind::Linear { angle } = &gradient.kind else {
+        return [Color(0, 0, 0, 0); 4];
+    };
+    let rad = angle.to_radians();
+    let dir_x = rad.sin();
+    let dir_y = -rad.cos();
+
+    // Compute gradient extent from the full (unclipped) rectangle
+    let extent_projs: Vec<f32> = extent_corners
+        .iter()
+        .map(|(cx, cy)| cx * dir_x + cy * dir_y)
+        .collect();
+    let min_p = extent_projs.iter().cloned().fold(f32::INFINITY, f32::min);
+    let max_p = extent_projs
+        .iter()
+        .cloned()
+        .fold(f32::NEG_INFINITY, f32::max);
+    let range = max_p - min_p;
+
+    // Sample the gradient at each of the visible (clipped) corners
+    let mut colors = [Color(0, 0, 0, 0); 4];
+    for (i, (cx, cy)) in sample_corners.iter().enumerate() {
+        let p = cx * dir_x + cy * dir_y;
+        let t = if range > 0.0 {
+            (p - min_p) / range
+        } else {
+            0.0
+        };
+        colors[i] = sample_gradient_stops(&gradient.stops, t);
+    }
+    colors
+}
+
+/// Returns the required ellipse radius `rx` (in the x direction) such that
+/// an ellipse centered with aspect ratio `w/h` passes through a point at
+/// offset `(dx, dy)` from its center.
+///
+/// The derivation:
+///   (dx/rx)² + (dy/ry)² = 1   and   ry = rx * h/w
+///   ⇒  rx² = dx² + dy² * w²/h²
+fn ellipse_rx_for_corner(dx: f32, dy: f32, w: f32, h: f32) -> f32 {
+    if h <= 0.0 || w <= 0.0 {
+        return dx;
+    }
+    (dx * dx + dy * dy * (w / h) * (w / h)).sqrt()
+}
+
+fn compute_radial_params(kind: &GradientKind, corners: &[(f32, f32); 4]) -> (f32, f32, f32, f32) {
+    let GradientKind::Radial {
+        shape,
+        size,
+        position,
+    } = kind
+    else {
+        return (0.0, 0.0, 1.0, 1.0);
+    };
+
+    let min_x = corners.iter().map(|c| c.0).fold(f32::INFINITY, f32::min);
+    let max_x = corners
+        .iter()
+        .map(|c| c.0)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let min_y = corners.iter().map(|c| c.1).fold(f32::INFINITY, f32::min);
+    let max_y = corners
+        .iter()
+        .map(|c| c.1)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let w = max_x - min_x;
+    let h = max_y - min_y;
+    let cx = min_x + w * position.0;
+    let cy = min_y + h * position.1;
+
+    log::trace!(
+        "compute_radial_params: corners=[({:.1},{:.1}),({:.1},{:.1}),({:.1},{:.1}),({:.1},{:.1})] \
+         box=({:.1},{:.1}) center=({:.1},{:.1}) shape={:?} size={:?}",
+        corners[0].0,
+        corners[0].1,
+        corners[1].0,
+        corners[1].1,
+        corners[2].0,
+        corners[2].1,
+        corners[3].0,
+        corners[3].1,
+        w,
+        h,
+        cx,
+        cy,
+        shape,
+        size,
+    );
+
+    let (rx, ry) = match (shape, size) {
+        (RadialShape::Circle, RadialSizeKind::ClosestSide) => {
+            let d = (cx - min_x)
+                .min(max_x - cx)
+                .min((cy - min_y).min(max_y - cy));
+            (d, d)
+        }
+        (RadialShape::Circle, RadialSizeKind::FarthestSide) => {
+            let d = (cx - min_x)
+                .max(max_x - cx)
+                .max((cy - min_y).max(max_y - cy));
+            (d, d)
+        }
+        (RadialShape::Circle, RadialSizeKind::ClosestCorner) => {
+            let d = corners
+                .iter()
+                .map(|(px, py)| ((px - cx).powi(2) + (py - cy).powi(2)).sqrt())
+                .fold(f32::INFINITY, f32::min);
+            (d, d)
+        }
+        (RadialShape::Circle, RadialSizeKind::FarthestCorner) => {
+            let d = corners
+                .iter()
+                .map(|(px, py)| ((px - cx).powi(2) + (py - cy).powi(2)).sqrt())
+                .fold(0.0f32, f32::max);
+            (d, d)
+        }
+        (RadialShape::Ellipse, RadialSizeKind::ClosestSide) => {
+            let rx = (cx - min_x).min(max_x - cx);
+            let ry = (cy - min_y).min(max_y - cy);
+            (rx, ry)
+        }
+        (RadialShape::Ellipse, RadialSizeKind::FarthestSide) => {
+            let rx = (cx - min_x).max(max_x - cx);
+            let ry = (cy - min_y).max(max_y - cy);
+            (rx, ry)
+        }
+        (RadialShape::Ellipse, RadialSizeKind::ClosestCorner) => {
+            let mut best_rx = f32::INFINITY;
+            let mut best_ry = f32::INFINITY;
+            for (px, py) in corners.iter() {
+                let dx = (px - cx).abs();
+                let dy = (py - cy).abs();
+                let rx = ellipse_rx_for_corner(dx, dy, w, h);
+                let ry = rx * h / w;
+                if rx < best_rx {
+                    best_rx = rx;
+                    best_ry = ry;
+                }
+            }
+            (best_rx, best_ry)
+        }
+        (RadialShape::Ellipse, RadialSizeKind::FarthestCorner) => {
+            let mut best_rx = 0.0f32;
+            let mut best_ry = 0.0f32;
+            for (px, py) in corners.iter() {
+                let dx = (px - cx).abs();
+                let dy = (py - cy).abs();
+                let rx = ellipse_rx_for_corner(dx, dy, w, h);
+                let ry = rx * h / w;
+                if rx > best_rx {
+                    best_rx = rx;
+                    best_ry = ry;
+                }
+            }
+            (best_rx, best_ry)
+        }
+    };
+
+    let rx = rx.max(0.001);
+    let ry = ry.max(0.001);
+
+    log::trace!(
+        "compute_radial_params: result cx={:.1} cy={:.1} rx={:.1} ry={:.1}",
+        cx,
+        cy,
+        rx,
+        ry,
+    );
+
+    (cx, cy, rx, ry)
+}
+
+fn color_at_point(cx: f32, cy: f32, rx: f32, ry: f32, px: f32, py: f32) -> f32 {
+    let dx = px - cx;
+    let dy = py - cy;
+    ((dx / rx).powi(2) + (dy / ry).powi(2))
+        .sqrt()
+        .clamp(0.0, 1.0)
+}
+
+fn emit_rect_vertices(
+    vertices: &mut Vec<Vertex>,
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+    screen_width: f32,
+    screen_height: f32,
+    colors: [[f32; 4]; 4],
+) {
+    let ndc = |v: f32, max: f32| (v / max) * 2.0 - 1.0;
+    let px1 = ndc(x1, screen_width);
+    let py1 = -ndc(y1, screen_height);
+    let px2 = ndc(x2, screen_width);
+    let py2 = -ndc(y2, screen_height);
+
+    #[rustfmt::skip]
+    vertices.extend_from_slice(&[
+        Vertex { position: [px1, py1, 0.0], color: colors[0] },
+        Vertex { position: [px1, py2, 0.0], color: colors[1] },
+        Vertex { position: [px2, py1, 0.0], color: colors[2] },
+        Vertex { position: [px2, py1, 0.0], color: colors[2] },
+        Vertex { position: [px1, py2, 0.0], color: colors[1] },
+        Vertex { position: [px2, py2, 0.0], color: colors[3] },
+    ]);
+}
+
+/// Subdivide a radial gradient rectangle into an NxN grid for proper rendering.
+fn emit_radial_gradient_vertices(
+    vertices: &mut Vec<Vertex>,
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+    screen_width: f32,
+    screen_height: f32,
+    cx: f32,
+    cy: f32,
+    rx: f32,
+    ry: f32,
+    stops: &[ColorStop],
+) {
+    const SUBDIV: u32 = 32;
+    let rect_w = x2 - x1;
+    let rect_h = y2 - y1;
+    let step_x = rect_w / SUBDIV as f32;
+    let step_y = rect_h / SUBDIV as f32;
+
+    for gy in 0..SUBDIV {
+        for gx in 0..SUBDIV {
+            let sx1 = x1 + gx as f32 * step_x;
+            let sy1 = y1 + gy as f32 * step_y;
+            let sx2 = sx1 + step_x;
+            let sy2 = sy1 + step_y;
+
+            let t_tl = color_at_point(cx, cy, rx, ry, sx1, sy1);
+            let t_bl = color_at_point(cx, cy, rx, ry, sx1, sy2);
+            let t_tr = color_at_point(cx, cy, rx, ry, sx2, sy1);
+            let t_br = color_at_point(cx, cy, rx, ry, sx2, sy2);
+
+            let colors = [
+                sample_gradient_stops(stops, t_tl).to_linear_f32_array(),
+                sample_gradient_stops(stops, t_bl).to_linear_f32_array(),
+                sample_gradient_stops(stops, t_tr).to_linear_f32_array(),
+                sample_gradient_stops(stops, t_br).to_linear_f32_array(),
+            ];
+
+            emit_rect_vertices(
+                vertices,
+                sx1,
+                sy1,
+                sx2,
+                sy2,
+                screen_width,
+                screen_height,
+                colors,
+            );
+        }
+    }
+}
+
+/// Sample a gradient's color stops at normalized position `t` (0.0–1.0).
+fn sample_gradient_stops(stops: &[ColorStop], t: f32) -> Color {
+    if stops.is_empty() {
+        return Color(0, 0, 0, 0);
+    }
+    if stops.len() == 1 {
+        return stops[0].color;
+    }
+
+    let t = t.clamp(0.0, 1.0);
+    let last = stops.len() - 1;
+
+    for i in 0..last {
+        let pos_i = stops[i]
+            .position
+            .unwrap_or(if i == 0 { 0.0 } else { i as f32 / last as f32 });
+        let pos_j = stops[i + 1].position.unwrap_or(if i + 1 == last {
+            1.0
+        } else {
+            (i + 1) as f32 / last as f32
+        });
+
+        if t >= pos_i && t <= pos_j {
+            let local = if pos_j > pos_i {
+                (t - pos_i) / (pos_j - pos_i)
+            } else {
+                0.0
+            };
+            return lerp_color(stops[i].color, stops[i + 1].color, local);
+        }
+    }
+
+    if t <= stops[0].position.unwrap_or(0.0) {
+        return stops[0].color;
+    }
+    stops[last].color
+}
+
+fn lerp_color(a: Color, b: Color, t: f32) -> Color {
+    // Interpolate in linear RGB space for correct color mixing
+    let al = a.to_linear_f32_array();
+    let bl = b.to_linear_f32_array();
+    Color::from_linear_f32_array([
+        al[0] + (bl[0] - al[0]) * t,
+        al[1] + (bl[1] - al[1]) * t,
+        al[2] + (bl[2] - al[2]) * t,
+        al[3] + (bl[3] - al[3]) * t,
+    ])
+}
+
 fn select_wgpu_backends() -> wgpu::Backends {
     if let Ok(value) = env::var("ORINIUM_WGPU_BACKEND") {
         match value.to_lowercase().as_str() {
@@ -841,4 +1257,373 @@ fn select_wgpu_backends() -> wgpu::Backends {
     }
 
     wgpu::Backends::PRIMARY
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::layouter::types::{
+        ColorStop, Gradient, GradientKind, RadialShape, RadialSizeKind,
+    };
+
+    // ── ellipse_rx_for_corner ──────────────────────────────────────────
+
+    #[test]
+    fn test_ellipse_rx_for_corner_centered() {
+        // Box 200x100, center (100,50), corner (200,100)
+        // dx=100, dy=50, w=200, h=100
+        // rx = sqrt(100^2 + 50^2 * (200/100)^2) = sqrt(10000 + 2500*4) = sqrt(20000) ≈ 141.42
+        let rx = ellipse_rx_for_corner(100.0, 50.0, 200.0, 100.0);
+        let expected = (20000.0f32).sqrt();
+        assert!(
+            (rx - expected).abs() < 0.01,
+            "rx={} expected={}",
+            rx,
+            expected
+        );
+    }
+
+    #[test]
+    fn test_ellipse_rx_for_corner_square() {
+        // Box 100x100, center (0,0), corner (100,100)
+        // dx=100, dy=100, w=100, h=100
+        // rx = sqrt(100^2 + 100^2 * (100/100)^2) = sqrt(20000) ≈ 141.42
+        let rx = ellipse_rx_for_corner(100.0, 100.0, 100.0, 100.0);
+        let expected = (20000.0f32).sqrt();
+        assert!(
+            (rx - expected).abs() < 0.01,
+            "rx={} expected={}",
+            rx,
+            expected
+        );
+    }
+
+    #[test]
+    fn test_ellipse_rx_for_corner_zero_box() {
+        // Degenerate box: h=0
+        assert_eq!(ellipse_rx_for_corner(50.0, 30.0, 100.0, 0.0), 50.0);
+        assert_eq!(ellipse_rx_for_corner(50.0, 30.0, 0.0, 100.0), 50.0);
+    }
+
+    // ── color_at_point ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_color_at_point_center() {
+        let d = color_at_point(100.0, 100.0, 50.0, 50.0, 100.0, 100.0);
+        assert!((d - 0.0).abs() < 1e-6, "d={}", d);
+    }
+
+    #[test]
+    fn test_color_at_point_on_edge() {
+        let d = color_at_point(100.0, 100.0, 50.0, 50.0, 150.0, 100.0);
+        assert!((d - 1.0).abs() < 1e-6, "d={}", d);
+    }
+
+    #[test]
+    fn test_color_at_point_outside() {
+        let d = color_at_point(100.0, 100.0, 50.0, 50.0, 200.0, 200.0);
+        assert!((d - 1.0).abs() < 1e-6, "d={}", d);
+    }
+
+    #[test]
+    fn test_color_at_point_ellipse() {
+        // Point (50, 25) on ellipse rx=100, ry=50
+        // distance = sqrt((50/100)^2 + (25/50)^2) = sqrt(0.25+0.25) = sqrt(0.5) ≈ 0.707
+        let d = color_at_point(0.0, 0.0, 100.0, 50.0, 50.0, 25.0);
+        assert!((d - (0.5f32).sqrt()).abs() < 1e-6, "d={}", d);
+    }
+
+    // ── compute_radial_params ──────────────────────────────────────────
+
+    fn make_radial(shape: RadialShape, size: RadialSizeKind, position: (f32, f32)) -> GradientKind {
+        GradientKind::Radial {
+            shape,
+            size,
+            position,
+        }
+    }
+
+    fn corners_from_rect(x: f32, y: f32, w: f32, h: f32) -> [(f32, f32); 4] {
+        [(x, y), (x, y + h), (x + w, y), (x + w, y + h)]
+    }
+
+    #[test]
+    fn test_radial_circle_closest_side_centered() {
+        // 200x100 box, center (100,50)
+        let kind = make_radial(RadialShape::Circle, RadialSizeKind::ClosestSide, (0.5, 0.5));
+        let (_cx, _cy, rx, ry) =
+            compute_radial_params(&kind, &corners_from_rect(0.0, 0.0, 200.0, 100.0));
+        // closest side = min(100, 100, 50, 50) = 50
+        assert!((rx - 50.0).abs() < 0.01, "rx={}", rx);
+        assert!((ry - 50.0).abs() < 0.01, "ry={}", ry);
+    }
+
+    #[test]
+    fn test_radial_circle_farthest_corner_centered() {
+        // 200x100 box, center (100,50). Distance to any corner = sqrt(100^2+50^2) ≈ 111.80
+        let kind = make_radial(
+            RadialShape::Circle,
+            RadialSizeKind::FarthestCorner,
+            (0.5, 0.5),
+        );
+        let (_cx, _cy, rx, ry) =
+            compute_radial_params(&kind, &corners_from_rect(0.0, 0.0, 200.0, 100.0));
+        let expected = ((100.0f32 * 100.0 + 50.0 * 50.0) as f32).sqrt();
+        assert!(
+            (rx - expected).abs() < 0.01,
+            "rx={} expected={}",
+            rx,
+            expected
+        );
+        assert!((ry - expected).abs() < 0.01, "ry={}", ry);
+    }
+
+    #[test]
+    fn test_radial_ellipse_closest_side_centered() {
+        let kind = make_radial(
+            RadialShape::Ellipse,
+            RadialSizeKind::ClosestSide,
+            (0.5, 0.5),
+        );
+        let (_cx, _cy, rx, ry) =
+            compute_radial_params(&kind, &corners_from_rect(0.0, 0.0, 200.0, 100.0));
+        assert!((rx - 100.0).abs() < 0.01, "rx={}", rx);
+        assert!((ry - 50.0).abs() < 0.01, "ry={}", ry);
+    }
+
+    #[test]
+    fn test_radial_ellipse_farthest_side_centered() {
+        let kind = make_radial(
+            RadialShape::Ellipse,
+            RadialSizeKind::FarthestSide,
+            (0.5, 0.5),
+        );
+        let (_cx, _cy, rx, ry) =
+            compute_radial_params(&kind, &corners_from_rect(0.0, 0.0, 200.0, 100.0));
+        assert!((rx - 100.0).abs() < 0.01, "rx={}", rx);
+        assert!((ry - 50.0).abs() < 0.01, "ry={}", ry);
+    }
+
+    #[test]
+    fn test_radial_ellipse_closest_corner_centered() {
+        // All corners equidistant from center: rx = sqrt(100^2 + 50^2 * (200/100)^2) = sqrt(20000) ≈ 141.42
+        let kind = make_radial(
+            RadialShape::Ellipse,
+            RadialSizeKind::ClosestCorner,
+            (0.5, 0.5),
+        );
+        let (_cx, _cy, rx, ry) =
+            compute_radial_params(&kind, &corners_from_rect(0.0, 0.0, 200.0, 100.0));
+        let expected_rx = (20000.0f32).sqrt();
+        let expected_ry = expected_rx * 100.0 / 200.0;
+        assert!(
+            (rx - expected_rx).abs() < 0.01,
+            "rx={} expected={}",
+            rx,
+            expected_rx
+        );
+        assert!(
+            (ry - expected_ry).abs() < 0.01,
+            "ry={} expected={}",
+            ry,
+            expected_ry
+        );
+    }
+
+    #[test]
+    fn test_radial_ellipse_farthest_corner_centered() {
+        // Same as closest-corner for centered position (all corners equidistant)
+        let kind = make_radial(
+            RadialShape::Ellipse,
+            RadialSizeKind::FarthestCorner,
+            (0.5, 0.5),
+        );
+        let (_cx, _cy, rx, ry) =
+            compute_radial_params(&kind, &corners_from_rect(0.0, 0.0, 200.0, 100.0));
+        let expected_rx = (20000.0f32).sqrt();
+        let expected_ry = expected_rx * 100.0 / 200.0;
+        assert!(
+            (rx - expected_rx).abs() < 0.01,
+            "rx={} expected={}",
+            rx,
+            expected_rx
+        );
+        assert!(
+            (ry - expected_ry).abs() < 0.01,
+            "ry={} expected={}",
+            ry,
+            expected_ry
+        );
+    }
+
+    #[test]
+    fn test_radial_ellipse_closest_corner_offset() {
+        // Box 200x100, position (0.2, 0.3) → center at (40, 30)
+        // Closest corner = TL (0,0): dx=40, dy=30
+        // rx = sqrt(40^2 + 30^2 * (200/100)^2) = sqrt(1600 + 900*4) = sqrt(5200) ≈ 72.11
+        let kind = make_radial(
+            RadialShape::Ellipse,
+            RadialSizeKind::ClosestCorner,
+            (0.2, 0.3),
+        );
+        let (_cx, _cy, rx, ry) =
+            compute_radial_params(&kind, &corners_from_rect(0.0, 0.0, 200.0, 100.0));
+        let expected_rx = (5200.0f32).sqrt();
+        let expected_ry = expected_rx * 100.0 / 200.0;
+        assert!(
+            (rx - expected_rx).abs() < 0.1,
+            "rx={} expected={}",
+            rx,
+            expected_rx
+        );
+        assert!(
+            (ry - expected_ry).abs() < 0.1,
+            "ry={} expected={}",
+            ry,
+            expected_ry
+        );
+    }
+
+    #[test]
+    fn test_radial_ellipse_farthest_corner_offset() {
+        // Box 200x100, position (0.2, 0.3) → center at (40, 30)
+        // Farthest corner = BR (200,100): dx=160, dy=70
+        // rx = sqrt(160^2 + 70^2 * (200/100)^2) = sqrt(25600 + 4900*4) = sqrt(45200) ≈ 212.60
+        let kind = make_radial(
+            RadialShape::Ellipse,
+            RadialSizeKind::FarthestCorner,
+            (0.2, 0.3),
+        );
+        let (_cx, _cy, rx, ry) =
+            compute_radial_params(&kind, &corners_from_rect(0.0, 0.0, 200.0, 100.0));
+        let expected_rx = (45200.0f32).sqrt();
+        let expected_ry = expected_rx * 100.0 / 200.0;
+        assert!(
+            (rx - expected_rx).abs() < 0.1,
+            "rx={} expected={}",
+            rx,
+            expected_rx
+        );
+        assert!(
+            (ry - expected_ry).abs() < 0.1,
+            "ry={} expected={}",
+            ry,
+            expected_ry
+        );
+    }
+
+    // ── sample_gradient_stops / lerp_color ─────────────────────────────
+
+    #[test]
+    fn test_lerp_color_srgb_vs_linear() {
+        // Interpolation between red and blue at t=0.5 should differ
+        // between sRGB and linear space.
+        let red = Color(255, 0, 0, 255);
+        let blue = Color(0, 0, 255, 255);
+        let mixed = lerp_color(red, blue, 0.5);
+        // In sRGB space: (128, 0, 128)
+        // In linear space: ~ (188, 0, 188)  (perceptually mid-way)
+        assert!(
+            mixed.0 > 128,
+            "R should be >128 in linear lerp, got {}",
+            mixed.0
+        );
+        assert!(
+            mixed.2 > 128,
+            "B should be >128 in linear lerp, got {}",
+            mixed.2
+        );
+    }
+
+    #[test]
+    fn test_sample_gradient_single_stop() {
+        let stops = vec![ColorStop {
+            color: Color(255, 0, 0, 255),
+            position: None,
+        }];
+        let c = sample_gradient_stops(&stops, 0.5);
+        assert_eq!(c, Color(255, 0, 0, 255));
+    }
+
+    #[test]
+    fn test_sample_gradient_two_stops() {
+        let stops = vec![
+            ColorStop {
+                color: Color(255, 0, 0, 255),
+                position: None,
+            },
+            ColorStop {
+                color: Color(0, 0, 255, 255),
+                position: None,
+            },
+        ];
+        let c0 = sample_gradient_stops(&stops, 0.0);
+        assert_eq!(c0, Color(255, 0, 0, 255));
+        let c1 = sample_gradient_stops(&stops, 1.0);
+        assert_eq!(c1, Color(0, 0, 255, 255));
+        // Middle should be a linear-space blend of red and blue
+        let mid = sample_gradient_stops(&stops, 0.5);
+        assert!(mid.0 > 0 && mid.0 < 255);
+        assert!(mid.2 > 0 && mid.2 < 255);
+    }
+
+    // ── compute_gradient_corner_colors_extent ──────────────────────────
+
+    #[test]
+    fn test_linear_gradient_extent_clipped() {
+        let gradient = Gradient {
+            kind: GradientKind::Linear { angle: 90.0 }, // left→right
+            stops: vec![
+                ColorStop {
+                    color: Color(255, 0, 0, 255),
+                    position: None,
+                },
+                ColorStop {
+                    color: Color(0, 0, 255, 255),
+                    position: None,
+                },
+            ],
+        };
+        // Full rect: x=0, y=0, w=200, h=100
+        let full = [(0.0, 0.0), (0.0, 100.0), (200.0, 0.0), (200.0, 100.0)];
+        // Visible rect: right portion x=120..200 (t=0.6..1.0), all corners should be more blue than red
+        let visible = [(120.0, 0.0), (120.0, 100.0), (200.0, 0.0), (200.0, 100.0)];
+
+        let colors = compute_gradient_corner_colors_extent(&gradient, &full, &visible);
+        for (i, c) in colors.iter().enumerate() {
+            assert!(
+                c.2 > c.0,
+                "Corner {} should be more blue (got r={}, b={})",
+                i,
+                c.0,
+                c.2
+            );
+        }
+        // TL/BL should be at t=0.6 (more red than TR/BR at t=1.0)
+        assert!(colors[0].0 > colors[2].0, "TL should have more red than TR");
+    }
+
+    #[test]
+    fn test_linear_gradient_extent_unclipped() {
+        let gradient = Gradient {
+            kind: GradientKind::Linear { angle: 90.0 },
+            stops: vec![
+                ColorStop {
+                    color: Color(255, 0, 0, 255),
+                    position: None,
+                },
+                ColorStop {
+                    color: Color(0, 0, 255, 255),
+                    position: None,
+                },
+            ],
+        };
+        let corners = [(0.0, 0.0), (0.0, 100.0), (200.0, 0.0), (200.0, 100.0)];
+        let colors = compute_gradient_corner_colors_extent(&gradient, &corners, &corners);
+        // TL/BL should be red, TR/BR should be blue
+        assert_eq!(colors[0], Color(255, 0, 0, 255)); // TL
+        assert_eq!(colors[1], Color(255, 0, 0, 255)); // BL
+        assert_eq!(colors[2], Color(0, 0, 255, 255)); // TR
+        assert_eq!(colors[3], Color(0, 0, 255, 255)); // BR
+    }
 }

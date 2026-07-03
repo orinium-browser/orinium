@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="ja">
+    <head>
+        <meta charset="UTF-8" />
+        <title>Flex / Grid Test</title>
+        <style>
+            body {
+                font-family: sans-serif;
+                padding: 20px;
+                line-height: 1.6;
+            }
+
+            section {
+                margin-bottom: 50px;
+            }
+
+            h2 {
+                border-bottom: 2px solid #333;
+                padding-bottom: 5px;
+            }
+
+            .container {
+                border: 2px dashed #999;
+                padding: 10px;
+                margin-top: 10px;
+            }
+
+            .item {
+                background: #4a90e2;
+                color: white;
+                padding: 10px;
+                text-align: center;
+            }
+
+            /* ================= FLEXBOX ================= */
+
+            .flex {
+                display: flex;
+                gap: 10px;
+            }
+
+            .flex-column {
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+            }
+
+            .flex-wrap {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+            }
+
+            .justify-start {
+                display: flex;
+                justify-content: flex-start;
+                gap: 10px;
+            }
+
+            .justify-center {
+                display: flex;
+                justify-content: center;
+                gap: 10px;
+            }
+
+            .justify-end {
+                display: flex;
+                justify-content: flex-end;
+                gap: 10px;
+            }
+
+            .justify-between {
+                display: flex;
+                justify-content: space-between;
+            }
+
+            .align-center {
+                display: flex;
+                align-items: center;
+                height: 100px;
+                gap: 10px;
+                border: 1px solid #ccc;
+            }
+
+            .flex-grow {
+                flex: 1;
+            }
+
+            .flex-shrink {
+                flex-shrink: 1;
+            }
+
+            /* ================= GRID ================= */
+
+            .grid-2 {
+                display: grid;
+                grid-template-columns: repeat(2, 1fr);
+                gap: 10px;
+            }
+
+            .grid-3 {
+                display: grid;
+                grid-template-columns: repeat(3, 1fr);
+                gap: 10px;
+            }
+
+            .grid-auto {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+                gap: 10px;
+            }
+
+            .grid-area {
+                display: grid;
+                grid-template-areas:
+                    "header header"
+                    "sidebar main"
+                    "footer footer";
+                grid-template-columns: 1fr 2fr;
+                gap: 10px;
+            }
+
+            .header {
+                grid-area: header;
+                background: #2ecc71;
+            }
+
+            .sidebar {
+                grid-area: sidebar;
+                background: #e67e22;
+            }
+
+            .main {
+                grid-area: main;
+                background: #3498db;
+            }
+
+            .footer {
+                grid-area: footer;
+                background: #9b59b6;
+            }
+        </style>
+    </head>
+
+    <body>
+        <h1>Flex / Grid Test</h1>
+
+        <section>
+            <h2>Flex Basics</h2>
+            <div class="container flex">
+                <div class="item">1</div>
+                <div class="item">2</div>
+                <div class="item">3</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>Flex Direction (Column)</h2>
+            <div class="container flex-column">
+                <div class="item">1</div>
+                <div class="item">2</div>
+                <div class="item">3</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>Flex Wrap</h2>
+            <div class="container flex-wrap">
+                <div class="item">1</div>
+                <div class="item">2</div>
+                <div class="item">3</div>
+                <div class="item">4</div>
+                <div class="item">5</div>
+                <div class="item">6</div>
+                <div class="item">7</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>Justify Content</h2>
+
+            <h3>flex-start</h3>
+            <div class="container justify-start">
+                <div class="item">1</div>
+                <div class="item">2</div>
+                <div class="item">3</div>
+            </div>
+
+            <h3>center</h3>
+            <div class="container justify-center">
+                <div class="item">1</div>
+                <div class="item">2</div>
+                <div class="item">3</div>
+            </div>
+
+            <h3>end</h3>
+            <div class="container justify-end">
+                <div class="item">1</div>
+                <div class="item">2</div>
+                <div class="item">3</div>
+            </div>
+
+            <h3>space-between</h3>
+            <div class="container justify-between">
+                <div class="item">1</div>
+                <div class="item">2</div>
+                <div class="item">3</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>Align Items</h2>
+            <div class="container align-center">
+                <div class="item">A</div>
+                <div class="item">B</div>
+                <div class="item">C</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>Flex Grow</h2>
+            <div class="container flex">
+                <div class="item flex-grow">grow</div>
+                <div class="item">fixed</div>
+                <div class="item">fixed</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>Grid 2 Columns</h2>
+            <div class="container grid-2">
+                <div class="item">1</div>
+                <div class="item">2</div>
+                <div class="item">3</div>
+                <div class="item">4</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>Grid 3 Columns</h2>
+            <div class="container grid-3">
+                <div class="item">1</div>
+                <div class="item">2</div>
+                <div class="item">3</div>
+                <div class="item">4</div>
+                <div class="item">5</div>
+                <div class="item">6</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>Auto-fit Grid</h2>
+            <div class="container grid-auto">
+                <div class="item">1</div>
+                <div class="item">2</div>
+                <div class="item">3</div>
+                <div class="item">4</div>
+                <div class="item">5</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>Grid Template Areas</h2>
+            <div class="container grid-area">
+                <div class="item header">header</div>
+                <div class="item sidebar">sidebar</div>
+                <div class="item main">main</div>
+                <div class="item footer">footer</div>
+            </div>
+        </section>
+    </body>
+</html>
