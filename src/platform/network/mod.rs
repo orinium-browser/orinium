@@ -97,7 +97,7 @@ impl NetworkCore {
     }
 }
 
-/// ネットワークスレッド
+/// ネットワークプロセスエントリ
 pub fn network_main(rx: IpcReceiver<NetworkCommand>, tx: IpcSender<NetworkMessage>) -> ! {
     let mut core = AsyncNetworkCore::new();
 
