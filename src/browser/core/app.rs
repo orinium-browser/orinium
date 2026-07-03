@@ -438,7 +438,22 @@ impl BrowserApp {
                 }
                 cmd_from_tick
             }
-            _ => browser_cmd,
+            BrowserCommand::RenameWindowTitle => {
+                if matches!(cmd_from_tick, BrowserCommand::RequestRedraw) {
+                    // tick() が追加の処理を要求 → RequestRedraw に昇格させる。
+                    // RequestRedraw のハンドラはタイトル設定も行うので情報は失われない。
+                    self.redraw(window_id, gpu);
+                    BrowserCommand::RequestRedraw
+                } else {
+                    browser_cmd
+                }
+            }
+            _ => {
+                if matches!(cmd_from_tick, BrowserCommand::RequestRedraw) {
+                    self.redraw(window_id, gpu);
+                }
+                browser_cmd
+            }
         }
     }
 
