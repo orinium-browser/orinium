@@ -665,6 +665,17 @@ impl<'a> Parser<'a> {
                     self.consume_token();
                 }
 
+                Token::Delim('*') => {
+                    current_selector.get_or_insert_with(|| Selector {
+                        tag: None,
+                        id: None,
+                        classes: vec![],
+                        pseudo_class: None,
+                        pseudo_element: None,
+                    });
+                    self.consume_token();
+                }
+
                 Token::Delim(',') => {
                     if let Some(sel) = current_selector.take() {
                         parts.push(SelectorPart {
