@@ -1,4 +1,5 @@
 use anyhow::Result;
+use orinium_browser::ProcessHandler;
 use orinium_browser::browser::{BrowserApp, Tab};
 use orinium_browser::platform::renderer::gpu::GpuRenderer;
 use std::collections::HashMap;
@@ -46,7 +47,8 @@ struct MultiWindowApp {
 
 impl MultiWindowApp {
     fn new() -> Result<Self> {
-        let mut browser = BrowserApp::new((900, 640), "Orinium Browser".to_string());
+        let mut browser = BrowserApp::new((900, 640), "Orinium Browser".into())
+            .expect("Failed to create browser instance");
 
         let mut pending_specs = Vec::new();
         for (i, spec) in WINDOWS.iter().enumerate() {
@@ -198,6 +200,10 @@ impl ApplicationHandler for MultiWindowApp {
 
 fn main() -> Result<()> {
     env_logger::init();
+
+    if let Some(handler) = ProcessHandler::current() {
+        handler.handle();
+    }
 
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);

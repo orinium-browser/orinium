@@ -1,8 +1,7 @@
 //! Browser resource loading process, supports HTTP and resource:/// schemes.
 
-use crate::platform::network::{NetworkCore, NetworkError};
+use crate::platform::network::{NetworkCore, NetworkError, StatusCode};
 use anyhow::{Result, anyhow};
-use hyper::StatusCode;
 use std::{fmt, rc::Rc};
 use url::Url;
 
@@ -33,7 +32,7 @@ use url::Url;
 /// use std::rc::Rc;
 /// use orinium_browser::platform::network::NetworkCore;
 ///
-/// let network = Some(Rc::new(NetworkCore::new()));
+/// let network = Some(Rc::new(NetworkCore::new().unwrap()));
 /// let loader = BrowserResourceLoader::new(network);
 ///
 /// // Typical call (pseudocode):
@@ -87,7 +86,7 @@ impl BrowserResourceLoader {
                 response: data
                     .map(|data| BrowserResponse {
                         url: url.to_string(),
-                        status: StatusCode::OK,
+                        status: hyper::StatusCode::OK.into(),
                         body: data,
                         headers: vec![],
                     })
@@ -104,7 +103,7 @@ impl BrowserResourceLoader {
             let data = ResourceURI::load(url.as_ref());
             data.map(|data| BrowserResponse {
                 url: url.to_string(),
-                status: StatusCode::OK,
+                status: hyper::StatusCode::OK.into(),
                 body: data,
                 headers: vec![],
             })

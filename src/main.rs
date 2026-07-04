@@ -1,12 +1,14 @@
 use anyhow::Result;
 use orinium_browser::browser::{BrowserApp, Tab};
-use std::env;
+use orinium_browser::ProcessHandler;
 
 fn main() -> Result<()> {
     #[cfg(feature = "dhat-heap")]
     let _profiler = dhat::Profiler::new_heap();
 
-    let _args: Vec<String> = env::args().collect();
+    if let Some(handler) = ProcessHandler::current() {
+        handler.handle();
+    }
 
     env_logger::init();
 

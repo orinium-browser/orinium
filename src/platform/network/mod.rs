@@ -10,46 +10,61 @@ pub mod sender_pool;
 pub use cache::Cache;
 pub use config::NetworkConfig;
 pub use cookie_store::CookieStore;
-pub use core::Response;
+pub use core::{Response, StatusCode};
 pub use error::NetworkError;
-pub use hyper::http::{Request, StatusCode};
+pub use hyper::http::Request;
+use ipc_channel::IpcError;
 pub use sender_pool::HostKey;
 pub use sender_pool::{HttpSender, SenderPool};
 
+use serde::{Deserialize, Serialize};
+
 use core::AsyncNetworkCore;
 
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::thread;
+use crate::ParentChannels;
+use ipc_channel::ipc::{IpcOneShotServer, IpcReceiver, IpcSender};
+use std::{env, io, process};
 
+#[derive(Deserialize, Serialize)]
 pub enum NetworkCommand {
     Fetch { url: String, msg_id: usize },
     SetConfig(NetworkConfig),
 }
 
+#[derive(Deserialize, Serialize)]
 pub struct NetworkMessage {
     pub msg_id: usize,
     pub response: Result<Response, NetworkError>,
 }
 
 pub struct NetworkCore {
-    cmd_tx: Sender<NetworkCommand>,
-    msg_rx: Receiver<NetworkMessage>, // UI スレッド用
+    cmd_tx: IpcSender<NetworkCommand>,
+    msg_rx: IpcReceiver<NetworkMessage>, // UI スレッド用
 }
 
 impl Default for NetworkCore {
     fn default() -> Self {
-        Self::new()
+        Self::new().unwrap()
     }
 }
 
 impl NetworkCore {
-    pub fn new() -> Self {
-        let (cmd_tx, cmd_rx) = mpsc::channel();
-        let (msg_tx, msg_rx) = mpsc::channel();
+    pub fn new() -> Result<Self, io::Error> {
+        let (server, server_name) =
+            IpcOneShotServer::<ParentChannels<NetworkCommand, NetworkMessage>>::new()?;
 
-        thread::spawn(move || spawn_network_thread(cmd_rx, msg_tx));
+        process::Command::new(env::current_exe()?)
+            .arg("--child")
+            .arg(&server_name)
+            .arg("--type=network")
+            .spawn()?;
 
-        Self { cmd_tx, msg_rx }
+        let (_, channels) = server.accept().unwrap();
+
+        Ok(Self {
+            cmd_tx: channels.cmd_tx,
+            msg_rx: channels.msg_rx,
+        })
     }
 
     pub fn set_network_config(&self, cfg: NetworkConfig) {
@@ -82,11 +97,11 @@ impl NetworkCore {
     }
 }
 
-/// ネットワークスレッド
-fn spawn_network_thread(rx: Receiver<NetworkCommand>, tx: Sender<NetworkMessage>) {
+/// ネットワークプロセスエントリ
+pub fn network_main(rx: IpcReceiver<NetworkCommand>, tx: IpcSender<NetworkMessage>) -> ! {
     let mut core = AsyncNetworkCore::new();
 
-    for cmd in rx {
+    while let Ok(cmd) = rx.recv() {
         match cmd {
             NetworkCommand::SetConfig(cfg) => core.set_network_config(cfg),
             NetworkCommand::Fetch { url, msg_id } => {
@@ -98,5 +113,14 @@ fn spawn_network_thread(rx: Receiver<NetworkCommand>, tx: Sender<NetworkMessage>
                 });
             }
         }
+    }
+
+    let err = rx.recv().err().unwrap();
+
+    if matches!(err, IpcError::Disconnected) {
+        log::info!(target: "network", "IPC channel closed, exiting normally.");
+        std::process::exit(0)
+    } else {
+        panic!("IPC channel unexpectedly closed: {err}")
     }
 }

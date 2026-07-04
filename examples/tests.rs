@@ -1,4 +1,5 @@
 use orinium_browser::{
+    ProcessHandler,
     browser::{BrowserApp, Tab, core::resource_loader::BrowserResourceLoader},
     engine::{
         css::parser::Parser as CssParser,
@@ -26,6 +27,10 @@ use ui_layout::{LayoutEngine, LayoutNode};
 fn main() -> Result<()> {
     #[cfg(feature = "dhat-heap")]
     let _profiler = dhat::Profiler::new_heap();
+
+    if let Some(handler) = ProcessHandler::current() {
+        handler.handle();
+    }
 
     env_logger::init();
 
@@ -83,7 +88,7 @@ fn main() -> Result<()> {
                 if args.len() == 3 || args.len() == 4 || args.len() == 5 {
                     let url = &args[2];
                     println!("Parsing DOM for URL: {}", url);
-                    let net = NetworkCore::new();
+                    let net = NetworkCore::new().expect("Failed to create NetworkCore instansce");
                     let loader = BrowserResourceLoader::new(Some(Rc::new(net)));
                     let resp = loader
                         .fetch_blocking(url.parse()?)
@@ -133,7 +138,7 @@ fn main() -> Result<()> {
                 if args.len() == 3 {
                     let url = &args[2];
                     println!("Parsing CSSOM for URL: {}", url);
-                    let net = NetworkCore::new();
+                    let net = NetworkCore::new().expect("Failed to create NetworkCore instansce");
                     let loader = BrowserResourceLoader::new(Some(Rc::new(net)));
                     let resp = loader
                         .fetch_blocking(url.parse()?)
@@ -154,14 +159,14 @@ fn main() -> Result<()> {
                 if args.len() == 3 {
                     let url = &args[2];
                     println!("Sending request to URL: {}", url);
-                    let net = NetworkCore::new();
+                    let net = NetworkCore::new().expect("Failed to create NetworkCore instansce");
                     net.set_network_config(NetworkConfig {
                         follow_redirects: false,
                         ..Default::default()
                     });
                     match net.fetch_blocking(url) {
                         Ok(resp) => {
-                            println!("Response Status: {}", resp.status);
+                            println!("Response Status: {}", resp.status.as_u16());
                             println!("Response Headers:");
                             for (key, value) in &resp.headers {
                                 println!("{}: {}", key, value);
@@ -187,7 +192,7 @@ fn main() -> Result<()> {
                 if args.len() == 3 {
                     let url = &args[2];
                     println!("Fetching URL: {}", url);
-                    let net = NetworkCore::new();
+                    let net = NetworkCore::new().expect("Failed to create NetworkCore instansce");
                     match net.fetch_blocking(url) {
                         Ok(resp) => {
                             println!("Response Reason-Phrase: {}", resp.reason_phrase);
@@ -295,7 +300,7 @@ use orinium_browser::engine::layouter::types::InfoNode;
 fn build_layout_info(raw_url: &str) -> Result<(LayoutNode, InfoNode)> {
     let parsed_url: url::Url = raw_url.parse()?;
 
-    let net = NetworkCore::new();
+    let net = NetworkCore::new().expect("Failed to create NetworkCore instansce");
     let loader = BrowserResourceLoader::new(Some(Rc::new(net)));
     let resp = loader
         .fetch_blocking(parsed_url.clone())
@@ -348,7 +353,8 @@ fn build_layout_info(raw_url: &str) -> Result<(LayoutNode, InfoNode)> {
         }
     }
 
-    let css_loader = BrowserResourceLoader::new(Some(Rc::new(NetworkCore::new())));
+    let net = NetworkCore::new().expect("Failed to create NetworkCore instansce");
+    let css_loader = BrowserResourceLoader::new(Some(Rc::new(net)));
     for css_url in &style_links {
         println!("Fetching CSS: {}", css_url);
         if let Ok(css_resp) = css_loader.fetch_blocking(css_url.clone()) {
