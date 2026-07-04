@@ -71,6 +71,24 @@ pub struct GlyphMetrics {
 }
 
 /* ============================
+ * Glyph Cluster (for FlowLayouter)
+ * ============================ */
+
+/// A single glyph cluster produced by text shaping.
+///
+/// Carries the cluster's byte offset in the original text, its advance
+/// width, and whether a line break is permitted after it.
+#[derive(Debug, Clone)]
+pub struct GlyphCluster {
+    /// Byte offset of this cluster's first character in the original text.
+    pub byte_offset: usize,
+    /// Advance width in pixels.
+    pub width: f32,
+    /// Whether a line break is permitted immediately after this cluster.
+    pub break_allowed: bool,
+}
+
+/* ============================
  * Errors
  * ============================ */
 
@@ -105,6 +123,15 @@ pub trait TextMeasurer<S>: Send + Sync {
         &self,
         request: &TextMeasureRequest<S>,
     ) -> Result<Vec<MeasuredFragment>, TextMeasureError>;
+
+    /// Shape text and return cluster-level break-opportunity data.
+    ///
+    /// Unlike [`measure`](Self::measure), this returns per-cluster
+    /// data suitable for use with [`TextFlowLayouter`].
+    fn measure_shaped(
+        &self,
+        request: &TextMeasureRequest<S>,
+    ) -> Result<Vec<GlyphCluster>, TextMeasureError>;
 }
 
 /* ============================

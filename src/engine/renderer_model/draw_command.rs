@@ -1,5 +1,6 @@
 //! Draw command definition for rendering, which represents drawing instructions.
 
+use crate::engine::layouter::text_layouter::TextFlowLayouter;
 use crate::engine::layouter::types::{
     Background, Color, Gradient, InfoNode, NodeKind, TextDecoration, TextStyle,
 };
@@ -209,23 +210,33 @@ pub fn generate_draw_commands(
 
     for child_info in &info.children {
         match &child_info.kind {
-            NodeKind::Text { texts, style } => {
-                for text in texts {
-                    if let Some(LayoutChild::Fragment(frag_node)) = layout_iter.next() {
-                        let (x, y) = frag_node.placement.offset;
+            NodeKind::Text {
+                text: _,
+                style,
+                text_id,
+            } => {
+                if let Some(result) = TextFlowLayouter::get_result(*text_id) {
+                    for (i, line_text) in result.line_texts.iter().enumerate() {
+                        let span = &result.spans[i];
+                        let (x, y) = span.line_pos;
 
                         cmd_buf.push(DrawCommand::DrawText {
                             x,
                             y,
-                            text: text.into(),
+                            text: line_text.as_str().into(),
                             style: *style,
                         });
 
                         let font_size = style.font_size;
                         let line_thickness = (font_size * 0.08).max(1.0);
+                        let line_y_adj = if line_text.is_empty() {
+                            y
+                        } else {
+                            y + font_size
+                        };
                         let (line_y, draw) = match style.text_decoration {
                             TextDecoration::None => (0.0, false),
-                            TextDecoration::Underline => (y + font_size, true),
+                            TextDecoration::Underline => (line_y_adj, true),
                             TextDecoration::LineThrough => (y + font_size * 0.5, true),
                             TextDecoration::Overline => (y, true),
                         };
@@ -234,9 +245,9 @@ pub fn generate_draw_commands(
                             cmd_buf.push(DrawCommand::DrawRect {
                                 x,
                                 y: line_y,
-                                width: frag_node.node.width(),
+                                width: span.x_range.end - span.x_range.start,
                                 height: line_thickness,
-                                color: style.color,
+                                color: style.text_decoration_color.unwrap_or(style.color),
                             });
                         }
                     }

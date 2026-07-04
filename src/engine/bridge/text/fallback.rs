@@ -1,6 +1,6 @@
 //! Fallback text measurer without font engine dependency.
 
-use super::{TextMeasureError, TextMeasureRequest, TextMeasurer};
+use super::{GlyphCluster, TextMeasureError, TextMeasureRequest, TextMeasurer};
 use crate::engine::{bridge::text::MeasuredFragment, layouter::types::TextStyle};
 
 /// Fallback text measurer.
@@ -36,5 +36,34 @@ impl TextMeasurer<TextStyle> for FallbackTextMeasurer {
             .collect();
 
         Ok(fragments)
+    }
+
+    fn measure_shaped(
+        &self,
+        request: &TextMeasureRequest<TextStyle>,
+    ) -> Result<Vec<GlyphCluster>, TextMeasureError> {
+        let font_size = request.style.font_size.max(1.0);
+        let char_width = font_size * 0.6;
+
+        let mut clusters = Vec::new();
+        let text = &request.text;
+        let mut i = 0;
+
+        while i < text.len() {
+            let ch = text[i..].chars().next().unwrap();
+            let byte_len = ch.len_utf8();
+            let is_space = ch.is_whitespace();
+            let w = char_width;
+
+            clusters.push(GlyphCluster {
+                byte_offset: i,
+                width: w,
+                break_allowed: is_space,
+            });
+
+            i += byte_len;
+        }
+
+        Ok(clusters)
     }
 }

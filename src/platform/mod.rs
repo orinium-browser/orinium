@@ -7,5 +7,4 @@ pub mod system;
 
 pub mod audio;
 
-pub mod font;
 pub(crate) mod os;

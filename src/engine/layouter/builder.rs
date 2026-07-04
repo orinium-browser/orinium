@@ -1,11 +1,12 @@
 //! Layout builder, which transforms a DOM tree into a UI layout.
 
-use crate::engine::bridge::text::{self, FallbackTextMeasurer, MeasuredFragment, TextMeasurer};
+use crate::engine::bridge::text::{self, GlyphCluster};
 use crate::engine::css::{
     matcher::{ElementChain, ElementInfo},
     values::{CssValue, Unit},
 };
 use crate::engine::html::HtmlNodeType;
+use crate::engine::layouter::types::VerticalAlign;
 use crate::engine::tree::TreeNode;
 
 use std::cell::RefCell;
@@ -13,11 +14,12 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use ui_layout::{
-    AlignItems, BoxSizing, Display, FlexDirection, Fragment, InnerDisplay, ItemFragment,
-    JustifyContent, LayoutChild, LayoutNode, Length, LengthOrAuto, OuterDisplay, Style,
+    AlignItems, BoxSizing, Display, FlexDirection, InnerDisplay, ItemFragment, JustifyContent,
+    LayoutChild, LayoutNode, Length, LengthOrAuto, OuterDisplay, Style,
 };
 
 use super::css_resolver::ResolvedStyles;
+use super::text_layouter::TextFlowLayouter;
 use super::types::{
     Background, BorderStyle, Color, ColorStop, ContainerRole, ContainerStyle, FontStyle,
     FontWeight, Gradient, GradientKind, InfoNode, LineHeight, NodeKind, RadialShape,
@@ -178,7 +180,7 @@ pub fn build_layout_and_info(
 
     let child = InheritedCss { text_style };
 
-    let (mut kind, inline_fragments_opt) = if let HtmlNodeType::Text(t) = &html_node {
+    let (mut kind, inline_layouter_opt) = if let HtmlNodeType::Text(t) = &html_node {
         let t = normalize_whitespace(t);
         let t = match text_style.text_transform {
             TextTransform::None => t,
@@ -186,43 +188,10 @@ pub fn build_layout_and_info(
             TextTransform::Lowercase => t.to_ascii_lowercase(),
         };
 
-        let _t = std::time::Instant::now();
-        let measured = measurer
-            .measure(&text::TextMeasureRequest {
-                text: t.clone(),
-                style: text_style,
-            })
-            .expect("text measure failed");
-        let preview = if t.len() > 40 {
-            let cut = t.floor_char_boundary(40);
-            format!("{}...", &t[..cut])
-        } else {
-            t.clone()
-        };
-        log::info!(
-            target: "Layouter",
-            "measure inline: text={:?} len={} took={:?}",
-            preview,
-            t.len(),
-            _t.elapsed(),
-        );
+        let Length::Px(line_height) = style.line_height else { unreachable!() };
+        let (layouter, kind) = create_text_node(t, text_style, line_height, measurer);
 
-        let kind = NodeKind::Text {
-            texts: measured.iter().map(|f| f.text.clone()).collect(),
-            style: text_style,
-        };
-
-        let inline_fragments: Vec<ItemFragment> = measured
-            .into_iter()
-            .map(|f| {
-                ItemFragment::Fragment(Fragment {
-                    width: f.width,
-                    height: f.height,
-                })
-            })
-            .collect();
-
-        (kind, Some(inline_fragments))
+        (kind, Some(layouter))
     } else if let Some(name) = html_node.tag_name()
         && name == "a"
         && let Some(href) = html_node.get_attr("href")
@@ -254,10 +223,10 @@ pub fn build_layout_and_info(
         )
     };
 
-    // Process Children if there are no inline fragments (i.e. text nodes).
-    let (layout, info) = if let Some(inline_fragments) = inline_fragments_opt {
+    // Process Children if there are no inline flow layouter (i.e. text nodes).
+    let (layout, info) = if let Some(layouter) = inline_layouter_opt {
         /* -----------------------------
-           Text Node with inline fragments
+           Text Node with FlowLayouter
         ----------------------------- */
 
         let style = Style {
@@ -268,7 +237,7 @@ pub fn build_layout_and_info(
             ..style
         };
 
-        let layout = LayoutNode::with_children(style, inline_fragments);
+        let layout = LayoutNode::with_children(style, [LayoutChild::Object(Box::new(layouter))]);
 
         let info = InfoNode {
             kind,
@@ -324,39 +293,13 @@ pub fn build_layout_and_info(
                         TextTransform::Lowercase => t.to_ascii_lowercase(),
                     };
 
-                    let _t = std::time::Instant::now();
-                    let request = &text::TextMeasureRequest {
-                        text: t.clone(),
-                        style: text_style,
-                    };
-                    let measured = measurer.measure(request).unwrap_or_else(|_|
-                            // FallbackTextMeasurer won't return any errors.
-                            FallbackTextMeasurer.measure(request).unwrap());
-                    let preview = if t.len() > 40 {
-                        let cut = t.floor_char_boundary(40);
-                        format!("{}...", &t[..cut])
-                    } else {
-                        t.clone()
-                    };
-                    log::info!(
-                        target: "Layouter",
-                        "measure child: text={:?} len={} took={:?}",
-                        preview,
-                        t.len(),
-                        _t.elapsed(),
-                    );
+                    let Length::Px(line_height) = style.line_height else { unreachable!() };
+                    let (layouter, kind) = create_text_node(t, text_style, line_height, measurer);
 
-                    let text_kind = NodeKind::Text {
-                        texts: measured.iter().map(|f| f.text.clone()).collect(),
-                        style: text_style,
-                    };
-
-                    for fragment in &measured {
-                        layout_children.push(generate_fragment_node(fragment).into());
-                    }
+                    layout_children.push(LayoutChild::Object(Box::new(layouter)));
 
                     info_children.push(InfoNode {
-                        kind: text_kind,
+                        kind,
                         children: vec![],
                     });
                 } else {
@@ -431,15 +374,55 @@ fn normalize_whitespace(text: &str) -> String {
     result
 }
 
-fn generate_fragment_node(fragment: &MeasuredFragment) -> ItemFragment {
-    if fragment.text == "\n" {
-        ItemFragment::LineBreak
+/// Measure text and create a [`TextFlowLayouter`] + [`NodeKind::Text`].
+///
+/// Falls back to unshaped measurement when shaped measurement fails.
+fn create_text_node(
+    text: String,
+    text_style: TextStyle,
+    line_height: f32,
+    measurer: &dyn text::TextMeasurer<TextStyle>,
+) -> (TextFlowLayouter, NodeKind) {
+    let _t = std::time::Instant::now();
+    let request = text::TextMeasureRequest {
+        text: text.clone(),
+        style: text_style,
+    };
+    let clusters = measurer.measure_shaped(&request).unwrap_or_else(|_| {
+        measurer
+            .measure(&request)
+            .map(|ms| {
+                ms.into_iter()
+                    .map(|f| GlyphCluster {
+                        byte_offset: 0,
+                        width: f.width,
+                        break_allowed: true,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    });
+    let preview = if text.len() > 40 {
+        let cut = text.floor_char_boundary(40);
+        format!("{}...", &text[..cut])
     } else {
-        ItemFragment::Fragment(Fragment {
-            width: fragment.width,
-            height: fragment.height,
-        })
-    }
+        text.clone()
+    };
+    log::info!(
+        target: "Layouter",
+        "measure_shaped: text={:?} len={} took={:?}",
+        preview,
+        text.len(),
+        _t.elapsed(),
+    );
+
+    let layouter = TextFlowLayouter::new(text.clone(), text_style, clusters, line_height);
+    let kind = NodeKind::Text {
+        text,
+        style: text_style,
+        text_id: layouter.id,
+    };
+    (layouter, kind)
 }
 
 fn collect_candidates(
@@ -661,16 +644,13 @@ fn apply_declaration(
 
         ("line-height", CssValue::Number(factor)) => {
             text_style.line_height = LineHeight::Number(*factor);
-            style.line_height = Length::Px(text_style.font_size * factor);
         }
         ("line-height", CssValue::Keyword(v)) if v == "normal" => {
             text_style.line_height = LineHeight::Normal;
-            style.line_height = Length::Px(text_style.font_size * DEFAULT_LINE_FACTOR);
         }
         ("line-height", _) => {
             let len = resolve_css_len(name, value, text_style)?;
             text_style.line_height = LineHeight::Px(length_to_px(&len, text_style.font_size));
-            style.line_height = len;
         }
 
         ("font-weight", CssValue::Keyword(v)) => {
@@ -693,14 +673,48 @@ fn apply_declaration(
             };
         }
 
-        ("text-decoration", CssValue::Keyword(v)) => {
-            text_style.text_decoration = match v.as_str() {
-                "none" => TextDecoration::None,
-                "underline" => TextDecoration::Underline,
-                "line-through" => TextDecoration::LineThrough,
-                "overline" => TextDecoration::Overline,
-                _ => TextDecoration::None,
+        ("text-decoration", v) => {
+            let items: Vec<&CssValue> = match v {
+                CssValue::List(list) => list.iter().collect(),
+                _ => vec![v],
             };
+            for item in items {
+                match item {
+                    CssValue::Keyword(k) => match k.as_str() {
+                        "none" => text_style.text_decoration = TextDecoration::None,
+                        "underline" => text_style.text_decoration = TextDecoration::Underline,
+                        "line-through" => text_style.text_decoration = TextDecoration::LineThrough,
+                        "overline" => text_style.text_decoration = TextDecoration::Overline,
+                        _ => {}
+                    },
+                    _ => {
+                        if let Some(c) = resolve_css_color(name, item) {
+                            text_style.text_decoration_color = Some(c);
+                        }
+                    }
+                }
+            }
+        }
+
+        ("text-decoration-color", _) => {
+            if let Some(c) = resolve_css_color(name, value) {
+                text_style.text_decoration_color = Some(c);
+            }
+        }
+
+        ("vertical-align", CssValue::Keyword(v)) => {
+            match v.as_str() {
+                "sub" => {
+                    text_style.vertical_align = VerticalAlign::Sub;
+                }
+                "super" | "sup" => {
+                    text_style.vertical_align = VerticalAlign::Super;
+                }
+                "top" | "middle" | "bottom" => {
+                    // Keep default, ignore for now
+                }
+                _ => {}
+            }
         }
 
         ("text-transform", CssValue::Keyword(v)) => {
@@ -1504,8 +1518,8 @@ fn resolve_css_color(name: &str, css_color: &CssValue) -> Option<Color> {
 
         // rgb() / rgba() unified
         CssValue::Function(func, args) if func == "rgb" || func == "rgba" => {
-            // Extract numeric components, ignoring commas and handling '/'
-            let mut numbers = Vec::new();
+            let mut values = Vec::new();
+            let mut has_pct = false;
             let mut alpha: Option<f32> = None;
             let mut after_slash = false;
 
@@ -1518,23 +1532,48 @@ fn resolve_css_color(name: &str, css_color: &CssValue) -> Option<Color> {
                         if after_slash {
                             alpha = Some(*n);
                         } else {
-                            numbers.push(*n);
+                            values.push(*n);
+                        }
+                    }
+                    CssValue::Length(p, Unit::Percent) => {
+                        has_pct = true;
+                        if after_slash {
+                            alpha = Some(p / 100.0);
+                        } else {
+                            values.push(*p);
                         }
                     }
                     _ => return None,
                 }
             }
 
-            if numbers.len() != 3 {
+            // rgb(r, g, b) -> 3 values
+            // rgba(r, g, b, a) -> 4 values
+            // rgb(r g b / a) -> 3 values + after_slash
+            let (a, values) = if values.len() == 4 && alpha.is_none() {
+                (values[3], vec![values[0], values[1], values[2]])
+            } else if values.len() == 3 {
+                (alpha.unwrap_or(1.0), values)
+            } else {
                 return None;
-            }
+            };
 
-            let a = alpha.unwrap_or(1.0);
+            // CSS stores rgb values as 0-255 integers or 0.0-1.0 floats
+            // or 0%-100% (already handled above).
+            let map_channel = |v: f32| -> f32 {
+                if has_pct {
+                    v / 100.0 * 255.0
+                } else if v > 1.0 {
+                    v.clamp(0.0, 255.0)
+                } else {
+                    v * 255.0
+                }
+            };
 
             Some(Color(
-                (numbers[0] * 255.0).round() as u8,
-                (numbers[1] * 255.0).round() as u8,
-                (numbers[2] * 255.0).round() as u8,
+                map_channel(values[0]).round() as u8,
+                map_channel(values[1]).round() as u8,
+                map_channel(values[2]).round() as u8,
                 (a * 255.0).round() as u8,
             ))
         }

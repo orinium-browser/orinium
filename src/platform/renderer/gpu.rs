@@ -10,6 +10,9 @@ use std::{env, fmt::Debug};
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
+use orinium_text::FontSystem;
+use orinium_text::fontdb;
+
 use super::text::text::{TextRenderer, TextSection};
 
 /// GPU描画コンテキスト
@@ -200,20 +203,19 @@ impl GpuRenderer {
 
         // テキスト描画用ラッパーの初期化。引数で渡されたフォントパスがあればそれを優先して読み込む。
         let text_renderer = if let Some(p) = font_path {
-            match std::fs::read(p) {
-                Ok(bytes) => {
-                    match TextRenderer::new_from_bytes(&device, &queue, config.format, bytes) {
-                        Ok(t) => Some(t),
-                        Err(e) => {
-                            log::warn!(target:"PRender::gpu::font" ,"failed to init text renderer from provided font: {}", e);
-                            None
-                        }
+            let source = fontdb::Source::File(p.into());
+            let font_sys = FontSystem::new_with_fonts(vec![source]);
+            if font_sys.db.len() > 0 {
+                match TextRenderer::new_with_fontsys(&device, &queue, config.format, font_sys) {
+                    Ok(t) => Some(t),
+                    Err(e) => {
+                        log::warn!(target:"PRender::gpu::font" ,"failed to init text renderer from provided font: {}", e);
+                        None
                     }
                 }
-                Err(e) => {
-                    log::warn!(target:"PRender::gpu::font" ,"failed to read font path '{}': {}", p, e);
-                    None
-                }
+            } else {
+                log::warn!(target:"PRender::gpu::font" ,"no faces loaded from provided font");
+                None
             }
         } else {
             match TextRenderer::new_from_device(&device, &queue, config.format) {
@@ -545,7 +547,7 @@ impl GpuRenderer {
                     // Use TextRenderer helper to create a Buffer with correct FontSystem handling
                     let section = if let Some(tr) = &mut self.text_renderer {
                         let mut render_text_style = *style;
-                        render_text_style.font_size = *font_size * sf;
+                        render_text_style.font_size = ((*font_size * sf) * 64.0).round() / 64.0;
                         let layout = tr.create_buffer_for_text(text, render_text_style);
 
                         TextSection {

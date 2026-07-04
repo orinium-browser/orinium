@@ -1,7 +1,7 @@
 //! Text measurement interface and implementations.
 
 use crate::engine::bridge::text::{
-    MeasuredFragment, TextMeasureError, TextMeasureRequest, TextMeasurer,
+    GlyphCluster, MeasuredFragment, TextMeasureError, TextMeasureRequest, TextMeasurer,
 };
 use crate::engine::layouter::types::{FontStyle, LineHeight, TextStyle as EngineTextStyle};
 
@@ -10,9 +10,14 @@ use std::sync::Mutex;
 
 use orinium_text::TextStyle as OriTextStyle;
 use orinium_text::{
-    BidiMode, Color as OriColor, FontKey, FontStyle as OriFontStyle, FontSystem,
+    BidiMode, Color as OriColor, FontStyle as OriFontStyle, FontSystem,
     FontWeight as OriFontWeight, TextLayouter, fontdb,
 };
+
+/// Quantize font_size to 1/64 px to avoid cache misses from floating-point noise.
+fn quantize_font_size(px: f32) -> f32 {
+    (px * 64.0).round() / 64.0
+}
 
 /// Platform-backed text measurer using orinium_text.
 ///
@@ -20,49 +25,35 @@ use orinium_text::{
 /// and is intended for production use.
 pub struct PlatformTextMeasurer {
     font_sys: Mutex<FontSystem>,
-    font_keys: Vec<FontKey>,
 }
 
 impl PlatformTextMeasurer {
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let mut maybe_bytes: Option<Vec<u8>> = None;
-
-        if let Ok(p) = env::var("ORINIUM_FONT")
-            && let Ok(b) = std::fs::read(&p)
-        {
-            maybe_bytes = Some(b);
-        }
-
-        if maybe_bytes.is_none() {
-            for p in crate::platform::font::system_font_candidates()? {
-                if let Ok(b) = std::fs::read(p) {
-                    maybe_bytes = Some(b);
-                    break;
-                }
+        let font_sys = match env::var("ORINIUM_FONT") {
+            Ok(p) => {
+                let source = fontdb::Source::File(p.into());
+                FontSystem::new_with_fonts(vec![source])
             }
-        }
-
-        let (font_sys, font_keys) = match maybe_bytes {
-            Some(bytes) => {
-                let mut sys = FontSystem::new();
-                let keys = sys.load_font_data(bytes);
-                (sys, keys)
-            }
-            None => return Err("no system font found".into()),
+            Err(_) => FontSystem::new(),
         };
+
+        if font_sys.db.len() == 0 {
+            return Err("no system font found".into());
+        }
 
         Ok(Self {
             font_sys: Mutex::new(font_sys),
-            font_keys,
         })
     }
 
     pub fn from_bytes(_id: &str, bytes: Vec<u8>) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut font_sys = FontSystem::new();
-        let font_keys = font_sys.load_font_data(bytes);
+        let source = fontdb::Source::Binary(std::sync::Arc::new(bytes));
+        let font_sys = FontSystem::new_with_fonts(vec![source]);
+        if font_sys.db.len() == 0 {
+            return Err("no system font found".into());
+        }
         Ok(Self {
             font_sys: Mutex::new(font_sys),
-            font_keys,
         })
     }
 }
@@ -74,7 +65,7 @@ impl TextMeasurer<EngineTextStyle> for PlatformTextMeasurer {
     ) -> Result<Vec<MeasuredFragment>, TextMeasureError> {
         let _t0 = std::time::Instant::now();
 
-        let font_size = req.style.font_size.max(1.0);
+        let font_size = quantize_font_size(req.style.font_size.max(1.0));
 
         let mut fs = self
             .font_sys
@@ -105,7 +96,7 @@ impl TextMeasurer<EngineTextStyle> for PlatformTextMeasurer {
             line_height: line_height_ratio,
             bidi_mode: BidiMode::Auto,
             font_families: vec![fontdb::Family::SansSerif],
-            exact_fonts: self.font_keys.clone(),
+            exact_fonts: Vec::new(),
         };
 
         let mut layouter = TextLayouter::new();
@@ -163,5 +154,78 @@ impl TextMeasurer<EngineTextStyle> for PlatformTextMeasurer {
             fragments.len(),
         );
         Ok(fragments)
+    }
+
+    fn measure_shaped(
+        &self,
+        req: &TextMeasureRequest<EngineTextStyle>,
+    ) -> Result<Vec<GlyphCluster>, TextMeasureError> {
+        let _t0 = std::time::Instant::now();
+
+        let font_size = quantize_font_size(req.style.font_size.max(1.0));
+
+        let mut fs = self
+            .font_sys
+            .lock()
+            .map_err(|e| TextMeasureError::Internal(format!("font_sys lock poisoned: {}", e)))?;
+
+        let line_height_ratio = match req.style.line_height {
+            LineHeight::Normal => 1.2,
+            LineHeight::Number(n) => n,
+            LineHeight::Px(px) => px / font_size,
+        };
+
+        let ori_style = OriTextStyle {
+            font_size,
+            color: OriColor(
+                req.style.color.0,
+                req.style.color.1,
+                req.style.color.2,
+                req.style.color.3,
+            ),
+            font_weight: OriFontWeight(req.style.font_weight.0),
+            font_style: match req.style.font_style {
+                FontStyle::Normal => OriFontStyle::Normal,
+                FontStyle::Italic => OriFontStyle::Italic,
+                FontStyle::Oblique => OriFontStyle::Oblique,
+            },
+            line_height: line_height_ratio,
+            bidi_mode: BidiMode::Auto,
+            font_families: vec![fontdb::Family::SansSerif],
+            exact_fonts: Vec::new(),
+        };
+
+        let mut layouter = TextLayouter::new();
+
+        let shaped = layouter.shape_text(&mut *fs, &req.text, &ori_style);
+
+        let clusters: Vec<GlyphCluster> = shaped
+            .fragments
+            .iter()
+            .map(|f| GlyphCluster {
+                byte_offset: f.cluster,
+                width: f.width,
+                break_allowed: f.break_after,
+            })
+            .collect();
+
+        let total = _t0.elapsed();
+        let preview = if req.text.len() > 40 {
+            let cut = req.text.floor_char_boundary(40);
+            format!("{}...", &req.text[..cut])
+        } else {
+            req.text.clone()
+        };
+        log::info!(
+            target: "TextMeasurer",
+            "measure_shaped: text={:?} len={} font_size={}  total={:?}  clusters={}",
+            preview,
+            req.text.len(),
+            font_size,
+            total,
+            clusters.len(),
+        );
+
+        Ok(clusters)
     }
 }

@@ -33,9 +33,11 @@ pub enum NodeKind {
         role: ContainerRole,
     },
     Text {
-        /// Text corresponding to the fragment
-        texts: Vec<String>,
+        /// Full text content.
+        text: String,
         style: TextStyle,
+        /// Unique ID linking to [`TextFlowLayouter`] for position data.
+        text_id: usize,
     },
     LineBreak,
 }
@@ -246,6 +248,17 @@ pub enum TextDecoration {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VerticalAlign {
+    #[default]
+    Baseline,
+    Sub,
+    Super,
+    Top,
+    Bottom,
+    Middle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TextTransform {
     #[default]
     None,
@@ -300,4 +313,8 @@ pub struct TextStyle {
     pub font_weight: FontWeight,
     pub color: Color,
     pub line_height: LineHeight,
+    pub vertical_align: VerticalAlign,
+    /// Override color for text-decoration lines.
+    /// `None` means use `color` (currentColor).
+    pub text_decoration_color: Option<Color>,
 }
