@@ -1,6 +1,6 @@
 use anyhow::Result;
-use orinium_browser::browser::{BrowserApp, Tab};
 use orinium_browser::ProcessHandler;
+use orinium_browser::browser::{BrowserApp, Tab};
 
 fn main() -> Result<()> {
     #[cfg(feature = "dhat-heap")]

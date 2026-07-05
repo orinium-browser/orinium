@@ -188,7 +188,9 @@ pub fn build_layout_and_info(
             TextTransform::Lowercase => t.to_ascii_lowercase(),
         };
 
-        let Length::Px(line_height) = style.line_height else { unreachable!() };
+        let Length::Px(line_height) = style.line_height else {
+            unreachable!()
+        };
         let (layouter, kind) = create_text_node(t, text_style, line_height, measurer);
 
         (kind, Some(layouter))
@@ -293,7 +295,9 @@ pub fn build_layout_and_info(
                         TextTransform::Lowercase => t.to_ascii_lowercase(),
                     };
 
-                    let Length::Px(line_height) = style.line_height else { unreachable!() };
+                    let Length::Px(line_height) = style.line_height else {
+                        unreachable!()
+                    };
                     let (layouter, kind) = create_text_node(t, text_style, line_height, measurer);
 
                     layout_children.push(LayoutChild::Object(Box::new(layouter)));
@@ -396,7 +400,10 @@ fn create_text_node(
                 ms.into_iter()
                     .map(|f| {
                         // find this fragment's byte offset in the original text
-                        let pos = text[offset..].find(&f.text).map(|p| offset + p).unwrap_or(offset);
+                        let pos = text[offset..]
+                            .find(&f.text)
+                            .map(|p| offset + p)
+                            .unwrap_or(offset);
                         offset = pos + f.text.len();
                         GlyphCluster {
                             byte_offset: pos,
