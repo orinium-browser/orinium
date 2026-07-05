@@ -30,7 +30,7 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 image = "0.25.10"
 ipc-channel = "0.22.0"
 log = "0.4.32"
-lru = "0.13"
+lru = "0.18"
 once_cell = "1.21.4"
 pixi_byte = {
   git = "https://github.com/orinium-browser/pixi_byte",
