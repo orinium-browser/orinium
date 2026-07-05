@@ -2,18 +2,6 @@
    User Agent Stylesheet
    ========================= */
 
-/* --- Global defaults --- */
-* {
-    box-sizing: border-box;
-}
-
-/* --- CSS custom properties --- */
-:root {
-    --border-thin: 1px;
-    --border-medium: 3px;
-    --border-thick: 5px;
-}
-
 /* --- Root element --- */
 html {
     display: block;
