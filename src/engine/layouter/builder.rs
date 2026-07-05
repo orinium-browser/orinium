@@ -1376,6 +1376,10 @@ fn parse_color_stops(args: &[CssValue]) -> Option<Vec<ColorStop>> {
                     i += 1;
                     None
                 }
+                CssValue::Number(0.0) => {
+                    i += 1;
+                    None
+                }
                 _ => None,
             }
         } else {
