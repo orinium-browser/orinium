@@ -10,6 +10,13 @@
                 box-sizing: border-box;
             }
 
+            /* --- CSS custom properties --- */
+            :root {
+                --border-thin: 1px;
+                --border-medium: 3px;
+                --border-thick: 5px;
+            }
+
             html {
                 background: #f0f0f0;
             }
@@ -62,18 +69,31 @@
             }
 
             /* === Border tests === */
-            .test-box { margin: 10px 0; padding: 12px; background: white; }
+            .test-box {
+                margin: 10px 0;
+                padding: 12px;
+                background: white;
+            }
 
             /* keyword widths */
-            .border-thin { border: thin solid #333; }
-            .border-medium { border: medium dashed #0066cc; }
-            .border-thick { border: thick dotted #cc0000; }
+            .border-thin {
+                border: thin solid #333;
+            }
+            .border-medium {
+                border: medium dashed #0066cc;
+            }
+            .border-thick {
+                border: thick dotted #cc0000;
+            }
 
-            .border-medium { border: medium solid #444; }
+            .border-medium {
+                border: medium solid #444;
+            }
 
-            /* use CSS variable (user-agent or author) */
-            .border-var { border: var(--border-medium) solid #228833; }
-
+            /* use CSS variable */
+            .border-var {
+                border: var(--border-medium) solid #228833;
+            }
         </style>
     </head>
     <body>
@@ -94,12 +114,19 @@
 
             <h2>Border shorthand テスト</h2>
 
-            <div class="test-box border-thin">border: thin solid #333; (expected ~1px)</div>
-            <div class="test-box border-medium">border: medium dashed #0066cc; (expected ~3px)</div>
-            <div class="test-box border-thick">border: thick dotted #cc0000; (expected ~5px)</div>
+            <div class="test-box border-thin">
+                border: thin solid #333; (expected ~1px)
+            </div>
+            <div class="test-box border-medium">
+                border: medium dashed #0066cc; (expected ~3px)
+            </div>
+            <div class="test-box border-thick">
+                border: thick dotted #cc0000; (expected ~5px)
+            </div>
             <div class="test-box border-medium">border: medium solid #444;</div>
-            <div class="test-box border-var">border: var(--border-medium) solid #228833; (from CSS variable)</div>
-
+            <div class="test-box border-var">
+                border: var(--border-medium) solid #228833; (from CSS variable)
+            </div>
         </main>
     </body>
 </html>
