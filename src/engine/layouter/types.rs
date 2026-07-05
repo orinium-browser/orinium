@@ -303,7 +303,7 @@ pub enum LineHeight {
     Px(f32),
 }
 
-#[derive(Copy, Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TextStyle {
     pub font_size: f32,
     pub text_align: TextAlign,
@@ -317,4 +317,27 @@ pub struct TextStyle {
     /// Override color for text-decoration lines.
     /// `None` means use `color` (currentColor).
     pub text_decoration_color: Option<Color>,
+    /// Ordered list of font family names (CSS `font-family`).
+    /// The first available font is used as primary; glyphs missing from it
+    /// fall back to subsequent families. Generic families (e.g. "sans-serif")
+    /// are resolved by the text engine.
+    pub font_families: Vec<String>,
+}
+
+impl Default for TextStyle {
+    fn default() -> Self {
+        Self {
+            font_size: 16.0,
+            text_align: TextAlign::default(),
+            text_decoration: TextDecoration::default(),
+            text_transform: TextTransform::default(),
+            font_style: FontStyle::default(),
+            font_weight: FontWeight::default(),
+            color: Color::default(),
+            line_height: LineHeight::default(),
+            vertical_align: VerticalAlign::default(),
+            text_decoration_color: None,
+            font_families: vec!["sans-serif".to_string()],
+        }
+    }
 }

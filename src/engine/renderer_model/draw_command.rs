@@ -224,7 +224,7 @@ pub fn generate_draw_commands(
                             x,
                             y,
                             text: line_text.as_str().into(),
-                            style: *style,
+                            style: style.clone(),
                         });
 
                         let font_size = style.font_size;

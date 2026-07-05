@@ -32,7 +32,7 @@ const DEFAULT_LINE_FACTOR: f32 = 1.2;
 ///
 /// `text_style` carries all inherited text/line-height values.
 /// Add new fields here when additional deferred-resolution properties arise.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct InheritedCss {
     pub text_style: TextStyle,
 }
@@ -178,7 +178,9 @@ pub fn build_layout_and_info(
         LineHeight::Px(px) => Length::Px(px),
     };
 
-    let child = InheritedCss { text_style };
+    let child = InheritedCss {
+        text_style: text_style.clone(),
+    };
 
     let (mut kind, inline_layouter_opt) = if let HtmlNodeType::Text(t) = &html_node {
         let t = normalize_whitespace(t);
@@ -191,7 +193,7 @@ pub fn build_layout_and_info(
         let Length::Px(line_height) = style.line_height else {
             unreachable!()
         };
-        let (layouter, kind) = create_text_node(t, text_style, line_height, measurer);
+        let (layouter, kind) = create_text_node(t, text_style.clone(), line_height, measurer);
 
         (kind, Some(layouter))
     } else if let Some(name) = html_node.tag_name()
@@ -298,7 +300,8 @@ pub fn build_layout_and_info(
                     let Length::Px(line_height) = style.line_height else {
                         unreachable!()
                     };
-                    let (layouter, kind) = create_text_node(t, text_style, line_height, measurer);
+                    let (layouter, kind) =
+                        create_text_node(t, text_style.clone(), line_height, measurer);
 
                     layout_children.push(LayoutChild::Object(Box::new(layouter)));
 
@@ -320,7 +323,7 @@ pub fn build_layout_and_info(
                         child_dom,
                         resolved_styles,
                         measurer,
-                        child,
+                        child.clone(),
                         chain.clone(),
                     );
 
@@ -390,7 +393,7 @@ fn create_text_node(
     let _t = std::time::Instant::now();
     let request = text::TextMeasureRequest {
         text: text.clone(),
-        style: text_style,
+        style: text_style.clone(),
     };
     let clusters = measurer.measure_shaped(&request).unwrap_or_else(|_| {
         measurer
@@ -429,7 +432,7 @@ fn create_text_node(
         _t.elapsed(),
     );
 
-    let layouter = TextFlowLayouter::new(text.clone(), text_style, clusters, line_height);
+    let layouter = TextFlowLayouter::new(text.clone(), text_style.clone(), clusters, line_height);
     let kind = NodeKind::Text {
         text,
         style: text_style,
@@ -684,6 +687,13 @@ fn apply_declaration(
                 "oblique" => FontStyle::Oblique,
                 _ => text_style.font_style,
             };
+        }
+
+        ("font-family", _) => {
+            let families = extract_font_families(value);
+            if !families.is_empty() {
+                text_style.font_families = families;
+            }
         }
 
         ("text-decoration", v) => {
@@ -1261,6 +1271,30 @@ fn parse_color_stops(args: &[CssValue]) -> Option<Vec<ColorStop>> {
     }
 
     Some(stops)
+}
+
+/// Extract font family names from a `font-family` CSS value.
+///
+/// Accepts a single keyword/string or a comma-separated list.
+#[allow(dead_code)]
+fn extract_font_families(value: &CssValue) -> Vec<String> {
+    let items: Vec<&CssValue> = match value {
+        CssValue::List(list) => list.iter().collect(),
+        other => vec![other],
+    };
+
+    let mut families = Vec::new();
+    for item in items {
+        let name = match item {
+            CssValue::Keyword(k) => k.to_string(),
+            CssValue::String(s) => s.clone(),
+            _ => continue,
+        };
+        if !name.is_empty() {
+            families.push(name);
+        }
+    }
+    families
 }
 
 /// Resolve CssValue to LengthOrAuto.

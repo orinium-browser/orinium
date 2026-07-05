@@ -1,60 +1,58 @@
-//! Text measurement interface and implementations.
+use orinium_text::fontdb;
 
 use crate::engine::bridge::text::{
     GlyphCluster, MeasuredFragment, TextMeasureError, TextMeasureRequest, TextMeasurer,
 };
 use crate::engine::layouter::types::{FontStyle, LineHeight, TextStyle as EngineTextStyle};
-
-use std::env;
-use std::sync::Mutex;
+use crate::platform::renderer::text::global_font;
 
 use orinium_text::TextStyle as OriTextStyle;
 use orinium_text::{
-    BidiMode, Color as OriColor, FontStyle as OriFontStyle, FontSystem,
-    FontWeight as OriFontWeight, TextLayouter, fontdb,
+    BidiMode, Color as OriColor, FontStyle as OriFontStyle, FontWeight as OriFontWeight,
+    TextLayouter,
 };
 
-/// Quantize font_size to 1/64 px to avoid cache misses from floating-point noise.
 fn quantize_font_size(px: f32) -> f32 {
     (px * 64.0).round() / 64.0
 }
 
-/// Platform-backed text measurer using orinium_text.
-///
-/// This measurer performs real text shaping and line layout,
-/// and is intended for production use.
-pub struct PlatformTextMeasurer {
-    font_sys: Mutex<FontSystem>,
+fn build_family_list<'a>(families: &'a [String]) -> Vec<fontdb::Family<'a>> {
+    if families.is_empty() {
+        return vec![fontdb::Family::SansSerif, fontdb::Family::Serif];
+    }
+    let mut list: Vec<fontdb::Family<'a>> = families
+        .iter()
+        .map(|f| {
+            let lower = f.to_ascii_lowercase();
+            match lower.as_str() {
+                "serif" => fontdb::Family::Serif,
+                "sans-serif" => fontdb::Family::SansSerif,
+                "monospace" => fontdb::Family::Monospace,
+                "cursive" => fontdb::Family::Cursive,
+                "fantasy" => fontdb::Family::Fantasy,
+                _ => fontdb::Family::Name(f.as_str()),
+            }
+        })
+        .collect();
+    list.push(fontdb::Family::SansSerif);
+    list.push(fontdb::Family::Serif);
+    list.push(fontdb::Family::Monospace);
+    list
 }
+
+pub struct PlatformTextMeasurer;
 
 impl PlatformTextMeasurer {
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let font_sys = match env::var("ORINIUM_FONT") {
-            Ok(p) => {
-                let source = fontdb::Source::File(p.into());
-                FontSystem::new_with_fonts(vec![source])
-            }
-            Err(_) => FontSystem::new(),
-        };
-
-        if font_sys.db.len() == 0 {
-            return Err("no system font found".into());
+        if global_font::global_font_system_ready() {
+            Ok(Self)
+        } else {
+            Err("no system font found".into())
         }
-
-        Ok(Self {
-            font_sys: Mutex::new(font_sys),
-        })
     }
 
-    pub fn from_bytes(_id: &str, bytes: Vec<u8>) -> Result<Self, Box<dyn std::error::Error>> {
-        let source = fontdb::Source::Binary(std::sync::Arc::new(bytes));
-        let font_sys = FontSystem::new_with_fonts(vec![source]);
-        if font_sys.db.len() == 0 {
-            return Err("no system font found".into());
-        }
-        Ok(Self {
-            font_sys: Mutex::new(font_sys),
-        })
+    pub fn from_bytes(_id: &str, _bytes: Vec<u8>) -> Result<Self, Box<dyn std::error::Error>> {
+        Ok(Self)
     }
 }
 
@@ -67,17 +65,13 @@ impl TextMeasurer<EngineTextStyle> for PlatformTextMeasurer {
 
         let font_size = quantize_font_size(req.style.font_size.max(1.0));
 
-        let mut fs = self
-            .font_sys
-            .lock()
-            .map_err(|e| TextMeasureError::Internal(format!("font_sys lock poisoned: {}", e)))?;
-        let t_lock = _t0.elapsed();
-
         let line_height_ratio = match req.style.line_height {
             LineHeight::Normal => 1.2,
             LineHeight::Number(n) => n,
             LineHeight::Px(px) => px / font_size,
         };
+
+        let font_families = build_family_list(&req.style.font_families);
 
         let ori_style = OriTextStyle {
             font_size,
@@ -95,14 +89,16 @@ impl TextMeasurer<EngineTextStyle> for PlatformTextMeasurer {
             },
             line_height: line_height_ratio,
             bidi_mode: BidiMode::Auto,
-            font_families: vec![fontdb::Family::SansSerif],
+            font_families,
             exact_fonts: Vec::new(),
         };
 
         let mut layouter = TextLayouter::new();
 
         let t_shape = std::time::Instant::now();
-        let shaped = layouter.shape_text(&mut *fs, &req.text, &ori_style);
+        let shaped = global_font::with_global_font_system(|fs| {
+            layouter.shape_text(fs, &req.text, &ori_style)
+        });
         let t_shape = t_shape.elapsed();
 
         let line_ranges: Vec<(usize, usize)> = req
@@ -117,7 +113,9 @@ impl TextMeasurer<EngineTextStyle> for PlatformTextMeasurer {
             .collect();
 
         let t_layout = std::time::Instant::now();
-        let layout = layouter.layout_lines(&mut *fs, &shaped, &line_ranges, &ori_style);
+        let layout = global_font::with_global_font_system(|fs| {
+            layouter.layout_lines(fs, &shaped, &line_ranges, &ori_style)
+        });
         let t_layout = t_layout.elapsed();
 
         let fragments: Vec<MeasuredFragment> = layout
@@ -143,11 +141,10 @@ impl TextMeasurer<EngineTextStyle> for PlatformTextMeasurer {
         };
         log::info!(
             target: "TextMeasurer",
-            "measure: text={:?} len={} font_size={}  lock={:?}  shape={:?}  layout={:?}  total={:?}  fragments={}",
+            "measure: text={:?} len={} font_size={}  shape={:?}  layout={:?}  total={:?}  fragments={}",
             preview,
             req.text.len(),
             font_size,
-            t_lock,
             t_shape,
             t_layout,
             total,
@@ -164,16 +161,13 @@ impl TextMeasurer<EngineTextStyle> for PlatformTextMeasurer {
 
         let font_size = quantize_font_size(req.style.font_size.max(1.0));
 
-        let mut fs = self
-            .font_sys
-            .lock()
-            .map_err(|e| TextMeasureError::Internal(format!("font_sys lock poisoned: {}", e)))?;
-
         let line_height_ratio = match req.style.line_height {
             LineHeight::Normal => 1.2,
             LineHeight::Number(n) => n,
             LineHeight::Px(px) => px / font_size,
         };
+
+        let font_families = build_family_list(&req.style.font_families);
 
         let ori_style = OriTextStyle {
             font_size,
@@ -191,13 +185,15 @@ impl TextMeasurer<EngineTextStyle> for PlatformTextMeasurer {
             },
             line_height: line_height_ratio,
             bidi_mode: BidiMode::Auto,
-            font_families: vec![fontdb::Family::SansSerif],
+            font_families,
             exact_fonts: Vec::new(),
         };
 
         let mut layouter = TextLayouter::new();
 
-        let shaped = layouter.shape_text(&mut *fs, &req.text, &ori_style);
+        let shaped = global_font::with_global_font_system(|fs| {
+            layouter.shape_text(fs, &req.text, &ori_style)
+        });
 
         let clusters: Vec<GlyphCluster> = shaped
             .fragments
