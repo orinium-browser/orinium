@@ -2515,6 +2515,7 @@ dependencies = [
  "fontconfig",
  "fontdb",
  "fontdue",
+ "lru",
  "rustybuzz",
  "sys-locale",
  "unicode-bidi",

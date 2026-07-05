@@ -78,18 +78,26 @@ fn length_to_px(len: &Length, font_size: f32) -> f32 {
 ///
 /// All other style fields are initialized per node and are **not inherited**.
 ///
-/// # Parameters
-///
-/// - `parent_text_style`
-///
-/// These values must be passed from the computed result of the parent when
-/// calling this function recursively.
-///
-/// # Returns
-///
-/// A tuple of:
-/// - `LayoutNode`: used by the layout engine
-/// - `InfoNode`: used for rendering (text, color, font size)
+/// A single frame on the explicit processing stack.
+struct StackFrame {
+    dom: Rc<RefCell<TreeNode<HtmlNodeType>>>,
+    chain: ElementChain,
+    child: InheritedCss,
+    kind: Option<NodeKind>,
+    style: Option<Style>,
+    child_slots: Vec<ChildSlot>,
+    element_children: Vec<Rc<RefCell<TreeNode<HtmlNodeType>>>>,
+}
+
+enum ChildSlot {
+    Inline(LayoutChild, InfoNode),
+    Element(usize),
+}
+
+fn ptr_from_dom<T>(dom: &Rc<RefCell<TreeNode<T>>>) -> *const TreeNode<T> {
+    &*dom.borrow() as *const TreeNode<T>
+}
+
 pub fn build_layout_and_info(
     dom: &Rc<RefCell<TreeNode<HtmlNodeType>>>,
     resolved_styles: &ResolvedStyles,
@@ -97,26 +105,19 @@ pub fn build_layout_and_info(
     parent: InheritedCss,
     mut chain: ElementChain,
 ) -> (LayoutNode, InfoNode) {
-    let html_node = dom.borrow().value.clone();
-
-    let mut text_style = parent.text_style;
-    let mut container_style = ContainerStyle::default();
-    let mut style = Style::default();
-
-    /* -----------------------------
-       Build element chain
-    ----------------------------- */
+    /*
+     * Build the initial element chain for the root node.
+     */
     if let HtmlNodeType::Element {
         tag_name,
         attributes,
         ..
-    } = &html_node
+    } = &dom.borrow().value
     {
         let id = attributes
             .iter()
             .find(|a| a.name == "id")
             .map(|a| a.value.clone());
-
         let class_list: Vec<String> = attributes
             .iter()
             .find(|attr| attr.name == "class")
@@ -127,7 +128,6 @@ pub fn build_layout_and_info(
                     .collect()
             })
             .unwrap_or_default();
-
         chain.insert(
             0,
             ElementInfo {
@@ -138,228 +138,343 @@ pub fn build_layout_and_info(
         );
     }
 
-    /* -----------------------------
-       Collect CSS candidates
-    ----------------------------- */
-    let candidates: Option<HashMap<String, (CssValue, (u32, u32, u32), usize)>> =
-        if let HtmlNodeType::Element { .. } = &html_node {
-            Some(collect_candidates(resolved_styles, &chain))
-        } else {
-            None
-        };
+    // ── Explicit post-order stack (index-based to avoid borrow conflicts) ──
 
-    /* -----------------------------
-       Phase 1: Apply element-specific CSS declarations
-    ----------------------------- */
-    if let Some(candidates) = &candidates {
-        for (name, (value, _, _)) in candidates {
-            if name.starts_with("--") {
+    let mut stack: Vec<StackFrame> = Vec::new();
+    stack.push(StackFrame {
+        dom: dom.clone(),
+        chain,
+        child: InheritedCss {
+            text_style: parent.text_style.clone(),
+        },
+        kind: None,
+        style: None,
+        child_slots: Vec::new(),
+        element_children: Vec::new(),
+    });
+
+    let mut results: HashMap<*const TreeNode<HtmlNodeType>, (LayoutNode, InfoNode)> =
+        HashMap::new();
+
+    // We use an index instead of .last_mut() so that push/pop don't conflict
+    // with the mutable reference to the current frame.
+    while let Some(top_idx) = {
+        if stack.is_empty() {
+            None
+        } else {
+            Some(stack.len() - 1)
+        }
+    } {
+        // Phase check must happen BEFORE borrowing stack[top_idx] mutably.
+        let is_entered = stack[top_idx].kind.is_some();
+
+        if !is_entered {
+            // ── ENTER phase ──────────────────────────────────────────────
+            // Read frame state we need before taking any mutable action.
+            let chain_for_css = stack[top_idx].chain.clone();
+            let child_css = stack[top_idx].child.clone();
+
+            let html_node = stack[top_idx].dom.borrow().value.clone();
+            let mut text_style = child_css.text_style.clone();
+            let mut container_style = ContainerStyle::default();
+            let mut style = Style::default();
+
+            // Collect CSS candidates.
+            let candidates: Option<HashMap<_, _>> = if let HtmlNodeType::Element { .. } = &html_node
+            {
+                Some(collect_candidates(resolved_styles, &chain_for_css))
+            } else {
+                None
+            };
+
+            // Apply CSS declarations.
+            if let Some(candidates) = &candidates {
+                for (name, (value, _, _)) in candidates {
+                    if !name.starts_with("--") {
+                        apply_declaration(
+                            name,
+                            value,
+                            &mut style,
+                            &mut container_style,
+                            &mut text_style,
+                        );
+                    }
+                }
+            }
+
+            // Resolve line-height.
+            style.line_height = match text_style.line_height {
+                LineHeight::Number(factor) => Length::Px(text_style.font_size * factor),
+                LineHeight::Normal => Length::Px(text_style.font_size * DEFAULT_LINE_FACTOR),
+                LineHeight::Px(px) => Length::Px(px),
+            };
+
+            let child = InheritedCss {
+                text_style: text_style.clone(),
+            };
+
+            if let HtmlNodeType::Text(t) = &html_node {
+                // ── Text node (leaf) ──
+                let t = normalize_whitespace(t);
+                let t = match text_style.text_transform {
+                    TextTransform::None => t,
+                    TextTransform::Uppercase => t.to_ascii_uppercase(),
+                    TextTransform::Lowercase => t.to_ascii_lowercase(),
+                };
+                let Length::Px(line_height) = style.line_height else {
+                    unreachable!()
+                };
+                let (layouter, kind) =
+                    create_text_node(t, text_style.clone(), line_height, measurer);
+
+                let mut inline_style = style.clone();
+                inline_style.display = Display {
+                    outer: OuterDisplay::Inline,
+                    inner: InnerDisplay::Flow,
+                };
+                let layout = LayoutNode::with_children(
+                    inline_style,
+                    [LayoutChild::Object(Box::new(layouter))],
+                );
+                let info = InfoNode {
+                    kind,
+                    children: Vec::new(),
+                };
+                let ptr = ptr_from_dom(&stack[top_idx].dom);
+                results.insert(ptr, (layout, info));
+                stack.pop();
                 continue;
             }
-            apply_declaration(
-                name,
-                value,
-                &mut style,
-                &mut container_style,
-                &mut text_style,
-            );
+
+            // ── Element node ──
+            let is_link = html_node.tag_name() == Some("a") && html_node.get_attr("href").is_some();
+
+            let kind = if is_link {
+                NodeKind::Container {
+                    scroll_x: false,
+                    scroll_y: false,
+                    scroll_offset_x: 0.0,
+                    scroll_offset_y: 0.0,
+                    style: container_style,
+                    role: ContainerRole::Link {
+                        href: html_node.get_attr("href").unwrap().to_string(),
+                    },
+                }
+            } else {
+                NodeKind::Container {
+                    scroll_x: false,
+                    scroll_y: false,
+                    scroll_offset_x: 0.0,
+                    scroll_offset_y: 0.0,
+                    style: container_style,
+                    role: ContainerRole::Normal,
+                }
+            };
+
+            // Table → flex overrides
+            if let Some(tag) = html_node.tag_name() {
+                match tag {
+                    "table" | "tbody" | "thead" | "tfoot" => {
+                        style.display = Display {
+                            outer: OuterDisplay::Block,
+                            inner: InnerDisplay::Flex,
+                        };
+                        style.flex_direction = FlexDirection::Column;
+                    }
+                    "tr" => {
+                        style.display = Display {
+                            outer: OuterDisplay::Block,
+                            inner: InnerDisplay::Flex,
+                        };
+                        style.flex_direction = FlexDirection::Row;
+                    }
+                    _ => {}
+                }
+            }
+
+            let mut child_slots: Vec<ChildSlot> = Vec::new();
+            let mut element_kids: Vec<Rc<RefCell<TreeNode<HtmlNodeType>>>> = Vec::new();
+
+            if style.display.outer != OuterDisplay::None {
+                for child_dom in stack[top_idx].dom.borrow().children() {
+                    let child_node = child_dom.borrow().value.clone();
+                    if let HtmlNodeType::Text(t) = &child_node {
+                        let t = normalize_whitespace(t);
+                        let t = match text_style.text_transform {
+                            TextTransform::None => t,
+                            TextTransform::Uppercase => t.to_ascii_uppercase(),
+                            TextTransform::Lowercase => t.to_ascii_lowercase(),
+                        };
+                        let Length::Px(line_height) = style.line_height else {
+                            unreachable!()
+                        };
+                        let (layouter, kind) =
+                            create_text_node(t, text_style.clone(), line_height, measurer);
+                        child_slots.push(ChildSlot::Inline(
+                            LayoutChild::Object(Box::new(layouter)),
+                            InfoNode {
+                                kind,
+                                children: Vec::new(),
+                            },
+                        ));
+                    } else if child_dom.borrow().value.tag_name() == Some("br") {
+                        child_slots.push(ChildSlot::Inline(
+                            ItemFragment::LineBreak.into(),
+                            InfoNode {
+                                kind: NodeKind::LineBreak,
+                                children: Vec::new(),
+                            },
+                        ));
+                    } else {
+                        child_slots.push(ChildSlot::Element(element_kids.len()));
+                        element_kids.push(child_dom.clone());
+                    }
+                }
+            }
+
+            if element_kids.is_empty() {
+                // ── No element children → leaf, build immediately ──
+                let (layout_children, info_children): (Vec<_>, Vec<_>) = child_slots
+                    .into_iter()
+                    .filter_map(|slot| match slot {
+                        ChildSlot::Inline(layout, info) => Some((layout, info)),
+                        ChildSlot::Element(_) => None,
+                    })
+                    .unzip();
+                let layout = LayoutNode::with_children(style.clone(), layout_children);
+                let info = InfoNode {
+                    kind,
+                    children: info_children,
+                };
+                let ptr = ptr_from_dom(&stack[top_idx].dom);
+                results.insert(ptr, (layout, info));
+                stack.pop();
+            } else {
+                // ── Has element children → save state, push children ──
+                let parent_chain = stack[top_idx].chain.clone();
+                stack[top_idx].kind = Some(kind);
+                stack[top_idx].style = Some(style);
+                stack[top_idx].child = child;
+                stack[top_idx].child_slots = child_slots;
+                stack[top_idx].element_children = element_kids;
+
+                // Build child chains and push frames.
+                // Clone element_kids before the immutable borrow below
+                // so we don't hold &mut stack[] while pushing.
+                let kids_for_push: Vec<_> = {
+                    let f = &stack[top_idx];
+                    f.element_children.clone()
+                };
+                let child_css = stack[top_idx].child.clone();
+                for kid in kids_for_push.iter().rev() {
+                    let mut kid_chain = parent_chain.clone();
+                    if let HtmlNodeType::Element {
+                        tag_name,
+                        attributes,
+                        ..
+                    } = &kid.borrow().value
+                    {
+                        let id = attributes
+                            .iter()
+                            .find(|a| a.name == "id")
+                            .map(|a| a.value.clone());
+                        let class_list: Vec<String> = attributes
+                            .iter()
+                            .find(|attr| attr.name == "class")
+                            .map(|attr| {
+                                attr.value
+                                    .split_whitespace()
+                                    .map(|s| s.to_string())
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        kid_chain.insert(
+                            0,
+                            ElementInfo {
+                                tag_name: tag_name.clone(),
+                                id,
+                                classes: class_list,
+                            },
+                        );
+                    }
+                    stack.push(StackFrame {
+                        dom: kid.clone(),
+                        chain: kid_chain,
+                        child: child_css.clone(),
+                        kind: None,
+                        style: None,
+                        child_slots: Vec::new(),
+                        element_children: Vec::new(),
+                    });
+                }
+            }
+        } else {
+            // ── EXIT phase ────────────────────────────────────────────────
+            // Take ownership of frame data for building results.
+            let frame = stack.swap_remove(top_idx);
+
+            let style = frame.style.as_ref().unwrap().clone();
+            let kind = frame.kind.as_ref().unwrap().clone();
+
+            // Collect element children results.
+            let mut element_results: Vec<(LayoutChild, InfoNode)> = Vec::new();
+
+            for kid in &frame.element_children {
+                let ptr: *const TreeNode<HtmlNodeType> = &*kid.borrow();
+                if let Some((child_layout, child_info)) = results.remove(&ptr) {
+                    element_results.push((child_layout.into(), child_info));
+                }
+            }
+
+            // Handle html→body background inheritance.
+            let mut final_kind = kind;
+            if frame.dom.borrow().value.tag_name() == Some("html") {
+                let should_inherit = final_kind.is_container_with_transparent_bg();
+                if should_inherit {
+                    for (i, kid) in frame.element_children.iter().enumerate() {
+                        if kid.borrow().value.tag_name() == Some("body")
+                            && i < element_results.len()
+                        {
+                            let child_bg = element_results[i].1.kind.container_bg();
+                            if let Some(bg) = child_bg {
+                                if let NodeKind::Container { ref mut style, .. } = final_kind {
+                                    style.background = bg.clone();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let mut element_results: Vec<_> = element_results.into_iter().map(Some).collect();
+            let mut all_layout: Vec<LayoutChild> = Vec::with_capacity(frame.child_slots.len());
+            let mut all_info: Vec<InfoNode> = Vec::with_capacity(frame.child_slots.len());
+
+            for slot in frame.child_slots {
+                let (lc, ic) = match slot {
+                    ChildSlot::Inline(layout, info) => (layout, info),
+                    ChildSlot::Element(index) => element_results[index]
+                        .take()
+                        .expect("element child result must exist"),
+                };
+                all_layout.push(lc);
+                all_info.push(ic);
+            }
+
+            let layout = LayoutNode::with_children(style, all_layout);
+            let info = InfoNode {
+                kind: final_kind,
+                children: all_info,
+            };
+            let ptr: *const TreeNode<HtmlNodeType> = &*frame.dom.borrow();
+            results.insert(ptr, (layout, info));
         }
     }
 
-    /* -----------------------------
-       Phase 2: Resolve line-height using final font_size.
-       text_style.line_height was either inherited from parent
-       (via parent.text_style) or set by an explicit declaration
-       in Phase 1 (via apply_declaration).
-    ----------------------------- */
-    style.line_height = match text_style.line_height {
-        LineHeight::Number(factor) => Length::Px(text_style.font_size * factor),
-        LineHeight::Normal => Length::Px(text_style.font_size * DEFAULT_LINE_FACTOR),
-        LineHeight::Px(px) => Length::Px(px),
-    };
-
-    let child = InheritedCss {
-        text_style: text_style.clone(),
-    };
-
-    let (mut kind, inline_layouter_opt) = if let HtmlNodeType::Text(t) = &html_node {
-        let t = normalize_whitespace(t);
-        let t = match text_style.text_transform {
-            TextTransform::None => t,
-            TextTransform::Uppercase => t.to_ascii_uppercase(),
-            TextTransform::Lowercase => t.to_ascii_lowercase(),
-        };
-
-        let Length::Px(line_height) = style.line_height else {
-            unreachable!()
-        };
-        let (layouter, kind) = create_text_node(t, text_style.clone(), line_height, measurer);
-
-        (kind, Some(layouter))
-    } else if let Some(name) = html_node.tag_name()
-        && name == "a"
-        && let Some(href) = html_node.get_attr("href")
-    {
-        (
-            NodeKind::Container {
-                scroll_x: false,
-                scroll_y: false,
-                scroll_offset_x: 0.0,
-                scroll_offset_y: 0.0,
-                style: container_style,
-                role: ContainerRole::Link {
-                    href: href.to_string(),
-                },
-            },
-            None,
-        )
-    } else {
-        (
-            NodeKind::Container {
-                scroll_x: false,
-                scroll_y: false,
-                scroll_offset_x: 0.0,
-                scroll_offset_y: 0.0,
-                style: container_style,
-                role: ContainerRole::Normal,
-            },
-            None,
-        )
-    };
-
-    // Process Children if there are no inline flow layouter (i.e. text nodes).
-    let (layout, info) = if let Some(layouter) = inline_layouter_opt {
-        /* -----------------------------
-           Text Node with FlowLayouter
-        ----------------------------- */
-
-        let style = Style {
-            display: Display {
-                outer: OuterDisplay::Inline,
-                inner: InnerDisplay::Flow,
-            },
-            ..style
-        };
-
-        let layout = LayoutNode::with_children(style, [LayoutChild::Object(Box::new(layouter))]);
-
-        let info = InfoNode {
-            kind,
-            children: vec![],
-        };
-
-        (layout, info)
-    } else {
-        /* -----------------------------
-           Children
-        ----------------------------- */
-
-        // NOTE:
-        // Table 要素は未実装。
-        // 暫定的に Flex に置き換える。
-        // TODO: 将来的には TableLayout 実装に置き換える。
-        let mut layout_children: Vec<LayoutChild> = Vec::new();
-        let mut info_children = Vec::new();
-
-        if style.display.outer != OuterDisplay::None {
-            // Table 要素は暫定的に Flex に置き換える。
-            match &html_node {
-                HtmlNodeType::Element { tag_name, .. }
-                    if tag_name == "table"
-                        || tag_name == "tbody"
-                        || tag_name == "thead"
-                        || tag_name == "tfoot" =>
-                {
-                    style.display = Display {
-                        outer: OuterDisplay::Block,
-                        inner: InnerDisplay::Flex,
-                    };
-                    style.flex_direction = FlexDirection::Column;
-                }
-                HtmlNodeType::Element { tag_name, .. } if tag_name == "tr" => {
-                    style.display = Display {
-                        outer: OuterDisplay::Block,
-                        inner: InnerDisplay::Flex,
-                    };
-                    style.flex_direction = FlexDirection::Row;
-                }
-                _ => {}
-            }
-
-            for child_dom in dom.borrow().children() {
-                let child_node = child_dom.borrow().value.clone();
-
-                if let HtmlNodeType::Text(t) = &child_node {
-                    let t = normalize_whitespace(t);
-                    let t = match text_style.text_transform {
-                        TextTransform::None => t,
-                        TextTransform::Uppercase => t.to_ascii_uppercase(),
-                        TextTransform::Lowercase => t.to_ascii_lowercase(),
-                    };
-
-                    let Length::Px(line_height) = style.line_height else {
-                        unreachable!()
-                    };
-                    let (layouter, kind) =
-                        create_text_node(t, text_style.clone(), line_height, measurer);
-
-                    layout_children.push(LayoutChild::Object(Box::new(layouter)));
-
-                    info_children.push(InfoNode {
-                        kind,
-                        children: vec![],
-                    });
-                } else {
-                    if child_dom.borrow().value.tag_name() == Some("br") {
-                        layout_children.push(ItemFragment::LineBreak.into());
-                        info_children.push(InfoNode {
-                            kind: NodeKind::LineBreak,
-                            children: vec![],
-                        });
-                        continue;
-                    }
-
-                    let (child_layout, child_info) = build_layout_and_info(
-                        child_dom,
-                        resolved_styles,
-                        measurer,
-                        child.clone(),
-                        chain.clone(),
-                    );
-
-                    if dom.borrow().value.tag_name() == Some("html")
-                        && child_dom.borrow().value.tag_name() == Some("body")
-                        && let NodeKind::Container { style, .. } = &mut kind
-                        && style.background == Background::Color(Color(0, 0, 0, 0))
-                    {
-                        let background = {
-                            let NodeKind::Container { style, .. } = &child_info.kind else {
-                                continue;
-                            };
-                            style.background.clone()
-                        };
-                        // html 要素の body 子要素に背景色が指定されていない場合、
-                        // body の背景色を html の背景色で上書きする
-                        style.background = background;
-                    }
-
-                    layout_children.push(child_layout.into());
-                    info_children.push(child_info);
-                }
-            }
-        }
-
-        let layout = LayoutNode::with_children(style, layout_children);
-
-        let info = InfoNode {
-            kind,
-            children: info_children,
-        };
-
-        (layout, info)
-    };
-
-    (layout, info)
+    let root_ptr: *const TreeNode<HtmlNodeType> = &*dom.borrow();
+    results
+        .remove(&root_ptr)
+        .expect("root must have been processed")
 }
 
 fn normalize_whitespace(text: &str) -> String {

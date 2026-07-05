@@ -42,6 +42,21 @@ pub enum NodeKind {
     LineBreak,
 }
 
+impl NodeKind {
+    pub fn is_container_with_transparent_bg(&self) -> bool {
+        matches!(self, NodeKind::Container { style, .. }
+            if style.background == Background::Color(Color(0, 0, 0, 0)))
+    }
+
+    pub fn container_bg(&self) -> Option<&Background> {
+        if let NodeKind::Container { style, .. } = self {
+            Some(&style.background)
+        } else {
+            None
+        }
+    }
+}
+
 // =========================
 //          Color
 // =========================
