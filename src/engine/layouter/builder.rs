@@ -392,11 +392,17 @@ fn create_text_node(
         measurer
             .measure(&request)
             .map(|ms| {
+                let mut offset = 0usize;
                 ms.into_iter()
-                    .map(|f| GlyphCluster {
-                        byte_offset: 0,
-                        width: f.width,
-                        break_allowed: true,
+                    .map(|f| {
+                        // find this fragment's byte offset in the original text
+                        let pos = text[offset..].find(&f.text).map(|p| offset + p).unwrap_or(offset);
+                        offset = pos + f.text.len();
+                        GlyphCluster {
+                            byte_offset: pos,
+                            width: f.width,
+                            break_allowed: true,
+                        }
                     })
                     .collect()
             })

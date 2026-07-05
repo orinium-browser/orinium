@@ -42,9 +42,10 @@ impl TextFlowLayouter {
     pub fn new(
         text: String,
         _style: TextStyle,
-        clusters: Vec<GlyphCluster>,
+        mut clusters: Vec<GlyphCluster>,
         line_height: f32,
     ) -> Self {
+        clusters.sort_by_key(|c| c.byte_offset);
         let id = NEXT_TEXT_ID.fetch_add(1, Ordering::Relaxed);
         Self {
             id,
