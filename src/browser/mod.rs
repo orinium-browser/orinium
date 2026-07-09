@@ -18,14 +18,13 @@
 //!
 //! 簡単な例（ローカル開発）:
 //! ```no_run
-//! use orinium_browser::browser::BrowserApp;
-//! use orinium_browser::browser::Tab;
+//! use orinium_browser::browser::{BrowserApp, BrowserUi, Tab};
 //!
 //! // BrowserApp を生成して実行する（テストや実行時の簡易例）
-//! let mut app = BrowserApp::default();
 //! let mut tab = Tab::new();
 //! tab.navigate("resource:///test/compatibility_test.html".parse().unwrap());
-//! app.add_tab(tab);
+//! let mut app = BrowserApp::default();
+//! app.set_default_ui(BrowserUi::with_tab(tab));
 //! app.run().unwrap();
 //! ```
 //!
@@ -34,4 +33,5 @@ pub mod core;
 
 pub use core::BrowserApp;
 pub use core::BrowserCommand;
+pub use core::BrowserUi;
 pub use core::Tab;

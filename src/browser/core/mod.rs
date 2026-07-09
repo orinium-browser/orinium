@@ -14,17 +14,15 @@
 //!
 //! Quick example (for contributors)
 //! ```no_run
-//! use orinium_browser::browser::{BrowserApp, Tab};
-//!
-//! // Create browser and a new tab
-//! let mut browser = BrowserApp::default();
-//! let mut tab = Tab::new();
+//! use orinium_browser::browser::{BrowserApp, BrowserUi, Tab};
 //!
 //! // Navigate the tab to a resource or URL (error handling elided)
+//! let mut tab = Tab::new();
 //! tab.navigate("resource:///test/compatibility_test.html".parse().unwrap());
 //!
-//! // Register the tab and run the app
-//! browser.add_tab(tab);
+//! // Create browser with the pre-configured tab and run it
+//! let mut browser = BrowserApp::default();
+//! browser.set_default_ui(BrowserUi::with_tab(tab));
 //! browser.run().unwrap();
 //! ```
 //!
@@ -47,3 +45,4 @@ pub mod webview;
 pub use app::BrowserApp;
 pub use command::BrowserCommand;
 pub use tab::Tab;
+pub use ui::BrowserUi;
