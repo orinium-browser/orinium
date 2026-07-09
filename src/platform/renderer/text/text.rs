@@ -116,11 +116,32 @@ pub struct TextSection {
     pub layout: Arc<TextLayout>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CachedLineHeight {
+    Normal,
+    Number(u32),
+    Px(u32),
+}
+
+impl CachedLineHeight {
+    fn from_line_height(line_height: LineHeight) -> Self {
+        match line_height {
+            LineHeight::Normal => Self::Normal,
+            LineHeight::Number(value) => Self::Number(value.to_bits()),
+            LineHeight::Px(value) => Self::Px(value.to_bits()),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct CachedLayout {
     text: String,
     font_size_bits: u32,
     color: u32,
+    font_weight: u16,
+    font_style: FontStyle,
+    line_height: CachedLineHeight,
+    font_families: Vec<String>,
     layout: Arc<TextLayout>,
 }
 
@@ -377,14 +398,25 @@ impl TextRenderer {
         style.font_size = quantize_font_size(style.font_size);
 
         let font_size_bits = style.font_size.to_bits();
-        let color_bits = ((style.color.0 as u32) << 24)
+        let color = ((style.color.0 as u32) << 24)
             | ((style.color.1 as u32) << 16)
             | ((style.color.2 as u32) << 8)
             | (style.color.3 as u32);
+        let font_weight = style.font_weight.0;
+        let font_style = style.font_style;
+        let line_height = CachedLineHeight::from_line_height(style.line_height);
+        let font_families = style.font_families.clone();
+
         for i in 0..self.layout_cache.len() {
-            if self.layout_cache[i].text == text
-                && self.layout_cache[i].font_size_bits == font_size_bits
-                && self.layout_cache[i].color == color_bits
+            let cached = &self.layout_cache[i];
+
+            if cached.text == text
+                && cached.font_size_bits == font_size_bits
+                && cached.color == color
+                && cached.font_weight == font_weight
+                && cached.font_style == font_style
+                && cached.line_height == line_height
+                && cached.font_families == font_families
             {
                 let entry = self.layout_cache.remove(i);
                 let layout = entry.layout.clone();
@@ -400,10 +432,15 @@ impl TextRenderer {
             CachedLayout {
                 text: text.to_string(),
                 font_size_bits,
-                color: color_bits,
+                color,
+                font_weight,
+                font_style,
+                line_height,
+                font_families,
                 layout: layout.clone(),
             },
         );
+
         if self.layout_cache.len() > 128 {
             self.layout_cache.pop();
         }

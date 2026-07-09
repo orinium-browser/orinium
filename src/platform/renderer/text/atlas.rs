@@ -26,7 +26,7 @@ pub struct GlyphAtlas {
     layers: u32,
     allocators: Vec<BucketedAtlasAllocator>,
     glyph_map: LruCache<GlyphKey, GlyphCacheValue>,
-    cpu_data: Vec<u8>,
+    cpu_layers: Vec<Vec<u8>>,
     dirty_layers: std::collections::HashSet<u32>,
 }
 
@@ -55,12 +55,15 @@ impl GlyphAtlas {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
+
         let view = texture.create_view(&wgpu::TextureViewDescriptor {
             label: Some("Glyph Atlas View"),
             dimension: Some(wgpu::TextureViewDimension::D2Array),
             ..Default::default()
         });
+
         let allocator = BucketedAtlasAllocator::new(size2(size as i32, size as i32));
+        let layer_size = (size * size) as usize;
 
         Self {
             texture,
@@ -69,7 +72,7 @@ impl GlyphAtlas {
             layers: 1,
             allocators: vec![allocator],
             glyph_map: LruCache::new(NonZeroUsize::new(LRU_CAPACITY).unwrap()),
-            cpu_data: vec![0u8; (INITIAL_SIZE * INITIAL_SIZE * MAX_LAYERS) as usize],
+            cpu_layers: vec![vec![0u8; layer_size]],
             dirty_layers: std::collections::HashSet::new(),
         }
     }
@@ -150,9 +153,13 @@ impl GlyphAtlas {
                 let new_layer = self.layers as usize;
                 let mut alloc =
                     BucketedAtlasAllocator::new(size2(self.size as i32, self.size as i32));
+
                 if let Some(allocation) = alloc.allocate(size2(item_w, item_h)) {
                     self.allocators.push(alloc);
+                    self.cpu_layers
+                        .push(vec![0u8; (self.size * self.size) as usize]);
                     self.layers += 1;
+
                     break 'search Some((new_layer, allocation));
                 }
             }
@@ -185,17 +192,19 @@ impl GlyphAtlas {
         self.glyph_map.put(key, cache_val);
 
         // Write glyph to CPU texture data cache
-        let layer_offset = (li * self.size * self.size) as usize;
+        let layer_data = &mut self.cpu_layers[li as usize];
+
         for y in 0..mask_height {
             let src_start = (y * mask_width) as usize;
             let src_end = src_start + mask_width as usize;
 
             let dst_y = rect.min.y as u32 + y;
-            let dst_start = layer_offset + (dst_y * self.size + rect.min.x as u32) as usize;
+            let dst_start = (dst_y * self.size + rect.min.x as u32) as usize;
 
-            self.cpu_data[dst_start..dst_start + mask_width as usize]
+            layer_data[dst_start..dst_start + mask_width as usize]
                 .copy_from_slice(&alpha_mask[src_start..src_end]);
         }
+
         self.dirty_layers.insert(li);
 
         let (u, v) = (
@@ -215,14 +224,14 @@ impl GlyphAtlas {
         }
 
         let size = self.size;
-        let layer_size = (size * size) as usize;
 
         for &layer in &self.dirty_layers {
-            let offset = (layer * size * size) as usize;
-            let layer_bytes = &self.cpu_data[offset..offset + layer_size];
+            let Some(layer_bytes) = self.cpu_layers.get(layer as usize) else {
+                continue;
+            };
 
             let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-            let stride = size; // R8Unorm so bytes_per_pixel = 1, stride = size
+            let stride = size;
             let padded_stride = ((stride + align - 1) / align) * align;
 
             let layout = wgpu::TexelCopyBufferLayout {
@@ -253,13 +262,16 @@ impl GlyphAtlas {
                 );
             } else {
                 let mut padded = Vec::with_capacity((padded_stride * size) as usize);
+
                 for row in layer_bytes.chunks(stride as usize) {
                     padded.extend_from_slice(row);
+
                     let pad = (padded_stride - stride) as usize;
                     if pad > 0 {
                         padded.extend(std::iter::repeat(0u8).take(pad));
                     }
                 }
+
                 queue.write_texture(
                     wgpu::TexelCopyTextureInfo {
                         texture: &self.texture,
