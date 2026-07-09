@@ -4,5 +4,5 @@ pub enum BrowserCommand {
     Exit,
     RequestRedraw,
     RenameWindowTitle,
-    OpenNewWindow { tab_id: usize },
+    OpenNewWindow,
 }
