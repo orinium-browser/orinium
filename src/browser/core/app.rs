@@ -14,13 +14,12 @@
 //!
 //! Example (for contributors / local testing):
 //! ```no_run
-//! use orinium_browser::browser::BrowserApp;
-//! use orinium_browser::browser::Tab;
+//! use orinium_browser::browser::{BrowserApp, BrowserUi, Tab};
 //!
-//! let mut app = BrowserApp::default();
 //! let mut tab = Tab::new();
 //! tab.navigate("resource:///test/compatibility_test.html".parse().unwrap());
-//! app.add_tab(tab);
+//! let mut app = BrowserApp::default();
+//! app.set_default_ui(BrowserUi::with_tab(tab));
 //! app.run().unwrap();
 //! ```
 //!
@@ -40,9 +39,11 @@ use winit::event::WindowEvent;
 use winit::window::WindowId;
 
 use super::tab::{FetchKind, Tab, TabTask};
+use super::ui::BrowserUi;
 use super::{BrowserCommand, resource_loader::BrowserResourceLoader};
 use crate::engine::layouter;
 use crate::engine::renderer_model::{self, DrawCommand};
+
 use crate::platform::network::NetworkCore;
 use crate::platform::renderer::gpu::GpuRenderer;
 use crate::platform::system::App;
@@ -68,9 +69,9 @@ pub struct InputState {
 }
 
 pub struct PendingFetches {
-    /// Maps (id) to (tab_id, FetchKind)
+    /// Maps (id) to (window_id, tab_id, FetchKind, Url)
     /// Id is used to track pending fetch requests.
-    map: HashMap<usize, (usize, FetchKind, Url)>,
+    map: HashMap<usize, (WindowId, usize, FetchKind, Url)>,
     counter: usize,
 }
 
@@ -83,12 +84,18 @@ impl PendingFetches {
     }
 
     /// URLとFetchKindを受け取り、一意IDを生成して登録
-    pub fn insert(&mut self, tab_id: usize, kind: FetchKind, url: Url) -> usize {
+    pub fn insert(
+        &mut self,
+        window_id: WindowId,
+        tab_id: usize,
+        kind: FetchKind,
+        url: Url,
+    ) -> usize {
         self.counter += 1;
 
         let id = self.generate_id(&url);
 
-        self.map.insert(id, (tab_id, kind, url));
+        self.map.insert(id, (window_id, tab_id, kind, url));
         dbg!(id)
     }
 
@@ -108,7 +115,7 @@ impl PendingFetches {
         now ^ self.counter ^ url_hash
     }
 
-    pub fn remove(&mut self, id: usize) -> Option<(usize, FetchKind, Url)> {
+    pub fn remove(&mut self, id: usize) -> Option<(WindowId, usize, FetchKind, Url)> {
         self.map.remove(&id)
     }
 }
@@ -123,7 +130,7 @@ impl PendingFetches {
 ///
 /// Typical lifecycle:
 /// 1. Construct `BrowserApp::new(...)`, which wires platform components (network, renderer, system).
-/// 2. Create `Tab` objects and call `add_tab` / `navigate` as needed.
+/// 2. Create `Tab` objects, wrap them in a `BrowserUi`, and call `set_default_ui`.
 /// 3. Call `run()` to start the event loop. Each loop iteration:
 ///    - Poll platform events (keyboard/mouse/window).
 ///    - Update input state and dispatch to the active tab.
@@ -133,13 +140,12 @@ impl PendingFetches {
 ///
 /// Example usage:
 /// ```no_run
-/// use orinium_browser::browser::BrowserApp;
-/// use orinium_browser::browser::Tab;
+/// use orinium_browser::browser::{BrowserApp, BrowserUi, Tab};
 ///
-/// let mut app = BrowserApp::default();
 /// let mut tab = Tab::new();
 /// tab.navigate("resource:///test/compatibility_test.html".parse().unwrap());
-/// app.add_tab(tab);
+/// let mut app = BrowserApp::default();
+/// app.set_default_ui(BrowserUi::with_tab(tab));
 /// app.run().unwrap();
 /// ```
 ///
@@ -147,20 +153,20 @@ impl PendingFetches {
 /// - Add small unit tests to validate tab lifecycle, fetch handling, and draw-command generation.
 /// - Prefer adding examples under `examples/` to demonstrate end-to-end behavior.
 pub struct BrowserApp {
-    tabs: Vec<Tab>,
-    active_tab: usize,
     /// Per-window render state, keyed by WindowId.
     renders: HashMap<WindowId, RenderState>,
     /// Per-window input state, keyed by WindowId.
     inputs: HashMap<WindowId, InputState>,
-    /// Maps each window to the tab index it displays.
-    window_tabs: HashMap<WindowId, usize>,
+    /// Maps each window to its UI (which holds its tabs and active tab).
+    windows: HashMap<WindowId, BrowserUi>,
     /// Default window size used when opening a new window.
     default_window_size: (u32, u32),
     /// Default window title used when opening a new window.
     default_window_title: String,
     network: BrowserResourceLoader,
     pending_fetches: PendingFetches,
+    /// UI used when the first window opens (if set before `run()`).
+    default_ui: Option<BrowserUi>,
 }
 
 impl Default for BrowserApp {
@@ -171,7 +177,11 @@ impl Default for BrowserApp {
 
 impl BrowserApp {
     /// Starts the main browser event loop asynchronously.
+    /// Returns an error if no default UI was set via `set_default_ui`.
     pub fn run(self) -> Result<()> {
+        if self.default_ui.is_none() {
+            anyhow::bail!("set_default_ui must be called before run()");
+        }
         run_with_winit_backend(self)
     }
 
@@ -184,15 +194,14 @@ impl BrowserApp {
         let network = BrowserResourceLoader::new(Some(Rc::new(NetworkCore::new()?)));
 
         Ok(Self {
-            tabs: vec![],
-            active_tab: 0,
             renders: HashMap::new(),
             inputs: HashMap::new(),
-            window_tabs: HashMap::new(),
+            windows: HashMap::new(),
             default_window_size,
             default_window_title,
             network,
             pending_fetches: PendingFetches::new(),
+            default_ui: None,
         })
     }
 
@@ -203,7 +212,7 @@ impl BrowserApp {
         window_size: (u32, u32),
         window_title: String,
         scale_factor: f64,
-        tab_id: usize,
+        root_ui: BrowserUi,
     ) {
         self.renders.insert(
             window_id,
@@ -215,14 +224,14 @@ impl BrowserApp {
             },
         );
         self.inputs.insert(window_id, InputState::default());
-        self.window_tabs.insert(window_id, tab_id);
+        self.windows.insert(window_id, root_ui);
     }
 
     /// Removes a window's state when the window is closed.
     pub fn close_window(&mut self, window_id: WindowId) {
         self.renders.remove(&window_id);
         self.inputs.remove(&window_id);
-        self.window_tabs.remove(&window_id);
+        self.windows.remove(&window_id);
     }
 
     /// Returns the default window size for opening new windows.
@@ -238,21 +247,26 @@ impl BrowserApp {
         self.default_window_title.clone()
     }
 
-    pub fn tick(&mut self) -> BrowserCommand {
+    pub fn tick(&mut self, window_id: WindowId) -> BrowserCommand {
         self.handle_network_messages();
 
-        // tick all tabs and collect redraw requests
+        // tick all tabs of the given window and collect redraw requests
         let mut needs_redraw = false;
-        let tab_count = self.tabs.len();
+        let Some(ui) = self.windows.get_mut(&window_id) else {
+            return BrowserCommand::None;
+        };
+        let tab_count = ui.tabs.len();
         for tab_id in 0..tab_count {
-            let Some(tab) = self.tabs.get_mut(tab_id) else {
+            let Some(tab) = ui.tabs.get_mut(tab_id) else {
                 continue;
             };
             for task in tab.tick() {
                 match task {
                     TabTask::Fetch { url, kind } => {
                         log::info!("Fetch requested in App: url={}", url);
-                        let id = self.pending_fetches.insert(tab_id, kind, url.clone());
+                        let id = self
+                            .pending_fetches
+                            .insert(window_id, tab_id, kind, url.clone());
                         self.network.fetch_async(url, id);
                     }
                     TabTask::NeedsRedraw => {
@@ -276,13 +290,17 @@ impl BrowserApp {
             log::info!("Network message received in App for fetch_id={}", msg.id);
 
             // pending_fetches から fetch 情報を取得
-            let Some((tab_id, kind, url)) = self.pending_fetches.remove(msg.id) else {
+            let Some((window_id, tab_id, kind, url)) = self.pending_fetches.remove(msg.id) else {
                 log::warn!("No pending fetch found for fetch_id={}", msg.id);
                 continue;
             };
 
-            // Tab を取得
-            let Some(tab) = self.tabs.get_mut(tab_id) else {
+            // Tab を取得（該当ウィンドウの UI から）
+            let Some(ui) = self.windows.get_mut(&window_id) else {
+                log::warn!("There is no window called id={:?}", window_id);
+                continue;
+            };
+            let Some(tab) = ui.tabs.get_mut(tab_id) else {
                 log::warn!("There is no Tab called id={}", tab_id);
                 continue;
             };
@@ -311,14 +329,18 @@ impl BrowserApp {
     }
 
     #[allow(dead_code)]
-    /// Returns a mutable reference to the currently active tab, if any.
-    fn active_tab_mut(&mut self) -> Option<&mut Tab> {
-        self.tabs.get_mut(self.active_tab)
+    /// Returns a mutable reference to the currently active tab of the given window, if any.
+    fn active_tab_mut(&mut self, window_id: WindowId) -> Option<&mut Tab> {
+        let ui = self.windows.get_mut(&window_id)?;
+        ui.tabs.get_mut(ui.active_tab)
     }
 
-    /// Returns the tab index associated with the given window (falls back to `active_tab`).
+    /// Returns the tab index associated with the given window (falls back to `0`).
     fn tab_id_for_window(&self, window_id: WindowId) -> usize {
-        *self.window_tabs.get(&window_id).unwrap_or(&self.active_tab)
+        self.windows
+            .get(&window_id)
+            .map(|ui| ui.active_tab)
+            .unwrap_or(0)
     }
 
     /// Rebuilds the render tree for the window's assigned tab and generates draw commands.
@@ -345,7 +367,10 @@ impl BrowserApp {
         };
 
         let title = {
-            let Some(tab) = self.tabs.get_mut(tab_id) else {
+            let Some(ui) = self.windows.get_mut(&window_id) else {
+                return;
+            };
+            let Some(tab) = ui.tabs.get_mut(tab_id) else {
                 return;
             };
 
@@ -433,7 +458,7 @@ impl BrowserApp {
 
             _ => BrowserCommand::None,
         };
-        let cmd_from_tick = self.tick();
+        let cmd_from_tick = self.tick(window_id);
         match browser_cmd {
             BrowserCommand::None => {
                 if matches!(cmd_from_tick, BrowserCommand::RequestRedraw) {
@@ -482,17 +507,10 @@ impl BrowserApp {
             && let winit::keyboard::Key::Character(ch) = &event.logical_key
             && ch.as_str().eq_ignore_ascii_case(KEY_NEW_WINDOW)
         {
-            let tab_id = self.new_empty_tab();
-            return BrowserCommand::OpenNewWindow { tab_id };
+            return BrowserCommand::OpenNewWindow;
         }
 
         BrowserCommand::None
-    }
-
-    /// Adds a new empty tab and returns its index.
-    pub fn new_empty_tab(&mut self) -> usize {
-        self.tabs.push(Tab::new());
-        self.tabs.len() - 1
     }
 
     /// Handles mouse input events, mainly left-clicks for the active tab.
@@ -515,7 +533,10 @@ impl BrowserApp {
         };
 
         let tab_id = self.tab_id_for_window(window_id);
-        if let Some(tab) = self.tabs.get_mut(tab_id) {
+        let Some(ui) = self.windows.get_mut(&window_id) else {
+            return BrowserCommand::None;
+        };
+        if let Some(tab) = ui.tabs.get_mut(tab_id) {
             Self::handle_mouse_click(tab, (x / sf) as f32, (y / sf) as f32);
             BrowserCommand::RequestRedraw
         } else {
@@ -536,7 +557,10 @@ impl BrowserApp {
         };
 
         let tab_id = self.tab_id_for_window(window_id);
-        if let Some(tab) = self.tabs.get_mut(tab_id)
+        let Some(ui) = self.windows.get_mut(&window_id) else {
+            return;
+        };
+        if let Some(tab) = ui.tabs.get_mut(tab_id)
             && let Some((layout, info)) = tab.layout_and_info_mut()
             && let layouter::types::NodeKind::Container {
                 scroll_offset_y, ..
@@ -603,9 +627,15 @@ impl BrowserApp {
         }
     }
 
-    /// Adds a new tab to the browser.
-    pub fn add_tab(&mut self, tab: Tab) {
-        self.tabs.push(tab);
+    /// Sets the UI to use when the first window opens.
+    /// Must be called before `run()`.
+    pub fn set_default_ui(&mut self, ui: BrowserUi) {
+        self.default_ui = Some(ui);
+    }
+
+    /// Takes the default UI, or returns `None` if not set.
+    pub fn take_default_ui(&mut self) -> Option<BrowserUi> {
+        self.default_ui.take()
     }
 
     /// Returns the current window size for the given window as `(width, height)` in floating-point pixels.
