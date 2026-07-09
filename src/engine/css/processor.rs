@@ -8,6 +8,7 @@ enum CssCommand {
     Process { css_sources: Vec<String> },
 }
 
+#[derive(Debug)]
 pub struct CssProcessor {
     cmd_tx: Sender<CssCommand>,
     result_rx: Receiver<ResolvedStyles>,

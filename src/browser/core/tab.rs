@@ -14,10 +14,12 @@ pub enum TabTask {
     NeedsRedraw,
 }
 
+#[derive(Debug)]
 enum TabError {
     NetworkError(BrowserNetworkError),
 }
 
+#[derive(Debug)]
 enum TabState {
     Loading,
     Loaded,
@@ -35,6 +37,7 @@ enum TabState {
 ///
 /// TODO:
 /// - ページの状態（Error、loading）の管理を追加
+#[derive(Debug)]
 pub struct Tab {
     title: Option<String>,
     base_url: Option<Url>,

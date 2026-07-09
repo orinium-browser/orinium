@@ -41,7 +41,7 @@ pub enum CssApplicationStrategy {
     Incremental,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 enum PagePhase {
     Init,
     BeforeHtmlParsing,
@@ -51,6 +51,7 @@ enum PagePhase {
     CssApplied,
 }
 
+#[derive(Debug)]
 pub struct WebView {
     phase: PagePhase,
 
@@ -79,6 +80,7 @@ pub struct WebView {
 /// - base_url: The base URL for resolving relative URLs.
 /// - title: The title of the document.
 /// - dom: The DOM tree of the document.
+#[derive(Debug)]
 pub struct DocumentInfo {
     document_url: Url,
     base_url: Url,
