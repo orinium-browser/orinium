@@ -5,6 +5,6 @@ pub enum UiEvent {
 }
 
 pub trait UiComponent: ui_layout::CustomLayout {
-    fn receive_event(event: UiEvent);
-    fn draw(cmd_buf: &mut Vec<DrawCommand>);
+    fn receive_event(&self, event: UiEvent);
+    fn draw(&self, cmd_buf: &mut Vec<DrawCommand>);
 }
