@@ -1,6 +1,6 @@
 use anyhow::Result;
 use orinium_browser::ProcessHandler;
-use orinium_browser::browser::{BrowserApp, Tab};
+use orinium_browser::browser::{BrowserApp, BrowserUi, Tab};
 use orinium_browser::platform::renderer::gpu::GpuRenderer;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -41,23 +41,21 @@ struct WindowState {
 struct MultiWindowApp {
     browser: BrowserApp,
     windows: HashMap<WindowId, WindowState>,
-    /// Specs of windows not yet created (drained in `resumed`).
-    pending_specs: Vec<(usize, WindowSpec)>,
+    /// Pre-built BrowserUi objects, one per window spec (drained in `resumed`).
+    pending_uis: Vec<(BrowserUi, WindowSpec)>,
 }
 
 impl MultiWindowApp {
     fn new() -> Result<Self> {
-        let mut browser = BrowserApp::new((900, 640), "Orinium Browser".into())
+        let browser = BrowserApp::new((900, 640), "Orinium Browser".into())
             .expect("Failed to create browser instance");
 
-        let mut pending_specs = Vec::new();
-        for (i, spec) in WINDOWS.iter().enumerate() {
+        let mut pending_uis = Vec::new();
+        for spec in WINDOWS.iter() {
             let mut tab = Tab::new();
             tab.navigate(spec.url.parse()?);
-            browser.add_tab(tab);
-            // Store index alongside the spec data we need at window creation time.
-            pending_specs.push((
-                i,
+            pending_uis.push((
+                BrowserUi::with_tab(tab),
                 WindowSpec {
                     title: spec.title,
                     url: spec.url,
@@ -69,15 +67,15 @@ impl MultiWindowApp {
         Ok(Self {
             browser,
             windows: HashMap::new(),
-            pending_specs,
+            pending_uis,
         })
     }
 }
 
 impl ApplicationHandler for MultiWindowApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        // Create all pending windows. Each window is mapped to its own tab.
-        for (tab_id, spec) in self.pending_specs.drain(..) {
+        // Create all pending windows. Each window gets its own BrowserUi.
+        for (root_ui, spec) in self.pending_uis.drain(..) {
             let window = Arc::new(
                 event_loop
                     .create_window(
@@ -101,7 +99,7 @@ impl ApplicationHandler for MultiWindowApp {
                 spec.size,
                 spec.title.to_string(),
                 scale_factor,
-                tab_id,
+                root_ui,
             );
 
             let mut state = WindowState {
@@ -158,8 +156,7 @@ impl ApplicationHandler for MultiWindowApp {
                         .set_title(&self.browser.window_title(window_id));
                 }
             }
-            BrowserCommand::None => {}
-            BrowserCommand::OpenNewWindow { tab_id } => {
+            BrowserCommand::OpenNewWindow => {
                 let default_size = self.browser.default_window_size();
                 let default_title = self.browser.default_window_title();
                 let window = Arc::new(
@@ -178,12 +175,15 @@ impl ApplicationHandler for MultiWindowApp {
                 let scale_factor = window.scale_factor();
                 let gpu_renderer = pollster::block_on(GpuRenderer::new(window.clone(), None))
                     .expect("failed to create GPU renderer");
+
+                let root_ui = BrowserUi::with_tab(Tab::new());
+
                 self.browser.open_window(
                     new_id,
                     (default_size.0 as u32, default_size.1 as u32),
                     default_title,
                     scale_factor,
-                    tab_id,
+                    root_ui,
                 );
                 let mut state = WindowState {
                     window,
@@ -194,6 +194,7 @@ impl ApplicationHandler for MultiWindowApp {
                 state.window.request_redraw();
                 self.windows.insert(new_id, state);
             }
+            BrowserCommand::None => {}
         }
     }
 }
