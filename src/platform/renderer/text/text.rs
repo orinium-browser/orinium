@@ -473,6 +473,7 @@ impl TextRenderer {
             bidi_mode: orinium_text::BidiMode::Auto,
             font_families,
             exact_fonts: Vec::new(),
+            variant: orinium_text::FontVariant::Normal,
         };
 
         let _t_shape = std::time::Instant::now();

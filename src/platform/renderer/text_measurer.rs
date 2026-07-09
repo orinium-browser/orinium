@@ -66,6 +66,7 @@ impl TextMeasurer<EngineTextStyle> for PlatformTextMeasurer {
             bidi_mode: BidiMode::Auto,
             font_families,
             exact_fonts: Vec::new(),
+            variant: orinium_text::FontVariant::Normal,
         };
 
         let mut layouter = TextLayouter::new();
@@ -162,6 +163,7 @@ impl TextMeasurer<EngineTextStyle> for PlatformTextMeasurer {
             bidi_mode: BidiMode::Auto,
             font_families,
             exact_fonts: Vec::new(),
+            variant: orinium_text::FontVariant::Normal,
         };
 
         let mut layouter = TextLayouter::new();
