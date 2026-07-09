@@ -1,6 +1,6 @@
 use orinium_browser::{
     ProcessHandler,
-    browser::{BrowserApp, Tab, core::resource_loader::BrowserResourceLoader},
+    browser::{BrowserApp, BrowserUi, Tab, core::resource_loader::BrowserResourceLoader},
     engine::{
         css::parser::Parser as CssParser,
         html::{HtmlNodeType, parser::Parser as HtmlParser},
@@ -266,12 +266,11 @@ fn main() -> Result<()> {
                     let url = &args[2];
                     println!("Testing simple rendering for URL: {}", url);
 
-                    let mut browser = BrowserApp::default();
-
                     let mut tab = Tab::new();
                     tab.navigate(url.parse()?);
 
-                    browser.add_tab(tab);
+                    let mut browser = BrowserApp::default();
+                    browser.set_default_ui(BrowserUi::with_tab(tab));
 
                     browser.run()?
                 } else {
