@@ -1,6 +1,6 @@
 use anyhow::Result;
 use orinium_browser::ProcessHandler;
-use orinium_browser::browser::{BrowserApp, Tab};
+use orinium_browser::browser::{BrowserApp, BrowserUi, Tab};
 
 fn main() -> Result<()> {
     #[cfg(feature = "dhat-heap")]
@@ -12,13 +12,11 @@ fn main() -> Result<()> {
 
     env_logger::init();
 
-    let mut browser = BrowserApp::default();
-
     let mut tab = Tab::new();
     tab.navigate("resource:///test/compatibility_test.html".parse()?);
 
-    browser.add_tab(tab);
-
+    let mut browser = BrowserApp::default();
+    browser.set_default_ui(BrowserUi::with_tab(tab));
     browser.run()?;
 
     Ok(())
