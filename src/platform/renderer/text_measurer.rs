@@ -1,10 +1,9 @@
-use orinium_text::fontdb;
-
 use crate::engine::bridge::text::{
     GlyphCluster, MeasuredFragment, TextMeasureError, TextMeasureRequest, TextMeasurer,
 };
 use crate::engine::layouter::types::{FontStyle, LineHeight, TextStyle as EngineTextStyle};
 use crate::platform::renderer::text::global_font;
+use crate::platform::renderer::text::text::*;
 
 use orinium_text::TextStyle as OriTextStyle;
 use orinium_text::{
@@ -14,30 +13,6 @@ use orinium_text::{
 
 fn quantize_font_size(px: f32) -> f32 {
     (px * 64.0).round() / 64.0
-}
-
-fn build_family_list<'a>(families: &'a [String]) -> Vec<fontdb::Family<'a>> {
-    if families.is_empty() {
-        return vec![fontdb::Family::SansSerif, fontdb::Family::Serif];
-    }
-    let mut list: Vec<fontdb::Family<'a>> = families
-        .iter()
-        .map(|f| {
-            let lower = f.to_ascii_lowercase();
-            match lower.as_str() {
-                "serif" => fontdb::Family::Serif,
-                "sans-serif" => fontdb::Family::SansSerif,
-                "monospace" => fontdb::Family::Monospace,
-                "cursive" => fontdb::Family::Cursive,
-                "fantasy" => fontdb::Family::Fantasy,
-                _ => fontdb::Family::Name(f.as_str()),
-            }
-        })
-        .collect();
-    list.push(fontdb::Family::SansSerif);
-    list.push(fontdb::Family::Serif);
-    list.push(fontdb::Family::Monospace);
-    list
 }
 
 pub struct PlatformTextMeasurer;

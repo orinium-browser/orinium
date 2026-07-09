@@ -84,7 +84,7 @@ fn pack_color(c: &OriColor) -> u32 {
     ((c.0 as u32) << 24) | ((c.1 as u32) << 16) | ((c.2 as u32) << 8) | (c.3 as u32)
 }
 
-fn build_family_list<'a>(families: &'a [String]) -> Vec<fontdb::Family<'a>> {
+pub fn build_family_list<'a>(families: &'a [String]) -> Vec<fontdb::Family<'a>> {
     if families.is_empty() {
         return vec![fontdb::Family::SansSerif, fontdb::Family::Serif];
     }
