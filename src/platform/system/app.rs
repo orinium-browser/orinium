@@ -7,7 +7,7 @@ use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowId};
 
-use crate::browser::{BrowserApp, BrowserCommand};
+use crate::browser::{BrowserApp, BrowserCommand, BrowserUi, Tab};
 use crate::platform::renderer::gpu::GpuRenderer;
 
 pub struct WindowState {
@@ -28,7 +28,7 @@ impl App {
         }
     }
 
-    fn open_new_window(&mut self, event_loop: &ActiveEventLoop, tab_id: usize) {
+    fn open_new_window(&mut self, event_loop: &ActiveEventLoop) {
         let default_size = self.browser_app.default_window_size();
         let default_title = self.browser_app.default_window_title();
         let window = Arc::new(
@@ -47,12 +47,15 @@ impl App {
         let scale_factor = window.scale_factor();
         let gpu_renderer = pollster::block_on(GpuRenderer::new(Arc::clone(&window), None)).unwrap();
 
+        let mut root_ui = BrowserUi::new();
+        root_ui.tabs.push(Tab::new());
+
         self.browser_app.open_window(
             window_id,
             (default_size.0 as u32, default_size.1 as u32),
             default_title,
             scale_factor,
-            tab_id,
+            root_ui,
         );
 
         let mut state = WindowState {
@@ -88,12 +91,17 @@ impl ApplicationHandler for App {
         let scale_factor = window.scale_factor();
         let gpu_renderer = pollster::block_on(GpuRenderer::new(Arc::clone(&window), None)).unwrap();
 
+        let Some(root_ui) = self.browser_app.take_default_ui() else {
+            log::error!("BrowserApp has no default UI configured");
+            return;
+        };
+
         self.browser_app.open_window(
             window_id,
             (default_size.0 as u32, default_size.1 as u32),
             default_title,
             scale_factor,
-            0,
+            root_ui,
         );
 
         let mut state = WindowState {
@@ -148,8 +156,8 @@ impl ApplicationHandler for App {
                         .set_title(&self.browser_app.window_title(window_id));
                 }
             }
-            BrowserCommand::OpenNewWindow { tab_id } => {
-                self.open_new_window(event_loop, tab_id);
+            BrowserCommand::OpenNewWindow => {
+                self.open_new_window(event_loop);
             }
             BrowserCommand::None => {}
         }
