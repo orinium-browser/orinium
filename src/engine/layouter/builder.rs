@@ -1119,6 +1119,29 @@ pub fn apply_declaration(
             style.item_style.flex_basis = resolve_css_len_auto(name, value, text_style)?;
         }
 
+        ("flex-shrink", CssValue::Number(v)) => {
+            style.item_style.flex_shrink = *v;
+        }
+
+        ("align-self", CssValue::Keyword(v)) => {
+            style.item_style.align_self = Some(match v.as_str() {
+                "stretch" => AlignItems::Stretch,
+                "flex-start" | "start" => AlignItems::Start,
+                "center" => AlignItems::Center,
+                "flex-end" | "end" => AlignItems::End,
+                "auto" => return Some(()),
+                _ => return None,
+            });
+        }
+
+        ("column-gap", _) => {
+            style.column_gap = resolve_css_len_auto(name, value, text_style)?;
+        }
+
+        ("row-gap", _) => {
+            style.row_gap = resolve_css_len_auto(name, value, text_style)?;
+        }
+
         _ => {
             // log::error!("{name}, {value:?}");
             return None;
