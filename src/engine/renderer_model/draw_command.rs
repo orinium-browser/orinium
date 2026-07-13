@@ -176,25 +176,14 @@ fn push_box_model(
     let padding_box = box_model.padding_box;
     let content_box = box_model.content_box;
 
-    let clip = !is_inline && padding_box.width > 0.0 && padding_box.height > 0.0;
     let dx = content_box.x - border_box.x;
     let dy = content_box.y - border_box.y;
 
     let state = BoxPushState {
         border: push_transform(cmd_buf, border_box.x, border_box.y),
-        clip: if clip {
-            cmd_buf.push(DrawCommand::PushClip {
-                x: padding_box.x - border_box.x,
-                y: padding_box.y - border_box.y,
-                width: padding_box.width,
-                height: padding_box.height,
-            });
-            true
-        } else {
-            false
-        },
-        content: push_transform(cmd_buf, dx, dy),
-        scroll: push_transform(cmd_buf, scroll_offset_x, -scroll_offset_y),
+        clip: false,
+        content: false,
+        scroll: false,
     };
 
     // Inline elements are fragmented across lines, so their borders
@@ -205,6 +194,26 @@ fn push_box_model(
     }
 
     draw_background(cmd_buf, &border_box, &padding_box, &style.background);
+
+    let clip = !is_inline && padding_box.width > 0.0 && padding_box.height > 0.0;
+    if clip {
+        cmd_buf.push(DrawCommand::PushClip {
+            x: padding_box.x - border_box.x,
+            y: padding_box.y - border_box.y,
+            width: padding_box.width,
+            height: padding_box.height,
+        });
+    }
+
+    let content = push_transform(cmd_buf, dx, dy);
+    let scroll = push_transform(cmd_buf, scroll_offset_x, -scroll_offset_y);
+
+    let state = BoxPushState {
+        clip,
+        content,
+        scroll,
+        ..state
+    };
 
     state
 }
