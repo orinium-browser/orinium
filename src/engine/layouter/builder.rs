@@ -719,9 +719,7 @@ pub fn apply_declaration(
          * Display
          * ====================== */
         ("display", CssValue::Keyword(v)) => {
-            if let Some(parsed_display) = Display::from_css_name(v.as_str()) {
-                style.display = parsed_display;
-            }
+            style.display = Display::from_css_name(v.as_str())?;
         }
 
         /* ======================
@@ -1123,6 +1121,7 @@ pub fn apply_declaration(
 
         _ => {
             // log::error!("{name}, {value:?}");
+            return None;
         }
     }
     Some(())
