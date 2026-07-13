@@ -40,20 +40,25 @@ Clone the repository.
 git clone https://github.com/orinium-browser/orinium.git
 cd orinium
 ```
-> [!NOTE]
-> Orinium's MSRV (Minimum Supported Rust Version) is 1.87.0.
-> If you are using an earlier version, please upgrade to Rust 1.87.0 or later.
-> 
-> If you are using rustup, you can set the required version with the following commands:
-> 
-> ```bash
-> rustup toolchain install 1.87.0
-> rustup override set 1.87.0
-> ```
+
 You can run Orinium using Cargo.
 
 ```bash
 cargo run
+```
+
+### Development test harness
+A development test harness is available at `examples/tests.rs`.
+
+```bash
+# Show available commands
+cargo run --example tests help
+
+# Parse DOM from a URL
+cargo run --example tests parse_dom https://example.com
+
+# Full rendering pipeline with a window
+cargo run --example tests simple_render https://example.com
 ```
 
 ## Contributing
@@ -65,4 +70,3 @@ Join the community to connect with other developers and stay up to date.
 Join our Discord community: [here](https://discord.gg/tMGPgHFsxJ)
 
 Other useful documentation for development can be found in [the directory](./docs/en).
-And, most documents are classified based on their lang.

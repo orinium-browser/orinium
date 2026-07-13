@@ -1,6 +1,6 @@
 # 前提
 ## アプリのメインループの作成
-`EventLoopは`「OSから送られてくるイベントを受け取って、アプリに伝える」仕組み。
+`EventLoop`は「OSから送られてくるイベントを受け取って、アプリに伝える」仕組み。
 ```rust
 let event_loop = EventLoop::<State>::with_user_event().build()?;
 let mut app = App::new();
@@ -31,28 +31,29 @@ event_loop.run_app(&mut app)?;
 
 # Oriniumで実装するもの
 ## `GpuRenderer`
-* ./src/engine/renderer
+* `src/platform/renderer/`（`gpu.rs`）
 ライフサイクル
 ```rust
-App::resumed()
- └── State::new()
-      └── GpuRenderer::new()   ← GPU初期化
-App::set_draw_commands()
+BrowserApp::default()
+ └── BrowserApp::run()
+      └── system::App::new()
+           └── GpuRenderer::new()   ← GPU初期化
+system::App::set_draw_commands()
  └── GpuRenderer::update_draw_commands()
 EventLoop: RedrawRequested
- └── State::render()
+ └── system::App::render()
       └── GpuRenderer::render() ← 毎フレーム描画
 EventLoop: Resized
- └── State::resize()
+ └── system::App::resize()
       └── GpuRenderer::resize()
-App終了
+アプリ終了
  └── GpuRenderer が Drop されて GPUリソース解放
 
 ```
 
 | フェーズ | 関数                       | 主な責任               | 呼ばれるタイミング                   |
 |------|--------------------------|--------------------|-----------------------------|
-| 初期化  | `new()`                  | GPUインスタンス、パイプライン作成 | アプリ起動時 (`resumed()`)        |
+| 初期化  | `new()`                  | GPUインスタンス、パイプライン作成 | `BrowserApp::run()` 内 (`system::App::new()`) |
 | 更新   | `update_draw_commands()` | 頂点・テキストバッファ更新      | 図形やテキスト変更時                  |
 | 描画   | `render()`               | 1フレームの描画           | 毎フレーム or `request_redraw()` |
 | リサイズ | `resize()`               | バッファとフォント領域更新      | ウィンドウサイズ変更時                 |

@@ -39,16 +39,12 @@
 git clone https://github.com/orinium-browser/orinium.git
 cd orinium
 ```
-> [!NOTE]
-> Orinium の MSRV (Minimum Supported Rust Version) は 1.87.0 です。
-> それ以前のバージョンを使用している方は 1.87.0 以降のバージョンに切り替えてください。
-> 
-> rustup を使用している場合は、以下でバージョンを合わせられます。
-> ```bash
-> rustup toolchain install 1.87.0
-> rustup override set 1.87.0
-> ```
+
 Cargo を使って実行可能です。
+
+```bash
+cargo run
+```
 
 > [!NOTE]
 > Ubuntu で以下のパッケージのインストールが必要になることが確認されています。
@@ -56,8 +52,18 @@ Cargo を使って実行可能です。
 > sudo apt install pkg-config libasound2-dev
 > ```
 
+### 開発用テスト
+開発用の test harness が `examples/tests.rs` にあります。
+
 ```bash
-cargo run
+# コマンド一覧を表示
+cargo run --example tests help
+
+# URLを指定してDOMをパース
+cargo run --example tests parse_dom https://example.com
+
+# フルレンダリング（ウィンドウ表示）
+cargo run --example tests simple_render https://example.com
 ```
 
 ## 貢献
@@ -69,4 +75,3 @@ cargo run
 Discordコミュニティは[ここ](https://discord.gg/tMGPgHFsxJ)です！
 
 その他の開発時に目を通しておくと便利なドキュメントは[ここ](./docs/ja)にあります。
-なお、一部のものを除いて、ドキュメントは言語ごとに分かれています。

@@ -27,16 +27,19 @@ Window Frame
 ```
 
 ## 2. Responsibilities of each layer
-| Layer                  | Main modules                       | Role                                                                                |
-|------------------------|------------------------------------|-------------------------------------------------------------------------------------|
-| **Application**        | `examples/tests.rs`, `main.rs`     | Tests, startup logic, and CLI entrypoint.                                           |
-| **browser**            | `src/browser/mod.rs`               | Orchestration layer that integrates the system and controls startup/initialization. |
-| **platform::ui**       | `src/platform/ui`                  | Manages OS windows and the event loop (`winit`); the outer boundary of the app.     |
-| **platform::renderer** | `src/platform/renderer`            | GPU abstraction (wgpu-based). Executes draw commands and manages frames.            |
-| **engine::layouter**   | `src/engine/layouter`              | Logical rendering layer that converts HTML/CSS layout results into draw commands.   |
-| **engine::html / css** | `src/engine/html`・`src/engine/css` | Tokenization, parsing, and construction of the DOM/CSSOM.                           |
-| **platform::network**  | `src/platform/network`             | TCP/TLS networking, HTTP handling, cache and cookie management.                     |
-| **platform::io**       | `src/platform/io`                  | OS-dependent I/O abstractions (files, configuration, etc.).                         |
+| Layer                      | Main modules                                                             | Role                                                                                                   |
+|----------------------------|--------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------|
+| **Application**            | `main.rs`, `examples/tests.rs`                                           | Entry point, CLI, and process management (`ProcessHandler`).                                              |
+| **browser::core**          | `src/browser/core/` {`app`, `tab`, `command`, `ui/`, `webview/`, `resource_loader`} | Orchestration layer that integrates the system: app startup, tab management, UI composition.           |
+| **engine::html / css**     | `src/engine/html/`・`src/engine/css/`                                     | Tokenization, parsing, and construction of the DOM/CSSOM.                                              |
+| **engine::layouter**       | `src/engine/layouter/` {`builder`, `css_resolver`, `text_layouter`, `types`} | Layout computation from HTML/CSS; produces InfoNode/LayoutNode trees.                                  |
+| **engine::renderer_model** | `src/engine/renderer_model/` {`draw_command`}                             | Logical rendering layer that converts DOM+CSS into `DrawCommand` values.                                |
+| **engine::bridge / input / tree / ui** | `src/engine/bridge/`, `input/`, `tree/`, `ui/`                           | Event bridging, input abstraction, tree structures, UI components.                                     |
+| **platform::renderer**     | `src/platform/renderer/` {`gpu`, `glyph/`, `text/`, `image`, `scroll_bar`, `text_measurer`} | GPU abstraction (wgpu-based). Actual rendering, font atlases, texture upload, scroll bar rendering.   |
+| **platform::network**      | `src/platform/network/`                                                  | TCP/TLS networking, HTTP handling, cache and cookie management (runs in a separate process).             |
+| **platform::system**       | `src/platform/system/`                                                   | OS window management and event loop (`winit`).                                                              |
+| **platform::io**           | `src/platform/io/`                                                       | OS-dependent I/O abstractions (files, configuration, etc.).                                             |
+| **platform::audio**        | `src/platform/audio/`                                                    | Audio playback (`cpal` / `symphonia`-based).                                                            |
 
 ## 3. Simple execution flow
 ```mermaid
@@ -45,7 +48,8 @@ sequenceDiagram
     participant Browser as browser::Browser
     participant Net as platform::network
     participant HTML as engine::html
-    participant Render as engine::layouter
+    participant Layout as engine::layouter
+    participant Draw as engine::renderer_model
     participant GPU as platform::renderer
 
     UI->>Browser: User input
@@ -53,8 +57,10 @@ sequenceDiagram
     Net-->>Browser: HTML data
     Browser->>HTML: Parse HTML
     HTML-->>Browser: DOM structure
-    Browser->>Render: Generate layout
-    Render-->>Browser: Draw commands
+    Browser->>Layout: Compute layout
+    Layout-->>Browser: LayoutNode
+    Browser->>Draw: Generate DrawCommands
+    Draw-->>Browser: Vec<DrawCommand>
     Browser->>GPU: Rendering instructions
     GPU-->>UI: Present frame
 ```
@@ -69,22 +75,27 @@ sequenceDiagram
 ### Dependency direction diagram
 
 ```
-┌───────────────┐
-│    browser    │
-└───────┬───────┘
-        ▼
-┌───────────────┐
-│ engine        │
-│ renderer/html │
-└───────┬───────┘
-        ▼
-┌───────────────┐
-│ platform      │
-│ renderer/ui   │
-└───────────────┘
+┌─────────────────────┐
+│ browser::core       │
+│ (app, tab, command) │
+└──────────┬──────────┘
+           ▼
+┌─────────────────────┐
+│ engine              │
+│ (html, css, layouter,│
+│  renderer_model     │
+│  tree, input, ui)   │
+└──────────┬──────────┘
+           ▼
+┌─────────────────────┐
+│ platform            │
+│ (renderer, network, │
+│  system, io, audio) │
+└─────────────────────┘
 ```
 * Arrows indicate dependency direction.
 * Only the upper layer calls the lower layer in a single direction.
+* `engine` does NOT depend on `platform`; it only depends on external crates and Rust std.
 
 <!--
 Events propagate from higher layers to lower layers. Lower layers should not reference higher layers; use callbacks or channels when necessary.
