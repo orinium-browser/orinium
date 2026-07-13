@@ -268,3 +268,241 @@ fn test_unsupported_blocks_inner_var_declaration() {
         "unsupported @supports should block inner declarations"
     );
 }
+
+#[test]
+fn test_supports_flex_shrink() {
+    let s = resolve(
+        r#"
+        @supports (flex-shrink: 0) {
+            div {
+                --val: supported;
+            }
+        }
+        "#,
+    );
+    assert!(
+        has_prop_in_rule(&s, "--val"),
+        "flex-shrink should be recognized"
+    );
+}
+
+#[test]
+fn test_supports_align_self() {
+    let s = resolve(
+        r#"
+        @supports (align-self: center) {
+            div {
+                --val: supported;
+            }
+        }
+        "#,
+    );
+    assert!(
+        has_prop_in_rule(&s, "--val"),
+        "align-self should be recognized"
+    );
+}
+
+#[test]
+fn test_supports_column_gap() {
+    let s = resolve(
+        r#"
+        @supports (column-gap: 10px) {
+            div {
+                --val: supported;
+            }
+        }
+        "#,
+    );
+    assert!(
+        has_prop_in_rule(&s, "--val"),
+        "column-gap should be recognized"
+    );
+}
+
+#[test]
+fn test_supports_row_gap() {
+    let s = resolve(
+        r#"
+        @supports (row-gap: 1em) {
+            div {
+                --val: supported;
+            }
+        }
+        "#,
+    );
+    assert!(
+        has_prop_in_rule(&s, "--val"),
+        "row-gap should be recognized"
+    );
+}
+
+#[test]
+fn test_supports_display_grid_unsupported() {
+    let s = resolve(
+        r#"
+        @supports (display: grid) {
+            div {
+                --val: supported;
+            }
+        }
+        "#,
+    );
+    assert!(
+        !has_prop_in_rule(&s, "--val"),
+        "display: grid is not supported by layout engine"
+    );
+}
+
+#[test]
+fn test_supports_display_contents_unsupported() {
+    let s = resolve(
+        r#"
+        @supports (display: contents) {
+            div {
+                --val: supported;
+            }
+        }
+        "#,
+    );
+    assert!(
+        !has_prop_in_rule(&s, "--val"),
+        "display: contents is not supported by layout engine"
+    );
+}
+
+#[test]
+fn test_supports_display_inline_block_unsupported() {
+    let s = resolve(
+        r#"
+        @supports (display: inline-block) {
+            div {
+                --val: supported;
+            }
+        }
+        "#,
+    );
+    assert!(
+        !has_prop_in_rule(&s, "--val"),
+        "display: inline-block is not supported by layout engine"
+    );
+}
+
+#[test]
+fn test_supports_min_function() {
+    let s = resolve(
+        r#"
+        @supports (width: min(100px, 200px)) {
+            div {
+                --val: supported;
+            }
+        }
+        "#,
+    );
+    assert!(
+        has_prop_in_rule(&s, "--val"),
+        "min() function should be recognized"
+    );
+}
+
+#[test]
+fn test_supports_max_function() {
+    let s = resolve(
+        r#"
+        @supports (width: max(100px, 200px)) {
+            div {
+                --val: supported;
+            }
+        }
+        "#,
+    );
+    assert!(
+        has_prop_in_rule(&s, "--val"),
+        "max() function should be recognized"
+    );
+}
+
+#[test]
+fn test_supports_min_function_with_percent() {
+    let s = resolve(
+        r#"
+        @supports (width: min(100%, 500px)) {
+            div {
+                --val: supported;
+            }
+        }
+        "#,
+    );
+    assert!(
+        has_prop_in_rule(&s, "--val"),
+        "min() with percent should be recognized"
+    );
+}
+
+#[test]
+fn test_supports_max_function_with_vw() {
+    let s = resolve(
+        r#"
+        @supports (width: max(200px, 50vw)) {
+            div {
+                --val: supported;
+            }
+        }
+        "#,
+    );
+    assert!(
+        has_prop_in_rule(&s, "--val"),
+        "max() with vw should be recognized"
+    );
+}
+
+#[test]
+fn test_supports_min_function_three_args() {
+    let s = resolve(
+        r#"
+        @supports (width: min(100px, 50vw, 500px)) {
+            div {
+                --val: supported;
+            }
+        }
+        "#,
+    );
+    assert!(
+        has_prop_in_rule(&s, "--val"),
+        "min() with three args should be recognized"
+    );
+}
+
+#[test]
+fn test_supports_max_function_single_arg_unsupported() {
+    let s = resolve(
+        r#"
+        @supports (width: max(100px)) {
+            div {
+                --val: supported;
+            }
+        }
+        "#,
+    );
+    assert!(
+        !has_prop_in_rule(&s, "--val"),
+        "max() with single arg should not be recognized"
+    );
+}
+
+#[test]
+fn test_supports_calc_in_min() {
+    let s = resolve(
+        r#"
+        @supports (width: min(calc(100% - 20px), 500px)) {
+            div {
+                --val: supported;
+            }
+        }
+        "#,
+    );
+    assert!(
+        has_prop_in_rule(&s, "--val"),
+        "calc() inside min() should be recognized"
+    );
+}
