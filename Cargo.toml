@@ -50,7 +50,7 @@ tokio-rustls = "0.26.4"
 # ui_layout = {path = "../ui_layout-rs"}
 ui_layout = {
   git = "https://github.com/098orin/ui_layout-rs",
-  rev = "e28d2c7b60adfec36eac2955c07535af594933c1"
+  rev = "ce0b187b0e2d1ba36af98f66b4266e4c1d2547d1"
 }
 url = "2.5"
 wgpu = "30.0.0"
