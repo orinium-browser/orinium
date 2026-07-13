@@ -585,7 +585,7 @@ fn collect_candidates(
     candidates
 }
 
-fn apply_declaration(
+pub fn apply_declaration(
     name: &str,
     value: &CssValue,
     style: &mut Style,

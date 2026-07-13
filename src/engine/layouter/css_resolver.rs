@@ -1,6 +1,6 @@
 //! A CSS resolver that handles selector matching and value resolution.
 
-use crate::engine::css::parser::{ComplexSelector, CssNode, CssNodeType};
+use crate::engine::css::parser::{AtQuery, ComplexSelector, CssNode, CssNodeType};
 use crate::engine::css::values::{CssIdent, CssValue};
 
 use std::collections::HashMap;
@@ -82,9 +82,97 @@ impl CssResolver {
             }
         }
 
-        for child in node.children() {
-            Self::walk(child, styles, order);
+        if Self::should_recurse(node) {
+            for child in node.children() {
+                Self::walk(child, styles, order);
+            }
         }
+    }
+
+    /// Returns `true` if the resolver should recurse into the node's children.
+    ///
+    /// For at-rules, evaluates the condition (e.g. `@supports`).
+    /// For all other nodes, always returns `true`.
+    fn should_recurse(node: &CssNode) -> bool {
+        if let CssNodeType::AtRule { name, params } = &node.node() {
+            Self::evaluate_at_rule(name, params)
+        } else {
+            true
+        }
+    }
+
+    /// Evaluate an at-rule condition. Returns `true` if children should be applied.
+    fn evaluate_at_rule(name: &str, params: &AtQuery) -> bool {
+        match name.to_ascii_lowercase().as_str() {
+            "supports" => Self::evaluate_supports(params),
+            _ => true,
+        }
+    }
+
+    /// Split a `Group`'s items by a logical keyword (`and`/`or`), returning
+    /// only the non-keyword operands.
+    fn split_group_by_keyword<'a>(items: &'a [AtQuery], keyword: &str) -> Option<Vec<&'a AtQuery>> {
+        let has_keyword = items.iter().any(|item| {
+            matches!(item, AtQuery::Keyword(k) if k.eq_ignore_ascii_case(keyword))
+        });
+        if !has_keyword {
+            return None;
+        }
+        let groups: Vec<&AtQuery> = items
+            .iter()
+            .filter(|item| !matches!(item, AtQuery::Keyword(k) if k.eq_ignore_ascii_case(keyword)))
+            .collect();
+        Some(groups)
+    }
+
+    /// Evaluate a `@supports` condition against the engine's supported features.
+    fn evaluate_supports(query: &AtQuery) -> bool {
+        match query {
+            AtQuery::Group(items) => {
+                if items.is_empty() {
+                    return false;
+                }
+
+                // `not` prefix
+                if let AtQuery::Keyword(k) = &items[0] {
+                    if k.eq_ignore_ascii_case("not") && items.len() > 1 {
+                        return !Self::evaluate_supports(&AtQuery::Group(items[1..].to_vec()));
+                    }
+                }
+
+                // `and` — all operands must hold
+                if let Some(groups) = Self::split_group_by_keyword(items, "and") {
+                    return groups.iter().all(|g| Self::evaluate_supports(g));
+                }
+
+                // `or` — at least one operand must hold
+                if let Some(groups) = Self::split_group_by_keyword(items, "or") {
+                    return groups.iter().any(|g| Self::evaluate_supports(g));
+                }
+
+                // Single group — unwrap
+                if items.len() == 1 {
+                    return Self::evaluate_supports(&items[0]);
+                }
+
+                // Multiple items without logical operators — implicit AND
+                items.iter().all(|g| Self::evaluate_supports(g))
+            }
+            AtQuery::Condition { name, value } => Self::is_supported_declaration(name, value),
+            AtQuery::Keyword(_) => false,
+        }
+    }
+
+    /// Check whether a `property: value` pair is supported by this engine.
+    fn is_supported_declaration(name: &str, value: &CssValue) -> bool {
+        super::builder::apply_declaration(
+            name,
+            value,
+            &mut ui_layout::Style::default(),
+            &mut super::types::ContainerStyle::default(),
+            &mut super::types::TextStyle::default(),
+        )
+        .is_some()
     }
 
     fn collect_declarations(rule_node: &CssNode) -> Vec<(String, CssValue, bool)> {
