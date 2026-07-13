@@ -47,10 +47,11 @@ symphonia = {
 }
 tokio = { version = "1.52", features = ["fs", "io-std", "net", "rt", "time"] }
 tokio-rustls = "0.26.4"
-ui_layout = {
-  git = "https://github.com/098orin/ui_layout-rs",
-  rev = "7aeb101b20fd288c905c01757f3dc24302630a74"
-}
+ui_layout = {path = "../ui_layout-rs"}
+# ui_layout = {
+#   git = "https://github.com/098orin/ui_layout-rs",
+#   rev = "e0cb70b03a20dbed8f7bdb518b6d29e7715f6e55"
+# }
 url = "2.5"
 wgpu = "30.0.0"
 wgpu-types = "30.0.0"
