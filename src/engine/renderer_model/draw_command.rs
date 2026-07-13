@@ -186,12 +186,7 @@ fn push_box_model(
         scroll: false,
     };
 
-    // Inline elements are fragmented across lines, so their borders
-    // cannot be drawn as a single rectangle per box model.
-    // TODO: support inline borders (draw per fragment).
-    if !is_inline {
-        draw_border(cmd_buf, &border_box, &padding_box, &style.border_color);
-    }
+    draw_border(cmd_buf, &border_box, &padding_box, &style.border_color);
 
     draw_background(cmd_buf, &border_box, &padding_box, &style.background);
 
