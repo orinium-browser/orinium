@@ -317,6 +317,7 @@ pub fn generate_draw_commands(
         match &child_info.kind {
             NodeKind::Text { text_id, style, .. } => {
                 draw_text(cmd_buf, style, *text_id);
+                layout_iter.next();
             }
             NodeKind::LineBreak => {
                 layout_iter.next();
