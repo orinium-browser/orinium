@@ -36,7 +36,7 @@ pixi_byte = {
   git = "https://github.com/orinium-browser/pixi_byte",
   rev = "9de1b545f412b33d864bb65896ec65d12509865e"
 }
-pollster = "0.4"
+pollster = "1.0"
 rustls = { version = "0.23.40", default-features = false, features = ["tls12"] }
 rustls-native-certs = "0.8.4"
 serde = { version = "1", features = ["derive"] }
