@@ -1488,6 +1488,23 @@ fn resolve_css_len(name: &str, css_len: &CssValue, text_style: &TextStyle) -> Op
 
             Some(result)
         }
+        CssValue::Function(fn_name, args)
+            if (fn_name == "min" || fn_name == "max") && args.len() >= 2 =>
+        {
+            let mut resolved: Vec<Length> = Vec::with_capacity(args.len());
+            for arg in args {
+                resolved.push(resolve_css_len(name, arg, text_style)?);
+            }
+            let mut result = resolved.remove(resolved.len() - 1);
+            for arg in resolved.into_iter().rev() {
+                result = if fn_name == "min" {
+                    Length::Min(Box::new(arg), Box::new(result))
+                } else {
+                    Length::Max(Box::new(arg), Box::new(result))
+                };
+            }
+            Some(result)
+        }
         CssValue::Color(_) => None,
         _ => {
             log::error!(target: "Layouter", "Unknown CSS Length type for `{}`: {:?}", name, css_len);
