@@ -3,9 +3,15 @@
 use crate::engine::css::parser::{AtQuery, ComplexSelector, CssNode, CssNodeType};
 use crate::engine::css::values::{CssIdent, CssValue};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 type CustomProperties = HashMap<CssIdent, CssValue>;
+
+struct Declaration {
+    name: String,
+    value: CssValue,
+    important: bool,
+}
 
 /// A single CSS declaration after selector resolution and value processing.
 ///
@@ -25,31 +31,19 @@ type CustomProperties = HashMap<CssIdent, CssValue>;
 /// 2. `order` (later declarations win)
 #[derive(Debug, Clone)]
 pub struct ResolvedDeclaration {
-    /// The selector this declaration originates from.
     pub selector: ComplexSelector,
-
-    /// The CSS property name (e.g. `"color"`, `"margin-top"`).
     pub name: String,
-
-    /// The resolved CSS value for the property.
-    /// This value has already had `var()` functions expanded.
     pub value: CssValue,
-
-    /// The specificity of the selector, represented as (a, b, c).
-    /// - a: ID selectors
-    /// - b: class, attribute, and pseudo-class selectors
-    /// - c: type and pseudo-element selectors
     pub specificity: (u32, u32, u32),
-
-    /// The source order of the declaration.
-    /// Higher values indicate declarations that appear later in the stylesheet.
     pub order: usize,
-
-    /// Whether this declaration is marked as `!important`.
     pub important: bool,
 }
 
 pub type ResolvedStyles = Vec<ResolvedDeclaration>;
+
+// ============================================================
+//  CssResolver — tree walk + rule resolution
+// ============================================================
 
 pub struct CssResolver;
 
@@ -62,25 +56,7 @@ impl CssResolver {
     }
 
     fn walk(node: &CssNode, styles: &mut ResolvedStyles, order: &mut usize) {
-        if let CssNodeType::Rule { selectors } = &node.node() {
-            let declarations = Self::collect_declarations(node);
-
-            for selector in selectors {
-                let specificity = selector.specificity();
-
-                for (name, value, important) in &declarations {
-                    styles.push(ResolvedDeclaration {
-                        selector: selector.clone(),
-                        name: name.clone(),
-                        value: value.clone(),
-                        specificity,
-                        order: *order,
-                        important: *important,
-                    });
-                    *order += 1;
-                }
-            }
-        }
+        Self::resolve_rule(node, styles, order);
 
         if Self::should_recurse(node) {
             for child in node.children() {
@@ -89,82 +65,107 @@ impl CssResolver {
         }
     }
 
-    /// Returns `true` if the resolver should recurse into the node's children.
-    ///
-    /// For at-rules, evaluates the condition (e.g. `@supports`).
-    /// For all other nodes, always returns `true`.
+    fn resolve_rule(node: &CssNode, styles: &mut ResolvedStyles, order: &mut usize) {
+        let CssNodeType::Rule { selectors } = node.node() else {
+            return;
+        };
+
+        let declarations = DeclarationResolver::collect(node);
+
+        for selector in selectors {
+            Self::push_resolved(selector, &declarations, styles, order);
+        }
+    }
+
+    fn push_resolved(
+        selector: &ComplexSelector,
+        declarations: &[Declaration],
+        styles: &mut ResolvedStyles,
+        order: &mut usize,
+    ) {
+        let specificity = selector.specificity();
+
+        for decl in declarations {
+            styles.push(ResolvedDeclaration {
+                selector: selector.clone(),
+                name: decl.name.clone(),
+                value: decl.value.clone(),
+                specificity,
+                order: *order,
+                important: decl.important,
+            });
+            *order += 1;
+        }
+    }
+
     fn should_recurse(node: &CssNode) -> bool {
-        if let CssNodeType::AtRule { name, params } = &node.node() {
+        if let CssNodeType::AtRule { name, params } = node.node() {
             Self::evaluate_at_rule(name, params)
         } else {
             true
         }
     }
 
-    /// Evaluate an at-rule condition. Returns `true` if children should be applied.
     fn evaluate_at_rule(name: &str, params: &AtQuery) -> bool {
-        match name.to_ascii_lowercase().as_str() {
-            "supports" => Self::evaluate_supports(params),
-            _ => true,
+        if name.eq_ignore_ascii_case("supports") {
+            SupportsEvaluator::evaluate(params)
+        } else {
+            true
         }
     }
+}
 
-    /// Split a `Group`'s items by a logical keyword (`and`/`or`), returning
-    /// only the non-keyword operands.
-    fn split_group_by_keyword<'a>(items: &'a [AtQuery], keyword: &str) -> Option<Vec<&'a AtQuery>> {
-        let has_keyword = items.iter().any(|item| {
-            matches!(item, AtQuery::Keyword(k) if k.eq_ignore_ascii_case(keyword))
-        });
-        if !has_keyword {
-            return None;
-        }
-        let groups: Vec<&AtQuery> = items
-            .iter()
-            .filter(|item| !matches!(item, AtQuery::Keyword(k) if k.eq_ignore_ascii_case(keyword)))
-            .collect();
-        Some(groups)
-    }
+// ============================================================
+//  SupportsEvaluator — `@supports` condition evaluation
+// ============================================================
 
-    /// Evaluate a `@supports` condition against the engine's supported features.
-    fn evaluate_supports(query: &AtQuery) -> bool {
+struct SupportsEvaluator;
+
+impl SupportsEvaluator {
+    /// Dispatch on the `AtQuery` AST variant.
+    fn evaluate(query: &AtQuery) -> bool {
         match query {
-            AtQuery::Group(items) => {
-                if items.is_empty() {
-                    return false;
-                }
-
-                // `not` prefix
-                if let AtQuery::Keyword(k) = &items[0] {
-                    if k.eq_ignore_ascii_case("not") && items.len() > 1 {
-                        return !Self::evaluate_supports(&AtQuery::Group(items[1..].to_vec()));
-                    }
-                }
-
-                // `and` — all operands must hold
-                if let Some(groups) = Self::split_group_by_keyword(items, "and") {
-                    return groups.iter().all(|g| Self::evaluate_supports(g));
-                }
-
-                // `or` — at least one operand must hold
-                if let Some(groups) = Self::split_group_by_keyword(items, "or") {
-                    return groups.iter().any(|g| Self::evaluate_supports(g));
-                }
-
-                // Single group — unwrap
-                if items.len() == 1 {
-                    return Self::evaluate_supports(&items[0]);
-                }
-
-                // Multiple items without logical operators — implicit AND
-                items.iter().all(|g| Self::evaluate_supports(g))
-            }
-            AtQuery::Condition { name, value } => Self::is_supported_declaration(name, value),
+            // `@supports (display: grid)` — a parenthesised group
+            AtQuery::Group(items) => Self::evaluate_group(items),
+            // `@supports (display: grid)` — the inner condition after unwrapping
+            AtQuery::Condition { name, value } => Self::is_supported(name, value),
+            // Stray keyword outside a group (malformed input)
             AtQuery::Keyword(_) => false,
         }
     }
 
-    /// Check whether a `property: value` pair is supported by this engine.
-    fn is_supported_declaration(name: &str, value: &CssValue) -> bool {
+    /// Evaluate a group of `@supports` items.
+    ///
+    /// The parser produces flat groups like:
+    /// - `(display: grid)` → `[Group([Condition])]`
+    /// - `(A) and (B)` → `[Group, Keyword("and"), Group]`
+    /// - `not (A)` → `[Keyword("not"), Group]`
+    /// - `(A) or (B)` → `[Group, Keyword("or"), Group]`
+    fn evaluate_group(items: &[AtQuery]) -> bool {
+        if items.is_empty() {
+            return false;
+        }
+
+        // `not (display: grid)` — negate
+        if matches!(items.first(), Some(AtQuery::Keyword(k)) if k.eq_ignore_ascii_case("not")) {
+            return items.len() > 1 && !Self::evaluate(&AtQuery::Group(items[1..].to_vec()));
+        }
+
+        // `(display: flex) and (gap: 10px)` — all operands must be supported
+        if let Some(operands) = Self::split_by_keyword(items, "and") {
+            operands.iter().all(|g| Self::evaluate(g))
+        // `(display: flex) or (display: grid)` — at least one must be supported
+        } else if let Some(operands) = Self::split_by_keyword(items, "or") {
+            operands.iter().any(|g| Self::evaluate(g))
+        // Single group — unwrap one level
+        } else if items.len() == 1 {
+            Self::evaluate(&items[0])
+        } else {
+            items.iter().all(|g| Self::evaluate(g))
+        }
+    }
+
+    fn is_supported(name: &str, value: &CssValue) -> bool {
         super::builder::apply_declaration(
             name,
             value,
@@ -175,28 +176,63 @@ impl CssResolver {
         .is_some()
     }
 
-    fn collect_declarations(rule_node: &CssNode) -> Vec<(String, CssValue, bool)> {
-        let mut result = Vec::new();
-        let mut custom_props: CustomProperties = HashMap::new();
+    fn split_by_keyword<'a>(items: &'a [AtQuery], keyword: &str) -> Option<Vec<&'a AtQuery>> {
+        let has = items
+            .iter()
+            .any(|item| matches!(item, AtQuery::Keyword(k) if k.eq_ignore_ascii_case(keyword)));
+        if !has {
+            return None;
+        }
+        Some(
+            items
+                .iter()
+                .filter(
+                    |item| !matches!(item, AtQuery::Keyword(k) if k.eq_ignore_ascii_case(keyword)),
+                )
+                .collect(),
+        )
+    }
+}
 
-        // 1. custom property を先に集める
+// ============================================================
+//  DeclarationResolver — `!important` extraction, `var()` resolution
+// ============================================================
+
+struct DeclarationResolver;
+
+impl DeclarationResolver {
+    fn collect(rule_node: &CssNode) -> Vec<Declaration> {
+        let mut custom_props: CustomProperties = HashMap::new();
+        let mut result = Vec::new();
+
         for child in rule_node.children() {
-            if let CssNodeType::Declaration { name, value } = &child.node()
-                && name.starts_with("--")
-            {
-                custom_props.insert(name.into(), value.clone());
+            if let CssNodeType::Declaration { name, value } = &child.node() {
+                if name.starts_with("--") {
+                    custom_props.insert(name.into(), value.clone());
+                }
             }
         }
 
-        // 2. 通常の declaration を var 解決して追加
         for child in rule_node.children() {
             if let CssNodeType::Declaration { name, value } = &child.node() {
                 let (raw_value, important) = Self::extract_important(value);
 
                 if name.starts_with("--") {
-                    result.push((name.clone(), raw_value, important));
-                } else if let Some(resolved) = Self::resolve_var(&raw_value, &custom_props) {
-                    result.push((name.clone(), resolved, important));
+                    // `--accent: blue` — custom property, keep as-is
+                    result.push(Declaration {
+                        name: name.clone(),
+                        value: raw_value,
+                        important,
+                    });
+                } else if let Some(resolved) =
+                    Self::resolve_var(&raw_value, &custom_props, &mut HashSet::new())
+                {
+                    // `color: var(--accent)` — resolve var() then emit
+                    result.push(Declaration {
+                        name: name.clone(),
+                        value: resolved,
+                        important,
+                    });
                 }
             }
         }
@@ -204,6 +240,10 @@ impl CssResolver {
         result
     }
 
+    /// Extract `!important` from a CSS value.
+    ///
+    /// `border: 1px solid black !important` is parsed as a `List` where the
+    /// last two items are `Keyword("!")` and `Keyword("important")`.
     fn extract_important(value: &CssValue) -> (CssValue, bool) {
         match value {
             CssValue::List(list) if list.len() >= 2 => {
@@ -223,49 +263,63 @@ impl CssResolver {
                     } else {
                         CssValue::List(list[..len - 2].to_vec())
                     };
-                    return (value, true);
+                    (value, true)
+                } else {
+                    (value.clone(), false)
                 }
-
-                (value.clone(), false)
             }
             _ => (value.clone(), false),
         }
     }
 
-    fn resolve_var(value: &CssValue, custom_props: &CustomProperties) -> Option<CssValue> {
+    fn resolve_var(
+        value: &CssValue,
+        custom_props: &CustomProperties,
+        visited: &mut HashSet<CssIdent>,
+    ) -> Option<CssValue> {
         match value {
+            // `var(--accent)` / `var(--missing, red)` — resolve the custom property
             CssValue::Function(name, args) if name == "var" => {
-                // var(--x [, fallback])
                 let var_name = match args.first() {
                     Some(CssValue::Keyword(name)) => name,
                     _ => return None,
                 };
 
-                if let Some(v) = custom_props.get(var_name) {
-                    Self::resolve_var(v, custom_props)
+                if !visited.insert(var_name.clone()) {
+                    return None;
+                }
+
+                let result = if let Some(v) = custom_props.get(var_name) {
+                    Self::resolve_var(v, custom_props, visited)
                 } else if let Some(fallback) = args.get(1) {
-                    Self::resolve_var(fallback, custom_props)
+                    Self::resolve_var(fallback, custom_props, visited)
                 } else {
                     None
-                }
+                };
+
+                visited.remove(var_name);
+                result
             }
 
+            // `rgb(var(--r), var(--g), var(--b))` — resolve args independently
             CssValue::Function(name, args) => {
                 let resolved_args = args
                     .iter()
-                    .map(|v| Self::resolve_var(v, custom_props))
+                    .map(|v| Self::resolve_var(v, custom_props, &mut visited.clone()))
                     .collect::<Option<Vec<_>>>()?;
                 Some(CssValue::Function(name.clone(), resolved_args))
             }
 
+            // `1px solid var(--color)` — resolve each item independently
             CssValue::List(list) => {
                 let resolved = list
                     .iter()
-                    .map(|v| Self::resolve_var(v, custom_props))
+                    .map(|v| Self::resolve_var(v, custom_props, &mut visited.clone()))
                     .collect::<Option<Vec<_>>>()?;
                 Some(CssValue::List(resolved))
             }
 
+            // `10px` / `"hello"` / `#fff` — already concrete, pass through
             _ => Some(value.clone()),
         }
     }
