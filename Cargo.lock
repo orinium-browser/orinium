@@ -2531,6 +2531,7 @@ dependencies = [
 [[package]]
 name = "orinium_text"
 version = "0.1.0"
+source = "git+https://github.com/orinium-browser/orinium_text?rev=aa51e6835cecb861d652fd3e14118765d3789c44#aa51e6835cecb861d652fd3e14118765d3789c44"
 dependencies = [
  "dwrote",
  "fontconfig",
@@ -3964,6 +3965,7 @@ dependencies = [
 [[package]]
 name = "ui_layout"
 version = "0.10.0"
+source = "git+https://github.com/098orin/ui_layout-rs?rev=e28d2c7b60adfec36eac2955c07535af594933c1#e28d2c7b60adfec36eac2955c07535af594933c1"
 
 [[package]]
 name = "unicode-bidi"
