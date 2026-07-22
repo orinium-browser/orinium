@@ -5,7 +5,8 @@
 
 ## 基本
 
-- インデントサイズは4です
+- Rust コードのインデントサイズは 4 とします
+- TOML コードのインデントサイズは 2 とします
 - 変数名はsnake_caseである必要があります（例: hoge_hoge）
 - 関数名はsnake_caseである必要があります（例: view_dom_tree）
 - 構造体名、列挙型名、トレイト名はPascalCaseである必要があります（例: TcpConnection, NetworkCore）
