@@ -17,22 +17,26 @@
 
 > [!TIP]
 > 以下にコードのドキュメントがあります。常に、dev ブランチの最新を保っています。
-> 
+>
 > https://orinium-browser.github.io/orinium/orinium_browser/
 
 ## Googleに依存しない、独立したブラウザ
+
 このブラウザエンジンのソースコードは、**Googleに依存しません**。Firefoxなどの一部のブラウザを除いて、世の中の多くのブラウザはGoogleのChromiumに依存しています。
 このプロジェクトはChromiumに代る新しいブラウザエンジンを提供します。
 
 ## 拡張機能形式
+
 将来的にこのブラウザエンジンは拡張機能をサポートします。現在サポート予定の形式は、
-* Orinium 独自の形式
-* Firefox addon
-* Chromium manifest v2（部分的）
+
+- Orinium 独自の形式
+- Firefox addon
+- Chromium manifest v2（部分的）
 
 です。これらの機能のサポートは他のブラウザとの互換性を保つのに役立ち、またこのブラウザに適した独自の機能でより良いユーザーエクスペリエンスを提供できます。
 
 ## Run
+
 リポジトリをクローンします。
 
 ```bash
@@ -48,11 +52,13 @@ cargo run
 
 > [!NOTE]
 > Ubuntu で以下のパッケージのインストールが必要になることが確認されています。
+>
 > ```bash
 > sudo apt install pkg-config libasound2-dev
 > ```
 
 ### 開発用テスト
+
 開発用の test harness が `examples/tests.rs` にあります。
 
 ```bash
@@ -67,6 +73,7 @@ cargo run --example tests simple_render https://example.com
 ```
 
 ## 貢献
+
 [CONTRIBUTING.md](./CONTRIBUTING.md)を参照してください。
 
 アーキテクチャは[architecture.md](./docs/ja/architecture.md)を参照してください。

@@ -17,23 +17,27 @@
 
 > [!TIP]
 > The code documentation is below. We always keep it up-to-date on the dev branch.
-> 
+>
 > https://orinium-browser.github.io/orinium/orinium_browser/
 
 ## An Independent Browser Free from Google
+
 The source code of this browser engine **does not depend on Google**.  
 Except for a few browsers like Firefox, most browsers in the world rely on Google’s Chromium.  
 This project aims to provide a new browser engine as an alternative to Chromium.
 
 ## Unique Extension Format
+
 In the future, this browser engine will support extensions. The planned formats include:
-* Orinium’s original format  
-* Firefox add-ons  
-* Chromium manifest v2 (partial support)
+
+- Orinium’s original format
+- Firefox add-ons
+- Chromium manifest v2 (partial support)
 
 Supporting these formats helps maintain compatibility with other browsers, while unique features designed specifically for Orinium will provide a better user experience.
 
 ## Run
+
 Clone the repository.
 
 ```bash
@@ -48,6 +52,7 @@ cargo run
 ```
 
 ### Development test harness
+
 A development test harness is available at `examples/tests.rs`.
 
 ```bash
@@ -62,6 +67,7 @@ cargo run --example tests simple_render https://example.com
 ```
 
 ## Contributing
+
 See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 For the architecture, see [architecture.md](./docs/en/architecture.md).
