@@ -20,11 +20,15 @@
 >
 > https://orinium-browser.github.io/orinium/orinium_browser/
 
-## An Independent Browser Free from Google
+# Separating the Web from Proprietary Implementations
 
-The source code of this browser engine **does not depend on Google**.  
-Except for a few browsers like Firefox, most browsers in the world rely on Google’s Chromium.  
-This project aims to provide a new browser engine as an alternative to Chromium.
+Orinium is a browser engine that aims to create an open execution environment where the Web is not dependent on the implementation or direction of any single organization, but remains under the control of users and developers.
+
+Today, many browsers rely on Chromium. Chromium is an excellent open-source project, but the concentration of browser implementations around a single project creates risks for the diversity and independence of the Web.
+
+When one implementation becomes the de facto standard, the interpretation of Web standards, the adoption of non-standard features, and the future direction of Web technologies can become heavily influenced by the decisions of one organization.
+
+Orinium is not a project created to eliminate Google. Instead, it aims to prevent any single company or organization from becoming a controlling point of the Web, ensuring that the Web remains an open platform that anyone can participate in, improve, and build upon.
 
 ## Unique Extension Format
 
