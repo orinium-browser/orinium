@@ -244,8 +244,26 @@ impl<'a> Parser<'a> {
                 self.special_text_mode = Some(name.clone());
             }
 
+            // HTML の void 要素は自行終了扱い（stack に push しない）
+            let is_void = matches!(
+                name.as_str(),
+                "area"
+                    | "base"
+                    | "br"
+                    | "col"
+                    | "embed"
+                    | "hr"
+                    | "img"
+                    | "input"
+                    | "link"
+                    | "meta"
+                    | "param"
+                    | "source"
+                    | "track"
+                    | "wbr"
+            );
             // Self-closing タグは stack に push しない
-            if !self_closing {
+            if !self_closing && !is_void {
                 self.tag_stack.push(name.clone());
                 self.stack.push(new_node);
                 log::debug!(target:"HtmlParser::Stack" ,"Stack len: {}, +Pushed <{}> to stack.", self.stack.len(), name);

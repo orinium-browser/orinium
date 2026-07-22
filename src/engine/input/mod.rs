@@ -42,6 +42,11 @@ pub fn hit_test<'a>(layout: &'a LayoutNode, info: &'a InfoNode, x: f32, y: f32) 
             scroll_offset_x,
             scroll_offset_y,
             ..
+        }
+        | NodeKind::Custom {
+            scroll_offset_x,
+            scroll_offset_y,
+            ..
         } = &info.kind
         {
             local_x += *scroll_offset_x;

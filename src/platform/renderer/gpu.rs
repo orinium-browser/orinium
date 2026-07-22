@@ -749,6 +749,9 @@ impl GpuRenderer {
 
                     todo!("Ellipse drawing with clipping is not implemented yet");
                 }
+                DrawCommand::SystemUi { .. } => {
+                    // TODO: implement composite/render system UI element
+                }
             }
         }
 

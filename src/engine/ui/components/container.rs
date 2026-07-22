@@ -1,6 +1,6 @@
-use ui_layout::{BlockLayouter, LayoutChild, LayoutContext, LayoutEngine, LayoutNode, Rect};
+use ui_layout::{BlockLayouter, LayoutContext, LayoutEngine, LayoutNode, Rect};
 
-use crate::engine::{layouter::types::ContainerStyle, ui::UiComponent};
+use crate::engine::layouter::types::ContainerStyle;
 
 pub struct ContainerComp {
     style: ContainerStyle,
@@ -54,15 +54,5 @@ impl BlockLayouter for ContainerComp {
 
     fn write_debug(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Container")
-    }
-}
-
-impl UiComponent for ContainerComp {
-    fn receive_event(&self, event: crate::engine::ui::UiEvent) {
-        todo!()
-    }
-
-    fn draw(&self, cmd_buf: &mut Vec<crate::engine::renderer_model::DrawCommand>) {
-        todo!()
     }
 }

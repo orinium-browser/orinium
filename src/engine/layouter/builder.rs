@@ -6,6 +6,7 @@ use crate::engine::css::{
     values::{CssValue, Unit},
 };
 use crate::engine::html::HtmlNodeType;
+use crate::engine::html::parser::DomTree;
 use crate::engine::layouter::types::VerticalAlign;
 use crate::engine::tree::TreeNode;
 
@@ -25,6 +26,12 @@ use super::types::{
     FontWeight, Gradient, GradientKind, InfoNode, LineHeight, NodeKind, RadialShape,
     RadialSizeKind, TextAlign, TextDecoration, TextStyle, TextTransform,
 };
+use crate::engine::ui::button::ButtonComponent;
+use crate::engine::ui::custom_bridge::CustomLayoutBridge;
+use crate::engine::ui::custom_node::CustomNode;
+
+/// Tags that produce a [`NodeKind::Custom`] instead of a normal container.
+const CUSTOM_TAGS: &[&str] = &["button"];
 
 const DEFAULT_LINE_FACTOR: f32 = 1.2;
 
@@ -236,6 +243,47 @@ pub fn build_layout_and_info(
                     inline_style,
                     [LayoutChild::Object(Box::new(layouter))],
                 );
+                let info = InfoNode {
+                    kind,
+                    children: Vec::new(),
+                };
+                let ptr = ptr_from_dom(&stack[top_idx].dom);
+                results.insert(ptr, (layout, info));
+                stack.pop();
+                continue;
+            }
+
+            // ── Custom / replaced element (leaf) ──
+            if let Some(tag) = html_node.tag_name()
+                && CUSTOM_TAGS.contains(&tag)
+            {
+                let node: std::rc::Rc<dyn CustomNode> = if tag == "button" {
+                    let text = DomTree::inner_text(&stack[top_idx].dom);
+                    std::rc::Rc::new(ButtonComponent {
+                        label: text,
+                        color: None,
+                    })
+                } else {
+                    unreachable!()
+                    // ToDo:
+                    // Support "iframe", "input" tags
+                };
+                let bridge = CustomLayoutBridge::new(
+                    container_style.clone(),
+                    style.clone(),
+                    std::rc::Rc::clone(&node),
+                );
+                let kind = NodeKind::Custom {
+                    node,
+                    scroll_x: false,
+                    scroll_y: false,
+                    scroll_offset_x: 0.0,
+                    scroll_offset_y: 0.0,
+                    style: container_style,
+                    text_style: text_style.clone(),
+                };
+                let layout =
+                    LayoutNode::with_children(style, [LayoutChild::Custom(Box::new(bridge))]);
                 let info = InfoNode {
                     kind,
                     children: Vec::new(),

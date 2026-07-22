@@ -2,7 +2,7 @@
 
 use crate::engine::layouter::text_layouter::TextFlowLayouter;
 use crate::engine::layouter::types::{
-    Background, Color, Gradient, InfoNode, NodeKind, TextDecoration, TextStyle,
+    Background, Color, ContainerStyle, Gradient, InfoNode, NodeKind, TextDecoration, TextStyle,
 };
 use smol_str::SmolStr;
 use ui_layout::{LayoutChild, LayoutNode};
@@ -51,6 +51,32 @@ pub enum DrawCommand {
         dy: f32,
     },
     PopTransform,
+
+    /// Delegate rendering to a platform-native system UI element.
+    ///
+    /// The renderer composites or renders the element identified by
+    /// [`SystemUiKind`] at the given rectangle within the current
+    /// coordinate space.
+    SystemUi {
+        kind: SystemUiKind,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    },
+}
+
+/// Discriminator for [`DrawCommand::SystemUi`].
+/// Stub
+#[derive(Debug, Clone)]
+pub enum SystemUiKind {
+    /// Composite an external surface (WebView, iframe, …).
+    WebView { surface_id: usize },
+    /// Render a platform-native input widget.
+    Input {
+        value: SmolStr,
+        placeholder: SmolStr,
+    },
 }
 
 /// Per-box-model push state for balanced pop generation.
@@ -230,11 +256,24 @@ fn pop_box_model(cmd_buf: &mut Vec<DrawCommand>, state: BoxPushState) {
 }
 
 /// Draw text spans for a single text node.
-fn draw_text(cmd_buf: &mut Vec<DrawCommand>, style: &TextStyle, text_id: usize) {
+///
+/// `content_origin` is the content-box origin of the enclosing box.
+/// For block containers this is `(0, 0)` (the flow cursor already starts at
+/// the content area), but for inline containers the flow layouter positions
+/// text in the parent's coordinate space while `push_box_model` also pushes
+/// the border-box offset, so we must subtract the content-box origin to
+/// avoid double-counting.
+fn draw_text(
+    cmd_buf: &mut Vec<DrawCommand>,
+    style: &TextStyle,
+    text_id: usize,
+    content_origin: (f32, f32),
+) {
     if let Some(result) = TextFlowLayouter::get_result(text_id) {
         for (i, line_text) in result.line_texts.iter().enumerate() {
             let span = &result.spans[i];
-            let (x, y) = span.line_pos;
+            let x = span.line_pos.0 - content_origin.0;
+            let y = span.line_pos.1 - content_origin.1;
 
             cmd_buf.push(DrawCommand::DrawText {
                 x,
@@ -282,6 +321,8 @@ pub fn generate_draw_commands(
 ) {
     let mut box_states: Vec<BoxPushState> = Vec::new();
 
+    let is_inline = matches!(layout.layout_box, ui_layout::LayoutBox::InlineBox(_));
+
     match &info.kind {
         NodeKind::Text { .. } | NodeKind::LineBreak => unreachable!(),
 
@@ -291,8 +332,6 @@ pub fn generate_draw_commands(
             style,
             ..
         } => {
-            let is_inline = matches!(layout.layout_box, ui_layout::LayoutBox::InlineBox(_));
-
             for box_model in &layout.layout_box {
                 box_states.push(push_box_model(
                     cmd_buf,
@@ -304,14 +343,58 @@ pub fn generate_draw_commands(
                 ));
             }
         }
+
+        NodeKind::Custom {
+            scroll_offset_x,
+            scroll_offset_y,
+            style,
+            node,
+            text_style,
+            ..
+        } => {
+            let effective_style = node
+                .background_color()
+                .map(|c| ContainerStyle {
+                    background: Background::Color(c),
+                    ..style.clone()
+                });
+            let style_ref = effective_style.as_ref().unwrap_or(style);
+
+            for box_model in &layout.layout_box {
+                box_states.push(push_box_model(
+                    cmd_buf,
+                    &box_model,
+                    style_ref,
+                    *scroll_offset_x,
+                    *scroll_offset_y,
+                    is_inline,
+                ));
+            }
+
+            node.draw(cmd_buf, text_style);
+        }
     }
+
+    // For inline containers the text flow layouter positions text in the
+    // parent's coordinate space, but push_box_model already pushes the
+    // border-box offset.  Subtract the content-box origin so text
+    // coordinates become relative to the pushed coordinate system.
+    let text_origin = if is_inline {
+        layout
+            .layout_box
+            .iter()
+            .next()
+            .map_or((0.0, 0.0), |bm| (bm.content_box.x, bm.content_box.y))
+    } else {
+        (0.0, 0.0)
+    };
 
     let mut layout_iter = layout.children.iter();
 
     for child_info in &info.children {
         match &child_info.kind {
             NodeKind::Text { text_id, style, .. } => {
-                draw_text(cmd_buf, style, *text_id);
+                draw_text(cmd_buf, style, *text_id, text_origin);
                 layout_iter.next();
             }
             NodeKind::LineBreak => {
@@ -322,10 +405,18 @@ pub fn generate_draw_commands(
                     generate_draw_commands(cmd_buf, node, child_info);
                 }
             }
+            NodeKind::Custom { .. } => {
+                if let Some(LayoutChild::Node(node)) = layout_iter.next() {
+                    generate_draw_commands(cmd_buf, node, child_info);
+                }
+            }
         }
     }
 
-    if matches!(info.kind, NodeKind::Container { .. }) {
+    if matches!(
+        info.kind,
+        NodeKind::Container { .. } | NodeKind::Custom { .. }
+    ) {
         for state in box_states.iter().rev() {
             pop_box_model(cmd_buf, *state);
         }

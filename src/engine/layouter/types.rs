@@ -1,5 +1,9 @@
 //! Layout tree node types. Styles, text, and container definitions.
 
+use std::rc::Rc;
+
+use crate::engine::ui::custom_node::CustomNode;
+
 /// InfoNode represents a node in the layout tree.
 /// It can be either a Container or Text node, each with its own properties and styles.
 #[derive(Debug, Clone)]
@@ -22,7 +26,8 @@ pub enum ContainerRole {
 ///
 /// - Container: A container node that can hold other nodes and has scrolling capabilities.
 /// - Text: A text node that contains text content and styling information.
-#[derive(Debug, Clone, PartialEq)]
+/// - Custom: A custom node that generates its own draw commands via [`CustomNode::draw`].
+#[derive(Debug, Clone)]
 pub enum NodeKind {
     Container {
         scroll_x: bool,
@@ -40,6 +45,15 @@ pub enum NodeKind {
         text_id: usize,
     },
     LineBreak,
+    Custom {
+        node: Rc<dyn CustomNode>,
+        scroll_x: bool,
+        scroll_y: bool,
+        scroll_offset_x: f32,
+        scroll_offset_y: f32,
+        style: ContainerStyle,
+        text_style: TextStyle,
+    },
 }
 
 impl NodeKind {
@@ -53,6 +67,30 @@ impl NodeKind {
             Some(&style.background)
         } else {
             None
+        }
+    }
+
+    pub fn custom_style(&self) -> Option<&ContainerStyle> {
+        if let NodeKind::Custom { style, .. } = self {
+            Some(style)
+        } else {
+            None
+        }
+    }
+
+    pub fn scroll_offsets(&self) -> (f32, f32) {
+        match self {
+            NodeKind::Container {
+                scroll_offset_x,
+                scroll_offset_y,
+                ..
+            }
+            | NodeKind::Custom {
+                scroll_offset_x,
+                scroll_offset_y,
+                ..
+            } => (*scroll_offset_x, *scroll_offset_y),
+            _ => (0.0, 0.0),
         }
     }
 }
