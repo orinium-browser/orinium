@@ -264,7 +264,17 @@ pub fn build_layout_and_info(
                         Background::Color(c) if c.3 > 0 => *c,
                         _ => default_bg,
                     };
+                    let btn_w = match &style.size.width {
+                        LengthOrAuto::Length(l) => l.clone(),
+                        LengthOrAuto::Auto => Length::Px(120.0),
+                    };
+                    let btn_h = match &style.size.height {
+                        LengthOrAuto::Length(l) => l.clone(),
+                        LengthOrAuto::Auto => Length::Px(36.0),
+                    };
                     std::rc::Rc::new(ButtonComponent {
+                        width: btn_w,
+                        height: btn_h,
                         label: text,
                         button_color: bg,
                         label_color: text_style.color,

@@ -1,3 +1,5 @@
+use ui_layout::Length;
+
 use crate::engine::{
     layouter::types::{Color, TextStyle},
     renderer_model::DrawCommand,
@@ -6,6 +8,8 @@ use crate::engine::{
 
 #[derive(Debug)]
 pub struct ButtonComponent {
+    pub width: Length,
+    pub height: Length,
     pub label: String,
     pub button_color: Color,
     pub label_color: Color,
@@ -28,6 +32,9 @@ impl CustomNode for ButtonComponent {
     }
 
     fn intrinsic_size(&self) -> (f32, f32) {
-        (120.0, 36.0)
+        (
+            self.width.resolve_with(None, 0.0, 0.0).unwrap_or(120.0),
+            self.height.resolve_with(None, 0.0, 0.0).unwrap_or(36.0),
+        )
     }
 }
