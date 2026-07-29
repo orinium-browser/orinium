@@ -4,6 +4,7 @@ use crate::engine::layouter::text_layouter::TextFlowLayouter;
 use crate::engine::layouter::types::{
     Background, Color, ContainerStyle, Gradient, InfoNode, NodeKind, TextDecoration, TextStyle,
 };
+use crate::engine::ui::custom_bridge::get_custom_inline_result;
 use smol_str::SmolStr;
 use ui_layout::{LayoutChild, LayoutNode};
 
@@ -352,12 +353,10 @@ pub fn generate_draw_commands(
             text_style,
             ..
         } => {
-            let effective_style = node
-                .background_color()
-                .map(|c| ContainerStyle {
-                    background: Background::Color(c),
-                    ..style.clone()
-                });
+            let effective_style = node.background_color().map(|c| ContainerStyle {
+                background: Background::Color(c),
+                ..style.clone()
+            });
             let style_ref = effective_style.as_ref().unwrap_or(style);
 
             for box_model in &layout.layout_box {
@@ -405,9 +404,82 @@ pub fn generate_draw_commands(
                     generate_draw_commands(cmd_buf, node, child_info);
                 }
             }
-            NodeKind::Custom { .. } => {
-                if let Some(LayoutChild::Node(node)) = layout_iter.next() {
-                    generate_draw_commands(cmd_buf, node, child_info);
+            NodeKind::Custom {
+                node,
+                text_style,
+                style,
+                layout_id,
+                ..
+            } => {
+                if let Some(LayoutChild::Node(node_layout)) = layout_iter.next() {
+                    // Block custom element: recurse into the child layout node.
+                    generate_draw_commands(cmd_buf, node_layout, child_info);
+                } else if layout_id.is_some() {
+                    // Inline custom element: consume the Object and draw directly.
+                    layout_iter.next();
+
+                    let effective_style = node.background_color().map(|c| ContainerStyle {
+                        background: Background::Color(c),
+                        ..style.clone()
+                    });
+                    let style_ref = effective_style.as_ref().unwrap_or(style);
+
+                    if let Some(result) = get_custom_inline_result(layout_id.unwrap()) {
+                        for span in &result.spans {
+                            let cx = span.line_pos.0 - text_origin.0;
+                            let cy = span.line_pos.1 - text_origin.1;
+                            let cw = result.width;
+                            let ch = result.height;
+
+                            let pb_x = cx - result.padding_left;
+                            let pb_y = cy - result.padding_top;
+                            let pb_w = cw + result.padding_left + result.padding_right;
+                            let pb_h = ch + result.padding_top + result.padding_bottom;
+
+                            let bb_x = pb_x - result.border_left;
+                            let bb_y = pb_y - result.border_top;
+                            let bb_w = pb_w + result.border_left + result.border_right;
+                            let bb_h = pb_h + result.border_top + result.border_bottom;
+
+                            let rect = ui_layout::BoxModel {
+                                border_box: ui_layout::Rect {
+                                    x: bb_x,
+                                    y: bb_y,
+                                    width: bb_w,
+                                    height: bb_h,
+                                },
+                                padding_box: ui_layout::Rect {
+                                    x: pb_x,
+                                    y: pb_y,
+                                    width: pb_w,
+                                    height: pb_h,
+                                },
+                                content_box: ui_layout::Rect {
+                                    x: cx,
+                                    y: cy,
+                                    width: cw,
+                                    height: ch,
+                                },
+                                children_box: ui_layout::Rect {
+                                    x: cx,
+                                    y: cy,
+                                    width: cw,
+                                    height: ch,
+                                },
+                            };
+                            push_box_model(cmd_buf, &rect, style_ref, 0.0, 0.0, true);
+                            node.draw(cmd_buf, text_style);
+                            pop_box_model(
+                                cmd_buf,
+                                BoxPushState {
+                                    border: true,
+                                    clip: false,
+                                    content: false,
+                                    scroll: false,
+                                },
+                            );
+                        }
+                    }
                 }
             }
         }

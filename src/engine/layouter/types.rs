@@ -53,6 +53,8 @@ pub enum NodeKind {
         scroll_offset_y: f32,
         style: ContainerStyle,
         text_style: TextStyle,
+        /// For inline custom elements: cache key for [`CustomInlineBridge`].
+        layout_id: Option<usize>,
     },
 }
 

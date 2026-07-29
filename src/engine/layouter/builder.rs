@@ -27,7 +27,7 @@ use super::types::{
     RadialSizeKind, TextAlign, TextDecoration, TextStyle, TextTransform,
 };
 use crate::engine::ui::button::ButtonComponent;
-use crate::engine::ui::custom_bridge::CustomLayoutBridge;
+use crate::engine::ui::custom_bridge::{CustomInlineBridge, CustomLayoutBridge};
 use crate::engine::ui::custom_node::CustomNode;
 
 /// Tags that produce a [`NodeKind::Custom`] instead of a normal container.
@@ -259,31 +259,67 @@ pub fn build_layout_and_info(
             {
                 let node: std::rc::Rc<dyn CustomNode> = if tag == "button" {
                     let text = DomTree::inner_text(&stack[top_idx].dom);
+                    let default_bg = Color(240, 240, 240, 255);
+                    let bg = match &container_style.background {
+                        Background::Color(c) if c.3 > 0 => *c,
+                        _ => default_bg,
+                    };
                     std::rc::Rc::new(ButtonComponent {
                         label: text,
-                        color: None,
+                        button_color: bg,
+                        label_color: text_style.color,
                     })
                 } else {
                     unreachable!()
                     // ToDo:
                     // Support "iframe", "input" tags
                 };
-                let bridge = CustomLayoutBridge::new(
-                    container_style.clone(),
-                    style.clone(),
-                    std::rc::Rc::clone(&node),
-                );
-                let kind = NodeKind::Custom {
-                    node,
-                    scroll_x: false,
-                    scroll_y: false,
-                    scroll_offset_x: 0.0,
-                    scroll_offset_y: 0.0,
-                    style: container_style,
-                    text_style: text_style.clone(),
+
+                let is_inline = matches!(style.display.outer, OuterDisplay::Inline);
+
+                let (kind, layout) = if is_inline {
+                    let inline_bridge = CustomInlineBridge::new(
+                        std::rc::Rc::clone(&node),
+                        style.clone(),
+                        container_style.clone(),
+                    );
+                    let layout_id = Some(inline_bridge.id);
+                    let kind = NodeKind::Custom {
+                        node,
+                        scroll_x: false,
+                        scroll_y: false,
+                        scroll_offset_x: 0.0,
+                        scroll_offset_y: 0.0,
+                        style: container_style,
+                        text_style: text_style.clone(),
+                        layout_id,
+                    };
+                    let layout = LayoutNode::with_children(
+                        style,
+                        [LayoutChild::Object(Box::new(inline_bridge))],
+                    );
+                    (kind, layout)
+                } else {
+                    let bridge = CustomLayoutBridge::new(
+                        container_style.clone(),
+                        style.clone(),
+                        std::rc::Rc::clone(&node),
+                    );
+                    let kind = NodeKind::Custom {
+                        node,
+                        scroll_x: false,
+                        scroll_y: false,
+                        scroll_offset_x: 0.0,
+                        scroll_offset_y: 0.0,
+                        style: container_style,
+                        text_style: text_style.clone(),
+                        layout_id: None,
+                    };
+                    let layout =
+                        LayoutNode::with_children(style, [LayoutChild::Custom(Box::new(bridge))]);
+                    (kind, layout)
                 };
-                let layout =
-                    LayoutNode::with_children(style, [LayoutChild::Custom(Box::new(bridge))]);
+
                 let info = InfoNode {
                     kind,
                     children: Vec::new(),
