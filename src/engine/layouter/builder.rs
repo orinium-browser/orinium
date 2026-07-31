@@ -22,9 +22,9 @@ use ui_layout::{
 use super::css_resolver::ResolvedStyles;
 use super::text_layouter::TextFlowLayouter;
 use super::types::{
-    Background, BorderStyle, Color, ColorStop, ContainerRole, ContainerStyle, FontStyle,
-    FontWeight, Gradient, GradientKind, InfoNode, LineHeight, NodeKind, RadialShape,
-    RadialSizeKind, TextAlign, TextDecoration, TextStyle, TextTransform,
+    Background, BorderRadius, BorderStyle, Color, ColorStop, ContainerRole, ContainerStyle,
+    CornerRadius, FontStyle, FontWeight, Gradient, GradientKind, InfoNode, LineHeight, NodeKind,
+    RadialShape, RadialSizeKind, TextAlign, TextDecoration, TextStyle, TextTransform,
 };
 use crate::engine::ui::button::ButtonComponent;
 use crate::engine::ui::custom_bridge::{CustomInlineBridge, CustomLayoutBridge};
@@ -720,6 +720,95 @@ pub fn apply_declaration(
         Some(())
     }
 
+    /// Split a border-radius value list on the `Keyword("/")` separator into
+    /// its horizontal and vertical components. Without a slash the vertical
+    /// list is empty (meaning "use the horizontal value").
+    fn split_radius_lists<'a>(
+        value: &'a CssValue,
+    ) -> (Vec<&'a CssValue>, Vec<&'a CssValue>) {
+        match value {
+            CssValue::List(vals) => {
+                let mut horiz: Vec<&'a CssValue> = Vec::new();
+                let mut vert: Vec<&'a CssValue> = Vec::new();
+                let mut after_slash = false;
+                for v in vals {
+                    if let CssValue::Keyword(k) = v
+                        && k == "/"
+                    {
+                        after_slash = true;
+                        continue;
+                    }
+                    if after_slash {
+                        vert.push(v);
+                    } else {
+                        horiz.push(v);
+                    }
+                }
+                (horiz, vert)
+            }
+            _ => (vec![value], Vec::new()),
+        }
+    }
+
+    /// Expand a 1/2/3/4-value list to per-corner lengths in CSS order
+    /// [top-left, top-right, bottom-right, bottom-left].
+    fn expand_radius_axis(
+        name: &str,
+        values: &[&CssValue],
+        text_style: &TextStyle,
+    ) -> Option<[Length; 4]> {
+        let vals: Vec<Length> = values
+            .iter()
+            .map(|v| resolve_css_len(name, v, text_style))
+            .collect::<Option<_>>()?;
+        match vals.as_slice() {
+            [a] => Some([a.clone(), a.clone(), a.clone(), a.clone()]),
+            [v, h] => Some([v.clone(), h.clone(), v.clone(), h.clone()]),
+            [t, h, b] => Some([t.clone(), h.clone(), b.clone(), h.clone()]),
+            [t, r, b, l] => Some([t.clone(), r.clone(), b.clone(), l.clone()]),
+            _ => None,
+        }
+    }
+
+    /// Parse a `border-radius` shorthand value (1-4 lengths per axis, optional
+    /// elliptical `/` form) into the four corners.
+    fn parse_border_radius_shorthand(
+        name: &str,
+        value: &CssValue,
+        text_style: &TextStyle,
+    ) -> Option<(CornerRadius, CornerRadius, CornerRadius, CornerRadius)> {
+        let (horiz, vert) = split_radius_lists(value);
+        let h = expand_radius_axis(name, &horiz, text_style)?;
+        let v = if vert.is_empty() {
+            h.clone()
+        } else {
+            expand_radius_axis(name, &vert, text_style)?
+        };
+        Some((
+            CornerRadius { x: h[0].clone(), y: v[0].clone() },
+            CornerRadius { x: h[1].clone(), y: v[1].clone() },
+            CornerRadius { x: h[2].clone(), y: v[2].clone() },
+            CornerRadius { x: h[3].clone(), y: v[3].clone() },
+        ))
+    }
+
+    /// Parse a single-corner radius value: one length, two lengths (`rx ry`)
+    /// or the elliptical `rx / ry` form.
+    fn parse_corner_radius(
+        name: &str,
+        value: &CssValue,
+        text_style: &TextStyle,
+    ) -> Option<CornerRadius> {
+        let (horiz, vert) = split_radius_lists(value);
+        let x = expand_radius_axis(name, &horiz, text_style)?;
+        let y = if vert.is_empty() {
+            x.clone()
+        } else {
+            expand_radius_axis(name, &vert, text_style)?
+        };
+        Some(CornerRadius { x: x[0].clone(), y: y[0].clone() })
+    }
+
     fn parse_border_shorthand(
         name: &str,
         value: &CssValue,
@@ -1103,6 +1192,28 @@ pub fn apply_declaration(
             if let Some(c) = maybe_color {
                 container_style.border_color.left = c;
             }
+        }
+
+        ("border-radius", v) => {
+            let (tl, tr, br, bl) = parse_border_radius_shorthand(name, v, text_style)?;
+            container_style.border_radius = BorderRadius {
+                top_left: tl,
+                top_right: tr,
+                bottom_right: br,
+                bottom_left: bl,
+            };
+        }
+        ("border-top-left-radius", v) => {
+            container_style.border_radius.top_left = parse_corner_radius(name, v, text_style)?;
+        }
+        ("border-top-right-radius", v) => {
+            container_style.border_radius.top_right = parse_corner_radius(name, v, text_style)?;
+        }
+        ("border-bottom-right-radius", v) => {
+            container_style.border_radius.bottom_right = parse_corner_radius(name, v, text_style)?;
+        }
+        ("border-bottom-left-radius", v) => {
+            container_style.border_radius.bottom_left = parse_corner_radius(name, v, text_style)?;
         }
 
         ("padding", v) => {

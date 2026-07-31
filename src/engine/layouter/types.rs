@@ -264,11 +264,41 @@ pub struct BorderStyles {
     pub left: BorderStyle,
 }
 
+/// Border radius of a single corner.
+///
+/// `x` is resolved against the border-box width and `y` against the border-box
+/// height (so percentages resolve per-axis per CSS).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CornerRadius {
+    pub x: ui_layout::Length,
+    pub y: ui_layout::Length,
+}
+
+impl Default for CornerRadius {
+    fn default() -> Self {
+        Self {
+            x: ui_layout::Length::Px(0.0),
+            y: ui_layout::Length::Px(0.0),
+        }
+    }
+}
+
+/// Rounded-corner radii of a box. Values are ordered top-left, top-right,
+/// bottom-right, bottom-left (matching CSS clockwise order).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct BorderRadius {
+    pub top_left: CornerRadius,
+    pub top_right: CornerRadius,
+    pub bottom_right: CornerRadius,
+    pub bottom_left: CornerRadius,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContainerStyle {
     pub background: Background,
     pub border_color: BorderColor,
     pub border_style: BorderStyles,
+    pub border_radius: BorderRadius,
 }
 
 impl Default for ContainerStyle {
@@ -277,6 +307,7 @@ impl Default for ContainerStyle {
             background: Background::default(),
             border_color: BorderColor::default(),
             border_style: BorderStyles::default(),
+            border_radius: BorderRadius::default(),
         }
     }
 }
