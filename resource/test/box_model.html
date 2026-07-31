@@ -4,6 +4,10 @@
         <meta charset="UTF-8" />
         <title>CSS Box Model Test</title>
         <style>
+            :root {
+                --border-medium: 3px;
+            }
+
             body {
                 font-family: sans-serif;
                 padding: 20px;
@@ -108,6 +112,24 @@
                 border-radius: 10px;
             }
 
+            /* keyword widths */
+            .bthin {
+                border: thin solid #333;
+            }
+
+            .bmedium {
+                border: medium dashed #0066cc;
+            }
+
+            .bthick {
+                border: thick dotted #cc0000;
+            }
+
+            /* use CSS variable */
+            .bvar {
+                border: var(--border-medium) solid #228833;
+            }
+
             /* box-sizing */
             .content-box {
                 box-sizing: content-box;
@@ -166,6 +188,7 @@
             <div class="container">
                 <div class="box m0">margin 0</div>
                 <div class="box m10">margin 10px</div>
+                <div class="box m-auto">margin auto (centered)</div>
                 <div class="box mt">margin-top</div>
                 <div class="box mb">margin-bottom</div>
                 <div class="box ml">margin-left</div>
@@ -193,6 +216,10 @@
                 <div class="box bdashed">dashed blue</div>
                 <div class="box bdotted">dotted</div>
                 <div class="box bradius">radius</div>
+                <div class="box bthin">thin solid (keyword)</div>
+                <div class="box bmedium">medium dashed (keyword)</div>
+                <div class="box bthick">thick dotted (keyword)</div>
+                <div class="box bvar">var(--border-medium)</div>
             </div>
         </section>
 

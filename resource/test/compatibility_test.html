@@ -26,7 +26,6 @@
             img {
                 max-width: 100px;
             }
-            video,
             audio {
                 max-width: 300px;
                 display: block;
@@ -35,6 +34,19 @@
             canvas {
                 border: 1px solid #000;
                 margin: 5px 0;
+            }
+            .css-apply p {
+                color: blue;
+            }
+            .css-apply .highlight {
+                color: red;
+                font-weight: bold;
+            }
+            .css-apply span {
+                background: yellow;
+            }
+            .css-apply .hidden {
+                display: none;
             }
         </style>
     </head>
@@ -87,6 +99,18 @@
             <footer>
                 <p>Footer content &copy; 2026</p>
             </footer>
+        </section>
+
+        <section>
+            <h2>CSS Selectors & display</h2>
+            <div class="css-apply">
+                <p>Tag selector (this paragraph is blue)</p>
+                <p class="highlight">Class selector (red &amp; bold)</p>
+                <p>
+                    Descendant selector: this <span>span is highlighted</span>.
+                </p>
+                <div class="hidden">display: none (should not be visible)</div>
+            </div>
         </section>
 
         <section>
@@ -150,22 +174,9 @@
 
         <section>
             <h2>Media</h2>
-            <img
-                src="https://via.placeholder.com/100"
-                alt="placeholder image"
-            />
-            <video controls>
-                <source
-                    src="https://www.w3schools.com/html/mov_bbb.mp4"
-                    type="video/mp4"
-                />
-                Your browser does not support the video tag.
-            </video>
+            <img src="resource:///icon.png" alt="Orinium icon" />
             <audio controls>
-                <source
-                    src="https://www.w3schools.com/html/horse.ogg"
-                    type="audio/ogg"
-                />
+                <source src="resource:///audio/birds.mp3" type="audio/mpeg" />
                 Your browser does not support the audio element.
             </audio>
             <canvas id="canvas" width="150" height="100"></canvas>
@@ -260,18 +271,18 @@
         <section>
             <h2>Embedded content</h2>
             <iframe
-                src="https://www.example.com"
+                src="resource:///about.html"
                 width="300"
                 height="100"
                 title="example iframe"
             ></iframe>
             <object
-                data="https://www.example.com"
+                data="resource:///about.html"
                 type="text/html"
                 width="300"
                 height="100"
             ></object>
-            <embed src="https://www.example.com" width="300" height="100" />
+            <embed src="resource:///about.html" width="300" height="100" />
         </section>
 
         <section>

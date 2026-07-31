@@ -88,6 +88,14 @@
 
             .flex-shrink {
                 flex-shrink: 1;
+                width: 150px;
+            }
+
+            .shrink-container {
+                display: flex;
+                width: 300px;
+                border: 1px solid #ccc;
+                margin-top: 10px;
             }
 
             /* ================= GRID ================= */
@@ -223,6 +231,16 @@
                 <div class="item flex-grow">grow</div>
                 <div class="item">fixed</div>
                 <div class="item">fixed</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>Flex Shrink</h2>
+            <p>3 x 150px items in a 300px container</p>
+            <div class="shrink-container">
+                <div class="item flex-shrink">shrink</div>
+                <div class="item flex-shrink">shrink</div>
+                <div class="item flex-shrink">shrink</div>
             </div>
         </section>
 
