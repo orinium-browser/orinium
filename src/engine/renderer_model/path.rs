@@ -338,3 +338,114 @@ pub fn polygon_path(points: &[(f32, f32)]) -> Path {
     path.close();
     path
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_points_on_ellipse(
+        points: &[(f32, f32)],
+        cx: f32,
+        cy: f32,
+        rx: f32,
+        ry: f32,
+        tol: f32,
+    ) {
+        for (px, py) in points {
+            let v = ((px - cx) / rx).powi(2) + ((py - cy) / ry).powi(2);
+            assert!(
+                (v - 1.0).abs() < tol,
+                "point ({px},{py}) not on ellipse: {v}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_rect_path_vertices_and_bounds() {
+        let path = rect_path(10.0, 20.0, 100.0, 50.0);
+        assert_eq!(
+            path.as_polygon_vertices().unwrap(),
+            vec![(10.0, 20.0), (110.0, 20.0), (110.0, 70.0), (10.0, 70.0)]
+        );
+        let bb = path.bounding_box().unwrap();
+        assert!((bb.x - 10.0).abs() < 1e-6);
+        assert!((bb.y - 20.0).abs() < 1e-6);
+        assert!((bb.width - 100.0).abs() < 1e-6);
+        assert!((bb.height - 50.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_polygon_path() {
+        let points = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)];
+        let path = polygon_path(&points);
+        assert_eq!(path.as_polygon_vertices().unwrap(), points.to_vec());
+    }
+
+    #[test]
+    fn test_ellipse_path_flattens() {
+        let path = ellipse_path(0.0, 0.0, 50.0, 30.0);
+        let verts = path.as_polygon_vertices().unwrap();
+        assert!(
+            verts.len() > 8,
+            "expected a flattened ellipse, got {} vertices",
+            verts.len()
+        );
+        assert_eq!(verts.first().copied(), Some((50.0, 0.0)));
+        assert_eq!(verts.last().copied(), Some((50.0, 0.0)));
+        assert_points_on_ellipse(&verts, 0.0, 0.0, 50.0, 30.0, 0.01);
+    }
+
+    #[test]
+    fn test_quad_curve_flattens() {
+        let mut path = Path::new();
+        path.move_to(0.0, 0.0);
+        path.quad_to((10.0, 20.0), (30.0, 0.0));
+        let verts = path.as_polygon_vertices().unwrap();
+        assert_eq!(verts.first().copied(), Some((0.0, 0.0)));
+        assert_eq!(verts.last().copied(), Some((30.0, 0.0)));
+        assert!(verts.len() > 2);
+        for &(_, y) in &verts[1..verts.len() - 1] {
+            assert!(y > 0.0, "quad should bulge upward, got y={y}");
+        }
+    }
+
+    #[test]
+    fn test_cubic_curve_flattens() {
+        let mut path = Path::new();
+        path.move_to(0.0, 0.0);
+        path.cubic_to((10.0, 20.0), (20.0, 20.0), (30.0, 0.0));
+        let verts = path.as_polygon_vertices().unwrap();
+        assert_eq!(verts.first().copied(), Some((0.0, 0.0)));
+        assert_eq!(verts.last().copied(), Some((30.0, 0.0)));
+        assert!(verts.len() > 2);
+    }
+
+    #[test]
+    fn test_empty_and_degenerate_paths() {
+        assert_eq!(Path::new().as_polygon_vertices(), None);
+        let mut path = Path::new();
+        path.move_to(0.0, 0.0);
+        path.line_to(10.0, 0.0);
+        assert_eq!(path.as_polygon_vertices(), None);
+    }
+
+    #[test]
+    fn test_curve_without_current_point_moves() {
+        let mut path = Path::new();
+        path.quad_to((10.0, 10.0), (20.0, 20.0));
+        assert_eq!(path.as_polygon_vertices(), None);
+        assert_eq!(path.commands().len(), 1);
+    }
+
+    #[test]
+    fn test_curve_bounding_box_includes_controls() {
+        let mut path = Path::new();
+        path.move_to(0.0, 0.0);
+        path.quad_to((100.0, 0.0), (50.0, 50.0));
+        let bb = path.bounding_box().unwrap();
+        assert!((bb.x - 0.0).abs() < 1e-6);
+        assert!((bb.width - 100.0).abs() < 1e-6);
+        assert!((bb.y - 0.0).abs() < 1e-6);
+        assert!((bb.height - 50.0).abs() < 1e-6);
+    }
+}

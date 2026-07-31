@@ -1535,4 +1535,82 @@ mod tests {
         assert_eq!(colors[2], Color(0, 0, 255, 255)); // TR
         assert_eq!(colors[3], Color(0, 0, 255, 255)); // BR
     }
+
+    // ── clip_against_edge / emit_clipped_polygon_fill ───────────────────
+
+    #[test]
+    fn test_clip_against_edge_left_keeps_points_inside() {
+        let poly = [(10.0, 0.0), (20.0, 0.0), (20.0, 10.0), (10.0, 10.0)];
+        let clipped = clip_against_edge(&poly, 0, 5.0, 0.0, 100.0, 100.0);
+        assert_eq!(clipped.len(), poly.len());
+        for (x, _) in &clipped {
+            assert!(*x >= 5.0);
+        }
+    }
+
+    #[test]
+    fn test_emit_clipped_polygon_fill_fully_inside() {
+        let mut vertices = Vec::new();
+        let points = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)];
+        let clip = ClipRect {
+            x: 0.0,
+            y: 0.0,
+            w: 200.0,
+            h: 200.0,
+        };
+        emit_clipped_polygon_fill(&mut vertices, &points, &clip, 1.0, 200.0, 200.0, [1.0; 4]);
+        // Two triangles for the quad.
+        assert_eq!(vertices.len(), 6);
+    }
+
+    #[test]
+    fn test_emit_clipped_polygon_fill_fully_outside() {
+        let mut vertices = Vec::new();
+        let points = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+        let clip = ClipRect {
+            x: 20.0,
+            y: 20.0,
+            w: 10.0,
+            h: 10.0,
+        };
+        emit_clipped_polygon_fill(&mut vertices, &points, &clip, 1.0, 200.0, 200.0, [1.0; 4]);
+        assert!(vertices.is_empty());
+    }
+
+    #[test]
+    fn test_emit_clipped_polygon_fill_partially_inside() {
+        let mut vertices = Vec::new();
+        let points = [(0.0, 0.0), (50.0, 0.0), (50.0, 50.0), (0.0, 50.0)];
+        let clip = ClipRect {
+            x: 10.0,
+            y: 10.0,
+            w: 30.0,
+            h: 30.0,
+        };
+        emit_clipped_polygon_fill(&mut vertices, &points, &clip, 1.0, 100.0, 100.0, [1.0; 4]);
+        assert!(!vertices.is_empty());
+        assert_eq!(vertices.len() % 3, 0);
+        for v in &vertices {
+            // Recover screen coordinates from NDC and ensure they stay within
+            // the clip rect [10, 40].
+            let sx = (v.position[0] + 1.0) / 2.0 * 100.0;
+            let sy = -(v.position[1] - 1.0) / 2.0 * 100.0;
+            assert!((10.0 - 1e-3..=40.0 + 1e-3).contains(&sx), "sx={sx}");
+            assert!((10.0 - 1e-3..=40.0 + 1e-3).contains(&sy), "sy={sy}");
+        }
+    }
+
+    // ── AffineTransform ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_affine_transform_composition_and_inverse() {
+        let t = AffineTransform::translate(3.0, 4.0).then(&AffineTransform::translate(5.0, 6.0));
+        assert_eq!(t.apply(1.0, 1.0), (9.0, 11.0));
+
+        let inv = t.inverse().unwrap();
+        let (x, y) = t.apply(10.0, 20.0);
+        let (rx, ry) = inv.apply(x, y);
+        assert!((rx - 10.0).abs() < 1e-5, "rx={rx}");
+        assert!((ry - 20.0).abs() < 1e-5, "ry={ry}");
+    }
 }
