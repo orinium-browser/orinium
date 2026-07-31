@@ -15,20 +15,86 @@ struct TestPageMeta {
 
 const TEST_PAGE_CATALOG: &[TestPageMeta] = &[
     // ── Layout ──
-    TestPageMeta { file: "basic_layout.html", group: "Layout", title: "Basic Layout", description: "文書フローの基本: ブロック積み重ね・ネスト・インライン要素・ページ構造" },
-    TestPageMeta { file: "box_model.html", group: "Layout", title: "Box Model", description: "margin / padding / border / box-sizing / display / overflow" },
-    TestPageMeta { file: "flex_grid.html", group: "Layout", title: "Flex & Grid", description: "flex の方向・折返し・justify/align・grow/shrink と grid レイアウト" },
-    TestPageMeta { file: "inline_text.html", group: "Layout", title: "Inline Layout", description: "インライン要素のネストと margin の挙動" },
+    TestPageMeta {
+        file: "basic_layout.html",
+        group: "Layout",
+        title: "Basic Layout",
+        description: "文書フローの基本: ブロック積み重ね・ネスト・インライン要素・ページ構造",
+    },
+    TestPageMeta {
+        file: "box_model.html",
+        group: "Layout",
+        title: "Box Model",
+        description: "margin / padding / border / box-sizing / display / overflow",
+    },
+    TestPageMeta {
+        file: "flex_grid.html",
+        group: "Layout",
+        title: "Flex & Grid",
+        description: "flex の方向・折返し・justify/align・grow/shrink と grid レイアウト",
+    },
+    TestPageMeta {
+        file: "inline_text.html",
+        group: "Layout",
+        title: "Inline Layout",
+        description: "インライン要素のネストと margin の挙動",
+    },
     // ── CSS ──
-    TestPageMeta { file: "css_color.html", group: "CSS", title: "Color & Gradient", description: "名前付き色 / hex / rgb / hsl / inherit・currentColor / グラデーション" },
-    TestPageMeta { file: "css_length.html", group: "CSS", title: "Length Units", description: "px / em / rem / % / vw / vh / calc()" },
-    TestPageMeta { file: "css_text.html", group: "CSS", title: "Text & Font", description: "text-decoration / text-transform / 文字間隔 / font 各種プロパティ" },
-    TestPageMeta { file: "size_constraint.html", group: "CSS", title: "Size Constraint", description: "min/max-width/height によるサイズ制約" },
-    TestPageMeta { file: "text_align_wrap.html", group: "CSS", title: "Text Align & Wrap", description: "text-align / 折り返し (Latin・CJK・混在) / line-height" },
-    TestPageMeta { file: "selector_test.html", group: "CSS", title: "CSS Selector", description: "タグ / クラス / id / 子孫 / 複数クラス / 複合セレクタ" },
+    TestPageMeta {
+        file: "css_color.html",
+        group: "CSS",
+        title: "Color & Gradient",
+        description: "名前付き色 / hex / rgb / hsl / inherit・currentColor / グラデーション",
+    },
+    TestPageMeta {
+        file: "css_length.html",
+        group: "CSS",
+        title: "Length Units",
+        description: "px / em / rem / % / vw / vh / calc()",
+    },
+    TestPageMeta {
+        file: "css_text.html",
+        group: "CSS",
+        title: "Text & Font",
+        description: "text-decoration / text-transform / 文字間隔 / font 各種プロパティ",
+    },
+    TestPageMeta {
+        file: "size_constraint.html",
+        group: "CSS",
+        title: "Size Constraint",
+        description: "min/max-width/height によるサイズ制約",
+    },
+    TestPageMeta {
+        file: "border_radius.html",
+        group: "CSS",
+        title: "Border Radius",
+        description: "角丸ボーダー: 一様 / 楕円 / 角ごと指定 / 複数値ショートハンド / パーセント・超過半径",
+    },
+    TestPageMeta {
+        file: "text_align_wrap.html",
+        group: "CSS",
+        title: "Text Align & Wrap",
+        description: "text-align / 折り返し (Latin・CJK・混在) / line-height",
+    },
+    TestPageMeta {
+        file: "selector_test.html",
+        group: "CSS",
+        title: "CSS Selector",
+        description: "タグ / クラス / id / 子孫 / 複数クラス / 複合セレクタ",
+    },
     // ── HTML ──
-    TestPageMeta { file: "compatibility_test.html", group: "HTML", title: "HTML Compatibility", description: "HTML Living Standard の広範な要素 (テキスト・リスト・テーブル・メディア・フォーム) の互換性確認" },
-    TestPageMeta { file: "table_form.html", group: "HTML", title: "Table & Form", description: "テーブルレイアウト (thead/tbody/tfoot) とフォーム (button)" },
+    TestPageMeta {
+        file: "compatibility_test.html",
+        group: "HTML",
+        title: "HTML Compatibility",
+        description: "HTML Living Standard の広範な要素 (テキスト・リスト・テーブル・メディア・フォーム) の互換性確認",
+    },
+    TestPageMeta {
+        file: "table_form.html",
+        group: "HTML",
+        title: "Table & Form",
+        description: "テーブルレイアウト (thead/tbody/tfoot) とフォーム (button)",
+    },
 ];
 
 /// テスト一覧に表示するグループ順 (未登録ファイルは末尾の "Other" に載る)
@@ -114,7 +180,10 @@ fn generate_test_index(dest_root: &Path) {
     // 一覧 HTML を組み立てる
     let mut list_html = String::new();
     for group in TEST_GROUP_ORDER {
-        let members: Vec<&TestPageMeta> = TEST_PAGE_CATALOG.iter().filter(|m| m.group == *group).collect();
+        let members: Vec<&TestPageMeta> = TEST_PAGE_CATALOG
+            .iter()
+            .filter(|m| m.group == *group)
+            .collect();
         if members.is_empty() && *group != "Other" {
             continue;
         }
@@ -160,8 +229,13 @@ fn generate_test_index(dest_root: &Path) {
         );
         return;
     }
-    let filled = template.replace(PLACEHOLDER, &format!(r#"<div class="test-list">
-{list_html}            </div>"#));
+    let filled = template.replace(
+        PLACEHOLDER,
+        &format!(
+            r#"<div class="test-list">
+{list_html}            </div>"#
+        ),
+    );
 
     let dest = dest_root.join("test").join("test.html");
     if let Some(parent) = dest.parent() {
@@ -182,7 +256,9 @@ fn generate_test_index(dest_root: &Path) {
 
 /// 生成した HTML にそのまま埋め込むための最小限のエスケープ。
 fn escape_html(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn visit_files<F: Fn(&Path)>(dir: &Path, cb: &F) -> io::Result<()> {

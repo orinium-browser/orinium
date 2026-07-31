@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="ja">
+    <head>
+        <meta charset="UTF-8" />
+        <title>Border Radius Test</title>
+        <style>
+            body {
+                font-family: sans-serif;
+                padding: 20px;
+                line-height: 1.8;
+            }
+            section {
+                margin-bottom: 40px;
+            }
+            h2 {
+                border-bottom: 2px solid #333;
+                padding-bottom: 5px;
+            }
+            table {
+                border-collapse: collapse;
+                margin: 10px 0;
+            }
+            th,
+            td {
+                border: 1px solid #999;
+                padding: 6px 12px;
+                text-align: left;
+            }
+
+            .box {
+                display: inline-block;
+                width: 160px;
+                height: 80px;
+                background: #eaf3fb;
+                margin: 10px;
+                padding: 6px;
+                vertical-align: top;
+            }
+            .label {
+                display: block;
+                font-size: 13px;
+                margin-bottom: 4px;
+            }
+
+            /* uniform radius */
+            .r0 {
+                border: 3px solid #333;
+                border-radius: 0;
+            }
+            .r4 {
+                border: 3px solid #333;
+                border-radius: 4px;
+            }
+            .r10 {
+                border: 3px solid #333;
+                border-radius: 10px;
+            }
+            .r20 {
+                border: 3px solid #333;
+                border-radius: 20px;
+            }
+
+            /* elliptical radius (x / y) */
+            .re-elliptical {
+                border: 3px solid #333;
+                border-radius: 30px / 10px;
+            }
+
+            /* individual corners */
+            .rc-tl {
+                border: 3px solid #333;
+                border-top-left-radius: 24px;
+            }
+            .rc-tr {
+                border: 3px solid #333;
+                border-top-right-radius: 24px;
+            }
+            .rc-br {
+                border: 3px solid #333;
+                border-bottom-right-radius: 24px;
+            }
+            .rc-bl {
+                border: 3px solid #333;
+                border-bottom-left-radius: 24px;
+            }
+            .rc-all {
+                border: 3px solid #333;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 18px;
+                border-bottom-right-radius: 12px;
+                border-bottom-left-radius: 24px;
+            }
+
+            /* shorthand with multiple values */
+            .rs-1 {
+                border: 3px solid #333;
+                border-radius: 10px;
+            }
+            .rs-2 {
+                border: 3px solid #333;
+                border-radius: 10px 30px;
+            }
+            .rs-3 {
+                border: 3px solid #333;
+                border-radius: 10px 30px 20px;
+            }
+            .rs-4 {
+                border: 3px solid #333;
+                border-radius: 6px 12px 18px 24px;
+            }
+
+            /* percent and over-radius */
+            .r50 {
+                border: 3px solid #333;
+                border-radius: 50%;
+            }
+            .rpct-mix {
+                border: 3px solid #333;
+                border-radius: 50% 0;
+            }
+            .rpill {
+                border: 3px solid #333;
+                border-radius: 999px;
+            }
+            .rover {
+                border: 3px solid #333;
+                border-radius: 200px;
+            }
+
+            /* thick border + radius */
+            .thick {
+                border: 10px solid #0066cc;
+                border-radius: 16px;
+            }
+            .thick-round {
+                border: 12px solid #0066cc;
+                border-radius: 50%;
+            }
+
+            /* colors + radius */
+            .multicolor {
+                border: 8px solid;
+                border-color: red blue green yellow;
+                border-radius: 16px;
+            }
+
+            /* no border, only background radius */
+            .bg-only {
+                border: none;
+                background: #2ecc71;
+                border-radius: 12px;
+            }
+            .bg-circle {
+                border: none;
+                background: #e74c3c;
+                border-radius: 50%;
+            }
+
+            .row {
+                margin: 10px 0;
+            }
+        </style>
+    </head>
+
+    <body>
+        <h1>Border Radius Test</h1>
+
+        <section>
+            <h2>Uniform radius</h2>
+            <div class="row">
+                <span class="box r0"
+                    ><span class="label">border-radius: 0</span>box</span
+                >
+                <span class="box r4"
+                    ><span class="label">border-radius: 4px</span>box</span
+                >
+                <span class="box r10"
+                    ><span class="label">border-radius: 10px</span>box</span
+                >
+                <span class="box r20">
+                    <span class="label">border-radius: 20px</span>box
+                </span>
+            </div>
+        </section>
+
+        <section>
+            <h2>Elliptical radius</h2>
+            <div class="row">
+                <span class="box re-elliptical"
+                    ><span class="label">border-radius: 30px / 10px</span
+                    >horizontal / vertical</span
+                >
+            </div>
+        </section>
+
+        <section>
+            <h2>Individual corners</h2>
+            <div class="row">
+                <span class="box rc-tl"
+                    ><span class="label">top-left: 24px</span>corner</span
+                >
+                <span class="box rc-tr"
+                    ><span class="label">top-right: 24px</span>corner</span
+                >
+                <span class="box rc-br"
+                    ><span class="label">bottom-right: 24px</span>corner</span
+                >
+                <span class="box rc-bl"
+                    ><span class="label">bottom-left: 24px</span>corner</span
+                >
+            </div>
+            <div class="row">
+                <span class="box rc-all"
+                    ><span class="label">TL:6px TR:18px BR:12px BL:24px</span
+                    >all corners</span
+                >
+            </div>
+        </section>
+
+        <section>
+            <h2>Shorthand with multiple values</h2>
+            <table>
+                <tr>
+                    <th>Value</th>
+                    <th>Expected corners (TL TR BR BL)</th>
+                    <th>Rendered</th>
+                </tr>
+                <tr>
+                    <td><code>10px</code></td>
+                    <td>10px 10px 10px 10px</td>
+                    <td class="box rs-1"></td>
+                </tr>
+                <tr>
+                    <td><code>10px 30px</code></td>
+                    <td>10px 30px 10px 30px</td>
+                    <td class="box rs-2"></td>
+                </tr>
+                <tr>
+                    <td><code>10px 30px 20px</code></td>
+                    <td>10px 30px 20px 30px</td>
+                    <td class="box rs-3"></td>
+                </tr>
+                <tr>
+                    <td><code>6px 12px 18px 24px</code></td>
+                    <td>6px 12px 18px 24px</td>
+                    <td class="box rs-4"></td>
+                </tr>
+            </table>
+        </section>
+
+        <section>
+            <h2>Percent and over-radius</h2>
+            <div class="row">
+                <span class="box r50"
+                    ><span class="label">border-radius: 50%</span>ellipse /
+                    circle</span
+                >
+                <span class="box rpct-mix"
+                    ><span class="label">border-radius: 50% 0</span>TL・BR
+                    のみ丸め</span
+                >
+            </div>
+            <div class="row">
+                <span class="box rpill"
+                    ><span class="label">border-radius: 999px</span
+                    >ピル形状</span
+                >
+                <span class="box rover"
+                    ><span class="label">border-radius: 200px</span
+                    >半径が辺より大きい</span
+                >
+            </div>
+        </section>
+
+        <section>
+            <h2>Thick border</h2>
+            <div class="row">
+                <span class="box thick"
+                    ><span class="label">border: 10px; radius: 16px</span>太枠 +
+                    角丸</span
+                >
+                <span class="box thick-round"
+                    ><span class="label">border: 12px; radius: 50%</span>太枠 +
+                    円</span
+                >
+            </div>
+        </section>
+
+        <section>
+            <h2>Colors + radius</h2>
+            <div class="row">
+                <span class="box multicolor"
+                    ><span class="label"
+                        >border-color: red blue green yellow; radius: 16px</span
+                    >辺ごとの色</span
+                >
+            </div>
+        </section>
+
+        <section>
+            <h2>Background only (no border)</h2>
+            <div class="row">
+                <span class="box bg-only"
+                    ><span class="label">background + radius: 12px</span
+                    >背景のみ角丸</span
+                >
+                <span class="box bg-circle"
+                    ><span class="label">background + radius: 50%</span
+                    >円形背景</span
+                >
+            </div>
+        </section>
+    </body>
+</html>
