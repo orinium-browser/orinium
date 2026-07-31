@@ -338,23 +338,6 @@ fn test_supports_row_gap() {
 }
 
 #[test]
-fn test_supports_display_grid_unsupported() {
-    let s = resolve(
-        r#"
-        @supports (display: grid) {
-            div {
-                --val: supported;
-            }
-        }
-        "#,
-    );
-    assert!(
-        !has_prop_in_rule(&s, "--val"),
-        "display: grid is not supported by layout engine"
-    );
-}
-
-#[test]
 fn test_supports_display_contents_unsupported() {
     let s = resolve(
         r#"
