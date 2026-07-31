@@ -339,6 +339,128 @@ pub fn polygon_path(points: &[(f32, f32)]) -> Path {
     path
 }
 
+/// Scale a set of corner radii `(rx, ry)` (CSS order TL, TR, BR, BL) down
+/// proportionally so no opposing pair exceeds the box dimensions, following
+/// the CSS `border-radius` clamping rule.
+pub fn clamp_radii(radii: [(f32, f32); 4], w: f32, h: f32) -> [(f32, f32); 4] {
+    let constraints = [
+        if w > 0.0 && radii[0].0 + radii[1].0 > 0.0 {
+            w / (radii[0].0 + radii[1].0)
+        } else {
+            1.0
+        },
+        if w > 0.0 && radii[2].0 + radii[3].0 > 0.0 {
+            w / (radii[2].0 + radii[3].0)
+        } else {
+            1.0
+        },
+        if h > 0.0 && radii[0].1 + radii[3].1 > 0.0 {
+            h / (radii[0].1 + radii[3].1)
+        } else {
+            1.0
+        },
+        if h > 0.0 && radii[1].1 + radii[2].1 > 0.0 {
+            h / (radii[1].1 + radii[2].1)
+        } else {
+            1.0
+        },
+    ];
+    let f = constraints.into_iter().fold(1.0f32, f32::min).max(0.0);
+    if f >= 1.0 {
+        return radii;
+    }
+    radii.map(|(rx, ry)| (rx * f, ry * f))
+}
+
+/// Append a single cubic Bézier approximating a quarter ellipse arc centered at
+/// `(cx, cy)` with radii `(rx, ry)`, from point `from` to point `to`. The sweep
+/// direction is derived from the relative position of the two endpoints.
+pub(crate) fn append_quarter_ellipse(
+    path: &mut Path,
+    cx: f32,
+    cy: f32,
+    rx: f32,
+    ry: f32,
+    from: (f32, f32),
+    to: (f32, f32),
+) {
+    if rx <= 0.0 || ry <= 0.0 {
+        path.line_to(to.0, to.1);
+        return;
+    }
+    let k = 4.0 * (std::f32::consts::SQRT_2 - 1.0) / 3.0;
+    let f = (from.0 - cx, from.1 - cy);
+    let t = (to.0 - cx, to.1 - cy);
+    // In y-down screen coordinates, the sign of the cross product tells us the
+    // sweep direction between the two radial vectors.
+    let sign = if f.0 * t.1 - f.1 * t.0 >= 0.0 { 1.0 } else { -1.0 };
+    let fu = (f.0 / rx, f.1 / ry);
+    let tu = (t.0 / rx, t.1 / ry);
+    let cp1 = (from.0 - sign * k * rx * fu.1, from.1 + sign * k * ry * fu.0);
+    let cp2 = (to.0 - sign * k * rx * tu.1, to.1 + sign * k * ry * tu.0);
+    path.cubic_to(cp1, cp2, to);
+}
+
+/// Builds a closed rounded rectangle path with top-left corner at `(x, y)`.
+///
+/// Corner radii are given as `(rx, ry)` pairs in CSS order (TL, TR, BR, BL) and
+/// are clamped so opposing radii fit within the box.
+pub fn rounded_rect_path(
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    tl: (f32, f32),
+    tr: (f32, f32),
+    br: (f32, f32),
+    bl: (f32, f32),
+) -> Path {
+    let radii = clamp_radii([tl, tr, br, bl], w, h);
+    let (tl, tr, br, bl) = (radii[0], radii[1], radii[2], radii[3]);
+    let mut path = Path::new();
+    path.move_to(x + w - tr.0, y);
+    append_quarter_ellipse(
+        &mut path,
+        x + w - tr.0,
+        y + tr.1,
+        tr.0,
+        tr.1,
+        (x + w - tr.0, y),
+        (x + w, y + tr.1),
+    );
+    path.line_to(x + w, y + h - br.1);
+    append_quarter_ellipse(
+        &mut path,
+        x + w - br.0,
+        y + h - br.1,
+        br.0,
+        br.1,
+        (x + w, y + h - br.1),
+        (x + w - br.0, y + h),
+    );
+    path.line_to(x + bl.0, y + h);
+    append_quarter_ellipse(
+        &mut path,
+        x + bl.0,
+        y + h - bl.1,
+        bl.0,
+        bl.1,
+        (x + bl.0, y + h),
+        (x, y + h - bl.1),
+    );
+    path.line_to(x, y + tl.1);
+    append_quarter_ellipse(
+        &mut path,
+        x + tl.0,
+        y + tl.1,
+        tl.0,
+        tl.1,
+        (x, y + tl.1),
+        (x + tl.0, y),
+    );
+    path.close();
+    path
+}
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -7,4 +7,6 @@ pub use draw_command::{
     AffineTransform, Brush, DrawCommand, FillRule, Paint, Rect, SystemUiKind,
     generate_draw_commands,
 };
-pub use path::{Path, PathCommand, ellipse_path, polygon_path, rect_path};
+pub use path::{
+    Path, PathCommand, clamp_radii, ellipse_path, polygon_path, rect_path, rounded_rect_path,
+};

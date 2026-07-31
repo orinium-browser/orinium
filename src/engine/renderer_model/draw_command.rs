@@ -3,9 +3,12 @@
 // Path definitions moved to path.rs
 use crate::engine::layouter::text_layouter::TextFlowLayouter;
 use crate::engine::layouter::types::{
-    Background, Color, ContainerStyle, Gradient, InfoNode, NodeKind, TextDecoration, TextStyle,
+    Background, BorderRadius, Color, ContainerStyle, CornerRadius, Gradient, InfoNode, NodeKind,
+    TextDecoration, TextStyle,
 };
-use crate::engine::renderer_model::path::{Path, rect_path};
+use crate::engine::renderer_model::path::{
+    Path, append_quarter_ellipse, clamp_radii, rect_path, rounded_rect_path,
+};
 use crate::engine::ui::custom_bridge::get_custom_inline_result;
 use smol_str::SmolStr;
 use ui_layout::{LayoutChild, LayoutNode};
@@ -262,13 +265,158 @@ fn push_transform(cmd_buf: &mut Vec<DrawCommand>, dx: f32, dy: f32) -> bool {
     }
 }
 
+/// Resolve the four outer corner radii to pixels against the border box.
+///
+/// Horizontal components resolve against the box width, vertical components
+/// against the box height (so `%` works per-axis per CSS).
+fn resolve_outer_radii(radius: &BorderRadius, box_w: f32, box_h: f32) -> [(f32, f32); 4] {
+    let resolve = |c: &CornerRadius| -> (f32, f32) {
+        (
+            c.x.resolve_with(Some(box_w), 0.0, 0.0).unwrap_or(0.0).max(0.0),
+            c.y.resolve_with(Some(box_h), 0.0, 0.0).unwrap_or(0.0).max(0.0),
+        )
+    };
+    [
+        resolve(&radius.top_left),
+        resolve(&radius.top_right),
+        resolve(&radius.bottom_right),
+        resolve(&radius.bottom_left),
+    ]
+}
+
+/// Compute the inner (padding-box) corner radii: the outer radii reduced by
+/// the two adjacent border widths, per CSS.
+fn inner_radii(outer: [(f32, f32); 4], bl: f32, bt: f32, br: f32, bb: f32) -> [(f32, f32); 4] {
+    [
+        (outer[0].0 - bl, outer[0].1 - bt),
+        (outer[1].0 - br, outer[1].1 - bt),
+        (outer[2].0 - br, outer[2].1 - bb),
+        (outer[3].0 - bl, outer[3].1 - bb),
+    ]
+    .map(|(x, y)| (x.max(0.0), y.max(0.0)))
+}
+
+/// Build the closed path of the top border edge, including the top-left and
+/// top-right corner caps. Coordinates are relative to the border-box origin.
+///
+/// `outer`/`inner` are the four corner radii in CSS order; the inner arcs are
+/// concentric with the outer arcs.
+fn top_border_strip(
+    w: f32,
+    bl: f32,
+    bt: f32,
+    br: f32,
+    outer: [(f32, f32); 4],
+    inner: [(f32, f32); 4],
+) -> Path {
+    let (rtl_x, rtl_y) = outer[0];
+    let (rtr_x, rtr_y) = outer[1];
+    let (itl_x, itl_y) = inner[0];
+    let (itr_x, itr_y) = inner[1];
+    let mut path = Path::new();
+    path.move_to(0.0, rtl_y);
+    append_quarter_ellipse(&mut path, rtl_x, rtl_y, rtl_x, rtl_y, (0.0, rtl_y), (rtl_x, 0.0));
+    path.line_to(w - rtr_x, 0.0);
+    append_quarter_ellipse(
+        &mut path,
+        w - rtr_x,
+        rtr_y,
+        rtr_x,
+        rtr_y,
+        (w - rtr_x, 0.0),
+        (w, rtr_y),
+    );
+    path.line_to(w - br, rtr_y);
+    append_quarter_ellipse(
+        &mut path,
+        w - rtr_x,
+        rtr_y,
+        itr_x,
+        itr_y,
+        (w - br, rtr_y),
+        (w - rtr_x, bt),
+    );
+    path.line_to(itl_x, bt);
+    append_quarter_ellipse(
+        &mut path,
+        rtl_x,
+        rtl_y,
+        itl_x,
+        itl_y,
+        (itl_x, bt),
+        (bl, rtl_y),
+    );
+    path.close();
+    path
+}
+
+/// Build the closed path of the bottom border edge, including the bottom-left
+/// and bottom-right corner caps.
+fn bottom_border_strip(
+    w: f32,
+    h: f32,
+    bl: f32,
+    bb: f32,
+    br: f32,
+    outer: [(f32, f32); 4],
+    inner: [(f32, f32); 4],
+) -> Path {
+    let (rbl_x, rbl_y) = outer[3];
+    let (rbr_x, rbr_y) = outer[2];
+    let (ibl_x, ibl_y) = inner[3];
+    let (ibr_x, ibr_y) = inner[2];
+    let mut path = Path::new();
+    path.move_to(w, h - rbr_y);
+    append_quarter_ellipse(
+        &mut path,
+        w - rbr_x,
+        h - rbr_y,
+        rbr_x,
+        rbr_y,
+        (w, h - rbr_y),
+        (w - rbr_x, h),
+    );
+    path.line_to(rbl_x, h);
+    append_quarter_ellipse(
+        &mut path,
+        rbl_x,
+        h - rbl_y,
+        rbl_x,
+        rbl_y,
+        (rbl_x, h),
+        (0.0, h - rbl_y),
+    );
+    path.line_to(bl, h - rbl_y);
+    append_quarter_ellipse(
+        &mut path,
+        rbl_x,
+        h - rbl_y,
+        ibl_x,
+        ibl_y,
+        (bl, h - rbl_y),
+        (rbl_x, h - bb),
+    );
+    path.line_to(w - rbr_x, h - bb);
+    append_quarter_ellipse(
+        &mut path,
+        w - rbr_x,
+        h - rbr_y,
+        ibr_x,
+        ibr_y,
+        (w - rbr_x, h - bb),
+        (w - br, h - rbr_y),
+    );
+    path.close();
+    path
+}
+
 /// Draw the four border edges inside the current coordinate system.
 /// Coordinates are relative to the border-box origin.
 fn draw_border(
     cmd_buf: &mut Vec<DrawCommand>,
     border_box: &ui_layout::Rect,
     padding_box: &ui_layout::Rect,
-    bc: &crate::engine::layouter::types::BorderColor,
+    style: &ContainerStyle,
 ) {
     let bw_top = (padding_box.y - border_box.y).max(0.0);
     let bw_bottom =
@@ -276,75 +424,116 @@ fn draw_border(
     let bw_left = (padding_box.x - border_box.x).max(0.0);
     let bw_right = (border_box.x + border_box.width - (padding_box.x + padding_box.width)).max(0.0);
 
+    let w = border_box.width;
+    let h = border_box.height;
+    let mut outer = resolve_outer_radii(&style.border_radius, w, h);
+    outer = clamp_radii(outer, w, h);
+    let mut inner = inner_radii(outer, bw_left, bw_top, bw_right, bw_bottom);
+    inner = clamp_radii(inner, padding_box.width.max(0.0), padding_box.height.max(0.0));
+
+    let bc = &style.border_color;
+    let push_fill = |cmd_buf: &mut Vec<DrawCommand>, path: Path, color: Color| {
+        cmd_buf.push(DrawCommand::Fill {
+            path,
+            rule: FillRule::NonZero,
+            paint: Paint {
+                brush: Brush::Solid(color),
+                opacity: 1.0,
+            },
+        });
+    };
+
+    let has_radius = outer.iter().any(|(rx, ry)| *rx > 0.0 || *ry > 0.0);
+    if !has_radius {
+        if bw_top > 0.0 {
+            push_fill(cmd_buf, rect_path(0.0, 0.0, w, bw_top), bc.top);
+        }
+        if bw_bottom > 0.0 {
+            push_fill(cmd_buf, rect_path(0.0, h - bw_bottom, w, bw_bottom), bc.bottom);
+        }
+        if bw_left > 0.0 {
+            push_fill(
+                cmd_buf,
+                rect_path(0.0, bw_top, bw_left, h - bw_top - bw_bottom),
+                bc.left,
+            );
+        }
+        if bw_right > 0.0 {
+            push_fill(
+                cmd_buf,
+                rect_path(w - bw_right, bw_top, bw_right, h - bw_top - bw_bottom),
+                bc.right,
+            );
+        }
+        return;
+    }
+
     if bw_top > 0.0 {
-        cmd_buf.push(DrawCommand::Fill {
-            path: rect_path(0.0, 0.0, border_box.width, bw_top),
-            rule: FillRule::NonZero,
-            paint: Paint {
-                brush: Brush::Solid(bc.top),
-                opacity: 1.0,
-            },
-        });
+        push_fill(
+            cmd_buf,
+            top_border_strip(w, bw_left, bw_top, bw_right, outer, inner),
+            bc.top,
+        );
     }
-
     if bw_bottom > 0.0 {
-        cmd_buf.push(DrawCommand::Fill {
-            path: rect_path(
-                0.0,
-                border_box.height - bw_bottom,
-                border_box.width,
-                bw_bottom,
-            ),
-            rule: FillRule::NonZero,
-            paint: Paint {
-                brush: Brush::Solid(bc.bottom),
-                opacity: 1.0,
-            },
-        });
+        push_fill(
+            cmd_buf,
+            bottom_border_strip(w, h, bw_left, bw_bottom, bw_right, outer, inner),
+            bc.bottom,
+        );
     }
-
     if bw_left > 0.0 {
-        cmd_buf.push(DrawCommand::Fill {
-            path: rect_path(0.0, bw_top, bw_left, border_box.height - bw_top - bw_bottom),
-            rule: FillRule::NonZero,
-            paint: Paint {
-                brush: Brush::Solid(bc.left),
-                opacity: 1.0,
-            },
-        });
+        push_fill(
+            cmd_buf,
+            rect_path(0.0, outer[0].1, bw_left, h - outer[0].1 - outer[3].1),
+            bc.left,
+        );
     }
-
     if bw_right > 0.0 {
-        cmd_buf.push(DrawCommand::Fill {
-            path: rect_path(
-                border_box.width - bw_right,
-                bw_top,
-                bw_right,
-                border_box.height - bw_top - bw_bottom,
-            ),
-            rule: FillRule::NonZero,
-            paint: Paint {
-                brush: Brush::Solid(bc.right),
-                opacity: 1.0,
-            },
-        });
+        push_fill(
+            cmd_buf,
+            rect_path(w - bw_right, outer[1].1, bw_right, h - outer[1].1 - outer[2].1),
+            bc.right,
+        );
     }
 }
 
-/// Draw the background inside the padding box.
+/// Draw the background inside the padding box (rounded when a border radius
+/// is present).
 /// Coordinates are relative to the border-box origin.
 fn draw_background(
     cmd_buf: &mut Vec<DrawCommand>,
     border_box: &ui_layout::Rect,
     padding_box: &ui_layout::Rect,
-    background: &Background,
+    style: &ContainerStyle,
 ) {
     let x = padding_box.x - border_box.x;
     let y = padding_box.y - border_box.y;
-    match background {
+    let bw_top = (padding_box.y - border_box.y).max(0.0);
+    let bw_bottom =
+        (border_box.y + border_box.height - (padding_box.y + padding_box.height)).max(0.0);
+    let bw_left = (padding_box.x - border_box.x).max(0.0);
+    let bw_right = (border_box.x + border_box.width - (padding_box.x + padding_box.width)).max(0.0);
+
+    let mut outer = resolve_outer_radii(&style.border_radius, border_box.width, border_box.height);
+    outer = clamp_radii(outer, border_box.width, border_box.height);
+    let mut inner = inner_radii(outer, bw_left, bw_top, bw_right, bw_bottom);
+    inner = clamp_radii(inner, padding_box.width.max(0.0), padding_box.height.max(0.0));
+
+    let path = rounded_rect_path(
+        x,
+        y,
+        padding_box.width,
+        padding_box.height,
+        inner[0],
+        inner[1],
+        inner[2],
+        inner[3],
+    );
+    match &style.background {
         Background::Color(c) if c.3 > 0 => {
             cmd_buf.push(DrawCommand::Fill {
-                path: rect_path(x, y, padding_box.width, padding_box.height),
+                path,
                 rule: FillRule::NonZero,
                 paint: Paint {
                     brush: Brush::Solid(*c),
@@ -354,7 +543,7 @@ fn draw_background(
         }
         Background::Gradient(g) => {
             cmd_buf.push(DrawCommand::Fill {
-                path: rect_path(x, y, padding_box.width, padding_box.height),
+                path,
                 paint: Paint {
                     brush: Brush::Gradient(g.clone()),
                     opacity: 1.0,
@@ -389,9 +578,9 @@ fn push_box_model(
         scroll: false,
     };
 
-    draw_border(cmd_buf, &border_box, &padding_box, &style.border_color);
+    draw_border(cmd_buf, &border_box, &padding_box, style);
 
-    draw_background(cmd_buf, &border_box, &padding_box, &style.background);
+    draw_background(cmd_buf, &border_box, &padding_box, style);
 
     let clip = !is_inline && padding_box.width > 0.0 && padding_box.height > 0.0;
     if clip {
