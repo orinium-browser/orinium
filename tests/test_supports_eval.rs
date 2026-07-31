@@ -372,7 +372,7 @@ fn test_supports_display_contents_unsupported() {
 }
 
 #[test]
-fn test_supports_display_inline_block_unsupported() {
+fn test_supports_display_inline_block_supported() {
     let s = resolve(
         r#"
         @supports (display: inline-block) {
@@ -383,8 +383,8 @@ fn test_supports_display_inline_block_unsupported() {
         "#,
     );
     assert!(
-        !has_prop_in_rule(&s, "--val"),
-        "display: inline-block is not supported by layout engine"
+        has_prop_in_rule(&s, "--val"),
+        "display: inline-block should be supported by layout engine"
     );
 }
 
