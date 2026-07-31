@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="ja">
+    <head>
+        <meta charset="UTF-8" />
+        <title>Text Align & Wrap Test</title>
+        <style>
+            body {
+                font-family: sans-serif;
+                padding: 20px;
+                line-height: 1.6;
+            }
+
+            section {
+                margin-bottom: 40px;
+            }
+
+            h2 {
+                border-bottom: 2px solid #333;
+                padding-bottom: 5px;
+            }
+
+            .sample {
+                border: 1px solid #999;
+                padding: 8px 12px;
+                margin: 8px 0;
+                background: #f5f5f5;
+            }
+
+            /* text-align */
+            .align-left {
+                text-align: left;
+            }
+
+            .align-center {
+                text-align: center;
+            }
+
+            .align-right {
+                text-align: right;
+            }
+
+            /* wrapping samples */
+            .wrap-latin {
+                background: #eaf3fb;
+            }
+
+            .wrap-word {
+                background: #fff3cd;
+            }
+
+            .wrap-cjk {
+                background: #d4edda;
+            }
+
+            .wrap-mixed {
+                background: #e2d5f5;
+            }
+
+            /* line-height */
+            .lh-normal {
+                line-height: normal;
+            }
+
+            .lh-15 {
+                line-height: 1.5;
+            }
+
+            .lh-20 {
+                line-height: 2;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>Text Align &amp; Wrap Test</h1>
+
+        <section>
+            <h2>text-align</h2>
+            <div class="sample align-left">
+                left aligned text left aligned text left aligned text left
+                aligned text left aligned text left aligned text.
+            </div>
+            <div class="sample align-center">
+                center aligned text center aligned text center aligned text
+                center aligned text center aligned text.
+            </div>
+            <div class="sample align-right">
+                right aligned text right aligned text right aligned text right
+                aligned text right aligned text right aligned text.
+            </div>
+        </section>
+
+        <section>
+            <h2>Line Wrapping</h2>
+
+            <h3>Latin sentence</h3>
+            <div class="sample wrap-latin">
+                The quick brown fox jumps over the lazy dog. The quick brown fox
+                jumps over the lazy dog. The quick brown fox jumps over the lazy
+                dog.
+            </div>
+
+            <h3>Long unbreakable word</h3>
+            <div class="sample wrap-word">
+                Supercalifragilisticexpialidocious
+                Supercalifragilisticexpialidocious
+                Supercalifragilisticexpialidocious
+            </div>
+
+            <h3>Japanese (CJK)</h3>
+            <div class="sample wrap-cjk">
+                吾輩は猫である。名前はまだ無い。どこで生れたかとんと見当がつかぬ。
+                何でも薄暗いじめじめした所でニャーニャー泣いていた事だけは記憶している。
+                吾輩はここで始めて人間というものを見た。
+            </div>
+
+            <h3>Mixed Latin &amp; CJK</h3>
+            <div class="sample wrap-mixed">
+                Orinium は Rust で書かれた軽量ブラウザです。The layout engine is
+                implemented from scratch in this project. 文章が
+                途中で折り返される様子を確認します。
+            </div>
+        </section>
+
+        <section>
+            <h2>line-height</h2>
+            <div class="sample lh-normal">
+                line-height normal — first line<br />
+                second line<br />
+                third line
+            </div>
+            <div class="sample lh-15">
+                line-height 1.5 — first line<br />
+                second line<br />
+                third line
+            </div>
+            <div class="sample lh-20">
+                line-height 2.0 — first line<br />
+                second line<br />
+                third line
+            </div>
+        </section>
+    </body>
+</html>

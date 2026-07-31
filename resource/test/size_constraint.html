@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="ja">
+    <head>
+        <meta charset="UTF-8" />
+        <title>Size Constraint Test</title>
+        <style>
+            body {
+                font-family: sans-serif;
+                padding: 20px;
+                line-height: 1.6;
+            }
+
+            section {
+                margin-bottom: 40px;
+            }
+
+            h2 {
+                border-bottom: 2px solid #333;
+                padding-bottom: 5px;
+            }
+
+            .box {
+                border: 1px solid #666;
+                padding: 8px;
+                margin: 8px 0;
+                background: #eaf3fb;
+            }
+
+            .label {
+                font-size: 14px;
+                color: #333;
+                margin-bottom: 4px;
+            }
+
+            /* min constraints */
+            .min-width {
+                min-width: 300px;
+                background: #d4edda;
+            }
+
+            .min-height {
+                min-height: 120px;
+                background: #fff3cd;
+            }
+
+            /* max constraints */
+            .max-width {
+                max-width: 200px;
+                background: #cce5ff;
+            }
+
+            .max-width-center {
+                max-width: 200px;
+                margin-left: auto;
+                margin-right: auto;
+                background: #e2d5f5;
+            }
+
+            .max-height {
+                max-height: 60px;
+                background: #f8d7da;
+            }
+
+            /* fixed with constraints */
+            .fixed-min {
+                width: 100px;
+                min-width: 150px;
+                background: #d1ecf1;
+            }
+
+            .fixed-max {
+                width: 300px;
+                max-width: 150px;
+                background: #f5c6cb;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>Size Constraint Test</h1>
+
+        <section>
+            <h2>min-width</h2>
+            <div class="label">content is short, box stretches to 300px</div>
+            <div class="box min-width">short</div>
+        </section>
+
+        <section>
+            <h2>min-height</h2>
+            <div class="label">content is short, box stretches to 120px</div>
+            <div class="box min-height">short content</div>
+        </section>
+
+        <section>
+            <h2>max-width</h2>
+            <div class="label">long content wraps within 200px</div>
+            <div class="box max-width">
+                This is a long sentence that must wrap because the max-width of
+                this box is only 200px wide, so the text cannot fit on a single
+                line and will break onto multiple lines.
+            </div>
+        </section>
+
+        <section>
+            <h2>max-width + centered</h2>
+            <div class="box max-width-center">
+                A 200px box centered by margin auto, content wraps inside.
+            </div>
+        </section>
+
+        <section>
+            <h2>max-height</h2>
+            <div class="label">
+                tall content is capped at 60px (overflow behavior check — the
+                overflow property is not yet parsed)
+            </div>
+            <div class="box max-height">
+                first line<br />
+                second line<br />
+                third line<br />
+                fourth line<br />
+                fifth line<br />
+                sixth line<br />
+                seventh line<br />
+                eighth line
+            </div>
+        </section>
+
+        <section>
+            <h2>fixed + min/max interplay</h2>
+            <div class="box fixed-min">
+                width 100px + min-width 150px → 150px
+            </div>
+            <div class="box fixed-max">
+                width 300px + max-width 150px → 150px
+            </div>
+        </section>
+    </body>
+</html>
