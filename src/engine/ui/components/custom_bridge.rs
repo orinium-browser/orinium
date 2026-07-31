@@ -162,7 +162,9 @@ impl FlowLayouter for CustomInlineBridge {
         // If measure() was called first, use the CSS-resolved size;
         // otherwise fall back to intrinsic size.
         let (use_width, use_height) = CUSTOM_INLINE_RESULTS.with(|m| {
-            m.borrow().get(&self.id).map_or((self.width, self.height), |r| (r.width, r.height))
+            m.borrow()
+                .get(&self.id)
+                .map_or((self.width, self.height), |r| (r.width, r.height))
         });
 
         let spans = vec![LineSpan {
@@ -216,14 +218,38 @@ impl FlowLayouter for CustomInlineBridge {
             .unwrap_or(self.height);
 
         let sp = &self.layout_style.spacing;
-        let b_top = sp.border_top.resolve_with(ctx.containing_block_width, vw, vh).unwrap_or(0.0);
-        let b_right = sp.border_right.resolve_with(ctx.containing_block_width, vw, vh).unwrap_or(0.0);
-        let b_bottom = sp.border_bottom.resolve_with(ctx.containing_block_width, vw, vh).unwrap_or(0.0);
-        let b_left = sp.border_left.resolve_with(ctx.containing_block_width, vw, vh).unwrap_or(0.0);
-        let p_top = sp.padding_top.resolve_with(ctx.containing_block_width, vw, vh).unwrap_or(0.0);
-        let p_right = sp.padding_right.resolve_with(ctx.containing_block_width, vw, vh).unwrap_or(0.0);
-        let p_bottom = sp.padding_bottom.resolve_with(ctx.containing_block_width, vw, vh).unwrap_or(0.0);
-        let p_left = sp.padding_left.resolve_with(ctx.containing_block_width, vw, vh).unwrap_or(0.0);
+        let b_top = sp
+            .border_top
+            .resolve_with(ctx.containing_block_width, vw, vh)
+            .unwrap_or(0.0);
+        let b_right = sp
+            .border_right
+            .resolve_with(ctx.containing_block_width, vw, vh)
+            .unwrap_or(0.0);
+        let b_bottom = sp
+            .border_bottom
+            .resolve_with(ctx.containing_block_width, vw, vh)
+            .unwrap_or(0.0);
+        let b_left = sp
+            .border_left
+            .resolve_with(ctx.containing_block_width, vw, vh)
+            .unwrap_or(0.0);
+        let p_top = sp
+            .padding_top
+            .resolve_with(ctx.containing_block_width, vw, vh)
+            .unwrap_or(0.0);
+        let p_right = sp
+            .padding_right
+            .resolve_with(ctx.containing_block_width, vw, vh)
+            .unwrap_or(0.0);
+        let p_bottom = sp
+            .padding_bottom
+            .resolve_with(ctx.containing_block_width, vw, vh)
+            .unwrap_or(0.0);
+        let p_left = sp
+            .padding_left
+            .resolve_with(ctx.containing_block_width, vw, vh)
+            .unwrap_or(0.0);
 
         CUSTOM_INLINE_RESULTS.with(|m| {
             m.borrow_mut().insert(
