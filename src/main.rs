@@ -13,7 +13,7 @@ fn main() -> Result<()> {
     env_logger::init();
 
     let mut tab = Tab::new();
-    tab.navigate("resource:///test/compatibility_test.html".parse()?);
+    tab.navigate("resource:///test/test.html".parse()?);
 
     let mut browser = BrowserApp::default();
     browser.set_default_ui(BrowserUi::with_tab(tab));

@@ -22,7 +22,7 @@
 //!
 //! // BrowserApp を生成して実行する（テストや実行時の簡易例）
 //! let mut tab = Tab::new();
-//! tab.navigate("resource:///test/compatibility_test.html".parse().unwrap());
+//! tab.navigate("resource:///test/test.html".parse().unwrap());
 //! let mut app = BrowserApp::default();
 //! app.set_default_ui(BrowserUi::with_tab(tab));
 //! app.run().unwrap();

@@ -11,14 +11,14 @@ pub fn load_local_file(path: &str) -> Result<Vec<u8>> {
 
 /// リソースファイルを探して読み込む。
 /// 順序は以下の通り：
+/// - 実行ファイルのあるディレクトリ/resource/<rel_path> (build.rs が同期・生成したリソース)
 /// - ./resource/<rel_path>
-/// - 実行ファイルのあるディレクトリ/resource/<rel_path>
 /// - カレントディレクトリ/resource/<rel_path>
+///
+/// ビルド成果物 (test インデックス等) が CWD のソースツリーより優先されるよう、
+/// 実行ファイルの隣にある resource を最初に試す。
 pub fn load_resource(rel_path: &str) -> Result<Vec<u8>> {
     let mut candidates: Vec<PathBuf> = Vec::new();
-
-    // ./resource/<rel_path>
-    candidates.push(PathBuf::from("resource").join(rel_path));
 
     // executable directory/resource/<rel_path>
     if let Ok(exe) = std::env::current_exe()
@@ -26,6 +26,9 @@ pub fn load_resource(rel_path: &str) -> Result<Vec<u8>> {
     {
         candidates.push(dir.join("resource").join(rel_path));
     }
+
+    // ./resource/<rel_path>
+    candidates.push(PathBuf::from("resource").join(rel_path));
 
     // current_dir()/resource/<rel_path>
     if let Ok(cd) = std::env::current_dir() {

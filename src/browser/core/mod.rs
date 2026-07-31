@@ -18,7 +18,7 @@
 //!
 //! // Navigate the tab to a resource or URL (error handling elided)
 //! let mut tab = Tab::new();
-//! tab.navigate("resource:///test/compatibility_test.html".parse().unwrap());
+//! tab.navigate("resource:///test/test.html".parse().unwrap());
 //!
 //! // Create browser with the pre-configured tab and run it
 //! let mut browser = BrowserApp::default();

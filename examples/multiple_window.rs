@@ -22,8 +22,8 @@ const WINDOWS: &[WindowSpec] = &[
         size: (900, 640),
     },
     WindowSpec {
-        title: "Window 2 – CSS Apply",
-        url: "resource:///test/css_apply.html",
+        title: "Window 2 – CSS Box Model",
+        url: "resource:///test/box_model.html",
         size: (900, 640),
     },
     WindowSpec {
