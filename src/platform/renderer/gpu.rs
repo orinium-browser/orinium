@@ -277,14 +277,12 @@ impl GpuRenderer {
         // --- scale_factor ---
         let sf = self.scale_factor as f32;
         // --- transform stack ---
+        // Each entry stores the composition of all transforms up to and
+        // including that level, so the current transform is always the last
+        // entry (O(1) lookup instead of recomposing the whole stack).
         let mut transform_stack: Vec<AffineTransform> = vec![AffineTransform::identity()];
-        let current_transform = |stack: &Vec<AffineTransform>| -> AffineTransform {
-            let mut t = AffineTransform::identity();
-            for m in stack.iter() {
-                t = t.then(m);
-            }
-            t
-        };
+        let current_transform =
+            |stack: &Vec<AffineTransform>| -> AffineTransform { *stack.last().unwrap() };
         // --- clip stack ---
         let mut clip_stack: Vec<ClipRect> = vec![ClipRect {
             x: 0.0,
@@ -298,7 +296,8 @@ impl GpuRenderer {
             match command {
                 // Transform (Push / Pop)
                 DrawCommand::PushTransform { transform } => {
-                    transform_stack.push(*transform);
+                    let parent = current_transform(&transform_stack);
+                    transform_stack.push(parent.then(transform));
                 }
                 DrawCommand::PopTransform => {
                     if transform_stack.len() > 1 {
