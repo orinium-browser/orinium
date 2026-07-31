@@ -3,7 +3,7 @@
 //! Builds a small HTML fragment containing `<iframe>`, `<input>`, and
 //! `<button>` tags, runs layout, and dumps the resulting draw commands.
 //! `<iframe>` and `<input>` emit `SystemUi`; `<button>` renders itself
-//! with plain `DrawRect` + `DrawText` commands.
+//! with plain `Fill` + `DrawText` commands.
 //!
 //! ```sh
 //! cargo run --example custom_node
@@ -101,23 +101,18 @@ fn main() {
 
     println!("\n── SystemUi commands ({}) ──", system_ui.len());
     for (i, cmd) in &system_ui {
-        if let DrawCommand::SystemUi {
-            kind,
-            x,
-            y,
-            width,
-            height,
-        } = cmd
-        {
+        if let DrawCommand::SystemUi { kind, rect } = cmd {
             match kind {
                 SystemUiKind::WebView { surface_id } => {
                     println!(
-                        "  [{i:>3}] Iframe   surface_id={surface_id}  rect=({x}, {y}, {width}, {height})"
+                        "  [{i:>3}] Iframe   surface_id={surface_id}  rect=({}, {}, {}, {})",
+                        rect.x, rect.y, rect.width, rect.height
                     );
                 }
                 SystemUiKind::Input { value, placeholder } => {
                     println!(
-                        "  [{i:>3}] Input    value={value:?}  placeholder={placeholder:?}  rect=({x}, {y}, {width}, {height})"
+                        "  [{i:>3}] Input    value={value:?}  placeholder={placeholder:?}  rect=({}, {}, {}, {})",
+                        rect.x, rect.y, rect.width, rect.height
                     );
                 }
             }

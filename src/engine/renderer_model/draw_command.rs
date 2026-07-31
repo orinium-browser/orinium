@@ -1,55 +1,216 @@
 //! Draw command definition for rendering, which represents drawing instructions.
 
+// Path definitions moved to path.rs
 use crate::engine::layouter::text_layouter::TextFlowLayouter;
 use crate::engine::layouter::types::{
     Background, Color, ContainerStyle, Gradient, InfoNode, NodeKind, TextDecoration, TextStyle,
 };
+use crate::engine::renderer_model::path::{Path, rect_path};
 use crate::engine::ui::custom_bridge::get_custom_inline_result;
 use smol_str::SmolStr;
 use ui_layout::{LayoutChild, LayoutNode};
 
+/// An affine transformation matrix (2D), in row-major convention with an
+/// implicit translation.
+#[derive(Debug, Clone, Copy)]
+pub struct AffineTransform {
+    pub m11: f32,
+    pub m12: f32,
+    pub m21: f32,
+    pub m22: f32,
+    pub dx: f32,
+    pub dy: f32,
+}
+
+impl AffineTransform {
+    /// The identity transform.
+    pub const fn identity() -> Self {
+        AffineTransform {
+            m11: 1.0,
+            m12: 0.0,
+            m21: 0.0,
+            m22: 1.0,
+            dx: 0.0,
+            dy: 0.0,
+        }
+    }
+
+    /// A pure translation transform.
+    pub fn translate(dx: f32, dy: f32) -> Self {
+        AffineTransform {
+            m11: 1.0,
+            m12: 0.0,
+            m21: 0.0,
+            m22: 1.0,
+            dx,
+            dy,
+        }
+    }
+
+    /// A pure scale transform.
+    pub const fn scale(sx: f32, sy: f32) -> Self {
+        AffineTransform {
+            m11: sx,
+            m12: 0.0,
+            m21: 0.0,
+            m22: sy,
+            dx: 0.0,
+            dy: 0.0,
+        }
+    }
+
+    /// A rotation transform by `angle` radians.
+    pub fn rotate(angle: f32) -> Self {
+        let c = angle.cos();
+        let s = angle.sin();
+        AffineTransform {
+            m11: c,
+            m12: -s,
+            m21: s,
+            m22: c,
+            dx: 0.0,
+            dy: 0.0,
+        }
+    }
+
+    /// Apply this transform to a point.
+    pub fn apply(&self, x: f32, y: f32) -> (f32, f32) {
+        (
+            x * self.m11 + y * self.m12 + self.dx,
+            x * self.m21 + y * self.m22 + self.dy,
+        )
+    }
+
+    /// Compose: `self` after `rhs` (rhs is applied first, then self).
+    pub fn then(&self, rhs: &AffineTransform) -> Self {
+        AffineTransform {
+            m11: self.m11 * rhs.m11 + self.m12 * rhs.m21,
+            m12: self.m11 * rhs.m12 + self.m12 * rhs.m22,
+            m21: self.m21 * rhs.m11 + self.m22 * rhs.m21,
+            m22: self.m21 * rhs.m12 + self.m22 * rhs.m22,
+            dx: self.m11 * rhs.dx + self.m12 * rhs.dy + self.dx,
+            dy: self.m21 * rhs.dx + self.m22 * rhs.dy + self.dy,
+        }
+    }
+
+    /// Returns the inverse transform, or `None` when the matrix is singular.
+    pub fn inverse(&self) -> Option<Self> {
+        let det = self.m11 * self.m22 - self.m12 * self.m21;
+        if det.abs() < f32::EPSILON {
+            return None;
+        }
+        let inv_det = 1.0 / det;
+        Some(AffineTransform {
+            m11: self.m22 * inv_det,
+            m12: -self.m12 * inv_det,
+            m21: -self.m21 * inv_det,
+            m22: self.m11 * inv_det,
+            dx: (self.m21 * self.dy - self.m22 * self.dx) * inv_det,
+            dy: (self.m12 * self.dx - self.m11 * self.dy) * inv_det,
+        })
+    }
+}
+
+/// Fill rule for path filling.
+///
+/// The GPU rasterizer currently ignores this value and always fills the path
+/// polygon directly; only simple, convex subpaths are rendered correctly.
+#[derive(Debug, Clone, Copy)]
+pub enum FillRule {
+    NonZero,
+    EvenOdd,
+}
+
+// --------------------------------
+// Path helpers
+// --------------------------------
+// Shape helpers are provided by path.rs
+
+/// An axis-aligned rectangle.
+#[derive(Debug, Clone, Copy)]
+pub struct Rect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+impl Rect {
+    /// Creates a new rectangle.
+    pub const fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    /// Returns `true` if the rectangle contains the given point.
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        x >= self.x && x <= self.x + self.width && y >= self.y && y <= self.y + self.height
+    }
+
+    /// Returns the intersection of two rectangles, or `None` if they do not
+    /// overlap.
+    pub fn intersect(&self, other: &Rect) -> Option<Rect> {
+        let x1 = self.x.max(other.x);
+        let y1 = self.y.max(other.y);
+        let x2 = (self.x + self.width).min(other.x + other.width);
+        let y2 = (self.y + self.height).min(other.y + other.height);
+        if x2 > x1 && y2 > y1 {
+            Some(Rect::new(x1, y1, x2 - x1, y2 - y1))
+        } else {
+            None
+        }
+    }
+}
+
+/// A fill source: a solid color or a gradient.
+#[derive(Debug, Clone)]
+pub enum Brush {
+    Solid(Color),
+    Gradient(Gradient),
+}
+
+/// How a path is painted: the brush plus an opacity multiplier.
+#[derive(Debug, Clone)]
+pub struct Paint {
+    pub brush: Brush,
+    pub opacity: f32,
+}
+
+/// A drawing instruction for the GPU renderer.
 #[derive(Debug, Clone)]
 pub enum DrawCommand {
+    /// Fill a path.
+    ///
+    /// The `rule` field is reserved; the GPU rasterizer currently ignores it
+    /// and only renders simple, roughly convex polygon subpaths. The `opacity`
+    /// is applied to solid color fills.
+    Fill {
+        path: Path,
+        paint: Paint,
+        rule: FillRule,
+    },
+    /// Draw a text run at `(x, y)`.
     DrawText {
         x: f32,
         y: f32,
         text: SmolStr,
         style: TextStyle,
     },
-    DrawRect {
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
-        color: Color,
-    },
-    DrawGradientRect {
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
-        gradient: Gradient,
-    },
-    DrawPolygon {
-        points: Vec<(f32, f32)>,
-        color: Color,
-    },
-    DrawEllipse {
-        center: (f32, f32),
-        radius_x: f32,
-        radius_y: f32,
-        color: Color,
-    },
+    /// Push a clip region given by a path.
+    ///
+    /// Non-rectangular paths are approximated by their bounding box.
     PushClip {
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
+        path: Path,
+        rule: FillRule,
     },
     PopClip,
+    /// Push a coordinate transform.
     PushTransform {
-        dx: f32,
-        dy: f32,
+        transform: AffineTransform,
     },
     PopTransform,
 
@@ -60,10 +221,7 @@ pub enum DrawCommand {
     /// coordinate space.
     SystemUi {
         kind: SystemUiKind,
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
+        rect: Rect,
     },
 }
 
@@ -95,7 +253,9 @@ struct BoxPushState {
 
 fn push_transform(cmd_buf: &mut Vec<DrawCommand>, dx: f32, dy: f32) -> bool {
     if dx != 0.0 || dy != 0.0 {
-        cmd_buf.push(DrawCommand::PushTransform { dx, dy });
+        cmd_buf.push(DrawCommand::PushTransform {
+            transform: AffineTransform::translate(dx, dy),
+        });
         true
     } else {
         false
@@ -117,42 +277,56 @@ fn draw_border(
     let bw_right = (border_box.x + border_box.width - (padding_box.x + padding_box.width)).max(0.0);
 
     if bw_top > 0.0 {
-        cmd_buf.push(DrawCommand::DrawRect {
-            x: 0.0,
-            y: 0.0,
-            width: border_box.width,
-            height: bw_top,
-            color: bc.top,
+        cmd_buf.push(DrawCommand::Fill {
+            path: rect_path(0.0, 0.0, border_box.width, bw_top),
+            rule: FillRule::NonZero,
+            paint: Paint {
+                brush: Brush::Solid(bc.top),
+                opacity: 1.0,
+            },
         });
     }
 
     if bw_bottom > 0.0 {
-        cmd_buf.push(DrawCommand::DrawRect {
-            x: 0.0,
-            y: border_box.height - bw_bottom,
-            width: border_box.width,
-            height: bw_bottom,
-            color: bc.bottom,
+        cmd_buf.push(DrawCommand::Fill {
+            path: rect_path(
+                0.0,
+                border_box.height - bw_bottom,
+                border_box.width,
+                bw_bottom,
+            ),
+            rule: FillRule::NonZero,
+            paint: Paint {
+                brush: Brush::Solid(bc.bottom),
+                opacity: 1.0,
+            },
         });
     }
 
     if bw_left > 0.0 {
-        cmd_buf.push(DrawCommand::DrawRect {
-            x: 0.0,
-            y: bw_top,
-            width: bw_left,
-            height: border_box.height - bw_top - bw_bottom,
-            color: bc.left,
+        cmd_buf.push(DrawCommand::Fill {
+            path: rect_path(0.0, bw_top, bw_left, border_box.height - bw_top - bw_bottom),
+            rule: FillRule::NonZero,
+            paint: Paint {
+                brush: Brush::Solid(bc.left),
+                opacity: 1.0,
+            },
         });
     }
 
     if bw_right > 0.0 {
-        cmd_buf.push(DrawCommand::DrawRect {
-            x: border_box.width - bw_right,
-            y: bw_top,
-            width: bw_right,
-            height: border_box.height - bw_top - bw_bottom,
-            color: bc.right,
+        cmd_buf.push(DrawCommand::Fill {
+            path: rect_path(
+                border_box.width - bw_right,
+                bw_top,
+                bw_right,
+                border_box.height - bw_top - bw_bottom,
+            ),
+            rule: FillRule::NonZero,
+            paint: Paint {
+                brush: Brush::Solid(bc.right),
+                opacity: 1.0,
+            },
         });
     }
 }
@@ -169,21 +343,23 @@ fn draw_background(
     let y = padding_box.y - border_box.y;
     match background {
         Background::Color(c) if c.3 > 0 => {
-            cmd_buf.push(DrawCommand::DrawRect {
-                x,
-                y,
-                width: padding_box.width,
-                height: padding_box.height,
-                color: *c,
+            cmd_buf.push(DrawCommand::Fill {
+                path: rect_path(x, y, padding_box.width, padding_box.height),
+                rule: FillRule::NonZero,
+                paint: Paint {
+                    brush: Brush::Solid(*c),
+                    opacity: 1.0,
+                },
             });
         }
         Background::Gradient(g) => {
-            cmd_buf.push(DrawCommand::DrawGradientRect {
-                x,
-                y,
-                width: padding_box.width,
-                height: padding_box.height,
-                gradient: g.clone(),
+            cmd_buf.push(DrawCommand::Fill {
+                path: rect_path(x, y, padding_box.width, padding_box.height),
+                paint: Paint {
+                    brush: Brush::Gradient(g.clone()),
+                    opacity: 1.0,
+                },
+                rule: FillRule::NonZero,
             });
         }
         _ => {}
@@ -220,10 +396,13 @@ fn push_box_model(
     let clip = !is_inline && padding_box.width > 0.0 && padding_box.height > 0.0;
     if clip {
         cmd_buf.push(DrawCommand::PushClip {
-            x: padding_box.x - border_box.x,
-            y: padding_box.y - border_box.y,
-            width: padding_box.width,
-            height: padding_box.height,
+            path: rect_path(
+                padding_box.x - border_box.x,
+                padding_box.y - border_box.y,
+                padding_box.width,
+                padding_box.height,
+            ),
+            rule: FillRule::NonZero,
         });
     }
 
@@ -298,12 +477,18 @@ fn draw_text(
             };
 
             if draw {
-                cmd_buf.push(DrawCommand::DrawRect {
-                    x,
-                    y: line_y,
-                    width: span.x_range.end - span.x_range.start,
-                    height: line_thickness,
-                    color: style.text_decoration_color.unwrap_or(style.color),
+                cmd_buf.push(DrawCommand::Fill {
+                    path: rect_path(
+                        x,
+                        line_y,
+                        span.x_range.end - span.x_range.start,
+                        line_thickness,
+                    ),
+                    rule: FillRule::NonZero,
+                    paint: Paint {
+                        brush: Brush::Solid(style.text_decoration_color.unwrap_or(style.color)),
+                        opacity: 1.0,
+                    },
                 });
             }
         }

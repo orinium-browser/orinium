@@ -3,7 +3,7 @@
 use crate::engine::layouter::types::{
     Color, ColorStop, Gradient, GradientKind, RadialShape, RadialSizeKind,
 };
-use crate::engine::renderer_model::DrawCommand;
+use crate::engine::renderer_model::{AffineTransform, Brush, DrawCommand, Rect};
 use anyhow::Result;
 use std::sync::Arc;
 use std::{env, fmt::Debug};
@@ -69,6 +69,15 @@ impl Vertex {
             ],
         }
     }
+}
+
+/// An axis-aligned clip region in logical (pre-scale-factor) coordinates.
+#[derive(Clone, Copy)]
+struct ClipRect {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
 }
 
 impl GpuRenderer {
@@ -268,24 +277,15 @@ impl GpuRenderer {
         // --- scale_factor ---
         let sf = self.scale_factor as f32;
         // --- transform stack ---
-        let mut transform_stack: Vec<(f32, f32)> = vec![(0.0, 0.0)];
-        let current_transform = |stack: &Vec<(f32, f32)>| -> (f32, f32) {
-            let mut dx = 0.0;
-            let mut dy = 0.0;
-            for (x, y) in stack.iter() {
-                dx += x;
-                dy += y;
+        let mut transform_stack: Vec<AffineTransform> = vec![AffineTransform::identity()];
+        let current_transform = |stack: &Vec<AffineTransform>| -> AffineTransform {
+            let mut t = AffineTransform::identity();
+            for m in stack.iter() {
+                t = t.then(m);
             }
-            (dx, dy)
+            t
         };
         // --- clip stack ---
-        #[derive(Clone, Copy)]
-        struct ClipRect {
-            x: f32,
-            y: f32,
-            w: f32,
-            h: f32,
-        }
         let mut clip_stack: Vec<ClipRect> = vec![ClipRect {
             x: 0.0,
             y: 0.0,
@@ -297,8 +297,8 @@ impl GpuRenderer {
         for command in commands {
             match command {
                 // Transform (Push / Pop)
-                DrawCommand::PushTransform { dx, dy } => {
-                    transform_stack.push((*dx, *dy));
+                DrawCommand::PushTransform { transform } => {
+                    transform_stack.push(*transform);
                 }
                 DrawCommand::PopTransform => {
                     if transform_stack.len() > 1 {
@@ -307,19 +307,12 @@ impl GpuRenderer {
                 }
 
                 // Clip (Push / Pop)
-                DrawCommand::PushClip {
-                    x,
-                    y,
-                    width: w,
-                    height: h,
-                } => {
-                    let (tdx, tdy) = current_transform(&transform_stack);
-                    let new_clip = ClipRect {
-                        x: x + tdx,
-                        y: y + tdy,
-                        w: *w,
-                        h: *h,
-                    };
+                DrawCommand::PushClip { path, rule: _ } => {
+                    let t = current_transform(&transform_stack);
+                    let b = path.bounding_box().unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
+                    let (x, y, w, h) = (b.x, b.y, b.width, b.height);
+                    let (cx, cy) = t.apply(x, y);
+                    let new_clip = ClipRect { x: cx, y: cy, w, h };
 
                     // 現在の clip との AND を取る
                     let parent = current_clip(&clip_stack);
@@ -343,147 +336,131 @@ impl GpuRenderer {
                     }
                 }
 
-                // Rectangle
-                DrawCommand::DrawRect {
-                    x,
-                    y,
-                    width: w,
-                    height: h,
-                    color,
+                // Fill
+                DrawCommand::Fill {
+                    path,
+                    paint,
+                    rule: _,
                 } => {
-                    // transform
-                    let (tdx, tdy) = current_transform(&transform_stack);
-                    let mut x1 = (x + tdx) * sf;
-                    let mut y1 = (y + tdy) * sf;
-                    let mut x2 = x1 + w * sf;
-                    let mut y2 = y1 + h * sf;
+                    let t = current_transform(&transform_stack);
+                    let Some(raw_points) = path.as_polygon_vertices() else {
+                        continue;
+                    };
 
-                    // clip 取得
+                    let transformed_points: Vec<(f32, f32)> = raw_points
+                        .iter()
+                        .map(|(px, py)| {
+                            let (tx, ty) = t.apply(*px, *py);
+                            (tx * sf, ty * sf)
+                        })
+                        .collect();
+
                     let clip = current_clip(&clip_stack);
+                    let clip_l = clip.x * sf;
+                    let clip_t = clip.y * sf;
+                    let clip_r = (clip.x + clip.w) * sf;
+                    let clip_b = (clip.y + clip.h) * sf;
 
-                    // 完全に外なら skip
-                    if x2 <= clip.x * sf
-                        || x1 >= (clip.x + clip.w) * sf
-                        || y2 <= clip.y * sf
-                        || y1 >= (clip.y + clip.h) * sf
-                    {
+                    // Quick reject by bounding box
+                    let mut min_x = f32::INFINITY;
+                    let mut min_y = f32::INFINITY;
+                    let mut max_x = f32::NEG_INFINITY;
+                    let mut max_y = f32::NEG_INFINITY;
+                    for (x, y) in transformed_points.iter() {
+                        min_x = min_x.min(*x);
+                        min_y = min_y.min(*y);
+                        max_x = max_x.max(*x);
+                        max_y = max_y.max(*y);
+                    }
+                    if max_x <= clip_l || min_x >= clip_r || max_y <= clip_t || min_y >= clip_b {
                         continue;
                     }
 
-                    // 部分クリップ
-                    x1 = x1.max(clip.x * sf);
-                    y1 = y1.max(clip.y * sf);
-                    x2 = x2.min((clip.x + clip.w) * sf);
-                    y2 = y2.min((clip.y + clip.h) * sf);
-
-                    // NDC
-                    let ndc = |v, max| (v / max) * 2.0 - 1.0;
-
-                    let px1 = ndc(x1, screen_width);
-                    let py1 = -ndc(y1, screen_height);
-                    let px2 = ndc(x2, screen_width);
-                    let py2 = -ndc(y2, screen_height);
-
-                    let color = color.to_linear_f32_array();
-
-                    #[rustfmt::skip]
-                vertices.extend_from_slice(&[
-                    Vertex { position: [px1, py1, 0.0], color },
-                    Vertex { position: [px1, py2, 0.0], color },
-                    Vertex { position: [px2, py1, 0.0], color },
-
-                    Vertex { position: [px2, py1, 0.0], color },
-                    Vertex { position: [px1, py2, 0.0], color },
-                    Vertex { position: [px2, py2, 0.0], color },
-                ]);
-                }
-
-                // Gradient Rectangle
-                DrawCommand::DrawGradientRect {
-                    x,
-                    y,
-                    width: w,
-                    height: h,
-                    gradient,
-                } => {
-                    let (tdx, tdy) = current_transform(&transform_stack);
-                    let mut x1 = (x + tdx) * sf;
-                    let mut y1 = (y + tdy) * sf;
-                    let mut x2 = x1 + w * sf;
-                    let mut y2 = y1 + h * sf;
-
-                    let clip = current_clip(&clip_stack);
-
-                    if x2 <= clip.x * sf
-                        || x1 >= (clip.x + clip.w) * sf
-                        || y2 <= clip.y * sf
-                        || y1 >= (clip.y + clip.h) * sf
-                    {
-                        continue;
-                    }
-
-                    x1 = x1.max(clip.x * sf);
-                    y1 = y1.max(clip.y * sf);
-                    x2 = x2.min((clip.x + clip.w) * sf);
-                    y2 = y2.min((clip.y + clip.h) * sf);
-
-                    let logical_corners = [
-                        ((x + tdx) * sf, (y + tdy) * sf),         // TL
-                        ((x + tdx) * sf, (y + tdy + h) * sf),     // BL
-                        ((x + tdx + w) * sf, (y + tdy) * sf),     // TR
-                        ((x + tdx + w) * sf, (y + tdy + h) * sf), // BR
-                    ];
-
-                    match &gradient.kind {
-                        GradientKind::Linear { .. } => {
-                            let visible_corners = [(x1, y1), (x1, y2), (x2, y1), (x2, y2)];
-
-                            let corner_colors = compute_gradient_corner_colors_extent(
-                                gradient,
-                                &logical_corners,
-                                &visible_corners,
-                            );
-                            let colors_lin = [
-                                corner_colors[0].to_linear_f32_array(),
-                                corner_colors[1].to_linear_f32_array(),
-                                corner_colors[2].to_linear_f32_array(),
-                                corner_colors[3].to_linear_f32_array(),
-                            ];
-                            emit_rect_vertices(
+                    match &paint.brush {
+                        Brush::Solid(color) => {
+                            let mut color_arr = color.to_linear_f32_array();
+                            color_arr[3] *= paint.opacity;
+                            emit_clipped_polygon_fill(
                                 &mut vertices,
-                                x1,
-                                y1,
-                                x2,
-                                y2,
+                                &transformed_points,
+                                &clip,
+                                sf,
                                 screen_width,
                                 screen_height,
-                                colors_lin,
+                                color_arr,
                             );
                         }
-                        GradientKind::Radial { .. } => {
-                            let (cx, cy, rx, ry) =
-                                compute_radial_params(&gradient.kind, &logical_corners);
-                            emit_radial_gradient_vertices(
-                                &mut vertices,
-                                x1,
-                                y1,
-                                x2,
-                                y2,
-                                screen_width,
-                                screen_height,
-                                cx,
-                                cy,
-                                rx,
-                                ry,
-                                &gradient.stops,
-                            );
+                        Brush::Gradient(gradient) => {
+                            let mut x1 = min_x;
+                            let mut y1 = min_y;
+                            let mut x2 = max_x;
+                            let mut y2 = max_y;
+
+                            x1 = x1.max(clip_l);
+                            y1 = y1.max(clip_t);
+                            x2 = x2.min(clip_r);
+                            y2 = y2.min(clip_b);
+
+                            let logical_corners = [
+                                (min_x, min_y),
+                                (min_x, max_y),
+                                (max_x, min_y),
+                                (max_x, max_y),
+                            ];
+
+                            match &gradient.kind {
+                                GradientKind::Linear { .. } => {
+                                    let visible_corners = [(x1, y1), (x1, y2), (x2, y1), (x2, y2)];
+
+                                    let corner_colors = compute_gradient_corner_colors_extent(
+                                        gradient,
+                                        &logical_corners,
+                                        &visible_corners,
+                                    );
+                                    let colors_lin = [
+                                        corner_colors[0].to_linear_f32_array(),
+                                        corner_colors[1].to_linear_f32_array(),
+                                        corner_colors[2].to_linear_f32_array(),
+                                        corner_colors[3].to_linear_f32_array(),
+                                    ];
+                                    emit_rect_vertices(
+                                        &mut vertices,
+                                        x1,
+                                        y1,
+                                        x2,
+                                        y2,
+                                        screen_width,
+                                        screen_height,
+                                        colors_lin,
+                                    );
+                                }
+                                GradientKind::Radial { .. } => {
+                                    let (cx, cy, rx, ry) =
+                                        compute_radial_params(&gradient.kind, &logical_corners);
+                                    emit_radial_gradient_vertices(
+                                        &mut vertices,
+                                        x1,
+                                        y1,
+                                        x2,
+                                        y2,
+                                        screen_width,
+                                        screen_height,
+                                        cx,
+                                        cy,
+                                        rx,
+                                        ry,
+                                        &gradient.stops,
+                                    );
+                                }
+                            }
                         }
                     }
                 }
 
                 // Text
                 DrawCommand::DrawText { x, y, text, style } => {
-                    let (tdx, tdy) = current_transform(&transform_stack);
+                    let t = current_transform(&transform_stack);
+                    let (tdx, tdy) = (t.dx, t.dy);
 
                     let clip = current_clip(&clip_stack);
 
@@ -547,208 +524,6 @@ impl GpuRenderer {
                     sections.push(section);
                 }
 
-                // Polygon
-                DrawCommand::DrawPolygon { points, color } => {
-                    // transform
-                    let (tdx, tdy) = current_transform(&transform_stack);
-                    let transformed_points: Vec<(f32, f32)> = points
-                        .iter()
-                        .map(|(px, py)| ((px + tdx) * sf, (py + tdy) * sf))
-                        .collect();
-
-                    // clip 取得
-                    let clip = current_clip(&clip_stack);
-                    // clip in scaled (screen) coords
-                    let clip_l = clip.x * sf;
-                    let clip_t = clip.y * sf;
-                    let clip_r = (clip.x + clip.w) * sf;
-                    let clip_b = (clip.y + clip.h) * sf;
-
-                    // Quick reject by bounding box
-                    let mut min_x = f32::INFINITY;
-                    let mut min_y = f32::INFINITY;
-                    let mut max_x = f32::NEG_INFINITY;
-                    let mut max_y = f32::NEG_INFINITY;
-                    for (x, y) in transformed_points.iter() {
-                        min_x = min_x.min(*x);
-                        min_y = min_y.min(*y);
-                        max_x = max_x.max(*x);
-                        max_y = max_y.max(*y);
-                    }
-                    if max_x <= clip_l || min_x >= clip_r || max_y <= clip_t || min_y >= clip_b {
-                        // fully outside
-                        continue;
-                    }
-
-                    // Helper: Sutherland–Hodgman polygon clipping against an axis-aligned edge
-                    let clip_against_edge = |poly: &Vec<(f32, f32)>, edge: u8| -> Vec<(f32, f32)> {
-                        // edge: 0=left,1=right,2=top,3=bottom
-                        let mut out: Vec<(f32, f32)> = Vec::new();
-                        if poly.is_empty() {
-                            return out;
-                        }
-                        let len = poly.len();
-                        for i in 0..len {
-                            let (sx, sy) = poly[i];
-                            let (ex, ey) = poly[(i + 1) % len];
-                            // inside test
-                            let inside = |x: f32, y: f32| -> bool {
-                                match edge {
-                                    0 => x >= clip_l, // left
-                                    1 => x <= clip_r, // right
-                                    2 => y >= clip_t, // top
-                                    3 => y <= clip_b, // bottom
-                                    _ => true,
-                                }
-                            };
-                            let s_in = inside(sx, sy);
-                            let e_in = inside(ex, ey);
-
-                            if s_in && e_in {
-                                // both inside
-                                out.push((ex, ey));
-                            } else if s_in && !e_in {
-                                // going out: add intersection
-                                // compute intersection between segment and clipping line
-                                let (ix, iy) = match edge {
-                                    0 | 1 => {
-                                        // vertical line x = clip_l or clip_r
-                                        let x_edge = if edge == 0 { clip_l } else { clip_r };
-                                        let dx = ex - sx;
-                                        if dx.abs() < f32::EPSILON {
-                                            (x_edge, sy)
-                                        } else {
-                                            let t = (x_edge - sx) / dx;
-                                            (x_edge, sy + t * (ey - sy))
-                                        }
-                                    }
-                                    2 | 3 => {
-                                        // horizontal line y = clip_t or clip_b
-                                        let y_edge = if edge == 2 { clip_t } else { clip_b };
-                                        let dy = ey - sy;
-                                        if dy.abs() < f32::EPSILON {
-                                            (sx, y_edge)
-                                        } else {
-                                            let t = (y_edge - sy) / dy;
-                                            (sx + t * (ex - sx), y_edge)
-                                        }
-                                    }
-                                    _ => (ex, ey),
-                                };
-                                out.push((ix, iy));
-                            } else if !s_in && e_in {
-                                // entering: add intersection then end point
-                                let (ix, iy) = match edge {
-                                    0 | 1 => {
-                                        let x_edge = if edge == 0 { clip_l } else { clip_r };
-                                        let dx = ex - sx;
-                                        if dx.abs() < f32::EPSILON {
-                                            (x_edge, sy)
-                                        } else {
-                                            let t = (x_edge - sx) / dx;
-                                            (x_edge, sy + t * (ey - sy))
-                                        }
-                                    }
-                                    2 | 3 => {
-                                        let y_edge = if edge == 2 { clip_t } else { clip_b };
-                                        let dy = ey - sy;
-                                        if dy.abs() < f32::EPSILON {
-                                            (sx, y_edge)
-                                        } else {
-                                            let t = (y_edge - sy) / dy;
-                                            (sx + t * (ex - sx), y_edge)
-                                        }
-                                    }
-                                    _ => (ex, ey),
-                                };
-                                out.push((ix, iy));
-                                out.push((ex, ey));
-                            } else {
-                                // both outside: do nothing
-                            }
-                        }
-                        out
-                    };
-
-                    // Triangulate polygon into fan triangles from vertex 0, clip each triangle, and push resulting triangles
-                    if transformed_points.len() < 3 {
-                        continue;
-                    }
-
-                    // NDC helper
-                    let ndc = |v: f32, max: f32| (v / max) * 2.0 - 1.0;
-
-                    let color_arr = color.to_linear_f32_array();
-
-                    let v0 = transformed_points[0];
-                    for i in 1..(transformed_points.len() - 1) {
-                        let tri = vec![v0, transformed_points[i], transformed_points[i + 1]];
-                        // clip triangle against rect using Sutherland–Hodgman (4 edges)
-                        let mut poly = tri;
-                        poly = clip_against_edge(&poly, 0); // left
-                        if poly.is_empty() {
-                            continue;
-                        }
-                        poly = clip_against_edge(&poly, 1); // right
-                        if poly.is_empty() {
-                            continue;
-                        }
-                        poly = clip_against_edge(&poly, 2); // top
-                        if poly.is_empty() {
-                            continue;
-                        }
-                        poly = clip_against_edge(&poly, 3); // bottom
-                        if poly.is_empty() {
-                            continue;
-                        }
-
-                        // triangulate resulting polygon as fan
-                        for j in 1..(poly.len() - 1) {
-                            let p1 = poly[0];
-                            let p2 = poly[j];
-                            let p3 = poly[j + 1];
-
-                            let px1 = ndc(p1.0, screen_width);
-                            let py1 = -ndc(p1.1, screen_height);
-                            let px2 = ndc(p2.0, screen_width);
-                            let py2 = -ndc(p2.1, screen_height);
-                            let px3 = ndc(p3.0, screen_width);
-                            let py3 = -ndc(p3.1, screen_height);
-
-                            vertices.push(Vertex {
-                                position: [px1, py1, 0.0],
-                                color: color_arr,
-                            });
-                            vertices.push(Vertex {
-                                position: [px2, py2, 0.0],
-                                color: color_arr,
-                            });
-                            vertices.push(Vertex {
-                                position: [px3, py3, 0.0],
-                                color: color_arr,
-                            });
-                        }
-                    }
-                }
-
-                // Ellipse
-                #[allow(unused)]
-                DrawCommand::DrawEllipse {
-                    center,
-                    radius_x,
-                    radius_y,
-                    color,
-                } => {
-                    // transform
-                    let (tdx, tdy) = current_transform(&transform_stack);
-                    let cx = center.0 + tdx;
-                    let cy = center.1 + tdy;
-
-                    // clip 取得
-                    let clip = current_clip(&clip_stack);
-
-                    todo!("Ellipse drawing with clipping is not implemented yet");
-                }
                 DrawCommand::SystemUi { .. } => {
                     // TODO: implement composite/render system UI element
                 }
@@ -899,6 +674,152 @@ impl GpuRenderer {
 
     pub fn set_scale_factor(&mut self, scale_factor: f64) {
         self.scale_factor = scale_factor;
+    }
+}
+
+/// Sutherland–Hodgman polygon clipping against one axis-aligned edge of the
+/// clip rectangle.
+///
+/// `edge` selects the clip edge in physical (scaled) coordinates:
+/// `0` = left, `1` = right, `2` = top, `3` = bottom.
+fn clip_against_edge(
+    poly: &[(f32, f32)],
+    edge: u8,
+    clip_l: f32,
+    clip_t: f32,
+    clip_r: f32,
+    clip_b: f32,
+) -> Vec<(f32, f32)> {
+    let mut out: Vec<(f32, f32)> = Vec::new();
+    if poly.is_empty() {
+        return out;
+    }
+    let len = poly.len();
+    for i in 0..len {
+        let (sx, sy) = poly[i];
+        let (ex, ey) = poly[(i + 1) % len];
+        let inside = |x: f32, y: f32| -> bool {
+            match edge {
+                0 => x >= clip_l,
+                1 => x <= clip_r,
+                2 => y >= clip_t,
+                3 => y <= clip_b,
+                _ => true,
+            }
+        };
+        let s_in = inside(sx, sy);
+        let e_in = inside(ex, ey);
+
+        // Intersection of the segment (s..e) with the selected clip edge.
+        let intersect = || -> (f32, f32) {
+            match edge {
+                0 | 1 => {
+                    let x_edge = if edge == 0 { clip_l } else { clip_r };
+                    let dx = ex - sx;
+                    if dx.abs() < f32::EPSILON {
+                        (x_edge, sy)
+                    } else {
+                        let t = (x_edge - sx) / dx;
+                        (x_edge, sy + t * (ey - sy))
+                    }
+                }
+                2 | 3 => {
+                    let y_edge = if edge == 2 { clip_t } else { clip_b };
+                    let dy = ey - sy;
+                    if dy.abs() < f32::EPSILON {
+                        (sx, y_edge)
+                    } else {
+                        let t = (y_edge - sy) / dy;
+                        (sx + t * (ex - sx), y_edge)
+                    }
+                }
+                _ => (ex, ey),
+            }
+        };
+
+        if s_in && e_in {
+            out.push((ex, ey));
+        } else if s_in && !e_in {
+            out.push(intersect());
+        } else if !s_in && e_in {
+            out.push(intersect());
+            out.push((ex, ey));
+        }
+    }
+    out
+}
+
+/// Clip a polygon against the current clip rectangle, triangulate it as a fan
+/// from its first vertex, and emit the resulting vertices.
+///
+/// `points` must be in physical (scale-factor-multiplied) screen coordinates;
+/// `clip` is in logical coordinates. `color` is the linear-space fill color.
+fn emit_clipped_polygon_fill(
+    vertices: &mut Vec<Vertex>,
+    points: &[(f32, f32)],
+    clip: &ClipRect,
+    sf: f32,
+    screen_width: f32,
+    screen_height: f32,
+    color: [f32; 4],
+) {
+    if points.len() < 3 {
+        return;
+    }
+
+    let clip_l = clip.x * sf;
+    let clip_t = clip.y * sf;
+    let clip_r = (clip.x + clip.w) * sf;
+    let clip_b = (clip.y + clip.h) * sf;
+
+    let ndc = |v: f32, max: f32| (v / max) * 2.0 - 1.0;
+
+    let v0 = points[0];
+    for i in 1..(points.len() - 1) {
+        let tri = vec![v0, points[i], points[i + 1]];
+        let mut poly = tri;
+        poly = clip_against_edge(&poly, 0, clip_l, clip_t, clip_r, clip_b);
+        if poly.is_empty() {
+            continue;
+        }
+        poly = clip_against_edge(&poly, 1, clip_l, clip_t, clip_r, clip_b);
+        if poly.is_empty() {
+            continue;
+        }
+        poly = clip_against_edge(&poly, 2, clip_l, clip_t, clip_r, clip_b);
+        if poly.is_empty() {
+            continue;
+        }
+        poly = clip_against_edge(&poly, 3, clip_l, clip_t, clip_r, clip_b);
+        if poly.is_empty() {
+            continue;
+        }
+
+        for j in 1..(poly.len() - 1) {
+            let p1 = poly[0];
+            let p2 = poly[j];
+            let p3 = poly[j + 1];
+
+            let px1 = ndc(p1.0, screen_width);
+            let py1 = -ndc(p1.1, screen_height);
+            let px2 = ndc(p2.0, screen_width);
+            let py2 = -ndc(p2.1, screen_height);
+            let px3 = ndc(p3.0, screen_width);
+            let py3 = -ndc(p3.1, screen_height);
+
+            vertices.push(Vertex {
+                position: [px1, py1, 0.0],
+                color,
+            });
+            vertices.push(Vertex {
+                position: [px2, py2, 0.0],
+                color,
+            });
+            vertices.push(Vertex {
+                position: [px3, py3, 0.0],
+                color,
+            });
+        }
     }
 }
 
