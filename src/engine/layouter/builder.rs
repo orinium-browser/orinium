@@ -723,9 +723,7 @@ pub fn apply_declaration(
     /// Split a border-radius value list on the `Keyword("/")` separator into
     /// its horizontal and vertical components. Without a slash the vertical
     /// list is empty (meaning "use the horizontal value").
-    fn split_radius_lists<'a>(
-        value: &'a CssValue,
-    ) -> (Vec<&'a CssValue>, Vec<&'a CssValue>) {
+    fn split_radius_lists<'a>(value: &'a CssValue) -> (Vec<&'a CssValue>, Vec<&'a CssValue>) {
         match value {
             CssValue::List(vals) => {
                 let mut horiz: Vec<&'a CssValue> = Vec::new();
@@ -785,10 +783,22 @@ pub fn apply_declaration(
             expand_radius_axis(name, &vert, text_style)?
         };
         Some((
-            CornerRadius { x: h[0].clone(), y: v[0].clone() },
-            CornerRadius { x: h[1].clone(), y: v[1].clone() },
-            CornerRadius { x: h[2].clone(), y: v[2].clone() },
-            CornerRadius { x: h[3].clone(), y: v[3].clone() },
+            CornerRadius {
+                x: h[0].clone(),
+                y: v[0].clone(),
+            },
+            CornerRadius {
+                x: h[1].clone(),
+                y: v[1].clone(),
+            },
+            CornerRadius {
+                x: h[2].clone(),
+                y: v[2].clone(),
+            },
+            CornerRadius {
+                x: h[3].clone(),
+                y: v[3].clone(),
+            },
         ))
     }
 
@@ -806,7 +816,10 @@ pub fn apply_declaration(
         } else {
             expand_radius_axis(name, &vert, text_style)?
         };
-        Some(CornerRadius { x: x[0].clone(), y: y[0].clone() })
+        Some(CornerRadius {
+            x: x[0].clone(),
+            y: y[0].clone(),
+        })
     }
 
     fn parse_border_shorthand(
