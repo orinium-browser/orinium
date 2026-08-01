@@ -10,6 +10,7 @@ use wgpu::util::DeviceExt;
 use super::atlas::GlyphAtlas;
 use super::global_font;
 use crate::engine::layouter::types::{FontStyle, LineHeight, TextStyle};
+use crate::platform::renderer::mesh::{self, TextSection};
 
 fn quantize_font_size(px: f32) -> f32 {
     (px * 64.0).round() / 64.0
@@ -109,12 +110,7 @@ pub fn build_family_list<'a>(families: &'a [String]) -> Vec<fontdb::Family<'a>> 
 }
 
 /// テキストセクション位置・クリップ・描画範囲をまとめた構造体
-pub struct TextSection {
-    pub screen_position: (f32, f32),
-    pub clip_origin: (f32, f32),
-    pub bounds: (f32, f32),
-    pub layout: Arc<TextLayout>,
-}
+/// (定義は [`mesh::TextSection`] を参照)
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CachedLineHeight {
@@ -739,5 +735,11 @@ impl TextRenderer {
         }
         rpass.set_index_buffer(self.quad_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         rpass.draw_indexed(0..6, 0, 0..self.num_instances);
+    }
+}
+
+impl mesh::TextLayoutSource for TextRenderer {
+    fn layout_text(&mut self, text: &str, style: &TextStyle) -> Option<Arc<TextLayout>> {
+        Some(self.create_buffer_for_text(text, style.clone()))
     }
 }

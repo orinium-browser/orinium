@@ -2,6 +2,7 @@
 
 pub mod gpu;
 mod image;
+pub(crate) mod mesh;
 pub(crate) mod scroll_bar;
 mod text;
 pub mod text_measurer;
