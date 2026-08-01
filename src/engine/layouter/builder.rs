@@ -26,12 +26,14 @@ use super::types::{
     CornerRadius, FontStyle, FontWeight, Gradient, GradientKind, InfoNode, LineHeight, NodeKind,
     RadialShape, RadialSizeKind, TextAlign, TextDecoration, TextStyle, TextTransform,
 };
+use crate::engine::renderer_model::Image;
 use crate::engine::ui::button::ButtonComponent;
 use crate::engine::ui::custom_bridge::{CustomInlineBridge, CustomLayoutBridge};
 use crate::engine::ui::custom_node::CustomNode;
+use crate::engine::ui::image::ImageComponent;
 
 /// Tags that produce a [`NodeKind::Custom`] instead of a normal container.
-const CUSTOM_TAGS: &[&str] = &["button"];
+const CUSTOM_TAGS: &[&str] = &["button", "img"];
 
 const DEFAULT_LINE_FACTOR: f32 = 1.2;
 
@@ -110,7 +112,26 @@ pub fn build_layout_and_info(
     resolved_styles: &ResolvedStyles,
     measurer: &dyn text::TextMeasurer<TextStyle>,
     parent: InheritedCss,
+    chain: ElementChain,
+) -> (LayoutNode, InfoNode) {
+    build_layout_and_info_with_images(
+        dom,
+        resolved_styles,
+        measurer,
+        parent,
+        chain,
+        &HashMap::new(),
+    )
+}
+
+/// Builds layout and render trees with decoded images keyed by their `src` value.
+pub fn build_layout_and_info_with_images(
+    dom: &Rc<RefCell<TreeNode<HtmlNodeType>>>,
+    resolved_styles: &ResolvedStyles,
+    measurer: &dyn text::TextMeasurer<TextStyle>,
+    parent: InheritedCss,
     mut chain: ElementChain,
+    images: &HashMap<String, Image>,
 ) -> (LayoutNode, InfoNode) {
     /*
      * Build the initial element chain for the root node.
@@ -257,32 +278,38 @@ pub fn build_layout_and_info(
             if let Some(tag) = html_node.tag_name()
                 && CUSTOM_TAGS.contains(&tag)
             {
-                let node: std::rc::Rc<dyn CustomNode> = if tag == "button" {
-                    let text = DomTree::inner_text(&stack[top_idx].dom);
-                    let default_bg = Color(240, 240, 240, 255);
-                    let bg = match &container_style.background {
-                        Background::Color(c) if c.3 > 0 => *c,
-                        _ => default_bg,
-                    };
-                    let btn_w = match &style.size.width {
-                        LengthOrAuto::Length(l) => l.clone(),
-                        LengthOrAuto::Auto => Length::Px(120.0),
-                    };
-                    let btn_h = match &style.size.height {
-                        LengthOrAuto::Length(l) => l.clone(),
-                        LengthOrAuto::Auto => Length::Px(36.0),
-                    };
-                    std::rc::Rc::new(ButtonComponent {
-                        width: btn_w,
-                        height: btn_h,
-                        label: text,
-                        button_color: bg,
-                        label_color: text_style.color,
-                    })
-                } else {
-                    unreachable!()
-                    // ToDo:
-                    // Support "iframe", "input" tags
+                let node: std::rc::Rc<dyn CustomNode> = match tag {
+                    "button" => {
+                        let text = DomTree::inner_text(&stack[top_idx].dom);
+                        let default_bg = Color(240, 240, 240, 255);
+                        let bg = match &container_style.background {
+                            Background::Color(c) if c.3 > 0 => *c,
+                            _ => default_bg,
+                        };
+                        let btn_w = match &style.size.width {
+                            LengthOrAuto::Length(l) => l.clone(),
+                            LengthOrAuto::Auto => Length::Px(120.0),
+                        };
+                        let btn_h = match &style.size.height {
+                            LengthOrAuto::Length(l) => l.clone(),
+                            LengthOrAuto::Auto => Length::Px(36.0),
+                        };
+                        std::rc::Rc::new(ButtonComponent {
+                            width: btn_w,
+                            height: btn_h,
+                            label: text,
+                            button_color: bg,
+                            label_color: text_style.color,
+                        })
+                    }
+                    "img" => {
+                        let image = html_node
+                            .get_attr("src")
+                            .and_then(|source| images.get(source))
+                            .cloned();
+                        std::rc::Rc::new(ImageComponent { image })
+                    }
+                    _ => unreachable!(),
                 };
 
                 let is_inline = matches!(style.display.outer, OuterDisplay::Inline);

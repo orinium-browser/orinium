@@ -1,5 +1,7 @@
 //! ブラウザのwebview機能。タスクとレンダリング情報の管理を行う。
 
+use std::collections::HashMap;
+
 use crate::engine::{
     css::{self, parser::Parser as CssParser},
     html::parser::{DomTree, Parser as HtmlParser},
@@ -7,6 +9,7 @@ use crate::engine::{
         self, InheritedCss,
         types::{InfoNode, TextStyle},
     },
+    renderer_model::Image,
 };
 use crate::platform::renderer::text_measurer::PlatformTextMeasurer;
 use ui_layout::LayoutNode;
@@ -27,6 +30,7 @@ pub enum WebViewTask {
 pub enum FetchKind {
     Html,
     Css,
+    Image { source: String },
 }
 
 /// CSS application strategy.
@@ -58,7 +62,9 @@ pub struct WebView {
     docment_info: Option<DocumentInfo>,
 
     pending_css_urls: Vec<Url>,
+    pending_images: Vec<(String, Url)>,
     loaded_css: Vec<String>,
+    images: HashMap<String, Image>,
 
     resolved_styles: layouter::css_resolver::ResolvedStyles,
     layout_and_info: Option<(LayoutNode, InfoNode)>,
@@ -104,6 +110,7 @@ struct ParsedDocument {
     title: String,
     style_links: Vec<Url>,
     inline_styles: Vec<String>,
+    image_sources: Vec<(String, Url)>,
 }
 
 impl Default for WebView {
@@ -120,7 +127,9 @@ impl WebView {
             docment_info: None,
 
             pending_css_urls: Vec::new(),
+            pending_images: Vec::new(),
             loaded_css: Vec::new(),
+            images: HashMap::new(),
 
             resolved_styles: layouter::css_resolver::ResolvedStyles::default(),
             layout_and_info: None,
@@ -165,6 +174,14 @@ impl WebView {
                 self.ensure_text_measurer();
                 self.update_layout();
 
+                for (source, url) in std::mem::take(&mut self.pending_images) {
+                    log::info!("Image fetch requested in WebView: url={}", url);
+                    tasks.push(WebViewTask::Fetch {
+                        url,
+                        kind: FetchKind::Image { source },
+                    });
+                }
+
                 // CSS fetch を要求
                 if self.pending_css_urls.is_empty() {
                     self.phase = PagePhase::CssApplied;
@@ -204,6 +221,7 @@ impl WebView {
         let parsed = parse_html(&html, document_url);
 
         self.pending_css_urls = parsed.style_links;
+        self.pending_images = parsed.image_sources;
         self.css_results_expected = self.pending_css_urls.len();
 
         let docment_info = DocumentInfo {
@@ -241,6 +259,14 @@ impl WebView {
                 self.css_processor.process(vec![css]);
             }
         }
+    }
+
+    /// Decodes a fetched image and rebuilds layout using its intrinsic size.
+    pub fn on_image_fetched(&mut self, source: String, bytes: &[u8]) -> anyhow::Result<()> {
+        let image = Image::decode(bytes)?;
+        self.images.insert(source, image);
+        self.update_layout();
+        Ok(())
     }
 
     /// Update page (e.g. DOM changed)
@@ -290,8 +316,9 @@ impl WebView {
         docment_info: &DocumentInfo,
         resolved_styles: &layouter::css_resolver::ResolvedStyles,
         measurer: &PlatformTextMeasurer,
+        images: &HashMap<String, Image>,
     ) -> (LayoutNode, InfoNode) {
-        layouter::build_layout_and_info(
+        layouter::build_layout_and_info_with_images(
             &docment_info.dom.root,
             resolved_styles,
             measurer,
@@ -302,6 +329,7 @@ impl WebView {
                 },
             },
             Vec::new(),
+            images,
         )
     }
 
@@ -315,6 +343,7 @@ impl WebView {
             doc_info,
             &self.resolved_styles,
             self.text_measurer.as_ref().unwrap(),
+            &self.images,
         ));
         self.needs_redraw = true;
     }
@@ -330,7 +359,9 @@ impl WebView {
 
         self.docment_info = None;
         self.pending_css_urls.clear();
+        self.pending_images.clear();
         self.loaded_css.clear();
+        self.images.clear();
         self.resolved_styles.clear();
         self.layout_and_info = None;
 
@@ -437,6 +468,16 @@ fn parse_html(html: &str, document_url: Url) -> ParsedDocument {
     // --- Inline styles ---
     let inline_styles = dom.collect_text_by_tag("style");
 
+    let image_sources = dom
+        .get_elements_by_tag_name("img")
+        .into_iter()
+        .filter_map(|node| {
+            let source = node.borrow().value.get_attr("src")?.to_string();
+            let url = resolve_url(&base_url, &source).ok()?;
+            Some((source, url))
+        })
+        .collect();
+
     ParsedDocument {
         document_url,
         base_url,
@@ -444,6 +485,7 @@ fn parse_html(html: &str, document_url: Url) -> ParsedDocument {
         title,
         style_links,
         inline_styles,
+        image_sources,
     }
 }
 
@@ -455,4 +497,24 @@ pub fn resolve_url(base_url: &Url, path: &str) -> Result<Url, url::ParseError> {
 
     // relative URL
     base_url.join(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_html_resolves_image_sources_against_base_url() {
+        let parsed = parse_html(
+            r#"<base href="https://cdn.example/assets/"><img src="logo.png"><img>"#,
+            Url::parse("https://example.test/page/index.html").unwrap(),
+        );
+
+        assert_eq!(parsed.image_sources.len(), 1);
+        assert_eq!(parsed.image_sources[0].0, "logo.png");
+        assert_eq!(
+            parsed.image_sources[0].1.as_str(),
+            "https://cdn.example/assets/logo.png"
+        );
+    }
 }
