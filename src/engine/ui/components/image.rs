@@ -40,6 +40,10 @@ impl CustomNode for ImageComponent {
             (image.width() as f32, image.height() as f32)
         })
     }
+
+    fn preserves_intrinsic_aspect_ratio(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

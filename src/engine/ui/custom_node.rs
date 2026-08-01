@@ -48,4 +48,10 @@ pub trait CustomNode: std::fmt::Debug + 'static {
     /// The layout engine uses this to size the element when no explicit
     /// width/height is set via CSS.
     fn intrinsic_size(&self) -> (f32, f32);
+
+    /// Whether one resolved dimension should scale the other dimension using
+    /// the node's intrinsic aspect ratio.
+    fn preserves_intrinsic_aspect_ratio(&self) -> bool {
+        false
+    }
 }
