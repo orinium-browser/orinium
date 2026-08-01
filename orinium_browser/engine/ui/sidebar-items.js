@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["button","container","custom_bridge","custom_node","image"]};
+window.SIDEBAR_ITEMS = {"mod":["button","container","custom_bridge","custom_node","image","text_input"]};

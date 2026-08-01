@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["hit_test"],"struct":["HitItem"],"type":["HitPath"]};
+window.SIDEBAR_ITEMS = {"fn":["dispatch_text_input","focus_text_input","focused_text_input_is_composing","hit_test"],"struct":["HitItem"],"type":["HitPath"]};
