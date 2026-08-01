@@ -7,407 +7,442 @@
 <a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>wgpu::util::DeviceExt;
 <a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>winit::window::Window;
 <a href=#9 id=9 data-nosnippet>9</a>
-<a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span><span class="kw">super</span>::mesh::{<span class="self">self</span>, MeshBuilder, Vertex};
-<a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span><span class="kw">super</span>::text::global_font;
-<a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span><span class="kw">super</span>::text::text::TextRenderer;
-<a href=#13 id=13 data-nosnippet>13</a>
-<a href=#14 id=14 data-nosnippet>14</a><span class="doccomment">/// GPU描画コンテキスト
-<a href=#15 id=15 data-nosnippet>15</a></span><span class="kw">pub struct </span>GpuRenderer {
-<a href=#16 id=16 data-nosnippet>16</a>    <span class="doccomment">/// GPUの描画対象
-<a href=#17 id=17 data-nosnippet>17</a>    </span>surface: wgpu::Surface&lt;<span class="lifetime">'static</span>&gt;,
-<a href=#18 id=18 data-nosnippet>18</a>    <span class="doccomment">/// GPUの論理デバイス
-<a href=#19 id=19 data-nosnippet>19</a>    </span>device: wgpu::Device,
-<a href=#20 id=20 data-nosnippet>20</a>    <span class="doccomment">/// コマンド送信用キュー
-<a href=#21 id=21 data-nosnippet>21</a>    </span>queue: wgpu::Queue,
-<a href=#22 id=22 data-nosnippet>22</a>    <span class="doccomment">/// サーフェス設定、解像度・フォーマットなどのフレームバッファ設定
-<a href=#23 id=23 data-nosnippet>23</a>    </span>config: wgpu::SurfaceConfiguration,
-<a href=#24 id=24 data-nosnippet>24</a>    <span class="doccomment">/// WindowSize
-<a href=#25 id=25 data-nosnippet>25</a>    </span>size: winit::dpi::PhysicalSize&lt;u32&gt;,
-<a href=#26 id=26 data-nosnippet>26</a>    <span class="doccomment">/// ディスプレイ倍率
-<a href=#27 id=27 data-nosnippet>27</a>    </span>scale_factor: f64,
-<a href=#28 id=28 data-nosnippet>28</a>    <span class="doccomment">/// RenderPipelin（頂点 to ピクセル）
-<a href=#29 id=29 data-nosnippet>29</a>    </span>render_pipeline: wgpu::RenderPipeline,
-<a href=#30 id=30 data-nosnippet>30</a>    <span class="doccomment">/// 頂点バッファ
-<a href=#31 id=31 data-nosnippet>31</a>    </span>vertex_buffer: <span class="prelude-ty">Option</span>&lt;wgpu::Buffer&gt;,
-<a href=#32 id=32 data-nosnippet>32</a>    <span class="doccomment">/// 描画命令から頂点・テキストセクションを生成するジオメトリ層
-<a href=#33 id=33 data-nosnippet>33</a>    </span>mesh_builder: MeshBuilder,
-<a href=#34 id=34 data-nosnippet>34</a>    <span class="doccomment">/// 頂点数
-<a href=#35 id=35 data-nosnippet>35</a>    </span>num_vertices: u32,
-<a href=#36 id=36 data-nosnippet>36</a>
-<a href=#37 id=37 data-nosnippet>37</a>    <span class="doccomment">/// テキスト描画用ラッパー
-<a href=#38 id=38 data-nosnippet>38</a>    </span>text_renderer: <span class="prelude-ty">Option</span>&lt;TextRenderer&gt;,
-<a href=#39 id=39 data-nosnippet>39</a>
-<a href=#40 id=40 data-nosnippet>40</a>    <span class="doccomment">/// テキストカリングを有効にする
-<a href=#41 id=41 data-nosnippet>41</a>    </span>enable_text_culling: bool,
-<a href=#42 id=42 data-nosnippet>42</a>}
+<a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span><span class="kw">super</span>::image::ImageRenderer;
+<a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span><span class="kw">super</span>::mesh::{<span class="self">self</span>, MeshBuilder, Vertex};
+<a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span><span class="kw">super</span>::text::global_font;
+<a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span><span class="kw">super</span>::text::text::TextRenderer;
+<a href=#14 id=14 data-nosnippet>14</a>
+<a href=#15 id=15 data-nosnippet>15</a><span class="doccomment">/// GPU描画コンテキスト
+<a href=#16 id=16 data-nosnippet>16</a></span><span class="kw">pub struct </span>GpuRenderer {
+<a href=#17 id=17 data-nosnippet>17</a>    <span class="doccomment">/// GPUの描画対象
+<a href=#18 id=18 data-nosnippet>18</a>    </span>surface: wgpu::Surface&lt;<span class="lifetime">'static</span>&gt;,
+<a href=#19 id=19 data-nosnippet>19</a>    <span class="doccomment">/// GPUの論理デバイス
+<a href=#20 id=20 data-nosnippet>20</a>    </span>device: wgpu::Device,
+<a href=#21 id=21 data-nosnippet>21</a>    <span class="doccomment">/// コマンド送信用キュー
+<a href=#22 id=22 data-nosnippet>22</a>    </span>queue: wgpu::Queue,
+<a href=#23 id=23 data-nosnippet>23</a>    <span class="doccomment">/// サーフェス設定、解像度・フォーマットなどのフレームバッファ設定
+<a href=#24 id=24 data-nosnippet>24</a>    </span>config: wgpu::SurfaceConfiguration,
+<a href=#25 id=25 data-nosnippet>25</a>    <span class="doccomment">/// WindowSize
+<a href=#26 id=26 data-nosnippet>26</a>    </span>size: winit::dpi::PhysicalSize&lt;u32&gt;,
+<a href=#27 id=27 data-nosnippet>27</a>    <span class="doccomment">/// ディスプレイ倍率
+<a href=#28 id=28 data-nosnippet>28</a>    </span>scale_factor: f64,
+<a href=#29 id=29 data-nosnippet>29</a>    <span class="doccomment">/// RenderPipelin（頂点 to ピクセル）
+<a href=#30 id=30 data-nosnippet>30</a>    </span>render_pipeline: wgpu::RenderPipeline,
+<a href=#31 id=31 data-nosnippet>31</a>    <span class="doccomment">/// 頂点バッファ
+<a href=#32 id=32 data-nosnippet>32</a>    </span>vertex_buffer: <span class="prelude-ty">Option</span>&lt;wgpu::Buffer&gt;,
+<a href=#33 id=33 data-nosnippet>33</a>    <span class="doccomment">/// 描画命令から頂点・テキストセクションを生成するジオメトリ層
+<a href=#34 id=34 data-nosnippet>34</a>    </span>mesh_builder: MeshBuilder,
+<a href=#35 id=35 data-nosnippet>35</a>    <span class="doccomment">/// 頂点数
+<a href=#36 id=36 data-nosnippet>36</a>    </span>num_vertices: u32,
+<a href=#37 id=37 data-nosnippet>37</a>
+<a href=#38 id=38 data-nosnippet>38</a>    <span class="doccomment">/// テキスト描画用ラッパー
+<a href=#39 id=39 data-nosnippet>39</a>    </span>text_renderer: <span class="prelude-ty">Option</span>&lt;TextRenderer&gt;,
+<a href=#40 id=40 data-nosnippet>40</a>
+<a href=#41 id=41 data-nosnippet>41</a>    <span class="doccomment">/// Decoded page image renderer.
+<a href=#42 id=42 data-nosnippet>42</a>    </span>image_renderer: ImageRenderer,
 <a href=#43 id=43 data-nosnippet>43</a>
-<a href=#44 id=44 data-nosnippet>44</a><span class="kw">impl </span>Vertex {
-<a href=#45 id=45 data-nosnippet>45</a>    <span class="kw">fn </span>desc() -&gt; wgpu::VertexBufferLayout&lt;<span class="lifetime">'static</span>&gt; {
-<a href=#46 id=46 data-nosnippet>46</a>        wgpu::VertexBufferLayout {
-<a href=#47 id=47 data-nosnippet>47</a>            array_stride: size_of::&lt;Vertex&gt;() <span class="kw">as </span>wgpu::BufferAddress,
-<a href=#48 id=48 data-nosnippet>48</a>            step_mode: wgpu::VertexStepMode::Vertex,
-<a href=#49 id=49 data-nosnippet>49</a>            attributes: <span class="kw-2">&amp;</span>[
-<a href=#50 id=50 data-nosnippet>50</a>                wgpu::VertexAttribute {
-<a href=#51 id=51 data-nosnippet>51</a>                    offset: <span class="number">0</span>,
-<a href=#52 id=52 data-nosnippet>52</a>                    shader_location: <span class="number">0</span>,
-<a href=#53 id=53 data-nosnippet>53</a>                    format: wgpu::VertexFormat::Float32x3,
-<a href=#54 id=54 data-nosnippet>54</a>                },
-<a href=#55 id=55 data-nosnippet>55</a>                wgpu::VertexAttribute {
-<a href=#56 id=56 data-nosnippet>56</a>                    offset: size_of::&lt;[f32; <span class="number">3</span>]&gt;() <span class="kw">as </span>wgpu::BufferAddress,
-<a href=#57 id=57 data-nosnippet>57</a>                    shader_location: <span class="number">1</span>,
-<a href=#58 id=58 data-nosnippet>58</a>                    format: wgpu::VertexFormat::Float32x4,
-<a href=#59 id=59 data-nosnippet>59</a>                },
-<a href=#60 id=60 data-nosnippet>60</a>            ],
-<a href=#61 id=61 data-nosnippet>61</a>        }
-<a href=#62 id=62 data-nosnippet>62</a>    }
-<a href=#63 id=63 data-nosnippet>63</a>}
-<a href=#64 id=64 data-nosnippet>64</a>
-<a href=#65 id=65 data-nosnippet>65</a><span class="kw">impl </span>GpuRenderer {
-<a href=#66 id=66 data-nosnippet>66</a>    <span class="doccomment">/// 新しいGPUレンダラーを作成
-<a href=#67 id=67 data-nosnippet>67</a>    </span><span class="kw">pub async fn </span>new(window: Arc&lt;Window&gt;, font_path: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>str&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-<a href=#68 id=68 data-nosnippet>68</a>        <span class="kw">let </span>size = window.inner_size();
-<a href=#69 id=69 data-nosnippet>69</a>        <span class="kw">let </span>scale_factor = window.scale_factor();
-<a href=#70 id=70 data-nosnippet>70</a>
-<a href=#71 id=71 data-nosnippet>71</a>        <span class="comment">// GPUドライバとの通信インスタンス
-<a href=#72 id=72 data-nosnippet>72</a>        // wgpuインスタンスの作成
-<a href=#73 id=73 data-nosnippet>73</a>        //
-<a href=#74 id=74 data-nosnippet>74</a>        // [`InstanceDescriptor::new_with_out_display_hundler`] の実装を参考に
-<a href=#75 id=75 data-nosnippet>75</a>        // backends 選択は [`select_wgpu_backends`] を使った実装。
-<a href=#76 id=76 data-nosnippet>76</a>        </span><span class="kw">let </span>instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-<a href=#77 id=77 data-nosnippet>77</a>            backends: select_wgpu_backends(),
-<a href=#78 id=78 data-nosnippet>78</a>            flags: Default::default(),
-<a href=#79 id=79 data-nosnippet>79</a>            memory_budget_thresholds: Default::default(),
-<a href=#80 id=80 data-nosnippet>80</a>            backend_options: Default::default(),
-<a href=#81 id=81 data-nosnippet>81</a>            display: <span class="prelude-val">None</span>,
-<a href=#82 id=82 data-nosnippet>82</a>        });
-<a href=#83 id=83 data-nosnippet>83</a>
-<a href=#84 id=84 data-nosnippet>84</a>        <span class="comment">// OSウィンドウとGPUの描画対象（サーフェス）を関連付ける
-<a href=#85 id=85 data-nosnippet>85</a>        // サーフェスの作成
-<a href=#86 id=86 data-nosnippet>86</a>        </span><span class="kw">let </span>surface = instance.create_surface(Arc::clone(<span class="kw-2">&amp;</span>window))<span class="question-mark">?</span>;
+<a href=#44 id=44 data-nosnippet>44</a>    <span class="doccomment">/// テキストカリングを有効にする
+<a href=#45 id=45 data-nosnippet>45</a>    </span>enable_text_culling: bool,
+<a href=#46 id=46 data-nosnippet>46</a>}
+<a href=#47 id=47 data-nosnippet>47</a>
+<a href=#48 id=48 data-nosnippet>48</a><span class="kw">impl </span>Vertex {
+<a href=#49 id=49 data-nosnippet>49</a>    <span class="kw">fn </span>desc() -&gt; wgpu::VertexBufferLayout&lt;<span class="lifetime">'static</span>&gt; {
+<a href=#50 id=50 data-nosnippet>50</a>        wgpu::VertexBufferLayout {
+<a href=#51 id=51 data-nosnippet>51</a>            array_stride: size_of::&lt;Vertex&gt;() <span class="kw">as </span>wgpu::BufferAddress,
+<a href=#52 id=52 data-nosnippet>52</a>            step_mode: wgpu::VertexStepMode::Vertex,
+<a href=#53 id=53 data-nosnippet>53</a>            attributes: <span class="kw-2">&amp;</span>[
+<a href=#54 id=54 data-nosnippet>54</a>                wgpu::VertexAttribute {
+<a href=#55 id=55 data-nosnippet>55</a>                    offset: <span class="number">0</span>,
+<a href=#56 id=56 data-nosnippet>56</a>                    shader_location: <span class="number">0</span>,
+<a href=#57 id=57 data-nosnippet>57</a>                    format: wgpu::VertexFormat::Float32x3,
+<a href=#58 id=58 data-nosnippet>58</a>                },
+<a href=#59 id=59 data-nosnippet>59</a>                wgpu::VertexAttribute {
+<a href=#60 id=60 data-nosnippet>60</a>                    offset: size_of::&lt;[f32; <span class="number">3</span>]&gt;() <span class="kw">as </span>wgpu::BufferAddress,
+<a href=#61 id=61 data-nosnippet>61</a>                    shader_location: <span class="number">1</span>,
+<a href=#62 id=62 data-nosnippet>62</a>                    format: wgpu::VertexFormat::Float32x4,
+<a href=#63 id=63 data-nosnippet>63</a>                },
+<a href=#64 id=64 data-nosnippet>64</a>            ],
+<a href=#65 id=65 data-nosnippet>65</a>        }
+<a href=#66 id=66 data-nosnippet>66</a>    }
+<a href=#67 id=67 data-nosnippet>67</a>}
+<a href=#68 id=68 data-nosnippet>68</a>
+<a href=#69 id=69 data-nosnippet>69</a><span class="kw">impl </span>GpuRenderer {
+<a href=#70 id=70 data-nosnippet>70</a>    <span class="doccomment">/// 新しいGPUレンダラーを作成
+<a href=#71 id=71 data-nosnippet>71</a>    </span><span class="kw">pub async fn </span>new(window: Arc&lt;Window&gt;, font_path: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>str&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+<a href=#72 id=72 data-nosnippet>72</a>        <span class="kw">let </span>size = window.inner_size();
+<a href=#73 id=73 data-nosnippet>73</a>        <span class="kw">let </span>scale_factor = window.scale_factor();
+<a href=#74 id=74 data-nosnippet>74</a>
+<a href=#75 id=75 data-nosnippet>75</a>        <span class="comment">// GPUドライバとの通信インスタンス
+<a href=#76 id=76 data-nosnippet>76</a>        // wgpuインスタンスの作成
+<a href=#77 id=77 data-nosnippet>77</a>        //
+<a href=#78 id=78 data-nosnippet>78</a>        // [`InstanceDescriptor::new_with_out_display_hundler`] の実装を参考に
+<a href=#79 id=79 data-nosnippet>79</a>        // backends 選択は [`select_wgpu_backends`] を使った実装。
+<a href=#80 id=80 data-nosnippet>80</a>        </span><span class="kw">let </span>instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+<a href=#81 id=81 data-nosnippet>81</a>            backends: select_wgpu_backends(),
+<a href=#82 id=82 data-nosnippet>82</a>            flags: Default::default(),
+<a href=#83 id=83 data-nosnippet>83</a>            memory_budget_thresholds: Default::default(),
+<a href=#84 id=84 data-nosnippet>84</a>            backend_options: Default::default(),
+<a href=#85 id=85 data-nosnippet>85</a>            display: <span class="prelude-val">None</span>,
+<a href=#86 id=86 data-nosnippet>86</a>        });
 <a href=#87 id=87 data-nosnippet>87</a>
-<a href=#88 id=88 data-nosnippet>88</a>        <span class="comment">// 利用可能なGPU（物理デバイス）アダプターの取得
-<a href=#89 id=89 data-nosnippet>89</a>        </span><span class="kw">let </span>adapter = instance
-<a href=#90 id=90 data-nosnippet>90</a>            .request_adapter(<span class="kw-2">&amp;</span>wgpu::RequestAdapterOptions {
-<a href=#91 id=91 data-nosnippet>91</a>                power_preference: wgpu::PowerPreference::default(),
-<a href=#92 id=92 data-nosnippet>92</a>                compatible_surface: <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>surface),
-<a href=#93 id=93 data-nosnippet>93</a>                force_fallback_adapter: <span class="bool-val">false</span>,
-<a href=#94 id=94 data-nosnippet>94</a>                <span class="comment">// This is currently only used for the browser's rendering backend, but we
-<a href=#95 id=95 data-nosnippet>95</a>                // enable limit bucketing preemptively in case WebGPU is exposed to web content
-<a href=#96 id=96 data-nosnippet>96</a>                // in the future.
-<a href=#97 id=97 data-nosnippet>97</a>                </span>apply_limit_buckets: <span class="bool-val">true</span>,
-<a href=#98 id=98 data-nosnippet>98</a>            })
-<a href=#99 id=99 data-nosnippet>99</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#100 id=100 data-nosnippet>100</a>
-<a href=#101 id=101 data-nosnippet>101</a>        <span class="comment">// デバイスとキューの作成
-<a href=#102 id=102 data-nosnippet>102</a>        </span><span class="kw">let </span>(device, queue) = adapter
-<a href=#103 id=103 data-nosnippet>103</a>            .request_device(<span class="kw-2">&amp;</span>wgpu::DeviceDescriptor {
-<a href=#104 id=104 data-nosnippet>104</a>                label: <span class="prelude-val">None</span>,
-<a href=#105 id=105 data-nosnippet>105</a>                required_features: wgpu::Features::empty(),
-<a href=#106 id=106 data-nosnippet>106</a>                required_limits: wgpu::Limits::default(),
-<a href=#107 id=107 data-nosnippet>107</a>                experimental_features: Default::default(),
-<a href=#108 id=108 data-nosnippet>108</a>                memory_hints: wgpu::MemoryHints::default(),
-<a href=#109 id=109 data-nosnippet>109</a>                trace: Default::default(),
-<a href=#110 id=110 data-nosnippet>110</a>            })
-<a href=#111 id=111 data-nosnippet>111</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#112 id=112 data-nosnippet>112</a>
-<a href=#113 id=113 data-nosnippet>113</a>        <span class="comment">// サーフェス設定
-<a href=#114 id=114 data-nosnippet>114</a>        // フレームバッファ設定（解像度・フォーマットなど）
-<a href=#115 id=115 data-nosnippet>115</a>        </span><span class="kw">let </span>surface_caps = surface.get_capabilities(<span class="kw-2">&amp;</span>adapter);
-<a href=#116 id=116 data-nosnippet>116</a>        <span class="kw">let </span>surface_format = surface_caps
-<a href=#117 id=117 data-nosnippet>117</a>            .formats
-<a href=#118 id=118 data-nosnippet>118</a>            .iter()
-<a href=#119 id=119 data-nosnippet>119</a>            .copied()
-<a href=#120 id=120 data-nosnippet>120</a>            .find(|f| f.is_srgb())
-<a href=#121 id=121 data-nosnippet>121</a>            .unwrap_or(surface_caps.formats[<span class="number">0</span>]);
-<a href=#122 id=122 data-nosnippet>122</a>
-<a href=#123 id=123 data-nosnippet>123</a>        <span class="kw">let </span>config = wgpu::SurfaceConfiguration {
-<a href=#124 id=124 data-nosnippet>124</a>            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-<a href=#125 id=125 data-nosnippet>125</a>            format: surface_format,
-<a href=#126 id=126 data-nosnippet>126</a>            <span class="comment">// Use automatic color space selection until browser-level color
-<a href=#127 id=127 data-nosnippet>127</a>            // management and CSS color spaces are implemented.
-<a href=#128 id=128 data-nosnippet>128</a>            </span>color_space: wgpu::SurfaceColorSpace::Auto,
-<a href=#129 id=129 data-nosnippet>129</a>            width: size.width,
-<a href=#130 id=130 data-nosnippet>130</a>            height: size.height,
-<a href=#131 id=131 data-nosnippet>131</a>            present_mode: surface_caps.present_modes[<span class="number">0</span>],
-<a href=#132 id=132 data-nosnippet>132</a>            alpha_mode: surface_caps.alpha_modes[<span class="number">0</span>],
-<a href=#133 id=133 data-nosnippet>133</a>            view_formats: <span class="macro">vec!</span>[],
-<a href=#134 id=134 data-nosnippet>134</a>            desired_maximum_frame_latency: <span class="number">2</span>,
-<a href=#135 id=135 data-nosnippet>135</a>        };
-<a href=#136 id=136 data-nosnippet>136</a>        surface.configure(<span class="kw-2">&amp;</span>device, <span class="kw-2">&amp;</span>config);
-<a href=#137 id=137 data-nosnippet>137</a>
-<a href=#138 id=138 data-nosnippet>138</a>        <span class="comment">// シェーダーの読み込み
-<a href=#139 id=139 data-nosnippet>139</a>        // シェーダーモジュールの作成
-<a href=#140 id=140 data-nosnippet>140</a>        // vertex/fragment for main pipeline
-<a href=#141 id=141 data-nosnippet>141</a>        </span><span class="kw">let </span>main_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-<a href=#142 id=142 data-nosnippet>142</a>            label: <span class="prelude-val">Some</span>(<span class="string">"Main Shader"</span>),
-<a href=#143 id=143 data-nosnippet>143</a>            source: wgpu::ShaderSource::Wgsl(<span class="macro">include_str!</span>(<span class="string">"shader/main.wgsl"</span>).into()),
-<a href=#144 id=144 data-nosnippet>144</a>        });
-<a href=#145 id=145 data-nosnippet>145</a>
-<a href=#146 id=146 data-nosnippet>146</a>        <span class="comment">// --- レンダーパイプライン（頂点→ピクセル変換のルール）の作成 ---
-<a href=#147 id=147 data-nosnippet>147</a>        </span><span class="kw">let </span>render_pipeline_layout =
-<a href=#148 id=148 data-nosnippet>148</a>            device.create_pipeline_layout(<span class="kw-2">&amp;</span>wgpu::PipelineLayoutDescriptor {
-<a href=#149 id=149 data-nosnippet>149</a>                label: <span class="prelude-val">Some</span>(<span class="string">"Render Pipeline Layout"</span>),
-<a href=#150 id=150 data-nosnippet>150</a>                bind_group_layouts: <span class="kw-2">&amp;</span>[],
-<a href=#151 id=151 data-nosnippet>151</a>                immediate_size: <span class="number">0</span>,
-<a href=#152 id=152 data-nosnippet>152</a>            });
-<a href=#153 id=153 data-nosnippet>153</a>
-<a href=#154 id=154 data-nosnippet>154</a>        <span class="kw">let </span>render_pipeline = device.create_render_pipeline(<span class="kw-2">&amp;</span>wgpu::RenderPipelineDescriptor {
-<a href=#155 id=155 data-nosnippet>155</a>            label: <span class="prelude-val">Some</span>(<span class="string">"Render Pipeline"</span>),
-<a href=#156 id=156 data-nosnippet>156</a>            layout: <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>render_pipeline_layout),
-<a href=#157 id=157 data-nosnippet>157</a>            cache: <span class="prelude-val">None</span>,
-<a href=#158 id=158 data-nosnippet>158</a>            vertex: wgpu::VertexState {
-<a href=#159 id=159 data-nosnippet>159</a>                module: <span class="kw-2">&amp;</span>main_shader,
-<a href=#160 id=160 data-nosnippet>160</a>                entry_point: <span class="prelude-val">Some</span>(<span class="string">"vs_main"</span>),
-<a href=#161 id=161 data-nosnippet>161</a>                buffers: <span class="kw-2">&amp;</span>[<span class="prelude-val">Some</span>(Vertex::desc())],
-<a href=#162 id=162 data-nosnippet>162</a>                compilation_options: wgpu::PipelineCompilationOptions::default(),
-<a href=#163 id=163 data-nosnippet>163</a>            },
-<a href=#164 id=164 data-nosnippet>164</a>            fragment: <span class="prelude-val">Some</span>(wgpu::FragmentState {
-<a href=#165 id=165 data-nosnippet>165</a>                module: <span class="kw-2">&amp;</span>main_shader,
-<a href=#166 id=166 data-nosnippet>166</a>                entry_point: <span class="prelude-val">Some</span>(<span class="string">"fs_main"</span>),
-<a href=#167 id=167 data-nosnippet>167</a>                targets: <span class="kw-2">&amp;</span>[<span class="prelude-val">Some</span>(wgpu::ColorTargetState {
-<a href=#168 id=168 data-nosnippet>168</a>                    format: config.format,
-<a href=#169 id=169 data-nosnippet>169</a>                    blend: <span class="prelude-val">Some</span>(wgpu::BlendState::ALPHA_BLENDING),
-<a href=#170 id=170 data-nosnippet>170</a>                    write_mask: wgpu::ColorWrites::ALL,
-<a href=#171 id=171 data-nosnippet>171</a>                })],
-<a href=#172 id=172 data-nosnippet>172</a>                compilation_options: wgpu::PipelineCompilationOptions::default(),
-<a href=#173 id=173 data-nosnippet>173</a>            }),
-<a href=#174 id=174 data-nosnippet>174</a>            primitive: wgpu::PrimitiveState {
-<a href=#175 id=175 data-nosnippet>175</a>                topology: wgpu::PrimitiveTopology::TriangleList,
-<a href=#176 id=176 data-nosnippet>176</a>                strip_index_format: <span class="prelude-val">None</span>,
-<a href=#177 id=177 data-nosnippet>177</a>                front_face: wgpu::FrontFace::Ccw,
-<a href=#178 id=178 data-nosnippet>178</a>                cull_mode: <span class="prelude-val">None</span>, <span class="comment">// 三角扇がカリングで消えちゃう...
-<a href=#179 id=179 data-nosnippet>179</a>                </span>polygon_mode: wgpu::PolygonMode::Fill,
-<a href=#180 id=180 data-nosnippet>180</a>                unclipped_depth: <span class="bool-val">false</span>,
-<a href=#181 id=181 data-nosnippet>181</a>                conservative: <span class="bool-val">false</span>,
-<a href=#182 id=182 data-nosnippet>182</a>            },
-<a href=#183 id=183 data-nosnippet>183</a>            depth_stencil: <span class="prelude-val">None</span>,
-<a href=#184 id=184 data-nosnippet>184</a>            multisample: wgpu::MultisampleState {
-<a href=#185 id=185 data-nosnippet>185</a>                count: <span class="number">1</span>,
-<a href=#186 id=186 data-nosnippet>186</a>                mask: !<span class="number">0</span>,
-<a href=#187 id=187 data-nosnippet>187</a>                alpha_to_coverage_enabled: <span class="bool-val">false</span>,
-<a href=#188 id=188 data-nosnippet>188</a>            },
-<a href=#189 id=189 data-nosnippet>189</a>            multiview_mask: <span class="prelude-val">None</span>,
-<a href=#190 id=190 data-nosnippet>190</a>        });
-<a href=#191 id=191 data-nosnippet>191</a>        <span class="comment">// --- レンダーパイプライン作成終了 ---
-<a href=#192 id=192 data-nosnippet>192</a>
-<a href=#193 id=193 data-nosnippet>193</a>        // テキスト描画用ラッパーの初期化。引数で渡されたフォントパスがあればグローバルフォントシステムに追加。
-<a href=#194 id=194 data-nosnippet>194</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(p) = font_path {
-<a href=#195 id=195 data-nosnippet>195</a>            global_font::load_global_font_path(p);
-<a href=#196 id=196 data-nosnippet>196</a>        }
-<a href=#197 id=197 data-nosnippet>197</a>        <span class="kw">let </span>text_renderer = <span class="kw">match </span>TextRenderer::new(<span class="kw-2">&amp;</span>device, <span class="kw-2">&amp;</span>queue, config.format) {
-<a href=#198 id=198 data-nosnippet>198</a>            <span class="prelude-val">Ok</span>(t) =&gt; <span class="prelude-val">Some</span>(t),
-<a href=#199 id=199 data-nosnippet>199</a>            <span class="prelude-val">Err</span>(e) =&gt; {
-<a href=#200 id=200 data-nosnippet>200</a>                <span class="macro">log::warn!</span>(target:<span class="string">"PRender::gpu::font" </span>,<span class="string">"no system font found for text renderer: {}"</span>, e);
-<a href=#201 id=201 data-nosnippet>201</a>                <span class="prelude-val">None
-<a href=#202 id=202 data-nosnippet>202</a>            </span>}
-<a href=#203 id=203 data-nosnippet>203</a>        };
-<a href=#204 id=204 data-nosnippet>204</a>
-<a href=#205 id=205 data-nosnippet>205</a>        <span class="comment">// Enable text culling by default, allow override by env var
-<a href=#206 id=206 data-nosnippet>206</a>        </span><span class="kw">let </span>enable_text_culling = std::env::var(<span class="string">"ORINIUM_TEXT_CULL"</span>).map_or(<span class="bool-val">true</span>, |v| v != <span class="string">"0"</span>);
-<a href=#207 id=207 data-nosnippet>207</a>
-<a href=#208 id=208 data-nosnippet>208</a>        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
-<a href=#209 id=209 data-nosnippet>209</a>            surface,
-<a href=#210 id=210 data-nosnippet>210</a>            device,
-<a href=#211 id=211 data-nosnippet>211</a>            queue,
-<a href=#212 id=212 data-nosnippet>212</a>            config,
-<a href=#213 id=213 data-nosnippet>213</a>            size,
-<a href=#214 id=214 data-nosnippet>214</a>            scale_factor,
-<a href=#215 id=215 data-nosnippet>215</a>            render_pipeline,
-<a href=#216 id=216 data-nosnippet>216</a>            vertex_buffer: <span class="prelude-val">None</span>,
-<a href=#217 id=217 data-nosnippet>217</a>            mesh_builder: MeshBuilder::new(
-<a href=#218 id=218 data-nosnippet>218</a>                size.width <span class="kw">as </span>f32,
-<a href=#219 id=219 data-nosnippet>219</a>                size.height <span class="kw">as </span>f32,
-<a href=#220 id=220 data-nosnippet>220</a>                scale_factor <span class="kw">as </span>f32,
-<a href=#221 id=221 data-nosnippet>221</a>            ),
-<a href=#222 id=222 data-nosnippet>222</a>            num_vertices: <span class="number">0</span>,
-<a href=#223 id=223 data-nosnippet>223</a>            text_renderer,
-<a href=#224 id=224 data-nosnippet>224</a>            enable_text_culling,
-<a href=#225 id=225 data-nosnippet>225</a>        })
-<a href=#226 id=226 data-nosnippet>226</a>    }
-<a href=#227 id=227 data-nosnippet>227</a>
-<a href=#228 id=228 data-nosnippet>228</a>    <span class="doccomment">/// ウィンドウサイズが変更された時の処理
-<a href=#229 id=229 data-nosnippet>229</a>    </span><span class="kw">pub fn </span>resize(<span class="kw-2">&amp;mut </span><span class="self">self</span>, new_size: winit::dpi::PhysicalSize&lt;u32&gt;) {
-<a href=#230 id=230 data-nosnippet>230</a>        <span class="kw">if </span>new_size.width &gt; <span class="number">0 </span>&amp;&amp; new_size.height &gt; <span class="number">0 </span>{
-<a href=#231 id=231 data-nosnippet>231</a>            <span class="macro">log::info!</span>(target:<span class="string">"PRender::gpu::resized"</span>, <span class="string">"Resized: {}x{}"</span>, new_size.width, new_size.height);
-<a href=#232 id=232 data-nosnippet>232</a>
-<a href=#233 id=233 data-nosnippet>233</a>            <span class="self">self</span>.size = new_size;
-<a href=#234 id=234 data-nosnippet>234</a>
-<a href=#235 id=235 data-nosnippet>235</a>            <span class="self">self</span>.config.width = new_size.width;
-<a href=#236 id=236 data-nosnippet>236</a>            <span class="self">self</span>.config.height = new_size.height;
-<a href=#237 id=237 data-nosnippet>237</a>
-<a href=#238 id=238 data-nosnippet>238</a>            <span class="self">self</span>.surface.configure(<span class="kw-2">&amp;</span><span class="self">self</span>.device, <span class="kw-2">&amp;</span><span class="self">self</span>.config);
-<a href=#239 id=239 data-nosnippet>239</a>
-<a href=#240 id=240 data-nosnippet>240</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(tr) = <span class="kw-2">&amp;mut </span><span class="self">self</span>.text_renderer {
-<a href=#241 id=241 data-nosnippet>241</a>                tr.resize_view(
-<a href=#242 id=242 data-nosnippet>242</a>                    <span class="self">self</span>.config.width <span class="kw">as </span>f32,
-<a href=#243 id=243 data-nosnippet>243</a>                    <span class="self">self</span>.config.height <span class="kw">as </span>f32,
-<a href=#244 id=244 data-nosnippet>244</a>                    <span class="kw-2">&amp;</span><span class="self">self</span>.queue,
-<a href=#245 id=245 data-nosnippet>245</a>                );
-<a href=#246 id=246 data-nosnippet>246</a>            }
-<a href=#247 id=247 data-nosnippet>247</a>        }
-<a href=#248 id=248 data-nosnippet>248</a>    }
-<a href=#249 id=249 data-nosnippet>249</a>
-<a href=#250 id=250 data-nosnippet>250</a>    <span class="doccomment">/// 描画命令を解析して頂点バッファやテキストキューに登録
-<a href=#251 id=251 data-nosnippet>251</a>    </span><span class="kw">pub fn </span>parse_draw_commands(<span class="kw-2">&amp;mut </span><span class="self">self</span>, commands: <span class="kw-2">&amp;</span>[DrawCommand]) {
-<a href=#252 id=252 data-nosnippet>252</a>        <span class="self">self</span>.mesh_builder
-<a href=#253 id=253 data-nosnippet>253</a>            .set_screen_size(<span class="self">self</span>.size.width <span class="kw">as </span>f32, <span class="self">self</span>.size.height <span class="kw">as </span>f32);
-<a href=#254 id=254 data-nosnippet>254</a>        <span class="self">self</span>.mesh_builder.set_scale_factor(<span class="self">self</span>.scale_factor <span class="kw">as </span>f32);
-<a href=#255 id=255 data-nosnippet>255</a>        <span class="self">self</span>.mesh_builder.set_text_culling(<span class="self">self</span>.enable_text_culling);
-<a href=#256 id=256 data-nosnippet>256</a>
-<a href=#257 id=257 data-nosnippet>257</a>        <span class="kw">let </span><span class="kw-2">mut </span>text_source: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span><span class="kw">dyn </span>mesh::TextLayoutSource&gt; = <span class="kw">match </span><span class="kw-2">&amp;mut </span><span class="self">self</span>.text_renderer
-<a href=#258 id=258 data-nosnippet>258</a>        {
-<a href=#259 id=259 data-nosnippet>259</a>            <span class="prelude-val">Some</span>(tr) =&gt; <span class="prelude-val">Some</span>(tr),
-<a href=#260 id=260 data-nosnippet>260</a>            <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
-<a href=#261 id=261 data-nosnippet>261</a>        };
-<a href=#262 id=262 data-nosnippet>262</a>        <span class="kw">let </span>built = <span class="self">self</span>.mesh_builder.build(commands, <span class="kw-2">&amp;mut </span>text_source);
-<a href=#263 id=263 data-nosnippet>263</a>        <span class="kw">let </span>vertices = built.vertices.clone();
-<a href=#264 id=264 data-nosnippet>264</a>        <span class="kw">let </span>sections = built.sections.clone();
-<a href=#265 id=265 data-nosnippet>265</a>
-<a href=#266 id=266 data-nosnippet>266</a>        <span class="self">self</span>.set_vertex_buffer(<span class="kw-2">&amp;</span>vertices);
-<a href=#267 id=267 data-nosnippet>267</a>
-<a href=#268 id=268 data-nosnippet>268</a>        <span class="comment">// テキストセクションをキューに追加
-<a href=#269 id=269 data-nosnippet>269</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(tr) = <span class="kw-2">&amp;mut </span><span class="self">self</span>.text_renderer {
-<a href=#270 id=270 data-nosnippet>270</a>            tr.queue(<span class="kw-2">&amp;</span><span class="self">self</span>.device, <span class="kw-2">&amp;</span><span class="self">self</span>.queue, <span class="kw-2">&amp;</span>sections).unwrap();
-<a href=#271 id=271 data-nosnippet>271</a>        }
-<a href=#272 id=272 data-nosnippet>272</a>    }
-<a href=#273 id=273 data-nosnippet>273</a>
-<a href=#274 id=274 data-nosnippet>274</a>    <span class="doccomment">/// フレームを描画
-<a href=#275 id=275 data-nosnippet>275</a>    ///
-<a href=#276 id=276 data-nosnippet>276</a>    /// TODO:
-<a href=#277 id=277 data-nosnippet>277</a>    /// [`wgpu::CurrentSurfaceTexture`] をよりよく処理する必要があります。
-<a href=#278 id=278 data-nosnippet>278</a>    /// 現在は、 Success 時以外の結果を無視し、Errorにまとめて返す挙動をします。
-<a href=#279 id=279 data-nosnippet>279</a>    </span><span class="kw">pub fn </span>render(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#280 id=280 data-nosnippet>280</a>        <span class="comment">// 描画するフレームバッファを取得
-<a href=#281 id=281 data-nosnippet>281</a>        </span><span class="kw">let </span>current_surface_texture = <span class="self">self</span>.surface.get_current_texture();
-<a href=#282 id=282 data-nosnippet>282</a>
-<a href=#283 id=283 data-nosnippet>283</a>        <span class="kw">let </span>output = <span class="kw">if let </span>wgpu::CurrentSurfaceTexture::Success(frame) = current_surface_texture {
-<a href=#284 id=284 data-nosnippet>284</a>            frame
-<a href=#285 id=285 data-nosnippet>285</a>        } <span class="kw">else </span>{
-<a href=#286 id=286 data-nosnippet>286</a>            <span class="macro">anyhow::bail!</span>(
-<a href=#287 id=287 data-nosnippet>287</a>                <span class="string">"`surface.get_current_texture` hasn't succeeded: {:?}."</span>,
-<a href=#288 id=288 data-nosnippet>288</a>                current_surface_texture
-<a href=#289 id=289 data-nosnippet>289</a>            );
-<a href=#290 id=290 data-nosnippet>290</a>        };
-<a href=#291 id=291 data-nosnippet>291</a>        <span class="kw">let </span>view = output
-<a href=#292 id=292 data-nosnippet>292</a>            .texture
-<a href=#293 id=293 data-nosnippet>293</a>            .create_view(<span class="kw-2">&amp;</span>wgpu::TextureViewDescriptor::default());
-<a href=#294 id=294 data-nosnippet>294</a>
-<a href=#295 id=295 data-nosnippet>295</a>        <span class="comment">// アニメーション中はテキストブラシが更新位置を反映できるようにセクションを再キューする必要がある
-<a href=#296 id=296 data-nosnippet>296</a>        // 補足: 呼び出し元（UI層）も各フレームで描画コマンドを再キューしているため、ここではアニメーション状態を返り値で通知するだけ
-<a href=#297 id=297 data-nosnippet>297</a>
-<a href=#298 id=298 data-nosnippet>298</a>        // GPUコマンドのエンコーダーの作成
-<a href=#299 id=299 data-nosnippet>299</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>encoder = <span class="self">self
-<a href=#300 id=300 data-nosnippet>300</a>            </span>.device
-<a href=#301 id=301 data-nosnippet>301</a>            .create_command_encoder(<span class="kw-2">&amp;</span>wgpu::CommandEncoderDescriptor {
-<a href=#302 id=302 data-nosnippet>302</a>                label: <span class="prelude-val">Some</span>(<span class="string">"Render Encoder"</span>),
-<a href=#303 id=303 data-nosnippet>303</a>            });
-<a href=#304 id=304 data-nosnippet>304</a>
-<a href=#305 id=305 data-nosnippet>305</a>        <span class="comment">// 描画パスの開始
-<a href=#306 id=306 data-nosnippet>306</a>        </span>{
-<a href=#307 id=307 data-nosnippet>307</a>            <span class="kw">let </span><span class="kw-2">mut </span>render_pass = encoder.begin_render_pass(<span class="kw-2">&amp;</span>wgpu::RenderPassDescriptor {
-<a href=#308 id=308 data-nosnippet>308</a>                label: <span class="prelude-val">Some</span>(<span class="string">"Render Pass"</span>),
-<a href=#309 id=309 data-nosnippet>309</a>                color_attachments: <span class="kw-2">&amp;</span>[<span class="prelude-val">Some</span>(wgpu::RenderPassColorAttachment {
-<a href=#310 id=310 data-nosnippet>310</a>                    view: <span class="kw-2">&amp;</span>view,
-<a href=#311 id=311 data-nosnippet>311</a>                    resolve_target: <span class="prelude-val">None</span>,
-<a href=#312 id=312 data-nosnippet>312</a>                    ops: wgpu::Operations {
-<a href=#313 id=313 data-nosnippet>313</a>                        <span class="comment">// 背景色をクリア
-<a href=#314 id=314 data-nosnippet>314</a>                        </span>load: wgpu::LoadOp::Clear(wgpu::Color {
-<a href=#315 id=315 data-nosnippet>315</a>                            r: <span class="number">1.0</span>,
-<a href=#316 id=316 data-nosnippet>316</a>                            g: <span class="number">1.0</span>,
-<a href=#317 id=317 data-nosnippet>317</a>                            b: <span class="number">1.0</span>,
-<a href=#318 id=318 data-nosnippet>318</a>                            a: <span class="number">1.0</span>,
-<a href=#319 id=319 data-nosnippet>319</a>                        }),
-<a href=#320 id=320 data-nosnippet>320</a>                        store: wgpu::StoreOp::Store,
-<a href=#321 id=321 data-nosnippet>321</a>                    },
-<a href=#322 id=322 data-nosnippet>322</a>                    depth_slice: <span class="prelude-val">None</span>,
-<a href=#323 id=323 data-nosnippet>323</a>                })],
-<a href=#324 id=324 data-nosnippet>324</a>                depth_stencil_attachment: <span class="prelude-val">None</span>,
-<a href=#325 id=325 data-nosnippet>325</a>                occlusion_query_set: <span class="prelude-val">None</span>,
-<a href=#326 id=326 data-nosnippet>326</a>                timestamp_writes: <span class="prelude-val">None</span>,
-<a href=#327 id=327 data-nosnippet>327</a>                multiview_mask: <span class="prelude-val">None</span>,
-<a href=#328 id=328 data-nosnippet>328</a>            });
-<a href=#329 id=329 data-nosnippet>329</a>
-<a href=#330 id=330 data-nosnippet>330</a>            <span class="comment">// 使用するシェーダー・設定をセット
-<a href=#331 id=331 data-nosnippet>331</a>            </span>render_pass.set_pipeline(<span class="kw-2">&amp;</span><span class="self">self</span>.render_pipeline);
-<a href=#332 id=332 data-nosnippet>332</a>            <span class="comment">// 頂点バッファをセットして描画
-<a href=#333 id=333 data-nosnippet>333</a>            </span><span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>vertex_buffer) = <span class="self">self</span>.vertex_buffer {
-<a href=#334 id=334 data-nosnippet>334</a>                render_pass.set_vertex_buffer(<span class="number">0</span>, vertex_buffer.slice(..));
-<a href=#335 id=335 data-nosnippet>335</a>                render_pass.draw(<span class="number">0</span>..<span class="self">self</span>.num_vertices, <span class="number">0</span>..<span class="number">1</span>);
-<a href=#336 id=336 data-nosnippet>336</a>            }
-<a href=#337 id=337 data-nosnippet>337</a>        }
-<a href=#338 id=338 data-nosnippet>338</a>
-<a href=#339 id=339 data-nosnippet>339</a>        <span class="comment">// テキストをレンダリング
-<a href=#340 id=340 data-nosnippet>340</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(tr) = <span class="kw-2">&amp;mut </span><span class="self">self</span>.text_renderer {
-<a href=#341 id=341 data-nosnippet>341</a>            <span class="kw">let </span><span class="kw-2">mut </span>rpass = encoder.begin_render_pass(<span class="kw-2">&amp;</span>wgpu::RenderPassDescriptor {
-<a href=#342 id=342 data-nosnippet>342</a>                label: <span class="prelude-val">Some</span>(<span class="string">"Text Render Pass"</span>),
-<a href=#343 id=343 data-nosnippet>343</a>                color_attachments: <span class="kw-2">&amp;</span>[<span class="prelude-val">Some</span>(wgpu::RenderPassColorAttachment {
-<a href=#344 id=344 data-nosnippet>344</a>                    view: <span class="kw-2">&amp;</span>view,
-<a href=#345 id=345 data-nosnippet>345</a>                    resolve_target: <span class="prelude-val">None</span>,
-<a href=#346 id=346 data-nosnippet>346</a>                    ops: wgpu::Operations {
-<a href=#347 id=347 data-nosnippet>347</a>                        load: wgpu::LoadOp::Load,
-<a href=#348 id=348 data-nosnippet>348</a>                        store: wgpu::StoreOp::Store,
-<a href=#349 id=349 data-nosnippet>349</a>                    },
-<a href=#350 id=350 data-nosnippet>350</a>                    depth_slice: <span class="prelude-val">None</span>,
-<a href=#351 id=351 data-nosnippet>351</a>                })],
-<a href=#352 id=352 data-nosnippet>352</a>                depth_stencil_attachment: <span class="prelude-val">None</span>,
-<a href=#353 id=353 data-nosnippet>353</a>                occlusion_query_set: <span class="prelude-val">None</span>,
-<a href=#354 id=354 data-nosnippet>354</a>                timestamp_writes: <span class="prelude-val">None</span>,
-<a href=#355 id=355 data-nosnippet>355</a>                multiview_mask: <span class="prelude-val">None</span>,
-<a href=#356 id=356 data-nosnippet>356</a>            });
-<a href=#357 id=357 data-nosnippet>357</a>            tr.draw(<span class="kw-2">&amp;mut </span>rpass);
-<a href=#358 id=358 data-nosnippet>358</a>        }
-<a href=#359 id=359 data-nosnippet>359</a>
-<a href=#360 id=360 data-nosnippet>360</a>        <span class="comment">// コマンドをGPUに送信
-<a href=#361 id=361 data-nosnippet>361</a>        </span><span class="self">self</span>.queue.submit(std::iter::once(encoder.finish()));
-<a href=#362 id=362 data-nosnippet>362</a>
-<a href=#363 id=363 data-nosnippet>363</a>        <span class="comment">// フレームを画面に表示
-<a href=#364 id=364 data-nosnippet>364</a>        </span><span class="self">self</span>.queue.present(output);
-<a href=#365 id=365 data-nosnippet>365</a>
-<a href=#366 id=366 data-nosnippet>366</a>        <span class="prelude-val">Ok</span>(())
-<a href=#367 id=367 data-nosnippet>367</a>    }
-<a href=#368 id=368 data-nosnippet>368</a>
-<a href=#369 id=369 data-nosnippet>369</a>    <span class="kw">fn </span>set_vertex_buffer(<span class="kw-2">&amp;mut </span><span class="self">self</span>, vertices: <span class="kw-2">&amp;</span>[Vertex]) {
-<a href=#370 id=370 data-nosnippet>370</a>        <span class="comment">// 頂点バッファを登録
-<a href=#371 id=371 data-nosnippet>371</a>        </span><span class="kw">if </span>!vertices.is_empty() {
-<a href=#372 id=372 data-nosnippet>372</a>            <span class="self">self</span>.vertex_buffer = <span class="prelude-val">Some</span>(<span class="self">self</span>.device.create_buffer_init(
-<a href=#373 id=373 data-nosnippet>373</a>                <span class="kw-2">&amp;</span>wgpu::util::BufferInitDescriptor {
-<a href=#374 id=374 data-nosnippet>374</a>                    label: <span class="prelude-val">Some</span>(<span class="string">"Vertex Buffer"</span>),
-<a href=#375 id=375 data-nosnippet>375</a>                    contents: bytemuck::cast_slice(vertices),
-<a href=#376 id=376 data-nosnippet>376</a>                    usage: wgpu::BufferUsages::VERTEX,
-<a href=#377 id=377 data-nosnippet>377</a>                },
-<a href=#378 id=378 data-nosnippet>378</a>            ));
-<a href=#379 id=379 data-nosnippet>379</a>            <span class="self">self</span>.num_vertices = vertices.len() <span class="kw">as </span>u32;
-<a href=#380 id=380 data-nosnippet>380</a>        } <span class="kw">else </span>{
-<a href=#381 id=381 data-nosnippet>381</a>            <span class="self">self</span>.vertex_buffer = <span class="prelude-val">None</span>;
-<a href=#382 id=382 data-nosnippet>382</a>            <span class="self">self</span>.num_vertices = <span class="number">0</span>;
-<a href=#383 id=383 data-nosnippet>383</a>        }
-<a href=#384 id=384 data-nosnippet>384</a>    }
-<a href=#385 id=385 data-nosnippet>385</a>
-<a href=#386 id=386 data-nosnippet>386</a>    <span class="kw">pub fn </span>set_scale_factor(<span class="kw-2">&amp;mut </span><span class="self">self</span>, scale_factor: f64) {
-<a href=#387 id=387 data-nosnippet>387</a>        <span class="self">self</span>.scale_factor = scale_factor;
-<a href=#388 id=388 data-nosnippet>388</a>    }
-<a href=#389 id=389 data-nosnippet>389</a>}
-<a href=#390 id=390 data-nosnippet>390</a>
-<a href=#391 id=391 data-nosnippet>391</a><span class="kw">fn </span>select_wgpu_backends() -&gt; wgpu::Backends {
-<a href=#392 id=392 data-nosnippet>392</a>    <span class="kw">if let </span><span class="prelude-val">Ok</span>(value) = env::var(<span class="string">"ORINIUM_WGPU_BACKEND"</span>) {
-<a href=#393 id=393 data-nosnippet>393</a>        <span class="kw">match </span>value.to_lowercase().as_str() {
-<a href=#394 id=394 data-nosnippet>394</a>            <span class="string">"gl" </span>| <span class="string">"opengl" </span>=&gt; <span class="kw">return </span>wgpu::Backends::GL,
-<a href=#395 id=395 data-nosnippet>395</a>            <span class="string">"vulkan" </span>| <span class="string">"vk" </span>=&gt; <span class="kw">return </span>wgpu::Backends::VULKAN,
-<a href=#396 id=396 data-nosnippet>396</a>            <span class="string">"metal" </span>=&gt; <span class="kw">return </span>wgpu::Backends::METAL,
-<a href=#397 id=397 data-nosnippet>397</a>            <span class="string">"dx12" </span>| <span class="string">"d3d12" </span>=&gt; <span class="kw">return </span>wgpu::Backends::DX12,
-<a href=#398 id=398 data-nosnippet>398</a>            <span class="string">"primary" </span>=&gt; <span class="kw">return </span>wgpu::Backends::PRIMARY,
-<a href=#399 id=399 data-nosnippet>399</a>            <span class="kw">_ </span>=&gt; {}
-<a href=#400 id=400 data-nosnippet>400</a>        }
-<a href=#401 id=401 data-nosnippet>401</a>    }
-<a href=#402 id=402 data-nosnippet>402</a>
-<a href=#403 id=403 data-nosnippet>403</a>    <span class="kw">let </span>is_wsl = env::var_os(<span class="string">"WSL_DISTRO_NAME"</span>).is_some() || env::var_os(<span class="string">"WSL_INTEROP"</span>).is_some();
-<a href=#404 id=404 data-nosnippet>404</a>    <span class="kw">let </span>is_wayland = env::var_os(<span class="string">"WAYLAND_DISPLAY"</span>).is_some();
-<a href=#405 id=405 data-nosnippet>405</a>
-<a href=#406 id=406 data-nosnippet>406</a>    <span class="kw">if </span>is_wsl &amp;&amp; is_wayland {
-<a href=#407 id=407 data-nosnippet>407</a>        <span class="comment">// WSLg + Wayland can be unstable with Vulkan; prefer GL by default.
-<a href=#408 id=408 data-nosnippet>408</a>        </span><span class="kw">return </span>wgpu::Backends::GL;
-<a href=#409 id=409 data-nosnippet>409</a>    }
-<a href=#410 id=410 data-nosnippet>410</a>
-<a href=#411 id=411 data-nosnippet>411</a>    wgpu::Backends::PRIMARY
-<a href=#412 id=412 data-nosnippet>412</a>}
+<a href=#88 id=88 data-nosnippet>88</a>        <span class="comment">// OSウィンドウとGPUの描画対象（サーフェス）を関連付ける
+<a href=#89 id=89 data-nosnippet>89</a>        // サーフェスの作成
+<a href=#90 id=90 data-nosnippet>90</a>        </span><span class="kw">let </span>surface = instance.create_surface(Arc::clone(<span class="kw-2">&amp;</span>window))<span class="question-mark">?</span>;
+<a href=#91 id=91 data-nosnippet>91</a>
+<a href=#92 id=92 data-nosnippet>92</a>        <span class="comment">// 利用可能なGPU（物理デバイス）アダプターの取得
+<a href=#93 id=93 data-nosnippet>93</a>        </span><span class="kw">let </span>adapter = instance
+<a href=#94 id=94 data-nosnippet>94</a>            .request_adapter(<span class="kw-2">&amp;</span>wgpu::RequestAdapterOptions {
+<a href=#95 id=95 data-nosnippet>95</a>                power_preference: wgpu::PowerPreference::default(),
+<a href=#96 id=96 data-nosnippet>96</a>                compatible_surface: <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>surface),
+<a href=#97 id=97 data-nosnippet>97</a>                force_fallback_adapter: <span class="bool-val">false</span>,
+<a href=#98 id=98 data-nosnippet>98</a>                <span class="comment">// This is currently only used for the browser's rendering backend, but we
+<a href=#99 id=99 data-nosnippet>99</a>                // enable limit bucketing preemptively in case WebGPU is exposed to web content
+<a href=#100 id=100 data-nosnippet>100</a>                // in the future.
+<a href=#101 id=101 data-nosnippet>101</a>                </span>apply_limit_buckets: <span class="bool-val">true</span>,
+<a href=#102 id=102 data-nosnippet>102</a>            })
+<a href=#103 id=103 data-nosnippet>103</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#104 id=104 data-nosnippet>104</a>
+<a href=#105 id=105 data-nosnippet>105</a>        <span class="comment">// デバイスとキューの作成
+<a href=#106 id=106 data-nosnippet>106</a>        </span><span class="kw">let </span>(device, queue) = adapter
+<a href=#107 id=107 data-nosnippet>107</a>            .request_device(<span class="kw-2">&amp;</span>wgpu::DeviceDescriptor {
+<a href=#108 id=108 data-nosnippet>108</a>                label: <span class="prelude-val">None</span>,
+<a href=#109 id=109 data-nosnippet>109</a>                required_features: wgpu::Features::empty(),
+<a href=#110 id=110 data-nosnippet>110</a>                required_limits: wgpu::Limits::default(),
+<a href=#111 id=111 data-nosnippet>111</a>                experimental_features: Default::default(),
+<a href=#112 id=112 data-nosnippet>112</a>                memory_hints: wgpu::MemoryHints::default(),
+<a href=#113 id=113 data-nosnippet>113</a>                trace: Default::default(),
+<a href=#114 id=114 data-nosnippet>114</a>            })
+<a href=#115 id=115 data-nosnippet>115</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#116 id=116 data-nosnippet>116</a>
+<a href=#117 id=117 data-nosnippet>117</a>        <span class="comment">// サーフェス設定
+<a href=#118 id=118 data-nosnippet>118</a>        // フレームバッファ設定（解像度・フォーマットなど）
+<a href=#119 id=119 data-nosnippet>119</a>        </span><span class="kw">let </span>surface_caps = surface.get_capabilities(<span class="kw-2">&amp;</span>adapter);
+<a href=#120 id=120 data-nosnippet>120</a>        <span class="kw">let </span>surface_format = surface_caps
+<a href=#121 id=121 data-nosnippet>121</a>            .formats
+<a href=#122 id=122 data-nosnippet>122</a>            .iter()
+<a href=#123 id=123 data-nosnippet>123</a>            .copied()
+<a href=#124 id=124 data-nosnippet>124</a>            .find(|f| f.is_srgb())
+<a href=#125 id=125 data-nosnippet>125</a>            .unwrap_or(surface_caps.formats[<span class="number">0</span>]);
+<a href=#126 id=126 data-nosnippet>126</a>
+<a href=#127 id=127 data-nosnippet>127</a>        <span class="kw">let </span>config = wgpu::SurfaceConfiguration {
+<a href=#128 id=128 data-nosnippet>128</a>            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+<a href=#129 id=129 data-nosnippet>129</a>            format: surface_format,
+<a href=#130 id=130 data-nosnippet>130</a>            <span class="comment">// Use automatic color space selection until browser-level color
+<a href=#131 id=131 data-nosnippet>131</a>            // management and CSS color spaces are implemented.
+<a href=#132 id=132 data-nosnippet>132</a>            </span>color_space: wgpu::SurfaceColorSpace::Auto,
+<a href=#133 id=133 data-nosnippet>133</a>            width: size.width,
+<a href=#134 id=134 data-nosnippet>134</a>            height: size.height,
+<a href=#135 id=135 data-nosnippet>135</a>            present_mode: surface_caps.present_modes[<span class="number">0</span>],
+<a href=#136 id=136 data-nosnippet>136</a>            alpha_mode: surface_caps.alpha_modes[<span class="number">0</span>],
+<a href=#137 id=137 data-nosnippet>137</a>            view_formats: <span class="macro">vec!</span>[],
+<a href=#138 id=138 data-nosnippet>138</a>            desired_maximum_frame_latency: <span class="number">2</span>,
+<a href=#139 id=139 data-nosnippet>139</a>        };
+<a href=#140 id=140 data-nosnippet>140</a>        surface.configure(<span class="kw-2">&amp;</span>device, <span class="kw-2">&amp;</span>config);
+<a href=#141 id=141 data-nosnippet>141</a>
+<a href=#142 id=142 data-nosnippet>142</a>        <span class="comment">// シェーダーの読み込み
+<a href=#143 id=143 data-nosnippet>143</a>        // シェーダーモジュールの作成
+<a href=#144 id=144 data-nosnippet>144</a>        // vertex/fragment for main pipeline
+<a href=#145 id=145 data-nosnippet>145</a>        </span><span class="kw">let </span>main_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+<a href=#146 id=146 data-nosnippet>146</a>            label: <span class="prelude-val">Some</span>(<span class="string">"Main Shader"</span>),
+<a href=#147 id=147 data-nosnippet>147</a>            source: wgpu::ShaderSource::Wgsl(<span class="macro">include_str!</span>(<span class="string">"shader/main.wgsl"</span>).into()),
+<a href=#148 id=148 data-nosnippet>148</a>        });
+<a href=#149 id=149 data-nosnippet>149</a>
+<a href=#150 id=150 data-nosnippet>150</a>        <span class="comment">// --- レンダーパイプライン（頂点→ピクセル変換のルール）の作成 ---
+<a href=#151 id=151 data-nosnippet>151</a>        </span><span class="kw">let </span>render_pipeline_layout =
+<a href=#152 id=152 data-nosnippet>152</a>            device.create_pipeline_layout(<span class="kw-2">&amp;</span>wgpu::PipelineLayoutDescriptor {
+<a href=#153 id=153 data-nosnippet>153</a>                label: <span class="prelude-val">Some</span>(<span class="string">"Render Pipeline Layout"</span>),
+<a href=#154 id=154 data-nosnippet>154</a>                bind_group_layouts: <span class="kw-2">&amp;</span>[],
+<a href=#155 id=155 data-nosnippet>155</a>                immediate_size: <span class="number">0</span>,
+<a href=#156 id=156 data-nosnippet>156</a>            });
+<a href=#157 id=157 data-nosnippet>157</a>
+<a href=#158 id=158 data-nosnippet>158</a>        <span class="kw">let </span>render_pipeline = device.create_render_pipeline(<span class="kw-2">&amp;</span>wgpu::RenderPipelineDescriptor {
+<a href=#159 id=159 data-nosnippet>159</a>            label: <span class="prelude-val">Some</span>(<span class="string">"Render Pipeline"</span>),
+<a href=#160 id=160 data-nosnippet>160</a>            layout: <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>render_pipeline_layout),
+<a href=#161 id=161 data-nosnippet>161</a>            cache: <span class="prelude-val">None</span>,
+<a href=#162 id=162 data-nosnippet>162</a>            vertex: wgpu::VertexState {
+<a href=#163 id=163 data-nosnippet>163</a>                module: <span class="kw-2">&amp;</span>main_shader,
+<a href=#164 id=164 data-nosnippet>164</a>                entry_point: <span class="prelude-val">Some</span>(<span class="string">"vs_main"</span>),
+<a href=#165 id=165 data-nosnippet>165</a>                buffers: <span class="kw-2">&amp;</span>[<span class="prelude-val">Some</span>(Vertex::desc())],
+<a href=#166 id=166 data-nosnippet>166</a>                compilation_options: wgpu::PipelineCompilationOptions::default(),
+<a href=#167 id=167 data-nosnippet>167</a>            },
+<a href=#168 id=168 data-nosnippet>168</a>            fragment: <span class="prelude-val">Some</span>(wgpu::FragmentState {
+<a href=#169 id=169 data-nosnippet>169</a>                module: <span class="kw-2">&amp;</span>main_shader,
+<a href=#170 id=170 data-nosnippet>170</a>                entry_point: <span class="prelude-val">Some</span>(<span class="string">"fs_main"</span>),
+<a href=#171 id=171 data-nosnippet>171</a>                targets: <span class="kw-2">&amp;</span>[<span class="prelude-val">Some</span>(wgpu::ColorTargetState {
+<a href=#172 id=172 data-nosnippet>172</a>                    format: config.format,
+<a href=#173 id=173 data-nosnippet>173</a>                    blend: <span class="prelude-val">Some</span>(wgpu::BlendState::ALPHA_BLENDING),
+<a href=#174 id=174 data-nosnippet>174</a>                    write_mask: wgpu::ColorWrites::ALL,
+<a href=#175 id=175 data-nosnippet>175</a>                })],
+<a href=#176 id=176 data-nosnippet>176</a>                compilation_options: wgpu::PipelineCompilationOptions::default(),
+<a href=#177 id=177 data-nosnippet>177</a>            }),
+<a href=#178 id=178 data-nosnippet>178</a>            primitive: wgpu::PrimitiveState {
+<a href=#179 id=179 data-nosnippet>179</a>                topology: wgpu::PrimitiveTopology::TriangleList,
+<a href=#180 id=180 data-nosnippet>180</a>                strip_index_format: <span class="prelude-val">None</span>,
+<a href=#181 id=181 data-nosnippet>181</a>                front_face: wgpu::FrontFace::Ccw,
+<a href=#182 id=182 data-nosnippet>182</a>                cull_mode: <span class="prelude-val">None</span>, <span class="comment">// 三角扇がカリングで消えちゃう...
+<a href=#183 id=183 data-nosnippet>183</a>                </span>polygon_mode: wgpu::PolygonMode::Fill,
+<a href=#184 id=184 data-nosnippet>184</a>                unclipped_depth: <span class="bool-val">false</span>,
+<a href=#185 id=185 data-nosnippet>185</a>                conservative: <span class="bool-val">false</span>,
+<a href=#186 id=186 data-nosnippet>186</a>            },
+<a href=#187 id=187 data-nosnippet>187</a>            depth_stencil: <span class="prelude-val">None</span>,
+<a href=#188 id=188 data-nosnippet>188</a>            multisample: wgpu::MultisampleState {
+<a href=#189 id=189 data-nosnippet>189</a>                count: <span class="number">1</span>,
+<a href=#190 id=190 data-nosnippet>190</a>                mask: !<span class="number">0</span>,
+<a href=#191 id=191 data-nosnippet>191</a>                alpha_to_coverage_enabled: <span class="bool-val">false</span>,
+<a href=#192 id=192 data-nosnippet>192</a>            },
+<a href=#193 id=193 data-nosnippet>193</a>            multiview_mask: <span class="prelude-val">None</span>,
+<a href=#194 id=194 data-nosnippet>194</a>        });
+<a href=#195 id=195 data-nosnippet>195</a>        <span class="comment">// --- レンダーパイプライン作成終了 ---
+<a href=#196 id=196 data-nosnippet>196</a>
+<a href=#197 id=197 data-nosnippet>197</a>        // テキスト描画用ラッパーの初期化。引数で渡されたフォントパスがあればグローバルフォントシステムに追加。
+<a href=#198 id=198 data-nosnippet>198</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(p) = font_path {
+<a href=#199 id=199 data-nosnippet>199</a>            global_font::load_global_font_path(p);
+<a href=#200 id=200 data-nosnippet>200</a>        }
+<a href=#201 id=201 data-nosnippet>201</a>        <span class="kw">let </span>text_renderer = <span class="kw">match </span>TextRenderer::new(<span class="kw-2">&amp;</span>device, <span class="kw-2">&amp;</span>queue, config.format) {
+<a href=#202 id=202 data-nosnippet>202</a>            <span class="prelude-val">Ok</span>(t) =&gt; <span class="prelude-val">Some</span>(t),
+<a href=#203 id=203 data-nosnippet>203</a>            <span class="prelude-val">Err</span>(e) =&gt; {
+<a href=#204 id=204 data-nosnippet>204</a>                <span class="macro">log::warn!</span>(target:<span class="string">"PRender::gpu::font" </span>,<span class="string">"no system font found for text renderer: {}"</span>, e);
+<a href=#205 id=205 data-nosnippet>205</a>                <span class="prelude-val">None
+<a href=#206 id=206 data-nosnippet>206</a>            </span>}
+<a href=#207 id=207 data-nosnippet>207</a>        };
+<a href=#208 id=208 data-nosnippet>208</a>        <span class="kw">let </span>image_renderer = ImageRenderer::new(<span class="kw-2">&amp;</span>device, config.format);
+<a href=#209 id=209 data-nosnippet>209</a>
+<a href=#210 id=210 data-nosnippet>210</a>        <span class="comment">// Enable text culling by default, allow override by env var
+<a href=#211 id=211 data-nosnippet>211</a>        </span><span class="kw">let </span>enable_text_culling = std::env::var(<span class="string">"ORINIUM_TEXT_CULL"</span>).map_or(<span class="bool-val">true</span>, |v| v != <span class="string">"0"</span>);
+<a href=#212 id=212 data-nosnippet>212</a>
+<a href=#213 id=213 data-nosnippet>213</a>        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
+<a href=#214 id=214 data-nosnippet>214</a>            surface,
+<a href=#215 id=215 data-nosnippet>215</a>            device,
+<a href=#216 id=216 data-nosnippet>216</a>            queue,
+<a href=#217 id=217 data-nosnippet>217</a>            config,
+<a href=#218 id=218 data-nosnippet>218</a>            size,
+<a href=#219 id=219 data-nosnippet>219</a>            scale_factor,
+<a href=#220 id=220 data-nosnippet>220</a>            render_pipeline,
+<a href=#221 id=221 data-nosnippet>221</a>            vertex_buffer: <span class="prelude-val">None</span>,
+<a href=#222 id=222 data-nosnippet>222</a>            mesh_builder: MeshBuilder::new(
+<a href=#223 id=223 data-nosnippet>223</a>                size.width <span class="kw">as </span>f32,
+<a href=#224 id=224 data-nosnippet>224</a>                size.height <span class="kw">as </span>f32,
+<a href=#225 id=225 data-nosnippet>225</a>                scale_factor <span class="kw">as </span>f32,
+<a href=#226 id=226 data-nosnippet>226</a>            ),
+<a href=#227 id=227 data-nosnippet>227</a>            num_vertices: <span class="number">0</span>,
+<a href=#228 id=228 data-nosnippet>228</a>            text_renderer,
+<a href=#229 id=229 data-nosnippet>229</a>            image_renderer,
+<a href=#230 id=230 data-nosnippet>230</a>            enable_text_culling,
+<a href=#231 id=231 data-nosnippet>231</a>        })
+<a href=#232 id=232 data-nosnippet>232</a>    }
+<a href=#233 id=233 data-nosnippet>233</a>
+<a href=#234 id=234 data-nosnippet>234</a>    <span class="doccomment">/// ウィンドウサイズが変更された時の処理
+<a href=#235 id=235 data-nosnippet>235</a>    </span><span class="kw">pub fn </span>resize(<span class="kw-2">&amp;mut </span><span class="self">self</span>, new_size: winit::dpi::PhysicalSize&lt;u32&gt;) {
+<a href=#236 id=236 data-nosnippet>236</a>        <span class="kw">if </span>new_size.width &gt; <span class="number">0 </span>&amp;&amp; new_size.height &gt; <span class="number">0 </span>{
+<a href=#237 id=237 data-nosnippet>237</a>            <span class="macro">log::info!</span>(target:<span class="string">"PRender::gpu::resized"</span>, <span class="string">"Resized: {}x{}"</span>, new_size.width, new_size.height);
+<a href=#238 id=238 data-nosnippet>238</a>
+<a href=#239 id=239 data-nosnippet>239</a>            <span class="self">self</span>.size = new_size;
+<a href=#240 id=240 data-nosnippet>240</a>
+<a href=#241 id=241 data-nosnippet>241</a>            <span class="self">self</span>.config.width = new_size.width;
+<a href=#242 id=242 data-nosnippet>242</a>            <span class="self">self</span>.config.height = new_size.height;
+<a href=#243 id=243 data-nosnippet>243</a>
+<a href=#244 id=244 data-nosnippet>244</a>            <span class="self">self</span>.surface.configure(<span class="kw-2">&amp;</span><span class="self">self</span>.device, <span class="kw-2">&amp;</span><span class="self">self</span>.config);
+<a href=#245 id=245 data-nosnippet>245</a>
+<a href=#246 id=246 data-nosnippet>246</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(tr) = <span class="kw-2">&amp;mut </span><span class="self">self</span>.text_renderer {
+<a href=#247 id=247 data-nosnippet>247</a>                tr.resize_view(
+<a href=#248 id=248 data-nosnippet>248</a>                    <span class="self">self</span>.config.width <span class="kw">as </span>f32,
+<a href=#249 id=249 data-nosnippet>249</a>                    <span class="self">self</span>.config.height <span class="kw">as </span>f32,
+<a href=#250 id=250 data-nosnippet>250</a>                    <span class="kw-2">&amp;</span><span class="self">self</span>.queue,
+<a href=#251 id=251 data-nosnippet>251</a>                );
+<a href=#252 id=252 data-nosnippet>252</a>            }
+<a href=#253 id=253 data-nosnippet>253</a>        }
+<a href=#254 id=254 data-nosnippet>254</a>    }
+<a href=#255 id=255 data-nosnippet>255</a>
+<a href=#256 id=256 data-nosnippet>256</a>    <span class="doccomment">/// 描画命令を解析して頂点バッファやテキストキューに登録
+<a href=#257 id=257 data-nosnippet>257</a>    </span><span class="kw">pub fn </span>parse_draw_commands(<span class="kw-2">&amp;mut </span><span class="self">self</span>, commands: <span class="kw-2">&amp;</span>[DrawCommand]) {
+<a href=#258 id=258 data-nosnippet>258</a>        <span class="self">self</span>.mesh_builder
+<a href=#259 id=259 data-nosnippet>259</a>            .set_screen_size(<span class="self">self</span>.size.width <span class="kw">as </span>f32, <span class="self">self</span>.size.height <span class="kw">as </span>f32);
+<a href=#260 id=260 data-nosnippet>260</a>        <span class="self">self</span>.mesh_builder.set_scale_factor(<span class="self">self</span>.scale_factor <span class="kw">as </span>f32);
+<a href=#261 id=261 data-nosnippet>261</a>        <span class="self">self</span>.mesh_builder.set_text_culling(<span class="self">self</span>.enable_text_culling);
+<a href=#262 id=262 data-nosnippet>262</a>
+<a href=#263 id=263 data-nosnippet>263</a>        <span class="kw">let </span><span class="kw-2">mut </span>text_source: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span><span class="kw">dyn </span>mesh::TextLayoutSource&gt; = <span class="kw">match </span><span class="kw-2">&amp;mut </span><span class="self">self</span>.text_renderer
+<a href=#264 id=264 data-nosnippet>264</a>        {
+<a href=#265 id=265 data-nosnippet>265</a>            <span class="prelude-val">Some</span>(tr) =&gt; <span class="prelude-val">Some</span>(tr),
+<a href=#266 id=266 data-nosnippet>266</a>            <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
+<a href=#267 id=267 data-nosnippet>267</a>        };
+<a href=#268 id=268 data-nosnippet>268</a>        <span class="kw">let </span>built = <span class="self">self</span>.mesh_builder.build(commands, <span class="kw-2">&amp;mut </span>text_source);
+<a href=#269 id=269 data-nosnippet>269</a>        <span class="kw">let </span>vertices = built.vertices.clone();
+<a href=#270 id=270 data-nosnippet>270</a>        <span class="kw">let </span>sections = built.sections.clone();
+<a href=#271 id=271 data-nosnippet>271</a>        <span class="kw">let </span>images = built.images.clone();
+<a href=#272 id=272 data-nosnippet>272</a>
+<a href=#273 id=273 data-nosnippet>273</a>        <span class="self">self</span>.set_vertex_buffer(<span class="kw-2">&amp;</span>vertices);
+<a href=#274 id=274 data-nosnippet>274</a>        <span class="self">self</span>.image_renderer.prepare(
+<a href=#275 id=275 data-nosnippet>275</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.device,
+<a href=#276 id=276 data-nosnippet>276</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.queue,
+<a href=#277 id=277 data-nosnippet>277</a>            <span class="kw-2">&amp;</span>images,
+<a href=#278 id=278 data-nosnippet>278</a>            <span class="self">self</span>.size.width <span class="kw">as </span>f32,
+<a href=#279 id=279 data-nosnippet>279</a>            <span class="self">self</span>.size.height <span class="kw">as </span>f32,
+<a href=#280 id=280 data-nosnippet>280</a>        );
+<a href=#281 id=281 data-nosnippet>281</a>
+<a href=#282 id=282 data-nosnippet>282</a>        <span class="comment">// テキストセクションをキューに追加
+<a href=#283 id=283 data-nosnippet>283</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(tr) = <span class="kw-2">&amp;mut </span><span class="self">self</span>.text_renderer {
+<a href=#284 id=284 data-nosnippet>284</a>            tr.queue(<span class="kw-2">&amp;</span><span class="self">self</span>.device, <span class="kw-2">&amp;</span><span class="self">self</span>.queue, <span class="kw-2">&amp;</span>sections).unwrap();
+<a href=#285 id=285 data-nosnippet>285</a>        }
+<a href=#286 id=286 data-nosnippet>286</a>    }
+<a href=#287 id=287 data-nosnippet>287</a>
+<a href=#288 id=288 data-nosnippet>288</a>    <span class="doccomment">/// フレームを描画
+<a href=#289 id=289 data-nosnippet>289</a>    ///
+<a href=#290 id=290 data-nosnippet>290</a>    /// TODO:
+<a href=#291 id=291 data-nosnippet>291</a>    /// [`wgpu::CurrentSurfaceTexture`] をよりよく処理する必要があります。
+<a href=#292 id=292 data-nosnippet>292</a>    /// 現在は、 Success 時以外の結果を無視し、Errorにまとめて返す挙動をします。
+<a href=#293 id=293 data-nosnippet>293</a>    </span><span class="kw">pub fn </span>render(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#294 id=294 data-nosnippet>294</a>        <span class="comment">// 描画するフレームバッファを取得
+<a href=#295 id=295 data-nosnippet>295</a>        </span><span class="kw">let </span>current_surface_texture = <span class="self">self</span>.surface.get_current_texture();
+<a href=#296 id=296 data-nosnippet>296</a>
+<a href=#297 id=297 data-nosnippet>297</a>        <span class="kw">let </span>output = <span class="kw">if let </span>wgpu::CurrentSurfaceTexture::Success(frame) = current_surface_texture {
+<a href=#298 id=298 data-nosnippet>298</a>            frame
+<a href=#299 id=299 data-nosnippet>299</a>        } <span class="kw">else </span>{
+<a href=#300 id=300 data-nosnippet>300</a>            <span class="macro">anyhow::bail!</span>(
+<a href=#301 id=301 data-nosnippet>301</a>                <span class="string">"`surface.get_current_texture` hasn't succeeded: {:?}."</span>,
+<a href=#302 id=302 data-nosnippet>302</a>                current_surface_texture
+<a href=#303 id=303 data-nosnippet>303</a>            );
+<a href=#304 id=304 data-nosnippet>304</a>        };
+<a href=#305 id=305 data-nosnippet>305</a>        <span class="kw">let </span>view = output
+<a href=#306 id=306 data-nosnippet>306</a>            .texture
+<a href=#307 id=307 data-nosnippet>307</a>            .create_view(<span class="kw-2">&amp;</span>wgpu::TextureViewDescriptor::default());
+<a href=#308 id=308 data-nosnippet>308</a>
+<a href=#309 id=309 data-nosnippet>309</a>        <span class="comment">// アニメーション中はテキストブラシが更新位置を反映できるようにセクションを再キューする必要がある
+<a href=#310 id=310 data-nosnippet>310</a>        // 補足: 呼び出し元（UI層）も各フレームで描画コマンドを再キューしているため、ここではアニメーション状態を返り値で通知するだけ
+<a href=#311 id=311 data-nosnippet>311</a>
+<a href=#312 id=312 data-nosnippet>312</a>        // GPUコマンドのエンコーダーの作成
+<a href=#313 id=313 data-nosnippet>313</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>encoder = <span class="self">self
+<a href=#314 id=314 data-nosnippet>314</a>            </span>.device
+<a href=#315 id=315 data-nosnippet>315</a>            .create_command_encoder(<span class="kw-2">&amp;</span>wgpu::CommandEncoderDescriptor {
+<a href=#316 id=316 data-nosnippet>316</a>                label: <span class="prelude-val">Some</span>(<span class="string">"Render Encoder"</span>),
+<a href=#317 id=317 data-nosnippet>317</a>            });
+<a href=#318 id=318 data-nosnippet>318</a>
+<a href=#319 id=319 data-nosnippet>319</a>        <span class="comment">// 描画パスの開始
+<a href=#320 id=320 data-nosnippet>320</a>        </span>{
+<a href=#321 id=321 data-nosnippet>321</a>            <span class="kw">let </span><span class="kw-2">mut </span>render_pass = encoder.begin_render_pass(<span class="kw-2">&amp;</span>wgpu::RenderPassDescriptor {
+<a href=#322 id=322 data-nosnippet>322</a>                label: <span class="prelude-val">Some</span>(<span class="string">"Render Pass"</span>),
+<a href=#323 id=323 data-nosnippet>323</a>                color_attachments: <span class="kw-2">&amp;</span>[<span class="prelude-val">Some</span>(wgpu::RenderPassColorAttachment {
+<a href=#324 id=324 data-nosnippet>324</a>                    view: <span class="kw-2">&amp;</span>view,
+<a href=#325 id=325 data-nosnippet>325</a>                    resolve_target: <span class="prelude-val">None</span>,
+<a href=#326 id=326 data-nosnippet>326</a>                    ops: wgpu::Operations {
+<a href=#327 id=327 data-nosnippet>327</a>                        <span class="comment">// 背景色をクリア
+<a href=#328 id=328 data-nosnippet>328</a>                        </span>load: wgpu::LoadOp::Clear(wgpu::Color {
+<a href=#329 id=329 data-nosnippet>329</a>                            r: <span class="number">1.0</span>,
+<a href=#330 id=330 data-nosnippet>330</a>                            g: <span class="number">1.0</span>,
+<a href=#331 id=331 data-nosnippet>331</a>                            b: <span class="number">1.0</span>,
+<a href=#332 id=332 data-nosnippet>332</a>                            a: <span class="number">1.0</span>,
+<a href=#333 id=333 data-nosnippet>333</a>                        }),
+<a href=#334 id=334 data-nosnippet>334</a>                        store: wgpu::StoreOp::Store,
+<a href=#335 id=335 data-nosnippet>335</a>                    },
+<a href=#336 id=336 data-nosnippet>336</a>                    depth_slice: <span class="prelude-val">None</span>,
+<a href=#337 id=337 data-nosnippet>337</a>                })],
+<a href=#338 id=338 data-nosnippet>338</a>                depth_stencil_attachment: <span class="prelude-val">None</span>,
+<a href=#339 id=339 data-nosnippet>339</a>                occlusion_query_set: <span class="prelude-val">None</span>,
+<a href=#340 id=340 data-nosnippet>340</a>                timestamp_writes: <span class="prelude-val">None</span>,
+<a href=#341 id=341 data-nosnippet>341</a>                multiview_mask: <span class="prelude-val">None</span>,
+<a href=#342 id=342 data-nosnippet>342</a>            });
+<a href=#343 id=343 data-nosnippet>343</a>
+<a href=#344 id=344 data-nosnippet>344</a>            <span class="comment">// 使用するシェーダー・設定をセット
+<a href=#345 id=345 data-nosnippet>345</a>            </span>render_pass.set_pipeline(<span class="kw-2">&amp;</span><span class="self">self</span>.render_pipeline);
+<a href=#346 id=346 data-nosnippet>346</a>            <span class="comment">// 頂点バッファをセットして描画
+<a href=#347 id=347 data-nosnippet>347</a>            </span><span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>vertex_buffer) = <span class="self">self</span>.vertex_buffer {
+<a href=#348 id=348 data-nosnippet>348</a>                render_pass.set_vertex_buffer(<span class="number">0</span>, vertex_buffer.slice(..));
+<a href=#349 id=349 data-nosnippet>349</a>                render_pass.draw(<span class="number">0</span>..<span class="self">self</span>.num_vertices, <span class="number">0</span>..<span class="number">1</span>);
+<a href=#350 id=350 data-nosnippet>350</a>            }
+<a href=#351 id=351 data-nosnippet>351</a>        }
+<a href=#352 id=352 data-nosnippet>352</a>
+<a href=#353 id=353 data-nosnippet>353</a>        <span class="comment">// Render decoded page images above box fills.
+<a href=#354 id=354 data-nosnippet>354</a>        </span>{
+<a href=#355 id=355 data-nosnippet>355</a>            <span class="kw">let </span><span class="kw-2">mut </span>render_pass = encoder.begin_render_pass(<span class="kw-2">&amp;</span>wgpu::RenderPassDescriptor {
+<a href=#356 id=356 data-nosnippet>356</a>                label: <span class="prelude-val">Some</span>(<span class="string">"Image Render Pass"</span>),
+<a href=#357 id=357 data-nosnippet>357</a>                color_attachments: <span class="kw-2">&amp;</span>[<span class="prelude-val">Some</span>(wgpu::RenderPassColorAttachment {
+<a href=#358 id=358 data-nosnippet>358</a>                    view: <span class="kw-2">&amp;</span>view,
+<a href=#359 id=359 data-nosnippet>359</a>                    resolve_target: <span class="prelude-val">None</span>,
+<a href=#360 id=360 data-nosnippet>360</a>                    ops: wgpu::Operations {
+<a href=#361 id=361 data-nosnippet>361</a>                        load: wgpu::LoadOp::Load,
+<a href=#362 id=362 data-nosnippet>362</a>                        store: wgpu::StoreOp::Store,
+<a href=#363 id=363 data-nosnippet>363</a>                    },
+<a href=#364 id=364 data-nosnippet>364</a>                    depth_slice: <span class="prelude-val">None</span>,
+<a href=#365 id=365 data-nosnippet>365</a>                })],
+<a href=#366 id=366 data-nosnippet>366</a>                depth_stencil_attachment: <span class="prelude-val">None</span>,
+<a href=#367 id=367 data-nosnippet>367</a>                occlusion_query_set: <span class="prelude-val">None</span>,
+<a href=#368 id=368 data-nosnippet>368</a>                timestamp_writes: <span class="prelude-val">None</span>,
+<a href=#369 id=369 data-nosnippet>369</a>                multiview_mask: <span class="prelude-val">None</span>,
+<a href=#370 id=370 data-nosnippet>370</a>            });
+<a href=#371 id=371 data-nosnippet>371</a>            <span class="self">self</span>.image_renderer.draw(<span class="kw-2">&amp;mut </span>render_pass);
+<a href=#372 id=372 data-nosnippet>372</a>        }
+<a href=#373 id=373 data-nosnippet>373</a>
+<a href=#374 id=374 data-nosnippet>374</a>        <span class="comment">// テキストをレンダリング
+<a href=#375 id=375 data-nosnippet>375</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(tr) = <span class="kw-2">&amp;mut </span><span class="self">self</span>.text_renderer {
+<a href=#376 id=376 data-nosnippet>376</a>            <span class="kw">let </span><span class="kw-2">mut </span>rpass = encoder.begin_render_pass(<span class="kw-2">&amp;</span>wgpu::RenderPassDescriptor {
+<a href=#377 id=377 data-nosnippet>377</a>                label: <span class="prelude-val">Some</span>(<span class="string">"Text Render Pass"</span>),
+<a href=#378 id=378 data-nosnippet>378</a>                color_attachments: <span class="kw-2">&amp;</span>[<span class="prelude-val">Some</span>(wgpu::RenderPassColorAttachment {
+<a href=#379 id=379 data-nosnippet>379</a>                    view: <span class="kw-2">&amp;</span>view,
+<a href=#380 id=380 data-nosnippet>380</a>                    resolve_target: <span class="prelude-val">None</span>,
+<a href=#381 id=381 data-nosnippet>381</a>                    ops: wgpu::Operations {
+<a href=#382 id=382 data-nosnippet>382</a>                        load: wgpu::LoadOp::Load,
+<a href=#383 id=383 data-nosnippet>383</a>                        store: wgpu::StoreOp::Store,
+<a href=#384 id=384 data-nosnippet>384</a>                    },
+<a href=#385 id=385 data-nosnippet>385</a>                    depth_slice: <span class="prelude-val">None</span>,
+<a href=#386 id=386 data-nosnippet>386</a>                })],
+<a href=#387 id=387 data-nosnippet>387</a>                depth_stencil_attachment: <span class="prelude-val">None</span>,
+<a href=#388 id=388 data-nosnippet>388</a>                occlusion_query_set: <span class="prelude-val">None</span>,
+<a href=#389 id=389 data-nosnippet>389</a>                timestamp_writes: <span class="prelude-val">None</span>,
+<a href=#390 id=390 data-nosnippet>390</a>                multiview_mask: <span class="prelude-val">None</span>,
+<a href=#391 id=391 data-nosnippet>391</a>            });
+<a href=#392 id=392 data-nosnippet>392</a>            tr.draw(<span class="kw-2">&amp;mut </span>rpass);
+<a href=#393 id=393 data-nosnippet>393</a>        }
+<a href=#394 id=394 data-nosnippet>394</a>
+<a href=#395 id=395 data-nosnippet>395</a>        <span class="comment">// コマンドをGPUに送信
+<a href=#396 id=396 data-nosnippet>396</a>        </span><span class="self">self</span>.queue.submit(std::iter::once(encoder.finish()));
+<a href=#397 id=397 data-nosnippet>397</a>
+<a href=#398 id=398 data-nosnippet>398</a>        <span class="comment">// フレームを画面に表示
+<a href=#399 id=399 data-nosnippet>399</a>        </span><span class="self">self</span>.queue.present(output);
+<a href=#400 id=400 data-nosnippet>400</a>
+<a href=#401 id=401 data-nosnippet>401</a>        <span class="prelude-val">Ok</span>(())
+<a href=#402 id=402 data-nosnippet>402</a>    }
+<a href=#403 id=403 data-nosnippet>403</a>
+<a href=#404 id=404 data-nosnippet>404</a>    <span class="kw">fn </span>set_vertex_buffer(<span class="kw-2">&amp;mut </span><span class="self">self</span>, vertices: <span class="kw-2">&amp;</span>[Vertex]) {
+<a href=#405 id=405 data-nosnippet>405</a>        <span class="comment">// 頂点バッファを登録
+<a href=#406 id=406 data-nosnippet>406</a>        </span><span class="kw">if </span>!vertices.is_empty() {
+<a href=#407 id=407 data-nosnippet>407</a>            <span class="self">self</span>.vertex_buffer = <span class="prelude-val">Some</span>(<span class="self">self</span>.device.create_buffer_init(
+<a href=#408 id=408 data-nosnippet>408</a>                <span class="kw-2">&amp;</span>wgpu::util::BufferInitDescriptor {
+<a href=#409 id=409 data-nosnippet>409</a>                    label: <span class="prelude-val">Some</span>(<span class="string">"Vertex Buffer"</span>),
+<a href=#410 id=410 data-nosnippet>410</a>                    contents: bytemuck::cast_slice(vertices),
+<a href=#411 id=411 data-nosnippet>411</a>                    usage: wgpu::BufferUsages::VERTEX,
+<a href=#412 id=412 data-nosnippet>412</a>                },
+<a href=#413 id=413 data-nosnippet>413</a>            ));
+<a href=#414 id=414 data-nosnippet>414</a>            <span class="self">self</span>.num_vertices = vertices.len() <span class="kw">as </span>u32;
+<a href=#415 id=415 data-nosnippet>415</a>        } <span class="kw">else </span>{
+<a href=#416 id=416 data-nosnippet>416</a>            <span class="self">self</span>.vertex_buffer = <span class="prelude-val">None</span>;
+<a href=#417 id=417 data-nosnippet>417</a>            <span class="self">self</span>.num_vertices = <span class="number">0</span>;
+<a href=#418 id=418 data-nosnippet>418</a>        }
+<a href=#419 id=419 data-nosnippet>419</a>    }
+<a href=#420 id=420 data-nosnippet>420</a>
+<a href=#421 id=421 data-nosnippet>421</a>    <span class="kw">pub fn </span>set_scale_factor(<span class="kw-2">&amp;mut </span><span class="self">self</span>, scale_factor: f64) {
+<a href=#422 id=422 data-nosnippet>422</a>        <span class="self">self</span>.scale_factor = scale_factor;
+<a href=#423 id=423 data-nosnippet>423</a>    }
+<a href=#424 id=424 data-nosnippet>424</a>}
+<a href=#425 id=425 data-nosnippet>425</a>
+<a href=#426 id=426 data-nosnippet>426</a><span class="kw">fn </span>select_wgpu_backends() -&gt; wgpu::Backends {
+<a href=#427 id=427 data-nosnippet>427</a>    <span class="kw">if let </span><span class="prelude-val">Ok</span>(value) = env::var(<span class="string">"ORINIUM_WGPU_BACKEND"</span>) {
+<a href=#428 id=428 data-nosnippet>428</a>        <span class="kw">match </span>value.to_lowercase().as_str() {
+<a href=#429 id=429 data-nosnippet>429</a>            <span class="string">"gl" </span>| <span class="string">"opengl" </span>=&gt; <span class="kw">return </span>wgpu::Backends::GL,
+<a href=#430 id=430 data-nosnippet>430</a>            <span class="string">"vulkan" </span>| <span class="string">"vk" </span>=&gt; <span class="kw">return </span>wgpu::Backends::VULKAN,
+<a href=#431 id=431 data-nosnippet>431</a>            <span class="string">"metal" </span>=&gt; <span class="kw">return </span>wgpu::Backends::METAL,
+<a href=#432 id=432 data-nosnippet>432</a>            <span class="string">"dx12" </span>| <span class="string">"d3d12" </span>=&gt; <span class="kw">return </span>wgpu::Backends::DX12,
+<a href=#433 id=433 data-nosnippet>433</a>            <span class="string">"primary" </span>=&gt; <span class="kw">return </span>wgpu::Backends::PRIMARY,
+<a href=#434 id=434 data-nosnippet>434</a>            <span class="kw">_ </span>=&gt; {}
+<a href=#435 id=435 data-nosnippet>435</a>        }
+<a href=#436 id=436 data-nosnippet>436</a>    }
+<a href=#437 id=437 data-nosnippet>437</a>
+<a href=#438 id=438 data-nosnippet>438</a>    <span class="kw">let </span>is_wsl = env::var_os(<span class="string">"WSL_DISTRO_NAME"</span>).is_some() || env::var_os(<span class="string">"WSL_INTEROP"</span>).is_some();
+<a href=#439 id=439 data-nosnippet>439</a>    <span class="kw">let </span>is_wayland = env::var_os(<span class="string">"WAYLAND_DISPLAY"</span>).is_some();
+<a href=#440 id=440 data-nosnippet>440</a>
+<a href=#441 id=441 data-nosnippet>441</a>    <span class="kw">if </span>is_wsl &amp;&amp; is_wayland {
+<a href=#442 id=442 data-nosnippet>442</a>        <span class="comment">// WSLg + Wayland can be unstable with Vulkan; prefer GL by default.
+<a href=#443 id=443 data-nosnippet>443</a>        </span><span class="kw">return </span>wgpu::Backends::GL;
+<a href=#444 id=444 data-nosnippet>444</a>    }
+<a href=#445 id=445 data-nosnippet>445</a>
+<a href=#446 id=446 data-nosnippet>446</a>    wgpu::Backends::PRIMARY
+<a href=#447 id=447 data-nosnippet>447</a>}
 </code></pre></div></section></main></body></html>
