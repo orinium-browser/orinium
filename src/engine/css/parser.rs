@@ -101,11 +101,23 @@ pub struct Selector {
     /// Class selectors (e.g. `.container`)
     pub classes: Vec<String>,
 
+    /// Attribute selectors (e.g. `[hidden]`, `[type="text"]`)
+    pub attributes: Vec<AttributeSelector>,
+
     /// Pseudo-class (e.g. `:hover`)
     pub pseudo_class: Option<String>,
 
     /// Pseudo-element (e.g. `::before`)
     pub pseudo_element: Option<String>,
+}
+
+/// An attribute-presence or exact-value selector.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AttributeSelector {
+    /// Attribute name to match.
+    pub name: String,
+    /// Required exact value, or `None` for a presence selector.
+    pub value: Option<String>,
 }
 
 /// Combinator defining the relationship between selectors.
@@ -589,6 +601,7 @@ impl<'a> Parser<'a> {
                         tag: None,
                         id: None,
                         classes: vec![],
+                        attributes: vec![],
                         pseudo_class: None,
                         pseudo_element: None,
                     });
@@ -605,6 +618,7 @@ impl<'a> Parser<'a> {
                         tag: None,
                         id: None,
                         classes: vec![],
+                        attributes: vec![],
                         pseudo_class: None,
                         pseudo_element: None,
                     });
@@ -619,6 +633,7 @@ impl<'a> Parser<'a> {
                             tag: None,
                             id: None,
                             classes: vec![],
+                            attributes: vec![],
                             pseudo_class: None,
                             pseudo_element: None,
                         });
@@ -636,6 +651,7 @@ impl<'a> Parser<'a> {
                                 tag: None,
                                 id: None,
                                 classes: vec![],
+                                attributes: vec![],
                                 pseudo_class: None,
                                 pseudo_element: None,
                             });
@@ -646,10 +662,56 @@ impl<'a> Parser<'a> {
                             tag: None,
                             id: None,
                             classes: vec![],
+                            attributes: vec![],
                             pseudo_class: None,
                             pseudo_element: None,
                         });
                         sel.pseudo_class = Some(name);
+                    }
+                }
+
+                Token::Delim('[') => {
+                    self.consume_token();
+                    while matches!(self.peek_token(), Token::Whitespace | Token::Comment(_)) {
+                        self.consume_token();
+                    }
+
+                    let name = match self.consume_token() {
+                        Token::Ident(name) => name,
+                        _ => continue,
+                    };
+
+                    while matches!(self.peek_token(), Token::Whitespace | Token::Comment(_)) {
+                        self.consume_token();
+                    }
+
+                    let value = if self.peek_token() == &Token::Delim('=') {
+                        self.consume_token();
+                        while matches!(self.peek_token(), Token::Whitespace | Token::Comment(_)) {
+                            self.consume_token();
+                        }
+                        match self.consume_token() {
+                            Token::Ident(value) | Token::String(value) => Some(value),
+                            _ => continue,
+                        }
+                    } else {
+                        None
+                    };
+
+                    while matches!(self.peek_token(), Token::Whitespace | Token::Comment(_)) {
+                        self.consume_token();
+                    }
+                    if self.peek_token() == &Token::Delim(']') {
+                        self.consume_token();
+                        let sel = current_selector.get_or_insert_with(|| Selector {
+                            tag: None,
+                            id: None,
+                            classes: vec![],
+                            attributes: vec![],
+                            pseudo_class: None,
+                            pseudo_element: None,
+                        });
+                        sel.attributes.push(AttributeSelector { name, value });
                     }
                 }
 
@@ -670,6 +732,7 @@ impl<'a> Parser<'a> {
                         tag: None,
                         id: None,
                         classes: vec![],
+                        attributes: vec![],
                         pseudo_class: None,
                         pseudo_element: None,
                     });
@@ -914,4 +977,29 @@ fn fmt_tree_node(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_exact_attribute_selector() {
+        let stylesheet = Parser::new(r#"input[type="hidden"] { display: none; }"#)
+            .parse()
+            .unwrap();
+        let CssNodeType::Rule { selectors } = stylesheet.children()[0].node() else {
+            panic!("expected CSS rule");
+        };
+        let selector = &selectors[0].parts[0].selector;
+
+        assert_eq!(selector.tag.as_deref(), Some("input"));
+        assert_eq!(
+            selector.attributes,
+            vec![AttributeSelector {
+                name: "type".into(),
+                value: Some("hidden".into()),
+            }]
+        );
+    }
 }

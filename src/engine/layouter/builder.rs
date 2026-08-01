@@ -163,6 +163,10 @@ pub fn build_layout_and_info_with_images(
                 tag_name: tag_name.clone(),
                 id,
                 classes: class_list,
+                attributes: attributes
+                    .iter()
+                    .map(|attr| (attr.name.clone(), attr.value.clone()))
+                    .collect(),
             },
         );
     }
@@ -520,6 +524,10 @@ pub fn build_layout_and_info_with_images(
                                 tag_name: tag_name.clone(),
                                 id,
                                 classes: class_list,
+                                attributes: attributes
+                                    .iter()
+                                    .map(|attr| (attr.name.clone(), attr.value.clone()))
+                                    .collect(),
                             },
                         );
                     }
