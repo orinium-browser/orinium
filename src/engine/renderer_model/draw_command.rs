@@ -4,6 +4,10 @@
 //! paths in [`crate::engine::renderer_model::path`], and the layout → command
 //! generation in [`crate::engine::renderer_model::box_model`].
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use anyhow::{Context, Result};
 use smol_str::SmolStr;
 
 use crate::engine::layouter::types::{Color, Gradient, TextStyle};
@@ -26,6 +30,73 @@ pub enum FillRule {
 pub enum Brush {
     Solid(Color),
     Gradient(Gradient),
+    /// A decoded RGBA image sampled across the fill path's bounds.
+    Image(Image),
+}
+
+/// Decoded image pixels shared between the engine and platform renderer.
+#[derive(Debug, Clone)]
+pub struct Image {
+    id: u64,
+    width: u32,
+    height: u32,
+    rgba: Arc<[u8]>,
+}
+
+impl Image {
+    /// Decodes encoded image bytes into RGBA8 pixels.
+    ///
+    /// Returns an error when the bytes are not a supported image format.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let decoded = image::load_from_memory(bytes).context("failed to decode image")?;
+        let rgba = decoded.to_rgba8();
+        let (width, height) = rgba.dimensions();
+        Self::from_rgba(width, height, rgba.into_raw())
+    }
+
+    /// Creates an image from decoded RGBA8 pixels.
+    ///
+    /// Returns an error when the byte length does not match the dimensions.
+    pub fn from_rgba(width: u32, height: u32, rgba: Vec<u8>) -> Result<Self> {
+        static NEXT_IMAGE_ID: AtomicU64 = AtomicU64::new(1);
+
+        let expected_len = (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .context("image dimensions exceed addressable memory")?;
+        if rgba.len() != expected_len {
+            anyhow::bail!(
+                "invalid RGBA byte length: expected {expected_len}, got {}",
+                rgba.len()
+            );
+        }
+        Ok(Self {
+            id: NEXT_IMAGE_ID.fetch_add(1, Ordering::Relaxed),
+            width,
+            height,
+            rgba: Arc::from(rgba),
+        })
+    }
+
+    /// Returns the renderer-unique image identifier.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// Returns the decoded image width in pixels.
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// Returns the decoded image height in pixels.
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// Returns the decoded RGBA8 pixel bytes.
+    pub fn rgba(&self) -> &[u8] {
+        &self.rgba
+    }
 }
 
 /// How a path is painted: the brush plus an opacity multiplier.
