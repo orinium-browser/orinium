@@ -194,6 +194,18 @@ impl ApplicationHandler for MultiWindowApp {
                 state.window.request_redraw();
                 self.windows.insert(new_id, state);
             }
+            BrowserCommand::SetImeAllowed { allowed, position } => {
+                if let Some(state) = self.windows.get(&window_id) {
+                    state.window.set_ime_allowed(allowed);
+                    if allowed {
+                        state.window.set_ime_cursor_area(
+                            winit::dpi::PhysicalPosition::new(position.0, position.1 + 24.0),
+                            winit::dpi::PhysicalSize::new(1.0, 1.0),
+                        );
+                    }
+                    state.window.request_redraw();
+                }
+            }
             BrowserCommand::None => {}
         }
     }

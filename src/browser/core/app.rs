@@ -623,8 +623,11 @@ impl BrowserApp {
             return BrowserCommand::None;
         };
         if let Some(tab) = ui.tabs.get_mut(tab_id) {
-            Self::handle_mouse_click(tab, (x / sf) as f32, (y / sf) as f32);
-            BrowserCommand::RequestRedraw
+            let input_focused = Self::handle_mouse_click(tab, (x / sf) as f32, (y / sf) as f32);
+            BrowserCommand::SetImeAllowed {
+                allowed: input_focused,
+                position: (x, y),
+            }
         } else {
             BrowserCommand::None
         }

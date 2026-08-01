@@ -3,6 +3,7 @@
 use std::rc::Rc;
 
 use super::layouter::types::{InfoNode, NodeKind};
+use super::ui::custom_bridge::get_custom_inline_result;
 use super::ui::custom_node::{CustomNode, TextInputEvent};
 use ui_layout::LayoutNode;
 
@@ -65,6 +66,26 @@ pub fn hit_test<'a>(layout: &'a LayoutNode, info: &'a InfoNode, x: f32, y: f32) 
                     path.push(HitItem { layout, info });
                     return path;
                 }
+            } else if child_layout.object().is_some()
+                && let NodeKind::Custom {
+                    layout_id: Some(layout_id),
+                    ..
+                } = &child_info.kind
+                && let Some(result) = get_custom_inline_result(*layout_id)
+                && result.spans.iter().any(|span| {
+                    local_x >= span.x_range.start
+                        && local_x <= span.x_range.end
+                        && local_y >= span.line_pos.1
+                        && local_y <= span.line_pos.1 + result.height
+                })
+            {
+                return vec![
+                    HitItem {
+                        layout,
+                        info: child_info,
+                    },
+                    HitItem { layout, info },
+                ];
             }
         }
 
