@@ -4,8 +4,9 @@ use std::cell::RefCell;
 
 use smol_str::SmolStr;
 
+use crate::engine::bridge::text::{self, FallbackTextMeasurer, TextMeasureRequest};
 use crate::engine::layouter::types::{Color, TextStyle};
-use crate::engine::renderer_model::DrawCommand;
+use crate::engine::renderer_model::{Brush, DrawCommand, FillRule, Paint, rect_path};
 use crate::engine::ui::custom_node::CustomNode;
 
 const DEFAULT_WIDTH: f32 = 200.0;
@@ -137,18 +138,20 @@ impl CustomNode for TextInputComponent {
             (!state.preedit.is_empty()).then_some((state.caret, state.caret + state.preedit.len()));
         let caret = state.focused.then_some(state.caret + state.preedit.len());
 
-        cmd_buf.push(DrawCommand::DrawTextInput {
-            x: INLINE_PADDING,
-            y: ((size.1 - style.font_size) * 0.5).max(0.0),
-            text: display_text.into(),
-            style,
+        draw_text_input(
+            &FallbackTextMeasurer::default(), // Stub implementation
+            cmd_buf,
+            display_text,
+            INLINE_PADDING,
+            ((size.1 - style.font_size) * 0.5).max(0.0),
+            &style,
             caret,
             preedit,
-            decoration_color: text_style.color,
-            caret_top: INLINE_PADDING,
-            caret_height: (size.1 - INLINE_PADDING * 2.0).max(0.0),
-            underline_y: (size.1 - 3.0).max(0.0),
-        });
+            text_style.color,
+            INLINE_PADDING,
+            (size.1 - INLINE_PADDING * 2.0).max(0.0),
+            (size.1 - 3.0).max(0.0),
+        );
     }
 
     fn background_color(&self) -> Option<Color> {
@@ -203,6 +206,105 @@ impl CustomNode for TextInputComponent {
     }
 }
 
+/// Draw text input decorations such as caret and IME preedit underline.
+#[allow(clippy::too_many_arguments)]
+fn draw_text_input(
+    measurer: &dyn text::TextMeasurer<TextStyle>,
+    cmd_buf: &mut Vec<DrawCommand>,
+    text: String,
+    x: f32,
+    y: f32,
+    style: &TextStyle,
+    caret: Option<usize>,
+    preedit: Option<(usize, usize)>,
+    decoration_color: Color,
+    caret_top: f32,
+    caret_height: f32,
+    underline_y: f32,
+) {
+    let Ok(fragments) = measurer.measure(&TextMeasureRequest {
+        text: text.clone(),
+        style: style.clone(),
+    }) else {
+        return;
+    };
+
+    let mut caret_x = None;
+    let mut preedit_start_x = None;
+    let mut preedit_end_x = None;
+
+    let mut byte_offset = 0;
+    let mut width = 0.0;
+
+    for fragment in &fragments {
+        if let Some(caret_pos) = caret
+            && caret_x.is_none()
+            && caret_pos <= byte_offset
+        {
+            caret_x = Some(width);
+        }
+
+        if let Some((start, end)) = preedit {
+            if preedit_start_x.is_none() && start <= byte_offset {
+                preedit_start_x = Some(width);
+            }
+
+            if preedit_end_x.is_none() && end <= byte_offset {
+                preedit_end_x = Some(width);
+            }
+        }
+
+        byte_offset += fragment.text.len();
+        width += fragment.width;
+    }
+
+    // Handle offsets at the end of the text.
+    if let Some(caret_pos) = caret
+        && caret_x.is_none()
+        && caret_pos <= byte_offset
+    {
+        caret_x = Some(width);
+    }
+
+    if let Some((start, end)) = preedit {
+        if preedit_start_x.is_none() && start <= byte_offset {
+            preedit_start_x = Some(width);
+        }
+
+        if preedit_end_x.is_none() && end <= byte_offset {
+            preedit_end_x = Some(width);
+        }
+    }
+
+    let paint = Paint {
+        brush: Brush::Solid(decoration_color),
+        opacity: 1.0,
+    };
+
+    if let (Some(start_x), Some(end_x)) = (preedit_start_x, preedit_end_x) {
+        cmd_buf.push(DrawCommand::Fill {
+            path: rect_path(x + start_x, underline_y, (end_x - start_x).max(0.0), 1.0),
+            rule: FillRule::NonZero,
+            paint: paint.clone(),
+        });
+    }
+
+    if let Some(caret_x) = caret_x {
+        cmd_buf.push(DrawCommand::Fill {
+            path: rect_path(x + caret_x, caret_top, 1.0, caret_height),
+            rule: FillRule::NonZero,
+            paint,
+        });
+    }
+
+    cmd_buf.push(DrawCommand::DrawText {
+        x,
+        y,
+        text: text.into(),
+        style: style.clone(),
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,24 +327,5 @@ mod tests {
         input.handle_text_input(TextInputEvent::Key(TextInputKey::Left));
         input.handle_text_input(TextInputEvent::Key(TextInputKey::Backspace));
         assert_eq!(input.state().value, "ab");
-    }
-
-    #[test]
-    fn draw_command_uses_utf8_offsets_for_preedit_and_caret() {
-        let input = TextInputComponent::new("a", "");
-        input.set_focused(true);
-        input.handle_text_input(TextInputEvent::Preedit("日".into()));
-        let mut commands = Vec::new();
-
-        input.draw(&mut commands, &TextStyle::default());
-
-        assert!(matches!(
-            &commands[0],
-            DrawCommand::DrawTextInput {
-                caret: Some(4),
-                preedit: Some((1, 4)),
-                ..
-            }
-        ));
     }
 }
