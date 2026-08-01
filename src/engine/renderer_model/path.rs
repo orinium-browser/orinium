@@ -1,7 +1,7 @@
 //! Path model for the renderer: a sequence of move/line/curve commands with
 //! helpers for bounding boxes and polygon conversion for GPU rasterization.
 
-use crate::engine::renderer_model::draw_command::Rect;
+use crate::engine::renderer_model::geom::Rect;
 
 /// A single path drawing command.
 #[derive(Debug, Clone)]
