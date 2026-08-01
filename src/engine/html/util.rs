@@ -18,6 +18,8 @@ use entities::{Codepoints, ENTITIES};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
+pub const MAX_ENTITY_NAME_LEN: usize = 31;
+
 static NAMED_ENTITIES: Lazy<HashMap<&'static str, String>> = Lazy::new(|| {
     let mut map = HashMap::new();
     for ent in ENTITIES.iter() {

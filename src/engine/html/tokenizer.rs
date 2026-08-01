@@ -1,6 +1,6 @@
 //! HTML tokenizer. Converts raw HTML input into token stream.
 
-use super::util::decode_entity;
+use super::util::{MAX_ENTITY_NAME_LEN, decode_entity};
 
 /// Represents a single HTML attribute
 #[derive(Debug, Clone, PartialEq)]
@@ -259,6 +259,19 @@ impl<'a> Tokenizer<'a> {
             let entity = iter.next().unwrap_or("");
 
             let decoded = decode_entity(entity).unwrap_or_else(|| format!("&{};", entity));
+
+            match &mut self.current_token {
+                Some(Token::Text(text)) => text.push_str(&decoded),
+                _ => self.current_token = Some(Token::Text(decoded)),
+            }
+
+            self.buffer.clear();
+            self.state = TokenizerState::Data;
+        } else if self.buffer.len() > MAX_ENTITY_NAME_LEN || self.input[self.pos..].starts_with('<')
+        {
+            let mut iter = self.buffer.rsplitn(2, '&');
+            let entity = iter.next().unwrap_or("");
+            let decoded = format!("&{}", entity);
 
             match &mut self.current_token {
                 Some(Token::Text(text)) => text.push_str(&decoded),
