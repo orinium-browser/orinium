@@ -3,6 +3,8 @@
 use crate::engine::layouter::types::{Color, TextStyle};
 use crate::engine::renderer_model::DrawCommand;
 
+use super::text_input::TextInputEvent;
+
 /// Trait for custom/replaced elements that produce their own draw commands.
 ///
 /// # Coordinate System
@@ -52,6 +54,29 @@ pub trait CustomNode: std::fmt::Debug + 'static {
     /// Whether one resolved dimension should scale the other dimension using
     /// the node's intrinsic aspect ratio.
     fn preserves_intrinsic_aspect_ratio(&self) -> bool {
+        false
+    }
+
+    /// Whether this node can receive keyboard and IME text input.
+    fn accepts_text_input(&self) -> bool {
+        false
+    }
+
+    /// Updates keyboard focus for this node.
+    fn set_focused(&self, _focused: bool) {}
+
+    /// Returns whether this node currently owns keyboard focus.
+    fn is_focused(&self) -> bool {
+        false
+    }
+
+    /// Applies a platform-neutral text editing event.
+    fn handle_text_input(&self, _event: TextInputEvent) -> bool {
+        false
+    }
+
+    /// Returns whether an IME preedit string is active.
+    fn is_composing(&self) -> bool {
         false
     }
 }

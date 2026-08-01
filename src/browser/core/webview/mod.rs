@@ -157,10 +157,14 @@ impl WebView {
 
         match self.phase {
             PagePhase::Init => {
-                self.resolved_styles
-                    .extend(layouter::css_resolver::CssResolver::resolve(
-                        &CssParser::new(USER_AGENT_CSS).parse().unwrap(),
-                    ));
+                let ua_styles = layouter::css_resolver::CssResolver::resolve_with_origin(
+                    &CssParser::new(USER_AGENT_CSS).parse().unwrap(),
+                    layouter::css_resolver::StyleOrigin::UserAgent,
+                );
+                layouter::css_resolver::append_resolved_styles(
+                    &mut self.resolved_styles,
+                    ua_styles,
+                );
 
                 tasks.push(WebViewTask::AskTabHtml);
 
@@ -234,8 +238,10 @@ impl WebView {
 
         for inline_css in &parsed.inline_styles {
             if let Ok(sheet) = CssParser::new(inline_css).parse() {
-                self.resolved_styles
-                    .extend(layouter::css_resolver::CssResolver::resolve(&sheet));
+                layouter::css_resolver::append_resolved_styles(
+                    &mut self.resolved_styles,
+                    layouter::css_resolver::CssResolver::resolve(&sheet),
+                );
             }
         }
 
@@ -281,7 +287,7 @@ impl WebView {
         &mut self,
         resolved: layouter::css_resolver::ResolvedStyles,
     ) {
-        self.resolved_styles.extend(resolved);
+        layouter::css_resolver::append_resolved_styles(&mut self.resolved_styles, resolved);
         self.update_layout();
     }
 

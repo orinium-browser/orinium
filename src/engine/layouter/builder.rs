@@ -31,9 +31,10 @@ use crate::engine::ui::button::ButtonComponent;
 use crate::engine::ui::custom_bridge::{CustomInlineBridge, CustomLayoutBridge};
 use crate::engine::ui::custom_node::CustomNode;
 use crate::engine::ui::image::ImageComponent;
+use crate::engine::ui::text_input::TextInputComponent;
 
 /// Tags that produce a [`NodeKind::Custom`] instead of a normal container.
-const CUSTOM_TAGS: &[&str] = &["button", "img"];
+const CUSTOM_TAGS: &[&str] = &["button", "img", "input"];
 
 const DEFAULT_LINE_FACTOR: f32 = 1.2;
 
@@ -162,6 +163,10 @@ pub fn build_layout_and_info_with_images(
                 tag_name: tag_name.clone(),
                 id,
                 classes: class_list,
+                attributes: attributes
+                    .iter()
+                    .map(|attr| (attr.name.clone(), attr.value.clone()))
+                    .collect(),
             },
         );
     }
@@ -217,11 +222,11 @@ pub fn build_layout_and_info_with_images(
 
             // Apply CSS declarations.
             if let Some(candidates) = &candidates {
-                for (name, (value, _, _)) in candidates {
+                for (name, declaration) in candidates {
                     if !name.starts_with("--") {
                         apply_declaration(
                             name,
-                            value,
+                            &declaration.value,
                             &mut style,
                             &mut container_style,
                             &mut text_style,
@@ -309,6 +314,12 @@ pub fn build_layout_and_info_with_images(
                             .cloned();
                         std::rc::Rc::new(ImageComponent { image })
                     }
+                    // ToDo:
+                    // Replace stub TextInputComponent to InputComponent
+                    "input" => std::rc::Rc::new(TextInputComponent::new(
+                        html_node.get_attr("value").unwrap_or_default(),
+                        html_node.get_attr("placeholder").unwrap_or_default(),
+                    )),
                     _ => unreachable!(),
                 };
 
@@ -515,6 +526,10 @@ pub fn build_layout_and_info_with_images(
                                 tag_name: tag_name.clone(),
                                 id,
                                 classes: class_list,
+                                attributes: attributes
+                                    .iter()
+                                    .map(|attr| (attr.name.clone(), attr.value.clone()))
+                                    .collect(),
                             },
                         );
                     }
@@ -680,25 +695,20 @@ fn create_text_node(
 fn collect_candidates(
     resolved_styles: &ResolvedStyles,
     chain: &ElementChain,
-) -> HashMap<String, (CssValue, (u32, u32, u32), usize)> {
-    let mut candidates: HashMap<String, (CssValue, (u32, u32, u32), usize)> = HashMap::new();
+) -> HashMap<String, super::css_resolver::ResolvedDeclaration> {
+    let mut candidates = HashMap::new();
 
     for decl in resolved_styles {
         if decl.selector.matches(chain) {
             let entry = candidates.get(&decl.name);
 
             let should_replace = match entry {
+                Some(current) => decl.outranks(current),
                 None => true,
-                Some((_, spec, order)) => {
-                    decl.specificity > *spec || (decl.specificity == *spec && decl.order > *order)
-                }
             };
 
             if should_replace {
-                candidates.insert(
-                    decl.name.clone(),
-                    (decl.value.clone(), decl.specificity, decl.order),
-                );
+                candidates.insert(decl.name.clone(), decl.clone());
             }
         }
     }

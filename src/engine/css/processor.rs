@@ -2,7 +2,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
 use super::parser::Parser as CssParser;
-use crate::engine::layouter::css_resolver::{CssResolver, ResolvedStyles};
+use crate::engine::layouter::css_resolver::{CssResolver, ResolvedStyles, append_resolved_styles};
 
 enum CssCommand {
     Process { css_sources: Vec<String> },
@@ -56,7 +56,7 @@ impl CssProcessor {
                 }
             };
 
-            resolved.extend(CssResolver::resolve(&sheet));
+            append_resolved_styles(&mut resolved, CssResolver::resolve(&sheet));
         }
 
         resolved

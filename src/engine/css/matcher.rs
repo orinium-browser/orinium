@@ -7,14 +7,21 @@ pub struct ElementInfo {
     pub tag_name: String,
     pub id: Option<String>,
     pub classes: Vec<String>,
+    pub attributes: Vec<(String, String)>,
 }
 
 /// 右（自分）→ 左（祖先）
 pub type ElementChain = Vec<ElementInfo>;
 
 impl Selector {
-    /// Simple selector matcher (tag / class / id)
-    pub fn matches(&self, tag_name: &str, id: Option<&str>, class_list: &[String]) -> bool {
+    /// Matches this simple selector against one element.
+    pub fn matches(
+        &self,
+        tag_name: &str,
+        id: Option<&str>,
+        class_list: &[String],
+        attributes: &[(String, String)],
+    ) -> bool {
         // tag
         if let Some(tag) = &self.tag
             && tag != tag_name
@@ -34,6 +41,18 @@ impl Selector {
         for class in &self.classes {
             if !class_list.iter().any(|c| c == class) {
                 return false;
+            }
+        }
+
+        for expected in &self.attributes {
+            let actual = attributes
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(&expected.name));
+            match (&expected.value, actual) {
+                (None, Some(_)) => {}
+                (Some(expected_value), Some((_, actual_value)))
+                    if actual_value == expected_value => {}
+                _ => return false,
             }
         }
 
@@ -63,10 +82,12 @@ impl ComplexSelector {
         let element = &chain[chain_index];
         let part = &self.parts[selector_index];
 
-        if !part
-            .selector
-            .matches(&element.tag_name, element.id.as_deref(), &element.classes)
-        {
+        if !part.selector.matches(
+            &element.tag_name,
+            element.id.as_deref(),
+            &element.classes,
+            &element.attributes,
+        ) {
             return false;
         }
 
@@ -99,12 +120,66 @@ impl ComplexSelector {
             if sel.id.is_some() {
                 a += 1;
             }
-            b += sel.classes.len() as u32;
+            b += (sel.classes.len() + sel.attributes.len()) as u32;
             if sel.tag.is_some() {
                 c += 1;
             }
         }
 
         (a, b, c)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::css::parser::{AttributeSelector, SelectorPart};
+
+    fn input_selector(value: Option<&str>) -> ComplexSelector {
+        ComplexSelector {
+            parts: vec![SelectorPart {
+                selector: Selector {
+                    tag: Some("input".into()),
+                    id: None,
+                    classes: Vec::new(),
+                    attributes: vec![AttributeSelector {
+                        name: "type".into(),
+                        value: value.map(Into::into),
+                    }],
+                    pseudo_class: None,
+                    pseudo_element: None,
+                },
+                combinator: None,
+            }],
+        }
+    }
+
+    fn input(attributes: &[(&str, &str)]) -> ElementInfo {
+        ElementInfo {
+            tag_name: "input".into(),
+            id: None,
+            classes: Vec::new(),
+            attributes: attributes
+                .iter()
+                .map(|(name, value)| ((*name).into(), (*value).into()))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn exact_attribute_selector_requires_matching_value() {
+        let selector = input_selector(Some("hidden"));
+
+        assert!(selector.matches(&[input(&[("type", "hidden")])]));
+        assert!(!selector.matches(&[input(&[])]));
+        assert!(!selector.matches(&[input(&[("type", "text")])]));
+    }
+
+    #[test]
+    fn presence_attribute_selector_requires_attribute() {
+        let selector = input_selector(None);
+
+        assert!(selector.matches(&[input(&[("type", "text")])]));
+        assert!(!selector.matches(&[input(&[])]));
     }
 }
