@@ -318,11 +318,18 @@ impl BrowserApp {
                             let css = String::from_utf8_lossy(&resp.body).to_string();
                             tab.on_fetch_succeeded_css(css);
                         }
+                        FetchKind::Image { source } => {
+                            tab.on_fetch_succeeded_image(source, &resp.body);
+                        }
                     }
                 }
                 Err(err) => {
                     log::error!("NetworkError: {}", err);
-                    tab.on_fetch_failed(err, url);
+                    if matches!(kind, FetchKind::Image { .. }) {
+                        log::warn!("Image fetch failed without aborting page load: {}", url);
+                    } else {
+                        tab.on_fetch_failed(err, url);
+                    }
                 }
             }
         }

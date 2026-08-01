@@ -13,7 +13,9 @@ use smol_str::SmolStr;
 use crate::engine::layouter::types::{
     Color, ColorStop, Gradient, GradientKind, RadialShape, RadialSizeKind, TextStyle,
 };
-use crate::engine::renderer_model::{AffineTransform, Brush, DrawCommand, Paint, Path, Rect};
+use crate::engine::renderer_model::{
+    AffineTransform, Brush, DrawCommand, Image, Paint, Path, Rect,
+};
 
 /// A single vertex: NDC position plus linear-space color.
 #[repr(C)]
@@ -32,6 +34,15 @@ pub struct TextSection {
     pub layout: Arc<TextLayout>,
 }
 
+/// A clipped image rectangle ready for the textured GPU pipeline.
+#[derive(Clone)]
+pub struct ImageSection {
+    pub image: Image,
+    pub rect: Rect,
+    pub uv: Rect,
+    pub opacity: f32,
+}
+
 /// Source of pre-laid-out text, decoupled from the [`MeshBuilder`] so that the
 /// geometry layer stays free of font-system / GPU state.
 pub trait TextLayoutSource {
@@ -43,6 +54,7 @@ pub trait TextLayoutSource {
 pub struct Mesh {
     pub vertices: Vec<Vertex>,
     pub sections: Vec<TextSection>,
+    pub images: Vec<ImageSection>,
 }
 
 /// An axis-aligned clip region in logical (pre-scale-factor) coordinates.
@@ -85,6 +97,7 @@ impl MeshBuilder {
             mesh: Mesh {
                 vertices: Vec::new(),
                 sections: Vec::new(),
+                images: Vec::new(),
             },
             transform_stack: vec![AffineTransform::identity()],
             clip_stack: vec![ClipRect {
@@ -122,6 +135,7 @@ impl MeshBuilder {
     ) -> &Mesh {
         self.mesh.vertices.clear();
         self.mesh.sections.clear();
+        self.mesh.images.clear();
 
         self.transform_stack.clear();
         self.transform_stack.push(AffineTransform::identity());
@@ -366,6 +380,29 @@ impl MeshBuilder {
                         }
                     }
                 }
+            }
+            Brush::Image(image) => {
+                let x1 = min_x.max(clip_l);
+                let y1 = min_y.max(clip_t);
+                let x2 = max_x.min(clip_r);
+                let y2 = max_y.min(clip_b);
+                if x2 <= x1 || y2 <= y1 {
+                    return;
+                }
+
+                let width = max_x - min_x;
+                let height = max_y - min_y;
+                self.mesh.images.push(ImageSection {
+                    image: image.clone(),
+                    rect: Rect::new(x1, y1, x2 - x1, y2 - y1),
+                    uv: Rect::new(
+                        (x1 - min_x) / width,
+                        (y1 - min_y) / height,
+                        (x2 - x1) / width,
+                        (y2 - y1) / height,
+                    ),
+                    opacity: paint.opacity,
+                });
             }
         }
     }
@@ -1512,6 +1549,41 @@ mod tests {
             },
             rule: crate::engine::renderer_model::FillRule::NonZero,
         }
+    }
+
+    #[test]
+    fn test_image_fill_preserves_uv_when_clipped() {
+        let mut builder = MeshBuilder::new(100.0, 100.0, 1.0);
+        let mut text: Option<&mut dyn TextLayoutSource> = Some(&mut NoText);
+        let image = Image::from_rgba(2, 2, vec![255; 16]).unwrap();
+        let commands = [
+            DrawCommand::PushClip {
+                path: rect_path(25.0, 25.0, 50.0, 50.0),
+                rule: crate::engine::renderer_model::FillRule::NonZero,
+            },
+            DrawCommand::Fill {
+                path: rect_path(0.0, 0.0, 100.0, 100.0),
+                paint: Paint {
+                    brush: Brush::Image(image),
+                    opacity: 0.5,
+                },
+                rule: crate::engine::renderer_model::FillRule::NonZero,
+            },
+            DrawCommand::PopClip,
+        ];
+
+        let mesh = builder.build(&commands, &mut text);
+        assert_eq!(mesh.images.len(), 1);
+        let section = &mesh.images[0];
+        assert_eq!(section.rect.x, 25.0);
+        assert_eq!(section.rect.y, 25.0);
+        assert_eq!(section.rect.width, 50.0);
+        assert_eq!(section.rect.height, 50.0);
+        assert_eq!(section.uv.x, 0.25);
+        assert_eq!(section.uv.y, 0.25);
+        assert_eq!(section.uv.width, 0.5);
+        assert_eq!(section.uv.height, 0.5);
+        assert_eq!(section.opacity, 0.5);
     }
 
     #[test]

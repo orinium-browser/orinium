@@ -552,7 +552,11 @@ pub fn generate_draw_commands(
                 ));
             }
 
-            node.draw(cmd_buf, text_style);
+            let size = layout.layout_box.iter().next().map_or_else(
+                || node.intrinsic_size(),
+                |box_model| (box_model.content_box.width, box_model.content_box.height),
+            );
+            node.draw_sized(cmd_buf, text_style, size);
         }
     }
 
@@ -650,7 +654,7 @@ pub fn generate_draw_commands(
                                 },
                             };
                             push_box_model(cmd_buf, &rect, style_ref, 0.0, 0.0, true);
-                            node.draw(cmd_buf, text_style);
+                            node.draw_sized(cmd_buf, text_style, (cw, ch));
                             pop_box_model(
                                 cmd_buf,
                                 BoxPushState {

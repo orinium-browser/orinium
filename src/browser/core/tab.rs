@@ -146,6 +146,16 @@ impl Tab {
         wv.on_css_fetched(css);
     }
 
+    /// Delivers encoded image bytes to the page that requested them.
+    pub fn on_fetch_succeeded_image(&mut self, source: String, bytes: &[u8]) {
+        let Some(wv) = self.webview.as_mut() else {
+            return;
+        };
+        if let Err(error) = wv.on_image_fetched(source, bytes) {
+            log::warn!("Failed to decode fetched image: {error}");
+        }
+    }
+
     /// Display error page on fetch failure
     pub fn on_fetch_failed(&mut self, err: BrowserNetworkError, failed_url: Url) {
         self.navigate("resource:///error.html".parse().unwrap());

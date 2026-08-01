@@ -7,6 +7,7 @@ use std::sync::Arc;
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
+use super::image::ImageRenderer;
 use super::mesh::{self, MeshBuilder, Vertex};
 use super::text::global_font;
 use super::text::text::TextRenderer;
@@ -36,6 +37,9 @@ pub struct GpuRenderer {
 
     /// テキスト描画用ラッパー
     text_renderer: Option<TextRenderer>,
+
+    /// Decoded page image renderer.
+    image_renderer: ImageRenderer,
 
     /// テキストカリングを有効にする
     enable_text_culling: bool,
@@ -201,6 +205,7 @@ impl GpuRenderer {
                 None
             }
         };
+        let image_renderer = ImageRenderer::new(&device, config.format);
 
         // Enable text culling by default, allow override by env var
         let enable_text_culling = std::env::var("ORINIUM_TEXT_CULL").map_or(true, |v| v != "0");
@@ -221,6 +226,7 @@ impl GpuRenderer {
             ),
             num_vertices: 0,
             text_renderer,
+            image_renderer,
             enable_text_culling,
         })
     }
@@ -262,8 +268,16 @@ impl GpuRenderer {
         let built = self.mesh_builder.build(commands, &mut text_source);
         let vertices = built.vertices.clone();
         let sections = built.sections.clone();
+        let images = built.images.clone();
 
         self.set_vertex_buffer(&vertices);
+        self.image_renderer.prepare(
+            &self.device,
+            &self.queue,
+            &images,
+            self.size.width as f32,
+            self.size.height as f32,
+        );
 
         // テキストセクションをキューに追加
         if let Some(tr) = &mut self.text_renderer {
@@ -334,6 +348,27 @@ impl GpuRenderer {
                 render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
                 render_pass.draw(0..self.num_vertices, 0..1);
             }
+        }
+
+        // Render decoded page images above box fills.
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Image Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+                multiview_mask: None,
+            });
+            self.image_renderer.draw(&mut render_pass);
         }
 
         // テキストをレンダリング

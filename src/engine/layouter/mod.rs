@@ -17,4 +17,4 @@ pub mod css_resolver;
 pub mod text_layouter;
 pub mod types;
 
-pub use builder::{InheritedCss, build_layout_and_info};
+pub use builder::{InheritedCss, build_layout_and_info, build_layout_and_info_with_images};
