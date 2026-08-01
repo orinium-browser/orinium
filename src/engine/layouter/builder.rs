@@ -314,6 +314,8 @@ pub fn build_layout_and_info_with_images(
                             .cloned();
                         std::rc::Rc::new(ImageComponent { image })
                     }
+                    // ToDo:
+                    // Replace stub TextInputComponent to InputComponent
                     "input" => std::rc::Rc::new(TextInputComponent::new(
                         html_node.get_attr("value").unwrap_or_default(),
                         html_node.get_attr("placeholder").unwrap_or_default(),
