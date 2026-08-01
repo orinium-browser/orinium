@@ -187,6 +187,36 @@ impl MeshBuilder {
                     let clip = *self.clip_stack.last().unwrap();
                     self.emit_text(text, *x, *y, tstr, style, &t, &clip);
                 }
+                DrawCommand::DrawTextInput {
+                    x,
+                    y,
+                    text: tstr,
+                    style,
+                    caret,
+                    preedit,
+                    decoration_color,
+                    caret_top,
+                    caret_height,
+                    underline_y,
+                } => {
+                    let t = *self.transform_stack.last().unwrap();
+                    let clip = *self.clip_stack.last().unwrap();
+                    self.emit_text_input(
+                        text,
+                        *x,
+                        *y,
+                        tstr,
+                        style,
+                        *caret,
+                        *preedit,
+                        *decoration_color,
+                        *caret_top,
+                        *caret_height,
+                        *underline_y,
+                        &t,
+                        &clip,
+                    );
+                }
                 DrawCommand::SystemUi { .. } => {
                     // TODO: implement composite/render system UI element
                 }
@@ -470,6 +500,84 @@ impl MeshBuilder {
             bounds: (tw * sf, th * sf),
             layout,
         });
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_text_input(
+        &mut self,
+        text_source: &mut Option<&mut dyn TextLayoutSource>,
+        x: f32,
+        y: f32,
+        text: &SmolStr,
+        style: &TextStyle,
+        caret: Option<usize>,
+        preedit: Option<(usize, usize)>,
+        decoration_color: Color,
+        caret_top: f32,
+        caret_height: f32,
+        underline_y: f32,
+        transform: &AffineTransform,
+        clip: &ClipRect,
+    ) {
+        self.emit_text(text_source, x, y, text, style, transform, clip);
+
+        let sf = self.scale_factor;
+        let mut scaled_style = style.clone();
+        scaled_style.font_size = ((style.font_size * sf) * 64.0).round() / 64.0;
+        let measure_prefix = |source: &mut dyn TextLayoutSource, byte_offset: usize| {
+            text.get(..byte_offset).and_then(|prefix| {
+                if prefix.is_empty() {
+                    Some(0.0)
+                } else {
+                    source
+                        .layout_text(prefix, &scaled_style)
+                        .map(|layout| layout.width / sf)
+                }
+            })
+        };
+
+        let Some(source) = text_source.as_mut() else {
+            return;
+        };
+        let paint = Paint {
+            brush: Brush::Solid(decoration_color),
+            opacity: 1.0,
+        };
+
+        if let Some((start, end)) = preedit
+            && let (Some(start_x), Some(end_x)) = (
+                measure_prefix(&mut **source, start),
+                measure_prefix(&mut **source, end),
+            )
+        {
+            self.emit_fill(
+                transform,
+                clip,
+                &crate::engine::renderer_model::rect_path(
+                    x + start_x,
+                    underline_y,
+                    (end_x - start_x).max(0.0),
+                    1.0,
+                ),
+                &paint,
+            );
+        }
+
+        if let Some(caret) = caret
+            && let Some(caret_x) = measure_prefix(&mut **source, caret)
+        {
+            self.emit_fill(
+                transform,
+                clip,
+                &crate::engine::renderer_model::rect_path(
+                    x + caret_x,
+                    caret_top,
+                    1.0,
+                    caret_height,
+                ),
+                &paint,
+            );
+        }
     }
 }
 
@@ -1052,6 +1160,50 @@ mod tests {
         fn layout_text(&mut self, _text: &str, _style: &TextStyle) -> Option<Arc<TextLayout>> {
             None
         }
+    }
+
+    struct VariableWidthText;
+
+    impl TextLayoutSource for VariableWidthText {
+        fn layout_text(&mut self, text: &str, _style: &TextStyle) -> Option<Arc<TextLayout>> {
+            let width = text
+                .chars()
+                .map(|character| if character.is_ascii() { 5.0 } else { 10.0 })
+                .sum();
+            Some(Arc::new(TextLayout {
+                lines: Vec::new(),
+                width,
+                height: 10.0,
+            }))
+        }
+    }
+
+    #[test]
+    fn text_input_caret_uses_shaped_prefix_width() {
+        let mut builder = MeshBuilder::new(100.0, 100.0, 1.0);
+        let mut source = VariableWidthText;
+        let mut text: Option<&mut dyn TextLayoutSource> = Some(&mut source);
+        let commands = [DrawCommand::DrawTextInput {
+            x: 4.0,
+            y: 0.0,
+            text: "a日b".into(),
+            style: TextStyle::default(),
+            caret: Some(4),
+            preedit: None,
+            decoration_color: Color::default(),
+            caret_top: 2.0,
+            caret_height: 10.0,
+            underline_y: 12.0,
+        }];
+
+        let mesh = builder.build(&commands, &mut text);
+        let caret_x = mesh
+            .vertices
+            .iter()
+            .map(|vertex| (vertex.position[0] + 1.0) * 50.0)
+            .fold(f32::INFINITY, f32::min);
+
+        assert!((caret_x - 19.0).abs() < 0.001);
     }
 
     // ── triangulate ───────────────────────────────────────────────────

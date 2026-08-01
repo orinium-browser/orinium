@@ -124,6 +124,21 @@ pub enum DrawCommand {
         text: SmolStr,
         style: TextStyle,
     },
+    /// Draw single-line input text and decorations using shaped text widths.
+    DrawTextInput {
+        x: f32,
+        y: f32,
+        text: SmolStr,
+        style: TextStyle,
+        /// UTF-8 byte offset at which to draw the caret.
+        caret: Option<usize>,
+        /// UTF-8 byte range occupied by the active IME preedit text.
+        preedit: Option<(usize, usize)>,
+        decoration_color: Color,
+        caret_top: f32,
+        caret_height: f32,
+        underline_y: f32,
+    },
     /// Push a clip region given by a path.
     ///
     /// Non-rectangular paths are approximated by their bounding box.

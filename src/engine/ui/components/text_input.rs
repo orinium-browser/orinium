@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use smol_str::SmolStr;
 
 use crate::engine::layouter::types::{Color, TextStyle};
-use crate::engine::renderer_model::{Brush, DrawCommand, FillRule, Paint, rect_path};
+use crate::engine::renderer_model::DrawCommand;
 use crate::engine::ui::custom_node::{CustomNode, TextInputEvent, TextInputKey};
 
 const DEFAULT_WIDTH: f32 = 200.0;
@@ -112,49 +112,22 @@ impl CustomNode for TextInputComponent {
             style.color = Color(128, 128, 128, 255);
         }
 
-        cmd_buf.push(DrawCommand::DrawText {
+        let preedit =
+            (!state.preedit.is_empty()).then_some((state.caret, state.caret + state.preedit.len()));
+        let caret = state.focused.then_some(state.caret + state.preedit.len());
+
+        cmd_buf.push(DrawCommand::DrawTextInput {
             x: INLINE_PADDING,
             y: ((size.1 - style.font_size) * 0.5).max(0.0),
             text: display_text.into(),
-            style: style.clone(),
+            style,
+            caret,
+            preedit,
+            decoration_color: text_style.color,
+            caret_top: INLINE_PADDING,
+            caret_height: (size.1 - INLINE_PADDING * 2.0).max(0.0),
+            underline_y: (size.1 - 3.0).max(0.0),
         });
-
-        if !state.preedit.is_empty() {
-            let prefix_width =
-                state.value[..state.caret].chars().count() as f32 * style.font_size * 0.6;
-            let preedit_width = state.preedit.chars().count() as f32 * style.font_size * 0.6;
-            cmd_buf.push(DrawCommand::Fill {
-                path: rect_path(
-                    INLINE_PADDING + prefix_width,
-                    (size.1 - 3.0).max(0.0),
-                    preedit_width,
-                    1.0,
-                ),
-                paint: Paint {
-                    brush: Brush::Solid(style.color),
-                    opacity: 1.0,
-                },
-                rule: FillRule::NonZero,
-            });
-        }
-
-        if state.focused {
-            let caret_width =
-                state.value[..state.caret].chars().count() as f32 * style.font_size * 0.6;
-            cmd_buf.push(DrawCommand::Fill {
-                path: rect_path(
-                    INLINE_PADDING + caret_width,
-                    INLINE_PADDING,
-                    1.0,
-                    (size.1 - INLINE_PADDING * 2.0).max(0.0),
-                ),
-                paint: Paint {
-                    brush: Brush::Solid(style.color),
-                    opacity: 1.0,
-                },
-                rule: FillRule::NonZero,
-            });
-        }
     }
 
     fn background_color(&self) -> Option<Color> {
@@ -231,5 +204,24 @@ mod tests {
         input.handle_text_input(TextInputEvent::Key(TextInputKey::Left));
         input.handle_text_input(TextInputEvent::Key(TextInputKey::Backspace));
         assert_eq!(input.state().value, "ab");
+    }
+
+    #[test]
+    fn draw_command_uses_utf8_offsets_for_preedit_and_caret() {
+        let input = TextInputComponent::new("a", "");
+        input.set_focused(true);
+        input.handle_text_input(TextInputEvent::Preedit("日".into()));
+        let mut commands = Vec::new();
+
+        input.draw(&mut commands, &TextStyle::default());
+
+        assert!(matches!(
+            &commands[0],
+            DrawCommand::DrawTextInput {
+                caret: Some(4),
+                preedit: Some((1, 4)),
+                ..
+            }
+        ));
     }
 }
