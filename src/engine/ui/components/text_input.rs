@@ -6,11 +6,32 @@ use smol_str::SmolStr;
 
 use crate::engine::layouter::types::{Color, TextStyle};
 use crate::engine::renderer_model::DrawCommand;
-use crate::engine::ui::custom_node::{CustomNode, TextInputEvent, TextInputKey};
+use crate::engine::ui::custom_node::CustomNode;
 
 const DEFAULT_WIDTH: f32 = 200.0;
 const DEFAULT_HEIGHT: f32 = 28.0;
 const INLINE_PADDING: f32 = 4.0;
+
+/// Editing keys understood by engine-owned text inputs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextInputKey {
+    Backspace,
+    Delete,
+    Left,
+    Right,
+    Home,
+    End,
+}
+
+/// Platform-neutral text and IME input delivered to a custom node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TextInputEvent {
+    Insert(String),
+    Preedit(String),
+    Commit(String),
+    Key(TextInputKey),
+    CancelComposition,
+}
 
 /// Mutable editing state for a single-line text input.
 #[derive(Debug, Clone, PartialEq, Eq)]

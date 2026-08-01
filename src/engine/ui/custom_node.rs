@@ -3,26 +3,7 @@
 use crate::engine::layouter::types::{Color, TextStyle};
 use crate::engine::renderer_model::DrawCommand;
 
-/// Editing keys understood by engine-owned text inputs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextInputKey {
-    Backspace,
-    Delete,
-    Left,
-    Right,
-    Home,
-    End,
-}
-
-/// Platform-neutral text and IME input delivered to a custom node.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TextInputEvent {
-    Insert(String),
-    Preedit(String),
-    Commit(String),
-    Key(TextInputKey),
-    CancelComposition,
-}
+use super::text_input::TextInputEvent;
 
 /// Trait for custom/replaced elements that produce their own draw commands.
 ///

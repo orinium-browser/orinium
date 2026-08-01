@@ -4,7 +4,8 @@ use std::rc::Rc;
 
 use super::layouter::types::{InfoNode, NodeKind};
 use super::ui::custom_bridge::get_custom_inline_result;
-use super::ui::custom_node::{CustomNode, TextInputEvent};
+use super::ui::custom_node::CustomNode;
+use super::ui::text_input::TextInputEvent;
 use ui_layout::LayoutNode;
 
 /// ヒットしたノード情報
