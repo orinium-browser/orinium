@@ -31,9 +31,10 @@ use crate::engine::ui::button::ButtonComponent;
 use crate::engine::ui::custom_bridge::{CustomInlineBridge, CustomLayoutBridge};
 use crate::engine::ui::custom_node::CustomNode;
 use crate::engine::ui::image::ImageComponent;
+use crate::engine::ui::text_input::TextInputComponent;
 
 /// Tags that produce a [`NodeKind::Custom`] instead of a normal container.
-const CUSTOM_TAGS: &[&str] = &["button", "img"];
+const CUSTOM_TAGS: &[&str] = &["button", "img", "input"];
 
 const DEFAULT_LINE_FACTOR: f32 = 1.2;
 
@@ -309,6 +310,10 @@ pub fn build_layout_and_info_with_images(
                             .cloned();
                         std::rc::Rc::new(ImageComponent { image })
                     }
+                    "input" => std::rc::Rc::new(TextInputComponent::new(
+                        html_node.get_attr("value").unwrap_or_default(),
+                        html_node.get_attr("placeholder").unwrap_or_default(),
+                    )),
                     _ => unreachable!(),
                 };
 

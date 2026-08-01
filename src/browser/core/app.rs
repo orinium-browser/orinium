@@ -43,6 +43,7 @@ use super::ui::BrowserUi;
 use super::{BrowserCommand, resource_loader::BrowserResourceLoader};
 use crate::engine::layouter;
 use crate::engine::renderer_model::{self, DrawCommand};
+use crate::engine::ui::custom_node::{TextInputEvent, TextInputKey};
 
 use crate::platform::network::NetworkCore;
 use crate::platform::renderer::gpu::GpuRenderer;
@@ -463,6 +464,8 @@ impl BrowserApp {
                 self.handle_keyboard_input(window_id, event)
             }
 
+            WindowEvent::Ime(event) => self.handle_ime_input(window_id, event),
+
             _ => BrowserCommand::None,
         };
         let cmd_from_tick = self.tick(window_id);
@@ -517,7 +520,83 @@ impl BrowserApp {
             return BrowserCommand::OpenNewWindow;
         }
 
-        BrowserCommand::None
+        let tab_id = self.tab_id_for_window(window_id);
+        let Some((_, info)) = self
+            .windows
+            .get(&window_id)
+            .and_then(|ui| ui.tabs.get(tab_id))
+            .and_then(Tab::layout_and_info)
+        else {
+            return BrowserCommand::None;
+        };
+
+        let key = match &event.logical_key {
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Backspace) => {
+                Some(TextInputKey::Backspace)
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Delete) => {
+                Some(TextInputKey::Delete)
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowLeft) => {
+                Some(TextInputKey::Left)
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowRight) => {
+                Some(TextInputKey::Right)
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Home) => {
+                Some(TextInputKey::Home)
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::End) => Some(TextInputKey::End),
+            _ => None,
+        };
+        let handled = if let Some(key) = key {
+            crate::engine::input::dispatch_text_input(info, TextInputEvent::Key(key))
+        } else if !ctrl && !crate::engine::input::focused_text_input_is_composing(info) {
+            event.text.as_ref().is_some_and(|text| {
+                crate::engine::input::dispatch_text_input(
+                    info,
+                    TextInputEvent::Insert(text.to_string()),
+                )
+            })
+        } else {
+            false
+        };
+
+        if handled {
+            BrowserCommand::RequestRedraw
+        } else {
+            BrowserCommand::None
+        }
+    }
+
+    /// Handles IME composition updates for the focused text input.
+    fn handle_ime_input(
+        &mut self,
+        window_id: WindowId,
+        event: winit::event::Ime,
+    ) -> BrowserCommand {
+        let tab_id = self.tab_id_for_window(window_id);
+        let Some((_, info)) = self
+            .windows
+            .get(&window_id)
+            .and_then(|ui| ui.tabs.get(tab_id))
+            .and_then(Tab::layout_and_info)
+        else {
+            return BrowserCommand::None;
+        };
+
+        let event = match event {
+            winit::event::Ime::Preedit(text, _) => TextInputEvent::Preedit(text),
+            winit::event::Ime::Commit(text) => TextInputEvent::Commit(text),
+            winit::event::Ime::Disabled => TextInputEvent::CancelComposition,
+            winit::event::Ime::Enabled => return BrowserCommand::None,
+        };
+
+        if crate::engine::input::dispatch_text_input(info, event) {
+            BrowserCommand::RequestRedraw
+        } else {
+            BrowserCommand::None
+        }
     }
 
     /// Handles mouse input events, mainly left-clicks for the active tab.
@@ -587,11 +666,24 @@ impl BrowserApp {
     }
 
     /// Handles a mouse click in the given tab at the specified coordinates.
-    pub fn handle_mouse_click(tab: &mut Tab, x: f32, y: f32) {
+    pub fn handle_mouse_click(tab: &mut Tab, x: f32, y: f32) -> bool {
         let hit_path = match tab.layout_and_info() {
             Some((layout, info)) => crate::engine::input::hit_test(layout, info, x, y),
-            None => return,
+            None => return false,
         };
+
+        let input_target = hit_path.iter().find_map(|hit| {
+            if let layouter::types::NodeKind::Custom { node, .. } = &hit.info.kind
+                && node.accepts_text_input()
+            {
+                Some(Rc::clone(node))
+            } else {
+                None
+            }
+        });
+        let input_focused = tab.layout_and_info().is_some_and(|(_, info)| {
+            crate::engine::input::focus_text_input(info, input_target.as_ref())
+        });
 
         let href_opt = {
             if let Some(hit) = hit_path.iter().find(|e| {
@@ -616,6 +708,7 @@ impl BrowserApp {
         if let Some(href) = href_opt {
             tab.move_to(&href)
         }
+        input_focused
     }
 
     /// Rebuilds the render tree and sends draw commands to the GPU for the given window.
