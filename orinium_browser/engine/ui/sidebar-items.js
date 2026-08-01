@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["button","container","custom_bridge","custom_node"]};

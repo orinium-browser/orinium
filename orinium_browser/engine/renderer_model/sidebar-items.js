@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["DrawCommand"],"fn":["generate_draw_commands"]};
+window.SIDEBAR_ITEMS = {"enum":["Brush","DrawCommand","FillRule","PathCommand","SystemUiKind"],"fn":["clamp_radii","ellipse_path","generate_draw_commands","polygon_path","rect_path","rounded_rect_path"],"struct":["AffineTransform","Paint","Path","Rect"]};

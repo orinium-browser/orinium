@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["system_font_candidates"]};
