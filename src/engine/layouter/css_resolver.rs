@@ -13,6 +13,15 @@ struct Declaration {
     important: bool,
 }
 
+/// Origin of a declaration in the CSS cascade.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum StyleOrigin {
+    /// Browser-provided default styling.
+    UserAgent,
+    /// Styling supplied by the loaded document.
+    Author,
+}
+
 /// A single CSS declaration after selector resolution and value processing.
 ///
 /// `ResolvedDeclaration` represents one property-value pair that has been
@@ -27,8 +36,10 @@ struct Declaration {
 /// During the cascade phase, multiple `ResolvedDeclaration`s with the same
 /// property name may compete. The winner is determined by comparing:
 ///
-/// 1. `specificity` (higher specificity wins)
-/// 2. `order` (later declarations win)
+/// 1. `important` declarations
+/// 2. cascade `origin`
+/// 3. `specificity` (higher specificity wins)
+/// 4. `order` (later declarations win)
 #[derive(Debug, Clone)]
 pub struct ResolvedDeclaration {
     pub selector: ComplexSelector,
@@ -37,9 +48,36 @@ pub struct ResolvedDeclaration {
     pub specificity: (u32, u32, u32),
     pub order: usize,
     pub important: bool,
+    pub origin: StyleOrigin,
 }
 
 pub type ResolvedStyles = Vec<ResolvedDeclaration>;
+
+impl ResolvedDeclaration {
+    /// Returns whether this declaration wins over another matching declaration.
+    pub fn outranks(&self, other: &Self) -> bool {
+        (self.important, self.origin, self.specificity, self.order)
+            > (
+                other.important,
+                other.origin,
+                other.specificity,
+                other.order,
+            )
+    }
+}
+
+/// Appends resolved declarations while preserving source order across stylesheets.
+pub fn append_resolved_styles(target: &mut ResolvedStyles, mut incoming: ResolvedStyles) {
+    let next_order = target
+        .iter()
+        .map(|declaration| declaration.order)
+        .max()
+        .map_or(0, |order| order + 1);
+    for declaration in &mut incoming {
+        declaration.order += next_order;
+    }
+    target.extend(incoming);
+}
 
 // ============================================================
 //  CssResolver — tree walk + rule resolution
@@ -48,24 +86,35 @@ pub type ResolvedStyles = Vec<ResolvedDeclaration>;
 pub struct CssResolver;
 
 impl CssResolver {
+    /// Resolves an author stylesheet into declarations used by layout.
     pub fn resolve(stylesheet: &CssNode) -> ResolvedStyles {
+        Self::resolve_with_origin(stylesheet, StyleOrigin::Author)
+    }
+
+    /// Resolves a stylesheet using the supplied cascade origin.
+    pub fn resolve_with_origin(stylesheet: &CssNode, origin: StyleOrigin) -> ResolvedStyles {
         let mut styles = Vec::new();
         let mut order = 0;
-        Self::walk(stylesheet, &mut styles, &mut order);
+        Self::walk(stylesheet, &mut styles, &mut order, origin);
         styles
     }
 
-    fn walk(node: &CssNode, styles: &mut ResolvedStyles, order: &mut usize) {
-        Self::resolve_rule(node, styles, order);
+    fn walk(node: &CssNode, styles: &mut ResolvedStyles, order: &mut usize, origin: StyleOrigin) {
+        Self::resolve_rule(node, styles, order, origin);
 
         if Self::should_recurse(node) {
             for child in node.children() {
-                Self::walk(child, styles, order);
+                Self::walk(child, styles, order, origin);
             }
         }
     }
 
-    fn resolve_rule(node: &CssNode, styles: &mut ResolvedStyles, order: &mut usize) {
+    fn resolve_rule(
+        node: &CssNode,
+        styles: &mut ResolvedStyles,
+        order: &mut usize,
+        origin: StyleOrigin,
+    ) {
         let CssNodeType::Rule { selectors } = node.node() else {
             return;
         };
@@ -73,7 +122,7 @@ impl CssResolver {
         let declarations = DeclarationResolver::collect(node);
 
         for selector in selectors {
-            Self::push_resolved(selector, &declarations, styles, order);
+            Self::push_resolved(selector, &declarations, styles, order, origin);
         }
     }
 
@@ -82,6 +131,7 @@ impl CssResolver {
         declarations: &[Declaration],
         styles: &mut ResolvedStyles,
         order: &mut usize,
+        origin: StyleOrigin,
     ) {
         let specificity = selector.specificity();
 
@@ -93,6 +143,7 @@ impl CssResolver {
                 specificity,
                 order: *order,
                 important: decl.important,
+                origin,
             });
             *order += 1;
         }
@@ -112,6 +163,38 @@ impl CssResolver {
         } else {
             true
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::css::parser::Parser;
+
+    fn resolve(css: &str, origin: StyleOrigin) -> ResolvedStyles {
+        let stylesheet = Parser::new(css).parse().unwrap();
+        CssResolver::resolve_with_origin(&stylesheet, origin)
+    }
+
+    #[test]
+    fn author_declaration_outranks_more_specific_user_agent_declaration() {
+        let user_agent = resolve(
+            r#"input[type="text"] { display: inline-block; }"#,
+            StyleOrigin::UserAgent,
+        );
+        let author = resolve("input { display: block; }", StyleOrigin::Author);
+
+        assert!(author[0].outranks(&user_agent[0]));
+    }
+
+    #[test]
+    fn append_rebases_order_across_stylesheets() {
+        let mut styles = resolve("input { display: inline; }", StyleOrigin::Author);
+        let later = resolve("input { display: block; }", StyleOrigin::Author);
+        append_resolved_styles(&mut styles, later);
+
+        assert!(styles[1].order > styles[0].order);
+        assert!(styles[1].outranks(&styles[0]));
     }
 }
 

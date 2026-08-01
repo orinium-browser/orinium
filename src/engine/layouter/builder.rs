@@ -222,11 +222,11 @@ pub fn build_layout_and_info_with_images(
 
             // Apply CSS declarations.
             if let Some(candidates) = &candidates {
-                for (name, (value, _, _)) in candidates {
+                for (name, declaration) in candidates {
                     if !name.starts_with("--") {
                         apply_declaration(
                             name,
-                            value,
+                            &declaration.value,
                             &mut style,
                             &mut container_style,
                             &mut text_style,
@@ -693,25 +693,20 @@ fn create_text_node(
 fn collect_candidates(
     resolved_styles: &ResolvedStyles,
     chain: &ElementChain,
-) -> HashMap<String, (CssValue, (u32, u32, u32), usize)> {
-    let mut candidates: HashMap<String, (CssValue, (u32, u32, u32), usize)> = HashMap::new();
+) -> HashMap<String, super::css_resolver::ResolvedDeclaration> {
+    let mut candidates = HashMap::new();
 
     for decl in resolved_styles {
         if decl.selector.matches(chain) {
             let entry = candidates.get(&decl.name);
 
             let should_replace = match entry {
+                Some(current) => decl.outranks(current),
                 None => true,
-                Some((_, spec, order)) => {
-                    decl.specificity > *spec || (decl.specificity == *spec && decl.order > *order)
-                }
             };
 
             if should_replace {
-                candidates.insert(
-                    decl.name.clone(),
-                    (decl.value.clone(), decl.specificity, decl.order),
-                );
+                candidates.insert(decl.name.clone(), decl.clone());
             }
         }
     }
