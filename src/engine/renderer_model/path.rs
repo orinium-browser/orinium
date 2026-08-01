@@ -164,30 +164,36 @@ impl Path {
             None
         }
     }
-    /// Returns the path as a list of vertices, flattening curved segments
-    /// into line segments, or `None` if the path has fewer than three
-    /// vertices.
+    /// Returns the path flattened into a list of vertices per subpath,
+    /// curving segments into line segments.
     ///
-    /// The GPU rasterizer expects a single, roughly convex subpath; other
-    /// paths (multiple subpaths or concave shapes) may be rendered
-    /// incorrectly.
-    pub fn as_polygon_vertices(&self) -> Option<Vec<(f32, f32)>> {
-        let mut vertices = Vec::new();
-        let mut current: Option<(f32, f32)> = None;
+    /// Each entry is one closed ring (its closing edge back to the first
+    /// point is implicit). Multiple `MoveTo`s yield multiple rings.
+    pub fn subpaths(&self) -> Vec<Vec<(f32, f32)>> {
+        let mut rings: Vec<Vec<(f32, f32)>> = Vec::new();
+        let mut current: Vec<(f32, f32)> = Vec::new();
+        let mut cur_point: Option<(f32, f32)> = None;
 
         for cmd in &self.commands {
             match cmd {
-                PathCommand::MoveTo { x, y } | PathCommand::LineTo { x, y } => {
-                    vertices.push((*x, *y));
-                    current = Some((*x, *y));
+                PathCommand::MoveTo { x, y } => {
+                    if !current.is_empty() {
+                        rings.push(std::mem::take(&mut current));
+                    }
+                    current.push((*x, *y));
+                    cur_point = Some((*x, *y));
+                }
+                PathCommand::LineTo { x, y } => {
+                    current.push((*x, *y));
+                    cur_point = Some((*x, *y));
                 }
                 PathCommand::QuadTo { cx, cy, x, y } => {
-                    if let Some(p0) = current {
-                        flatten_quad(p0, (*cx, *cy), (*x, *y), &mut vertices);
+                    if let Some(p0) = cur_point {
+                        flatten_quad(p0, (*cx, *cy), (*x, *y), &mut current);
                     } else {
-                        vertices.push((*x, *y));
+                        current.push((*x, *y));
                     }
-                    current = Some((*x, *y));
+                    cur_point = Some((*x, *y));
                 }
                 PathCommand::CubicTo {
                     c1x,
@@ -197,23 +203,38 @@ impl Path {
                     x,
                     y,
                 } => {
-                    if let Some(p0) = current {
-                        flatten_cubic(p0, (*c1x, *c1y), (*c2x, *c2y), (*x, *y), &mut vertices);
+                    if let Some(p0) = cur_point {
+                        flatten_cubic(p0, (*c1x, *c1y), (*c2x, *c2y), (*x, *y), &mut current);
                     } else {
-                        vertices.push((*x, *y));
+                        current.push((*x, *y));
                     }
-                    current = Some((*x, *y));
+                    cur_point = Some((*x, *y));
                 }
-                PathCommand::Close => {}
+                PathCommand::Close => {
+                    // The ring's closing edge is implicit; nothing to emit.
+                }
             }
         }
-
-        if vertices.len() < 3 {
-            None
-        } else {
-            Some(vertices)
+        if !current.is_empty() {
+            rings.push(current);
         }
+        rings
     }
+
+    /// Returns the path as a single flat list of vertices, or `None` if the
+    /// path has fewer than three vertices total.
+    ///
+    /// Prefer [`Path::subpaths`] when subpaths must be triangulated
+    /// independently.
+    pub fn as_polygon_vertices(&self) -> Option<Vec<(f32, f32)>> {
+        let rings = self.subpaths();
+        let total: usize = rings.iter().map(Vec::len).sum();
+        if total < 3 {
+            return None;
+        }
+        Some(rings.into_iter().flatten().collect())
+    }
+
     pub fn commands(&self) -> &[PathCommand] {
         &self.commands
     }
@@ -393,11 +414,15 @@ pub(crate) fn append_quarter_ellipse(
     let t = (to.0 - cx, to.1 - cy);
     // In y-down screen coordinates, the sign of the cross product tells us the
     // sweep direction between the two radial vectors.
-    let sign = if f.0 * t.1 - f.1 * t.0 >= 0.0 { 1.0 } else { -1.0 };
+    let sign = if f.0 * t.1 - f.1 * t.0 >= 0.0 {
+        1.0
+    } else {
+        -1.0
+    };
     let fu = (f.0 / rx, f.1 / ry);
     let tu = (t.0 / rx, t.1 / ry);
     let cp1 = (from.0 - sign * k * rx * fu.1, from.1 + sign * k * ry * fu.0);
-    let cp2 = (to.0 - sign * k * rx * tu.1, to.1 + sign * k * ry * tu.0);
+    let cp2 = (to.0 + sign * k * rx * tu.1, to.1 - sign * k * ry * tu.0);
     path.cubic_to(cp1, cp2, to);
 }
 
@@ -518,6 +543,41 @@ mod tests {
     }
 
     #[test]
+    fn test_rounded_rect_corners_on_ellipse() {
+        // Regression: `append_quarter_ellipse` mirrored the second control
+        // point, drifting corner arcs off the true ellipse. The circle stayed
+        // exact because `ellipse_path` inlines its own control points.
+        let path = rounded_rect_path(
+            100.0,
+            100.0,
+            200.0,
+            200.0,
+            (50.0, 50.0),
+            (50.0, 50.0),
+            (50.0, 50.0),
+            (50.0, 50.0),
+        );
+        let verts = path.as_polygon_vertices().unwrap();
+        let corners = [
+            ((150.0, 150.0), (-1.0, -1.0)),
+            ((250.0, 150.0), (1.0, -1.0)),
+            ((250.0, 250.0), (1.0, 1.0)),
+            ((150.0, 250.0), (-1.0, 1.0)),
+        ];
+        for (px, py) in verts {
+            for ((cx, cy), (sx, sy)) in corners {
+                if (px - cx) * sx > 0.0 && (py - cy) * sy > 0.0 {
+                    let v = ((px - cx) / 50.0).powi(2) + ((py - cy) / 50.0).powi(2);
+                    assert!(
+                        (v - 1.0).abs() < 0.01,
+                        "corner point ({px},{py}) not on radius-50 arc: {v}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_quad_curve_flattens() {
         let mut path = Path::new();
         path.move_to(0.0, 0.0);
@@ -569,5 +629,23 @@ mod tests {
         assert!((bb.width - 100.0).abs() < 1e-6);
         assert!((bb.y - 0.0).abs() < 1e-6);
         assert!((bb.height - 50.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_subpaths_split_on_move_to() {
+        let mut path = Path::new();
+        path.move_to(0.0, 0.0);
+        path.line_to(10.0, 0.0);
+        path.line_to(10.0, 10.0);
+        path.close();
+        path.move_to(20.0, 20.0);
+        path.line_to(30.0, 20.0);
+        path.line_to(30.0, 30.0);
+        path.close();
+
+        let rings = path.subpaths();
+        assert_eq!(rings.len(), 2);
+        assert_eq!(rings[0].len(), 3);
+        assert_eq!(rings[1].len(), 3);
     }
 }
