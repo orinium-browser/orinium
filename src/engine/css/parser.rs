@@ -297,14 +297,14 @@ impl<'a> Parser<'a> {
                     let node = self
                         .parse_at_rule()
                         .map_err(|e| e.with_context("parse: failed to parse at-rule"))?;
-                    log::debug!(target: "CssParser", "AtRule parsed: {:?}", &node);
+                    log::debug!(target: "CssParser", "AtRule parsed: {:?}", node);
                     stylesheet.children.push(node);
                 }
                 _ => {
                     let node = self
                         .parse_rule()
                         .map_err(|e| e.with_context("parse: failed to parse rule"))?;
-                    log::debug!(target: "CssParser", "Rule parsed: {:?}", &node);
+                    log::debug!(target: "CssParser", "Rule parsed: {:?}", node);
                     stylesheet.children.push(node);
                 }
             }

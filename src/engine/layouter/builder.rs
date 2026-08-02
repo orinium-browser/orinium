@@ -29,14 +29,8 @@ use super::types::{
 };
 use crate::engine::renderer_model::Image;
 use crate::engine::ui::block_bridge::CustomLayoutBridge;
-use crate::engine::ui::button::ButtonComponent;
-use crate::engine::ui::custom_node::CustomNode;
-use crate::engine::ui::image::ImageComponent;
 use crate::engine::ui::inline_bridge::CustomInlineBridge;
-use crate::engine::ui::text_input::TextInputComponent;
-
-/// Tags that produce a [`NodeKind::Custom`] instead of a normal container.
-const CUSTOM_TAGS: &[&str] = &["button", "img", "input"];
+use crate::engine::ui::registry::{ComponentRegistry, CustomNodeContext};
 
 const DEFAULT_LINE_FACTOR: f32 = 1.2;
 
@@ -136,6 +130,7 @@ pub fn build_layout_and_info_with_images(
     mut chain: ElementChain,
     images: &HashMap<String, Image>,
 ) -> (LayoutNode, InfoNode) {
+    let registry = ComponentRegistry::new();
     /*
      * Build the initial element chain for the root node.
      */
@@ -180,7 +175,7 @@ pub fn build_layout_and_info_with_images(
         dom: dom.clone(),
         chain,
         child: InheritedCss {
-            text_style: parent.text_style.clone(),
+            text_style: parent.text_style,
         },
         kind: None,
         style: None,
@@ -283,38 +278,22 @@ pub fn build_layout_and_info_with_images(
 
             // ── Custom / replaced element (leaf) ──
             if let Some(tag) = html_node.tag_name()
-                && CUSTOM_TAGS.contains(&tag)
+                && registry.tags().contains(&tag)
             {
-                let node: std::rc::Rc<dyn CustomNode> = match tag {
-                    "button" => {
-                        let text = DomTree::inner_text(&stack[top_idx].dom);
-                        let default_bg = Color(240, 240, 240, 255);
-                        let bg = match &container_style.background {
-                            Background::Color(c) if c.3 > 0 => *c,
-                            _ => default_bg,
-                        };
-                        std::rc::Rc::new(ButtonComponent {
-                            label: text,
-                            button_color: bg,
-                            label_color: text_style.color,
-                        })
-                    }
-                    "img" => {
-                        let image = html_node
-                            .get_attr("src")
-                            .and_then(|source| images.get(source))
-                            .cloned();
-                        std::rc::Rc::new(ImageComponent { image })
-                    }
-                    // ToDo:
-                    // TODO: Replace stub TextInputComponent to InputComponent
-                    "input" => std::rc::Rc::new(TextInputComponent::new(
-                        html_node.get_attr("value").unwrap_or_default(),
-                        html_node.get_attr("placeholder").unwrap_or_default(),
-                        measurer.clone(),
-                    )),
-                    _ => unreachable!(),
-                };
+                let dom_node_weak = Rc::downgrade(&stack[top_idx].dom);
+                let node = registry
+                    .create(&CustomNodeContext {
+                        tag,
+                        inner_text: &DomTree::inner_text(&stack[top_idx].dom),
+                        container_style: &container_style,
+                        text_style: &text_style,
+                        measurer: Arc::clone(&measurer),
+                        images,
+                        get_attr: &|name| html_node.get_attr(name).map(str::to_string),
+                        set_attr: None,
+                        dom_node: Some(dom_node_weak),
+                    })
+                    .expect("registry must handle every tag it reports");
 
                 let is_inline = matches!(style.display.outer, OuterDisplay::Inline);
 
@@ -567,10 +546,10 @@ pub fn build_layout_and_info_with_images(
                             && i < element_results.len()
                         {
                             let child_bg = element_results[i].1.kind.container_bg();
-                            if let Some(bg) = child_bg {
-                                if let NodeKind::Container { ref mut style, .. } = final_kind {
-                                    style.background = bg.clone();
-                                }
+                            if let Some(bg) = child_bg
+                                && let NodeKind::Container { ref mut style, .. } = final_kind
+                            {
+                                style.background = bg.clone();
                             }
                         }
                     }
@@ -1436,11 +1415,11 @@ fn parse_background_shorthand(
         }
 
         // gradient
-        if let CssValue::Function(fn_name, args) = v {
-            if fn_name == "linear-gradient" || fn_name == "radial-gradient" {
-                maybe_gradient = Some(parse_gradient(fn_name, args, text_style)?);
-                continue;
-            }
+        if let CssValue::Function(fn_name, args) = v
+            && (fn_name == "linear-gradient" || fn_name == "radial-gradient")
+        {
+            maybe_gradient = Some(parse_gradient(fn_name, args, text_style)?);
+            continue;
         }
 
         // color
@@ -1499,37 +1478,38 @@ fn parse_linear_direction(args: &[CssValue]) -> (usize, Option<f32>) {
     }
 
     // "to" <side-or-corner>
-    if let CssValue::Keyword(k) = &args[0] {
-        if k.as_str() == "to" && args.len() > 1 {
-            let mut idx = 1;
-            let mut sides: Vec<&str> = Vec::new();
-            while idx < args.len() {
-                if let CssValue::Keyword(k) = &args[idx] {
-                    match k.as_str() {
-                        "top" | "bottom" | "left" | "right" => {
-                            sides.push(k.as_str());
-                            idx += 1;
-                        }
-                        _ => break,
+    if let CssValue::Keyword(k) = &args[0]
+        && k.as_str() == "to"
+        && args.len() > 1
+    {
+        let mut idx = 1;
+        let mut sides: Vec<&str> = Vec::new();
+        while idx < args.len() {
+            if let CssValue::Keyword(k) = &args[idx] {
+                match k.as_str() {
+                    "top" | "bottom" | "left" | "right" => {
+                        sides.push(k.as_str());
+                        idx += 1;
                     }
-                } else {
-                    break;
+                    _ => break,
                 }
+            } else {
+                break;
             }
-            if !sides.is_empty() {
-                let angle = match sides.as_slice() {
-                    ["top"] => Some(0.0),
-                    ["top", "left"] => Some(315.0),
-                    ["top", "right"] => Some(45.0),
-                    ["bottom"] => Some(180.0),
-                    ["bottom", "left"] => Some(225.0),
-                    ["bottom", "right"] => Some(135.0),
-                    ["left"] => Some(270.0),
-                    ["right"] => Some(90.0),
-                    _ => None,
-                };
-                return (idx, angle);
-            }
+        }
+        if !sides.is_empty() {
+            let angle = match sides.as_slice() {
+                ["top"] => Some(0.0),
+                ["top", "left"] => Some(315.0),
+                ["top", "right"] => Some(45.0),
+                ["bottom"] => Some(180.0),
+                ["bottom", "left"] => Some(225.0),
+                ["bottom", "right"] => Some(135.0),
+                ["left"] => Some(270.0),
+                ["right"] => Some(90.0),
+                _ => None,
+            };
+            return (idx, angle);
         }
     }
 
@@ -1587,31 +1567,31 @@ fn parse_radial_gradient(args: &[CssValue], _text_style: &TextStyle) -> Option<G
     // Optional "at <position>" — simplified to "at center" / "at top left" etc.
     if idx < args.len() && args[idx] == CssValue::Keyword("at".into()) {
         idx += 1; // skip "at"
-        if idx < args.len() {
-            if let CssValue::Keyword(k) = &args[idx] {
-                // Parse position keywords
-                match k.as_str() {
-                    "center" => position = (0.5, 0.5),
-                    "top" => position = (0.5, 0.0),
-                    "bottom" => position = (0.5, 1.0),
-                    "left" => position = (0.0, 0.5),
-                    "right" => position = (1.0, 0.5),
-                    _ => {} // ignore unknown
+        if idx < args.len()
+            && let CssValue::Keyword(k) = &args[idx]
+        {
+            // Parse position keywords
+            match k.as_str() {
+                "center" => position = (0.5, 0.5),
+                "top" => position = (0.5, 0.0),
+                "bottom" => position = (0.5, 1.0),
+                "left" => position = (0.0, 0.5),
+                "right" => position = (1.0, 0.5),
+                _ => {} // ignore unknown
+            }
+            idx += 1;
+            // Optional second keyword (e.g. "top left")
+            if idx < args.len()
+                && let CssValue::Keyword(k2) = &args[idx]
+            {
+                match (k.as_str(), k2.as_str()) {
+                    ("top", "left") | ("left", "top") => position = (0.0, 0.0),
+                    ("top", "right") | ("right", "top") => position = (1.0, 0.0),
+                    ("bottom", "left") | ("left", "bottom") => position = (0.0, 1.0),
+                    ("bottom", "right") | ("right", "bottom") => position = (1.0, 1.0),
+                    _ => {}
                 }
                 idx += 1;
-                // Optional second keyword (e.g. "top left")
-                if idx < args.len() {
-                    if let CssValue::Keyword(k2) = &args[idx] {
-                        match (k.as_str(), k2.as_str()) {
-                            ("top", "left") | ("left", "top") => position = (0.0, 0.0),
-                            ("top", "right") | ("right", "top") => position = (1.0, 0.0),
-                            ("bottom", "left") | ("left", "bottom") => position = (0.0, 1.0),
-                            ("bottom", "right") | ("right", "bottom") => position = (1.0, 1.0),
-                            _ => {}
-                        }
-                        idx += 1;
-                    }
-                }
             }
         }
     }
@@ -1713,7 +1693,7 @@ fn resolve_css_len(name: &str, css_len: &CssValue, text_style: &TextStyle) -> Op
             Unit::Em | Unit::Rem => unreachable!(),
             Unit::Deg => {
                 log::error!(target: "Layouter", "Unexpected deg unit for `{}` (expected length)", name);
-                return None;
+                None
             }
         },
         CssValue::Number(0.0) => Some(Length::Px(0.0)),

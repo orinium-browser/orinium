@@ -204,18 +204,13 @@ pub enum RadialShape {
     Ellipse,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum RadialSizeKind {
     ClosestSide,
     FarthestSide,
     ClosestCorner,
+    #[default]
     FarthestCorner,
-}
-
-impl Default for RadialSizeKind {
-    fn default() -> Self {
-        Self::FarthestCorner
-    }
 }
 
 /// A single color stop in a gradient.
@@ -296,23 +291,12 @@ pub struct BorderRadius {
     pub bottom_left: CornerRadius,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ContainerStyle {
     pub background: Background,
     pub border_color: BorderColor,
     pub border_style: BorderStyles,
     pub border_radius: BorderRadius,
-}
-
-impl Default for ContainerStyle {
-    fn default() -> Self {
-        Self {
-            background: Background::default(),
-            border_color: BorderColor::default(),
-            border_style: BorderStyles::default(),
-            border_radius: BorderRadius::default(),
-        }
-    }
 }
 
 // =========================

@@ -238,11 +238,11 @@ fn generate_test_index(dest_root: &Path) {
     );
 
     let dest = dest_root.join("test").join("test.html");
-    if let Some(parent) = dest.parent() {
-        if let Err(e) = fs::create_dir_all(parent) {
-            build_log(format_args!("[BUILD] failed creating dir: {}", e));
-            return;
-        }
+    if let Some(parent) = dest.parent()
+        && let Err(e) = fs::create_dir_all(parent)
+    {
+        build_log(format_args!("[BUILD] failed creating dir: {}", e));
+        return;
     }
     match fs::write(&dest, &filled) {
         Ok(()) => build_log(format_args!(

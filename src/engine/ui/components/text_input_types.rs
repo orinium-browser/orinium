@@ -18,6 +18,10 @@ pub enum TextInputEvent {
     Preedit(String),
     Commit(String),
     Key(TextInputKey),
+    Enter,
+    Undo,
+    Redo,
+    Paste(String),
     CancelComposition,
 }
 

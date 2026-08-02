@@ -244,7 +244,7 @@ impl SupportsEvaluator {
         } else if items.len() == 1 {
             Self::evaluate(&items[0])
         } else {
-            items.iter().all(|g| Self::evaluate(g))
+            items.iter().all(Self::evaluate)
         }
     }
 
@@ -289,10 +289,10 @@ impl DeclarationResolver {
         let mut result = Vec::new();
 
         for child in rule_node.children() {
-            if let CssNodeType::Declaration { name, value } = &child.node() {
-                if name.starts_with("--") {
-                    custom_props.insert(name.into(), value.clone());
-                }
+            if let CssNodeType::Declaration { name, value } = &child.node()
+                && name.starts_with("--")
+            {
+                custom_props.insert(name.into(), value.clone());
             }
         }
 

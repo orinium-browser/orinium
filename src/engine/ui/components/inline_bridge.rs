@@ -3,7 +3,7 @@
 use ui_layout::{FlowLayoutContext, FlowLayouter, LayoutContext, Style};
 
 use crate::engine::layouter::types::ContainerStyle;
-use crate::engine::ui::CustomNode;
+use crate::engine::ui::custom_node::{ContentSize, CustomNode};
 
 use super::inline_cache::{
     CustomInlineResult, InlineLayoutId, get_custom_inline_result, next_custom_inline_id,
@@ -52,7 +52,7 @@ impl CustomInlineBridge {
         containing_height: Option<f32>,
         viewport_width: f32,
         viewport_height: f32,
-    ) -> (f32, f32) {
+    ) -> ContentSize {
         resolve_border_box_size(
             self.node.as_ref(),
             &self.layout_style,
@@ -77,12 +77,13 @@ impl FlowLayouter for CustomInlineBridge {
 
         let (use_width, use_height) = get_custom_inline_result(self.id).map_or_else(
             || {
-                self.resolve_size(
+                let resolved = self.resolve_size(
                     Some(ctx.available_inline_size),
                     None,
                     ctx.available_inline_size,
                     0.0,
-                )
+                );
+                (resolved.width, resolved.height)
             },
             |r| (r.width, r.height),
         );
@@ -117,12 +118,14 @@ impl FlowLayouter for CustomInlineBridge {
         let vw = ctx.containing_block_width.unwrap_or(0.0);
         let vh = ctx.containing_block_height.unwrap_or(0.0);
 
-        let (css_w, css_h) = self.resolve_size(
+        let resolved = self.resolve_size(
             ctx.containing_block_width,
             ctx.containing_block_height,
             vw,
             vh,
         );
+        let css_w = resolved.width;
+        let css_h = resolved.height;
 
         let sp = &self.layout_style.spacing;
         let b_top = sp

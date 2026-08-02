@@ -16,13 +16,13 @@ pub fn with_global_font_system<T>(f: impl FnOnce(&mut FontSystem) -> T) -> T {
     let mut fs = GLOBAL_FONT_SYSTEM
         .lock()
         .expect("GLOBAL_FONT_SYSTEM lock failed");
-    f(&mut *fs)
+    f(&mut fs)
 }
 
 pub fn global_font_system_ready() -> bool {
     GLOBAL_FONT_SYSTEM
         .lock()
-        .map(|fs| fs.db.len() > 0)
+        .map(|fs| !fs.db.is_empty())
         .unwrap_or(false)
 }
 

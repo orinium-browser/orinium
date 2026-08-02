@@ -14,6 +14,12 @@ pub struct CssProcessor {
     result_rx: Receiver<ResolvedStyles>,
 }
 
+impl Default for CssProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CssProcessor {
     pub fn new() -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel::<CssCommand>();

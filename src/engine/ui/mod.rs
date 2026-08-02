@@ -7,6 +7,7 @@ pub use components::image;
 pub use components::inline_bridge;
 pub use components::inline_cache::InlineLayoutId;
 pub(crate) use components::inline_cache::get_custom_inline_result;
+pub use components::registry;
 pub use components::text_input;
 pub use components::text_input_types;
-pub use custom_node::CustomNode;
+pub use custom_node::{ContentSize, CustomNode, PointerEvent};

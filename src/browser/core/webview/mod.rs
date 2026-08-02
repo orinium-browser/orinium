@@ -349,7 +349,7 @@ impl WebView {
         self.layout_and_info = Some(Self::build_layout(
             doc_info,
             &self.resolved_styles,
-            Arc::new(self.text_measurer.as_ref().unwrap().clone()),
+            Arc::new(*self.text_measurer.as_ref().unwrap()),
             &self.images,
         ));
         self.needs_redraw = true;

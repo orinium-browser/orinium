@@ -58,7 +58,7 @@ impl SoundManager {
         let supported_cfg = device
             .default_output_config()
             .context("Failed to get default output config")?;
-        let config: StreamConfig = supported_cfg.clone().into();
+        let config: StreamConfig = supported_cfg.into();
         let sample_format = supported_cfg.sample_format();
         let output_channels = config.channels as usize;
 

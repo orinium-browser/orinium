@@ -13,6 +13,7 @@ use crate::engine::renderer_model::geom::AffineTransform;
 use crate::engine::renderer_model::path::{
     Path, append_quarter_ellipse, clamp_radii, rect_path, rounded_rect_path,
 };
+use crate::engine::ui::ContentSize;
 use crate::engine::ui::get_custom_inline_result;
 
 /// Per-box-model push state for balanced pop generation.
@@ -341,7 +342,7 @@ fn draw_background(
     match &style.background {
         Background::Color(c) if c.3 > 0 => {
             cmd_buf.push(DrawCommand::Fill {
-                path: path.clone(),
+                path: path,
                 rule: FillRule::NonZero,
                 paint: Paint {
                     brush: Brush::Solid(*c),
@@ -351,7 +352,7 @@ fn draw_background(
         }
         Background::Gradient(g) => {
             cmd_buf.push(DrawCommand::Fill {
-                path: path.clone(),
+                path: path,
                 rule: FillRule::NonZero,
                 paint: Paint {
                     brush: Brush::Gradient(g.clone()),
@@ -406,14 +407,12 @@ fn push_box_model(
     let content = push_transform(cmd_buf, dx, dy);
     let scroll = push_transform(cmd_buf, scroll_offset_x, -scroll_offset_y);
 
-    let state = BoxPushState {
+    BoxPushState {
         clip,
         content,
         scroll,
         ..state
-    };
-
-    state
+    }
 }
 
 /// Pop commands for a single box model (reverse order of pushes).
@@ -536,8 +535,8 @@ pub fn generate_draw_commands(
             text_style,
             ..
         } => {
-            let effective_style = node.background_color().map(|c| ContainerStyle {
-                background: Background::Color(c),
+            let effective_style = node.background().map(|background| ContainerStyle {
+                background,
                 ..style.clone()
             });
             let style_ref = effective_style.as_ref().unwrap_or(style);
@@ -555,7 +554,10 @@ pub fn generate_draw_commands(
 
             let size = layout.layout_box.iter().next().map_or_else(
                 || node.intrinsic_size(),
-                |box_model| (box_model.content_box.width, box_model.content_box.height),
+                |box_model| ContentSize {
+                    width: box_model.content_box.width,
+                    height: box_model.content_box.height,
+                },
             );
             node.draw_sized(cmd_buf, text_style, layout_style, size);
         }
@@ -606,8 +608,8 @@ pub fn generate_draw_commands(
                     // Inline custom element: consume the Object and draw directly.
                     layout_iter.next();
 
-                    let effective_style = node.background_color().map(|c| ContainerStyle {
-                        background: Background::Color(c),
+                    let effective_style = node.background().map(|background| ContainerStyle {
+                        background,
                         ..style.clone()
                     });
                     let style_ref = effective_style.as_ref().unwrap_or(style);
@@ -656,7 +658,15 @@ pub fn generate_draw_commands(
                                 },
                             };
                             push_box_model(cmd_buf, &rect, style_ref, 0.0, 0.0, true);
-                            node.draw_sized(cmd_buf, text_style, layout_style, (cw, ch));
+                            node.draw_sized(
+                                cmd_buf,
+                                text_style,
+                                layout_style,
+                                ContentSize {
+                                    width: cw,
+                                    height: ch,
+                                },
+                            );
                             pop_box_model(
                                 cmd_buf,
                                 BoxPushState {

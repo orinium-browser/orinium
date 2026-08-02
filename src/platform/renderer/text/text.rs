@@ -78,7 +78,7 @@ fn pack_uv_size(uw: f32, vh: f32) -> u32 {
 }
 
 fn pack_layer(layer: u32) -> u32 {
-    layer as u32
+    layer
 }
 
 fn pack_color(c: &OriColor) -> u32 {

@@ -8,6 +8,12 @@ pub struct BrowserUi {
     pub active_tab: usize,
 }
 
+impl Default for BrowserUi {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BrowserUi {
     pub fn new() -> Self {
         Self {

@@ -3,11 +3,11 @@
 use std::rc::Rc;
 
 use super::layouter::types::{InfoNode, NodeKind};
+use super::ui::PointerEvent;
 use super::ui::custom_node::CustomNode;
 use super::ui::get_custom_inline_result;
 use super::ui::text_input_types::TextInputEvent;
 use ui_layout::LayoutNode;
-
 /// ヒットしたノード情報
 pub struct HitItem<'a> {
     pub layout: &'a LayoutNode,
@@ -16,6 +16,45 @@ pub struct HitItem<'a> {
 
 /// ヒットパス（子→親の順）
 pub type HitPath<'a> = Vec<HitItem<'a>>;
+
+/// Returns the innermost custom node on a hit path, if any.
+///
+/// The hit path is ordered child→parent, so the first `Custom` node found is
+/// the deepest node under the pointer.
+pub fn hit_custom_node<'a>(path: &'a HitPath<'a>) -> Option<&'a Rc<dyn CustomNode>> {
+    path.iter().find_map(|hit| match &hit.info.kind {
+        NodeKind::Custom { node, .. } => Some(node),
+        _ => None,
+    })
+}
+
+/// Dispatches a pointer event to the innermost custom node on the hit path.
+pub fn dispatch_pointer(path: &HitPath<'_>, event: PointerEvent) -> bool {
+    hit_custom_node(path).is_some_and(|node| node.on_pointer_event(event))
+}
+
+/// Updates the hover state of custom nodes after a pointer move.
+///
+/// Clears hover from the previously hovered node (if different) and sets it on
+/// the node under the pointer. Returns whether the hover target changed.
+pub fn update_hover(path: &HitPath<'_>, previous: Option<&Rc<dyn CustomNode>>) -> bool {
+    let current = hit_custom_node(path);
+    match (previous, current) {
+        (Some(prev), Some(curr)) if Rc::ptr_eq(prev, curr) => false,
+        (Some(prev), _) => {
+            prev.set_hovered(false);
+            if let Some(curr) = current {
+                curr.set_hovered(true);
+            }
+            true
+        }
+        (None, Some(curr)) => {
+            curr.set_hovered(true);
+            true
+        }
+        (None, None) => false,
+    }
+}
 
 /// x, y: グローバル座標
 pub fn hit_test<'a>(layout: &'a LayoutNode, info: &'a InfoNode, x: f32, y: f32) -> HitPath<'a> {
@@ -143,11 +182,25 @@ pub fn focused_text_input_is_composing(info: &InfoNode) -> bool {
     info.children.iter().any(focused_text_input_is_composing)
 }
 
+/// Returns whether any custom node in the tree reports a pending repaint.
+///
+/// Consumes the repaint flags of the nodes it visits, so callers should only
+/// invoke this once per frame, right before deciding whether to redraw.
+pub fn any_custom_node_needs_repaint(info: &InfoNode) -> bool {
+    if let NodeKind::Custom { node, .. } = &info.kind
+        && node.needs_repaint()
+    {
+        return true;
+    }
+    info.children.iter().any(any_custom_node_needs_repaint)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::bridge::text::FallbackTextMeasurer;
-    use crate::engine::layouter::types::{ContainerStyle, TextStyle};
+    use crate::engine::bridge::text::{FallbackTextMeasurer, TextMeasurer};
+    use crate::engine::layouter::types::{Color, ContainerStyle, TextStyle};
+    use crate::engine::ui::button::ButtonComponent;
     use crate::engine::ui::text_input::TextInputComponent;
     use crate::engine::ui::text_input_types::TextInputEvent;
     use std::sync::Arc;
@@ -171,8 +224,9 @@ mod tests {
 
     #[test]
     fn focus_and_dispatch_target_one_input() {
-        let measurer = Arc::new(FallbackTextMeasurer::default());
-        let first: Rc<dyn CustomNode> = Rc::new(TextInputComponent::new("", "", measurer.clone()));
+        let measurer: Arc<dyn TextMeasurer<TextStyle>> = Arc::new(FallbackTextMeasurer);
+        let first: Rc<dyn CustomNode> =
+            Rc::new(TextInputComponent::new("", "", Arc::clone(&measurer)));
         let second: Rc<dyn CustomNode> = Rc::new(TextInputComponent::new("", "", measurer));
         let root = InfoNode {
             kind: NodeKind::LineBreak,
@@ -189,5 +243,86 @@ mod tests {
             &root,
             TextInputEvent::Commit("日本".into())
         ));
+    }
+
+    #[test]
+    fn hit_custom_node_finds_innermost_custom() {
+        let node: Rc<dyn CustomNode> = Rc::new(TextInputComponent::new(
+            "",
+            "",
+            Arc::new(FallbackTextMeasurer),
+        ));
+        let info = input_info(Rc::clone(&node));
+        let layout = LayoutNode::new(ui_layout::Style::default());
+        let path = vec![
+            HitItem {
+                layout: &layout,
+                info: &info,
+            },
+            HitItem {
+                layout: &layout,
+                info: &info,
+            },
+        ];
+        assert!(Rc::ptr_eq(hit_custom_node(&path).unwrap(), &node));
+    }
+
+    #[test]
+    fn update_hover_switches_target() {
+        let measurer: Arc<dyn TextMeasurer<TextStyle>> = Arc::new(FallbackTextMeasurer);
+        let a: Rc<dyn CustomNode> = Rc::new(ButtonComponent::new(
+            "A",
+            Color(0, 0, 0, 255),
+            Color(255, 255, 255, 255),
+            Arc::clone(&measurer),
+        ));
+        let b: Rc<dyn CustomNode> = Rc::new(ButtonComponent::new(
+            "B",
+            Color(0, 0, 0, 255),
+            Color(255, 255, 255, 255),
+            measurer,
+        ));
+        let info_a = input_info(Rc::clone(&a));
+        let info_b = input_info(Rc::clone(&b));
+        let layout = LayoutNode::new(ui_layout::Style::default());
+        let path_a = vec![HitItem {
+            layout: &layout,
+            info: &info_a,
+        }];
+        let path_b = vec![HitItem {
+            layout: &layout,
+            info: &info_b,
+        }];
+
+        assert!(update_hover(&path_a, None));
+        assert!(a.is_hovered());
+        assert!(!b.is_hovered());
+
+        assert!(update_hover(&path_b, Some(&a)));
+        assert!(!a.is_hovered());
+        assert!(b.is_hovered());
+
+        assert!(!update_hover(&path_b, Some(&b)));
+    }
+
+    #[test]
+    fn any_custom_node_needs_repaint_tracks_dirty_nodes() {
+        let measurer: Arc<dyn TextMeasurer<TextStyle>> = Arc::new(FallbackTextMeasurer);
+        let a: Rc<dyn CustomNode> = Rc::new(ButtonComponent::new(
+            "A",
+            Color(0, 0, 0, 255),
+            Color(255, 255, 255, 255),
+            Arc::clone(&measurer),
+        ));
+        let info_a = input_info(Rc::clone(&a));
+
+        // Fresh nodes are dirty (initial paint).
+        assert!(any_custom_node_needs_repaint(&info_a));
+        assert!(!any_custom_node_needs_repaint(&info_a));
+
+        // A pointer event that changes visual state marks it dirty again.
+        a.on_pointer_event(PointerEvent::Down { x: 0.0, y: 0.0 });
+        assert!(any_custom_node_needs_repaint(&info_a));
+        assert!(!any_custom_node_needs_repaint(&info_a));
     }
 }

@@ -41,7 +41,7 @@ impl BlockLayouter for CustomLayoutBridge {
     fn layout(&mut self, ctx: &LayoutContext) -> Rect {
         let viewport_width = ctx.containing_block_width.unwrap_or(0.0);
         let viewport_height = ctx.containing_block_height.unwrap_or(0.0);
-        let (width, height) = resolve_border_box_size(
+        let resolved = resolve_border_box_size(
             self.node.as_ref(),
             &self.layout_style,
             ctx.containing_block_width,
@@ -53,8 +53,8 @@ impl BlockLayouter for CustomLayoutBridge {
         Rect {
             x: 0.0,
             y: 0.0,
-            width,
-            height,
+            width: resolved.width,
+            height: resolved.height,
         }
     }
 

@@ -184,10 +184,10 @@ impl GlyphAtlas {
         let cache_val = (li, alloc_id, rect, mask_width, mask_height);
 
         // Make room in the cache if full (key is guaranteed absent).
-        if self.glyph_map.len() >= LRU_CAPACITY {
-            if let Some((_k, (elayer, ealloc_id, _, _, _))) = self.glyph_map.pop_lru() {
-                self.allocators[elayer as usize].deallocate(ealloc_id);
-            }
+        if self.glyph_map.len() >= LRU_CAPACITY
+            && let Some((_k, (elayer, ealloc_id, _, _, _))) = self.glyph_map.pop_lru()
+        {
+            self.allocators[elayer as usize].deallocate(ealloc_id);
         }
         self.glyph_map.put(key, cache_val);
 
@@ -232,7 +232,7 @@ impl GlyphAtlas {
 
             let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
             let stride = size;
-            let padded_stride = ((stride + align - 1) / align) * align;
+            let padded_stride = stride.div_ceil(align) * align;
 
             let layout = wgpu::TexelCopyBufferLayout {
                 offset: 0,
@@ -268,7 +268,7 @@ impl GlyphAtlas {
 
                     let pad = (padded_stride - stride) as usize;
                     if pad > 0 {
-                        padded.extend(std::iter::repeat(0u8).take(pad));
+                        padded.extend(std::iter::repeat_n(0u8, pad));
                     }
                 }
 

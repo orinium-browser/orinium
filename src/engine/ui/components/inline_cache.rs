@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ui_layout::{BoxSizing, LineSpan, Style};
 
-use crate::engine::ui::custom_node::CustomNode;
+use crate::engine::ui::custom_node::{ContentSize, CustomNode};
 
 /// Unique identifier for an inline custom element's layout result.
 ///
@@ -132,8 +132,8 @@ pub(crate) fn resolve_custom_size(
     resolved_width: Option<f32>,
     resolved_height: Option<f32>,
     style: &Style,
-) -> (f32, f32) {
-    let (intrinsic_width, intrinsic_height) = node.intrinsic_size();
+) -> ContentSize {
+    let intrinsic = node.intrinsic_size();
     let pb_h = horizontal_padding_border(style);
     let pb_v = vertical_padding_border(style);
 
@@ -148,21 +148,21 @@ pub(crate) fn resolve_custom_size(
 
     let (content_width, content_height) = if node.preserves_intrinsic_aspect_ratio() {
         match (content_width, content_height) {
-            (Some(width), None) if intrinsic_width > 0.0 => {
-                (width, intrinsic_height * width / intrinsic_width)
+            (Some(width), None) if intrinsic.width > 0.0 => {
+                (width, intrinsic.height * width / intrinsic.width)
             }
-            (None, Some(height)) if intrinsic_height > 0.0 => {
-                (intrinsic_width * height / intrinsic_height, height)
+            (None, Some(height)) if intrinsic.height > 0.0 => {
+                (intrinsic.width * height / intrinsic.height, height)
             }
             _ => (
-                content_width.unwrap_or(intrinsic_width),
-                content_height.unwrap_or(intrinsic_height),
+                content_width.unwrap_or(intrinsic.width),
+                content_height.unwrap_or(intrinsic.height),
             ),
         }
     } else {
         (
-            content_width.unwrap_or(intrinsic_width),
-            content_height.unwrap_or(intrinsic_height),
+            content_width.unwrap_or(intrinsic.width),
+            content_height.unwrap_or(intrinsic.height),
         )
     };
 
@@ -180,7 +180,10 @@ pub(crate) fn resolve_custom_size(
         height = height.min(max_h);
     }
 
-    (width + pb_h, height + pb_v)
+    ContentSize {
+        width: width + pb_h,
+        height: height + pb_v,
+    }
 }
 
 /// Resolve the **border-box** size of a custom node from its resolved CSS
@@ -195,7 +198,7 @@ pub(crate) fn resolve_border_box_size(
     containing_height: Option<f32>,
     viewport_width: f32,
     viewport_height: f32,
-) -> (f32, f32) {
+) -> ContentSize {
     let resolved_width =
         style
             .size
@@ -230,12 +233,15 @@ mod tests {
             _cmd_buf: &mut Vec<DrawCommand>,
             _text_style: &TextStyle,
             _style: &Style,
-            _size: (f32, f32),
+            _size: ContentSize,
         ) {
         }
 
-        fn intrinsic_size(&self) -> (f32, f32) {
-            (self.width, self.height)
+        fn intrinsic_size(&self) -> ContentSize {
+            ContentSize {
+                width: self.width,
+                height: self.height,
+            }
         }
 
         fn preserves_intrinsic_aspect_ratio(&self) -> bool {
@@ -253,7 +259,10 @@ mod tests {
         let style = Style::default();
         assert_eq!(
             resolve_custom_size(&node, None, None, &style),
-            (200.0, 100.0)
+            ContentSize {
+                width: 200.0,
+                height: 100.0
+            }
         );
     }
 
@@ -267,7 +276,10 @@ mod tests {
         let style = Style::default();
         assert_eq!(
             resolve_custom_size(&node, Some(50.0), Some(40.0), &style),
-            (50.0, 40.0)
+            ContentSize {
+                width: 50.0,
+                height: 40.0
+            }
         );
     }
 
@@ -281,7 +293,10 @@ mod tests {
         let style = Style::default();
         assert_eq!(
             resolve_custom_size(&node, Some(100.0), None, &style),
-            (100.0, 50.0)
+            ContentSize {
+                width: 100.0,
+                height: 50.0
+            }
         );
     }
 
@@ -295,7 +310,10 @@ mod tests {
         let style = Style::default();
         assert_eq!(
             resolve_custom_size(&node, None, Some(50.0), &style),
-            (100.0, 50.0)
+            ContentSize {
+                width: 100.0,
+                height: 50.0
+            }
         );
     }
 
@@ -313,7 +331,10 @@ mod tests {
         style.spacing.border_bottom = Length::Px(2.0);
         assert_eq!(
             resolve_custom_size(&node, Some(100.0), Some(50.0), &style),
-            (110.0, 54.0)
+            ContentSize {
+                width: 110.0,
+                height: 54.0
+            }
         );
     }
 
@@ -337,7 +358,10 @@ mod tests {
         };
         assert_eq!(
             resolve_custom_size(&node, Some(120.0), Some(60.0), &style),
-            (120.0, 60.0)
+            ContentSize {
+                width: 120.0,
+                height: 60.0
+            }
         );
     }
 
@@ -353,11 +377,17 @@ mod tests {
         style.size.max_width = LengthOrAuto::Length(Length::Px(90.0));
         assert_eq!(
             resolve_custom_size(&node, Some(50.0), Some(50.0), &style),
-            (80.0, 50.0)
+            ContentSize {
+                width: 80.0,
+                height: 50.0
+            }
         );
         assert_eq!(
             resolve_custom_size(&node, Some(95.0), Some(50.0), &style),
-            (90.0, 50.0)
+            ContentSize {
+                width: 90.0,
+                height: 50.0
+            }
         );
     }
 }

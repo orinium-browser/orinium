@@ -43,6 +43,7 @@ use super::ui::BrowserUi;
 use super::{BrowserCommand, resource_loader::BrowserResourceLoader};
 use crate::engine::layouter;
 use crate::engine::renderer_model::{self, DrawCommand};
+use crate::engine::ui::PointerEvent;
 use crate::engine::ui::text_input_types::{TextInputEvent, TextInputKey};
 
 use crate::platform::network::NetworkCore;
@@ -67,6 +68,8 @@ pub struct InputState {
     pub mouse_position: (f64, f64),
     /// Current keyboard modifier state (Ctrl, Shift, Alt, etc.).
     pub modifiers: winit::keyboard::ModifiersState,
+    /// The custom node currently under the pointer, if any.
+    pub hovered: Option<Rc<dyn crate::engine::ui::CustomNode>>,
 }
 
 pub struct PendingFetches {
@@ -448,10 +451,17 @@ impl BrowserApp {
                 if let Some(input) = self.inputs.get_mut(&window_id) {
                     input.mouse_position = (position.x, position.y);
                 }
-                BrowserCommand::None
+                let changed = self.handle_pointer_move(window_id, position.x, position.y);
+                if changed {
+                    BrowserCommand::RequestRedraw
+                } else {
+                    BrowserCommand::None
+                }
             }
 
-            WindowEvent::MouseInput { button, .. } => self.handle_mouse_input(window_id, button),
+            WindowEvent::MouseInput { button, state, .. } => {
+                self.handle_mouse_input(window_id, button, state)
+            }
 
             WindowEvent::ModifiersChanged(modifiers) => {
                 if let Some(input) = self.inputs.get_mut(&window_id) {
@@ -549,7 +559,22 @@ impl BrowserApp {
             winit::keyboard::Key::Named(winit::keyboard::NamedKey::End) => Some(TextInputKey::End),
             _ => None,
         };
-        let handled = if let Some(key) = key {
+        let special = if ctrl && let winit::keyboard::Key::Character(ch) = &event.logical_key {
+            match ch.as_str() {
+                "z" | "Z" => Some(TextInputEvent::Undo),
+                "y" | "Y" => Some(TextInputEvent::Redo),
+                _ => None,
+            }
+        } else if let winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter) =
+            &event.logical_key
+        {
+            Some(TextInputEvent::Enter)
+        } else {
+            None
+        };
+        let handled = if let Some(special) = special {
+            crate::engine::input::dispatch_text_input(info, special)
+        } else if let Some(key) = key {
             crate::engine::input::dispatch_text_input(info, TextInputEvent::Key(key))
         } else if !ctrl && !crate::engine::input::focused_text_input_is_composing(info) {
             event.text.as_ref().is_some_and(|text| {
@@ -604,6 +629,7 @@ impl BrowserApp {
         &mut self,
         window_id: WindowId,
         button: winit::event::MouseButton,
+        state: winit::event::ElementState,
     ) -> BrowserCommand {
         if button != winit::event::MouseButton::Left {
             return BrowserCommand::None;
@@ -617,13 +643,23 @@ impl BrowserApp {
             ),
             _ => return BrowserCommand::None,
         };
+        let (px, py) = ((x / sf) as f32, (y / sf) as f32);
 
         let tab_id = self.tab_id_for_window(window_id);
         let Some(ui) = self.windows.get_mut(&window_id) else {
             return BrowserCommand::None;
         };
         if let Some(tab) = ui.tabs.get_mut(tab_id) {
-            let input_focused = Self::handle_mouse_click(tab, (x / sf) as f32, (y / sf) as f32);
+            if let Some((layout, info)) = tab.layout_and_info() {
+                let path = crate::engine::input::hit_test(layout, info, px, py);
+                let event = match state {
+                    winit::event::ElementState::Pressed => PointerEvent::Down { x: px, y: py },
+                    winit::event::ElementState::Released => PointerEvent::Up { x: px, y: py },
+                };
+                crate::engine::input::dispatch_pointer(&path, event);
+            }
+
+            let input_focused = Self::handle_mouse_click(tab, px, py);
             BrowserCommand::SetImeAllowed {
                 allowed: input_focused,
                 position: (x, y),
@@ -631,6 +667,40 @@ impl BrowserApp {
         } else {
             BrowserCommand::None
         }
+    }
+
+    /// Dispatches a pointer move and updates hover state for the active tab.
+    ///
+    /// Returns whether the move changed any visual state (and thus requires a
+    /// repaint).
+    fn handle_pointer_move(&mut self, window_id: WindowId, x: f64, y: f64) -> bool {
+        let Some(render) = self.renders.get(&window_id) else {
+            return false;
+        };
+        let sf = render.scale_factor;
+        let (px, py) = ((x / sf) as f32, (y / sf) as f32);
+
+        let tab_id = self.tab_id_for_window(window_id);
+        let Some(ui) = self.windows.get_mut(&window_id) else {
+            return false;
+        };
+        let Some(tab) = ui.tabs.get_mut(tab_id) else {
+            return false;
+        };
+        let Some((layout, info)) = tab.layout_and_info() else {
+            return false;
+        };
+        let path = crate::engine::input::hit_test(layout, info, px, py);
+        let mut repaint =
+            crate::engine::input::dispatch_pointer(&path, PointerEvent::Move { x: px, y: py });
+        if let Some(input) = self.inputs.get_mut(&window_id) {
+            let previous = input.hovered.clone();
+            if crate::engine::input::update_hover(&path, previous.as_ref()) {
+                repaint = true;
+                input.hovered = crate::engine::input::hit_custom_node(&path).cloned();
+            }
+        }
+        repaint
     }
 
     /// Handles scrolling for the window's assigned tab, updating its layout container offsets.
