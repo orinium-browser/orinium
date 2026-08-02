@@ -1,58 +1,44 @@
 //! Editable single-line text input with IME composition state.
 
 use std::cell::RefCell;
+use std::sync::Arc;
 
 use smol_str::SmolStr;
+use ui_layout::Style;
 
-use crate::engine::bridge::text::{self, FallbackTextMeasurer, TextMeasureRequest};
+use crate::engine::bridge::text::{self, TextMeasureRequest};
 use crate::engine::layouter::types::{Color, TextStyle};
 use crate::engine::renderer_model::{Brush, DrawCommand, FillRule, Paint, rect_path};
+use crate::engine::ui::components::text_input_types::{
+    TextInputEvent, TextInputKey, TextInputState,
+};
 use crate::engine::ui::custom_node::CustomNode;
 
-const DEFAULT_WIDTH: f32 = 200.0;
-const DEFAULT_HEIGHT: f32 = 28.0;
 const INLINE_PADDING: f32 = 4.0;
 
-/// Editing keys understood by engine-owned text inputs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextInputKey {
-    Backspace,
-    Delete,
-    Left,
-    Right,
-    Home,
-    End,
-}
-
-/// Platform-neutral text and IME input delivered to a custom node.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TextInputEvent {
-    Insert(String),
-    Preedit(String),
-    Commit(String),
-    Key(TextInputKey),
-    CancelComposition,
-}
-
-/// Mutable editing state for a single-line text input.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TextInputState {
-    pub value: String,
-    pub preedit: String,
-    pub caret: usize,
-    pub focused: bool,
-}
-
 /// An HTML text input rendered by the engine.
-#[derive(Debug)]
 pub struct TextInputComponent {
     state: RefCell<TextInputState>,
     placeholder: SmolStr,
+    measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
+}
+
+impl std::fmt::Debug for TextInputComponent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TextInputComponent")
+            .field("state", &self.state.borrow())
+            .field("placeholder", &self.placeholder)
+            .finish_non_exhaustive()
+    }
 }
 
 impl TextInputComponent {
     /// Creates a text input with an initial value and placeholder.
-    pub fn new(value: impl Into<String>, placeholder: impl Into<SmolStr>) -> Self {
+    pub fn new(
+        value: impl Into<String>,
+        placeholder: impl Into<SmolStr>,
+        measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
+    ) -> Self {
         let value = value.into();
         let caret = value.len();
         Self {
@@ -63,6 +49,7 @@ impl TextInputComponent {
                 focused: false,
             }),
             placeholder: placeholder.into(),
+            measurer,
         }
     }
 
@@ -110,11 +97,13 @@ impl TextInputComponent {
 }
 
 impl CustomNode for TextInputComponent {
-    fn draw(&self, cmd_buf: &mut Vec<DrawCommand>, text_style: &TextStyle) {
-        self.draw_sized(cmd_buf, text_style, self.intrinsic_size());
-    }
-
-    fn draw_sized(&self, cmd_buf: &mut Vec<DrawCommand>, text_style: &TextStyle, size: (f32, f32)) {
+    fn draw_sized(
+        &self,
+        cmd_buf: &mut Vec<DrawCommand>,
+        text_style: &TextStyle,
+        _style: &Style,
+        size: (f32, f32),
+    ) {
         let state = self.state.borrow();
         let mut style = text_style.clone();
         let (display_text, placeholder) = if state.value.is_empty() && state.preedit.is_empty() {
@@ -139,7 +128,7 @@ impl CustomNode for TextInputComponent {
         let caret = state.focused.then_some(state.caret + state.preedit.len());
 
         draw_text_input(
-            &FallbackTextMeasurer::default(), // Stub implementation
+            &*self.measurer,
             cmd_buf,
             display_text,
             INLINE_PADDING,
@@ -159,7 +148,7 @@ impl CustomNode for TextInputComponent {
     }
 
     fn intrinsic_size(&self) -> (f32, f32) {
-        (DEFAULT_WIDTH, DEFAULT_HEIGHT)
+        (200.0, 28.0)
     }
 
     fn accepts_text_input(&self) -> bool {
@@ -258,7 +247,6 @@ fn draw_text_input(
         width += fragment.width;
     }
 
-    // Handle offsets at the end of the text.
     if let Some(caret_pos) = caret
         && caret_x.is_none()
         && caret_pos <= byte_offset
@@ -309,9 +297,19 @@ fn draw_text_input(
 mod tests {
     use super::*;
 
+    use crate::engine::bridge::text::FallbackTextMeasurer;
+
+    fn make_component(value: &str, placeholder: &str) -> TextInputComponent {
+        TextInputComponent::new(
+            value,
+            placeholder,
+            Arc::new(FallbackTextMeasurer::default()),
+        )
+    }
+
     #[test]
     fn preedit_is_replaced_by_ime_commit() {
-        let input = TextInputComponent::new("abc", "");
+        let input = make_component("abc", "");
         input.handle_text_input(TextInputEvent::Preedit("にほ".into()));
         assert_eq!(input.state().preedit, "にほ");
 
@@ -323,7 +321,7 @@ mod tests {
 
     #[test]
     fn editing_uses_utf8_character_boundaries() {
-        let input = TextInputComponent::new("a日b", "");
+        let input = make_component("a日b", "");
         input.handle_text_input(TextInputEvent::Key(TextInputKey::Left));
         input.handle_text_input(TextInputEvent::Key(TextInputKey::Backspace));
         assert_eq!(input.state().value, "ab");

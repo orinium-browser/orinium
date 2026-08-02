@@ -1,9 +1,11 @@
 //! [`CustomNode`] trait for replaced elements that delegate rendering.
 
+use ui_layout::Style;
+
 use crate::engine::layouter::types::{Color, TextStyle};
 use crate::engine::renderer_model::DrawCommand;
 
-use super::text_input::TextInputEvent;
+use super::text_input_types::TextInputEvent;
 
 /// Trait for custom/replaced elements that produce their own draw commands.
 ///
@@ -12,29 +14,38 @@ use super::text_input::TextInputEvent;
 /// `(0, 0)` = top-left of the content box. The parent's transform/clip
 /// stack handles positioning.
 ///
-/// # Lifecycle (Phase 1)
-/// - `draw()` is called every frame during `generate_draw_commands`.
-/// - Event handling is deferred to a later phase.
+/// # Lifecycle
+/// - `draw_sized()` is called every frame during `generate_draw_commands`.
+/// - Event handling (focus, IME) is dispatched through `engine::input`.
 pub trait CustomNode: std::fmt::Debug + 'static {
-    /// Emit draw commands into `cmd_buf`.
+    /// Emit draw commands fitted to the resolved content-box `size`.
     ///
     /// `text_style` carries the inherited CSS text properties (color,
     /// font-size, font-weight, etc.) resolved for this element.
+    /// `style` carries the resolved `ui_layout::Style` (CSS width/height,
+    /// box-sizing, etc.) and `size` is the resolved content-box size.
     ///
-    /// Called once per frame for each visible custom node.
-    fn draw(&self, cmd_buf: &mut Vec<DrawCommand>, text_style: &TextStyle);
-
-    /// Emit draw commands fitted to the resolved content-box `size`.
-    ///
-    /// Replaced elements that support CSS sizing can override this method.
-    /// The default preserves the original intrinsic-size drawing behavior.
+    /// This is the primary drawing entry point.
     fn draw_sized(
         &self,
         cmd_buf: &mut Vec<DrawCommand>,
         text_style: &TextStyle,
-        _size: (f32, f32),
-    ) {
-        self.draw(cmd_buf, text_style);
+        style: &Style,
+        size: (f32, f32),
+    );
+
+    /// Emit draw commands using the intrinsic content-box size.
+    ///
+    /// Defaults to [`draw_sized`](Self::draw_sized) with the intrinsic size
+    /// and a default style. Components that only draw at their intrinsic size
+    /// may override this instead.
+    fn draw(&self, cmd_buf: &mut Vec<DrawCommand>, text_style: &TextStyle) {
+        self.draw_sized(
+            cmd_buf,
+            text_style,
+            &Style::default(),
+            self.intrinsic_size(),
+        );
     }
 
     /// Optional background color override.

@@ -1,5 +1,7 @@
 //! Replaced-element component for decoded HTML images.
 
+use ui_layout::Style;
+
 use crate::engine::layouter::types::TextStyle;
 use crate::engine::renderer_model::{Brush, DrawCommand, FillRule, Image, Paint, rect_path};
 use crate::engine::ui::custom_node::CustomNode;
@@ -11,15 +13,11 @@ pub struct ImageComponent {
 }
 
 impl CustomNode for ImageComponent {
-    fn draw(&self, cmd_buf: &mut Vec<DrawCommand>, text_style: &TextStyle) {
-        let size = self.intrinsic_size();
-        self.draw_sized(cmd_buf, text_style, size);
-    }
-
     fn draw_sized(
         &self,
         cmd_buf: &mut Vec<DrawCommand>,
         _text_style: &TextStyle,
+        _style: &Style,
         size: (f32, f32),
     ) {
         let Some(image) = &self.image else {
@@ -57,12 +55,17 @@ mod tests {
         assert_eq!(component.intrinsic_size(), (2.0, 3.0));
 
         let mut commands = Vec::new();
-        component.draw_sized(&mut commands, &TextStyle::default(), (20.0, 30.0));
+        component.draw_sized(
+            &mut commands,
+            &TextStyle::default(),
+            &Style::default(),
+            (20.0, 30.0),
+        );
         let DrawCommand::Fill { path, paint, .. } = &commands[0] else {
             panic!("expected image fill");
         };
         assert!(matches!(&paint.brush, Brush::Image(_)));
         let points = path.subpaths().remove(0);
-        assert!(points.iter().any(|point| *point == (20.0, 30.0)));
+        assert!(points.contains(&(20.0, 30.0)));
     }
 }

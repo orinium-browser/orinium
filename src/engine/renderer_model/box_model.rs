@@ -13,7 +13,7 @@ use crate::engine::renderer_model::geom::AffineTransform;
 use crate::engine::renderer_model::path::{
     Path, append_quarter_ellipse, clamp_radii, rect_path, rounded_rect_path,
 };
-use crate::engine::ui::custom_bridge::get_custom_inline_result;
+use crate::engine::ui::get_custom_inline_result;
 
 /// Per-box-model push state for balanced pop generation.
 #[derive(Default, Clone, Copy)]
@@ -531,6 +531,7 @@ pub fn generate_draw_commands(
             scroll_offset_x,
             scroll_offset_y,
             style,
+            layout_style,
             node,
             text_style,
             ..
@@ -556,7 +557,7 @@ pub fn generate_draw_commands(
                 || node.intrinsic_size(),
                 |box_model| (box_model.content_box.width, box_model.content_box.height),
             );
-            node.draw_sized(cmd_buf, text_style, size);
+            node.draw_sized(cmd_buf, text_style, layout_style, size);
         }
     }
 
@@ -594,6 +595,7 @@ pub fn generate_draw_commands(
                 node,
                 text_style,
                 style,
+                layout_style,
                 layout_id,
                 ..
             } => {
@@ -654,7 +656,7 @@ pub fn generate_draw_commands(
                                 },
                             };
                             push_box_model(cmd_buf, &rect, style_ref, 0.0, 0.0, true);
-                            node.draw_sized(cmd_buf, text_style, (cw, ch));
+                            node.draw_sized(cmd_buf, text_style, layout_style, (cw, ch));
                             pop_box_model(
                                 cmd_buf,
                                 BoxPushState {

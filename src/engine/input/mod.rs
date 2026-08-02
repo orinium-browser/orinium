@@ -3,9 +3,9 @@
 use std::rc::Rc;
 
 use super::layouter::types::{InfoNode, NodeKind};
-use super::ui::custom_bridge::get_custom_inline_result;
 use super::ui::custom_node::CustomNode;
-use super::ui::text_input::TextInputEvent;
+use super::ui::get_custom_inline_result;
+use super::ui::text_input_types::TextInputEvent;
 use ui_layout::LayoutNode;
 
 /// ヒットしたノード情報
@@ -146,8 +146,11 @@ pub fn focused_text_input_is_composing(info: &InfoNode) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::bridge::text::FallbackTextMeasurer;
     use crate::engine::layouter::types::{ContainerStyle, TextStyle};
     use crate::engine::ui::text_input::TextInputComponent;
+    use crate::engine::ui::text_input_types::TextInputEvent;
+    use std::sync::Arc;
 
     fn input_info(node: Rc<dyn CustomNode>) -> InfoNode {
         InfoNode {
@@ -158,6 +161,7 @@ mod tests {
                 scroll_offset_x: 0.0,
                 scroll_offset_y: 0.0,
                 style: ContainerStyle::default(),
+                layout_style: ui_layout::Style::default(),
                 text_style: TextStyle::default(),
                 layout_id: None,
             },
@@ -167,8 +171,9 @@ mod tests {
 
     #[test]
     fn focus_and_dispatch_target_one_input() {
-        let first: Rc<dyn CustomNode> = Rc::new(TextInputComponent::new("", ""));
-        let second: Rc<dyn CustomNode> = Rc::new(TextInputComponent::new("", ""));
+        let measurer = Arc::new(FallbackTextMeasurer::default());
+        let first: Rc<dyn CustomNode> = Rc::new(TextInputComponent::new("", "", measurer.clone()));
+        let second: Rc<dyn CustomNode> = Rc::new(TextInputComponent::new("", "", measurer));
         let root = InfoNode {
             kind: NodeKind::LineBreak,
             children: vec![

@@ -19,6 +19,8 @@ use orinium_browser::engine::{
     },
     renderer_model::{DrawCommand, SystemUiKind, generate_draw_commands},
 };
+use std::sync::Arc;
+
 use orinium_browser::platform::renderer::text_measurer::PlatformTextMeasurer;
 use ui_layout::LayoutEngine;
 
@@ -66,10 +68,11 @@ fn main() {
     // ── Build layout + info ─────────────────────────────────
     let measurer =
         PlatformTextMeasurer::new().expect("PlatformTextMeasurer requires a system font");
+    let measurer = Arc::new(measurer);
     let (mut layout, info) = build_layout_and_info(
         &dom.root,
         &resolved,
-        &measurer,
+        measurer,
         InheritedCss {
             text_style: TextStyle {
                 font_size: 16.0,

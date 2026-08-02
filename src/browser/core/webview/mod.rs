@@ -1,6 +1,7 @@
 //! ブラウザのwebview機能。タスクとレンダリング情報の管理を行う。
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::engine::{
     css::{self, parser::Parser as CssParser},
@@ -321,7 +322,7 @@ impl WebView {
     fn build_layout(
         docment_info: &DocumentInfo,
         resolved_styles: &layouter::css_resolver::ResolvedStyles,
-        measurer: &PlatformTextMeasurer,
+        measurer: Arc<dyn crate::engine::bridge::text::TextMeasurer<layouter::types::TextStyle>>,
         images: &HashMap<String, Image>,
     ) -> (LayoutNode, InfoNode) {
         layouter::build_layout_and_info_with_images(
@@ -348,7 +349,7 @@ impl WebView {
         self.layout_and_info = Some(Self::build_layout(
             doc_info,
             &self.resolved_styles,
-            self.text_measurer.as_ref().unwrap(),
+            Arc::new(self.text_measurer.as_ref().unwrap().clone()),
             &self.images,
         ));
         self.needs_redraw = true;

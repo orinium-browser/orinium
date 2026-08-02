@@ -15,7 +15,7 @@ fn quantize_font_size(px: f32) -> f32 {
     (px * 64.0).round() / 64.0
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct PlatformTextMeasurer;
 
 impl PlatformTextMeasurer {

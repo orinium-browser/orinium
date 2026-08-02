@@ -43,7 +43,7 @@ use super::ui::BrowserUi;
 use super::{BrowserCommand, resource_loader::BrowserResourceLoader};
 use crate::engine::layouter;
 use crate::engine::renderer_model::{self, DrawCommand};
-use crate::engine::ui::text_input::{TextInputEvent, TextInputKey};
+use crate::engine::ui::text_input_types::{TextInputEvent, TextInputKey};
 
 use crate::platform::network::NetworkCore;
 use crate::platform::renderer::gpu::GpuRenderer;

@@ -13,6 +13,7 @@ use crate::engine::tree::TreeNode;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use ui_layout::{
     AlignItems, BoxSizing, Display, FlexDirection, InnerDisplay, ItemFragment, JustifyContent,
@@ -27,10 +28,11 @@ use super::types::{
     RadialShape, RadialSizeKind, TextAlign, TextDecoration, TextStyle, TextTransform,
 };
 use crate::engine::renderer_model::Image;
+use crate::engine::ui::block_bridge::CustomLayoutBridge;
 use crate::engine::ui::button::ButtonComponent;
-use crate::engine::ui::custom_bridge::{CustomInlineBridge, CustomLayoutBridge};
 use crate::engine::ui::custom_node::CustomNode;
 use crate::engine::ui::image::ImageComponent;
+use crate::engine::ui::inline_bridge::CustomInlineBridge;
 use crate::engine::ui::text_input::TextInputComponent;
 
 /// Tags that produce a [`NodeKind::Custom`] instead of a normal container.
@@ -111,7 +113,7 @@ fn ptr_from_dom<T>(dom: &Rc<RefCell<TreeNode<T>>>) -> *const TreeNode<T> {
 pub fn build_layout_and_info(
     dom: &Rc<RefCell<TreeNode<HtmlNodeType>>>,
     resolved_styles: &ResolvedStyles,
-    measurer: &dyn text::TextMeasurer<TextStyle>,
+    measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
     parent: InheritedCss,
     chain: ElementChain,
 ) -> (LayoutNode, InfoNode) {
@@ -129,7 +131,7 @@ pub fn build_layout_and_info(
 pub fn build_layout_and_info_with_images(
     dom: &Rc<RefCell<TreeNode<HtmlNodeType>>>,
     resolved_styles: &ResolvedStyles,
-    measurer: &dyn text::TextMeasurer<TextStyle>,
+    measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
     parent: InheritedCss,
     mut chain: ElementChain,
     images: &HashMap<String, Image>,
@@ -258,7 +260,7 @@ pub fn build_layout_and_info_with_images(
                     unreachable!()
                 };
                 let (layouter, kind) =
-                    create_text_node(t, text_style.clone(), line_height, measurer);
+                    create_text_node(t, text_style.clone(), line_height, &*measurer);
 
                 let mut inline_style = style.clone();
                 inline_style.display = Display {
@@ -291,17 +293,7 @@ pub fn build_layout_and_info_with_images(
                             Background::Color(c) if c.3 > 0 => *c,
                             _ => default_bg,
                         };
-                        let btn_w = match &style.size.width {
-                            LengthOrAuto::Length(l) => l.clone(),
-                            LengthOrAuto::Auto => Length::Px(120.0),
-                        };
-                        let btn_h = match &style.size.height {
-                            LengthOrAuto::Length(l) => l.clone(),
-                            LengthOrAuto::Auto => Length::Px(36.0),
-                        };
                         std::rc::Rc::new(ButtonComponent {
-                            width: btn_w,
-                            height: btn_h,
                             label: text,
                             button_color: bg,
                             label_color: text_style.color,
@@ -315,10 +307,11 @@ pub fn build_layout_and_info_with_images(
                         std::rc::Rc::new(ImageComponent { image })
                     }
                     // ToDo:
-                    // Replace stub TextInputComponent to InputComponent
+                    // TODO: Replace stub TextInputComponent to InputComponent
                     "input" => std::rc::Rc::new(TextInputComponent::new(
                         html_node.get_attr("value").unwrap_or_default(),
                         html_node.get_attr("placeholder").unwrap_or_default(),
+                        measurer.clone(),
                     )),
                     _ => unreachable!(),
                 };
@@ -339,6 +332,7 @@ pub fn build_layout_and_info_with_images(
                         scroll_offset_x: 0.0,
                         scroll_offset_y: 0.0,
                         style: container_style,
+                        layout_style: style.clone(),
                         text_style: text_style.clone(),
                         layout_id,
                     };
@@ -360,6 +354,7 @@ pub fn build_layout_and_info_with_images(
                         scroll_offset_x: 0.0,
                         scroll_offset_y: 0.0,
                         style: container_style,
+                        layout_style: style.clone(),
                         text_style: text_style.clone(),
                         layout_id: None,
                     };
@@ -441,7 +436,7 @@ pub fn build_layout_and_info_with_images(
                             unreachable!()
                         };
                         let (layouter, kind) =
-                            create_text_node(t, text_style.clone(), line_height, measurer);
+                            create_text_node(t, text_style.clone(), line_height, &*measurer);
                         child_slots.push(ChildSlot::Inline(
                             LayoutChild::Object(Box::new(layouter)),
                             InfoNode {

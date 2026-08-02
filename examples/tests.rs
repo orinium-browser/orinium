@@ -21,7 +21,7 @@ use orinium_browser::{
 use colored::*;
 
 use anyhow::Result;
-use std::{env, rc::Rc};
+use std::{env, rc::Rc, sync::Arc};
 use ui_layout::{LayoutEngine, LayoutNode};
 
 fn main() -> Result<()> {
@@ -366,10 +366,11 @@ fn build_layout_info(raw_url: &str) -> Result<(LayoutNode, InfoNode)> {
 
     let measurer = PlatformTextMeasurer::new()
         .expect("Failed to initialize text measurer (no system font found)");
+    let measurer = Arc::new(measurer);
     let (layout, info) = build_layout_and_info(
         &dom.root,
         &resolved_styles,
-        &measurer,
+        measurer,
         InheritedCss {
             text_style: TextStyle {
                 font_size: 16.0,

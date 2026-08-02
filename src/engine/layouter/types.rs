@@ -2,6 +2,7 @@
 
 use std::rc::Rc;
 
+use crate::engine::ui::InlineLayoutId;
 use crate::engine::ui::custom_node::CustomNode;
 
 /// InfoNode represents a node in the layout tree.
@@ -52,9 +53,11 @@ pub enum NodeKind {
         scroll_offset_x: f32,
         scroll_offset_y: f32,
         style: ContainerStyle,
+        /// Resolved `ui_layout::Style` for CSS sizing at render time.
+        layout_style: ui_layout::Style,
         text_style: TextStyle,
         /// For inline custom elements: cache key for [`CustomInlineBridge`].
-        layout_id: Option<usize>,
+        layout_id: Option<InlineLayoutId>,
     },
 }
 
