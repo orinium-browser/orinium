@@ -297,14 +297,14 @@
 <a href=#297 id=297 data-nosnippet>297</a>                    <span class="kw">let </span>node = <span class="self">self
 <a href=#298 id=298 data-nosnippet>298</a>                        </span>.parse_at_rule()
 <a href=#299 id=299 data-nosnippet>299</a>                        .map_err(|e| e.with_context(<span class="string">"parse: failed to parse at-rule"</span>))<span class="question-mark">?</span>;
-<a href=#300 id=300 data-nosnippet>300</a>                    <span class="macro">log::debug!</span>(target: <span class="string">"CssParser"</span>, <span class="string">"AtRule parsed: {:?}"</span>, <span class="kw-2">&amp;</span>node);
+<a href=#300 id=300 data-nosnippet>300</a>                    <span class="macro">log::debug!</span>(target: <span class="string">"CssParser"</span>, <span class="string">"AtRule parsed: {:?}"</span>, node);
 <a href=#301 id=301 data-nosnippet>301</a>                    stylesheet.children.push(node);
 <a href=#302 id=302 data-nosnippet>302</a>                }
 <a href=#303 id=303 data-nosnippet>303</a>                <span class="kw">_ </span>=&gt; {
 <a href=#304 id=304 data-nosnippet>304</a>                    <span class="kw">let </span>node = <span class="self">self
 <a href=#305 id=305 data-nosnippet>305</a>                        </span>.parse_rule()
 <a href=#306 id=306 data-nosnippet>306</a>                        .map_err(|e| e.with_context(<span class="string">"parse: failed to parse rule"</span>))<span class="question-mark">?</span>;
-<a href=#307 id=307 data-nosnippet>307</a>                    <span class="macro">log::debug!</span>(target: <span class="string">"CssParser"</span>, <span class="string">"Rule parsed: {:?}"</span>, <span class="kw-2">&amp;</span>node);
+<a href=#307 id=307 data-nosnippet>307</a>                    <span class="macro">log::debug!</span>(target: <span class="string">"CssParser"</span>, <span class="string">"Rule parsed: {:?}"</span>, node);
 <a href=#308 id=308 data-nosnippet>308</a>                    stylesheet.children.push(node);
 <a href=#309 id=309 data-nosnippet>309</a>                }
 <a href=#310 id=310 data-nosnippet>310</a>            }

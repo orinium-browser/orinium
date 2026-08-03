@@ -58,7 +58,7 @@
 <a href=#58 id=58 data-nosnippet>58</a>        <span class="kw">let </span>supported_cfg = device
 <a href=#59 id=59 data-nosnippet>59</a>            .default_output_config()
 <a href=#60 id=60 data-nosnippet>60</a>            .context(<span class="string">"Failed to get default output config"</span>)<span class="question-mark">?</span>;
-<a href=#61 id=61 data-nosnippet>61</a>        <span class="kw">let </span>config: StreamConfig = supported_cfg.clone().into();
+<a href=#61 id=61 data-nosnippet>61</a>        <span class="kw">let </span>config: StreamConfig = supported_cfg.into();
 <a href=#62 id=62 data-nosnippet>62</a>        <span class="kw">let </span>sample_format = supported_cfg.sample_format();
 <a href=#63 id=63 data-nosnippet>63</a>        <span class="kw">let </span>output_channels = config.channels <span class="kw">as </span>usize;
 <a href=#64 id=64 data-nosnippet>64</a>

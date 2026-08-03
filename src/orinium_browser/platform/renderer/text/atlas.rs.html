@@ -184,10 +184,10 @@
 <a href=#184 id=184 data-nosnippet>184</a>        <span class="kw">let </span>cache_val = (li, alloc_id, rect, mask_width, mask_height);
 <a href=#185 id=185 data-nosnippet>185</a>
 <a href=#186 id=186 data-nosnippet>186</a>        <span class="comment">// Make room in the cache if full (key is guaranteed absent).
-<a href=#187 id=187 data-nosnippet>187</a>        </span><span class="kw">if </span><span class="self">self</span>.glyph_map.len() &gt;= LRU_CAPACITY {
-<a href=#188 id=188 data-nosnippet>188</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>((_k, (elayer, ealloc_id, <span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>))) = <span class="self">self</span>.glyph_map.pop_lru() {
-<a href=#189 id=189 data-nosnippet>189</a>                <span class="self">self</span>.allocators[elayer <span class="kw">as </span>usize].deallocate(ealloc_id);
-<a href=#190 id=190 data-nosnippet>190</a>            }
+<a href=#187 id=187 data-nosnippet>187</a>        </span><span class="kw">if </span><span class="self">self</span>.glyph_map.len() &gt;= LRU_CAPACITY
+<a href=#188 id=188 data-nosnippet>188</a>            &amp;&amp; <span class="kw">let </span><span class="prelude-val">Some</span>((_k, (elayer, ealloc_id, <span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>))) = <span class="self">self</span>.glyph_map.pop_lru()
+<a href=#189 id=189 data-nosnippet>189</a>        {
+<a href=#190 id=190 data-nosnippet>190</a>            <span class="self">self</span>.allocators[elayer <span class="kw">as </span>usize].deallocate(ealloc_id);
 <a href=#191 id=191 data-nosnippet>191</a>        }
 <a href=#192 id=192 data-nosnippet>192</a>        <span class="self">self</span>.glyph_map.put(key, cache_val);
 <a href=#193 id=193 data-nosnippet>193</a>
@@ -232,7 +232,7 @@
 <a href=#232 id=232 data-nosnippet>232</a>
 <a href=#233 id=233 data-nosnippet>233</a>            <span class="kw">let </span>align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 <a href=#234 id=234 data-nosnippet>234</a>            <span class="kw">let </span>stride = size;
-<a href=#235 id=235 data-nosnippet>235</a>            <span class="kw">let </span>padded_stride = ((stride + align - <span class="number">1</span>) / align) * align;
+<a href=#235 id=235 data-nosnippet>235</a>            <span class="kw">let </span>padded_stride = stride.div_ceil(align) * align;
 <a href=#236 id=236 data-nosnippet>236</a>
 <a href=#237 id=237 data-nosnippet>237</a>            <span class="kw">let </span>layout = wgpu::TexelCopyBufferLayout {
 <a href=#238 id=238 data-nosnippet>238</a>                offset: <span class="number">0</span>,
@@ -268,7 +268,7 @@
 <a href=#268 id=268 data-nosnippet>268</a>
 <a href=#269 id=269 data-nosnippet>269</a>                    <span class="kw">let </span>pad = (padded_stride - stride) <span class="kw">as </span>usize;
 <a href=#270 id=270 data-nosnippet>270</a>                    <span class="kw">if </span>pad &gt; <span class="number">0 </span>{
-<a href=#271 id=271 data-nosnippet>271</a>                        padded.extend(std::iter::repeat(<span class="number">0u8</span>).take(pad));
+<a href=#271 id=271 data-nosnippet>271</a>                        padded.extend(std::iter::repeat_n(<span class="number">0u8</span>, pad));
 <a href=#272 id=272 data-nosnippet>272</a>                    }
 <a href=#273 id=273 data-nosnippet>273</a>                }
 <a href=#274 id=274 data-nosnippet>274</a>

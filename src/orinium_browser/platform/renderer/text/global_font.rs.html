@@ -16,13 +16,13 @@
 <a href=#16 id=16 data-nosnippet>16</a>    <span class="kw">let </span><span class="kw-2">mut </span>fs = GLOBAL_FONT_SYSTEM
 <a href=#17 id=17 data-nosnippet>17</a>        .lock()
 <a href=#18 id=18 data-nosnippet>18</a>        .expect(<span class="string">"GLOBAL_FONT_SYSTEM lock failed"</span>);
-<a href=#19 id=19 data-nosnippet>19</a>    f(<span class="kw-2">&amp;mut *</span>fs)
+<a href=#19 id=19 data-nosnippet>19</a>    f(<span class="kw-2">&amp;mut </span>fs)
 <a href=#20 id=20 data-nosnippet>20</a>}
 <a href=#21 id=21 data-nosnippet>21</a>
 <a href=#22 id=22 data-nosnippet>22</a><span class="kw">pub fn </span>global_font_system_ready() -&gt; bool {
 <a href=#23 id=23 data-nosnippet>23</a>    GLOBAL_FONT_SYSTEM
 <a href=#24 id=24 data-nosnippet>24</a>        .lock()
-<a href=#25 id=25 data-nosnippet>25</a>        .map(|fs| fs.db.len() &gt; <span class="number">0</span>)
+<a href=#25 id=25 data-nosnippet>25</a>        .map(|fs| !fs.db.is_empty())
 <a href=#26 id=26 data-nosnippet>26</a>        .unwrap_or(<span class="bool-val">false</span>)
 <a href=#27 id=27 data-nosnippet>27</a>}
 <a href=#28 id=28 data-nosnippet>28</a>

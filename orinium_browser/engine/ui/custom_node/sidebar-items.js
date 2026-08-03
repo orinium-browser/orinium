@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"trait":["CustomNode"]};
+window.SIDEBAR_ITEMS = {"enum":["PointerEvent"],"struct":["ContentSize"],"trait":["CustomNode"]};

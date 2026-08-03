@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["get_custom_inline_result"],"struct":["CustomInlineBridge","CustomInlineResult","CustomLayoutBridge"]};
