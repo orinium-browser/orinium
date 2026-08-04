@@ -705,13 +705,17 @@ impl BrowserApp {
 
     /// Handles scrolling for the window's assigned tab, updating its layout container offsets.
     fn handle_scroll(&mut self, window_id: WindowId, delta: winit::event::MouseScrollDelta) {
-        let scroll_amount = match delta {
-            winit::event::MouseScrollDelta::LineDelta(_, y) => -y * 60.0,
-            winit::event::MouseScrollDelta::PixelDelta(pos) => -pos.y as f32,
+        let (scroll_x, scroll_y) = match delta {
+            winit::event::MouseScrollDelta::LineDelta(x, y) => (-x * 60.0, -y * 60.0),
+            winit::event::MouseScrollDelta::PixelDelta(pos) => (-pos.x as f32, -pos.y as f32),
         };
 
         let (window_height, sf) = match self.renders.get(&window_id) {
             Some(render) => (render.window_size.1 as f32, render.scale_factor as f32),
+            None => return,
+        };
+        let (mouse_x, mouse_y) = match self.inputs.get(&window_id) {
+            Some(input) => (input.mouse_position.0 as f32, input.mouse_position.1 as f32),
             None => return,
         };
 
@@ -721,20 +725,28 @@ impl BrowserApp {
         };
         if let Some(tab) = ui.tabs.get_mut(tab_id)
             && let Some((layout, info)) = tab.layout_and_info_mut()
-            && let layouter::types::NodeKind::Container {
+        {
+            // Prefer the scrollable container under the cursor; the wheel
+            // event chains to the root when nothing nested consumes it.
+            if crate::engine::input::scroll_at(layout, info, mouse_x, mouse_y, scroll_x, scroll_y) {
+                return;
+            }
+
+            if let layouter::types::NodeKind::Container {
                 scroll_offset_y, ..
             } = &mut info.kind
-        {
-            *scroll_offset_y = (*scroll_offset_y + scroll_amount).clamp(
-                0.0,
-                (layout
-                    .layout_box
-                    .iter()
-                    .map(|l| l.children_box.height)
-                    .sum::<f32>()
-                    - (window_height / sf))
-                    .max(0.0),
-            );
+            {
+                *scroll_offset_y = (*scroll_offset_y + scroll_y).clamp(
+                    0.0,
+                    (layout
+                        .layout_box
+                        .iter()
+                        .map(|l| l.children_box.height)
+                        .sum::<f32>()
+                        - (window_height / sf))
+                        .max(0.0),
+                );
+            }
         }
     }
 

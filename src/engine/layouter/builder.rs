@@ -25,11 +25,10 @@ use super::text_layouter::TextFlowLayouter;
 use super::types::{
     Background, BorderRadius, BorderStyle, Color, ColorStop, ContainerRole, ContainerStyle,
     CornerRadius, FontStyle, FontWeight, Gradient, GradientKind, InfoNode, LineHeight, NodeKind,
-    RadialShape, RadialSizeKind, TextAlign, TextDecoration, TextStyle, TextTransform,
+    Overflow, RadialShape, RadialSizeKind, TextAlign, TextDecoration, TextStyle, TextTransform,
 };
 use crate::engine::renderer_model::Image;
-use crate::engine::ui::block_bridge::CustomLayoutBridge;
-use crate::engine::ui::inline_bridge::CustomInlineBridge;
+use crate::engine::ui::custom_node_bridge::CustomNodeBridge;
 use crate::engine::ui::registry::{ComponentRegistry, CustomNodeContext};
 
 const DEFAULT_LINE_FACTOR: f32 = 1.2;
@@ -208,6 +207,7 @@ pub fn build_layout_and_info_with_images(
             let mut text_style = child_css.text_style.clone();
             let mut container_style = ContainerStyle::default();
             let mut style = Style::default();
+            let mut overflow = Overflow::default();
 
             // Collect CSS candidates.
             let candidates: Option<HashMap<_, _>> = if let HtmlNodeType::Element { .. } = &html_node
@@ -227,6 +227,7 @@ pub fn build_layout_and_info_with_images(
                             &mut style,
                             &mut container_style,
                             &mut text_style,
+                            &mut overflow,
                         );
                     }
                 }
@@ -262,10 +263,7 @@ pub fn build_layout_and_info_with_images(
                     outer: OuterDisplay::Inline,
                     inner: InnerDisplay::Flow,
                 };
-                let layout = LayoutNode::with_children(
-                    inline_style,
-                    [LayoutChild::Object(Box::new(layouter))],
-                );
+                let layout = LayoutNode::with_children(inline_style, [layouter]);
                 let info = InfoNode {
                     kind,
                     children: Vec::new(),
@@ -295,53 +293,22 @@ pub fn build_layout_and_info_with_images(
                     })
                     .expect("registry must handle every tag it reports");
 
-                let is_inline = matches!(style.display.outer, OuterDisplay::Inline);
-
-                let (kind, layout) = if is_inline {
-                    let inline_bridge = CustomInlineBridge::new(
-                        std::rc::Rc::clone(&node),
-                        style.clone(),
-                        container_style.clone(),
-                    );
-                    let layout_id = Some(inline_bridge.id);
-                    let kind = NodeKind::Custom {
-                        node,
-                        scroll_x: false,
-                        scroll_y: false,
-                        scroll_offset_x: 0.0,
-                        scroll_offset_y: 0.0,
-                        style: container_style,
-                        layout_style: style.clone(),
-                        text_style: text_style.clone(),
-                        layout_id,
-                    };
-                    let layout = LayoutNode::with_children(
-                        style,
-                        [LayoutChild::Object(Box::new(inline_bridge))],
-                    );
-                    (kind, layout)
-                } else {
-                    let bridge = CustomLayoutBridge::new(
-                        container_style.clone(),
-                        style.clone(),
-                        std::rc::Rc::clone(&node),
-                    );
-                    let kind = NodeKind::Custom {
-                        node,
-                        scroll_x: false,
-                        scroll_y: false,
-                        scroll_offset_x: 0.0,
-                        scroll_offset_y: 0.0,
-                        style: container_style,
-                        layout_style: style.clone(),
-                        text_style: text_style.clone(),
-                        layout_id: None,
-                    };
-                    let layout =
-                        LayoutNode::with_children(style, [LayoutChild::Custom(Box::new(bridge))]);
-                    (kind, layout)
+                let bridge = CustomNodeBridge::new(
+                    std::rc::Rc::clone(&node),
+                    style.clone(),
+                    style.display.outer,
+                );
+                let kind = NodeKind::Custom {
+                    node,
+                    scroll_x: overflow.x,
+                    scroll_y: overflow.y,
+                    scroll_offset_x: 0.0,
+                    scroll_offset_y: 0.0,
+                    style: container_style,
+                    layout_style: style.clone(),
+                    text_style: text_style.clone(),
                 };
-
+                let layout = LayoutNode::with_children(style, [bridge]);
                 let info = InfoNode {
                     kind,
                     children: Vec::new(),
@@ -357,8 +324,8 @@ pub fn build_layout_and_info_with_images(
 
             let kind = if is_link {
                 NodeKind::Container {
-                    scroll_x: false,
-                    scroll_y: false,
+                    scroll_x: overflow.x,
+                    scroll_y: overflow.y,
                     scroll_offset_x: 0.0,
                     scroll_offset_y: 0.0,
                     style: container_style,
@@ -368,8 +335,8 @@ pub fn build_layout_and_info_with_images(
                 }
             } else {
                 NodeKind::Container {
-                    scroll_x: false,
-                    scroll_y: false,
+                    scroll_x: overflow.x,
+                    scroll_y: overflow.y,
                     scroll_offset_x: 0.0,
                     scroll_offset_y: 0.0,
                     style: container_style,
@@ -417,7 +384,7 @@ pub fn build_layout_and_info_with_images(
                         let (layouter, kind) =
                             create_text_node(t, text_style.clone(), line_height, &*measurer);
                         child_slots.push(ChildSlot::Inline(
-                            LayoutChild::Object(Box::new(layouter)),
+                            layouter.into(),
                             InfoNode {
                                 kind,
                                 children: Vec::new(),
@@ -696,6 +663,7 @@ pub fn apply_declaration(
     style: &mut Style,
     container_style: &mut ContainerStyle,
     text_style: &mut TextStyle,
+    overflow: &mut Overflow,
 ) -> Option<()> {
     fn expand_box<T: Clone, F>(
         name: &str,
@@ -831,6 +799,35 @@ pub fn apply_declaration(
             x: x[0].clone(),
             y: y[0].clone(),
         })
+    }
+
+    /// Whether a single `overflow` keyword enables scrolling on an axis.
+    fn overflow_scrollable(keyword: &str) -> Option<bool> {
+        match keyword {
+            "visible" | "clip" => Some(false),
+            "hidden" | "scroll" | "auto" => Some(true),
+            _ => None,
+        }
+    }
+
+    /// Expand an `overflow` shorthand (1 or 2 keywords) into per-axis flags.
+    fn overflow_flags(value: &CssValue) -> Option<(bool, bool)> {
+        match value {
+            CssValue::Keyword(k) => overflow_scrollable(k).map(|b| (b, b)),
+            CssValue::List(l) => {
+                let x = match l.first()? {
+                    CssValue::Keyword(k) => overflow_scrollable(k)?,
+                    _ => return None,
+                };
+                let y = match l.get(1) {
+                    Some(CssValue::Keyword(k)) => overflow_scrollable(k)?,
+                    Some(_) => return None,
+                    None => x,
+                };
+                Some((x, y))
+            }
+            _ => None,
+        }
     }
 
     fn parse_border_shorthand(
@@ -1287,6 +1284,37 @@ pub fn apply_declaration(
         }
         ("max-height", _) => {
             style.size.max_height = resolve_css_len_auto(name, value, text_style)?;
+        }
+        ("aspect-ratio", _) => {
+            style.size.aspect_ratio = match value {
+                CssValue::Keyword(v) if v == "auto" => None,
+                CssValue::Number(v) if *v > 0.0 => Some(*v),
+                CssValue::List(l) => {
+                    let mut nums = l.iter().filter_map(|v| match v {
+                        CssValue::Number(n) if *n > 0.0 => Some(*n),
+                        _ => None,
+                    });
+                    let w = nums.next()?;
+                    let h = nums.next()?;
+                    Some(w / h)
+                }
+                _ => return None,
+            };
+        }
+
+        /* ======================
+         * Overflow
+         * ====================== */
+        ("overflow", _) => {
+            let (x, y) = overflow_flags(value)?;
+            overflow.x = x;
+            overflow.y = y;
+        }
+        ("overflow-x", CssValue::Keyword(k)) => {
+            overflow.x = overflow_scrollable(k)?;
+        }
+        ("overflow-y", CssValue::Keyword(k)) => {
+            overflow.y = overflow_scrollable(k)?;
         }
 
         /* ======================
@@ -2056,5 +2084,119 @@ fn resolve_css_color(name: &str, css_color: &CssValue) -> Option<Color> {
             );
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn apply_overflow(value: CssValue) -> Overflow {
+        let mut style = Style::default();
+        let mut container_style = ContainerStyle::default();
+        let mut text_style = TextStyle::default();
+        let mut overflow = Overflow::default();
+        let parsed = apply_declaration(
+            "overflow",
+            &value,
+            &mut style,
+            &mut container_style,
+            &mut text_style,
+            &mut overflow,
+        );
+        assert!(parsed.is_some());
+        overflow
+    }
+
+    #[test]
+    fn overflow_single_keyword_sets_both_axes() {
+        assert_eq!(
+            apply_overflow(CssValue::Keyword("hidden".into())),
+            Overflow { x: true, y: true }
+        );
+        assert_eq!(
+            apply_overflow(CssValue::Keyword("auto".into())),
+            Overflow { x: true, y: true }
+        );
+        assert_eq!(
+            apply_overflow(CssValue::Keyword("visible".into())),
+            Overflow { x: false, y: false }
+        );
+        assert_eq!(
+            apply_overflow(CssValue::Keyword("clip".into())),
+            Overflow { x: false, y: false }
+        );
+    }
+
+    #[test]
+    fn overflow_two_keywords_set_axes_independently() {
+        assert_eq!(
+            apply_overflow(CssValue::List(vec![
+                CssValue::Keyword("hidden".into()),
+                CssValue::Keyword("visible".into()),
+            ])),
+            Overflow { x: true, y: false }
+        );
+        assert_eq!(
+            apply_overflow(CssValue::List(vec![
+                CssValue::Keyword("visible".into()),
+                CssValue::Keyword("auto".into()),
+            ])),
+            Overflow { x: false, y: true }
+        );
+    }
+
+    #[test]
+    fn overflow_axis_properties_set_single_axis() {
+        let mut style = Style::default();
+        let mut container_style = ContainerStyle::default();
+        let mut text_style = TextStyle::default();
+        let mut overflow = Overflow::default();
+
+        assert!(
+            apply_declaration(
+                "overflow-x",
+                &CssValue::Keyword("scroll".into()),
+                &mut style,
+                &mut container_style,
+                &mut text_style,
+                &mut overflow,
+            )
+            .is_some()
+        );
+        assert_eq!(overflow, Overflow { x: true, y: false });
+
+        assert!(
+            apply_declaration(
+                "overflow-y",
+                &CssValue::Keyword("auto".into()),
+                &mut style,
+                &mut container_style,
+                &mut text_style,
+                &mut overflow,
+            )
+            .is_some()
+        );
+        assert_eq!(overflow, Overflow { x: true, y: true });
+    }
+
+    #[test]
+    fn unsupported_overflow_value_is_rejected() {
+        let mut style = Style::default();
+        let mut container_style = ContainerStyle::default();
+        let mut text_style = TextStyle::default();
+        let mut overflow = Overflow::default();
+        assert!(
+            apply_declaration(
+                "overflow",
+                &CssValue::Number(1.0),
+                &mut style,
+                &mut container_style,
+                &mut text_style,
+                &mut overflow,
+            )
+            .is_none()
+        );
+        assert_eq!(overflow, Overflow::default());
     }
 }

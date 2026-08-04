@@ -1,7 +1,7 @@
 //! Generation of [`DrawCommand`]s from the layout tree (box models, borders,
 //! backgrounds and text).
 
-use ui_layout::{LayoutChild, LayoutNode};
+use ui_layout::{BoxModel, LayoutChild, LayoutNode, Rect};
 
 use crate::engine::layouter::text_layouter::TextFlowLayouter;
 use crate::engine::layouter::types::{
@@ -14,7 +14,6 @@ use crate::engine::renderer_model::path::{
     Path, append_quarter_ellipse, clamp_radii, rect_path, rounded_rect_path,
 };
 use crate::engine::ui::ContentSize;
-use crate::engine::ui::get_custom_inline_result;
 
 /// Per-box-model push state for balanced pop generation.
 #[derive(Default, Clone, Copy)]
@@ -598,63 +597,49 @@ pub fn generate_draw_commands(
                 text_style,
                 style,
                 layout_style,
-                layout_id,
                 ..
             } => {
-                if let Some(LayoutChild::Node(node_layout)) = layout_iter.next() {
+                match layout_iter.next() {
                     // Block custom element: recurse into the child layout node.
-                    generate_draw_commands(cmd_buf, node_layout, child_info);
-                } else if layout_id.is_some() {
-                    // Inline custom element: consume the Object and draw directly.
-                    layout_iter.next();
+                    Some(LayoutChild::Node(node_layout)) => {
+                        generate_draw_commands(cmd_buf, node_layout, child_info);
+                    }
+                    // Inline custom element: consume the Object and draw it
+                    // from the layout result stored on the tree child.
+                    Some(LayoutChild::Custom(custom_child)) => {
+                        if let Some(result) = custom_child.result() {
+                            let effective_style =
+                                node.background().map(|background| ContainerStyle {
+                                    background,
+                                    ..style.clone()
+                                });
+                            let style_ref = effective_style.as_ref().unwrap_or(style);
 
-                    let effective_style = node.background().map(|background| ContainerStyle {
-                        background,
-                        ..style.clone()
-                    });
-                    let style_ref = effective_style.as_ref().unwrap_or(style);
-
-                    if let Some(result) = get_custom_inline_result(layout_id.unwrap()) {
-                        for span in &result.spans {
-                            let cx = span.line_pos.0 - text_origin.0;
-                            let cy = span.line_pos.1 - text_origin.1;
-                            let cw = result.width;
-                            let ch = result.height;
-
-                            let pb_x = cx - result.padding_left;
-                            let pb_y = cy - result.padding_top;
-                            let pb_w = cw + result.padding_left + result.padding_right;
-                            let pb_h = ch + result.padding_top + result.padding_bottom;
-
-                            let bb_x = pb_x - result.border_left;
-                            let bb_y = pb_y - result.border_top;
-                            let bb_w = pb_w + result.border_left + result.border_right;
-                            let bb_h = pb_h + result.border_top + result.border_bottom;
-
-                            let rect = ui_layout::BoxModel {
-                                border_box: ui_layout::Rect {
-                                    x: bb_x,
-                                    y: bb_y,
-                                    width: bb_w,
-                                    height: bb_h,
+                            let bm = &result.box_model;
+                            let rect = BoxModel {
+                                border_box: Rect {
+                                    x: bm.border_box.x - text_origin.0,
+                                    y: bm.border_box.y - text_origin.1,
+                                    width: bm.border_box.width,
+                                    height: bm.border_box.height,
                                 },
-                                padding_box: ui_layout::Rect {
-                                    x: pb_x,
-                                    y: pb_y,
-                                    width: pb_w,
-                                    height: pb_h,
+                                padding_box: Rect {
+                                    x: bm.padding_box.x - text_origin.0,
+                                    y: bm.padding_box.y - text_origin.1,
+                                    width: bm.padding_box.width,
+                                    height: bm.padding_box.height,
                                 },
-                                content_box: ui_layout::Rect {
-                                    x: cx,
-                                    y: cy,
-                                    width: cw,
-                                    height: ch,
+                                content_box: Rect {
+                                    x: bm.content_box.x - text_origin.0,
+                                    y: bm.content_box.y - text_origin.1,
+                                    width: bm.content_box.width,
+                                    height: bm.content_box.height,
                                 },
-                                children_box: ui_layout::Rect {
-                                    x: cx,
-                                    y: cy,
-                                    width: cw,
-                                    height: ch,
+                                children_box: Rect {
+                                    x: bm.children_box.x - text_origin.0,
+                                    y: bm.children_box.y - text_origin.1,
+                                    width: bm.children_box.width,
+                                    height: bm.children_box.height,
                                 },
                             };
                             push_box_model(cmd_buf, &rect, style_ref, 0.0, 0.0, true);
@@ -663,8 +648,8 @@ pub fn generate_draw_commands(
                                 text_style,
                                 layout_style,
                                 ContentSize {
-                                    width: cw,
-                                    height: ch,
+                                    width: rect.content_box.width,
+                                    height: rect.content_box.height,
                                 },
                             );
                             pop_box_model(
@@ -678,6 +663,7 @@ pub fn generate_draw_commands(
                             );
                         }
                     }
+                    _ => {}
                 }
             }
         }

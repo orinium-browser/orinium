@@ -2,7 +2,10 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use ui_layout::{FlowLayoutContext, FlowLayouter, LayoutContext, LineSpan, MeasureResult};
+use ui_layout::{
+    BoxModel, CustomLayouter, InlineBox, LayoutBox, LayoutContext, LineSpan, MeasureResult,
+    OuterDisplay, Rect,
+};
 
 use crate::engine::bridge::text::GlyphCluster;
 use crate::engine::layouter::types::TextStyle;
@@ -23,7 +26,7 @@ pub struct TextLayoutResult {
     pub line_texts: Vec<String>,
 }
 
-/// A self-layouting text object that implements [`FlowLayouter`].
+/// A self-layouting text object that implements [`CustomLayouter`].
 ///
 /// Constructed with pre-shaped cluster data from a text measurer.
 /// During layout it wraps text at word boundaries using
@@ -284,8 +287,12 @@ impl Drop for TextFlowLayouter {
     }
 }
 
-impl FlowLayouter for TextFlowLayouter {
-    fn layout(&self, ctx: &FlowLayoutContext) -> Vec<LineSpan> {
+impl CustomLayouter for TextFlowLayouter {
+    fn formatting_context(&self) -> OuterDisplay {
+        OuterDisplay::Inline
+    }
+
+    fn layout(&mut self, ctx: &LayoutContext) -> LayoutBox {
         let result = self.compute_layout(ctx.available_inline_size, ctx.start_pos);
         let spans = result.spans.clone();
 
@@ -293,7 +300,38 @@ impl FlowLayouter for TextFlowLayouter {
             cache.borrow_mut().insert(self.id, result);
         });
 
-        spans
+        let (start_x, start_y) = ctx.start_pos;
+        let lh = self.line_height.max(1.0);
+        let total_width = spans
+            .iter()
+            .map(|s| s.line_pos.0 + s.width())
+            .filter(|x| !x.is_nan())
+            .max_by(f32::total_cmp)
+            .map(|max_x| (max_x - start_x).max(0.0))
+            .unwrap_or(0.0);
+        let total_height = spans
+            .iter()
+            .map(|s| s.line_index)
+            .max()
+            .map(|line| (line as f32 + 1.0) * lh)
+            .unwrap_or(0.0);
+        let rect = Rect {
+            x: start_x,
+            y: start_y,
+            width: total_width,
+            height: total_height,
+        };
+        let box_model = BoxModel {
+            border_box: rect,
+            padding_box: rect,
+            content_box: rect,
+            children_box: rect,
+        };
+
+        LayoutBox::InlineBox(InlineBox {
+            box_model,
+            line_spans: spans,
+        })
     }
 
     fn measure(&self, _ctx: &LayoutContext) -> MeasureResult {

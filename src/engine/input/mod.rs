@@ -5,7 +5,6 @@ use std::rc::Rc;
 use super::layouter::types::{InfoNode, NodeKind};
 use super::ui::PointerEvent;
 use super::ui::custom_node::CustomNode;
-use super::ui::get_custom_inline_result;
 use super::ui::text_input_types::TextInputEvent;
 use ui_layout::LayoutNode;
 /// ヒットしたノード情報
@@ -106,17 +105,12 @@ pub fn hit_test<'a>(layout: &'a LayoutNode, info: &'a InfoNode, x: f32, y: f32) 
                     path.push(HitItem { layout, info });
                     return path;
                 }
-            } else if child_layout.object().is_some()
-                && let NodeKind::Custom {
-                    layout_id: Some(layout_id),
-                    ..
-                } = &child_info.kind
-                && let Some(result) = get_custom_inline_result(*layout_id)
+            } else if let Some(result) = child_layout.custom_result()
                 && result.spans.iter().any(|span| {
                     local_x >= span.x_range.start
                         && local_x <= span.x_range.end
                         && local_y >= span.line_pos.1
-                        && local_y <= span.line_pos.1 + result.height
+                        && local_y <= span.line_pos.1 + result.box_model.content_box.height
                 })
             {
                 return vec![
@@ -135,6 +129,101 @@ pub fn hit_test<'a>(layout: &'a LayoutNode, info: &'a InfoNode, x: f32, y: f32) 
 
     // どの box にもヒットしなかった
     Vec::new()
+}
+
+/// Scrolls the deepest scrollable container under `(x, y)` by `(dx, dy)`.
+///
+/// Mirrors [`hit_test`]: boxes are tested front-to-back and children are
+/// visited before the node itself, so the innermost container wins. Only
+/// nodes whose [`NodeKind::Container`] / [`NodeKind::Custom`] flags enable
+/// scrolling for an axis are scrolled, clamped to the scrollable range
+/// (`children_box` extent minus the visible `content_box`).
+///
+/// Returns whether any scroll offset actually changed. Callers can use a
+/// `false` result to chain the wheel event to an ancestor (e.g. the root).
+pub fn scroll_at(
+    layout: &LayoutNode,
+    info: &mut InfoNode,
+    x: f32,
+    y: f32,
+    dx: f32,
+    dy: f32,
+) -> bool {
+    if layout.layout_box.is_empty() {
+        return false;
+    }
+
+    for box_model in layout
+        .layout_box
+        .iter()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
+        let rect = box_model.padding_box;
+        if x < rect.x || y < rect.y || x > rect.x + rect.width || y > rect.y + rect.height {
+            continue;
+        }
+
+        let mut local_x = x - box_model.content_box.x;
+        let mut local_y = y - box_model.content_box.y;
+        let (my_scroll_x, my_scroll_y) = info.kind.scroll_offsets();
+        local_x += my_scroll_x;
+        local_y += my_scroll_y;
+
+        for (child_layout, child_info) in layout.children.iter().zip(&mut info.children).rev() {
+            if let Some(child_node) = child_layout.node()
+                && scroll_at(child_node, child_info, local_x, local_y, dx, dy)
+            {
+                return true;
+            }
+        }
+
+        let scrolled = match &mut info.kind {
+            NodeKind::Container {
+                scroll_x,
+                scroll_y,
+                scroll_offset_x,
+                scroll_offset_y,
+                ..
+            }
+            | NodeKind::Custom {
+                scroll_x,
+                scroll_y,
+                scroll_offset_x,
+                scroll_offset_y,
+                ..
+            } => {
+                let mut changed = false;
+                if *scroll_y {
+                    let max_scroll =
+                        (box_model.children_box.height - box_model.content_box.height).max(0.0);
+                    let next = (*scroll_offset_y + dy).clamp(0.0, max_scroll);
+                    if (next - *scroll_offset_y).abs() > f32::EPSILON {
+                        changed = true;
+                    }
+                    *scroll_offset_y = next;
+                }
+                if *scroll_x {
+                    let max_scroll =
+                        (box_model.children_box.width - box_model.content_box.width).max(0.0);
+                    let next = (*scroll_offset_x + dx).clamp(0.0, max_scroll);
+                    if (next - *scroll_offset_x).abs() > f32::EPSILON {
+                        changed = true;
+                    }
+                    *scroll_offset_x = next;
+                }
+                changed
+            }
+            _ => false,
+        };
+        if scrolled {
+            return true;
+        }
+        return false;
+    }
+
+    false
 }
 
 /// Focuses `target` and clears focus from every other text input.
@@ -216,7 +305,6 @@ mod tests {
                 style: ContainerStyle::default(),
                 layout_style: ui_layout::Style::default(),
                 text_style: TextStyle::default(),
-                layout_id: None,
             },
             children: Vec::new(),
         }
@@ -324,5 +412,170 @@ mod tests {
         a.on_pointer_event(PointerEvent::Down { x: 0.0, y: 0.0 });
         assert!(any_custom_node_needs_repaint(&info_a));
         assert!(!any_custom_node_needs_repaint(&info_a));
+    }
+
+    fn box_model(
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        children_width: f32,
+        children_height: f32,
+    ) -> ui_layout::BoxModel {
+        let rect = ui_layout::Rect {
+            x,
+            y,
+            width,
+            height,
+        };
+        ui_layout::BoxModel {
+            border_box: rect,
+            padding_box: rect,
+            content_box: rect,
+            children_box: ui_layout::Rect {
+                x,
+                y,
+                width: children_width,
+                height: children_height,
+            },
+        }
+    }
+
+    fn scrollable_info() -> InfoNode {
+        InfoNode {
+            kind: NodeKind::Container {
+                scroll_x: false,
+                scroll_y: true,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: ContainerStyle::default(),
+                role: crate::engine::layouter::types::ContainerRole::Normal,
+            },
+            children: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn scroll_at_scrolls_under_point_clamped_to_range() {
+        let mut layout = LayoutNode::new(ui_layout::Style::default());
+        layout.layout_box =
+            ui_layout::LayoutBox::BlockBox(box_model(0.0, 0.0, 200.0, 100.0, 200.0, 300.0));
+        let mut info = scrollable_info();
+
+        // Cursor inside the box. Positive dy scrolls down.
+        assert!(scroll_at(&layout, &mut info, 50.0, 50.0, 0.0, 100.0));
+        let NodeKind::Container {
+            scroll_offset_y, ..
+        } = &info.kind
+        else {
+            panic!("expected container");
+        };
+        assert_eq!(*scroll_offset_y, 100.0);
+
+        // Clamp to children_box.height - content_box.height = 200.
+        assert!(scroll_at(&layout, &mut info, 50.0, 50.0, 0.0, 300.0));
+        let NodeKind::Container {
+            scroll_offset_y, ..
+        } = &info.kind
+        else {
+            panic!("expected container");
+        };
+        assert_eq!(*scroll_offset_y, 200.0);
+
+        // Cannot scroll past 0 (negative dy scrolls up).
+        assert!(scroll_at(&layout, &mut info, 50.0, 50.0, 0.0, -500.0));
+        let NodeKind::Container {
+            scroll_offset_y, ..
+        } = &info.kind
+        else {
+            panic!("expected container");
+        };
+        assert_eq!(*scroll_offset_y, 0.0);
+    }
+
+    #[test]
+    fn scroll_at_ignores_cursor_outside_box() {
+        let mut layout = LayoutNode::new(ui_layout::Style::default());
+        layout.layout_box =
+            ui_layout::LayoutBox::BlockBox(box_model(0.0, 0.0, 200.0, 100.0, 200.0, 300.0));
+        let mut info = scrollable_info();
+
+        assert!(!scroll_at(&layout, &mut info, 250.0, 50.0, 0.0, -100.0));
+    }
+
+    #[test]
+    fn scroll_at_ignores_non_scrollable_containers() {
+        let mut layout = LayoutNode::new(ui_layout::Style::default());
+        layout.layout_box =
+            ui_layout::LayoutBox::BlockBox(box_model(0.0, 0.0, 200.0, 100.0, 200.0, 300.0));
+        let mut info = InfoNode {
+            kind: NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: ContainerStyle::default(),
+                role: crate::engine::layouter::types::ContainerRole::Normal,
+            },
+            children: Vec::new(),
+        };
+
+        assert!(!scroll_at(&layout, &mut info, 50.0, 50.0, 0.0, -100.0));
+        let NodeKind::Container {
+            scroll_offset_y, ..
+        } = &info.kind
+        else {
+            panic!("expected container");
+        };
+        assert_eq!(*scroll_offset_y, 0.0);
+    }
+
+    #[test]
+    fn scroll_at_prefers_innermost_scrollable_container() {
+        // Outer container with scrollable content; inner container is
+        // scrollable and sits inside it. A scroll over the inner container
+        // should move the inner one, not the outer.
+        let outer_children_box = box_model(0.0, 0.0, 400.0, 300.0, 400.0, 900.0);
+        let inner_children_box = box_model(10.0, 10.0, 100.0, 80.0, 100.0, 240.0);
+
+        let mut outer_layout = LayoutNode::with_children(
+            ui_layout::Style::default(),
+            [LayoutNode::new(ui_layout::Style::default())],
+        );
+        outer_layout.layout_box = ui_layout::LayoutBox::BlockBox(outer_children_box);
+
+        let mut inner_layout = LayoutNode::new(ui_layout::Style::default());
+        inner_layout.layout_box = ui_layout::LayoutBox::BlockBox(inner_children_box);
+
+        outer_layout.children[0] = ui_layout::LayoutChild::Node(Box::new(inner_layout));
+
+        let mut outer_info = scrollable_info();
+        let inner_info = scrollable_info();
+        outer_info.children.push(inner_info);
+
+        // Cursor over the inner container. Positive dy scrolls down.
+        assert!(scroll_at(
+            &outer_layout,
+            &mut outer_info,
+            50.0,
+            50.0,
+            0.0,
+            30.0
+        ));
+        let NodeKind::Container {
+            scroll_offset_y, ..
+        } = &outer_info.children[0].kind
+        else {
+            panic!("expected inner container");
+        };
+        assert_eq!(*scroll_offset_y, 30.0);
+        let NodeKind::Container {
+            scroll_offset_y: outer_off,
+            ..
+        } = &outer_info.kind
+        else {
+            panic!("expected outer container");
+        };
+        assert_eq!(*outer_off, 0.0);
     }
 }

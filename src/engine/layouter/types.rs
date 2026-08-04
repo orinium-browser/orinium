@@ -2,7 +2,6 @@
 
 use std::rc::Rc;
 
-use crate::engine::ui::InlineLayoutId;
 use crate::engine::ui::custom_node::CustomNode;
 
 /// InfoNode represents a node in the layout tree.
@@ -21,6 +20,20 @@ pub struct InfoNode {
 pub enum ContainerRole {
     Normal,
     Link { href: String },
+}
+
+/// CSS `overflow` scrollability resolved per axis.
+///
+/// Each flag is `true` when the axis participates in scrolling
+/// (`overflow: hidden` / `scroll` / `auto`). Populated from the CSS
+/// `overflow` / `overflow-x` / `overflow-y` properties and consumed when
+/// routing wheel input and applying scroll offsets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Overflow {
+    /// Whether horizontal overflow scrolls.
+    pub x: bool,
+    /// Whether vertical overflow scrolls.
+    pub y: bool,
 }
 
 /// Node kind of InfoNode
@@ -56,8 +69,6 @@ pub enum NodeKind {
         /// Resolved `ui_layout::Style` for CSS sizing at render time.
         layout_style: ui_layout::Style,
         text_style: TextStyle,
-        /// For inline custom elements: cache key for [`CustomInlineBridge`].
-        layout_id: Option<InlineLayoutId>,
     },
 }
 
