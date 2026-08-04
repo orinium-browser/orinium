@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["block_bridge","button","custom_node","image","inline_bridge","registry","text_input","text_input_types"],"struct":["InlineLayoutId"]};
+window.SIDEBAR_ITEMS = {"mod":["button","custom_node","custom_node_bridge","image","registry","text_input","text_input_types"]};
