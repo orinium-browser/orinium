@@ -219,7 +219,15 @@ pub fn build_layout_and_info_with_images(
 
             // Apply CSS declarations.
             if let Some(candidates) = &candidates {
-                for (name, declaration) in candidates {
+                // The candidates map dedupes per property name (cascade winner),
+                // but a shorthand and its longhand (e.g. `padding` and
+                // `padding-top`) are distinct keys. Iterating a HashMap applies
+                // them in random order, so re-sort by source order to make the
+                // cascade deterministic.
+                let mut candidates: Vec<_> = candidates.values().collect();
+                candidates.sort_by_key(|declaration| declaration.order);
+                for declaration in candidates {
+                    let name = &declaration.name;
                     if !name.starts_with("--") {
                         apply_declaration(
                             name,
