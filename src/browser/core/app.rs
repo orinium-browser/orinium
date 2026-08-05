@@ -1,16 +1,17 @@
 //! Browser core: application entry and lifecycle manager.
 //!
 //! Responsibilities:
-//! - Manage Browser lifetime, window, and tab collection.
-//! - Coordinate network/resource loading and map responses to tabs.
-//! - Drive the engine pipeline: schedule layout, collect draw commands, and hand them to the platform renderer.
-//! - Handle input and window events and dispatch them to tabs/UI.
+//! - Manage the window collection and each window's [`BrowserUi`].
+//! - Forward winit window events to the owning window's UI.
+//! - Coordinate network/resource loading and route responses to the owning window.
+//!
+//! Tab state, input handling, and rendering are delegated to [`BrowserUi`] /
+//! [`BrowserRenderer`]; this type stays a thin orchestrator.
 //!
 //! Processing flow (high-level):
 //! 1. Initialize platform components (system window, GPU renderer, network core).
-//! 2. Create and register `Tab` instances and navigate to initial URLs.
-//! 3. Enter event loop: handle events -> update state -> request layout -> generate draw commands -> render.
-//! 4. Manage asynchronous fetches and inject resources into the engine when they arrive.
+//! 2. Create and register `BrowserUi` instances and navigate to initial URLs.
+//! 3. Enter event loop: forward events -> delegate to `BrowserUi` -> route fetches.
 //!
 //! Example (for contributors / local testing):
 //! ```no_run
@@ -38,39 +39,12 @@ use url::Url;
 use winit::event::WindowEvent;
 use winit::window::WindowId;
 
-use super::tab::{FetchKind, Tab, TabTask};
+use super::tab::FetchKind;
 use super::ui::BrowserUi;
 use super::{BrowserCommand, resource_loader::BrowserResourceLoader};
-use crate::engine::layouter;
-use crate::engine::renderer_model::{self, DrawCommand};
-use crate::engine::ui::PointerEvent;
-use crate::engine::ui::text_input_types::{TextInputEvent, TextInputKey};
-
 use crate::platform::network::NetworkCore;
 use crate::platform::renderer::gpu::GpuRenderer;
 use crate::platform::system::App;
-
-pub struct RenderState {
-    /// List of draw commands generated from the layout engine.
-    pub draw_commands: Vec<DrawCommand>,
-    /// Current window size in pixels (width, height).
-    pub window_size: (u32, u32),
-    /// Current scale factor (for HiDPI displays).
-    pub scale_factor: f64,
-    /// Current window title.
-    pub window_title: String,
-}
-
-/// Stores input-related state for a single browser window.
-#[derive(Default)]
-pub struct InputState {
-    /// Current mouse position in window coordinates.
-    pub mouse_position: (f64, f64),
-    /// Current keyboard modifier state (Ctrl, Shift, Alt, etc.).
-    pub modifiers: winit::keyboard::ModifiersState,
-    /// The custom node currently under the pointer, if any.
-    pub hovered: Option<Rc<dyn crate::engine::ui::CustomNode>>,
-}
 
 pub struct PendingFetches {
     /// Maps (id) to (window_id, tab_id, FetchKind, Url)
@@ -127,20 +101,19 @@ impl PendingFetches {
 /// Main browser application struct.
 ///
 /// Responsibilities:
-/// - Manage collection of `Tab` instances and the active tab index.
-/// - Coordinate resource loading and pending fetch lifecycle.
-/// - Orchestrate engine work (layout/draw-command generation) and submit commands to the renderer.
-/// - Process input and window events and propagate them to tabs/UI.
+/// - Manage the window collection and per-window [`BrowserUi`] instances.
+/// - Forward winit window events to each window's UI.
+/// - Coordinate resource loading and route fetched results to the owning window.
+///
+/// Tab state, input handling, and rendering are delegated to [`BrowserUi`] /
+/// [`BrowserRenderer`].
 ///
 /// Typical lifecycle:
-/// 1. Construct `BrowserApp::new(...)`, which wires platform components (network, renderer, system).
+/// 1. Construct `BrowserApp::new(...)`, which wires platform components (network, system).
 /// 2. Create `Tab` objects, wrap them in a `BrowserUi`, and call `set_default_ui`.
 /// 3. Call `run()` to start the event loop. Each loop iteration:
-///    - Poll platform events (keyboard/mouse/window).
-///    - Update input state and dispatch to the active tab.
-///    - If DOM/CSS changes occurred, request layout and regenerate draw commands.
-///    - Submit draw commands to the platform-specific renderer.
-/// 4. Manage asynchronous resource fetches: match responses to pending fetch IDs and notify tabs.
+///    - Forward winit events to the owning window's `BrowserUi`.
+///    - Tick the UI, forward fetch requests to the network, and route responses back.
 ///
 /// Example usage:
 /// ```no_run
@@ -152,16 +125,8 @@ impl PendingFetches {
 /// app.set_default_ui(BrowserUi::with_tab(tab));
 /// app.run().unwrap();
 /// ```
-///
-/// Contributor guidance:
-/// - Add small unit tests to validate tab lifecycle, fetch handling, and draw-command generation.
-/// - Prefer adding examples under `examples/` to demonstrate end-to-end behavior.
 pub struct BrowserApp {
-    /// Per-window render state, keyed by WindowId.
-    renders: HashMap<WindowId, RenderState>,
-    /// Per-window input state, keyed by WindowId.
-    inputs: HashMap<WindowId, InputState>,
-    /// Maps each window to its UI (which holds its tabs and active tab).
+    /// Maps each window to its UI (tabs, input state, renderer).
     windows: HashMap<WindowId, BrowserUi>,
     /// Default window size used when opening a new window.
     default_window_size: (u32, u32),
@@ -198,8 +163,6 @@ impl BrowserApp {
         let network = BrowserResourceLoader::new(Some(Rc::new(NetworkCore::new()?)));
 
         Ok(Self {
-            renders: HashMap::new(),
-            inputs: HashMap::new(),
             windows: HashMap::new(),
             default_window_size,
             default_window_title,
@@ -209,32 +172,21 @@ impl BrowserApp {
         })
     }
 
-    /// Registers a new window with the given id, size, title, scale factor, and associated tab.
+    /// Registers a new window with the given id, size, title, scale factor, and associated UI.
     pub fn open_window(
         &mut self,
         window_id: WindowId,
         window_size: (u32, u32),
         window_title: String,
         scale_factor: f64,
-        root_ui: BrowserUi,
+        mut root_ui: BrowserUi,
     ) {
-        self.renders.insert(
-            window_id,
-            RenderState {
-                draw_commands: vec![],
-                window_size,
-                scale_factor,
-                window_title,
-            },
-        );
-        self.inputs.insert(window_id, InputState::default());
+        root_ui.set_window(window_size, scale_factor, window_title);
         self.windows.insert(window_id, root_ui);
     }
 
     /// Removes a window's state when the window is closed.
     pub fn close_window(&mut self, window_id: WindowId) {
-        self.renders.remove(&window_id);
-        self.inputs.remove(&window_id);
         self.windows.remove(&window_id);
     }
 
@@ -251,162 +203,15 @@ impl BrowserApp {
         self.default_window_title.clone()
     }
 
-    pub fn tick(&mut self, window_id: WindowId) -> BrowserCommand {
-        self.handle_network_messages();
-
-        // tick all tabs of the given window and collect redraw requests
-        let mut needs_redraw = false;
-        let Some(ui) = self.windows.get_mut(&window_id) else {
-            return BrowserCommand::None;
-        };
-        let tab_count = ui.tabs.len();
-        for tab_id in 0..tab_count {
-            let Some(tab) = ui.tabs.get_mut(tab_id) else {
-                continue;
-            };
-            for task in tab.tick() {
-                match task {
-                    TabTask::Fetch { url, kind } => {
-                        log::info!("Fetch requested in App: url={}", url);
-                        let id = self
-                            .pending_fetches
-                            .insert(window_id, tab_id, kind, url.clone());
-                        self.network.fetch_async(url, id);
-                    }
-                    TabTask::NeedsRedraw => {
-                        needs_redraw = true;
-                    }
-                }
-            }
-        }
-
-        if needs_redraw {
-            BrowserCommand::RequestRedraw
-        } else {
-            BrowserCommand::None
-        }
+    /// Sets the UI to use when the first window opens.
+    /// Must be called before `run()`.
+    pub fn set_default_ui(&mut self, ui: BrowserUi) {
+        self.default_ui = Some(ui);
     }
 
-    fn handle_network_messages(&mut self) {
-        let messages = self.network.try_receive();
-
-        for msg in messages {
-            log::info!("Network message received in App for fetch_id={}", msg.id);
-
-            // pending_fetches から fetch 情報を取得
-            let Some((window_id, tab_id, kind, url)) = self.pending_fetches.remove(msg.id) else {
-                log::warn!("No pending fetch found for fetch_id={}", msg.id);
-                continue;
-            };
-
-            // Tab を取得（該当ウィンドウの UI から）
-            let Some(ui) = self.windows.get_mut(&window_id) else {
-                log::warn!("There is no window called id={:?}", window_id);
-                continue;
-            };
-            let Some(tab) = ui.tabs.get_mut(tab_id) else {
-                log::warn!("There is no Tab called id={}", tab_id);
-                continue;
-            };
-
-            match msg.response {
-                Ok(resp) => {
-                    log::info!("Fetch Done in App for tab_id={}", tab_id);
-
-                    match kind {
-                        FetchKind::Html => {
-                            let html = String::from_utf8_lossy(&resp.body).to_string();
-                            tab.on_fetch_succeeded_html(html);
-                        }
-                        FetchKind::Css => {
-                            let css = String::from_utf8_lossy(&resp.body).to_string();
-                            tab.on_fetch_succeeded_css(css);
-                        }
-                        FetchKind::Image { source } => {
-                            tab.on_fetch_succeeded_image(source, &resp.body);
-                        }
-                    }
-                }
-                Err(err) => {
-                    log::error!("NetworkError: {}", err);
-                    if matches!(kind, FetchKind::Image { .. }) {
-                        log::warn!("Image fetch failed without aborting page load: {}", url);
-                    } else {
-                        tab.on_fetch_failed(err, url);
-                    }
-                }
-            }
-        }
-    }
-
-    #[allow(dead_code)]
-    /// Returns a mutable reference to the currently active tab of the given window, if any.
-    fn active_tab_mut(&mut self, window_id: WindowId) -> Option<&mut Tab> {
-        let ui = self.windows.get_mut(&window_id)?;
-        ui.tabs.get_mut(ui.active_tab)
-    }
-
-    /// Returns the tab index associated with the given window (falls back to `0`).
-    fn tab_id_for_window(&self, window_id: WindowId) -> usize {
-        self.windows
-            .get(&window_id)
-            .map(|ui| ui.active_tab)
-            .unwrap_or(0)
-    }
-
-    /// Rebuilds the render tree for the window's assigned tab and generates draw commands.
-    fn rebuild_render_tree(&mut self, window_id: WindowId) {
-        let tab_id = self.tab_id_for_window(window_id);
-
-        let (viewport, mut draw_commands) = {
-            let Some(render) = self.renders.get_mut(&window_id) else {
-                return;
-            };
-
-            let sf = render.scale_factor as f32;
-
-            let viewport = (
-                render.window_size.0 as f32 / sf,
-                render.window_size.1 as f32 / sf,
-            );
-
-            // Reuse allocation
-            let mut draw_commands = std::mem::take(&mut render.draw_commands);
-            draw_commands.clear();
-
-            (viewport, draw_commands)
-        };
-
-        let title = {
-            let Some(ui) = self.windows.get_mut(&window_id) else {
-                return;
-            };
-            let Some(tab) = ui.tabs.get_mut(tab_id) else {
-                return;
-            };
-
-            tab.relayout(viewport);
-
-            let Some((layout, info)) = tab.layout_and_info() else {
-                log::debug!("No layout/info available for tab {}", tab_id);
-                return;
-            };
-
-            renderer_model::generate_draw_commands(&mut draw_commands, layout, info);
-
-            tab.title()
-        };
-
-        let Some(render) = self.renders.get_mut(&window_id) else {
-            return;
-        };
-
-        // Return reused buffer
-        render.draw_commands = draw_commands;
-
-        if let Some(title) = title {
-            render.window_title = title;
-        }
+    /// Takes the default UI, or returns `None` if not set.
+    pub fn take_default_ui(&mut self) -> Option<BrowserUi> {
+        self.default_ui.take()
     }
 
     /// Handles a `winit` window event for the given window and returns a `BrowserCommand`.
@@ -416,67 +221,9 @@ impl BrowserApp {
         event: WindowEvent,
         gpu: &mut GpuRenderer,
     ) -> BrowserCommand {
-        let browser_cmd = match event {
-            WindowEvent::CloseRequested => BrowserCommand::Exit,
-
-            WindowEvent::RedrawRequested => {
-                self.redraw(window_id, gpu);
-                BrowserCommand::RenameWindowTitle
-            }
-
-            WindowEvent::Resized(size) => {
-                if let Some(render) = self.renders.get_mut(&window_id) {
-                    render.window_size = (size.width, size.height);
-                }
-                gpu.resize(size);
-                self.redraw(window_id, gpu);
-                BrowserCommand::RequestRedraw
-            }
-
-            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                gpu.set_scale_factor(scale_factor);
-                if let Some(render) = self.renders.get_mut(&window_id) {
-                    render.scale_factor = scale_factor;
-                }
-                self.redraw(window_id, gpu);
-                BrowserCommand::RequestRedraw
-            }
-
-            WindowEvent::MouseWheel { delta, .. } => {
-                self.handle_scroll(window_id, delta);
-                BrowserCommand::RequestRedraw
-            }
-
-            WindowEvent::CursorMoved { position, .. } => {
-                if let Some(input) = self.inputs.get_mut(&window_id) {
-                    input.mouse_position = (position.x, position.y);
-                }
-                let changed = self.handle_pointer_move(window_id, position.x, position.y);
-                if changed {
-                    BrowserCommand::RequestRedraw
-                } else {
-                    BrowserCommand::None
-                }
-            }
-
-            WindowEvent::MouseInput { button, state, .. } => {
-                self.handle_mouse_input(window_id, button, state)
-            }
-
-            WindowEvent::ModifiersChanged(modifiers) => {
-                if let Some(input) = self.inputs.get_mut(&window_id) {
-                    input.modifiers = modifiers.state();
-                }
-                BrowserCommand::None
-            }
-
-            WindowEvent::KeyboardInput { event, .. } => {
-                self.handle_keyboard_input(window_id, event)
-            }
-
-            WindowEvent::Ime(event) => self.handle_ime_input(window_id, event),
-
-            _ => BrowserCommand::None,
+        let browser_cmd = match self.windows.get_mut(&window_id) {
+            Some(ui) => ui.handle_window_event(event, gpu),
+            None => BrowserCommand::None,
         };
         let cmd_from_tick = self.tick(window_id);
         match browser_cmd {
@@ -505,328 +252,28 @@ impl BrowserApp {
         }
     }
 
-    /// Handles keyboard input events and returns a `BrowserCommand`.
-    fn handle_keyboard_input(
-        &mut self,
-        window_id: WindowId,
-        event: winit::event::KeyEvent,
-    ) -> BrowserCommand {
-        // TODO: あとで消す
-        const KEY_NEW_WINDOW: &str = "n";
-
-        if event.state != winit::event::ElementState::Pressed {
-            return BrowserCommand::None;
-        }
-
-        let ctrl = self
-            .inputs
-            .get(&window_id)
-            .is_some_and(|i| i.modifiers.control_key());
-
-        if ctrl
-            && let winit::keyboard::Key::Character(ch) = &event.logical_key
-            && ch.as_str().eq_ignore_ascii_case(KEY_NEW_WINDOW)
-        {
-            return BrowserCommand::OpenNewWindow;
-        }
-
-        let tab_id = self.tab_id_for_window(window_id);
-        let Some((_, info)) = self
-            .windows
-            .get(&window_id)
-            .and_then(|ui| ui.tabs.get(tab_id))
-            .and_then(Tab::layout_and_info)
-        else {
-            return BrowserCommand::None;
-        };
-
-        let key = match &event.logical_key {
-            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Backspace) => {
-                Some(TextInputKey::Backspace)
-            }
-            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Delete) => {
-                Some(TextInputKey::Delete)
-            }
-            winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowLeft) => {
-                Some(TextInputKey::Left)
-            }
-            winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowRight) => {
-                Some(TextInputKey::Right)
-            }
-            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Home) => {
-                Some(TextInputKey::Home)
-            }
-            winit::keyboard::Key::Named(winit::keyboard::NamedKey::End) => Some(TextInputKey::End),
-            _ => None,
-        };
-        let special = if ctrl && let winit::keyboard::Key::Character(ch) = &event.logical_key {
-            match ch.as_str() {
-                "z" | "Z" => Some(TextInputEvent::Undo),
-                "y" | "Y" => Some(TextInputEvent::Redo),
-                _ => None,
-            }
-        } else if let winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter) =
-            &event.logical_key
-        {
-            Some(TextInputEvent::Enter)
-        } else {
-            None
-        };
-        let handled = if let Some(special) = special {
-            crate::engine::input::dispatch_text_input(info, special)
-        } else if let Some(key) = key {
-            crate::engine::input::dispatch_text_input(info, TextInputEvent::Key(key))
-        } else if !ctrl && !crate::engine::input::focused_text_input_is_composing(info) {
-            event.text.as_ref().is_some_and(|text| {
-                crate::engine::input::dispatch_text_input(
-                    info,
-                    TextInputEvent::Insert(text.to_string()),
-                )
-            })
-        } else {
-            false
-        };
-
-        if handled {
-            BrowserCommand::RequestRedraw
-        } else {
-            BrowserCommand::None
-        }
-    }
-
-    /// Handles IME composition updates for the focused text input.
-    fn handle_ime_input(
-        &mut self,
-        window_id: WindowId,
-        event: winit::event::Ime,
-    ) -> BrowserCommand {
-        let tab_id = self.tab_id_for_window(window_id);
-        let Some((_, info)) = self
-            .windows
-            .get(&window_id)
-            .and_then(|ui| ui.tabs.get(tab_id))
-            .and_then(Tab::layout_and_info)
-        else {
-            return BrowserCommand::None;
-        };
-
-        let event = match event {
-            winit::event::Ime::Preedit(text, _) => TextInputEvent::Preedit(text),
-            winit::event::Ime::Commit(text) => TextInputEvent::Commit(text),
-            winit::event::Ime::Disabled => TextInputEvent::CancelComposition,
-            winit::event::Ime::Enabled => return BrowserCommand::None,
-        };
-
-        if crate::engine::input::dispatch_text_input(info, event) {
-            BrowserCommand::RequestRedraw
-        } else {
-            BrowserCommand::None
-        }
-    }
-
-    /// Handles mouse input events, mainly left-clicks for the active tab.
-    fn handle_mouse_input(
-        &mut self,
-        window_id: WindowId,
-        button: winit::event::MouseButton,
-        state: winit::event::ElementState,
-    ) -> BrowserCommand {
-        if button != winit::event::MouseButton::Left {
-            return BrowserCommand::None;
-        }
-
-        let (x, y, sf) = match (self.inputs.get(&window_id), self.renders.get(&window_id)) {
-            (Some(input), Some(render)) => (
-                input.mouse_position.0,
-                input.mouse_position.1,
-                render.scale_factor,
-            ),
-            _ => return BrowserCommand::None,
-        };
-        let (px, py) = ((x / sf) as f32, (y / sf) as f32);
-
-        let tab_id = self.tab_id_for_window(window_id);
-        let Some(ui) = self.windows.get_mut(&window_id) else {
-            return BrowserCommand::None;
-        };
-        if let Some(tab) = ui.tabs.get_mut(tab_id) {
-            if let Some((layout, info)) = tab.layout_and_info() {
-                let path = crate::engine::input::hit_test(layout, info, px, py);
-                let event = match state {
-                    winit::event::ElementState::Pressed => PointerEvent::Down { x: px, y: py },
-                    winit::event::ElementState::Released => PointerEvent::Up { x: px, y: py },
-                };
-                crate::engine::input::dispatch_pointer(&path, event);
-            }
-
-            let input_focused = Self::handle_mouse_click(tab, px, py);
-            BrowserCommand::SetImeAllowed {
-                allowed: input_focused,
-                position: (x, y),
-            }
-        } else {
-            BrowserCommand::None
-        }
-    }
-
-    /// Dispatches a pointer move and updates hover state for the active tab.
-    ///
-    /// Returns whether the move changed any visual state (and thus requires a
-    /// repaint).
-    fn handle_pointer_move(&mut self, window_id: WindowId, x: f64, y: f64) -> bool {
-        let Some(render) = self.renders.get(&window_id) else {
-            return false;
-        };
-        let sf = render.scale_factor;
-        let (px, py) = ((x / sf) as f32, (y / sf) as f32);
-
-        let tab_id = self.tab_id_for_window(window_id);
-        let Some(ui) = self.windows.get_mut(&window_id) else {
-            return false;
-        };
-        let Some(tab) = ui.tabs.get_mut(tab_id) else {
-            return false;
-        };
-        let Some((layout, info)) = tab.layout_and_info() else {
-            return false;
-        };
-        let path = crate::engine::input::hit_test(layout, info, px, py);
-        let mut repaint =
-            crate::engine::input::dispatch_pointer(&path, PointerEvent::Move { x: px, y: py });
-        if let Some(input) = self.inputs.get_mut(&window_id) {
-            let previous = input.hovered.clone();
-            if crate::engine::input::update_hover(&path, previous.as_ref()) {
-                repaint = true;
-                input.hovered = crate::engine::input::hit_custom_node(&path).cloned();
-            }
-        }
-        repaint
-    }
-
-    /// Handles scrolling for the window's assigned tab, updating its layout container offsets.
-    fn handle_scroll(&mut self, window_id: WindowId, delta: winit::event::MouseScrollDelta) {
-        let (scroll_x, scroll_y) = match delta {
-            winit::event::MouseScrollDelta::LineDelta(x, y) => (-x * 60.0, -y * 60.0),
-            winit::event::MouseScrollDelta::PixelDelta(pos) => (-pos.x as f32, -pos.y as f32),
-        };
-
-        let (window_height, sf) = match self.renders.get(&window_id) {
-            Some(render) => (render.window_size.1 as f32, render.scale_factor as f32),
-            None => return,
-        };
-        let (mouse_x, mouse_y) = match self.inputs.get(&window_id) {
-            Some(input) => (input.mouse_position.0 as f32, input.mouse_position.1 as f32),
-            None => return,
-        };
-
-        let tab_id = self.tab_id_for_window(window_id);
+    /// Rebuilds the render tree and sends draw commands to the GPU for the given window.
+    pub fn redraw(&mut self, window_id: WindowId, gpu: &mut GpuRenderer) {
         let Some(ui) = self.windows.get_mut(&window_id) else {
             return;
         };
-        if let Some(tab) = ui.tabs.get_mut(tab_id)
-            && let Some((layout, info)) = tab.layout_and_info_mut()
-        {
-            // Prefer the scrollable container under the cursor; the wheel
-            // event chains to the root when nothing nested consumes it.
-            if crate::engine::input::scroll_at(layout, info, mouse_x, mouse_y, scroll_x, scroll_y) {
-                return;
-            }
-
-            if let layouter::types::NodeKind::Container {
-                scroll_offset_y, ..
-            } = &mut info.kind
-            {
-                *scroll_offset_y = (*scroll_offset_y + scroll_y).clamp(
-                    0.0,
-                    (layout
-                        .layout_box
-                        .iter()
-                        .map(|l| l.children_box.height)
-                        .sum::<f32>()
-                        - (window_height / sf))
-                        .max(0.0),
-                );
-            }
-        }
-    }
-
-    /// Handles a mouse click in the given tab at the specified coordinates.
-    pub fn handle_mouse_click(tab: &mut Tab, x: f32, y: f32) -> bool {
-        let hit_path = match tab.layout_and_info() {
-            Some((layout, info)) => crate::engine::input::hit_test(layout, info, x, y),
-            None => return false,
-        };
-
-        let input_target = hit_path.iter().find_map(|hit| {
-            if let layouter::types::NodeKind::Custom { node, .. } = &hit.info.kind
-                && node.accepts_text_input()
-            {
-                Some(Rc::clone(node))
-            } else {
-                None
-            }
-        });
-        let input_focused = tab.layout_and_info().is_some_and(|(_, info)| {
-            crate::engine::input::focus_text_input(info, input_target.as_ref())
-        });
-
-        let href_opt = {
-            if let Some(hit) = hit_path.iter().find(|e| {
-                matches!(
-                    e.info.kind,
-                    layouter::types::NodeKind::Container { ref role, .. }
-                        if matches!(role, layouter::types::ContainerRole::Link { .. })
-                )
-            }) {
-                if let layouter::types::NodeKind::Container { role, .. } = &hit.info.kind
-                    && let layouter::types::ContainerRole::Link { href } = role
-                {
-                    Some(href.clone())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        };
-
-        if let Some(href) = href_opt {
-            tab.move_to(&href)
-        }
-        input_focused
-    }
-
-    /// Rebuilds the render tree and sends draw commands to the GPU for the given window.
-    pub fn redraw(&mut self, window_id: WindowId, gpu: &mut GpuRenderer) {
-        self.rebuild_render_tree(window_id);
-        self.apply_draw_commands(window_id, gpu);
-        if let Err(e) = gpu.render() {
-            log::error!(target: "BrowserApp::redraw", "Render error occurred: {}", e);
-        }
+        ui.redraw(gpu);
     }
 
     /// Applies the current draw commands for the given window to the GPU renderer.
     pub fn apply_draw_commands(&self, window_id: WindowId, gpu: &mut GpuRenderer) {
-        if let Some(render) = self.renders.get(&window_id) {
-            gpu.parse_draw_commands(&render.draw_commands);
+        if let Some(ui) = self.windows.get(&window_id) {
+            ui.apply_draw_commands(gpu);
         }
-    }
-
-    /// Sets the UI to use when the first window opens.
-    /// Must be called before `run()`.
-    pub fn set_default_ui(&mut self, ui: BrowserUi) {
-        self.default_ui = Some(ui);
-    }
-
-    /// Takes the default UI, or returns `None` if not set.
-    pub fn take_default_ui(&mut self) -> Option<BrowserUi> {
-        self.default_ui.take()
     }
 
     /// Returns the current window size for the given window as `(width, height)` in floating-point pixels.
     pub fn window_size(&self, window_id: WindowId) -> (f32, f32) {
-        match self.renders.get(&window_id) {
-            Some(render) => (render.window_size.0 as f32, render.window_size.1 as f32),
+        match self.windows.get(&window_id) {
+            Some(ui) => {
+                let (width, height) = ui.window_size();
+                (width as f32, height as f32)
+            }
             None => (
                 self.default_window_size.0 as f32,
                 self.default_window_size.1 as f32,
@@ -836,9 +283,54 @@ impl BrowserApp {
 
     /// Returns the window title for the given window.
     pub fn window_title(&self, window_id: WindowId) -> String {
-        match self.renders.get(&window_id) {
-            Some(render) => render.window_title.clone(),
+        match self.windows.get(&window_id) {
+            Some(ui) => ui.window_title(),
             None => self.default_window_title.clone(),
+        }
+    }
+
+    /// Ticks the given window's UI and forwards its fetch requests to the network.
+    fn tick(&mut self, window_id: WindowId) -> BrowserCommand {
+        self.handle_network_messages();
+
+        let Some(ui) = self.windows.get_mut(&window_id) else {
+            return BrowserCommand::None;
+        };
+        let outcome = ui.tick();
+
+        for fetch in outcome.fetches {
+            log::info!("Fetch requested in App: url={}", fetch.url);
+            let id =
+                self.pending_fetches
+                    .insert(window_id, fetch.tab_id, fetch.kind, fetch.url.clone());
+            self.network.fetch_async(fetch.url, id);
+        }
+
+        if outcome.needs_redraw {
+            BrowserCommand::RequestRedraw
+        } else {
+            BrowserCommand::None
+        }
+    }
+
+    fn handle_network_messages(&mut self) {
+        let messages = self.network.try_receive();
+
+        for msg in messages {
+            log::info!("Network message received in App for fetch_id={}", msg.id);
+
+            // pending_fetches から fetch 情報を取得
+            let Some((window_id, tab_id, kind, url)) = self.pending_fetches.remove(msg.id) else {
+                log::warn!("No pending fetch found for fetch_id={}", msg.id);
+                continue;
+            };
+
+            // 該当ウィンドウの UI へ配送
+            let Some(ui) = self.windows.get_mut(&window_id) else {
+                log::warn!("There is no window called id={:?}", window_id);
+                continue;
+            };
+            ui.deliver_fetch(tab_id, kind, url, msg.response);
         }
     }
 }

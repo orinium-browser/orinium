@@ -1,11 +1,106 @@
-//! Browser UI components.
+//! Browser UI components and window render state.
+
+use std::rc::Rc;
+
+use url::Url;
+use winit::event::{ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 
 use crate::browser::Tab;
+use crate::browser::core::renderer::BrowserRenderer;
+use crate::browser::core::resource_loader::{BrowserNetworkError, BrowserResponse};
+use crate::browser::core::tab::{FetchKind, TabTask};
+use crate::engine::layouter;
+use crate::engine::renderer_model::DrawCommand;
+use crate::engine::ui::PointerEvent;
+use crate::engine::ui::custom_node::CustomNode;
+use crate::engine::ui::text_input_types::{TextInputEvent, TextInputKey};
+use crate::platform::renderer::gpu::GpuRenderer;
 
-#[derive(Debug)]
+use super::BrowserCommand;
+
+/// Render state for a browser window.
+#[derive(Debug, Clone)]
+pub struct RenderState {
+    /// List of draw commands generated from the layout engine.
+    pub draw_commands: Vec<DrawCommand>,
+    /// Current window size in pixels (width, height).
+    pub window_size: (u32, u32),
+    /// Current scale factor (for HiDPI displays).
+    pub scale_factor: f64,
+    /// Current window title.
+    pub window_title: String,
+}
+
+impl Default for RenderState {
+    fn default() -> Self {
+        Self {
+            draw_commands: Vec::new(),
+            window_size: (800, 600),
+            scale_factor: 1.0,
+            window_title: String::new(),
+        }
+    }
+}
+
+impl RenderState {
+    /// Creates a new `RenderState` with the specified size, scale factor, and title.
+    pub fn new(window_size: (u32, u32), scale_factor: f64, window_title: String) -> Self {
+        Self {
+            draw_commands: Vec::new(),
+            window_size,
+            scale_factor,
+            window_title,
+        }
+    }
+
+    /// Calculates the viewport dimensions in scaled logical pixels.
+    pub fn viewport(&self) -> (f32, f32) {
+        let sf = self.scale_factor as f32;
+        (
+            self.window_size.0 as f32 / sf,
+            self.window_size.1 as f32 / sf,
+        )
+    }
+}
+
+/// Stores input-related state for a single browser window.
+#[derive(Default)]
+struct InputState {
+    /// Current mouse position in window coordinates.
+    mouse_position: (f64, f64),
+    /// Current keyboard modifier state (Ctrl, Shift, Alt, etc.).
+    modifiers: winit::keyboard::ModifiersState,
+    /// The custom node currently under the pointer, if any.
+    hovered: Option<Rc<dyn CustomNode>>,
+    /// The chrome element currently under the pointer, if any.
+    hovered_chrome: Option<ChromeHit>,
+}
+
+/// タブから発生したリソース取得リクエスト。
+pub(crate) struct FetchRequest {
+    pub(crate) tab_id: usize,
+    pub(crate) url: Url,
+    pub(crate) kind: FetchKind,
+}
+
+/// [`BrowserUi::tick`] の結果。
+pub(crate) struct BrowserUiTick {
+    pub(crate) fetches: Vec<FetchRequest>,
+    pub(crate) needs_redraw: bool,
+}
+
+/// BrowserUi は 1 ウィンドウ分の状態管理を担当する。
+///
+/// 責務:
+/// - タブとアクティブタブの管理
+/// - ウィンドウ・入力イベント（キーボード / IME / マウス / スクロール）の処理
+/// - タブの tick と fetch 結果の配送
+/// - 実際の描画は [`BrowserRenderer`] へ委譲する
 pub struct BrowserUi {
-    pub tabs: Vec<Tab>,
-    pub active_tab: usize,
+    tabs: Vec<Tab>,
+    active_tab: usize,
+    renderer: BrowserRenderer,
+    input: InputState,
 }
 
 impl Default for BrowserUi {
@@ -19,6 +114,8 @@ impl BrowserUi {
         Self {
             tabs: Vec::new(),
             active_tab: 0,
+            renderer: BrowserRenderer::new(),
+            input: InputState::default(),
         }
     }
 
@@ -26,6 +123,595 @@ impl BrowserUi {
         Self {
             tabs: vec![tab],
             active_tab: 0,
+            renderer: BrowserRenderer::new(),
+            input: InputState::default(),
         }
+    }
+
+    /// Returns the tab list.
+    pub fn tabs(&self) -> &[Tab] {
+        &self.tabs
+    }
+
+    /// Returns the index of the active tab.
+    pub fn active_tab(&self) -> usize {
+        self.active_tab
+    }
+
+    /// Returns the active tab, if any.
+    pub fn active_tab_mut(&mut self) -> Option<&mut Tab> {
+        self.tabs.get_mut(self.active_tab)
+    }
+
+    /// ウィンドウの初期サイズ・スケール・タイトルを設定する。
+    pub fn set_window(&mut self, window_size: (u32, u32), scale_factor: f64, window_title: String) {
+        self.renderer
+            .set_window(window_size, scale_factor, window_title);
+    }
+
+    /// Returns the window size in physical pixels.
+    pub fn window_size(&self) -> (u32, u32) {
+        self.renderer.render_state.window_size
+    }
+
+    /// Returns the current window title.
+    pub fn window_title(&self) -> String {
+        self.renderer.render_state.window_title.clone()
+    }
+
+    /// Rebuilds the render tree and sends draw commands to the GPU for this window.
+    pub fn redraw(&mut self, gpu: &mut GpuRenderer) {
+        self.renderer.redraw(&mut self.tabs, self.active_tab, gpu);
+    }
+
+    /// Applies the current draw commands to the GPU renderer.
+    pub fn apply_draw_commands(&self, gpu: &mut GpuRenderer) {
+        self.renderer.apply_draw_commands(gpu);
+    }
+
+    /// Ticks all tabs and collects fetch requests and redraw demands.
+    pub(crate) fn tick(&mut self) -> BrowserUiTick {
+        let mut fetches = Vec::new();
+        let mut needs_redraw = false;
+
+        let tab_count = self.tabs.len();
+        for tab_id in 0..tab_count {
+            let Some(tab) = self.tabs.get_mut(tab_id) else {
+                continue;
+            };
+            for task in tab.tick() {
+                match task {
+                    TabTask::Fetch { url, kind } => {
+                        log::info!("Fetch requested in BrowserUi: url={}", url);
+                        fetches.push(FetchRequest { tab_id, url, kind });
+                    }
+                    TabTask::NeedsRedraw => {
+                        needs_redraw = true;
+                    }
+                }
+            }
+        }
+
+        BrowserUiTick {
+            fetches,
+            needs_redraw,
+        }
+    }
+
+    /// Delivers a fetched resource to the target tab.
+    pub(crate) fn deliver_fetch(
+        &mut self,
+        tab_id: usize,
+        kind: FetchKind,
+        url: Url,
+        response: Result<BrowserResponse, BrowserNetworkError>,
+    ) {
+        let Some(tab) = self.tabs.get_mut(tab_id) else {
+            log::warn!("There is no Tab called id={}", tab_id);
+            return;
+        };
+
+        match response {
+            Ok(resp) => {
+                log::info!("Fetch Done in BrowserUi for tab_id={}", tab_id);
+
+                match kind {
+                    FetchKind::Html => {
+                        let html = String::from_utf8_lossy(&resp.body).to_string();
+                        tab.on_fetch_succeeded_html(html);
+                    }
+                    FetchKind::Css => {
+                        let css = String::from_utf8_lossy(&resp.body).to_string();
+                        tab.on_fetch_succeeded_css(css);
+                    }
+                    FetchKind::Image { source } => {
+                        tab.on_fetch_succeeded_image(source, &resp.body);
+                    }
+                }
+            }
+            Err(err) => {
+                log::error!("NetworkError: {}", err);
+                if matches!(kind, FetchKind::Image { .. }) {
+                    log::warn!("Image fetch failed without aborting page load: {}", url);
+                } else {
+                    tab.on_fetch_failed(err, url);
+                }
+            }
+        }
+    }
+
+    /// Handles a `winit` window event for this window and returns a `BrowserCommand`.
+    pub fn handle_window_event(
+        &mut self,
+        event: WindowEvent,
+        gpu: &mut GpuRenderer,
+    ) -> BrowserCommand {
+        match event {
+            WindowEvent::CloseRequested => BrowserCommand::Exit,
+
+            WindowEvent::RedrawRequested => {
+                self.redraw(gpu);
+                BrowserCommand::RenameWindowTitle
+            }
+
+            WindowEvent::Resized(size) => {
+                self.renderer.render_state.window_size = (size.width, size.height);
+                gpu.resize(size);
+                self.redraw(gpu);
+                BrowserCommand::RequestRedraw
+            }
+
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                gpu.set_scale_factor(scale_factor);
+                self.renderer.render_state.scale_factor = scale_factor;
+                self.redraw(gpu);
+                BrowserCommand::RequestRedraw
+            }
+
+            WindowEvent::MouseWheel { delta, .. } => {
+                self.handle_scroll(delta);
+                BrowserCommand::RequestRedraw
+            }
+
+            WindowEvent::CursorMoved { position, .. } => {
+                self.input.mouse_position = (position.x, position.y);
+                if self.handle_pointer_move(position.x, position.y) {
+                    BrowserCommand::RequestRedraw
+                } else {
+                    BrowserCommand::None
+                }
+            }
+
+            WindowEvent::MouseInput { button, state, .. } => self.handle_mouse_input(button, state),
+
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.input.modifiers = modifiers.state();
+                BrowserCommand::None
+            }
+
+            WindowEvent::KeyboardInput { event, .. } => self.handle_keyboard_input(event),
+
+            WindowEvent::Ime(event) => self.handle_ime_input(event),
+
+            _ => BrowserCommand::None,
+        }
+    }
+
+    /// Handles keyboard input events and returns a `BrowserCommand`.
+    fn handle_keyboard_input(&mut self, event: KeyEvent) -> BrowserCommand {
+        // TODO: あとで消す
+        const KEY_NEW_WINDOW: &str = "n";
+
+        if event.state != ElementState::Pressed {
+            return BrowserCommand::None;
+        }
+
+        let ctrl = self.input.modifiers.control_key();
+
+        if ctrl
+            && let winit::keyboard::Key::Character(ch) = &event.logical_key
+            && ch.as_str().eq_ignore_ascii_case(KEY_NEW_WINDOW)
+        {
+            return BrowserCommand::OpenNewWindow;
+        }
+
+        let tab_id = self.active_tab;
+
+        // While the address bar is focused, keyboard and IME input drive the
+        // URL bar instead of the page.
+        if self.renderer.layout.toolbar.url_bar.is_focused() {
+            // Enter submits the typed URL.
+            if let winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter) =
+                &event.logical_key
+            {
+                let url = self.renderer.layout.toolbar.url_bar.state().value;
+                self.renderer
+                    .layout
+                    .toolbar
+                    .url_bar
+                    .handle_text_input(TextInputEvent::Enter);
+                if let Some(tab) = self.tabs.get_mut(tab_id) {
+                    match Url::parse(&url) {
+                        Ok(url) => tab.navigate(url),
+                        Err(_) => {
+                            log::warn!("Ignoring invalid URL entered in address bar: {}", url);
+                        }
+                    }
+                }
+                return BrowserCommand::RequestRedraw;
+            }
+
+            let special = logical_key_to_special_event(&event.logical_key, ctrl);
+            let key = logical_key_to_text_key(&event.logical_key);
+            let handled = if let Some(special) = special {
+                self.renderer
+                    .layout
+                    .toolbar
+                    .url_bar
+                    .handle_text_input(special)
+            } else if let Some(key) = key {
+                self.renderer
+                    .layout
+                    .toolbar
+                    .url_bar
+                    .handle_text_input(TextInputEvent::Key(key))
+            } else if !ctrl && !self.renderer.layout.toolbar.url_bar.is_composing() {
+                event.text.as_ref().is_some_and(|text| {
+                    self.renderer
+                        .layout
+                        .toolbar
+                        .url_bar
+                        .handle_text_input(TextInputEvent::Insert(text.to_string()))
+                })
+            } else {
+                false
+            };
+
+            return if handled {
+                BrowserCommand::RequestRedraw
+            } else {
+                BrowserCommand::None
+            };
+        }
+
+        let Some((_, info)) = self.tabs.get(tab_id).and_then(Tab::layout_and_info) else {
+            return BrowserCommand::None;
+        };
+
+        let special = logical_key_to_special_event(&event.logical_key, ctrl);
+        let key = logical_key_to_text_key(&event.logical_key);
+        let handled = if let Some(special) = special {
+            crate::engine::input::dispatch_text_input(info, special)
+        } else if let Some(key) = key {
+            crate::engine::input::dispatch_text_input(info, TextInputEvent::Key(key))
+        } else if !ctrl && !crate::engine::input::focused_text_input_is_composing(info) {
+            event.text.as_ref().is_some_and(|text| {
+                crate::engine::input::dispatch_text_input(
+                    info,
+                    TextInputEvent::Insert(text.to_string()),
+                )
+            })
+        } else {
+            false
+        };
+
+        if handled {
+            BrowserCommand::RequestRedraw
+        } else {
+            BrowserCommand::None
+        }
+    }
+
+    /// Handles IME composition updates for the focused text input.
+    fn handle_ime_input(&mut self, event: Ime) -> BrowserCommand {
+        let event = match event {
+            Ime::Preedit(text, _) => TextInputEvent::Preedit(text),
+            Ime::Commit(text) => TextInputEvent::Commit(text),
+            Ime::Disabled => TextInputEvent::CancelComposition,
+            Ime::Enabled => return BrowserCommand::None,
+        };
+
+        let tab_id = self.active_tab;
+
+        // The address bar owns IME composition while it is focused.
+        if self.renderer.layout.toolbar.url_bar.is_focused() {
+            let handled = self
+                .renderer
+                .layout
+                .toolbar
+                .url_bar
+                .handle_text_input(event);
+            return if handled {
+                BrowserCommand::RequestRedraw
+            } else {
+                BrowserCommand::None
+            };
+        }
+
+        let Some((_, info)) = self.tabs.get(tab_id).and_then(Tab::layout_and_info) else {
+            return BrowserCommand::None;
+        };
+
+        if crate::engine::input::dispatch_text_input(info, event) {
+            BrowserCommand::RequestRedraw
+        } else {
+            BrowserCommand::None
+        }
+    }
+
+    /// Handles mouse input events, mainly left-clicks for the active tab.
+    fn handle_mouse_input(&mut self, button: MouseButton, state: ElementState) -> BrowserCommand {
+        if button != MouseButton::Left {
+            return BrowserCommand::None;
+        }
+
+        let (x, y, sf) = (
+            self.input.mouse_position.0,
+            self.input.mouse_position.1,
+            self.renderer.render_state.scale_factor,
+        );
+        let (px, py) = ((x / sf) as f32, (y / sf) as f32);
+
+        let tab_id = self.active_tab;
+        let width = self.renderer.render_state.viewport().0;
+
+        // Click inside the chrome toolbar.
+        if let Some(hit) = self.renderer.layout.hit_test(px, py, width) {
+            let event = match state {
+                ElementState::Pressed => PointerEvent::Down { x: px, y: py },
+                ElementState::Released => PointerEvent::Up { x: px, y: py },
+            };
+            let (_, clicked) = self.renderer.layout.handle_pointer_event(hit, event);
+
+            // Pressing the URL bar must enable the OS IME so the caret and
+            // input methods work; the platform handler also requests a redraw.
+            if hit == ChromeHit::UrlBar && matches!(state, ElementState::Pressed) {
+                self.renderer.layout.toolbar.url_bar.set_focused(true);
+                if let Some(tab) = self.tabs.get_mut(tab_id)
+                    && let Some((_, info)) = tab.layout_and_info()
+                {
+                    crate::engine::input::focus_text_input(info, None);
+                }
+                return BrowserCommand::SetImeAllowed {
+                    allowed: true,
+                    position: (x, y),
+                };
+            }
+
+            // Navigation buttons trigger on a completed click.
+            if matches!(state, ElementState::Released)
+                && clicked
+                && let Some(tab) = self.tabs.get_mut(tab_id)
+            {
+                match hit {
+                    ChromeHit::Back => {
+                        tab.go_back();
+                    }
+                    ChromeHit::Reload => {
+                        tab.reload();
+                    }
+                    ChromeHit::UrlBar => {}
+                }
+            }
+
+            return if self.renderer.layout.toolbar_needs_repaint() || clicked {
+                BrowserCommand::RequestRedraw
+            } else {
+                BrowserCommand::SetImeAllowed {
+                    allowed: false,
+                    position: (x, y),
+                }
+            };
+        }
+
+        // Content area: dispatch to the active tab in page coordinates.
+        let toolbar_height = self.renderer.layout.toolbar_rects(width).height();
+        let (px, py) = (px, py - toolbar_height);
+
+        if let Some(tab) = self.tabs.get_mut(tab_id) {
+            if let Some((layout, info)) = tab.layout_and_info() {
+                let path = crate::engine::input::hit_test(layout, info, px, py);
+                let event = match state {
+                    ElementState::Pressed => PointerEvent::Down { x: px, y: py },
+                    ElementState::Released => PointerEvent::Up { x: px, y: py },
+                };
+                crate::engine::input::dispatch_pointer(&path, event);
+            }
+
+            // Clicking the page unfocuses the address bar.
+            self.renderer.layout.toolbar.url_bar.set_focused(false);
+
+            let input_focused = handle_mouse_click(tab, px, py);
+            BrowserCommand::SetImeAllowed {
+                allowed: input_focused,
+                position: (x, y),
+            }
+        } else {
+            BrowserCommand::None
+        }
+    }
+
+    /// Dispatches a pointer move and updates hover state for the active tab.
+    ///
+    /// Returns whether the move changed any visual state (and thus requires a
+    /// repaint).
+    fn handle_pointer_move(&mut self, x: f64, y: f64) -> bool {
+        let tab_id = self.active_tab;
+        let sf = self.renderer.render_state.scale_factor;
+        let (px, py) = ((x / sf) as f32, (y / sf) as f32);
+        let width = self.renderer.render_state.viewport().0;
+
+        let hit = self.renderer.layout.hit_test(px, py, width);
+
+        // Chrome hover: send Leave to the previously hovered element and Move
+        // to the element under the pointer.
+        let mut repaint = false;
+        let prev_hovered = self.input.hovered_chrome;
+        if let Some(previous) = prev_hovered
+            && Some(previous) != hit
+        {
+            self.renderer
+                .layout
+                .handle_pointer_event(previous, PointerEvent::Leave);
+            self.input.hovered_chrome = None;
+        }
+        if let Some(hit) = hit {
+            self.renderer
+                .layout
+                .handle_pointer_event(hit, PointerEvent::Move { x: px, y: py });
+            self.input.hovered_chrome = Some(hit);
+            return repaint || self.renderer.layout.toolbar_needs_repaint();
+        }
+
+        // Content area: dispatch to the page in page coordinates.
+        let toolbar_height = self.renderer.layout.toolbar_rects(width).height();
+        let (px, py) = (px, py - toolbar_height);
+
+        let Some(tab) = self.tabs.get_mut(tab_id) else {
+            return false;
+        };
+        let Some((layout, info)) = tab.layout_and_info() else {
+            return false;
+        };
+        let path = crate::engine::input::hit_test(layout, info, px, py);
+        repaint |=
+            crate::engine::input::dispatch_pointer(&path, PointerEvent::Move { x: px, y: py });
+        let previous = self.input.hovered.clone();
+        if crate::engine::input::update_hover(&path, previous.as_ref()) {
+            repaint = true;
+            self.input.hovered = crate::engine::input::hit_custom_node(&path).cloned();
+        }
+        repaint
+    }
+
+    /// Handles scrolling for the window's assigned tab, updating its layout container offsets.
+    fn handle_scroll(&mut self, delta: MouseScrollDelta) {
+        let (scroll_x, scroll_y) = match delta {
+            MouseScrollDelta::LineDelta(x, y) => (-x * 60.0, -y * 60.0),
+            MouseScrollDelta::PixelDelta(pos) => (-pos.x as f32, -pos.y as f32),
+        };
+
+        let (window_height, sf) = (
+            self.renderer.render_state.window_size.1 as f32,
+            self.renderer.render_state.scale_factor as f32,
+        );
+        let (mouse_x, mouse_y) = (
+            self.input.mouse_position.0 as f32,
+            self.input.mouse_position.1 as f32,
+        );
+
+        let tab_id = self.active_tab;
+        if let Some(tab) = self.tabs.get_mut(tab_id)
+            && let Some((layout, info)) = tab.layout_and_info_mut()
+        {
+            // Prefer the scrollable container under the cursor; the wheel
+            // event chains to the root when nothing nested consumes it.
+            if crate::engine::input::scroll_at(layout, info, mouse_x, mouse_y, scroll_x, scroll_y) {
+                return;
+            }
+
+            if let layouter::types::NodeKind::Container {
+                scroll_offset_y, ..
+            } = &mut info.kind
+            {
+                *scroll_offset_y = (*scroll_offset_y + scroll_y).clamp(
+                    0.0,
+                    (layout
+                        .layout_box
+                        .iter()
+                        .map(|l| l.children_box.height)
+                        .sum::<f32>()
+                        - (window_height / sf))
+                        .max(0.0),
+                );
+            }
+        }
+    }
+}
+
+// Sub-modules
+pub mod basic_ui;
+
+pub use basic_ui::{BrowserLayout, ChromeHit};
+
+/// Handles a mouse click in the given tab at the specified coordinates.
+fn handle_mouse_click(tab: &mut Tab, x: f32, y: f32) -> bool {
+    let hit_path = match tab.layout_and_info() {
+        Some((layout, info)) => crate::engine::input::hit_test(layout, info, x, y),
+        None => return false,
+    };
+
+    let input_target = hit_path.iter().find_map(|hit| {
+        if let layouter::types::NodeKind::Custom { node, .. } = &hit.info.kind
+            && node.accepts_text_input()
+        {
+            Some(Rc::clone(node))
+        } else {
+            None
+        }
+    });
+    let input_focused = tab.layout_and_info().is_some_and(|(_, info)| {
+        crate::engine::input::focus_text_input(info, input_target.as_ref())
+    });
+
+    let href_opt = {
+        if let Some(hit) = hit_path.iter().find(|e| {
+            matches!(
+                e.info.kind,
+                layouter::types::NodeKind::Container { ref role, .. }
+                    if matches!(role, layouter::types::ContainerRole::Link { .. })
+            )
+        }) {
+            if let layouter::types::NodeKind::Container { role, .. } = &hit.info.kind
+                && let layouter::types::ContainerRole::Link { href } = role
+            {
+                Some(href.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+
+    if let Some(href) = href_opt {
+        tab.move_to(&href)
+    }
+    input_focused
+}
+
+/// Maps a logical key to a text-editing navigation key, if any.
+fn logical_key_to_text_key(key: &winit::keyboard::Key) -> Option<TextInputKey> {
+    match key {
+        winit::keyboard::Key::Named(winit::keyboard::NamedKey::Backspace) => {
+            Some(TextInputKey::Backspace)
+        }
+        winit::keyboard::Key::Named(winit::keyboard::NamedKey::Delete) => {
+            Some(TextInputKey::Delete)
+        }
+        winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowLeft) => {
+            Some(TextInputKey::Left)
+        }
+        winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowRight) => {
+            Some(TextInputKey::Right)
+        }
+        winit::keyboard::Key::Named(winit::keyboard::NamedKey::Home) => Some(TextInputKey::Home),
+        winit::keyboard::Key::Named(winit::keyboard::NamedKey::End) => Some(TextInputKey::End),
+        _ => None,
+    }
+}
+
+/// Maps a logical key to a text-editing special event (undo/redo/enter).
+fn logical_key_to_special_event(key: &winit::keyboard::Key, ctrl: bool) -> Option<TextInputEvent> {
+    if ctrl && let winit::keyboard::Key::Character(ch) = key {
+        match ch.as_str() {
+            "z" | "Z" => Some(TextInputEvent::Undo),
+            "y" | "Y" => Some(TextInputEvent::Redo),
+            _ => None,
+        }
+    } else if let winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter) = key {
+        Some(TextInputEvent::Enter)
+    } else {
+        None
     }
 }
