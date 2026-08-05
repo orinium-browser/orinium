@@ -286,7 +286,6 @@ pub fn build_layout_and_info_with_images(
             if let Some(tag) = html_node.tag_name()
                 && registry.tags().contains(&tag)
             {
-                let dom_node_weak = Rc::downgrade(&stack[top_idx].dom);
                 let node = registry
                     .create(&CustomNodeContext {
                         tag,
@@ -296,13 +295,12 @@ pub fn build_layout_and_info_with_images(
                         measurer: Arc::clone(&measurer),
                         images,
                         get_attr: &|name| html_node.get_attr(name).map(str::to_string),
-                        set_attr: None,
-                        dom_node: Some(dom_node_weak),
+                        write_back: None,
                     })
                     .expect("registry must handle every tag it reports");
 
                 let bridge = CustomNodeBridge::new(
-                    std::rc::Rc::clone(&node),
+                    Arc::clone(&node),
                     style.clone(),
                     style.display.outer,
                 );

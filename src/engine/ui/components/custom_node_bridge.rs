@@ -33,14 +33,14 @@ use super::inline_cache::resolve_border_box_size;
 /// and auto-height work regardless of the display value.
 #[derive(Debug)]
 pub struct CustomNodeBridge {
-    node: std::rc::Rc<dyn CustomNode>,
+    node: std::sync::Arc<dyn CustomNode>,
     layout_style: Style,
     display: OuterDisplay,
 }
 
 impl CustomNodeBridge {
     pub fn new(
-        node: std::rc::Rc<dyn CustomNode>,
+        node: std::sync::Arc<dyn CustomNode>,
         layout_style: Style,
         display: OuterDisplay,
     ) -> Self {
@@ -191,7 +191,7 @@ mod tests {
 
     fn bridge(display: OuterDisplay) -> CustomNodeBridge {
         CustomNodeBridge::new(
-            std::rc::Rc::new(TestNode {
+            std::sync::Arc::new(TestNode {
                 width: 200.0,
                 height: 100.0,
             }),
@@ -285,7 +285,7 @@ mod tests {
         use ui_layout::{Length, LengthOrAuto};
 
         let b = CustomNodeBridge::new(
-            std::rc::Rc::new(TestNode {
+            std::sync::Arc::new(TestNode {
                 width: 200.0,
                 height: 100.0,
             }),

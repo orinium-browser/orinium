@@ -1,6 +1,7 @@
 //! Browser UI components and window render state.
 
-use std::rc::Rc;
+use std::sync::Arc;
+
 
 use url::Url;
 use winit::event::{ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
@@ -71,7 +72,7 @@ struct InputState {
     /// Current keyboard modifier state (Ctrl, Shift, Alt, etc.).
     modifiers: winit::keyboard::ModifiersState,
     /// The custom node currently under the pointer, if any.
-    hovered: Option<Rc<dyn CustomNode>>,
+    hovered: Option<Arc<dyn CustomNode>>,
 }
 
 /// タブから発生したリソース取得リクエスト。
@@ -604,7 +605,7 @@ fn handle_mouse_click(tab: &mut Tab, x: f32, y: f32) -> bool {
         if let layouter::types::NodeKind::Custom { node, .. } = &hit.info.kind
             && node.accepts_text_input()
         {
-            Some(Rc::clone(node))
+            Some(Arc::clone(node))
         } else {
             None
         }

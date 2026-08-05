@@ -56,7 +56,7 @@ impl ContentSize {
 /// # Lifecycle
 /// - `draw_sized()` is called every frame during `generate_draw_commands`.
 /// - Event handling (focus, IME) is dispatched through `engine::input`.
-pub trait CustomNode: std::fmt::Debug + 'static {
+pub trait CustomNode: std::fmt::Debug + Send + Sync + 'static {
     /// Emit draw commands fitted to the resolved content-box `size`.
     ///
     /// `text_style` carries the inherited CSS text properties (color,

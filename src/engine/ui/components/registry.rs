@@ -1,20 +1,24 @@
 //! Component registry: maps HTML tags to custom node factories.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::{Rc, Weak};
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
 
 use crate::engine::bridge::text;
-use crate::engine::html::HtmlNodeType;
 use crate::engine::layouter::types::{Color, ContainerStyle, TextStyle};
 use crate::engine::renderer_model::Image;
-use crate::engine::tree::TreeNode;
 use crate::engine::ui::button::ButtonComponent;
 use crate::engine::ui::custom_node::CustomNode;
 use crate::engine::ui::image::ImageComponent;
 use crate::engine::ui::text_input::OnValueChange;
 use crate::engine::ui::text_input::TextInputComponent;
+
+/// A channel for reporting text-input value changes to the DOM owner.
+///
+/// Layout is built off the UI thread on a [`DomSnapshot`]-style arena, so the
+/// builder cannot touch the real DOM. Text inputs instead report
+/// `(snapshot node id, new value)` through this channel; the UI thread drains
+/// it and applies the value to the live tree.
+pub type DomWriteBack = mpsc::Sender<(u32, String)>;
 
 /// Context handed to a [`CustomNodeFactory`] to construct a component.
 pub struct CustomNodeContext<'a> {
@@ -32,10 +36,8 @@ pub struct CustomNodeContext<'a> {
     pub images: &'a HashMap<String, Image>,
     /// Attribute accessor.
     pub get_attr: &'a dyn Fn(&str) -> Option<String>,
-    /// Attribute setter (for bidirectional sync).
-    pub set_attr: Option<&'a dyn Fn(&str, String)>,
-    /// Weak reference to the DOM node for attribute write-back.
-    pub dom_node: Option<Weak<RefCell<TreeNode<HtmlNodeType>>>>,
+    /// Channel + snapshot node id for value write-back (bidirectional sync).
+    pub write_back: Option<(DomWriteBack, u32)>,
 }
 
 /// Constructs a [`CustomNode`] for a given HTML tag.
@@ -44,7 +46,7 @@ pub trait CustomNodeFactory {
     fn tags(&self) -> &'static [&'static str];
 
     /// Builds a node for `tag`, or `None` if the tag is not handled here.
-    fn create(&self, tag: &str, ctx: &CustomNodeContext) -> Option<Rc<dyn CustomNode>>;
+    fn create(&self, tag: &str, ctx: &CustomNodeContext) -> Option<Arc<dyn CustomNode>>;
 }
 
 /// A registry of [`CustomNodeFactory`]es used by the layout builder.
@@ -79,7 +81,7 @@ impl ComponentRegistry {
     }
 
     /// Constructs a node for `tag`, or `None` if no factory handles it.
-    pub fn create(&self, ctx: &CustomNodeContext) -> Option<Rc<dyn CustomNode>> {
+    pub fn create(&self, ctx: &CustomNodeContext) -> Option<Arc<dyn CustomNode>> {
         for factory in &self.factories {
             if factory.tags().contains(&ctx.tag) {
                 return factory.create(ctx.tag, ctx);
@@ -96,13 +98,13 @@ impl CustomNodeFactory for ButtonFactory {
         &["button"]
     }
 
-    fn create(&self, _tag: &str, ctx: &CustomNodeContext) -> Option<Rc<dyn CustomNode>> {
+    fn create(&self, _tag: &str, ctx: &CustomNodeContext) -> Option<Arc<dyn CustomNode>> {
         let default_bg = Color(240, 240, 240, 255);
         let bg = match &ctx.container_style.background {
             crate::engine::layouter::types::Background::Color(c) if c.3 > 0 => *c,
             _ => default_bg,
         };
-        Some(Rc::new(ButtonComponent::new(
+        Some(Arc::new(ButtonComponent::new(
             ctx.inner_text.to_string(),
             bg,
             ctx.text_style.color,
@@ -118,11 +120,11 @@ impl CustomNodeFactory for ImageFactory {
         &["img"]
     }
 
-    fn create(&self, _tag: &str, ctx: &CustomNodeContext) -> Option<Rc<dyn CustomNode>> {
+    fn create(&self, _tag: &str, ctx: &CustomNodeContext) -> Option<Arc<dyn CustomNode>> {
         let image = (ctx.get_attr)("src")
             .and_then(|source| ctx.images.get(&source))
             .cloned();
-        Some(Rc::new(ImageComponent {
+        Some(Arc::new(ImageComponent {
             image,
             alt: (ctx.get_attr)("alt").unwrap_or_default(),
         }))
@@ -136,27 +138,17 @@ impl CustomNodeFactory for TextInputFactory {
         &["input"]
     }
 
-    fn create(&self, _tag: &str, ctx: &CustomNodeContext) -> Option<Rc<dyn CustomNode>> {
+    fn create(&self, _tag: &str, ctx: &CustomNodeContext) -> Option<Arc<dyn CustomNode>> {
         let value = (ctx.get_attr)("value").unwrap_or_default();
         let placeholder = (ctx.get_attr)("placeholder").unwrap_or_default();
-        let on_value_change = ctx.dom_node.as_ref().map(|weak_dom| {
-            let weak_dom = weak_dom.clone();
+        let on_value_change = ctx.write_back.as_ref().map(|(sender, node_id)| {
+            let sender = sender.clone();
+            let node_id = *node_id;
             Arc::new(move |new_value: &str| {
-                if let Some(dom) = weak_dom.upgrade()
-                    && let HtmlNodeType::Element { attributes, .. } = &mut dom.borrow_mut().value
-                {
-                    if let Some(attr) = attributes.iter_mut().find(|a| a.name == "value") {
-                        attr.value = new_value.to_string();
-                    } else {
-                        attributes.push(crate::engine::html::tokenizer::Attribute {
-                            name: "value".to_string(),
-                            value: new_value.to_string(),
-                        });
-                    }
-                }
+                let _ = sender.send((node_id, new_value.to_string()));
             }) as Arc<OnValueChange>
         });
-        Some(Rc::new(if let Some(cb) = on_value_change {
+        Some(Arc::new(if let Some(cb) = on_value_change {
             TextInputComponent::with_on_change(value, placeholder, Arc::clone(&ctx.measurer), cb)
         } else {
             TextInputComponent::new(value, placeholder, Arc::clone(&ctx.measurer))
@@ -199,8 +191,7 @@ mod tests {
                 measurer: Arc::clone(&measurer),
                 images: &images,
                 get_attr: &get_attr,
-                set_attr: None,
-                dom_node: None,
+                write_back: None,
             })
             .unwrap();
         assert_eq!(button.role(), Some("button"));
@@ -214,8 +205,7 @@ mod tests {
                 measurer: Arc::clone(&measurer),
                 images: &images,
                 get_attr: &get_attr,
-                set_attr: None,
-                dom_node: None,
+                write_back: None,
             })
             .unwrap();
         assert_eq!(input.role(), Some("textbox"));
@@ -230,8 +220,7 @@ mod tests {
                 measurer: Arc::clone(&measurer),
                 images: &images,
                 get_attr: &get_attr,
-                set_attr: None,
-                dom_node: None,
+                write_back: None,
             })
             .unwrap();
         assert_eq!(img.role(), None);
@@ -253,8 +242,7 @@ mod tests {
             measurer: Arc::new(FallbackTextMeasurer),
             images: &images,
             get_attr: &get_attr,
-            set_attr: None,
-            dom_node: None,
+            write_back: None,
         };
         assert!(registry.create(&ctx).is_none());
     }

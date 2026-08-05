@@ -1,6 +1,6 @@
 //! 入力処理とヒットテスト。クリック位置の要素判定を行う。
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use super::layouter::types::{InfoNode, NodeKind};
 use super::ui::PointerEvent;
@@ -20,7 +20,7 @@ pub type HitPath<'a> = Vec<HitItem<'a>>;
 ///
 /// The hit path is ordered child→parent, so the first `Custom` node found is
 /// the deepest node under the pointer.
-pub fn hit_custom_node<'a>(path: &'a HitPath<'a>) -> Option<&'a Rc<dyn CustomNode>> {
+pub fn hit_custom_node<'a>(path: &'a HitPath<'a>) -> Option<&'a Arc<dyn CustomNode>> {
     path.iter().find_map(|hit| match &hit.info.kind {
         NodeKind::Custom { node, .. } => Some(node),
         _ => None,
@@ -36,10 +36,10 @@ pub fn dispatch_pointer(path: &HitPath<'_>, event: PointerEvent) -> bool {
 ///
 /// Clears hover from the previously hovered node (if different) and sets it on
 /// the node under the pointer. Returns whether the hover target changed.
-pub fn update_hover(path: &HitPath<'_>, previous: Option<&Rc<dyn CustomNode>>) -> bool {
+pub fn update_hover(path: &HitPath<'_>, previous: Option<&Arc<dyn CustomNode>>) -> bool {
     let current = hit_custom_node(path);
     match (previous, current) {
-        (Some(prev), Some(curr)) if Rc::ptr_eq(prev, curr) => false,
+        (Some(prev), Some(curr)) if Arc::ptr_eq(prev, curr) => false,
         (Some(prev), _) => {
             prev.set_hovered(false);
             if let Some(curr) = current {
@@ -229,12 +229,12 @@ pub fn scroll_at(
 /// Focuses `target` and clears focus from every other text input.
 ///
 /// Returns whether a text input received focus.
-pub fn focus_text_input(info: &InfoNode, target: Option<&Rc<dyn CustomNode>>) -> bool {
+pub fn focus_text_input(info: &InfoNode, target: Option<&Arc<dyn CustomNode>>) -> bool {
     let mut focused = false;
     if let NodeKind::Custom { node, .. } = &info.kind
         && node.accepts_text_input()
     {
-        let is_target = target.is_some_and(|target| Rc::ptr_eq(node, target));
+        let is_target = target.is_some_and(|target| Arc::ptr_eq(node, target));
         node.set_focused(is_target);
         focused |= is_target;
     }
@@ -294,7 +294,7 @@ mod tests {
     use crate::engine::ui::text_input_types::TextInputEvent;
     use std::sync::Arc;
 
-    fn input_info(node: Rc<dyn CustomNode>) -> InfoNode {
+    fn input_info(node: Arc<dyn CustomNode>) -> InfoNode {
         InfoNode {
             kind: NodeKind::Custom {
                 node,
@@ -313,14 +313,14 @@ mod tests {
     #[test]
     fn focus_and_dispatch_target_one_input() {
         let measurer: Arc<dyn TextMeasurer<TextStyle>> = Arc::new(FallbackTextMeasurer);
-        let first: Rc<dyn CustomNode> =
-            Rc::new(TextInputComponent::new("", "", Arc::clone(&measurer)));
-        let second: Rc<dyn CustomNode> = Rc::new(TextInputComponent::new("", "", measurer));
+        let first: Arc<dyn CustomNode> =
+            Arc::new(TextInputComponent::new("", "", Arc::clone(&measurer)));
+        let second: Arc<dyn CustomNode> = Arc::new(TextInputComponent::new("", "", measurer));
         let root = InfoNode {
             kind: NodeKind::LineBreak,
             children: vec![
-                input_info(Rc::clone(&first)),
-                input_info(Rc::clone(&second)),
+                input_info(Arc::clone(&first)),
+                input_info(Arc::clone(&second)),
             ],
         };
 
@@ -335,12 +335,12 @@ mod tests {
 
     #[test]
     fn hit_custom_node_finds_innermost_custom() {
-        let node: Rc<dyn CustomNode> = Rc::new(TextInputComponent::new(
+        let node: Arc<dyn CustomNode> = Arc::new(TextInputComponent::new(
             "",
             "",
             Arc::new(FallbackTextMeasurer),
         ));
-        let info = input_info(Rc::clone(&node));
+        let info = input_info(Arc::clone(&node));
         let layout = LayoutNode::new(ui_layout::Style::default());
         let path = vec![
             HitItem {
@@ -352,26 +352,26 @@ mod tests {
                 info: &info,
             },
         ];
-        assert!(Rc::ptr_eq(hit_custom_node(&path).unwrap(), &node));
+        assert!(Arc::ptr_eq(hit_custom_node(&path).unwrap(), &node));
     }
 
     #[test]
     fn update_hover_switches_target() {
         let measurer: Arc<dyn TextMeasurer<TextStyle>> = Arc::new(FallbackTextMeasurer);
-        let a: Rc<dyn CustomNode> = Rc::new(ButtonComponent::new(
+        let a: Arc<dyn CustomNode> = Arc::new(ButtonComponent::new(
             "A",
             Color(0, 0, 0, 255),
             Color(255, 255, 255, 255),
             Arc::clone(&measurer),
         ));
-        let b: Rc<dyn CustomNode> = Rc::new(ButtonComponent::new(
+        let b: Arc<dyn CustomNode> = Arc::new(ButtonComponent::new(
             "B",
             Color(0, 0, 0, 255),
             Color(255, 255, 255, 255),
             measurer,
         ));
-        let info_a = input_info(Rc::clone(&a));
-        let info_b = input_info(Rc::clone(&b));
+        let info_a = input_info(Arc::clone(&a));
+        let info_b = input_info(Arc::clone(&b));
         let layout = LayoutNode::new(ui_layout::Style::default());
         let path_a = vec![HitItem {
             layout: &layout,
@@ -396,13 +396,13 @@ mod tests {
     #[test]
     fn any_custom_node_needs_repaint_tracks_dirty_nodes() {
         let measurer: Arc<dyn TextMeasurer<TextStyle>> = Arc::new(FallbackTextMeasurer);
-        let a: Rc<dyn CustomNode> = Rc::new(ButtonComponent::new(
+        let a: Arc<dyn CustomNode> = Arc::new(ButtonComponent::new(
             "A",
             Color(0, 0, 0, 255),
             Color(255, 255, 255, 255),
             Arc::clone(&measurer),
         ));
-        let info_a = input_info(Rc::clone(&a));
+        let info_a = input_info(Arc::clone(&a));
 
         // Fresh nodes are dirty (initial paint).
         assert!(any_custom_node_needs_repaint(&info_a));

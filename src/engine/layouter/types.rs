@@ -1,6 +1,6 @@
 //! Layout tree node types. Styles, text, and container definitions.
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::engine::ui::custom_node::CustomNode;
 
@@ -60,7 +60,7 @@ pub enum NodeKind {
     },
     LineBreak,
     Custom {
-        node: Rc<dyn CustomNode>,
+        node: Arc<dyn CustomNode>,
         scroll_x: bool,
         scroll_y: bool,
         scroll_offset_x: f32,

@@ -1,7 +1,7 @@
 //! Editable single-line text input with IME composition state.
 
-use std::cell::{Cell, RefCell};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use smol_str::SmolStr;
 use ui_layout::Style;
@@ -15,7 +15,7 @@ use crate::engine::ui::components::text_input_types::{
 use crate::engine::ui::custom_node::{ContentSize, CustomNode};
 
 /// Callback invoked when the text input's value changes.
-pub type OnValueChange = dyn Fn(&str);
+pub type OnValueChange = dyn Fn(&str) + Send + Sync;
 
 const INLINE_PADDING: f32 = 4.0;
 
@@ -29,12 +29,12 @@ struct EditSnapshot {
 
 /// An HTML text input rendered by the engine.
 pub struct TextInputComponent {
-    state: RefCell<TextInputState>,
+    state: Mutex<TextInputState>,
     placeholder: SmolStr,
     measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
-    undo_stack: RefCell<Vec<EditSnapshot>>,
-    redo_stack: RefCell<Vec<EditSnapshot>>,
-    dirty: Cell<bool>,
+    undo_stack: Mutex<Vec<EditSnapshot>>,
+    redo_stack: Mutex<Vec<EditSnapshot>>,
+    dirty: AtomicBool,
     on_value_change: Option<Arc<OnValueChange>>,
     on_enter: Option<Arc<OnValueChange>>,
 }
@@ -42,7 +42,7 @@ pub struct TextInputComponent {
 impl std::fmt::Debug for TextInputComponent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TextInputComponent")
-            .field("state", &self.state.borrow())
+            .field("state", &self.state.lock().unwrap())
             .field("placeholder", &self.placeholder)
             .finish_non_exhaustive()
     }
@@ -58,7 +58,7 @@ impl TextInputComponent {
         let value = value.into();
         let caret = value.len();
         Self {
-            state: RefCell::new(TextInputState {
+            state: Mutex::new(TextInputState {
                 value,
                 preedit: String::new(),
                 caret,
@@ -66,9 +66,9 @@ impl TextInputComponent {
             }),
             placeholder: placeholder.into(),
             measurer,
-            undo_stack: RefCell::new(Vec::new()),
-            redo_stack: RefCell::new(Vec::new()),
-            dirty: Cell::new(true),
+            undo_stack: Mutex::new(Vec::new()),
+            redo_stack: Mutex::new(Vec::new()),
+            dirty: AtomicBool::new(true),
             on_value_change: None,
             on_enter: None,
         }
@@ -103,16 +103,16 @@ impl TextInputComponent {
     /// Used to sync the URL bar with the active tab after navigation.
     pub fn set_value(&self, value: impl Into<String>) {
         let value = value.into();
-        let mut state = self.state.borrow_mut();
+        let mut state = self.state.lock().unwrap();
         state.value = value;
         state.caret = state.value.len();
         state.preedit.clear();
-        self.dirty.set(true);
+        self.dirty.store(true, Ordering::Relaxed);
     }
 
     /// Returns a copy of the current editing state.
     pub fn state(&self) -> TextInputState {
-        self.state.borrow().clone()
+        self.state.lock().unwrap().clone()
     }
 
     fn previous_boundary(value: &str, caret: usize) -> usize {
@@ -153,7 +153,7 @@ impl TextInputComponent {
     }
 
     fn snapshot(&self) -> EditSnapshot {
-        let state = self.state.borrow();
+        let state = self.state.lock().unwrap();
         EditSnapshot {
             value: state.value.clone(),
             caret: state.caret,
@@ -162,32 +162,32 @@ impl TextInputComponent {
     }
 
     fn push_undo(&self, snapshot: EditSnapshot) {
-        self.undo_stack.borrow_mut().push(snapshot);
-        self.redo_stack.borrow_mut().clear();
+        self.undo_stack.lock().unwrap().push(snapshot);
+        self.redo_stack.lock().unwrap().clear();
     }
 
     fn undo(&self) {
-        let Some(snapshot) = self.undo_stack.borrow_mut().pop() else {
+        let Some(snapshot) = self.undo_stack.lock().unwrap().pop() else {
             return;
         };
-        self.redo_stack.borrow_mut().push(self.snapshot());
-        let mut state = self.state.borrow_mut();
+        self.redo_stack.lock().unwrap().push(self.snapshot());
+        let mut state = self.state.lock().unwrap();
         state.value = snapshot.value;
         state.caret = snapshot.caret;
         state.preedit = snapshot.preedit;
-        self.dirty.set(true);
+        self.dirty.store(true, Ordering::Relaxed);
     }
 
     fn redo(&self) {
-        let Some(snapshot) = self.redo_stack.borrow_mut().pop() else {
+        let Some(snapshot) = self.redo_stack.lock().unwrap().pop() else {
             return;
         };
-        self.undo_stack.borrow_mut().push(self.snapshot());
-        let mut state = self.state.borrow_mut();
+        self.undo_stack.lock().unwrap().push(self.snapshot());
+        let mut state = self.state.lock().unwrap();
         state.value = snapshot.value;
         state.caret = snapshot.caret;
         state.preedit = snapshot.preedit;
-        self.dirty.set(true);
+        self.dirty.store(true, Ordering::Relaxed);
     }
 }
 
@@ -199,7 +199,7 @@ impl CustomNode for TextInputComponent {
         _style: &Style,
         size: ContentSize,
     ) {
-        let state = self.state.borrow();
+        let state = self.state.lock().unwrap();
         let mut style = text_style.clone();
         let (display_text, placeholder) = if state.value.is_empty() && state.preedit.is_empty() {
             (self.placeholder.as_str().to_owned(), true)
@@ -254,16 +254,16 @@ impl CustomNode for TextInputComponent {
     }
 
     fn set_focused(&self, focused: bool) {
-        let mut state = self.state.borrow_mut();
+        let mut state = self.state.lock().unwrap();
         state.focused = focused;
-        self.dirty.set(true);
+        self.dirty.store(true, Ordering::Relaxed);
         if !focused {
             state.preedit.clear();
         }
     }
 
     fn is_focused(&self) -> bool {
-        self.state.borrow().focused
+        self.state.lock().unwrap().focused
     }
 
     fn handle_text_input(&self, event: TextInputEvent) -> bool {
@@ -279,21 +279,23 @@ impl CustomNode for TextInputComponent {
                     return true;
                 }
                 self.push_undo(self.snapshot());
-                let mut state = self.state.borrow_mut();
+                let mut state = self.state.lock().unwrap();
                 let caret = state.caret;
                 state.value.insert_str(caret, &text);
                 state.caret += text.len();
                 state.preedit.clear();
-                self.dirty.set(true);
+                let value = state.value.clone();
+                drop(state);
+                self.dirty.store(true, Ordering::Relaxed);
                 if let Some(ref cb) = self.on_value_change {
-                    cb(&state.value);
+                    cb(&value);
                 }
             }
             TextInputEvent::Preedit(text) => {
-                let mut state = self.state.borrow_mut();
+                let mut state = self.state.lock().unwrap();
                 if state.preedit != text {
                     state.preedit = text;
-                    self.dirty.set(true);
+                    self.dirty.store(true, Ordering::Relaxed);
                 }
             }
             TextInputEvent::Key(key) => {
@@ -301,19 +303,21 @@ impl CustomNode for TextInputComponent {
                 if changed {
                     self.push_undo(self.snapshot());
                 }
-                let mut state = self.state.borrow_mut();
+                let mut state = self.state.lock().unwrap();
                 state.preedit.clear();
                 Self::handle_key(&mut state, key);
-                self.dirty.set(true);
+                let value = state.value.clone();
+                drop(state);
+                self.dirty.store(true, Ordering::Relaxed);
                 if changed && let Some(ref cb) = self.on_value_change {
-                    cb(&state.value);
+                    cb(&value);
                 }
             }
             TextInputEvent::Enter => {
-                let mut state = self.state.borrow_mut();
+                let mut state = self.state.lock().unwrap();
                 if !state.preedit.is_empty() {
                     state.preedit.clear();
-                    self.dirty.set(true);
+                    self.dirty.store(true, Ordering::Relaxed);
                 }
                 let value = state.value.clone();
                 drop(state);
@@ -328,10 +332,10 @@ impl CustomNode for TextInputComponent {
                 self.redo();
             }
             TextInputEvent::CancelComposition => {
-                let mut state = self.state.borrow_mut();
+                let mut state = self.state.lock().unwrap();
                 if !state.preedit.is_empty() {
                     state.preedit.clear();
-                    self.dirty.set(true);
+                    self.dirty.store(true, Ordering::Relaxed);
                 }
             }
         }
@@ -339,15 +343,15 @@ impl CustomNode for TextInputComponent {
     }
 
     fn is_composing(&self) -> bool {
-        !self.state.borrow().preedit.is_empty()
+        !self.state.lock().unwrap().preedit.is_empty()
     }
 
     fn needs_repaint(&self) -> bool {
-        self.dirty.replace(false)
+        self.dirty.swap(false, Ordering::Relaxed)
     }
 
     fn composition_rect(&self) -> Option<(f32, f32, f32, f32)> {
-        let state = self.state.borrow();
+        let state = self.state.lock().unwrap();
         if state.preedit.is_empty() {
             return None;
         }
@@ -395,7 +399,7 @@ impl CustomNode for TextInputComponent {
     }
 
     fn value(&self) -> Option<String> {
-        Some(self.state.borrow().value.clone())
+        Some(self.state.lock().unwrap().value.clone())
     }
 }
 

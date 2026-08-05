@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use ui_layout::Style;
@@ -19,9 +19,9 @@ pub struct ButtonComponent {
     pub button_color: Color,
     pub label_color: Color,
     measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
-    hovered: Cell<bool>,
-    pressed: Cell<bool>,
-    dirty: Cell<bool>,
+    hovered: AtomicBool,
+    pressed: AtomicBool,
+    dirty: AtomicBool,
 }
 
 impl std::fmt::Debug for ButtonComponent {
@@ -48,9 +48,9 @@ impl ButtonComponent {
             button_color,
             label_color,
             measurer,
-            hovered: Cell::new(false),
-            pressed: Cell::new(false),
-            dirty: Cell::new(true),
+            hovered: AtomicBool::new(false),
+            pressed: AtomicBool::new(false),
+            dirty: AtomicBool::new(true),
         }
     }
 }
@@ -76,9 +76,9 @@ impl CustomNode for ButtonComponent {
 
     fn background(&self) -> Option<Background> {
         let base = self.button_color;
-        let color = if self.pressed.get() {
+        let color = if self.pressed.load(Ordering::Relaxed) {
             shade(base, -30)
-        } else if self.hovered.get() {
+        } else if self.hovered.load(Ordering::Relaxed) {
             shade(base, 20)
         } else {
             base
@@ -109,29 +109,29 @@ impl CustomNode for ButtonComponent {
     fn on_pointer_event(&self, event: PointerEvent) -> bool {
         match event {
             PointerEvent::Move { .. } => {
-                let was_hovered = self.hovered.replace(true);
+                let was_hovered = self.hovered.swap(true, Ordering::Relaxed);
                 if !was_hovered {
-                    self.dirty.set(true);
+                    self.dirty.store(true, Ordering::Relaxed);
                 }
                 true
             }
             PointerEvent::Down { .. } => {
-                self.hovered.set(true);
-                self.pressed.set(true);
-                self.dirty.set(true);
+                self.hovered.store(true, Ordering::Relaxed);
+                self.pressed.store(true, Ordering::Relaxed);
+                self.dirty.store(true, Ordering::Relaxed);
                 true
             }
             PointerEvent::Up { .. } => {
-                let clicked = self.pressed.replace(false);
-                self.hovered.set(false);
-                self.dirty.set(true);
+                let clicked = self.pressed.swap(false, Ordering::Relaxed);
+                self.hovered.store(false, Ordering::Relaxed);
+                self.dirty.store(true, Ordering::Relaxed);
                 clicked
             }
             PointerEvent::Leave => {
-                let was_hovered = self.hovered.replace(false);
-                let was_pressed = self.pressed.replace(false);
+                let was_hovered = self.hovered.swap(false, Ordering::Relaxed);
+                let was_pressed = self.pressed.swap(false, Ordering::Relaxed);
                 if was_hovered || was_pressed {
-                    self.dirty.set(true);
+                    self.dirty.store(true, Ordering::Relaxed);
                 }
                 false
             }
@@ -139,17 +139,17 @@ impl CustomNode for ButtonComponent {
     }
 
     fn set_hovered(&self, hovered: bool) {
-        if self.hovered.replace(hovered) != hovered {
-            self.dirty.set(true);
+        if self.hovered.swap(hovered, Ordering::Relaxed) != hovered {
+            self.dirty.store(true, Ordering::Relaxed);
         }
     }
 
     fn is_hovered(&self) -> bool {
-        self.hovered.get()
+        self.hovered.load(Ordering::Relaxed)
     }
 
     fn needs_repaint(&self) -> bool {
-        self.dirty.replace(false)
+        self.dirty.swap(false, Ordering::Relaxed)
     }
 
     fn role(&self) -> Option<&'static str> {
