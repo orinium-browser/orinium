@@ -36,6 +36,7 @@ pub struct TextInputComponent {
     redo_stack: RefCell<Vec<EditSnapshot>>,
     dirty: Cell<bool>,
     on_value_change: Option<Arc<OnValueChange>>,
+    on_enter: Option<Arc<OnValueChange>>,
 }
 
 impl std::fmt::Debug for TextInputComponent {
@@ -69,6 +70,7 @@ impl TextInputComponent {
             redo_stack: RefCell::new(Vec::new()),
             dirty: Cell::new(true),
             on_value_change: None,
+            on_enter: None,
         }
     }
 
@@ -82,6 +84,30 @@ impl TextInputComponent {
         let mut input = Self::new(value, placeholder, measurer);
         input.on_value_change = Some(on_value_change);
         input
+    }
+
+    /// Creates a text input that navigates when the user presses Enter.
+    pub fn with_on_enter(
+        value: impl Into<String>,
+        placeholder: impl Into<SmolStr>,
+        measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
+        on_enter: Arc<OnValueChange>,
+    ) -> Self {
+        let mut input = Self::new(value, placeholder, measurer);
+        input.on_enter = Some(on_enter);
+        input
+    }
+
+    /// Replaces the current value and moves the caret to the end.
+    ///
+    /// Used to sync the URL bar with the active tab after navigation.
+    pub fn set_value(&self, value: impl Into<String>) {
+        let value = value.into();
+        let mut state = self.state.borrow_mut();
+        state.value = value;
+        state.caret = state.value.len();
+        state.preedit.clear();
+        self.dirty.set(true);
     }
 
     /// Returns a copy of the current editing state.
@@ -288,6 +314,11 @@ impl CustomNode for TextInputComponent {
                 if !state.preedit.is_empty() {
                     state.preedit.clear();
                     self.dirty.set(true);
+                }
+                let value = state.value.clone();
+                drop(state);
+                if let Some(ref cb) = self.on_enter {
+                    cb(&value);
                 }
             }
             TextInputEvent::Undo => {
@@ -559,5 +590,30 @@ mod tests {
 
         input.handle_text_input(TextInputEvent::Insert(" world".into()));
         assert_eq!(*received.lock().unwrap(), vec!["hello", "hello world"]);
+    }
+
+    #[test]
+    fn on_enter_callback_fires_with_current_value() {
+        use std::sync::{Arc, Mutex};
+        let received: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let received_clone = Arc::clone(&received);
+        let cb: Arc<OnValueChange> = Arc::new(move |v: &str| {
+            received_clone.lock().unwrap().push(v.to_string());
+        });
+        let input = TextInputComponent::with_on_enter("", "", Arc::new(FallbackTextMeasurer), cb);
+
+        input.handle_text_input(TextInputEvent::Insert("https://example.com".into()));
+        input.handle_text_input(TextInputEvent::Enter);
+        assert_eq!(*received.lock().unwrap(), vec!["https://example.com"]);
+    }
+
+    #[test]
+    fn set_value_updates_value_and_caret() {
+        let input = make_component("old", "");
+        input.set_value("new value");
+        let state = input.state();
+        assert_eq!(state.value, "new value");
+        assert_eq!(state.caret, "new value".len());
+        assert!(input.needs_repaint());
     }
 }

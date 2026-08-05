@@ -44,6 +44,8 @@ pub struct Tab {
     docment_url: Option<Url>,
     webview: Option<WebView>,
     state: TabState,
+    /// Previously visited URLs, most recent last. Used by the back button.
+    history: Vec<Url>,
 }
 
 impl Default for Tab {
@@ -60,6 +62,7 @@ impl Tab {
             docment_url: None,
             webview: None,
             state: TabState::Loading,
+            history: Vec::new(),
         }
     }
 
@@ -163,11 +166,46 @@ impl Tab {
     }
 
     pub fn navigate(&mut self, url: Url) {
+        self.navigate_internal(url, true);
+    }
+
+    /// Navigates to the previous URL in the history, if any.
+    ///
+    /// Returns `false` when there is no history to go back to.
+    pub fn go_back(&mut self) -> bool {
+        let Some(previous) = self.history.pop() else {
+            return false;
+        };
+        self.navigate_internal(previous, false);
+        true
+    }
+
+    /// Reloads the current document, if one is loaded.
+    pub fn reload(&mut self) {
+        if let Some(url) = self.docment_url.clone() {
+            self.navigate_internal(url, false);
+        }
+    }
+
+    /// Returns whether the back button can navigate to a previous page.
+    pub fn can_go_back(&self) -> bool {
+        !self.history.is_empty()
+    }
+
+    fn navigate_internal(&mut self, url: Url, record_history: bool) {
+        if record_history
+            && self.docment_url.as_ref() != Some(&url)
+            && let Some(previous) = self.docment_url.clone()
+        {
+            self.history.push(previous);
+        }
         self.docment_url = Some(url);
         let mut webview = WebView::new();
         webview.navigate();
         self.webview = Some(webview);
         self.state = TabState::Loading;
+        self.title = None;
+        self.base_url = None;
     }
 
     pub fn move_to(&mut self, href: &str) {
@@ -218,5 +256,63 @@ impl Tab {
         if let Some(wv) = self.webview.as_mut() {
             wv.clear_redraw_flag();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn url(s: &str) -> Url {
+        Url::parse(s).unwrap()
+    }
+
+    #[test]
+    fn navigate_records_history() {
+        let mut tab = Tab::new();
+        tab.navigate(url("https://example.test/a"));
+        tab.navigate(url("https://example.test/b"));
+
+        assert!(tab.can_go_back());
+        assert_eq!(
+            tab.document_url().as_ref().map(Url::as_str),
+            Some("https://example.test/b")
+        );
+    }
+
+    #[test]
+    fn navigating_to_same_url_does_not_duplicate_history() {
+        let mut tab = Tab::new();
+        tab.navigate(url("https://example.test/a"));
+        tab.navigate(url("https://example.test/a"));
+        assert!(!tab.can_go_back());
+    }
+
+    #[test]
+    fn go_back_restores_previous_url() {
+        let mut tab = Tab::new();
+        tab.navigate(url("https://example.test/a"));
+        tab.navigate(url("https://example.test/b"));
+
+        assert!(tab.go_back());
+        assert_eq!(
+            tab.document_url().as_ref().map(Url::as_str),
+            Some("https://example.test/a")
+        );
+        assert!(!tab.can_go_back());
+        // No history left: going back again reports failure.
+        assert!(!tab.go_back());
+    }
+
+    #[test]
+    fn reload_keeps_url_without_recording_history() {
+        let mut tab = Tab::new();
+        tab.navigate(url("https://example.test/a"));
+        tab.reload();
+        assert_eq!(
+            tab.document_url().as_ref().map(Url::as_str),
+            Some("https://example.test/a")
+        );
+        assert!(!tab.can_go_back());
     }
 }
