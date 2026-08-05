@@ -47,4 +47,4 @@ pub use app::BrowserApp;
 pub use command::BrowserCommand;
 pub use renderer::BrowserRenderer;
 pub use tab::Tab;
-pub use ui::{BrowserUi, RenderState};
+pub use ui::{BasicChrome, BrowserUi, Chrome, ChromeAction, ChromeEventResult, RenderState};

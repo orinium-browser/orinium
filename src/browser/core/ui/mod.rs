@@ -72,8 +72,6 @@ struct InputState {
     modifiers: winit::keyboard::ModifiersState,
     /// The custom node currently under the pointer, if any.
     hovered: Option<Rc<dyn CustomNode>>,
-    /// The chrome element currently under the pointer, if any.
-    hovered_chrome: Option<ChromeHit>,
 }
 
 /// タブから発生したリソース取得リクエスト。
@@ -110,20 +108,32 @@ impl Default for BrowserUi {
 }
 
 impl BrowserUi {
+    /// Creates a UI with the default [`BasicChrome`] and no tabs.
     pub fn new() -> Self {
+        Self::with_chrome(Box::new(BasicChrome::new()))
+    }
+
+    /// Creates a UI with one tab and the default [`BasicChrome`].
+    pub fn with_tab(tab: Tab) -> Self {
+        Self::with_tab_and_chrome(tab, Box::new(BasicChrome::new()))
+    }
+
+    /// Creates a UI with a custom chrome and no tabs.
+    pub fn with_chrome(chrome: Box<dyn Chrome>) -> Self {
         Self {
             tabs: Vec::new(),
             active_tab: 0,
-            renderer: BrowserRenderer::new(),
+            renderer: BrowserRenderer::with_chrome(chrome),
             input: InputState::default(),
         }
     }
 
-    pub fn with_tab(tab: Tab) -> Self {
+    /// Creates a UI with one tab and a custom chrome.
+    pub fn with_tab_and_chrome(tab: Tab, chrome: Box<dyn Chrome>) -> Self {
         Self {
             tabs: vec![tab],
             active_tab: 0,
-            renderer: BrowserRenderer::new(),
+            renderer: BrowserRenderer::with_chrome(chrome),
             input: InputState::default(),
         }
     }
@@ -317,60 +327,19 @@ impl BrowserUi {
 
         let tab_id = self.active_tab;
 
-        // While the address bar is focused, keyboard and IME input drive the
-        // URL bar instead of the page.
-        if self.renderer.layout.toolbar.url_bar.is_focused() {
-            // Enter submits the typed URL.
-            if let winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter) =
-                &event.logical_key
-            {
-                let url = self.renderer.layout.toolbar.url_bar.state().value;
-                self.renderer
-                    .layout
-                    .toolbar
-                    .url_bar
-                    .handle_text_input(TextInputEvent::Enter);
-                if let Some(tab) = self.tabs.get_mut(tab_id) {
-                    match Url::parse(&url) {
-                        Ok(url) => tab.navigate(url),
-                        Err(_) => {
-                            log::warn!("Ignoring invalid URL entered in address bar: {}", url);
-                        }
+        // While the chrome owns text input (e.g. the address bar is focused),
+        // keyboard input drives the chrome instead of the page.
+        if self.renderer.chrome.accepts_text_input() {
+            let action = self.renderer.chrome.key_event(&event, ctrl);
+            return match action {
+                ChromeAction::Navigate(url) => {
+                    if let Some(tab) = self.tabs.get_mut(tab_id) {
+                        tab.navigate(url);
                     }
+                    BrowserCommand::RequestRedraw
                 }
-                return BrowserCommand::RequestRedraw;
-            }
-
-            let special = logical_key_to_special_event(&event.logical_key, ctrl);
-            let key = logical_key_to_text_key(&event.logical_key);
-            let handled = if let Some(special) = special {
-                self.renderer
-                    .layout
-                    .toolbar
-                    .url_bar
-                    .handle_text_input(special)
-            } else if let Some(key) = key {
-                self.renderer
-                    .layout
-                    .toolbar
-                    .url_bar
-                    .handle_text_input(TextInputEvent::Key(key))
-            } else if !ctrl && !self.renderer.layout.toolbar.url_bar.is_composing() {
-                event.text.as_ref().is_some_and(|text| {
-                    self.renderer
-                        .layout
-                        .toolbar
-                        .url_bar
-                        .handle_text_input(TextInputEvent::Insert(text.to_string()))
-                })
-            } else {
-                false
-            };
-
-            return if handled {
-                BrowserCommand::RequestRedraw
-            } else {
-                BrowserCommand::None
+                ChromeAction::Repaint => BrowserCommand::RequestRedraw,
+                _ => BrowserCommand::None,
             };
         }
 
@@ -404,6 +373,16 @@ impl BrowserUi {
 
     /// Handles IME composition updates for the focused text input.
     fn handle_ime_input(&mut self, event: Ime) -> BrowserCommand {
+        // While the chrome owns text input (e.g. the address bar is focused),
+        // IME events drive the chrome instead of the page.
+        if self.renderer.chrome.accepts_text_input() {
+            let action = self.renderer.chrome.ime_event(&event);
+            return match action {
+                ChromeAction::Repaint => BrowserCommand::RequestRedraw,
+                _ => BrowserCommand::None,
+            };
+        }
+
         let event = match event {
             Ime::Preedit(text, _) => TextInputEvent::Preedit(text),
             Ime::Commit(text) => TextInputEvent::Commit(text),
@@ -412,21 +391,6 @@ impl BrowserUi {
         };
 
         let tab_id = self.active_tab;
-
-        // The address bar owns IME composition while it is focused.
-        if self.renderer.layout.toolbar.url_bar.is_focused() {
-            let handled = self
-                .renderer
-                .layout
-                .toolbar
-                .url_bar
-                .handle_text_input(event);
-            return if handled {
-                BrowserCommand::RequestRedraw
-            } else {
-                BrowserCommand::None
-            };
-        }
 
         let Some((_, info)) = self.tabs.get(tab_id).and_then(Tab::layout_and_info) else {
             return BrowserCommand::None;
@@ -455,46 +419,47 @@ impl BrowserUi {
         let tab_id = self.active_tab;
         let width = self.renderer.render_state.viewport().0;
 
-        // Click inside the chrome toolbar.
-        if let Some(hit) = self.renderer.layout.hit_test(px, py, width) {
-            let event = match state {
-                ElementState::Pressed => PointerEvent::Down { x: px, y: py },
-                ElementState::Released => PointerEvent::Up { x: px, y: py },
-            };
-            let (_, clicked) = self.renderer.layout.handle_pointer_event(hit, event);
-
-            // Pressing the URL bar must enable the OS IME so the caret and
-            // input methods work; the platform handler also requests a redraw.
-            if hit == ChromeHit::UrlBar && matches!(state, ElementState::Pressed) {
-                self.renderer.layout.toolbar.url_bar.set_focused(true);
-                if let Some(tab) = self.tabs.get_mut(tab_id)
-                    && let Some((_, info)) = tab.layout_and_info()
-                {
-                    crate::engine::input::focus_text_input(info, None);
+        // Click inside the chrome.
+        let window_event = match state {
+            ElementState::Pressed => PointerEvent::Down { x: px, y: py },
+            ElementState::Released => PointerEvent::Up { x: px, y: py },
+        };
+        let result = self.renderer.chrome.pointer_event(width, window_event);
+        if result.consumed {
+            match result.action {
+                // Pressing the URL bar enables the OS IME so the caret and
+                // input methods work; the platform handler also requests a
+                // redraw.
+                ChromeAction::EnableIme => {
+                    if let Some(tab) = self.tabs.get_mut(tab_id)
+                        && let Some((_, info)) = tab.layout_and_info()
+                    {
+                        crate::engine::input::focus_text_input(info, None);
+                    }
+                    return BrowserCommand::SetImeAllowed {
+                        allowed: true,
+                        position: (x, y),
+                    };
                 }
-                return BrowserCommand::SetImeAllowed {
-                    allowed: true,
-                    position: (x, y),
-                };
-            }
-
-            // Navigation buttons trigger on a completed click.
-            if matches!(state, ElementState::Released)
-                && clicked
-                && let Some(tab) = self.tabs.get_mut(tab_id)
-            {
-                match hit {
-                    ChromeHit::Back => {
+                ChromeAction::Back => {
+                    if let Some(tab) = self.tabs.get_mut(tab_id) {
                         tab.go_back();
                     }
-                    ChromeHit::Reload => {
+                }
+                ChromeAction::Reload => {
+                    if let Some(tab) = self.tabs.get_mut(tab_id) {
                         tab.reload();
                     }
-                    ChromeHit::UrlBar => {}
                 }
+                ChromeAction::Navigate(url) => {
+                    if let Some(tab) = self.tabs.get_mut(tab_id) {
+                        tab.navigate(url);
+                    }
+                }
+                ChromeAction::Repaint | ChromeAction::None => {}
             }
 
-            return if self.renderer.layout.toolbar_needs_repaint() || clicked {
+            return if self.renderer.chrome.needs_repaint() {
                 BrowserCommand::RequestRedraw
             } else {
                 BrowserCommand::SetImeAllowed {
@@ -505,8 +470,8 @@ impl BrowserUi {
         }
 
         // Content area: dispatch to the active tab in page coordinates.
-        let toolbar_height = self.renderer.layout.toolbar_rects(width).height();
-        let (px, py) = (px, py - toolbar_height);
+        let chrome_height = self.renderer.chrome.chrome_height(width);
+        let (px, py) = (px, py - chrome_height);
 
         if let Some(tab) = self.tabs.get_mut(tab_id) {
             if let Some((layout, info)) = tab.layout_and_info() {
@@ -518,8 +483,8 @@ impl BrowserUi {
                 crate::engine::input::dispatch_pointer(&path, event);
             }
 
-            // Clicking the page unfocuses the address bar.
-            self.renderer.layout.toolbar.url_bar.set_focused(false);
+            // Clicking the page unfocuses the chrome's text input.
+            self.renderer.chrome.blur();
 
             let input_focused = handle_mouse_click(tab, px, py);
             BrowserCommand::SetImeAllowed {
@@ -541,31 +506,18 @@ impl BrowserUi {
         let (px, py) = ((x / sf) as f32, (y / sf) as f32);
         let width = self.renderer.render_state.viewport().0;
 
-        let hit = self.renderer.layout.hit_test(px, py, width);
-
-        // Chrome hover: send Leave to the previously hovered element and Move
-        // to the element under the pointer.
-        let mut repaint = false;
-        let prev_hovered = self.input.hovered_chrome;
-        if let Some(previous) = prev_hovered
-            && Some(previous) != hit
-        {
-            self.renderer
-                .layout
-                .handle_pointer_event(previous, PointerEvent::Leave);
-            self.input.hovered_chrome = None;
-        }
-        if let Some(hit) = hit {
-            self.renderer
-                .layout
-                .handle_pointer_event(hit, PointerEvent::Move { x: px, y: py });
-            self.input.hovered_chrome = Some(hit);
-            return repaint || self.renderer.layout.toolbar_needs_repaint();
+        // The chrome receives every move so it can track its own hover state.
+        let result = self
+            .renderer
+            .chrome
+            .pointer_event(width, PointerEvent::Move { x: px, y: py });
+        if result.consumed {
+            return self.renderer.chrome.needs_repaint();
         }
 
         // Content area: dispatch to the page in page coordinates.
-        let toolbar_height = self.renderer.layout.toolbar_rects(width).height();
-        let (px, py) = (px, py - toolbar_height);
+        let chrome_height = self.renderer.chrome.chrome_height(width);
+        let (px, py) = (px, py - chrome_height);
 
         let Some(tab) = self.tabs.get_mut(tab_id) else {
             return false;
@@ -574,14 +526,14 @@ impl BrowserUi {
             return false;
         };
         let path = crate::engine::input::hit_test(layout, info, px, py);
-        repaint |=
+        let mut repaint =
             crate::engine::input::dispatch_pointer(&path, PointerEvent::Move { x: px, y: py });
         let previous = self.input.hovered.clone();
         if crate::engine::input::update_hover(&path, previous.as_ref()) {
             repaint = true;
             self.input.hovered = crate::engine::input::hit_custom_node(&path).cloned();
         }
-        repaint
+        repaint || self.renderer.chrome.needs_repaint()
     }
 
     /// Handles scrolling for the window's assigned tab, updating its layout container offsets.
@@ -591,7 +543,8 @@ impl BrowserUi {
             MouseScrollDelta::PixelDelta(pos) => (-pos.x as f32, -pos.y as f32),
         };
 
-        let (window_height, sf) = (
+        let (width, window_height, sf) = (
+            self.renderer.render_state.viewport().0,
             self.renderer.render_state.window_size.1 as f32,
             self.renderer.render_state.scale_factor as f32,
         );
@@ -614,6 +567,10 @@ impl BrowserUi {
                 scroll_offset_y, ..
             } = &mut info.kind
             {
+                // The page is laid out below the chrome, so the visible height
+                // is the window height minus the chrome height.
+                let visible_height = (window_height / sf - self.renderer.chrome.chrome_height(width))
+                    .max(0.0);
                 *scroll_offset_y = (*scroll_offset_y + scroll_y).clamp(
                     0.0,
                     (layout
@@ -621,7 +578,7 @@ impl BrowserUi {
                         .iter()
                         .map(|l| l.children_box.height)
                         .sum::<f32>()
-                        - (window_height / sf))
+                        - visible_height)
                         .max(0.0),
                 );
             }
@@ -630,9 +587,11 @@ impl BrowserUi {
 }
 
 // Sub-modules
-pub mod basic_ui;
+mod basic_chrome;
+mod chrome;
 
-pub use basic_ui::{BrowserLayout, ChromeHit};
+pub use basic_chrome::BasicChrome;
+pub use chrome::{Chrome, ChromeAction, ChromeEventResult};
 
 /// Handles a mouse click in the given tab at the specified coordinates.
 fn handle_mouse_click(tab: &mut Tab, x: f32, y: f32) -> bool {

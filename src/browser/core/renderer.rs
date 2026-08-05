@@ -6,7 +6,7 @@ use crate::engine::renderer_model::{AffineTransform, DrawCommand, FillRule, rect
 use crate::platform::renderer::gpu::GpuRenderer;
 
 use super::tab::Tab;
-use super::ui::{BrowserLayout, RenderState};
+use super::ui::{BasicChrome, Chrome, RenderState};
 
 /// BrowserRenderer は実際の描画を担当する。
 ///
@@ -20,8 +20,8 @@ use super::ui::{BrowserLayout, RenderState};
 pub struct BrowserRenderer {
     /// ウィンドウの描画状態（DrawCommand、サイズ、スケール、タイトル）。
     pub render_state: RenderState,
-    /// ブラウザ chrome（ツールバーなどの UI 描画）。
-    pub layout: BrowserLayout,
+    /// ブラウザ chrome（ツールバーなどの UI 描画）。既定は [`BasicChrome`]。
+    pub chrome: Box<dyn Chrome>,
 }
 
 impl Default for BrowserRenderer {
@@ -31,10 +31,16 @@ impl Default for BrowserRenderer {
 }
 
 impl BrowserRenderer {
+    /// 既定の [`BasicChrome`] でレンダラを生成する。
     pub fn new() -> Self {
+        Self::with_chrome(Box::new(BasicChrome::new()))
+    }
+
+    /// 任意の chrome 実装でレンダラを生成する。
+    pub fn with_chrome(chrome: Box<dyn Chrome>) -> Self {
         Self {
             render_state: RenderState::default(),
-            layout: BrowserLayout::new(),
+            chrome,
         }
     }
 
@@ -42,7 +48,7 @@ impl BrowserRenderer {
     pub fn with_window(window_size: (u32, u32), scale_factor: f64, window_title: String) -> Self {
         Self {
             render_state: RenderState::new(window_size, scale_factor, window_title),
-            layout: BrowserLayout::new(),
+            chrome: Box::new(BasicChrome::new()),
         }
     }
 
@@ -57,29 +63,28 @@ impl BrowserRenderer {
     /// DrawCommand を再生成する。
     pub fn rebuild(&mut self, tabs: &mut [Tab], active_tab: usize) {
         let (width, height) = self.render_state.viewport();
-        let toolbar_height = self.layout.toolbar_rects(width).height();
-        let content_height = (height - toolbar_height).max(0.0);
+        let chrome_height = self.chrome.chrome_height(width);
+        let content_height = (height - chrome_height).max(0.0);
 
         // Reuse allocation
         let mut draw_commands = std::mem::take(&mut self.render_state.draw_commands);
         draw_commands.clear();
 
-        // Page area: below the toolbar, clipped so page content never overlaps
-        // the chrome.
+        // Page area: below the chrome, clipped so page content never overlaps it.
         draw_commands.push(DrawCommand::PushClip {
-            path: rect_path(0.0, toolbar_height, width, content_height),
+            path: rect_path(0.0, chrome_height, width, content_height),
             rule: FillRule::NonZero,
         });
         draw_commands.push(DrawCommand::PushTransform {
-            transform: AffineTransform::translate(0.0, toolbar_height),
+            transform: AffineTransform::translate(0.0, chrome_height),
         });
 
         let title = if let Some(tab) = tabs.get_mut(active_tab) {
             tab.relayout((width, content_height));
 
-            // Keep the address bar in sync with the active tab.
+            // Keep the chrome in sync with the active tab.
             let url = tab.document_url().map(|url| url.to_string());
-            self.layout.sync_url(url.as_deref());
+            self.chrome.sync_url(url.as_deref());
 
             if let Some((layout, info)) = tab.layout_and_info() {
                 renderer_model::generate_draw_commands(&mut draw_commands, layout, info);
@@ -95,8 +100,8 @@ impl BrowserRenderer {
         draw_commands.push(DrawCommand::PopTransform);
         draw_commands.push(DrawCommand::PopClip);
 
-        // Chrome toolbar drawn on top of the page area.
-        self.layout.draw_chrome(&mut draw_commands, width);
+        // Chrome drawn on top of the page area.
+        self.chrome.draw(&mut draw_commands, width);
 
         // Return reused buffer
         self.render_state.draw_commands = draw_commands;

@@ -37,3 +37,4 @@ pub use core::BrowserRenderer;
 pub use core::BrowserUi;
 pub use core::RenderState;
 pub use core::Tab;
+pub use core::{BasicChrome, Chrome, ChromeAction, ChromeEventResult};
