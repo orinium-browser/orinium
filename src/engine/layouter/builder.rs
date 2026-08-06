@@ -1700,7 +1700,6 @@ fn parse_color_stops(args: &[CssValue]) -> Option<Vec<ColorStop>> {
 /// Extract font family names from a `font-family` CSS value.
 ///
 /// Accepts a single keyword/string or a comma-separated list.
-#[allow(dead_code)]
 fn extract_font_families(value: &CssValue) -> Vec<String> {
     let items: Vec<&CssValue> = match value {
         CssValue::List(list) => list.iter().collect(),
