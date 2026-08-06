@@ -1964,6 +1964,7 @@ fn resolve_css_color(name: &str, css_color: &CssValue, color_scheme: ColorScheme
             "indianred" => Some(Color(205, 92, 92, 255)),
             "lightcoral" => Some(Color(240, 128, 128, 255)),
             "salmon" => Some(Color(250, 128, 114, 255)),
+            "darkred" => Some(Color(139, 0, 0, 255)),
             "darksalmon" => Some(Color(233, 150, 122, 255)),
             "lightsalmon" => Some(Color(255, 160, 122, 255)),
 
@@ -1980,14 +1981,17 @@ fn resolve_css_color(name: &str, css_color: &CssValue, color_scheme: ColorScheme
             "tomato" => Some(Color(255, 99, 71, 255)),
             "orangered" => Some(Color(255, 69, 0, 255)),
             "orange" => Some(Color(255, 165, 0, 255)),
+            "wheat" => Some(Color(245, 222, 179, 255)),
 
             // ===== Yellow =====
+            "beige" => Some(Color(245, 245, 220, 255)),
             "gold" => Some(Color(255, 215, 0, 255)),
             "goldenrod" => Some(Color(218, 165, 32, 255)),
             "yellow" => Some(Color(255, 255, 0, 255)),
             "lightyellow" => Some(Color(255, 255, 224, 255)),
             "lemonchiffon" => Some(Color(255, 250, 205, 255)),
             "lightgoldenrodyellow" => Some(Color(250, 250, 210, 255)),
+            "khaki" => Some(Color(240, 230, 140, 255)),
             "papayawhip" => Some(Color(255, 239, 213, 255)),
             "moccasin" => Some(Color(255, 228, 181, 255)),
 
@@ -1998,6 +2002,7 @@ fn resolve_css_color(name: &str, css_color: &CssValue, color_scheme: ColorScheme
             "lime" => Some(Color(0, 255, 0, 255)),
             "limegreen" => Some(Color(50, 205, 50, 255)),
             "lightgreen" => Some(Color(144, 238, 144, 255)),
+            "olive" => Some(Color(128, 128, 0, 255)),
             "palegreen" => Some(Color(152, 251, 152, 255)),
             "springgreen" => Some(Color(0, 255, 127, 255)),
             "seagreen" => Some(Color(46, 139, 87, 255)),
@@ -2017,6 +2022,7 @@ fn resolve_css_color(name: &str, css_color: &CssValue, color_scheme: ColorScheme
             "darkblue" => Some(Color(0, 0, 139, 255)),
             "navy" => Some(Color(0, 0, 128, 255)),
             "royalblue" => Some(Color(65, 105, 225, 255)),
+            "teal" => Some(Color(0, 128, 128, 255)),
             "cornflowerblue" => Some(Color(100, 149, 237, 255)),
             "skyblue" => Some(Color(135, 206, 235, 255)),
             "lightblue" => Some(Color(173, 216, 230, 255)),
@@ -2029,9 +2035,11 @@ fn resolve_css_color(name: &str, css_color: &CssValue, color_scheme: ColorScheme
             "plum" => Some(Color(221, 160, 221, 255)),
             "orchid" => Some(Color(218, 112, 214, 255)),
             "mediumpurple" => Some(Color(147, 112, 219, 255)),
+            "thistle" => Some(Color(216, 191, 216, 255)),
             "rebeccapurple" => Some(Color(102, 51, 153, 255)),
 
             // ===== Brown =====
+            "bisque" => Some(Color(255, 228, 196, 255)),
             "brown" => Some(Color(165, 42, 42, 255)),
             "saddlebrown" => Some(Color(139, 69, 19, 255)),
             "sienna" => Some(Color(160, 82, 45, 255)),
@@ -2044,9 +2052,12 @@ fn resolve_css_color(name: &str, css_color: &CssValue, color_scheme: ColorScheme
             "snow" => Some(Color(255, 250, 250, 255)),
             "honeydew" => Some(Color(240, 255, 240, 255)),
             "mintcream" => Some(Color(245, 255, 250, 255)),
+            "ivory" => Some(Color(255, 255, 240, 255)),
             "azure" => Some(Color(240, 255, 255, 255)),
             "aliceblue" => Some(Color(240, 248, 255, 255)),
             "ghostwhite" => Some(Color(248, 248, 255, 255)),
+            "linen" => Some(Color(250, 240, 230, 255)),
+            "oldlace" => Some(Color(253, 245, 230, 255)),
 
             // ===== Gray scale =====
             "gainsboro" => Some(Color(220, 220, 220, 255)),
