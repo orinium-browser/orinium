@@ -1,16 +1,21 @@
 //! ブラウザのwebview機能。タスクとレンダリング情報の管理を行う。
 
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::rc::Weak;
+use std::sync::{Arc, mpsc};
 
 use crate::engine::{
     css::{self, parser::Parser as CssParser},
+    html::HtmlNodeType,
     html::parser::{DomTree, Parser as HtmlParser},
     layouter::{
         self, InheritedCss,
+        dom_snapshot::DomSnapshot,
         types::{InfoNode, TextStyle},
     },
     renderer_model::Image,
+    tree::TreeNode,
 };
 use crate::platform::renderer::text_measurer::PlatformTextMeasurer;
 use ui_layout::LayoutNode;
@@ -78,6 +83,14 @@ pub struct WebView {
     css_strategy: CssApplicationStrategy,
     css_results_expected: usize,
     css_results_received: usize,
+
+    layout_processor: layouter::LayoutProcessor,
+    layout_pending: bool,
+    /// Live DOM references for the latest snapshot, used to apply write-backs.
+    layout_dom_refs: Vec<Weak<RefCell<TreeNode<HtmlNodeType>>>>,
+    /// Channel on which text inputs report value write-backs (received here).
+    write_back_tx: mpsc::Sender<(u32, String)>,
+    write_back_rx: mpsc::Receiver<(u32, String)>,
 }
 
 /// DocumentInfo holds basic information about the HTML document.
@@ -122,6 +135,7 @@ impl Default for WebView {
 
 impl WebView {
     pub fn new() -> Self {
+        let (write_back_tx, write_back_rx) = mpsc::channel();
         Self {
             phase: PagePhase::Init,
 
@@ -143,6 +157,12 @@ impl WebView {
             css_strategy: CssApplicationStrategy::Incremental,
             css_results_expected: 0,
             css_results_received: 0,
+
+            layout_processor: layouter::LayoutProcessor::new(),
+            layout_pending: false,
+            layout_dom_refs: Vec::new(),
+            write_back_tx,
+            write_back_rx,
         }
     }
 
@@ -217,6 +237,9 @@ impl WebView {
                 // 安定状態
             }
         }
+
+        self.try_apply_layout_results();
+        self.drain_write_backs();
 
         tasks
     }
@@ -319,40 +342,56 @@ impl WebView {
         }
     }
 
-    fn build_layout(
-        docment_info: &DocumentInfo,
-        resolved_styles: &layouter::css_resolver::ResolvedStyles,
-        measurer: Arc<dyn crate::engine::bridge::text::TextMeasurer<layouter::types::TextStyle>>,
-        images: &HashMap<String, Image>,
-    ) -> (LayoutNode, InfoNode) {
-        layouter::build_layout_and_info_with_images(
-            &docment_info.dom.root,
-            resolved_styles,
-            measurer,
-            InheritedCss {
+    /// Builds a snapshot and hands the heavy tree construction to the background.
+    fn update_layout(&mut self) {
+        if self.docment_info.is_none() {
+            return;
+        }
+        self.ensure_text_measurer();
+
+        let doc_info = self.docment_info.as_ref().unwrap();
+        let (snapshot, dom_refs) = DomSnapshot::from_tree(&doc_info.dom.root);
+        let root = snapshot.roots()[0];
+
+        let task = layouter::LayoutTask {
+            snapshot,
+            root,
+            resolved_styles: self.resolved_styles.clone(),
+            measurer: Arc::new(*self.text_measurer.as_ref().unwrap()),
+            images: self.images.clone(),
+            parent: InheritedCss {
                 text_style: TextStyle {
                     font_size: 16.0,
                     ..Default::default()
                 },
             },
-            Vec::new(),
-            images,
-        )
+            chain: Vec::new(),
+            write_back_sender: Some(self.write_back_tx.clone()),
+        };
+        self.layout_dom_refs = dom_refs;
+        self.layout_processor.send(task);
+        self.layout_pending = true;
     }
 
-    fn update_layout(&mut self) {
-        let doc_info = match self.docment_info.as_ref() {
-            Some(d) => d,
-            None => return,
-        };
+    /// Takes completed layout results from the worker and makes them drawable.
+    fn try_apply_layout_results(&mut self) {
+        while let Some(result) = self.layout_processor.try_receive() {
+            self.layout_and_info = Some((result.layout, result.info));
+            self.layout_pending = false;
+            self.needs_redraw = true;
+        }
+    }
 
-        self.layout_and_info = Some(Self::build_layout(
-            doc_info,
-            &self.resolved_styles,
-            Arc::new(*self.text_measurer.as_ref().unwrap()),
-            &self.images,
-        ));
-        self.needs_redraw = true;
+    /// Applies value write-backs reported by text inputs to the live DOM.
+    fn drain_write_backs(&mut self) {
+        while let Ok((node_id, value)) = self.write_back_rx.try_recv() {
+            if let Some(weak) = self.layout_dom_refs.get(node_id as usize)
+                && let Some(node) = weak.upgrade()
+            {
+                node.borrow_mut().value.set_attr("value", value);
+            }
+            self.needs_redraw = true;
+        }
     }
 
     pub fn navigate(&mut self) {
@@ -377,6 +416,13 @@ impl WebView {
         self.css_processor = css::processor::CssProcessor::new();
         self.css_results_expected = 0;
         self.css_results_received = 0;
+
+        self.layout_processor = layouter::LayoutProcessor::new();
+        self.layout_pending = false;
+        self.layout_dom_refs.clear();
+        let (write_back_tx, write_back_rx) = mpsc::channel();
+        self.write_back_tx = write_back_tx;
+        self.write_back_rx = write_back_rx;
     }
 
     pub fn title(&self) -> Option<&String> {

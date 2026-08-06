@@ -6,13 +6,11 @@ use crate::engine::css::{
     values::{CssValue, Unit},
 };
 use crate::engine::html::HtmlNodeType;
-use crate::engine::html::parser::DomTree;
+use crate::engine::layouter::dom_snapshot::{DomSnapshot, NodeId};
 use crate::engine::layouter::types::VerticalAlign;
-use crate::engine::tree::TreeNode;
+use crate::engine::tree::NodeRef;
 
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use ui_layout::{
@@ -29,7 +27,7 @@ use super::types::{
 };
 use crate::engine::renderer_model::Image;
 use crate::engine::ui::custom_node_bridge::CustomNodeBridge;
-use crate::engine::ui::registry::{ComponentRegistry, CustomNodeContext};
+use crate::engine::ui::registry::{ComponentRegistry, CustomNodeContext, DomWriteBack};
 
 const DEFAULT_LINE_FACTOR: f32 = 1.2;
 
@@ -85,13 +83,13 @@ fn length_to_px(len: &Length, font_size: f32) -> f32 {
 ///
 /// A single frame on the explicit processing stack.
 struct StackFrame {
-    dom: Rc<RefCell<TreeNode<HtmlNodeType>>>,
+    dom: NodeId,
     chain: ElementChain,
     child: InheritedCss,
     kind: Option<NodeKind>,
     style: Option<Style>,
     child_slots: Vec<ChildSlot>,
-    element_children: Vec<Rc<RefCell<TreeNode<HtmlNodeType>>>>,
+    element_children: Vec<NodeId>,
 }
 
 enum ChildSlot {
@@ -99,12 +97,8 @@ enum ChildSlot {
     Element(usize),
 }
 
-fn ptr_from_dom<T>(dom: &Rc<RefCell<TreeNode<T>>>) -> *const TreeNode<T> {
-    &*dom.borrow() as *const TreeNode<T>
-}
-
 pub fn build_layout_and_info(
-    dom: &Rc<RefCell<TreeNode<HtmlNodeType>>>,
+    dom: &NodeRef<HtmlNodeType>,
     resolved_styles: &ResolvedStyles,
     measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
     parent: InheritedCss,
@@ -122,12 +116,41 @@ pub fn build_layout_and_info(
 
 /// Builds layout and render trees with decoded images keyed by their `src` value.
 pub fn build_layout_and_info_with_images(
-    dom: &Rc<RefCell<TreeNode<HtmlNodeType>>>,
+    dom: &NodeRef<HtmlNodeType>,
+    resolved_styles: &ResolvedStyles,
+    measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
+    parent: InheritedCss,
+    chain: ElementChain,
+    images: &HashMap<String, Image>,
+) -> (LayoutNode, InfoNode) {
+    let (snapshot, _dom_refs) = DomSnapshot::from_tree(dom);
+    build_layout_and_info_from_snapshot(
+        &snapshot,
+        snapshot.roots()[0],
+        resolved_styles,
+        measurer,
+        parent,
+        chain,
+        images,
+        None,
+    )
+}
+
+/// Builds layout and render trees from a [`DomSnapshot`].
+///
+/// `write_back_sender` (when set) is cloned per text input so value changes
+/// are reported as `(node id, value)` on the channel instead of mutating the
+/// DOM directly, which allows this function to run off the UI thread.
+#[allow(clippy::too_many_arguments)]
+pub fn build_layout_and_info_from_snapshot(
+    snapshot: &DomSnapshot,
+    root: NodeId,
     resolved_styles: &ResolvedStyles,
     measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
     parent: InheritedCss,
     mut chain: ElementChain,
     images: &HashMap<String, Image>,
+    write_back_sender: Option<DomWriteBack>,
 ) -> (LayoutNode, InfoNode) {
     let registry = ComponentRegistry::new();
     /*
@@ -137,7 +160,7 @@ pub fn build_layout_and_info_with_images(
         tag_name,
         attributes,
         ..
-    } = &dom.borrow().value
+    } = &snapshot.node(root).kind
     {
         let id = attributes
             .iter()
@@ -171,7 +194,7 @@ pub fn build_layout_and_info_with_images(
 
     let mut stack: Vec<StackFrame> = Vec::new();
     stack.push(StackFrame {
-        dom: dom.clone(),
+        dom: root,
         chain,
         child: InheritedCss {
             text_style: parent.text_style,
@@ -182,8 +205,7 @@ pub fn build_layout_and_info_with_images(
         element_children: Vec::new(),
     });
 
-    let mut results: HashMap<*const TreeNode<HtmlNodeType>, (LayoutNode, InfoNode)> =
-        HashMap::new();
+    let mut results: HashMap<NodeId, (LayoutNode, InfoNode)> = HashMap::new();
 
     // We use an index instead of .last_mut() so that push/pop don't conflict
     // with the mutable reference to the current frame.
@@ -203,14 +225,14 @@ pub fn build_layout_and_info_with_images(
             let chain_for_css = stack[top_idx].chain.clone();
             let child_css = stack[top_idx].child.clone();
 
-            let html_node = stack[top_idx].dom.borrow().value.clone();
+            let html_node = &snapshot.node(stack[top_idx].dom).kind;
             let mut text_style = child_css.text_style.clone();
             let mut container_style = ContainerStyle::default();
             let mut style = Style::default();
             let mut overflow = Overflow::default();
 
             // Collect CSS candidates.
-            let candidates: Option<HashMap<_, _>> = if let HtmlNodeType::Element { .. } = &html_node
+            let candidates: Option<HashMap<_, _>> = if let HtmlNodeType::Element { .. } = html_node
             {
                 Some(collect_candidates(resolved_styles, &chain_for_css))
             } else {
@@ -252,7 +274,7 @@ pub fn build_layout_and_info_with_images(
                 text_style: text_style.clone(),
             };
 
-            if let HtmlNodeType::Text(t) = &html_node {
+            if let HtmlNodeType::Text(t) = html_node {
                 // ── Text node (leaf) ──
                 let t = normalize_whitespace(t);
                 let t = match text_style.text_transform {
@@ -276,7 +298,7 @@ pub fn build_layout_and_info_with_images(
                     kind,
                     children: Vec::new(),
                 };
-                let ptr = ptr_from_dom(&stack[top_idx].dom);
+                let ptr = stack[top_idx].dom;
                 results.insert(ptr, (layout, info));
                 stack.pop();
                 continue;
@@ -289,21 +311,20 @@ pub fn build_layout_and_info_with_images(
                 let node = registry
                     .create(&CustomNodeContext {
                         tag,
-                        inner_text: &DomTree::inner_text(&stack[top_idx].dom),
+                        inner_text: &snapshot.inner_text(stack[top_idx].dom),
                         container_style: &container_style,
                         text_style: &text_style,
                         measurer: Arc::clone(&measurer),
                         images,
                         get_attr: &|name| html_node.get_attr(name).map(str::to_string),
-                        write_back: None,
+                        write_back: write_back_sender
+                            .as_ref()
+                            .map(|sender| (sender.clone(), stack[top_idx].dom)),
                     })
                     .expect("registry must handle every tag it reports");
 
-                let bridge = CustomNodeBridge::new(
-                    Arc::clone(&node),
-                    style.clone(),
-                    style.display.outer,
-                );
+                let bridge =
+                    CustomNodeBridge::new(Arc::clone(&node), style.clone(), style.display.outer);
                 let kind = NodeKind::Custom {
                     node,
                     scroll_x: overflow.x,
@@ -319,7 +340,7 @@ pub fn build_layout_and_info_with_images(
                     kind,
                     children: Vec::new(),
                 };
-                let ptr = ptr_from_dom(&stack[top_idx].dom);
+                let ptr = stack[top_idx].dom;
                 results.insert(ptr, (layout, info));
                 stack.pop();
                 continue;
@@ -372,12 +393,12 @@ pub fn build_layout_and_info_with_images(
             }
 
             let mut child_slots: Vec<ChildSlot> = Vec::new();
-            let mut element_kids: Vec<Rc<RefCell<TreeNode<HtmlNodeType>>>> = Vec::new();
+            let mut element_kids: Vec<NodeId> = Vec::new();
 
             if style.display.outer != OuterDisplay::None {
-                for child_dom in stack[top_idx].dom.borrow().children() {
-                    let child_node = child_dom.borrow().value.clone();
-                    if let HtmlNodeType::Text(t) = &child_node {
+                for &child in snapshot.children(stack[top_idx].dom) {
+                    let child_node = &snapshot.node(child).kind;
+                    if let HtmlNodeType::Text(t) = child_node {
                         let t = normalize_whitespace(t);
                         let t = match text_style.text_transform {
                             TextTransform::None => t,
@@ -396,7 +417,7 @@ pub fn build_layout_and_info_with_images(
                                 children: Vec::new(),
                             },
                         ));
-                    } else if child_dom.borrow().value.tag_name() == Some("br") {
+                    } else if child_node.tag_name() == Some("br") {
                         child_slots.push(ChildSlot::Inline(
                             ItemFragment::LineBreak.into(),
                             InfoNode {
@@ -406,7 +427,7 @@ pub fn build_layout_and_info_with_images(
                         ));
                     } else {
                         child_slots.push(ChildSlot::Element(element_kids.len()));
-                        element_kids.push(child_dom.clone());
+                        element_kids.push(child);
                     }
                 }
             }
@@ -425,7 +446,7 @@ pub fn build_layout_and_info_with_images(
                     kind,
                     children: info_children,
                 };
-                let ptr = ptr_from_dom(&stack[top_idx].dom);
+                let ptr = stack[top_idx].dom;
                 results.insert(ptr, (layout, info));
                 stack.pop();
             } else {
@@ -445,13 +466,13 @@ pub fn build_layout_and_info_with_images(
                     f.element_children.clone()
                 };
                 let child_css = stack[top_idx].child.clone();
-                for kid in kids_for_push.iter().rev() {
+                for &kid in kids_for_push.iter().rev() {
                     let mut kid_chain = parent_chain.clone();
                     if let HtmlNodeType::Element {
                         tag_name,
                         attributes,
                         ..
-                    } = &kid.borrow().value
+                    } = &snapshot.node(kid).kind
                     {
                         let id = attributes
                             .iter()
@@ -481,7 +502,7 @@ pub fn build_layout_and_info_with_images(
                         );
                     }
                     stack.push(StackFrame {
-                        dom: kid.clone(),
+                        dom: kid,
                         chain: kid_chain,
                         child: child_css.clone(),
                         kind: None,
@@ -502,20 +523,19 @@ pub fn build_layout_and_info_with_images(
             // Collect element children results.
             let mut element_results: Vec<(LayoutChild, InfoNode)> = Vec::new();
 
-            for kid in &frame.element_children {
-                let ptr: *const TreeNode<HtmlNodeType> = &*kid.borrow();
-                if let Some((child_layout, child_info)) = results.remove(&ptr) {
+            for &kid in &frame.element_children {
+                if let Some((child_layout, child_info)) = results.remove(&kid) {
                     element_results.push((child_layout.into(), child_info));
                 }
             }
 
             // Handle html→body background inheritance.
             let mut final_kind = kind;
-            if frame.dom.borrow().value.tag_name() == Some("html") {
+            if snapshot.node(frame.dom).kind.tag_name() == Some("html") {
                 let should_inherit = final_kind.is_container_with_transparent_bg();
                 if should_inherit {
-                    for (i, kid) in frame.element_children.iter().enumerate() {
-                        if kid.borrow().value.tag_name() == Some("body")
+                    for (i, &kid) in frame.element_children.iter().enumerate() {
+                        if snapshot.node(kid).kind.tag_name() == Some("body")
                             && i < element_results.len()
                         {
                             let child_bg = element_results[i].1.kind.container_bg();
@@ -549,14 +569,13 @@ pub fn build_layout_and_info_with_images(
                 kind: final_kind,
                 children: all_info,
             };
-            let ptr: *const TreeNode<HtmlNodeType> = &*frame.dom.borrow();
+            let ptr = frame.dom;
             results.insert(ptr, (layout, info));
         }
     }
 
-    let root_ptr: *const TreeNode<HtmlNodeType> = &*dom.borrow();
     results
-        .remove(&root_ptr)
+        .remove(&root)
         .expect("root must have been processed")
 }
 
