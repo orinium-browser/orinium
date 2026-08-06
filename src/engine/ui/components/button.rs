@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use ui_layout::Style;
 
@@ -19,9 +19,11 @@ pub struct ButtonComponent {
     pub button_color: Color,
     pub label_color: Color,
     measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
+    measured_cache: Mutex<Option<(f32, f32)>>,
     hovered: AtomicBool,
     pressed: AtomicBool,
     dirty: AtomicBool,
+    label_dirty: AtomicBool,
 }
 
 impl std::fmt::Debug for ButtonComponent {
@@ -48,9 +50,11 @@ impl ButtonComponent {
             button_color,
             label_color,
             measurer,
+            measured_cache: Mutex::new(None),
             hovered: AtomicBool::new(false),
             pressed: AtomicBool::new(false),
             dirty: AtomicBool::new(true),
+            label_dirty: AtomicBool::new(false),
         }
     }
 }
@@ -88,18 +92,33 @@ impl CustomNode for ButtonComponent {
 
     fn intrinsic_size(&self) -> ContentSize {
         let text_style = TextStyle::default();
-        let measured = self.measurer.measure(&TextMeasureRequest {
-            text: self.label.clone(),
-            style: text_style,
-        });
-        let (label_width, label_height) = measured.map_or_else(
-            |_| DEFAULT_BUTTON_SIZE,
-            |fragments| {
-                let width: f32 = fragments.iter().map(|f| f.width).sum();
-                let height = fragments.iter().map(|f| f.height).fold(0.0, f32::max);
-                (width, height)
-            },
-        );
+        let cached_size = self.measured_cache.lock().ok().and_then(|cache| *cache);
+
+        let (label_width, label_height) = if !self.label_dirty.load(Ordering::Relaxed)
+            && let Some((label_width, label_height)) = cached_size
+        {
+            (label_width, label_height)
+        } else {
+            let measured = self.measurer.measure(&TextMeasureRequest {
+                text: self.label.clone(),
+                style: text_style,
+            });
+            let (label_width, label_height) = measured.map_or_else(
+                |_| DEFAULT_BUTTON_SIZE,
+                |fragments| {
+                    let width: f32 = fragments.iter().map(|f| f.width).sum();
+                    let height = fragments.iter().map(|f| f.height).fold(0.0, f32::max);
+                    (width, height)
+                },
+            );
+
+            if let Ok(mut cache) = self.measured_cache.lock() {
+                *cache = Some((label_width, label_height));
+            }
+
+            (label_width, label_height)
+        };
+
         ContentSize {
             width: label_width + 24.0,
             height: label_height.max(24.0) + 12.0,
