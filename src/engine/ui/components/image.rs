@@ -16,6 +16,12 @@ pub struct ImageComponent {
     pub alt: String,
 }
 
+impl ImageComponent {
+    pub fn new(image: Option<Image>, alt: String) -> Self {
+        Self { image, alt }
+    }
+}
+
 impl CustomNode for ImageComponent {
     fn draw_sized(
         &self,
@@ -146,10 +152,7 @@ mod tests {
     #[test]
     fn image_component_uses_intrinsic_size_and_draw_target() {
         let image = Image::from_rgba(2, 3, vec![255; 24]).unwrap();
-        let component = ImageComponent {
-            image: Some(image),
-            alt: String::new(),
-        };
+        let component = ImageComponent::new(Some(image), String::new());
         assert_eq!(
             component.intrinsic_size(),
             ContentSize {
@@ -178,10 +181,7 @@ mod tests {
 
     #[test]
     fn broken_image_renders_placeholder() {
-        let component = ImageComponent {
-            image: None,
-            alt: "example".to_string(),
-        };
+        let component = ImageComponent::new(None, "example".to_string());
         let mut commands = Vec::new();
         component.draw_sized(
             &mut commands,
@@ -203,10 +203,7 @@ mod tests {
 
     #[test]
     fn broken_image_intrinsic_sized_to_alt() {
-        let component = ImageComponent {
-            image: None,
-            alt: "hello".to_string(),
-        };
+        let component = ImageComponent::new(None, "hello".to_string());
         let size = component.intrinsic_size();
         assert_eq!(size.width, 160.0);
         assert_eq!(size.height, 16.0);
@@ -214,17 +211,14 @@ mod tests {
 
     #[test]
     fn broken_image_exposes_alt_as_label() {
-        let broken = ImageComponent {
-            image: None,
-            alt: "alt text".to_string(),
-        };
+        let broken = ImageComponent::new(None, "alt text".to_string());
         assert_eq!(broken.role(), None);
         assert_eq!(broken.label(), Some("alt text".to_string()));
 
-        let ok = ImageComponent {
-            image: Some(Image::from_rgba(1, 1, vec![255; 4]).unwrap()),
-            alt: "alt text".to_string(),
-        };
+        let ok = ImageComponent::new(
+            Some(Image::from_rgba(1, 1, vec![255; 4]).unwrap()),
+            "alt text".to_string(),
+        );
         assert_eq!(ok.role(), Some("img"));
     }
 }

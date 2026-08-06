@@ -124,10 +124,10 @@ impl CustomNodeFactory for ImageFactory {
         let image = (ctx.get_attr)("src")
             .and_then(|source| ctx.images.get(&source))
             .cloned();
-        Some(Arc::new(ImageComponent {
+        Some(Arc::new(ImageComponent::new(
             image,
-            alt: (ctx.get_attr)("alt").unwrap_or_default(),
-        }))
+            (ctx.get_attr)("alt").unwrap_or_default(),
+        )))
     }
 }
 
