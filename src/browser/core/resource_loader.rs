@@ -1,7 +1,11 @@
-//! Browser resource loading process, supports HTTP and resource:/// schemes.
+//! Browser resource loading process.
+//!
+//! Supports the `http(s)://` scheme (via the platform `NetworkCore`), and the
+//! network-free `resource:///` and `data:` schemes.
 
 use crate::platform::network::{NetworkCore, NetworkError, StatusCode};
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
+use base64::Engine;
 use std::{fmt, rc::Rc};
 use url::Url;
 
@@ -13,14 +17,16 @@ use url::Url;
 /// Responsibilities:
 /// - Resolve and fetch resources from `resource:///` scheme (bundled/local) and
 ///   from standard HTTP/HTTPS URLs.
+/// - Decode `data:` URLs (base64 or percent-encoded payloads) without touching
+///   the network stack.
 /// - Provide a small synchronous/queuing abstraction over the platform network
 ///   core so callers in the engine/browser can request resources without dealing
 ///   with the network implementation details.
 ///
 /// Processing flow (overview):
-/// 1. Caller requests a URL (either `resource:///...` or `http(s)://...`).
-/// 2. If the URL scheme is `resource`, loader resolves it to a local path or
-///    embedded asset and returns the bytes immediately when available.
+/// 1. Caller requests a URL (`resource:///...`, `data:...` or `http(s)://...`).
+/// 2. Network-free schemes (`resource`, `data`) are resolved locally and pushed
+///    to `immediate_pool` as `BrowserNetworkMessage`s.
 /// 3. For HTTP/HTTPS, loader forwards the request to `NetworkCore` and manages
 ///    request ids / pending responses. When the network reply is ready, the
 ///    loader hands the response back to the browser/tab via the expected
@@ -43,8 +49,8 @@ use url::Url;
 /// Notes for contributors:
 /// - Keep the loader focused on scheme resolution, simple caching/pooling,
 ///   and delegation to `NetworkCore`. Avoid adding heavy parsing logic here.
-/// - Unit tests should validate `resource:///` resolution and HTTP request
-///   delegation semantics (e.g. mapping of request IDs to responses).
+/// - Unit tests should validate `resource:///` and `data:` resolution and HTTP
+///   request delegation semantics (e.g. mapping of request IDs to responses).
 pub struct BrowserResourceLoader {
     /// Optional platform network core used for HTTP/HTTPS requests.
     pub network: Option<Rc<NetworkCore>>,
@@ -54,15 +60,6 @@ pub struct BrowserResourceLoader {
     /// events; see the network module for details.
     pub immediate_pool: Vec<BrowserNetworkMessage>,
 }
-
-// NOTE: The actual fetch and handling methods are implemented below in this
-// file. When adding methods, prefer small, testable units:
-// - `resolve_resource_url(&self, url: &Url) -> ResourceLocation`
-// - `fetch_http(&self, url: Url) -> Result<Vec<u8>>`
-// - `fetch_resource_scheme(&self, url: Url) -> Result<Vec<u8>>`
-//
-// Keep the public API ergonomic for the engine (sync or async facade as
-// appropriate for how NetworkCore exposes requests).
 
 impl BrowserResourceLoader {
     /// Construct a new resource loader.
@@ -77,74 +74,88 @@ impl BrowserResourceLoader {
         }
     }
 
-    /// 非同期 fetch: URL と ID を送信するだけ
+    /// Async fetch: resolve immediate schemes (`resource` / `data`) in place and
+    /// push the result to `immediate_pool`; delegate all other schemes to `NetworkCore`.
     pub fn fetch_async(&mut self, url: Url, id: usize) {
-        if url.scheme() == ("resource") {
-            let data = ResourceURI::load(url.as_ref());
-            let msg = BrowserNetworkMessage {
-                id,
-                response: data
-                    .map(|data| BrowserResponse {
-                        url: url.to_string(),
-                        status: hyper::StatusCode::OK.into(),
-                        body: data,
-                        headers: vec![],
-                    })
-                    .map_err(BrowserNetworkError::AnyhowError),
-            };
-            self.immediate_pool.push(msg);
-        } else if let Some(net) = &self.network {
-            net.fetch_async(url.to_string(), id);
-        }
+        let Some(body) = load_immediate(&url) else {
+            if let Some(net) = &self.network {
+                net.fetch_async(url.to_string(), id);
+            }
+            return;
+        };
+        let msg = BrowserNetworkMessage {
+            id,
+            response: body
+                .map(|body| make_response(&url, body))
+                .map_err(BrowserNetworkError::AnyhowError),
+        };
+        self.immediate_pool.push(msg);
     }
 
     pub fn fetch_blocking(&self, url: Url) -> Result<BrowserResponse> {
-        if url.scheme() == ("resource") {
-            let data = ResourceURI::load(url.as_ref());
-            data.map(|data| BrowserResponse {
-                url: url.to_string(),
-                status: hyper::StatusCode::OK.into(),
-                body: data,
-                headers: vec![],
-            })
-        } else if let Some(net) = &self.network {
-            net.fetch_blocking(url.as_str())
-                .map(|resp| BrowserResponse {
-                    url: resp.url,
-                    status: resp.status,
-                    body: resp.body,
-                    headers: resp.headers,
-                })
-                .map_err(|e| anyhow!("NetworkError: {}", e))
-        } else {
-            Err(anyhow!("NetworkCore not available"))
+        if let Some(body) = load_immediate(&url) {
+            return body.map(|body| make_response(&url, body));
         }
+        let Some(net) = &self.network else {
+            return Err(anyhow!("NetworkCore not available"));
+        };
+        net.fetch_blocking(url.as_str())
+            .map(|resp| BrowserResponse {
+                url: resp.url,
+                status: resp.status,
+                body: resp.body,
+                headers: resp.headers,
+            })
+            .map_err(|e| anyhow!("NetworkError: {}", e))
     }
 
-    /// UIスレッドから呼ぶ: 受信済みネットワーク結果を取り込む
+    /// Called from the UI thread: collect received network and immediate-scheme results.
     pub fn try_receive(&mut self) -> Vec<BrowserNetworkMessage> {
-        let mut msgs = if let Some(net) = &self.network {
-            net.try_receive()
-                .into_iter()
-                .map(|msg| BrowserNetworkMessage {
-                    id: msg.msg_id,
-                    response: msg
-                        .response
-                        .map(|resp| BrowserResponse {
-                            url: resp.url,
-                            status: resp.status,
-                            body: resp.body,
-                            headers: resp.headers,
-                        })
-                        .map_err(BrowserNetworkError::NetworkError),
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let mut msgs: Vec<BrowserNetworkMessage> = self
+            .network
+            .as_ref()
+            .map(|net| {
+                net.try_receive()
+                    .into_iter()
+                    .map(|msg| BrowserNetworkMessage {
+                        id: msg.msg_id,
+                        response: msg
+                            .response
+                            .map(|resp| BrowserResponse {
+                                url: resp.url,
+                                status: resp.status,
+                                body: resp.body,
+                                headers: resp.headers,
+                            })
+                            .map_err(BrowserNetworkError::NetworkError),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         msgs.extend(std::mem::take(&mut self.immediate_pool));
 
         msgs
+    }
+}
+
+/// Loads the body of schemes that are resolved without the network.
+///
+/// Returns `None` for schemes that must be delegated to `NetworkCore`.
+fn load_immediate(url: &Url) -> Option<Result<Vec<u8>>> {
+    match url.scheme() {
+        "resource" => Some(ResourceURI::load(url.as_str())),
+        "data" => Some(DataURI::decode(url.as_str())),
+        _ => None,
+    }
+}
+
+/// Builds a 200 OK response from the body of an immediate scheme.
+fn make_response(url: &Url, body: Vec<u8>) -> BrowserResponse {
+    BrowserResponse {
+        url: url.to_string(),
+        status: hyper::StatusCode::OK.into(),
+        body,
+        headers: vec![],
     }
 }
 
@@ -188,5 +199,144 @@ impl ResourceURI {
         } else {
             Err(anyhow!("Unsupported scheme: {}", url))
         }
+    }
+}
+
+/// `data:` URL decoder (RFC 2397)
+///
+/// Format: `data:[<mediatype>][;base64],<payload>`
+/// - With the `;base64` flag: base64-decode the payload (ignoring whitespace).
+/// - Otherwise: percent-decode the payload into bytes.
+pub struct DataURI;
+
+impl DataURI {
+    pub fn decode(url: &str) -> Result<Vec<u8>> {
+        let rest = url
+            .strip_prefix("data:")
+            .with_context(|| format!("Not a data: URL: {url}"))?;
+        let (metadata, payload) = rest
+            .split_once(',')
+            .context("data: URL is missing the ',' delimiter")?;
+
+        if metadata.to_ascii_lowercase().contains(";base64") {
+            let cleaned: String = payload
+                .chars()
+                .filter(|c| !c.is_ascii_whitespace())
+                .collect();
+            base64::engine::general_purpose::STANDARD
+                .decode(cleaned)
+                .context("failed to decode base64 data: URL")
+        } else {
+            Ok(percent_decode(payload))
+        }
+    }
+}
+
+/// Converts `%XX` sequences into their byte values. Invalid `%` sequences are kept as-is.
+fn percent_decode(input: &str) -> Vec<u8> {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (hex_value(bytes[i + 1]), hex_value(bytes[i + 2]))
+        {
+            out.push(hi * 16 + lo);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn hex_value(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn data_uri_decodes_base64_payload() {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(b"hello");
+        let url = format!("data:image/png;base64,{encoded}");
+        assert_eq!(DataURI::decode(&url).unwrap(), b"hello");
+    }
+
+    #[test]
+    fn data_uri_decodes_plain_payload() {
+        let url = "data:text/plain,hello%20world";
+        assert_eq!(DataURI::decode(url).unwrap(), b"hello world");
+    }
+
+    #[test]
+    fn data_uri_ignores_whitespace_in_base64_payload() {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(b"line1line2");
+        let url = format!("data:text/plain;base64,{encoded}\n\r\t ");
+        assert_eq!(DataURI::decode(&url).unwrap(), b"line1line2");
+    }
+
+    #[test]
+    fn data_uri_rejects_missing_delimiter() {
+        assert!(DataURI::decode("data:text/plain").is_err());
+    }
+
+    #[test]
+    fn data_uri_rejects_invalid_base64() {
+        assert!(DataURI::decode("data:text/plain;base64,%%%").is_err());
+    }
+
+    #[test]
+    fn data_uri_flag_is_case_insensitive() {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(b"ok");
+        let url = format!("data:text/plain;BASE64,{encoded}");
+        assert_eq!(DataURI::decode(&url).unwrap(), b"ok");
+    }
+
+    #[test]
+    fn url_parse_preserves_data_url() {
+        let url = Url::parse("data:image/png;base64,AAAA").unwrap();
+        assert_eq!(url.scheme(), "data");
+        assert_eq!(url.as_str(), "data:image/png;base64,AAAA");
+    }
+
+    #[test]
+    fn fetch_blocking_decodes_data_url_without_network() {
+        let loader = BrowserResourceLoader::new(None);
+        let encoded = base64::engine::general_purpose::STANDARD.encode(b"png-bytes");
+        let url = Url::parse(&format!("data:image/png;base64,{encoded}")).unwrap();
+
+        let resp = loader.fetch_blocking(url).unwrap();
+        assert!(resp.status.is_success());
+        assert_eq!(resp.body, b"png-bytes");
+    }
+
+    #[test]
+    fn fetch_async_pushes_data_url_into_immediate_pool() {
+        let mut loader = BrowserResourceLoader::new(None);
+        let url = Url::parse("data:text/plain,hi").unwrap();
+
+        loader.fetch_async(url, 7);
+        let msgs = loader.try_receive();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].id, 7);
+        let resp = msgs[0].response.as_ref().unwrap();
+        assert_eq!(resp.body, b"hi");
+    }
+
+    #[test]
+    fn fetch_blocking_rejects_data_url_without_network() {
+        let loader = BrowserResourceLoader::new(None);
+        let url = Url::parse("data:image/png;base64,@@@not-base64@@@").unwrap();
+        assert!(loader.fetch_blocking(url).is_err());
     }
 }
