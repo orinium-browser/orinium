@@ -13,7 +13,7 @@ dhat = "0.3.3"
 # orinium_text = { path = "../orinium_text" }
 orinium_text = {
   git = "https://github.com/orinium-browser/orinium_text",
-  rev = "6501dac12b2091dd6cc6bbca6139294d0fa08bd6",
+  rev = "5d29332fab8f1218e6893fc8ffe77a101d7fb9e6",
 }
 
 ab_glyph = "0.2"
