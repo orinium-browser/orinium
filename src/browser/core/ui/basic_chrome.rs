@@ -326,7 +326,7 @@ impl Chrome for BasicChrome {
             self.toolbar
                 .url_bar
                 .handle_text_input(TextInputEvent::Enter);
-            match Url::parse(&url) {
+            match Url::parse(&url).or_else(|_| Url::parse(&format!("https://{url}"))) {
                 Ok(url) => ChromeAction::Navigate(url),
                 Err(_) => {
                     log::warn!("Ignoring invalid URL entered in address bar: {}", url);
