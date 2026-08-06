@@ -26,6 +26,7 @@ use super::dom_snapshot::{DomSnapshot, NodeId};
 use super::types::{InfoNode, TextStyle};
 use crate::engine::bridge::text::TextMeasurer;
 use crate::engine::css::matcher::ElementChain;
+use crate::engine::layouter::types::ColorScheme;
 use crate::engine::renderer_model::Image;
 use crate::engine::ui::registry::DomWriteBack;
 
@@ -35,6 +36,7 @@ pub struct LayoutTask {
     pub root: NodeId,
     pub resolved_styles: Arc<ResolvedStyles>,
     pub measurer: Arc<dyn TextMeasurer<TextStyle>>,
+    pub system_color_scheme: ColorScheme,
     pub images: HashMap<String, Image>,
     pub parent: InheritedCss,
     pub chain: ElementChain,
@@ -120,6 +122,7 @@ impl LayoutProcessor {
                             task.measurer,
                             task.parent,
                             task.chain,
+                            task.system_color_scheme,
                             &task.images,
                             task.write_back_sender,
                         );
@@ -180,9 +183,11 @@ mod tests {
             root,
             resolved_styles: Arc::new(ResolvedStyles::default()),
             measurer: Arc::new(FallbackTextMeasurer),
+            system_color_scheme: ColorScheme::Light,
             images: HashMap::new(),
             parent: InheritedCss {
                 text_style: TextStyle::default(),
+                color_scheme: ColorScheme::Light,
             },
             chain: Vec::new(),
             write_back_sender,

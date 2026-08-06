@@ -52,7 +52,7 @@ impl MultiWindowApp {
 
         let mut pending_uis = Vec::new();
         for spec in WINDOWS.iter() {
-            let mut tab = Tab::new();
+            let mut tab = Tab::default();
             tab.navigate(spec.url.parse()?);
             pending_uis.push((
                 BrowserUi::with_tab(tab),
@@ -176,7 +176,7 @@ impl ApplicationHandler for MultiWindowApp {
                 let gpu_renderer = pollster::block_on(GpuRenderer::new(window.clone(), None))
                     .expect("failed to create GPU renderer");
 
-                let root_ui = BrowserUi::with_tab(Tab::new());
+                let root_ui = BrowserUi::with_tab(Tab::default());
 
                 self.browser.open_window(
                     new_id,

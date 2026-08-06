@@ -10,6 +10,7 @@ use crate::browser::core::renderer::BrowserRenderer;
 use crate::browser::core::resource_loader::{BrowserNetworkError, BrowserResponse};
 use crate::browser::core::tab::{FetchKind, TabTask};
 use crate::engine::layouter;
+use crate::engine::layouter::types::ColorScheme;
 use crate::engine::renderer_model::DrawCommand;
 use crate::engine::ui::PointerEvent;
 use crate::engine::ui::custom_node::CustomNode;
@@ -99,6 +100,10 @@ pub struct BrowserUi {
     active_tab: usize,
     renderer: BrowserRenderer,
     input: InputState,
+
+    /// ToDo: add set color scheme event
+    #[allow(unused)]
+    system_color_scheme: ColorScheme,
 }
 
 impl Default for BrowserUi {
@@ -125,16 +130,28 @@ impl BrowserUi {
             active_tab: 0,
             renderer: BrowserRenderer::with_chrome(chrome),
             input: InputState::default(),
+            system_color_scheme: dark_light::detect().map(Into::into).unwrap_or_else(|e| {
+                log::error!("Failed to detect system color scheme, using default: {e}");
+                Default::default()
+            }),
         }
     }
 
     /// Creates a UI with one tab and a custom chrome.
-    pub fn with_tab_and_chrome(tab: Tab, chrome: Box<dyn Chrome>) -> Self {
+    pub fn with_tab_and_chrome(mut tab: Tab, chrome: Box<dyn Chrome>) -> Self {
+        let system_color_scheme = dark_light::detect().map(Into::into).unwrap_or_else(|e| {
+            log::error!("Failed to detect system color scheme, using default: {e}");
+            Default::default()
+        });
+
+        tab.set_system_color_scheme(system_color_scheme);
+
         Self {
             tabs: vec![tab],
             active_tab: 0,
             renderer: BrowserRenderer::with_chrome(chrome),
             input: InputState::default(),
+            system_color_scheme,
         }
     }
 

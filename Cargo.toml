@@ -21,6 +21,7 @@ anyhow = "1.0"
 base64 = "0.22"
 bytemuck = { version = "1.25", features = ["derive"] }
 cpal = "0.18.1"
+dark-light = "2.0.0"
 entities = "1.0.1"
 env_logger = "0.11.10"
 etagere = "0.3.0"
@@ -48,10 +49,7 @@ symphonia = {
 }
 tokio = { version = "1.52", features = ["fs", "io-std", "net", "rt", "time"] }
 tokio-rustls = "0.26.4"
-ui_layout = {
-  git = "https://github.com/098orin/ui_layout-rs",
-  rev = "c226b49"
-}
+ui_layout = { git = "https://github.com/098orin/ui_layout-rs", rev = "c226b49" }
 url = "2.5"
 wgpu = "30.0.0"
 wgpu-types = "30.0.0"

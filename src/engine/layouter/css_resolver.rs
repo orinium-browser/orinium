@@ -256,6 +256,7 @@ impl SupportsEvaluator {
             &mut super::types::ContainerStyle::default(),
             &mut super::types::TextStyle::default(),
             &mut super::types::Overflow::default(),
+            super::types::ColorScheme::Light,
         )
         .is_some()
     }

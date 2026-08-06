@@ -7,7 +7,7 @@ use orinium_browser::{
         layouter::{
             InheritedCss, build_layout_and_info,
             css_resolver::{CssResolver, ResolvedStyles},
-            types::TextStyle,
+            types::{ColorScheme, TextStyle},
         },
         renderer_model::generate_draw_commands,
         tree::NodeRef,
@@ -266,7 +266,7 @@ fn main() -> Result<()> {
                     let url = &args[2];
                     println!("Testing simple rendering for URL: {}", url);
 
-                    let mut tab = Tab::new();
+                    let mut tab = Tab::default();
                     tab.navigate(url.parse()?);
 
                     let mut browser = BrowserApp::default();
@@ -376,8 +376,13 @@ fn build_layout_info(raw_url: &str) -> Result<(LayoutNode, InfoNode)> {
                 font_size: 16.0,
                 ..Default::default()
             },
+            color_scheme: ColorScheme::default(),
         },
         Vec::new(),
+        dark_light::detect().map(Into::into).unwrap_or_else(|e| {
+            log::error!("Failed to detect system color scheme, using default: {e}");
+            Default::default()
+        }),
     );
 
     Ok((layout, info))

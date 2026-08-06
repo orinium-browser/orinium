@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::rc::Weak;
 use std::sync::{Arc, mpsc};
 
+use crate::engine::layouter::types::ColorScheme;
 use crate::engine::{
     css::{self, parser::Parser as CssParser},
     html::HtmlNodeType,
@@ -79,6 +80,8 @@ pub struct WebView {
 
     text_measurer: Option<PlatformTextMeasurer>,
 
+    system_color_scheme: ColorScheme,
+
     css_processor: css::processor::CssProcessor,
     css_strategy: CssApplicationStrategy,
     css_results_expected: usize,
@@ -152,12 +155,12 @@ struct ParsedDocument {
 
 impl Default for WebView {
     fn default() -> Self {
-        Self::new()
+        Self::new(ColorScheme::default())
     }
 }
 
 impl WebView {
-    pub fn new() -> Self {
+    pub fn new(system_color_scheme: ColorScheme) -> Self {
         let (write_back_tx, write_back_rx) = mpsc::channel();
         Self {
             phase: PagePhase::Init,
@@ -175,6 +178,8 @@ impl WebView {
             needs_redraw: false,
 
             text_measurer: None,
+
+            system_color_scheme,
 
             css_processor: css::processor::CssProcessor::new(),
             css_strategy: CssApplicationStrategy::Incremental,
@@ -409,12 +414,14 @@ impl WebView {
             root,
             resolved_styles: Arc::clone(&self.resolved_styles),
             measurer: Arc::new(*self.text_measurer.as_ref().unwrap()),
+            system_color_scheme: self.system_color_scheme,
             images: self.images.clone(),
             parent: InheritedCss {
                 text_style: TextStyle {
                     font_size: 16.0,
                     ..Default::default()
                 },
+                color_scheme: Default::default(),
             },
             chain: Vec::new(),
             write_back_sender: Some(self.write_back_tx.clone()),
@@ -484,6 +491,10 @@ impl WebView {
         let (write_back_tx, write_back_rx) = mpsc::channel();
         self.write_back_tx = write_back_tx;
         self.write_back_rx = write_back_rx;
+    }
+
+    pub fn set_system_color_scheme(&mut self, scheme: ColorScheme) {
+        self.system_color_scheme = scheme;
     }
 
     pub fn title(&self) -> Option<&String> {

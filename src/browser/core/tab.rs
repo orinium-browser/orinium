@@ -2,7 +2,11 @@
 
 use crate::{
     browser::core::resource_loader::BrowserNetworkError,
-    engine::{html::HtmlNodeType, layouter::types::InfoNode, tree::TreeNode},
+    engine::{
+        html::HtmlNodeType,
+        layouter::types::{ColorScheme, InfoNode},
+        tree::TreeNode,
+    },
 };
 use ui_layout::LayoutNode;
 use url::Url;
@@ -43,6 +47,9 @@ pub struct Tab {
     base_url: Option<Url>,
     docment_url: Option<Url>,
     webview: Option<WebView>,
+
+    system_color_scheme: ColorScheme,
+
     state: TabState,
     /// Previously visited URLs, most recent last. Used by the back button.
     history: Vec<Url>,
@@ -50,17 +57,20 @@ pub struct Tab {
 
 impl Default for Tab {
     fn default() -> Self {
-        Self::new()
+        Self::new(ColorScheme::default())
     }
 }
 
 impl Tab {
-    pub fn new() -> Self {
+    pub fn new(system_color_scheme: ColorScheme) -> Self {
         Self {
             title: None,
             base_url: None,
             docment_url: None,
             webview: None,
+
+            system_color_scheme,
+
             state: TabState::Loading,
             history: Vec::new(),
         }
@@ -200,7 +210,7 @@ impl Tab {
             self.history.push(previous);
         }
         self.docment_url = Some(url);
-        let mut webview = WebView::new();
+        let mut webview = WebView::new(self.system_color_scheme);
         webview.navigate();
         self.webview = Some(webview);
         self.state = TabState::Loading;
@@ -232,6 +242,12 @@ impl Tab {
         self.webview
             .as_mut()
             .and_then(|wv| wv.layout_and_info_mut())
+    }
+
+    pub fn set_system_color_scheme(&mut self, scheme: ColorScheme) {
+        self.webview
+            .as_mut()
+            .map(|wv| wv.set_system_color_scheme(scheme));
     }
 
     /// Returns title of the document
@@ -269,7 +285,7 @@ mod tests {
 
     #[test]
     fn navigate_records_history() {
-        let mut tab = Tab::new();
+        let mut tab = Tab::default();
         tab.navigate(url("https://example.test/a"));
         tab.navigate(url("https://example.test/b"));
 
@@ -282,7 +298,7 @@ mod tests {
 
     #[test]
     fn navigating_to_same_url_does_not_duplicate_history() {
-        let mut tab = Tab::new();
+        let mut tab = Tab::default();
         tab.navigate(url("https://example.test/a"));
         tab.navigate(url("https://example.test/a"));
         assert!(!tab.can_go_back());
@@ -290,7 +306,7 @@ mod tests {
 
     #[test]
     fn go_back_restores_previous_url() {
-        let mut tab = Tab::new();
+        let mut tab = Tab::default();
         tab.navigate(url("https://example.test/a"));
         tab.navigate(url("https://example.test/b"));
 
@@ -306,7 +322,7 @@ mod tests {
 
     #[test]
     fn reload_keeps_url_without_recording_history() {
-        let mut tab = Tab::new();
+        let mut tab = Tab::default();
         tab.navigate(url("https://example.test/a"));
         tab.reload();
         assert_eq!(

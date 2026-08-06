@@ -78,8 +78,13 @@ fn main() {
                 font_size: 16.0,
                 ..Default::default()
             },
+            color_scheme: Default::default(),
         },
         Vec::new(),
+        dark_light::detect().map(Into::into).unwrap_or_else(|e| {
+            log::error!("Failed to detect system color scheme, using default: {e}");
+            Default::default()
+        }),
     );
 
     // ── Layout pass ─────────────────────────────────────────

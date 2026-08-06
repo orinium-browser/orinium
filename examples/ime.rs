@@ -15,7 +15,7 @@ fn main() -> Result<()> {
 
     env_logger::init();
 
-    let mut tab = Tab::new();
+    let mut tab = Tab::default();
     tab.navigate("resource:///test/ime.html".parse()?);
 
     let mut browser = BrowserApp::new((720, 420), "Orinium IME Example".into())?;

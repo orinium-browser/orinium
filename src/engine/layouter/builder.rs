@@ -21,9 +21,10 @@ use ui_layout::{
 use super::css_resolver::ResolvedStyles;
 use super::text_layouter::TextFlowLayouter;
 use super::types::{
-    Background, BorderRadius, BorderStyle, Color, ColorStop, ContainerRole, ContainerStyle,
-    CornerRadius, FontStyle, FontWeight, Gradient, GradientKind, InfoNode, LineHeight, NodeKind,
-    Overflow, RadialShape, RadialSizeKind, TextAlign, TextDecoration, TextStyle, TextTransform,
+    Background, BorderRadius, BorderStyle, Color, ColorScheme, ColorStop, ContainerRole,
+    ContainerStyle, CornerRadius, FontStyle, FontWeight, Gradient, GradientKind, InfoNode,
+    LineHeight, NodeKind, Overflow, RadialShape, RadialSizeKind, TextAlign, TextDecoration,
+    TextStyle, TextTransform,
 };
 use crate::engine::renderer_model::Image;
 use crate::engine::ui::custom_node_bridge::CustomNodeBridge;
@@ -34,10 +35,13 @@ const DEFAULT_LINE_FACTOR: f32 = 1.2;
 /// Inherited values from parent, passed down through the tree.
 ///
 /// `text_style` carries all inherited text/line-height values.
+/// `color_scheme` carries the element's used color scheme (resolved from the
+/// `color-scheme` property and the system preference).
 /// Add new fields here when additional deferred-resolution properties arise.
 #[derive(Clone)]
 pub struct InheritedCss {
     pub text_style: TextStyle,
+    pub color_scheme: ColorScheme,
 }
 
 /// Convert a resolved `Length` to an absolute pixel value for `LineHeight::Px`.
@@ -103,6 +107,7 @@ pub fn build_layout_and_info(
     measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
     parent: InheritedCss,
     chain: ElementChain,
+    system_color_scheme: ColorScheme,
 ) -> (LayoutNode, InfoNode) {
     build_layout_and_info_with_images(
         dom,
@@ -110,6 +115,7 @@ pub fn build_layout_and_info(
         measurer,
         parent,
         chain,
+        system_color_scheme,
         &HashMap::new(),
     )
 }
@@ -121,6 +127,7 @@ pub fn build_layout_and_info_with_images(
     measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
     parent: InheritedCss,
     chain: ElementChain,
+    system_color_scheme: ColorScheme,
     images: &HashMap<String, Image>,
 ) -> (LayoutNode, InfoNode) {
     let (snapshot, _dom_refs) = DomSnapshot::from_tree(dom);
@@ -131,6 +138,7 @@ pub fn build_layout_and_info_with_images(
         measurer,
         parent,
         chain,
+        system_color_scheme,
         images,
         None,
     )
@@ -141,6 +149,9 @@ pub fn build_layout_and_info_with_images(
 /// `write_back_sender` (when set) is cloned per text input so value changes
 /// are reported as `(node id, value)` on the channel instead of mutating the
 /// DOM directly, which allows this function to run off the UI thread.
+///
+/// `system_color_scheme` seeds the root element's used color scheme and is
+/// used to resolve `color-scheme: light dark` and `light-dark()` values.
 #[allow(clippy::too_many_arguments)]
 pub fn build_layout_and_info_from_snapshot(
     snapshot: &DomSnapshot,
@@ -149,6 +160,7 @@ pub fn build_layout_and_info_from_snapshot(
     measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
     parent: InheritedCss,
     mut chain: ElementChain,
+    system_color_scheme: ColorScheme,
     images: &HashMap<String, Image>,
     write_back_sender: Option<DomWriteBack>,
 ) -> (LayoutNode, InfoNode) {
@@ -198,6 +210,7 @@ pub fn build_layout_and_info_from_snapshot(
         chain,
         child: InheritedCss {
             text_style: parent.text_style,
+            color_scheme: system_color_scheme,
         },
         kind: None,
         style: None,
@@ -239,6 +252,17 @@ pub fn build_layout_and_info_from_snapshot(
                 None
             };
 
+            // Resolve the used color scheme for this element. `light-dark()`
+            // and system colors resolve against it, and it is inherited by
+            // descendants that do not set `color-scheme` themselves.
+            let used_color_scheme = {
+                let declaration = candidates
+                    .as_ref()
+                    .and_then(|c| c.get("color-scheme"))
+                    .map(|d| &d.value);
+                resolve_used_color_scheme(declaration, child_css.color_scheme, system_color_scheme)
+            };
+
             // Apply CSS declarations.
             if let Some(candidates) = &candidates {
                 // The candidates map dedupes per property name (cascade winner),
@@ -258,6 +282,7 @@ pub fn build_layout_and_info_from_snapshot(
                             &mut container_style,
                             &mut text_style,
                             &mut overflow,
+                            used_color_scheme,
                         );
                     }
                 }
@@ -272,6 +297,7 @@ pub fn build_layout_and_info_from_snapshot(
 
             let child = InheritedCss {
                 text_style: text_style.clone(),
+                color_scheme: used_color_scheme,
             };
 
             if let HtmlNodeType::Text(t) = html_node {
@@ -658,6 +684,72 @@ fn create_text_node(
     (layouter, kind)
 }
 
+/// How an element's `color-scheme` property constrains its used color scheme.
+enum ColorSchemePref {
+    /// `normal` or unset: fall back to the inherited (or system) scheme.
+    Normal,
+    Light,
+    Dark,
+    /// Both `light` and `dark` listed: follow the system preference.
+    Both,
+}
+
+/// Parses the winning `color-scheme` declaration into a preference.
+fn color_scheme_pref(value: Option<&CssValue>) -> ColorSchemePref {
+    let Some(value) = value else {
+        return ColorSchemePref::Normal;
+    };
+    let mut light = false;
+    let mut dark = false;
+    let mut has = false;
+    let mut push = |keyword: &str| {
+        has = true;
+        match keyword {
+            "light" => light = true,
+            "dark" => dark = true,
+            // `only`, `normal`, unknown keywords are ignored here.
+            _ => {}
+        }
+    };
+    match value {
+        CssValue::Keyword(k) => push(k),
+        CssValue::List(items) => {
+            for item in items {
+                if let CssValue::Keyword(k) = item {
+                    push(k);
+                }
+            }
+        }
+        _ => {}
+    }
+    if !has {
+        ColorSchemePref::Normal
+    } else if light && dark {
+        ColorSchemePref::Both
+    } else if light {
+        ColorSchemePref::Light
+    } else if dark {
+        ColorSchemePref::Dark
+    } else {
+        ColorSchemePref::Normal
+    }
+}
+
+/// Computes the used color scheme of an element from its `color-scheme`
+/// declaration, the inherited scheme, and the system preference.
+fn resolve_used_color_scheme(
+    declaration: Option<&CssValue>,
+    inherited: ColorScheme,
+    system: ColorScheme,
+) -> ColorScheme {
+    match color_scheme_pref(declaration) {
+        ColorSchemePref::Normal => inherited,
+        ColorSchemePref::Light => ColorScheme::Light,
+        ColorSchemePref::Dark => ColorScheme::Dark,
+        ColorSchemePref::Both => system,
+    }
+}
+
 fn collect_candidates(
     resolved_styles: &ResolvedStyles,
     chain: &ElementChain,
@@ -689,6 +781,7 @@ pub fn apply_declaration(
     container_style: &mut ContainerStyle,
     text_style: &mut TextStyle,
     overflow: &mut Overflow,
+    color_scheme: ColorScheme,
 ) -> Option<()> {
     fn expand_box<T: Clone, F>(
         name: &str,
@@ -859,6 +952,7 @@ pub fn apply_declaration(
         name: &str,
         value: &CssValue,
         text_style: &TextStyle,
+        color_scheme: ColorScheme,
     ) -> Option<(Option<Length>, Option<BorderStyle>, Option<Color>)> {
         let mut width: Option<Length> = None;
         let mut style_v: Option<BorderStyle> = None;
@@ -931,7 +1025,7 @@ pub fn apply_declaration(
 
             // try as color
             if color_v.is_none()
-                && let Some(c) = resolve_css_color(name, token)
+                && let Some(c) = resolve_css_color(name, token, color_scheme)
             {
                 color_v = Some(c);
                 continue;
@@ -965,12 +1059,13 @@ pub fn apply_declaration(
                 CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("initial") => {
                     Background::Color(Color(0, 0, 0, 0))
                 }
-                _ => Background::Color(resolve_css_color(name, value)?),
+                _ => Background::Color(resolve_css_color(name, value, color_scheme)?),
             };
         }
 
         ("background", _) => {
-            container_style.background = parse_background_shorthand(name, value, text_style)?;
+            container_style.background =
+                parse_background_shorthand(name, value, text_style, color_scheme)?;
         }
 
         ("color", _) => {
@@ -982,9 +1077,14 @@ pub fn apply_declaration(
                 CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentColor") => {
                     text_style.color
                 }
-                _ => resolve_css_color(name, value)?,
+                _ => resolve_css_color(name, value, color_scheme)?,
             }
         }
+
+        // The used color scheme is computed before declarations are applied
+        // (see `resolve_used_color_scheme`); this arm just accepts the
+        // property so it is not treated as unsupported.
+        ("color-scheme", _) => {}
 
         ("font-size", CssValue::Length(_, _)) => {
             // TODO: Add other size
@@ -1053,7 +1153,7 @@ pub fn apply_declaration(
                         _ => {}
                     },
                     _ => {
-                        if let Some(c) = resolve_css_color(name, item) {
+                        if let Some(c) = resolve_css_color(name, item, color_scheme) {
                             text_style.text_decoration_color = Some(c);
                         }
                     }
@@ -1062,7 +1162,7 @@ pub fn apply_declaration(
         }
 
         ("text-decoration-color", _) => {
-            if let Some(c) = resolve_css_color(name, value) {
+            if let Some(c) = resolve_css_color(name, value, color_scheme) {
                 text_style.text_decoration_color = Some(c);
             }
         }
@@ -1163,7 +1263,7 @@ pub fn apply_declaration(
             {
                 (Some(Length::Px(0.0)), None, None)
             } else {
-                parse_border_shorthand(name, v, text_style)?
+                parse_border_shorthand(name, v, text_style, color_scheme)?
             };
 
             if let Some(w) = maybe_width {
@@ -1189,7 +1289,7 @@ pub fn apply_declaration(
         }
         ("border-top", _) => {
             let (maybe_width, maybe_style, maybe_color) =
-                parse_border_shorthand(name, value, text_style)?;
+                parse_border_shorthand(name, value, text_style, color_scheme)?;
             if let Some(w) = maybe_width {
                 style.spacing.border_top = w;
             }
@@ -1202,7 +1302,7 @@ pub fn apply_declaration(
         }
         ("border-right", _) => {
             let (maybe_width, maybe_style, maybe_color) =
-                parse_border_shorthand(name, value, text_style)?;
+                parse_border_shorthand(name, value, text_style, color_scheme)?;
             if let Some(w) = maybe_width {
                 style.spacing.border_right = w;
             }
@@ -1215,7 +1315,7 @@ pub fn apply_declaration(
         }
         ("border-bottom", _) => {
             let (maybe_width, maybe_style, maybe_color) =
-                parse_border_shorthand(name, value, text_style)?;
+                parse_border_shorthand(name, value, text_style, color_scheme)?;
             if let Some(w) = maybe_width {
                 style.spacing.border_bottom = w;
             }
@@ -1228,7 +1328,7 @@ pub fn apply_declaration(
         }
         ("border-left", _) => {
             let (maybe_width, maybe_style, maybe_color) =
-                parse_border_shorthand(name, value, text_style)?;
+                parse_border_shorthand(name, value, text_style, color_scheme)?;
             if let Some(w) = maybe_width {
                 style.spacing.border_left = w;
             }
@@ -1440,6 +1540,7 @@ fn parse_background_shorthand(
     name: &str,
     value: &CssValue,
     text_style: &TextStyle,
+    color_scheme: ColorScheme,
 ) -> Option<Background> {
     let items: Vec<&CssValue> = match value {
         CssValue::List(values) => values.iter().collect(),
@@ -1471,12 +1572,12 @@ fn parse_background_shorthand(
         if let CssValue::Function(fn_name, args) = v
             && (fn_name == "linear-gradient" || fn_name == "radial-gradient")
         {
-            maybe_gradient = Some(parse_gradient(fn_name, args, text_style)?);
+            maybe_gradient = Some(parse_gradient(fn_name, args, text_style, color_scheme)?);
             continue;
         }
 
         // color
-        if let Some(c) = resolve_css_color(name, v) {
+        if let Some(c) = resolve_css_color(name, v, color_scheme) {
             maybe_color = Some(c);
             continue;
         }
@@ -1496,22 +1597,31 @@ fn parse_background_shorthand(
 //   Gradient Parsing
 // =========================
 
-fn parse_gradient(fn_name: &str, args: &[CssValue], text_style: &TextStyle) -> Option<Gradient> {
+fn parse_gradient(
+    fn_name: &str,
+    args: &[CssValue],
+    text_style: &TextStyle,
+    color_scheme: ColorScheme,
+) -> Option<Gradient> {
     match fn_name {
-        "linear-gradient" => parse_linear_gradient(args, text_style),
-        "radial-gradient" => parse_radial_gradient(args, text_style),
+        "linear-gradient" => parse_linear_gradient(args, text_style, color_scheme),
+        "radial-gradient" => parse_radial_gradient(args, text_style, color_scheme),
         _ => None,
     }
 }
 
-fn parse_linear_gradient(args: &[CssValue], _text_style: &TextStyle) -> Option<Gradient> {
+fn parse_linear_gradient(
+    args: &[CssValue],
+    _text_style: &TextStyle,
+    color_scheme: ColorScheme,
+) -> Option<Gradient> {
     if args.is_empty() {
         return None;
     }
 
     let (skip, angle) = parse_linear_direction(args);
     let angle = angle.unwrap_or(180.0);
-    let stops = parse_color_stops(&args[skip..])?;
+    let stops = parse_color_stops(&args[skip..], color_scheme)?;
 
     Some(Gradient {
         kind: GradientKind::Linear { angle },
@@ -1569,7 +1679,11 @@ fn parse_linear_direction(args: &[CssValue]) -> (usize, Option<f32>) {
     (0, None)
 }
 
-fn parse_radial_gradient(args: &[CssValue], _text_style: &TextStyle) -> Option<Gradient> {
+fn parse_radial_gradient(
+    args: &[CssValue],
+    _text_style: &TextStyle,
+    color_scheme: ColorScheme,
+) -> Option<Gradient> {
     let mut shape = RadialShape::Ellipse;
     let mut size = RadialSizeKind::default();
     let mut position = (0.5f32, 0.5f32);
@@ -1649,7 +1763,7 @@ fn parse_radial_gradient(args: &[CssValue], _text_style: &TextStyle) -> Option<G
         }
     }
 
-    let stops = parse_color_stops(&args[idx..])?;
+    let stops = parse_color_stops(&args[idx..], color_scheme)?;
     if stops.is_empty() {
         return None;
     }
@@ -1663,12 +1777,12 @@ fn parse_radial_gradient(args: &[CssValue], _text_style: &TextStyle) -> Option<G
     })
 }
 
-fn parse_color_stops(args: &[CssValue]) -> Option<Vec<ColorStop>> {
+fn parse_color_stops(args: &[CssValue], color_scheme: ColorScheme) -> Option<Vec<ColorStop>> {
     let mut stops = Vec::new();
     let mut i = 0;
 
     while i < args.len() {
-        let color = resolve_css_color("gradient", &args[i])?;
+        let color = resolve_css_color("gradient", &args[i], color_scheme)?;
         i += 1;
 
         let position = if i < args.len() {
@@ -1825,7 +1939,10 @@ fn resolve_css_len(name: &str, css_len: &CssValue, text_style: &TextStyle) -> Op
 /// - Keywords like `currentColor`, `inherit`, `initial`, `unset`
 ///   must NOT reach this stage.
 /// - The returned Color is always absolute RGBA.
-fn resolve_css_color(name: &str, css_color: &CssValue) -> Option<Color> {
+///
+/// `color_scheme` is the element's used color scheme, used to resolve
+/// `light-dark()`.
+fn resolve_css_color(name: &str, css_color: &CssValue, color_scheme: ColorScheme) -> Option<Color> {
     fn keyword_color_to_color(name: &str, keyword: &str) -> Option<Color> {
         // NOTE:
         // Keyword matching is case-insensitive according to CSS specs.
@@ -2099,6 +2216,15 @@ fn resolve_css_color(name: &str, css_color: &CssValue) -> Option<Color> {
             Some(Color(r, g, b, a))
         }
 
+        // light-dark(<light-color>, <dark-color>)
+        CssValue::Function(func, args) if func == "light-dark" && args.len() == 2 => {
+            let chosen = match color_scheme {
+                ColorScheme::Light => &args[0],
+                ColorScheme::Dark => &args[1],
+            };
+            resolve_css_color(name, chosen, color_scheme)
+        }
+
         // Any other value reaching here is a pipeline error
         _ => {
             log::error!(
@@ -2128,6 +2254,7 @@ mod tests {
             &mut container_style,
             &mut text_style,
             &mut overflow,
+            ColorScheme::Light,
         );
         assert!(parsed.is_some());
         overflow
@@ -2186,6 +2313,7 @@ mod tests {
                 &mut container_style,
                 &mut text_style,
                 &mut overflow,
+                ColorScheme::Light,
             )
             .is_some()
         );
@@ -2199,6 +2327,7 @@ mod tests {
                 &mut container_style,
                 &mut text_style,
                 &mut overflow,
+                ColorScheme::Light,
             )
             .is_some()
         );
@@ -2219,6 +2348,7 @@ mod tests {
                 &mut container_style,
                 &mut text_style,
                 &mut overflow,
+                ColorScheme::Light,
             )
             .is_none()
         );

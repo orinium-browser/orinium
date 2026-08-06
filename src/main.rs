@@ -12,7 +12,7 @@ fn main() -> Result<()> {
 
     env_logger::init();
 
-    let mut tab = Tab::new();
+    let mut tab = Tab::default();
     tab.navigate("resource:///test/test.html".parse()?);
 
     let mut browser = BrowserApp::default();

@@ -47,7 +47,7 @@ impl App {
         let scale_factor = window.scale_factor();
         let gpu_renderer = pollster::block_on(GpuRenderer::new(Arc::clone(&window), None)).unwrap();
 
-        let root_ui = BrowserUi::with_tab(Tab::new());
+        let root_ui = BrowserUi::with_tab(Tab::default());
 
         self.browser_app.open_window(
             window_id,

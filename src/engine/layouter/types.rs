@@ -115,6 +115,27 @@ impl NodeKind {
 //          Color
 // =========================
 
+/// Color scheme used to resolve `light-dark()` values and system colors.
+///
+/// Mirrors the system preference (`prefers-color-scheme`) and the computed
+/// `color-scheme` property of each element.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ColorScheme {
+    #[default]
+    Light,
+    Dark,
+}
+
+impl From<dark_light::Mode> for ColorScheme {
+    fn from(value: dark_light::Mode) -> Self {
+        match value {
+            dark_light::Mode::Dark => ColorScheme::Dark,
+            dark_light::Mode::Light => ColorScheme::Light,
+            dark_light::Mode::Unspecified => ColorScheme::default(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Color(pub u8, pub u8, pub u8, pub u8);
 

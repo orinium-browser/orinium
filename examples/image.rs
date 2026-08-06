@@ -15,7 +15,7 @@ fn main() -> Result<()> {
 
     env_logger::init();
 
-    let mut tab = Tab::new();
+    let mut tab = Tab::default();
     tab.navigate("resource:///test/image.html".parse()?);
 
     let mut browser = BrowserApp::new((900, 700), "Orinium Image Example".into())?;
