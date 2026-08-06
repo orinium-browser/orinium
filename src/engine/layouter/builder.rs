@@ -1864,6 +1864,7 @@ fn resolve_css_color(name: &str, css_color: &CssValue) -> Option<Color> {
 
             // ===== Yellow =====
             "gold" => Some(Color(255, 215, 0, 255)),
+            "goldenrod" => Some(Color(218, 165, 32, 255)),
             "yellow" => Some(Color(255, 255, 0, 255)),
             "lightyellow" => Some(Color(255, 255, 224, 255)),
             "lemonchiffon" => Some(Color(255, 250, 205, 255)),
