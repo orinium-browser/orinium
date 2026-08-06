@@ -1056,7 +1056,9 @@ pub fn apply_declaration(
                 CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentColor") => {
                     Background::Color(text_style.color)
                 }
-                CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("initial") => {
+                CssValue::Keyword(kw)
+                    if kw.eq_ignore_ascii_case("initial") || kw.eq_ignore_ascii_case("unset") =>
+                {
                     Background::Color(Color(0, 0, 0, 0))
                 }
                 _ => Background::Color(resolve_css_color(name, value, color_scheme)?),
