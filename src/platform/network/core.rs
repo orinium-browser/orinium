@@ -44,6 +44,10 @@ impl AsyncNetworkCore {
         self.inner.set_network_config(config)
     }
 
+    /// Removes all cached responses.
+    pub fn clear_cache(&self) {
+        self.inner.cache.clear();
+    }
     /// UI スレッドなどから呼ばれる blocking API
     pub fn fetch_blocking(&self, url: &str) -> Result<Response, NetworkError> {
         // network スレッド内で完結させる
@@ -52,7 +56,7 @@ impl AsyncNetworkCore {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct StatusCode(u16);
 
 impl From<hyper::StatusCode> for StatusCode {
@@ -81,7 +85,7 @@ impl StatusCode {
 }
 
 /// HTTP response
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Response {
     pub url: String,
     pub status: StatusCode,
@@ -94,6 +98,7 @@ pub(super) struct NetworkInner {
     sender_pool: Arc<std::sync::RwLock<SenderPool>>,
     tls_config: Arc<ClientConfig>,
     network_config: Arc<NetworkConfig>,
+    cache: super::Cache,
 }
 
 impl NetworkInner {
@@ -102,11 +107,13 @@ impl NetworkInner {
             sender_pool: Arc::new(std::sync::RwLock::new(SenderPool::new())),
             tls_config: Arc::new(Self::build_tls_config()),
             network_config: Arc::new(NetworkConfig::default()),
+            cache: super::Cache::new(),
         }
     }
 
-    pub fn set_network_config(&mut self, confing: NetworkConfig) {
-        self.network_config = Arc::new(confing)
+    pub fn set_network_config(&mut self, config: NetworkConfig) {
+        self.cache.set_enabled(config.enable_cache);
+        self.network_config = Arc::new(config)
     }
 
     fn build_tls_config() -> ClientConfig {
@@ -127,6 +134,11 @@ impl NetworkInner {
         let mut redirects = 0usize;
 
         loop {
+            if let Some(cached) = self.cache.get(&current.to_string()) {
+                log::info!("NetworkCache: hit for url={}", current);
+                return Ok(cached);
+            }
+
             let resp = self.send_request(&current).await?;
 
             if self.network_config.follow_redirects
@@ -148,6 +160,10 @@ impl NetworkInner {
                     redirects += 1;
                     continue;
                 }
+            }
+
+            if resp.status.is_success() {
+                self.cache.set(&current.to_string(), &resp);
             }
 
             return Ok(resp);
@@ -303,4 +319,21 @@ fn resolve_redirect(base: &Uri, location: &str) -> Result<Uri, NetworkError> {
     };
 
     next.parse().map_err(|_| NetworkError::InvalidUri)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enable_cache_config_is_applied_to_cache() {
+        let mut inner = NetworkInner::new();
+        assert!(inner.cache.is_enabled());
+
+        inner.set_network_config(NetworkConfig {
+            enable_cache: false,
+            ..NetworkConfig::default()
+        });
+        assert!(!inner.cache.is_enabled());
+    }
 }

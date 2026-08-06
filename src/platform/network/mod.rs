@@ -29,6 +29,7 @@ use std::{env, io, process};
 pub enum NetworkCommand {
     Fetch { url: String, msg_id: usize },
     SetConfig(NetworkConfig),
+    ClearCache,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -71,6 +72,11 @@ impl NetworkCore {
         let _ = self.cmd_tx.send(NetworkCommand::SetConfig(cfg));
     }
 
+    /// Clears all cached responses in the network process.
+    pub fn clear_cache(&self) {
+        let _ = self.cmd_tx.send(NetworkCommand::ClearCache);
+    }
+
     /// 非同期送信のみ。結果は try_receive で取得
     pub fn fetch_async(&self, url: String, msg_id: usize) {
         let _ = self.cmd_tx.send(NetworkCommand::Fetch { url, msg_id });
@@ -104,6 +110,10 @@ pub fn network_main(rx: IpcReceiver<NetworkCommand>, tx: IpcSender<NetworkMessag
     while let Ok(cmd) = rx.recv() {
         match cmd {
             NetworkCommand::SetConfig(cfg) => core.set_network_config(cfg),
+            NetworkCommand::ClearCache => {
+                core.clear_cache();
+                log::info!("NetworkCore: cache cleared");
+            }
             NetworkCommand::Fetch { url, msg_id } => {
                 let res = core.fetch_blocking(&url);
                 log::info!("NetworkCore: fetched URL for msg_id={}", msg_id);
