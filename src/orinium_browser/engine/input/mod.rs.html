@@ -5,7 +5,7 @@
 <a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span><span class="kw">super</span>::layouter::types::{InfoNode, NodeKind};
 <a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span><span class="kw">super</span>::ui::PointerEvent;
 <a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span><span class="kw">super</span>::ui::custom_node::CustomNode;
-<a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span><span class="kw">super</span>::ui::text_input_types::TextInputEvent;
+<a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span><span class="kw">super</span>::ui::input_text_types::InputTextEvent;
 <a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span>ui_layout::LayoutNode;
 <a href=#10 id=10 data-nosnippet>10</a><span class="doccomment">/// ヒットしたノード情報
 <a href=#11 id=11 data-nosnippet>11</a></span><span class="kw">pub struct </span>HitItem&lt;<span class="lifetime">'a</span>&gt; {
@@ -245,7 +245,7 @@
 <a href=#245 id=245 data-nosnippet>245</a>}
 <a href=#246 id=246 data-nosnippet>246</a>
 <a href=#247 id=247 data-nosnippet>247</a><span class="doccomment">/// Sends an editing event to the focused text input, if one exists.
-<a href=#248 id=248 data-nosnippet>248</a></span><span class="kw">pub fn </span>dispatch_text_input(info: <span class="kw-2">&amp;</span>InfoNode, event: TextInputEvent) -&gt; bool {
+<a href=#248 id=248 data-nosnippet>248</a></span><span class="kw">pub fn </span>dispatch_text_input(info: <span class="kw-2">&amp;</span>InfoNode, event: InputTextEvent) -&gt; bool {
 <a href=#249 id=249 data-nosnippet>249</a>    <span class="kw">if let </span>NodeKind::Custom { node, .. } = <span class="kw-2">&amp;</span>info.kind
 <a href=#250 id=250 data-nosnippet>250</a>        &amp;&amp; node.accepts_text_input()
 <a href=#251 id=251 data-nosnippet>251</a>        &amp;&amp; node.is_focused()
@@ -290,8 +290,8 @@
 <a href=#290 id=290 data-nosnippet>290</a>    <span class="kw">use </span><span class="kw">crate</span>::engine::bridge::text::{FallbackTextMeasurer, TextMeasurer};
 <a href=#291 id=291 data-nosnippet>291</a>    <span class="kw">use </span><span class="kw">crate</span>::engine::layouter::types::{Color, ContainerStyle, TextStyle};
 <a href=#292 id=292 data-nosnippet>292</a>    <span class="kw">use </span><span class="kw">crate</span>::engine::ui::button::ButtonComponent;
-<a href=#293 id=293 data-nosnippet>293</a>    <span class="kw">use </span><span class="kw">crate</span>::engine::ui::text_input::TextInputComponent;
-<a href=#294 id=294 data-nosnippet>294</a>    <span class="kw">use </span><span class="kw">crate</span>::engine::ui::text_input_types::TextInputEvent;
+<a href=#293 id=293 data-nosnippet>293</a>    <span class="kw">use </span><span class="kw">crate</span>::engine::ui::input_text::InputTextComponent;
+<a href=#294 id=294 data-nosnippet>294</a>    <span class="kw">use </span><span class="kw">crate</span>::engine::ui::input_text_types::InputTextEvent;
 <a href=#295 id=295 data-nosnippet>295</a>    <span class="kw">use </span>std::sync::Arc;
 <a href=#296 id=296 data-nosnippet>296</a>
 <a href=#297 id=297 data-nosnippet>297</a>    <span class="kw">fn </span>input_info(node: Arc&lt;<span class="kw">dyn </span>CustomNode&gt;) -&gt; InfoNode {
@@ -314,8 +314,8 @@
 <a href=#314 id=314 data-nosnippet>314</a>    </span><span class="kw">fn </span>focus_and_dispatch_target_one_input() {
 <a href=#315 id=315 data-nosnippet>315</a>        <span class="kw">let </span>measurer: Arc&lt;<span class="kw">dyn </span>TextMeasurer&lt;TextStyle&gt;&gt; = Arc::new(FallbackTextMeasurer);
 <a href=#316 id=316 data-nosnippet>316</a>        <span class="kw">let </span>first: Arc&lt;<span class="kw">dyn </span>CustomNode&gt; =
-<a href=#317 id=317 data-nosnippet>317</a>            Arc::new(TextInputComponent::new(<span class="string">""</span>, <span class="string">""</span>, Arc::clone(<span class="kw-2">&amp;</span>measurer)));
-<a href=#318 id=318 data-nosnippet>318</a>        <span class="kw">let </span>second: Arc&lt;<span class="kw">dyn </span>CustomNode&gt; = Arc::new(TextInputComponent::new(<span class="string">""</span>, <span class="string">""</span>, measurer));
+<a href=#317 id=317 data-nosnippet>317</a>            Arc::new(InputTextComponent::new(<span class="string">""</span>, <span class="string">""</span>, Arc::clone(<span class="kw-2">&amp;</span>measurer)));
+<a href=#318 id=318 data-nosnippet>318</a>        <span class="kw">let </span>second: Arc&lt;<span class="kw">dyn </span>CustomNode&gt; = Arc::new(InputTextComponent::new(<span class="string">""</span>, <span class="string">""</span>, measurer));
 <a href=#319 id=319 data-nosnippet>319</a>        <span class="kw">let </span>root = InfoNode {
 <a href=#320 id=320 data-nosnippet>320</a>            kind: NodeKind::LineBreak,
 <a href=#321 id=321 data-nosnippet>321</a>            children: <span class="macro">vec!</span>[
@@ -329,13 +329,13 @@
 <a href=#329 id=329 data-nosnippet>329</a>        <span class="macro">assert!</span>(second.is_focused());
 <a href=#330 id=330 data-nosnippet>330</a>        <span class="macro">assert!</span>(dispatch_text_input(
 <a href=#331 id=331 data-nosnippet>331</a>            <span class="kw-2">&amp;</span>root,
-<a href=#332 id=332 data-nosnippet>332</a>            TextInputEvent::Commit(<span class="string">"日本"</span>.into())
+<a href=#332 id=332 data-nosnippet>332</a>            InputTextEvent::Commit(<span class="string">"日本"</span>.into())
 <a href=#333 id=333 data-nosnippet>333</a>        ));
 <a href=#334 id=334 data-nosnippet>334</a>    }
 <a href=#335 id=335 data-nosnippet>335</a>
 <a href=#336 id=336 data-nosnippet>336</a>    <span class="attr">#[test]
 <a href=#337 id=337 data-nosnippet>337</a>    </span><span class="kw">fn </span>hit_custom_node_finds_innermost_custom() {
-<a href=#338 id=338 data-nosnippet>338</a>        <span class="kw">let </span>node: Arc&lt;<span class="kw">dyn </span>CustomNode&gt; = Arc::new(TextInputComponent::new(
+<a href=#338 id=338 data-nosnippet>338</a>        <span class="kw">let </span>node: Arc&lt;<span class="kw">dyn </span>CustomNode&gt; = Arc::new(InputTextComponent::new(
 <a href=#339 id=339 data-nosnippet>339</a>            <span class="string">""</span>,
 <a href=#340 id=340 data-nosnippet>340</a>            <span class="string">""</span>,
 <a href=#341 id=341 data-nosnippet>341</a>            Arc::new(FallbackTextMeasurer),

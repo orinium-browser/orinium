@@ -171,7 +171,7 @@
 <a href=#171 id=171 data-nosnippet>171</a>    <span class="kw">use </span><span class="kw">crate</span>::engine::html::parser::Parser <span class="kw">as </span>HtmlParser;
 <a href=#172 id=172 data-nosnippet>172</a>    <span class="kw">use </span><span class="kw">crate</span>::engine::layouter::types::NodeKind;
 <a href=#173 id=173 data-nosnippet>173</a>    <span class="kw">use </span><span class="kw">crate</span>::engine::ui::custom_node::CustomNode;
-<a href=#174 id=174 data-nosnippet>174</a>    <span class="kw">use </span><span class="kw">crate</span>::engine::ui::text_input_types::TextInputEvent;
+<a href=#174 id=174 data-nosnippet>174</a>    <span class="kw">use </span><span class="kw">crate</span>::engine::ui::input_text_types::InputTextEvent;
 <a href=#175 id=175 data-nosnippet>175</a>
 <a href=#176 id=176 data-nosnippet>176</a>    <span class="kw">fn </span>sample_task(write_back_sender: <span class="prelude-ty">Option</span>&lt;DomWriteBack&gt;) -&gt; LayoutTask {
 <a href=#177 id=177 data-nosnippet>177</a>        <span class="kw">let </span>html = <span class="string">"&lt;html&gt;&lt;body&gt;&lt;p&gt;hello&lt;/p&gt;&lt;input value='a'&gt;&lt;/body&gt;&lt;/html&gt;"</span>;
@@ -240,7 +240,7 @@
 <a href=#240 id=240 data-nosnippet>240</a>        <span class="kw">let </span>input = find_custom(<span class="kw-2">&amp;</span>result.info, <span class="string">"textbox"</span>)
 <a href=#241 id=241 data-nosnippet>241</a>            .expect(<span class="string">"input component must exist in the Info tree"</span>);
 <a href=#242 id=242 data-nosnippet>242</a>
-<a href=#243 id=243 data-nosnippet>243</a>        input.handle_text_input(TextInputEvent::Insert(<span class="string">"hello"</span>.into()));
+<a href=#243 id=243 data-nosnippet>243</a>        input.handle_text_input(InputTextEvent::Insert(<span class="string">"hello"</span>.into()));
 <a href=#244 id=244 data-nosnippet>244</a>
 <a href=#245 id=245 data-nosnippet>245</a>        <span class="kw">let </span>(node_id, value) = rx
 <a href=#246 id=246 data-nosnippet>246</a>            .recv_timeout(Duration::from_secs(<span class="number">5</span>))

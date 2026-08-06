@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["TextInputEvent","TextInputKey"],"struct":["TextInputState"]};
