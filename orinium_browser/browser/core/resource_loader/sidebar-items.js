@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["BrowserNetworkError"],"struct":["BrowserNetworkMessage","BrowserResourceLoader","BrowserResponse","ResourceURI"]};
+window.SIDEBAR_ITEMS = {"enum":["BrowserNetworkError"],"struct":["BrowserNetworkMessage","BrowserResourceLoader","BrowserResponse","DataURI","ResourceURI"]};

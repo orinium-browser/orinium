@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["build_layout_and_info","build_layout_and_info_with_images"],"mod":["css_resolver","text_layouter","types"],"struct":["InheritedCss"]};
+window.SIDEBAR_ITEMS = {"fn":["build_layout_and_info","build_layout_and_info_from_snapshot","build_layout_and_info_with_images"],"mod":["css_resolver","dom_snapshot","processor","text_layouter","types"],"struct":["InheritedCss"]};

@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["BrowserUi"]};
+window.SIDEBAR_ITEMS = {"enum":["ChromeAction"],"struct":["BasicChrome","BrowserUi","ChromeEventResult","RenderState"],"trait":["Chrome"]};

@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["Cache","CachedResponse"]};
+window.SIDEBAR_ITEMS = {"struct":["Cache"]};

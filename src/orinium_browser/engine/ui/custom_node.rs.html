@@ -56,7 +56,7 @@
 <a href=#56 id=56 data-nosnippet>56</a>/// # Lifecycle
 <a href=#57 id=57 data-nosnippet>57</a>/// - `draw_sized()` is called every frame during `generate_draw_commands`.
 <a href=#58 id=58 data-nosnippet>58</a>/// - Event handling (focus, IME) is dispatched through `engine::input`.
-<a href=#59 id=59 data-nosnippet>59</a></span><span class="kw">pub trait </span>CustomNode: std::fmt::Debug + <span class="lifetime">'static </span>{
+<a href=#59 id=59 data-nosnippet>59</a></span><span class="kw">pub trait </span>CustomNode: std::fmt::Debug + Send + Sync + <span class="lifetime">'static </span>{
 <a href=#60 id=60 data-nosnippet>60</a>    <span class="doccomment">/// Emit draw commands fitted to the resolved content-box `size`.
 <a href=#61 id=61 data-nosnippet>61</a>    ///
 <a href=#62 id=62 data-nosnippet>62</a>    /// `text_style` carries the inherited CSS text properties (color,

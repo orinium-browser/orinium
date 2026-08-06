@@ -33,14 +33,14 @@
 <a href=#33 id=33 data-nosnippet>33</a>/// and auto-height work regardless of the display value.
 <a href=#34 id=34 data-nosnippet>34</a></span><span class="attr">#[derive(Debug)]
 <a href=#35 id=35 data-nosnippet>35</a></span><span class="kw">pub struct </span>CustomNodeBridge {
-<a href=#36 id=36 data-nosnippet>36</a>    node: std::rc::Rc&lt;<span class="kw">dyn </span>CustomNode&gt;,
+<a href=#36 id=36 data-nosnippet>36</a>    node: std::sync::Arc&lt;<span class="kw">dyn </span>CustomNode&gt;,
 <a href=#37 id=37 data-nosnippet>37</a>    layout_style: Style,
 <a href=#38 id=38 data-nosnippet>38</a>    display: OuterDisplay,
 <a href=#39 id=39 data-nosnippet>39</a>}
 <a href=#40 id=40 data-nosnippet>40</a>
 <a href=#41 id=41 data-nosnippet>41</a><span class="kw">impl </span>CustomNodeBridge {
 <a href=#42 id=42 data-nosnippet>42</a>    <span class="kw">pub fn </span>new(
-<a href=#43 id=43 data-nosnippet>43</a>        node: std::rc::Rc&lt;<span class="kw">dyn </span>CustomNode&gt;,
+<a href=#43 id=43 data-nosnippet>43</a>        node: std::sync::Arc&lt;<span class="kw">dyn </span>CustomNode&gt;,
 <a href=#44 id=44 data-nosnippet>44</a>        layout_style: Style,
 <a href=#45 id=45 data-nosnippet>45</a>        display: OuterDisplay,
 <a href=#46 id=46 data-nosnippet>46</a>    ) -&gt; <span class="self">Self </span>{
@@ -191,7 +191,7 @@
 <a href=#191 id=191 data-nosnippet>191</a>
 <a href=#192 id=192 data-nosnippet>192</a>    <span class="kw">fn </span>bridge(display: OuterDisplay) -&gt; CustomNodeBridge {
 <a href=#193 id=193 data-nosnippet>193</a>        CustomNodeBridge::new(
-<a href=#194 id=194 data-nosnippet>194</a>            std::rc::Rc::new(TestNode {
+<a href=#194 id=194 data-nosnippet>194</a>            std::sync::Arc::new(TestNode {
 <a href=#195 id=195 data-nosnippet>195</a>                width: <span class="number">200.0</span>,
 <a href=#196 id=196 data-nosnippet>196</a>                height: <span class="number">100.0</span>,
 <a href=#197 id=197 data-nosnippet>197</a>            }),
@@ -285,7 +285,7 @@
 <a href=#285 id=285 data-nosnippet>285</a>        <span class="kw">use </span>ui_layout::{Length, LengthOrAuto};
 <a href=#286 id=286 data-nosnippet>286</a>
 <a href=#287 id=287 data-nosnippet>287</a>        <span class="kw">let </span>b = CustomNodeBridge::new(
-<a href=#288 id=288 data-nosnippet>288</a>            std::rc::Rc::new(TestNode {
+<a href=#288 id=288 data-nosnippet>288</a>            std::sync::Arc::new(TestNode {
 <a href=#289 id=289 data-nosnippet>289</a>                width: <span class="number">200.0</span>,
 <a href=#290 id=290 data-nosnippet>290</a>                height: <span class="number">100.0</span>,
 <a href=#291 id=291 data-nosnippet>291</a>            }),
