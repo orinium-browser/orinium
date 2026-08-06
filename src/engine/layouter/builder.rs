@@ -2033,6 +2033,7 @@ fn resolve_css_color(name: &str, css_color: &CssValue, color_scheme: ColorScheme
             "brown" => Some(Color(165, 42, 42, 255)),
             "saddlebrown" => Some(Color(139, 69, 19, 255)),
             "sienna" => Some(Color(160, 82, 45, 255)),
+            "tan" => Some(Color(210, 180, 140, 255)),
             "chocolate" => Some(Color(210, 105, 30, 255)),
             "peru" => Some(Color(205, 133, 63, 255)),
             "burlywood" => Some(Color(222, 184, 135, 255)),
