@@ -7,6 +7,7 @@ use crate::engine::bridge::text;
 use crate::engine::layouter::types::{Color, ContainerStyle, TextStyle};
 use crate::engine::renderer_model::Image;
 use crate::engine::ui::button::ButtonComponent;
+use crate::engine::ui::components::input_hidden::InputHiddenComponent;
 use crate::engine::ui::custom_node::CustomNode;
 use crate::engine::ui::image::ImageComponent;
 use crate::engine::ui::input_text::InputTextComponent;
@@ -142,6 +143,11 @@ impl CustomNodeFactory for InputTextFactory {
         let type_ = (ctx.get_attr)("type").unwrap_or_default();
         let value = (ctx.get_attr)("value").unwrap_or_default();
         let placeholder = (ctx.get_attr)("placeholder").unwrap_or_default();
+
+        if type_.eq_ignore_ascii_case("hidden") {
+            return Some(Arc::new(InputHiddenComponent::new(value)));
+        }
+
         let on_value_change = ctx.write_back.as_ref().map(|(sender, node_id)| {
             let sender = sender.clone();
             let node_id = *node_id;
@@ -149,6 +155,7 @@ impl CustomNodeFactory for InputTextFactory {
                 let _ = sender.send((node_id, new_value.to_string()));
             }) as Arc<OnValueChange>
         });
+
         Some(Arc::new(if let Some(cb) = on_value_change {
             InputTextComponent::with_on_change(value, placeholder, Arc::clone(&ctx.measurer), cb)
         } else {
