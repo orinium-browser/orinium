@@ -14,7 +14,7 @@ use crate::engine::layouter::types::ColorScheme;
 use crate::engine::renderer_model::DrawCommand;
 use crate::engine::ui::PointerEvent;
 use crate::engine::ui::custom_node::CustomNode;
-use crate::engine::ui::input_text_types::{TextInputEvent, TextInputKey};
+use crate::engine::ui::input_text_types::{InputTextEvent, InputTextKey};
 use crate::platform::renderer::gpu::GpuRenderer;
 
 use super::BrowserCommand;
@@ -369,12 +369,12 @@ impl BrowserUi {
         let handled = if let Some(special) = special {
             crate::engine::input::dispatch_text_input(info, special)
         } else if let Some(key) = key {
-            crate::engine::input::dispatch_text_input(info, TextInputEvent::Key(key))
+            crate::engine::input::dispatch_text_input(info, InputTextEvent::Key(key))
         } else if !ctrl && !crate::engine::input::focused_text_input_is_composing(info) {
             event.text.as_ref().is_some_and(|text| {
                 crate::engine::input::dispatch_text_input(
                     info,
-                    TextInputEvent::Insert(text.to_string()),
+                    InputTextEvent::Insert(text.to_string()),
                 )
             })
         } else {
@@ -401,9 +401,9 @@ impl BrowserUi {
         }
 
         let event = match event {
-            Ime::Preedit(text, _) => TextInputEvent::Preedit(text),
-            Ime::Commit(text) => TextInputEvent::Commit(text),
-            Ime::Disabled => TextInputEvent::CancelComposition,
+            Ime::Preedit(text, _) => InputTextEvent::Preedit(text),
+            Ime::Commit(text) => InputTextEvent::Commit(text),
+            Ime::Disabled => InputTextEvent::CancelComposition,
             Ime::Enabled => return BrowserCommand::None,
         };
 
@@ -657,36 +657,36 @@ fn handle_mouse_click(tab: &mut Tab, x: f32, y: f32) -> bool {
 }
 
 /// Maps a logical key to a text-editing navigation key, if any.
-fn logical_key_to_text_key(key: &winit::keyboard::Key) -> Option<TextInputKey> {
+fn logical_key_to_text_key(key: &winit::keyboard::Key) -> Option<InputTextKey> {
     match key {
         winit::keyboard::Key::Named(winit::keyboard::NamedKey::Backspace) => {
-            Some(TextInputKey::Backspace)
+            Some(InputTextKey::Backspace)
         }
         winit::keyboard::Key::Named(winit::keyboard::NamedKey::Delete) => {
-            Some(TextInputKey::Delete)
+            Some(InputTextKey::Delete)
         }
         winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowLeft) => {
-            Some(TextInputKey::Left)
+            Some(InputTextKey::Left)
         }
         winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowRight) => {
-            Some(TextInputKey::Right)
+            Some(InputTextKey::Right)
         }
-        winit::keyboard::Key::Named(winit::keyboard::NamedKey::Home) => Some(TextInputKey::Home),
-        winit::keyboard::Key::Named(winit::keyboard::NamedKey::End) => Some(TextInputKey::End),
+        winit::keyboard::Key::Named(winit::keyboard::NamedKey::Home) => Some(InputTextKey::Home),
+        winit::keyboard::Key::Named(winit::keyboard::NamedKey::End) => Some(InputTextKey::End),
         _ => None,
     }
 }
 
 /// Maps a logical key to a text-editing special event (undo/redo/enter).
-fn logical_key_to_special_event(key: &winit::keyboard::Key, ctrl: bool) -> Option<TextInputEvent> {
+fn logical_key_to_special_event(key: &winit::keyboard::Key, ctrl: bool) -> Option<InputTextEvent> {
     if ctrl && let winit::keyboard::Key::Character(ch) = key {
         match ch.as_str() {
-            "z" | "Z" => Some(TextInputEvent::Undo),
-            "y" | "Y" => Some(TextInputEvent::Redo),
+            "z" | "Z" => Some(InputTextEvent::Undo),
+            "y" | "Y" => Some(InputTextEvent::Redo),
             _ => None,
         }
     } else if let winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter) = key {
-        Some(TextInputEvent::Enter)
+        Some(InputTextEvent::Enter)
     } else {
         None
     }

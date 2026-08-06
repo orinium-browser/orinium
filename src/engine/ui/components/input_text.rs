@@ -10,7 +10,7 @@ use crate::engine::bridge::text::{self, TextMeasureRequest};
 use crate::engine::layouter::types::{Background, Color, TextStyle};
 use crate::engine::renderer_model::{Brush, DrawCommand, FillRule, Paint, rect_path};
 use crate::engine::ui::components::input_text_types::{
-    TextInputEvent, TextInputKey, TextInputState,
+    InputTextEvent, InputTextKey, InputTextState,
 };
 use crate::engine::ui::custom_node::{ContentSize, CustomNode};
 
@@ -28,8 +28,8 @@ struct EditSnapshot {
 }
 
 /// An HTML text input rendered by the engine.
-pub struct TextInputComponent {
-    state: Mutex<TextInputState>,
+pub struct InputTextComponent {
+    state: Mutex<InputTextState>,
     placeholder: SmolStr,
     measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
     undo_stack: Mutex<Vec<EditSnapshot>>,
@@ -39,16 +39,16 @@ pub struct TextInputComponent {
     on_enter: Option<Arc<OnValueChange>>,
 }
 
-impl std::fmt::Debug for TextInputComponent {
+impl std::fmt::Debug for InputTextComponent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TextInputComponent")
+        f.debug_struct("InputTextComponent")
             .field("state", &self.state.lock().unwrap())
             .field("placeholder", &self.placeholder)
             .finish_non_exhaustive()
     }
 }
 
-impl TextInputComponent {
+impl InputTextComponent {
     /// Creates a text input with an initial value and placeholder.
     pub fn new(
         value: impl Into<String>,
@@ -58,7 +58,7 @@ impl TextInputComponent {
         let value = value.into();
         let caret = value.len();
         Self {
-            state: Mutex::new(TextInputState {
+            state: Mutex::new(InputTextState {
                 value,
                 preedit: String::new(),
                 caret,
@@ -111,7 +111,7 @@ impl TextInputComponent {
     }
 
     /// Returns a copy of the current editing state.
-    pub fn state(&self) -> TextInputState {
+    pub fn state(&self) -> InputTextState {
         self.state.lock().unwrap().clone()
     }
 
@@ -129,26 +129,26 @@ impl TextInputComponent {
             .map_or(value.len(), |(offset, _)| caret + offset)
     }
 
-    fn handle_key(state: &mut TextInputState, key: TextInputKey) {
+    fn handle_key(state: &mut InputTextState, key: InputTextKey) {
         match key {
-            TextInputKey::Backspace if state.caret > 0 => {
+            InputTextKey::Backspace if state.caret > 0 => {
                 let previous = Self::previous_boundary(&state.value, state.caret);
                 state.value.replace_range(previous..state.caret, "");
                 state.caret = previous;
             }
-            TextInputKey::Delete if state.caret < state.value.len() => {
+            InputTextKey::Delete if state.caret < state.value.len() => {
                 let next = Self::next_boundary(&state.value, state.caret);
                 state.value.replace_range(state.caret..next, "");
             }
-            TextInputKey::Left => {
+            InputTextKey::Left => {
                 state.caret = Self::previous_boundary(&state.value, state.caret);
             }
-            TextInputKey::Right => {
+            InputTextKey::Right => {
                 state.caret = Self::next_boundary(&state.value, state.caret);
             }
-            TextInputKey::Home => state.caret = 0,
-            TextInputKey::End => state.caret = state.value.len(),
-            TextInputKey::Backspace | TextInputKey::Delete => {}
+            InputTextKey::Home => state.caret = 0,
+            InputTextKey::End => state.caret = state.value.len(),
+            InputTextKey::Backspace | InputTextKey::Delete => {}
         }
     }
 
@@ -191,7 +191,7 @@ impl TextInputComponent {
     }
 }
 
-impl CustomNode for TextInputComponent {
+impl CustomNode for InputTextComponent {
     fn draw_sized(
         &self,
         cmd_buf: &mut Vec<DrawCommand>,
@@ -266,11 +266,11 @@ impl CustomNode for TextInputComponent {
         self.state.lock().unwrap().focused
     }
 
-    fn handle_text_input(&self, event: TextInputEvent) -> bool {
+    fn handle_text_input(&self, event: InputTextEvent) -> bool {
         match event {
-            TextInputEvent::Insert(text)
-            | TextInputEvent::Commit(text)
-            | TextInputEvent::Paste(text) => {
+            InputTextEvent::Insert(text)
+            | InputTextEvent::Commit(text)
+            | InputTextEvent::Paste(text) => {
                 let text: String = text
                     .chars()
                     .filter(|character| !character.is_control())
@@ -291,15 +291,15 @@ impl CustomNode for TextInputComponent {
                     cb(&value);
                 }
             }
-            TextInputEvent::Preedit(text) => {
+            InputTextEvent::Preedit(text) => {
                 let mut state = self.state.lock().unwrap();
                 if state.preedit != text {
                     state.preedit = text;
                     self.dirty.store(true, Ordering::Relaxed);
                 }
             }
-            TextInputEvent::Key(key) => {
-                let changed = matches!(key, TextInputKey::Backspace | TextInputKey::Delete);
+            InputTextEvent::Key(key) => {
+                let changed = matches!(key, InputTextKey::Backspace | InputTextKey::Delete);
                 if changed {
                     self.push_undo(self.snapshot());
                 }
@@ -313,7 +313,7 @@ impl CustomNode for TextInputComponent {
                     cb(&value);
                 }
             }
-            TextInputEvent::Enter => {
+            InputTextEvent::Enter => {
                 let mut state = self.state.lock().unwrap();
                 if !state.preedit.is_empty() {
                     state.preedit.clear();
@@ -325,13 +325,13 @@ impl CustomNode for TextInputComponent {
                     cb(&value);
                 }
             }
-            TextInputEvent::Undo => {
+            InputTextEvent::Undo => {
                 self.undo();
             }
-            TextInputEvent::Redo => {
+            InputTextEvent::Redo => {
                 self.redo();
             }
-            TextInputEvent::CancelComposition => {
+            InputTextEvent::CancelComposition => {
                 let mut state = self.state.lock().unwrap();
                 if !state.preedit.is_empty() {
                     state.preedit.clear();
@@ -507,17 +507,17 @@ mod tests {
 
     use crate::engine::bridge::text::FallbackTextMeasurer;
 
-    fn make_component(value: &str, placeholder: &str) -> TextInputComponent {
-        TextInputComponent::new(value, placeholder, Arc::new(FallbackTextMeasurer))
+    fn make_component(value: &str, placeholder: &str) -> InputTextComponent {
+        InputTextComponent::new(value, placeholder, Arc::new(FallbackTextMeasurer))
     }
 
     #[test]
     fn preedit_is_replaced_by_ime_commit() {
         let input = make_component("abc", "");
-        input.handle_text_input(TextInputEvent::Preedit("にほ".into()));
+        input.handle_text_input(InputTextEvent::Preedit("にほ".into()));
         assert_eq!(input.state().preedit, "にほ");
 
-        input.handle_text_input(TextInputEvent::Commit("日本".into()));
+        input.handle_text_input(InputTextEvent::Commit("日本".into()));
         let state = input.state();
         assert_eq!(state.value, "abc日本");
         assert!(state.preedit.is_empty());
@@ -526,37 +526,37 @@ mod tests {
     #[test]
     fn editing_uses_utf8_character_boundaries() {
         let input = make_component("a日b", "");
-        input.handle_text_input(TextInputEvent::Key(TextInputKey::Left));
-        input.handle_text_input(TextInputEvent::Key(TextInputKey::Backspace));
+        input.handle_text_input(InputTextEvent::Key(InputTextKey::Left));
+        input.handle_text_input(InputTextEvent::Key(InputTextKey::Backspace));
         assert_eq!(input.state().value, "ab");
     }
 
     #[test]
     fn undo_redo_restores_value_and_caret() {
         let input = make_component("", "");
-        input.handle_text_input(TextInputEvent::Insert("abc".into()));
+        input.handle_text_input(InputTextEvent::Insert("abc".into()));
         assert_eq!(input.state().value, "abc");
 
-        input.handle_text_input(TextInputEvent::Undo);
+        input.handle_text_input(InputTextEvent::Undo);
         assert_eq!(input.state().value, "");
 
-        input.handle_text_input(TextInputEvent::Redo);
+        input.handle_text_input(InputTextEvent::Redo);
         assert_eq!(input.state().value, "abc");
     }
 
     #[test]
     fn paste_inserts_at_caret() {
         let input = make_component("ab", "");
-        input.handle_text_input(TextInputEvent::Key(TextInputKey::Left));
-        input.handle_text_input(TextInputEvent::Paste("XY".into()));
+        input.handle_text_input(InputTextEvent::Key(InputTextKey::Left));
+        input.handle_text_input(InputTextEvent::Paste("XY".into()));
         assert_eq!(input.state().value, "aXYb");
     }
 
     #[test]
     fn enter_keeps_value_and_clears_preedit() {
         let input = make_component("abc", "");
-        input.handle_text_input(TextInputEvent::Preedit("にほ".into()));
-        input.handle_text_input(TextInputEvent::Enter);
+        input.handle_text_input(InputTextEvent::Preedit("にほ".into()));
+        input.handle_text_input(InputTextEvent::Enter);
         let state = input.state();
         assert_eq!(state.value, "abc");
         assert!(state.preedit.is_empty());
@@ -587,12 +587,12 @@ mod tests {
         let cb: Arc<OnValueChange> = Arc::new(move |v: &str| {
             received_clone.lock().unwrap().push(v.to_string());
         });
-        let input = TextInputComponent::with_on_change("", "", Arc::new(FallbackTextMeasurer), cb);
+        let input = InputTextComponent::with_on_change("", "", Arc::new(FallbackTextMeasurer), cb);
 
-        input.handle_text_input(TextInputEvent::Insert("hello".into()));
+        input.handle_text_input(InputTextEvent::Insert("hello".into()));
         assert_eq!(*received.lock().unwrap(), vec!["hello"]);
 
-        input.handle_text_input(TextInputEvent::Insert(" world".into()));
+        input.handle_text_input(InputTextEvent::Insert(" world".into()));
         assert_eq!(*received.lock().unwrap(), vec!["hello", "hello world"]);
     }
 
@@ -604,10 +604,10 @@ mod tests {
         let cb: Arc<OnValueChange> = Arc::new(move |v: &str| {
             received_clone.lock().unwrap().push(v.to_string());
         });
-        let input = TextInputComponent::with_on_enter("", "", Arc::new(FallbackTextMeasurer), cb);
+        let input = InputTextComponent::with_on_enter("", "", Arc::new(FallbackTextMeasurer), cb);
 
-        input.handle_text_input(TextInputEvent::Insert("https://example.com".into()));
-        input.handle_text_input(TextInputEvent::Enter);
+        input.handle_text_input(InputTextEvent::Insert("https://example.com".into()));
+        input.handle_text_input(InputTextEvent::Enter);
         assert_eq!(*received.lock().unwrap(), vec!["https://example.com"]);
     }
 

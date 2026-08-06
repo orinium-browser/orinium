@@ -26,8 +26,8 @@ use crate::engine::renderer_model::{
 };
 use crate::engine::ui::button::ButtonComponent;
 use crate::engine::ui::custom_node::{ContentSize, CustomNode, PointerEvent};
-use crate::engine::ui::input_text::TextInputComponent;
-use crate::engine::ui::input_text_types::TextInputEvent;
+use crate::engine::ui::input_text::InputTextComponent;
+use crate::engine::ui::input_text_types::InputTextEvent;
 use crate::platform::renderer::text_measurer::PlatformTextMeasurer;
 
 /// Horizontal and vertical spacing between chrome elements.
@@ -80,7 +80,7 @@ struct BrowserToolbar {
     /// Reload current page button.
     reload_button: ButtonComponent,
     /// URL entry bar.
-    url_bar: TextInputComponent,
+    url_bar: InputTextComponent,
 }
 
 impl BrowserToolbar {
@@ -100,7 +100,7 @@ impl BrowserToolbar {
             LABEL_COLOR,
             Arc::clone(&measurer),
         );
-        let url_bar = TextInputComponent::new("", "Enter URL", measurer);
+        let url_bar = InputTextComponent::new("", "Enter URL", measurer);
         Self {
             back_button,
             reload_button,
@@ -326,7 +326,7 @@ impl Chrome for BasicChrome {
             let url = self.toolbar.url_bar.state().value;
             self.toolbar
                 .url_bar
-                .handle_text_input(TextInputEvent::Enter);
+                .handle_text_input(InputTextEvent::Enter);
             match Url::parse(&url).or_else(|_| Url::parse(&format!("https://{url}"))) {
                 Ok(url) => ChromeAction::Navigate(url),
                 Err(_) => {
@@ -342,12 +342,12 @@ impl Chrome for BasicChrome {
             } else if let Some(key) = key {
                 self.toolbar
                     .url_bar
-                    .handle_text_input(TextInputEvent::Key(key))
+                    .handle_text_input(InputTextEvent::Key(key))
             } else if !ctrl && !self.toolbar.url_bar.is_composing() {
                 event.text.as_ref().is_some_and(|text| {
                     self.toolbar
                         .url_bar
-                        .handle_text_input(TextInputEvent::Insert(text.to_string()))
+                        .handle_text_input(InputTextEvent::Insert(text.to_string()))
                 })
             } else {
                 false
@@ -363,9 +363,9 @@ impl Chrome for BasicChrome {
 
     fn ime_event(&mut self, event: &Ime) -> ChromeAction {
         let event = match event {
-            Ime::Preedit(text, _) => TextInputEvent::Preedit(text.clone()),
-            Ime::Commit(text) => TextInputEvent::Commit(text.clone()),
-            Ime::Disabled => TextInputEvent::CancelComposition,
+            Ime::Preedit(text, _) => InputTextEvent::Preedit(text.clone()),
+            Ime::Commit(text) => InputTextEvent::Commit(text.clone()),
+            Ime::Disabled => InputTextEvent::CancelComposition,
             Ime::Enabled => return ChromeAction::None,
         };
 
@@ -550,7 +550,7 @@ mod tests {
         chrome
             .toolbar
             .url_bar
-            .handle_text_input(TextInputEvent::Insert("zzz".into()));
+            .handle_text_input(InputTextEvent::Insert("zzz".into()));
         chrome.sync_url(Some("https://example.com"));
         assert_eq!(
             chrome.toolbar.url_bar.state().value,

@@ -5,7 +5,7 @@ use ui_layout::Style;
 use crate::engine::layouter::types::{Background, TextStyle};
 use crate::engine::renderer_model::DrawCommand;
 
-use super::input_text_types::TextInputEvent;
+use super::input_text_types::InputTextEvent;
 
 /// Platform-neutral pointer event delivered to a custom node.
 ///
@@ -121,7 +121,7 @@ pub trait CustomNode: std::fmt::Debug + Send + Sync + 'static {
     }
 
     /// Applies a platform-neutral text editing event.
-    fn handle_text_input(&self, _event: TextInputEvent) -> bool {
+    fn handle_text_input(&self, _event: InputTextEvent) -> bool {
         false
     }
 

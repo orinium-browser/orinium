@@ -2,7 +2,7 @@
 
 /// Editing keys understood by engine-owned text inputs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextInputKey {
+pub enum InputTextKey {
     Backspace,
     Delete,
     Left,
@@ -13,11 +13,11 @@ pub enum TextInputKey {
 
 /// Platform-neutral text and IME input delivered to a custom node.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TextInputEvent {
+pub enum InputTextEvent {
     Insert(String),
     Preedit(String),
     Commit(String),
-    Key(TextInputKey),
+    Key(InputTextKey),
     Enter,
     Undo,
     Redo,
@@ -27,7 +27,7 @@ pub enum TextInputEvent {
 
 /// Mutable editing state for a single-line text input.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TextInputState {
+pub struct InputTextState {
     pub value: String,
     pub preedit: String,
     pub caret: usize,

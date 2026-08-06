@@ -23,8 +23,8 @@ src/engine/ui/
     ├── inline_cache.rs       # CSS size resolution for custom nodes
     ├── button.rs             # ButtonComponent
     ├── image.rs              # ImageComponent
-    ├── text_input.rs         # TextInputComponent (IME-aware)
-    ├── text_input_types.rs   # TextInputEvent / TextInputKey / TextInputState
+    ├── text_input.rs         # InputTextComponent (IME-aware)
+    ├── text_input_types.rs   # InputTextEvent / InputTextKey / InputTextState
     └── registry.rs           # ComponentRegistry + CustomNodeFactory
 ```
 
@@ -69,7 +69,7 @@ Every component implements this trait, which requires `'static` and `Debug`.
 | `preserves_intrinsic_aspect_ratio() -> bool`                       | Scale the other axis from the intrinsic ratio when one axis is set                                           |
 | `accepts_text_input() -> bool`                                     | Whether the node accepts keyboard / IME input                                                                |
 | `set_focused(&self, bool)` / `is_focused()`                        | Update / read keyboard focus                                                                                 |
-| `handle_text_input(&self, TextInputEvent) -> bool`                 | Handle a platform-neutral editing event                                                                      |
+| `handle_text_input(&self, InputTextEvent) -> bool`                 | Handle a platform-neutral editing event                                                                      |
 | `is_composing() -> bool`                                           | Whether an IME preedit is active                                                                             |
 | `on_pointer_event(&self, PointerEvent) -> bool`                    | Handle a platform-neutral pointer event (`Move` / `Down` / `Up` / `Leave`)                                   |
 | `set_hovered(&self, bool)` / `is_hovered()`                        | Update / read the hover state                                                                                |
@@ -102,10 +102,10 @@ implementing an `ui_layout` trait connects the two sides. A single
 `OuterDisplay` captured at construction time selects the formatting context via
 `formatting_context()`, and `layout(ctx)` returns a `LayoutBox`:
 
-| `formatting_context` | Returned `LayoutBox`                                              |
-| -------------------- | ----------------------------------------------------------------- |
+| `formatting_context`   | Returned `LayoutBox`                                              |
+| ---------------------- | ----------------------------------------------------------------- |
 | `OuterDisplay::Block`  | `LayoutBox::BlockBox(BoxModel)` (border-box `Rect` at the origin) |
-| `OuterDisplay::Inline` | `LayoutBox::InlineBox(InlineBox)` (spans + box model)              |
+| `OuterDisplay::Inline` | `LayoutBox::InlineBox(InlineBox)` (spans + box model)             |
 | `OuterDisplay::None`   | `LayoutBox::None` (element is skipped)                            |
 
 `measure()` is implemented for every context so flex sizing and auto-height work
@@ -191,7 +191,7 @@ matching component, choosing a bridge based on `display: outer`.
 | -------- | -------------------- | ----------------------------------------------------------------------------- |
 | `button` | `ButtonComponent`    | label (inner_text), background color, text color, text measurer               |
 | `img`    | `ImageComponent`     | decodes `Image` from the `src` attribute; `alt` text for fallback             |
-| `input`  | `TextInputComponent` | `value` / `placeholder` attributes, text measurer, optional DOM sync callback |
+| `input`  | `InputTextComponent` | `value` / `placeholder` attributes, text measurer, optional DOM sync callback |
 
 `NodeKind::Custom.layout_style` holds a clone of the `Style`, identical to the one
 passed to `LayoutNode::with_children(style, …)`.
@@ -222,11 +222,11 @@ key / IME events
    ▼ engine::input
    ▼ hit_test → finds NodeKind::Custom
    ▼ focus_text_input → set_focused()
-   ▼ dispatch_text_input → handle_text_input(TextInputEvent)
-   ▼ TextInputComponent（updates value / caret / preedit）
+   ▼ dispatch_text_input → handle_text_input(InputTextEvent)
+   ▼ InputTextComponent（updates value / caret / preedit）
 ```
 
-`TextInputEvent` is a platform-neutral editing event passed from the `platform`
+`InputTextEvent` is a platform-neutral editing event passed from the `platform`
 input device implementation into `engine` (`Insert` / `Preedit` / `Commit` /
 `Key` / `Enter` / `Undo` / `Redo` / `Paste` / `CancelComposition`).
 
@@ -260,11 +260,11 @@ pub struct ButtonComponent {
 - A11y: `role() = "button"`, `label()` = label text
 - Dirty tracking: `needs_repaint()` returns whether the visual state changed since last check
 
-### 6.2 `TextInputComponent` (`text_input.rs`)
+### 6.2 `InputTextComponent` (`text_input.rs`)
 
 ```rust
-pub struct TextInputComponent {
-    state: RefCell<TextInputState>,      // value / caret / preedit / focused
+pub struct InputTextComponent {
+    state: RefCell<InputTextState>,      // value / caret / preedit / focused
     placeholder: SmolStr,
     measurer: Arc<dyn TextMeasurer<TextStyle>>,
     // private: undo / redo history, dirty flag, on_value_change callback
@@ -275,7 +275,7 @@ pub struct TextInputComponent {
 - Drawing: emits text, caret, and IME preedit underline (`draw_text_input()`
   measures glyph widths with the measurer for layout)
 - Input: `accepts_text_input() = true`; handles Backspace / Delete / arrows / Home / End
-- IME: `Preedit` / `Commit` / `CancelComposition` managed via `TextInputState.preedit`;
+- IME: `Preedit` / `Commit` / `CancelComposition` managed via `InputTextState.preedit`;
   `composition_rect()` reports the preedit underline rect in content-box coordinates
 - Editing: `Enter` clears preedit; `Undo` / `Redo` walk the edit history; `Paste` inserts
   at the caret
@@ -319,7 +319,7 @@ pub struct ImageComponent {
 - **`draw` vs `draw_sized`**: `draw` is the fallback, `draw_sized` is the primary path.
   CSS size reaches the component via bridge → `resolve_border_box_size` → `draw_sized(size)`
 - **`engine` must not reference `platform`**: input is abstracted as platform-neutral
-  `TextInputEvent` / `PointerEvent`; text measurement goes through the
+  `InputTextEvent` / `PointerEvent`; text measurement goes through the
   `bridge::text::TextMeasurer` trait
 - **`ui_layout` dependency**: the bridges and `Style` depend on the `ui_layout` crate,
   pinned to a git revision. Do not bump casually.

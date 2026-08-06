@@ -9,8 +9,8 @@ use crate::engine::renderer_model::Image;
 use crate::engine::ui::button::ButtonComponent;
 use crate::engine::ui::custom_node::CustomNode;
 use crate::engine::ui::image::ImageComponent;
+use crate::engine::ui::input_text::InputTextComponent;
 use crate::engine::ui::input_text::OnValueChange;
-use crate::engine::ui::input_text::TextInputComponent;
 
 /// A channel for reporting text-input value changes to the DOM owner.
 ///
@@ -61,7 +61,7 @@ impl ComponentRegistry {
         let mut registry = Self::default();
         registry.register(Box::new(ButtonFactory));
         registry.register(Box::new(ImageFactory));
-        registry.register(Box::new(TextInputFactory));
+        registry.register(Box::new(InputTextFactory));
         registry
     }
 
@@ -131,14 +131,15 @@ impl CustomNodeFactory for ImageFactory {
     }
 }
 
-struct TextInputFactory;
+struct InputTextFactory;
 
-impl CustomNodeFactory for TextInputFactory {
+impl CustomNodeFactory for InputTextFactory {
     fn tags(&self) -> &'static [&'static str] {
         &["input"]
     }
 
     fn create(&self, _tag: &str, ctx: &CustomNodeContext) -> Option<Arc<dyn CustomNode>> {
+        let type_ = (ctx.get_attr)("type").unwrap_or_default();
         let value = (ctx.get_attr)("value").unwrap_or_default();
         let placeholder = (ctx.get_attr)("placeholder").unwrap_or_default();
         let on_value_change = ctx.write_back.as_ref().map(|(sender, node_id)| {
@@ -149,9 +150,9 @@ impl CustomNodeFactory for TextInputFactory {
             }) as Arc<OnValueChange>
         });
         Some(Arc::new(if let Some(cb) = on_value_change {
-            TextInputComponent::with_on_change(value, placeholder, Arc::clone(&ctx.measurer), cb)
+            InputTextComponent::with_on_change(value, placeholder, Arc::clone(&ctx.measurer), cb)
         } else {
-            TextInputComponent::new(value, placeholder, Arc::clone(&ctx.measurer))
+            InputTextComponent::new(value, placeholder, Arc::clone(&ctx.measurer))
         }))
     }
 }

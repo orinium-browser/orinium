@@ -22,8 +22,8 @@ src/engine/ui/
     ├── inline_cache.rs       # カスタムノードの CSS サイズ解決
     ├── button.rs             # ButtonComponent
     ├── image.rs              # ImageComponent
-    ├── text_input.rs         # TextInputComponent（IME 対応）
-    ├── text_input_types.rs   # TextInputEvent / TextInputKey / TextInputState
+    ├── text_input.rs         # InputTextComponent（IME 対応）
+    ├── text_input_types.rs   # InputTextEvent / InputTextKey / InputTextState
     └── registry.rs           # ComponentRegistry + CustomNodeFactory
 ```
 
@@ -68,7 +68,7 @@ src/engine/ui/
 | `preserves_intrinsic_aspect_ratio() -> bool`          | 片側指定時にもう片側を固有アスペクト比に従わせる                                                 |
 | `accepts_text_input() -> bool`                        | キーボード / IME 入力を受け付けるか                                                              |
 | `set_focused(&self, bool)` / `is_focused()`           | フォーカス状態の更新・参照                                                                       |
-| `handle_text_input(&self, TextInputEvent) -> bool`    | プラットフォーム非依存の編集イベントを処理                                                       |
+| `handle_text_input(&self, InputTextEvent) -> bool`    | プラットフォーム非依存の編集イベントを処理                                                       |
 | `is_composing() -> bool`                              | IME プレエディット（変換中）かどうか                                                             |
 | `on_pointer_event(&self, PointerEvent) -> bool`       | プラットフォーム非依存のポインタイベント（`Move`/`Down`/`Up`/`Leave`）を処理                     |
 | `set_hovered(&self, bool)` / `is_hovered()`           | ホバー状態の更新・参照                                                                           |
@@ -99,11 +99,11 @@ src/engine/ui/
 保持する解決済み `OuterDisplay` が `formatting_context()` で整形文脈を選び、
 `layout(ctx)` で `LayoutBox` を返します:
 
-| `formatting_context` | 返す `LayoutBox`                                                           |
-| -------------------- | -------------------------------------------------------------------------- |
-| `OuterDisplay::Block`  | `LayoutBox::BlockBox(BoxModel)`（原点の border-box `Rect`）               |
-| `OuterDisplay::Inline` | `LayoutBox::InlineBox(InlineBox)`（spans + box model）                     |
-| `OuterDisplay::None`   | `LayoutBox::None`（要素はスキップ）                                        |
+| `formatting_context`   | 返す `LayoutBox`                                            |
+| ---------------------- | ----------------------------------------------------------- |
+| `OuterDisplay::Block`  | `LayoutBox::BlockBox(BoxModel)`（原点の border-box `Rect`） |
+| `OuterDisplay::Inline` | `LayoutBox::InlineBox(InlineBox)`（spans + box model）      |
+| `OuterDisplay::None`   | `LayoutBox::None`（要素はスキップ）                         |
 
 `measure()` は全コンテキストで実装しており、display 値によらず flex の
 sizing と auto-height が機能します。
@@ -186,7 +186,7 @@ Vec<DrawCommand> → platform::renderer
 | -------- | -------------------- | ------------------------------------------------ |
 | `button` | `ButtonComponent`    | ラベル（inner_text）、背景色、テキスト色         |
 | `img`    | `ImageComponent`     | `src` 属性からデコード済み `Image` を引き当て    |
-| `input`  | `TextInputComponent` | `value` / `placeholder` 属性、テキストメジャーラ |
+| `input`  | `InputTextComponent` | `value` / `placeholder` 属性、テキストメジャーラ |
 
 `NodeKind::Custom.layout_style` には `Style` の clone が入り、
 `LayoutNode::with_children(style, …)` の `style` と同一の値が保存されます。
@@ -215,11 +215,11 @@ Vec<DrawCommand> → platform::renderer
    ▼ engine::input
    ▼ hit_test → NodeKind::Custom を検出
    ▼ focus_text_input → set_focused()
-   ▼ dispatch_text_input → handle_text_input(TextInputEvent)
-   ▼ TextInputComponent（状態更新: value / caret / preedit）
+   ▼ dispatch_text_input → handle_text_input(InputTextEvent)
+   ▼ InputTextComponent（状態更新: value / caret / preedit）
 ```
 
-`TextInputEvent` はプラットフォーム非依存の編集イベントで、
+`InputTextEvent` はプラットフォーム非依存の編集イベントで、
 `platform` 側の入力デバイス実装から `engine` へ渡されます
 （`Insert` / `Preedit` / `Commit` / `Key` / `Enter` / `Undo` / `Redo` / `Paste` / `CancelComposition`）。
 
@@ -248,11 +248,11 @@ pub struct ButtonComponent {
 - アクセシビリティ: `role() = "button"`、`label()` = ラベル文字列
 - dirty 追跡: `needs_repaint()` は直前のチェック以降に視覚状態が変化したかを返す（フラグを消費）
 
-### 6.2 `TextInputComponent`（`text_input.rs`）
+### 6.2 `InputTextComponent`（`text_input.rs`）
 
 ```rust
-pub struct TextInputComponent {
-    state: RefCell<TextInputState>,      // value / caret / preedit / focused
+pub struct InputTextComponent {
+    state: RefCell<InputTextState>,      // value / caret / preedit / focused
     placeholder: SmolStr,
     measurer: Arc<dyn TextMeasurer<TextStyle>>,
     // private: undo / redo 履歴、dirty フラグ、on_value_change コールバック
@@ -263,7 +263,7 @@ pub struct TextInputComponent {
 - 描画: テキスト、キャレット、IME プレエディット下線を生成
   （`draw_text_input()` がメジャーラで字形幅を測定して配置）
 - 入力: `accepts_text_input() = true`。バックスペース / Delete / 矢印 / Home / End を処理
-- IME: `Preedit` / `Commit` / `CancelComposition` を `TextInputState.preedit` で管理。
+- IME: `Preedit` / `Commit` / `CancelComposition` を `InputTextState.preedit` で管理。
   `composition_rect()` が変換中下線の content-box 座標矩形を返す
 - 編集: `Enter` は preedit をクリア。`Undo` / `Redo` は編集履歴を辿る。`Paste` はキャレット位置へ挿入
 - DOM 同期: `on_value_change` コールバック（ファクトリで配線）がユーザー編集時に DOM `value` 属性を更新
@@ -303,7 +303,7 @@ pub struct ImageComponent {
 - **`draw` vs `draw_sized`**: `draw` はフォールバック、`draw_sized` が主経路。
   CSS サイズはブリッジ → `resolve_border_box_size` → `draw_sized(size)` で届く
 - **`engine` は `platform` を参照しない**: 入力イベントはプラットフォーム非依存の
-  `TextInputEvent` / `PointerEvent` で抽象化し、計測は `bridge::text::TextMeasurer` トレイト経由
+  `InputTextEvent` / `PointerEvent` で抽象化し、計測は `bridge::text::TextMeasurer` トレイト経由
 - **`ui_layout` クレート依存**: ブリッジと `Style` は git 依存の `ui_layout` に固定（rev 指定）。
   不用意に bump しない
 - **`ContentSize` 型**: サイズは `ContentSize { width, height }` で型レベルで content-box を明示。

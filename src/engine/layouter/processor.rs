@@ -171,7 +171,7 @@ mod tests {
     use crate::engine::html::parser::Parser as HtmlParser;
     use crate::engine::layouter::types::NodeKind;
     use crate::engine::ui::custom_node::CustomNode;
-    use crate::engine::ui::input_text_types::TextInputEvent;
+    use crate::engine::ui::input_text_types::InputTextEvent;
 
     fn sample_task(write_back_sender: Option<DomWriteBack>) -> LayoutTask {
         let html = "<html><body><p>hello</p><input value='a'></body></html>";
@@ -240,7 +240,7 @@ mod tests {
         let input = find_custom(&result.info, "textbox")
             .expect("input component must exist in the Info tree");
 
-        input.handle_text_input(TextInputEvent::Insert("hello".into()));
+        input.handle_text_input(InputTextEvent::Insert("hello".into()));
 
         let (node_id, value) = rx
             .recv_timeout(Duration::from_secs(5))

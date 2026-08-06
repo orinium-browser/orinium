@@ -5,7 +5,7 @@ use std::sync::Arc;
 use super::layouter::types::{InfoNode, NodeKind};
 use super::ui::PointerEvent;
 use super::ui::custom_node::CustomNode;
-use super::ui::input_text_types::TextInputEvent;
+use super::ui::input_text_types::InputTextEvent;
 use ui_layout::LayoutNode;
 /// ヒットしたノード情報
 pub struct HitItem<'a> {
@@ -245,7 +245,7 @@ pub fn focus_text_input(info: &InfoNode, target: Option<&Arc<dyn CustomNode>>) -
 }
 
 /// Sends an editing event to the focused text input, if one exists.
-pub fn dispatch_text_input(info: &InfoNode, event: TextInputEvent) -> bool {
+pub fn dispatch_text_input(info: &InfoNode, event: InputTextEvent) -> bool {
     if let NodeKind::Custom { node, .. } = &info.kind
         && node.accepts_text_input()
         && node.is_focused()
@@ -290,8 +290,8 @@ mod tests {
     use crate::engine::bridge::text::{FallbackTextMeasurer, TextMeasurer};
     use crate::engine::layouter::types::{Color, ContainerStyle, TextStyle};
     use crate::engine::ui::button::ButtonComponent;
-    use crate::engine::ui::input_text::TextInputComponent;
-    use crate::engine::ui::input_text_types::TextInputEvent;
+    use crate::engine::ui::input_text::InputTextComponent;
+    use crate::engine::ui::input_text_types::InputTextEvent;
     use std::sync::Arc;
 
     fn input_info(node: Arc<dyn CustomNode>) -> InfoNode {
@@ -314,8 +314,8 @@ mod tests {
     fn focus_and_dispatch_target_one_input() {
         let measurer: Arc<dyn TextMeasurer<TextStyle>> = Arc::new(FallbackTextMeasurer);
         let first: Arc<dyn CustomNode> =
-            Arc::new(TextInputComponent::new("", "", Arc::clone(&measurer)));
-        let second: Arc<dyn CustomNode> = Arc::new(TextInputComponent::new("", "", measurer));
+            Arc::new(InputTextComponent::new("", "", Arc::clone(&measurer)));
+        let second: Arc<dyn CustomNode> = Arc::new(InputTextComponent::new("", "", measurer));
         let root = InfoNode {
             kind: NodeKind::LineBreak,
             children: vec![
@@ -329,13 +329,13 @@ mod tests {
         assert!(second.is_focused());
         assert!(dispatch_text_input(
             &root,
-            TextInputEvent::Commit("日本".into())
+            InputTextEvent::Commit("日本".into())
         ));
     }
 
     #[test]
     fn hit_custom_node_finds_innermost_custom() {
-        let node: Arc<dyn CustomNode> = Arc::new(TextInputComponent::new(
+        let node: Arc<dyn CustomNode> = Arc::new(InputTextComponent::new(
             "",
             "",
             Arc::new(FallbackTextMeasurer),
