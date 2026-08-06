@@ -86,7 +86,8 @@ struct BrowserToolbar {
 impl BrowserToolbar {
     /// Create a new toolbar with placeholder components.
     fn new() -> Self {
-        let measurer: Arc<dyn TextMeasurer<TextStyle>> = Arc::new(PlatformTextMeasurer);
+        let measurer: Arc<dyn TextMeasurer<TextStyle>> =
+            Arc::new(PlatformTextMeasurer::new().unwrap());
         let back_button = ButtonComponent::new(
             "← Back",
             BUTTON_BACKGROUND,

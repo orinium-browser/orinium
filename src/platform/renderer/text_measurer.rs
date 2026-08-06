@@ -4,6 +4,7 @@ use crate::engine::bridge::text::{
 use crate::engine::layouter::types::{FontStyle, LineHeight, TextStyle as EngineTextStyle};
 use crate::platform::renderer::text::global_font;
 use crate::platform::renderer::text::text::*;
+use crate::platform::renderer::text_cache::TextShapeCache;
 
 use orinium_text::TextStyle as OriTextStyle;
 use orinium_text::{
@@ -15,20 +16,25 @@ fn quantize_font_size(px: f32) -> f32 {
     (px * 64.0).round() / 64.0
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct PlatformTextMeasurer;
+pub struct PlatformTextMeasurer {
+    cache: TextShapeCache,
+}
 
 impl PlatformTextMeasurer {
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         if global_font::global_font_system_ready() {
-            Ok(Self)
+            Ok(Self {
+                cache: TextShapeCache::new(),
+            })
         } else {
             Err("no system font found".into())
         }
     }
 
     pub fn from_bytes(_id: &str, _bytes: Vec<u8>) -> Result<Self, Box<dyn std::error::Error>> {
-        Ok(Self)
+        Ok(Self {
+            cache: TextShapeCache::new(),
+        })
     }
 }
 
@@ -73,9 +79,16 @@ impl TextMeasurer<EngineTextStyle> for PlatformTextMeasurer {
         let mut layouter = TextLayouter::new();
 
         let t_shape = std::time::Instant::now();
-        let shaped = global_font::with_global_font_system(|fs| {
-            layouter.shape_text(fs, &req.text, &ori_style)
-        });
+        let shaped = if let Some(shaped) = self.cache.get(&req.text, &ori_style) {
+            shaped
+        } else {
+            let shaped = global_font::with_global_font_system(|fs| {
+                layouter.shape_text(fs, &req.text, &ori_style)
+            });
+
+            self.cache.insert(&req.text, &ori_style, shaped.clone());
+            shaped
+        };
         let t_shape = t_shape.elapsed();
 
         let line_ranges: Vec<(usize, usize)> = req
@@ -169,9 +182,16 @@ impl TextMeasurer<EngineTextStyle> for PlatformTextMeasurer {
 
         let mut layouter = TextLayouter::new();
 
-        let shaped = global_font::with_global_font_system(|fs| {
-            layouter.shape_text(fs, &req.text, &ori_style)
-        });
+        let shaped = if let Some(shaped) = self.cache.get(&req.text, &ori_style) {
+            shaped
+        } else {
+            let shaped = global_font::with_global_font_system(|fs| {
+                layouter.shape_text(fs, &req.text, &ori_style)
+            });
+
+            self.cache.insert(&req.text, &ori_style, shaped.clone());
+            shaped
+        };
 
         let clusters: Vec<GlyphCluster> = shaped
             .fragments

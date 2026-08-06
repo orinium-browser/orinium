@@ -62,7 +62,6 @@ enum PagePhase {
     CssApplied,
 }
 
-#[derive(Debug)]
 pub struct WebView {
     phase: PagePhase,
 
@@ -78,7 +77,7 @@ pub struct WebView {
 
     needs_redraw: bool,
 
-    text_measurer: Option<PlatformTextMeasurer>,
+    text_measurer: Option<Arc<PlatformTextMeasurer>>,
 
     system_color_scheme: ColorScheme,
 
@@ -377,7 +376,7 @@ impl WebView {
 
     fn ensure_text_measurer(&mut self) {
         if self.text_measurer.is_none() {
-            self.text_measurer = Some(PlatformTextMeasurer::new().unwrap());
+            self.text_measurer = Some(Arc::new(PlatformTextMeasurer::new().unwrap()));
         }
     }
 
@@ -413,7 +412,7 @@ impl WebView {
             snapshot,
             root,
             resolved_styles: Arc::clone(&self.resolved_styles),
-            measurer: Arc::new(*self.text_measurer.as_ref().unwrap()),
+            measurer: self.text_measurer.clone().unwrap(),
             system_color_scheme: self.system_color_scheme,
             images: self.images.clone(),
             parent: InheritedCss {
