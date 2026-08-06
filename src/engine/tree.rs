@@ -4,7 +4,7 @@
 //! - `TreeNode<T>` stores a node value, parent, and children.
 //! - `Tree<T>` stores a root node and provides traversal, mapping, and searching utilities.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::rc::{Rc, Weak};
 
@@ -118,6 +118,12 @@ impl<T> TreeNode<T> {
 #[derive(Clone)]
 pub struct Tree<T> {
     pub root: NodeRef<T>,
+    /// Monotonic counter bumped by [`Tree::mark_dirty`] on every mutation.
+    ///
+    /// Layout snapshots cache the DOM and are reused while the version is
+    /// unchanged, so any mutation (currently the text-input write-back, later
+    /// JS DOM manipulation) must call [`Tree::mark_dirty`] to invalidate them.
+    version: Cell<u64>,
 }
 
 impl<T: Clone> Tree<T> {
@@ -125,7 +131,18 @@ impl<T: Clone> Tree<T> {
     pub fn new(root_value: T) -> Self {
         Self {
             root: TreeNode::new(root_value),
+            version: Cell::new(0),
         }
+    }
+
+    /// Records a DOM mutation by bumping the tree's version counter.
+    pub fn mark_dirty(&self) {
+        self.version.set(self.version.get() + 1);
+    }
+
+    /// The current mutation version of the tree.
+    pub fn version(&self) -> u64 {
+        self.version.get()
     }
 
     /// Recursively traverse all nodes, applying a function
@@ -167,6 +184,7 @@ impl<T: Clone> Tree<T> {
 
         Tree {
             root: map_node(&self.root, &f),
+            version: Cell::new(0),
         }
     }
 
@@ -191,6 +209,7 @@ impl<T: Clone> Tree<T> {
 
         Tree {
             root: map_node(&self.root, &f),
+            version: Cell::new(0),
         }
     }
 

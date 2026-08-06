@@ -7,9 +7,15 @@
 //!
 //! Per-frame lightweight layout (`LayoutEngine::layout`) still runs on the UI
 //! thread as before. This processor only handles the heavier tree build.
+//!
+//! Tasks are coalesced: each task carries a monotonic sequence number, and the
+//! worker skips a task as soon as a newer one has been queued. The newest task
+//! always captures the latest DOM/styles/images, so the skipped build's work
+//! would be wasted anyway.
 
 use std::collections::HashMap;
-use std::sync::{mpsc, Arc};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread;
 
 use ui_layout::LayoutNode;
@@ -25,14 +31,17 @@ use crate::engine::ui::registry::DomWriteBack;
 
 /// The complete set of inputs the builder needs to run on the worker thread.
 pub struct LayoutTask {
-    pub snapshot: DomSnapshot,
+    pub snapshot: Arc<DomSnapshot>,
     pub root: NodeId,
-    pub resolved_styles: ResolvedStyles,
+    pub resolved_styles: Arc<ResolvedStyles>,
     pub measurer: Arc<dyn TextMeasurer<TextStyle>>,
     pub images: HashMap<String, Image>,
     pub parent: InheritedCss,
     pub chain: ElementChain,
     pub write_back_sender: Option<DomWriteBack>,
+    /// Monotonic sequence number used to coalesce stale tasks. Assigned by
+    /// [`LayoutProcessor::send`], ignore when constructing a task.
+    pub version: u64,
 }
 
 /// The layout the builder finished on the worker thread.
@@ -69,6 +78,9 @@ unsafe impl Send for SendableResult {}
 pub struct LayoutProcessor {
     cmd_tx: mpsc::Sender<LayoutCommand>,
     result_rx: mpsc::Receiver<SendableResult>,
+    /// Latest task sequence number; shared with the worker so it can detect
+    /// and skip superseded tasks.
+    latest: Arc<AtomicU64>,
 }
 
 impl std::fmt::Debug for LayoutProcessor {
@@ -88,10 +100,19 @@ impl LayoutProcessor {
         let (cmd_tx, cmd_rx) = mpsc::channel::<LayoutCommand>();
         let (result_tx, result_rx) = mpsc::channel::<SendableResult>();
 
+        let latest = Arc::new(AtomicU64::new(0));
+        let worker_latest = Arc::clone(&latest);
+
         thread::spawn(move || {
             for cmd in cmd_rx {
                 match cmd {
                     LayoutCommand::Build(task) => {
+                        // A newer task queued after this one supersedes it: the
+                        // newest task's snapshot/styles/images include every
+                        // change made up to that point, so skip the build.
+                        if task.version < worker_latest.load(Ordering::SeqCst) {
+                            continue;
+                        }
                         let (layout, info) = build_layout_and_info_from_snapshot(
                             &task.snapshot,
                             task.root,
@@ -109,11 +130,20 @@ impl LayoutProcessor {
             }
         });
 
-        Self { cmd_tx, result_rx }
+        Self {
+            cmd_tx,
+            result_rx,
+            latest,
+        }
     }
 
     /// Sends a layout task to the worker.
+    ///
+    /// The task is stamped with a fresh sequence number; tasks that fall behind
+    /// the newest one are skipped by the worker.
     pub fn send(&self, task: LayoutTask) {
+        let mut task = task;
+        task.version = self.latest.fetch_add(1, Ordering::SeqCst) + 1;
         let _ = self.cmd_tx.send(LayoutCommand::Build(task));
     }
 
@@ -146,9 +176,9 @@ mod tests {
         let (snapshot, _dom_refs) = DomSnapshot::from_tree(&dom.root);
         let root = snapshot.roots()[0];
         LayoutTask {
-            snapshot,
+            snapshot: Arc::new(snapshot),
             root,
-            resolved_styles: ResolvedStyles::default(),
+            resolved_styles: Arc::new(ResolvedStyles::default()),
             measurer: Arc::new(FallbackTextMeasurer),
             images: HashMap::new(),
             parent: InheritedCss {
@@ -156,6 +186,7 @@ mod tests {
             },
             chain: Vec::new(),
             write_back_sender,
+            version: 0,
         }
     }
 

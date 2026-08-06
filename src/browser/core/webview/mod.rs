@@ -72,7 +72,7 @@ pub struct WebView {
     loaded_css: Vec<String>,
     images: HashMap<String, Image>,
 
-    resolved_styles: layouter::css_resolver::ResolvedStyles,
+    resolved_styles: Arc<layouter::css_resolver::ResolvedStyles>,
     layout_and_info: Option<(LayoutNode, InfoNode)>,
 
     needs_redraw: bool,
@@ -88,9 +88,32 @@ pub struct WebView {
     layout_pending: bool,
     /// Live DOM references for the latest snapshot, used to apply write-backs.
     layout_dom_refs: Vec<Weak<RefCell<TreeNode<HtmlNodeType>>>>,
+    /// Cached DOM snapshot, reused while the tree's mutation version is
+    /// unchanged so that CSS/image-driven relayouts skip the full clone.
+    snapshot_cache: Option<SnapshotCache>,
     /// Channel on which text inputs report value write-backs (received here).
     write_back_tx: mpsc::Sender<(u32, String)>,
     write_back_rx: mpsc::Receiver<(u32, String)>,
+}
+
+/// A DOM snapshot paired with the tree mutation version it was built from.
+///
+/// The snapshot and its live references stay valid as long as the DOM has not
+/// mutated (`Tree::version()` unchanged). They are shared with layout tasks via
+/// `Arc` instead of being cloned per task.
+struct SnapshotCache {
+    dom_version: u64,
+    snapshot: Arc<DomSnapshot>,
+    dom_refs: Vec<Weak<RefCell<TreeNode<HtmlNodeType>>>>,
+}
+
+impl std::fmt::Debug for SnapshotCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SnapshotCache")
+            .field("dom_version", &self.dom_version)
+            .field("snapshot", &self.snapshot)
+            .finish()
+    }
 }
 
 /// DocumentInfo holds basic information about the HTML document.
@@ -146,7 +169,7 @@ impl WebView {
             loaded_css: Vec::new(),
             images: HashMap::new(),
 
-            resolved_styles: layouter::css_resolver::ResolvedStyles::default(),
+            resolved_styles: Arc::new(layouter::css_resolver::ResolvedStyles::default()),
             layout_and_info: None,
 
             needs_redraw: false,
@@ -161,6 +184,7 @@ impl WebView {
             layout_processor: layouter::LayoutProcessor::new(),
             layout_pending: false,
             layout_dom_refs: Vec::new(),
+            snapshot_cache: None,
             write_back_tx,
             write_back_rx,
         }
@@ -183,7 +207,7 @@ impl WebView {
                     layouter::css_resolver::StyleOrigin::UserAgent,
                 );
                 layouter::css_resolver::append_resolved_styles(
-                    &mut self.resolved_styles,
+                    Arc::make_mut(&mut self.resolved_styles),
                     ua_styles,
                 );
 
@@ -259,11 +283,12 @@ impl WebView {
             title: parsed.title,
         };
         self.docment_info = Some(docment_info);
+        self.snapshot_cache = None;
 
         for inline_css in &parsed.inline_styles {
             if let Ok(sheet) = CssParser::new(inline_css).parse() {
                 layouter::css_resolver::append_resolved_styles(
-                    &mut self.resolved_styles,
+                    Arc::make_mut(&mut self.resolved_styles),
                     layouter::css_resolver::CssResolver::resolve(&sheet),
                 );
             }
@@ -304,6 +329,12 @@ impl WebView {
     /// This is a stub method for now.
     pub fn update_page(&mut self) {
         self.ensure_text_measurer();
+        // The caller mutated the DOM (e.g. TreeNode::replace_child), which does
+        // not bump Tree::version on its own. Mark the tree dirty so the cached
+        // snapshot is rebuilt instead of reused stale.
+        if let Some(doc_info) = self.docment_info.as_mut() {
+            doc_info.dom.mark_dirty();
+        }
         self.update_layout();
     }
 
@@ -311,7 +342,10 @@ impl WebView {
         &mut self,
         resolved: layouter::css_resolver::ResolvedStyles,
     ) {
-        layouter::css_resolver::append_resolved_styles(&mut self.resolved_styles, resolved);
+        layouter::css_resolver::append_resolved_styles(
+            Arc::make_mut(&mut self.resolved_styles),
+            resolved,
+        );
         self.update_layout();
     }
 
@@ -350,13 +384,30 @@ impl WebView {
         self.ensure_text_measurer();
 
         let doc_info = self.docment_info.as_ref().unwrap();
-        let (snapshot, dom_refs) = DomSnapshot::from_tree(&doc_info.dom.root);
+        let dom_version = doc_info.dom.version();
+        let (snapshot, dom_refs) = match &self.snapshot_cache {
+            // The DOM is unchanged since the last snapshot: reuse it instead of
+            // re-cloning the whole tree (CSS/image relayouts dominate).
+            Some(cache) if cache.dom_version == dom_version => {
+                (Arc::clone(&cache.snapshot), cache.dom_refs.clone())
+            }
+            _ => {
+                let (snapshot, dom_refs) = DomSnapshot::from_tree(&doc_info.dom.root);
+                let snapshot = Arc::new(snapshot);
+                self.snapshot_cache = Some(SnapshotCache {
+                    dom_version,
+                    snapshot: Arc::clone(&snapshot),
+                    dom_refs: dom_refs.clone(),
+                });
+                (snapshot, dom_refs)
+            }
+        };
         let root = snapshot.roots()[0];
 
         let task = layouter::LayoutTask {
             snapshot,
             root,
-            resolved_styles: self.resolved_styles.clone(),
+            resolved_styles: Arc::clone(&self.resolved_styles),
             measurer: Arc::new(*self.text_measurer.as_ref().unwrap()),
             images: self.images.clone(),
             parent: InheritedCss {
@@ -367,6 +418,7 @@ impl WebView {
             },
             chain: Vec::new(),
             write_back_sender: Some(self.write_back_tx.clone()),
+            version: 0,
         };
         self.layout_dom_refs = dom_refs;
         self.layout_processor.send(task);
@@ -384,13 +436,21 @@ impl WebView {
 
     /// Applies value write-backs reported by text inputs to the live DOM.
     fn drain_write_backs(&mut self) {
+        let mut applied = false;
         while let Ok((node_id, value)) = self.write_back_rx.try_recv() {
             if let Some(weak) = self.layout_dom_refs.get(node_id as usize)
                 && let Some(node) = weak.upgrade()
             {
                 node.borrow_mut().value.set_attr("value", value);
+                applied = true;
             }
             self.needs_redraw = true;
+        }
+
+        // The DOM mutated, so the cached snapshot is stale and must be rebuilt
+        // on the next relayout. Future JS mutations must also bump the version.
+        if applied && let Some(doc_info) = self.docment_info.as_mut() {
+            doc_info.dom.mark_dirty();
         }
     }
 
@@ -408,7 +468,7 @@ impl WebView {
         self.pending_images.clear();
         self.loaded_css.clear();
         self.images.clear();
-        self.resolved_styles.clear();
+        Arc::make_mut(&mut self.resolved_styles).clear();
         self.layout_and_info = None;
 
         self.needs_redraw = false;
@@ -420,6 +480,7 @@ impl WebView {
         self.layout_processor = layouter::LayoutProcessor::new();
         self.layout_pending = false;
         self.layout_dom_refs.clear();
+        self.snapshot_cache = None;
         let (write_back_tx, write_back_rx) = mpsc::channel();
         self.write_back_tx = write_back_tx;
         self.write_back_rx = write_back_rx;
