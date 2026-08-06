@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-
 use url::Url;
 use winit::event::{ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 
@@ -570,8 +569,8 @@ impl BrowserUi {
             {
                 // The page is laid out below the chrome, so the visible height
                 // is the window height minus the chrome height.
-                let visible_height = (window_height / sf - self.renderer.chrome.chrome_height(width))
-                    .max(0.0);
+                let visible_height =
+                    (window_height / sf - self.renderer.chrome.chrome_height(width)).max(0.0);
                 *scroll_offset_y = (*scroll_offset_y + scroll_y).clamp(
                     0.0,
                     (layout
