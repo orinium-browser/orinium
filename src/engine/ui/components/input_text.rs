@@ -9,7 +9,7 @@ use ui_layout::Style;
 use crate::engine::bridge::text::{self, TextMeasureRequest};
 use crate::engine::layouter::types::{Background, Color, TextStyle};
 use crate::engine::renderer_model::{Brush, DrawCommand, FillRule, Paint, rect_path};
-use crate::engine::ui::components::text_input_types::{
+use crate::engine::ui::components::input_text_types::{
     TextInputEvent, TextInputKey, TextInputState,
 };
 use crate::engine::ui::custom_node::{ContentSize, CustomNode};

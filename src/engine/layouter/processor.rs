@@ -171,7 +171,7 @@ mod tests {
     use crate::engine::html::parser::Parser as HtmlParser;
     use crate::engine::layouter::types::NodeKind;
     use crate::engine::ui::custom_node::CustomNode;
-    use crate::engine::ui::text_input_types::TextInputEvent;
+    use crate::engine::ui::input_text_types::TextInputEvent;
 
     fn sample_task(write_back_sender: Option<DomWriteBack>) -> LayoutTask {
         let html = "<html><body><p>hello</p><input value='a'></body></html>";

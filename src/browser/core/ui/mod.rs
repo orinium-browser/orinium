@@ -14,7 +14,7 @@ use crate::engine::layouter::types::ColorScheme;
 use crate::engine::renderer_model::DrawCommand;
 use crate::engine::ui::PointerEvent;
 use crate::engine::ui::custom_node::CustomNode;
-use crate::engine::ui::text_input_types::{TextInputEvent, TextInputKey};
+use crate::engine::ui::input_text_types::{TextInputEvent, TextInputKey};
 use crate::platform::renderer::gpu::GpuRenderer;
 
 use super::BrowserCommand;

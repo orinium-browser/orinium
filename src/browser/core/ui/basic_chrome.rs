@@ -26,8 +26,8 @@ use crate::engine::renderer_model::{
 };
 use crate::engine::ui::button::ButtonComponent;
 use crate::engine::ui::custom_node::{ContentSize, CustomNode, PointerEvent};
-use crate::engine::ui::text_input::TextInputComponent;
-use crate::engine::ui::text_input_types::TextInputEvent;
+use crate::engine::ui::input_text::TextInputComponent;
+use crate::engine::ui::input_text_types::TextInputEvent;
 use crate::platform::renderer::text_measurer::PlatformTextMeasurer;
 
 /// Horizontal and vertical spacing between chrome elements.

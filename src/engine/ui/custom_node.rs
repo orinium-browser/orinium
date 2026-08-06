@@ -5,7 +5,7 @@ use ui_layout::Style;
 use crate::engine::layouter::types::{Background, TextStyle};
 use crate::engine::renderer_model::DrawCommand;
 
-use super::text_input_types::TextInputEvent;
+use super::input_text_types::TextInputEvent;
 
 /// Platform-neutral pointer event delivered to a custom node.
 ///

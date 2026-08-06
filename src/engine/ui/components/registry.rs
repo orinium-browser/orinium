@@ -9,8 +9,8 @@ use crate::engine::renderer_model::Image;
 use crate::engine::ui::button::ButtonComponent;
 use crate::engine::ui::custom_node::CustomNode;
 use crate::engine::ui::image::ImageComponent;
-use crate::engine::ui::text_input::OnValueChange;
-use crate::engine::ui::text_input::TextInputComponent;
+use crate::engine::ui::input_text::OnValueChange;
+use crate::engine::ui::input_text::TextInputComponent;
 
 /// A channel for reporting text-input value changes to the DOM owner.
 ///

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use super::layouter::types::{InfoNode, NodeKind};
 use super::ui::PointerEvent;
 use super::ui::custom_node::CustomNode;
-use super::ui::text_input_types::TextInputEvent;
+use super::ui::input_text_types::TextInputEvent;
 use ui_layout::LayoutNode;
 /// ヒットしたノード情報
 pub struct HitItem<'a> {
@@ -290,8 +290,8 @@ mod tests {
     use crate::engine::bridge::text::{FallbackTextMeasurer, TextMeasurer};
     use crate::engine::layouter::types::{Color, ContainerStyle, TextStyle};
     use crate::engine::ui::button::ButtonComponent;
-    use crate::engine::ui::text_input::TextInputComponent;
-    use crate::engine::ui::text_input_types::TextInputEvent;
+    use crate::engine::ui::input_text::TextInputComponent;
+    use crate::engine::ui::input_text_types::TextInputEvent;
     use std::sync::Arc;
 
     fn input_info(node: Arc<dyn CustomNode>) -> InfoNode {
