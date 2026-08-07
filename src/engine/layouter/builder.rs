@@ -14,8 +14,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ui_layout::{
-    AlignItems, BoxSizing, Display, FlexDirection, InnerDisplay, ItemFragment, JustifyContent,
-    LayoutChild, LayoutNode, Length, LengthOrAuto, OuterDisplay, Style,
+    AlignItems, AutoSizeBehavior, BoxSizing, Display, FlexDirection, InnerDisplay, ItemFragment,
+    JustifyContent, LayoutChild, LayoutNode, Length, LengthOrAuto, OuterDisplay, Style,
 };
 
 use super::css_resolver::ResolvedStyles;
@@ -335,6 +335,9 @@ pub fn build_layout_and_info_from_snapshot(
             if let Some(tag) = html_node.tag_name()
                 && registry.tags().contains(&tag)
             {
+                // Replaced elements (button/img/input) size by their intrinsic
+                // content when auto-sized, not by filling the containing block.
+                style.size.auto_behavior = AutoSizeBehavior::ShrinkToFit;
                 let node = registry
                     .create(&CustomNodeContext {
                         tag,
