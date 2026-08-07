@@ -99,10 +99,10 @@ handles positioning.
 `ui_layout`'s layout engine does not know about `CustomNode`, so a **bridge**
 implementing an `ui_layout` trait connects the two sides. A single
 `CustomNodeBridge` implements the unified `CustomLayouter` trait; the resolved
-`OuterDisplay` captured at construction time selects the formatting context via
-`formatting_context()`, and `layout(ctx)` returns a `LayoutBox`:
+`OuterDisplay` read from its owned `ui_layout::Style` selects the formatting
+context, and `layout(ctx)` returns a `LayoutBox`:
 
-| `formatting_context`   | Returned `LayoutBox`                                              |
+| `style.display.outer`  | Returned `LayoutBox`                                              |
 | ---------------------- | ----------------------------------------------------------------- |
 | `OuterDisplay::Block`  | `LayoutBox::BlockBox(BoxModel)` (border-box `Rect` at the origin) |
 | `OuterDisplay::Inline` | `LayoutBox::InlineBox(InlineBox)` (spans + box model)             |
@@ -112,13 +112,16 @@ implementing an `ui_layout` trait connects the two sides. A single
 regardless of the display value.
 
 The bridge holds `layout_style: ui_layout::Style` (resolved CSS) and passes it to
-`resolve_border_box_size()` to compute the final box size.
+`resolve_border_box_size()` to compute the final box size. It is exposed via the
+`style()` accessor; the layout engine reads `display.outer` from it, so the trait
+does not need to report the formatting context.
 
-Custom objects are attached to the layout tree as `LayoutChild::Custom(CustomChild)`
-(the old `LayoutChild::Object` variant no longer exists); the engine stores each
-object's `CustomObjectResult` on the `CustomChild`. Both the renderer and the hit
-tester read the result back from the tree via `LayoutChild::custom_result()`, so no
-side channel (thread-local cache / `layout_id`) is needed.
+Custom objects are attached to the layout tree as
+`LayoutChild::Custom(Box<CustomChild>)` (the old `LayoutChild::Object` variant no
+longer exists); the engine stores each object's `CustomObjectResult` on the
+`CustomChild`. Both the renderer and the hit tester read the result back from the
+tree via `LayoutChild::custom_result()`, so no side channel (thread-local cache /
+`layout_id`) is needed.
 
 ### 3.3 Size resolution (`inline_cache.rs`)
 
@@ -167,7 +170,7 @@ HTML DOM
    │  builder.rs（CUSTOM_TAGS = ["button", "img", "input"]）
    ▼
 Component creation（Rc<dyn CustomNode>）
-   │  CustomNodeBridge::new(node, style, display.outer)（LayoutChild::Custom）
+   │  CustomNodeBridge::new(node, style)（LayoutChild::Custom）
    ▼
 LayoutNode + InfoNode（NodeKind::Custom）
    │  ui_layout::LayoutEngine::layout()

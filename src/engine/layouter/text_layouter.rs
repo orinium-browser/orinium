@@ -3,8 +3,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ui_layout::{
-    BoxModel, CustomLayouter, InlineBox, LayoutBox, LayoutContext, LineSpan, MeasureResult,
-    OuterDisplay, Rect,
+    BoxModel, CustomLayouter, InlineBox, LayoutBox, LayoutContext, LineSpan, MeasureResult, Rect,
 };
 
 use crate::engine::bridge::text::GlyphCluster;
@@ -288,10 +287,6 @@ impl Drop for TextFlowLayouter {
 }
 
 impl CustomLayouter for TextFlowLayouter {
-    fn formatting_context(&self) -> OuterDisplay {
-        OuterDisplay::Inline
-    }
-
     fn layout(&mut self, ctx: &LayoutContext) -> LayoutBox {
         let result = self.compute_layout(ctx.available_inline_size, ctx.start_pos);
         let spans = result.spans.clone();

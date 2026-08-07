@@ -1,9 +1,9 @@
 //! Unified layout bridge for custom nodes.
 //!
 //! Implements the unified [`CustomLayouter`] trait for both block and inline
-//! formatting contexts. The resolved [`OuterDisplay`] is captured at
-//! construction time and drives [`formatting_context`](Self::formatting_context)
-//! plus the shape of the returned [`LayoutBox`].
+//! formatting contexts. The resolved [`OuterDisplay`] is taken from the owned
+//! [`Style`] (`layout_style`) at layout time and drives the shape of the
+//! returned [`LayoutBox`].
 
 use ui_layout::{
     BoxModel, CustomLayouter, InlineBox, LayoutBox, LayoutContext, OuterDisplay, Rect, Style,
@@ -19,8 +19,8 @@ use super::inline_cache::resolve_border_box_size;
 /// and padding when sizing the element. The actual content rendering is
 /// delegated to a separate [`CustomNode`](crate::engine::ui::CustomNode).
 ///
-/// The element participates in the formatting context reported by
-/// [`formatting_context`](Self::formatting_context):
+/// The element participates in the formatting context reported by the owned
+/// style's [`OuterDisplay`]:
 ///
 /// - [`OuterDisplay::Inline`] → `layout` returns a
 ///   [`LayoutBox::InlineBox`] carrying positioned [`LineSpan`]s plus the box
@@ -35,20 +35,19 @@ use super::inline_cache::resolve_border_box_size;
 pub struct CustomNodeBridge {
     node: std::sync::Arc<dyn CustomNode>,
     layout_style: Style,
-    display: OuterDisplay,
 }
 
 impl CustomNodeBridge {
-    pub fn new(
-        node: std::sync::Arc<dyn CustomNode>,
-        layout_style: Style,
-        display: OuterDisplay,
-    ) -> Self {
-        Self {
-            node,
-            layout_style,
-            display,
-        }
+    pub fn new(node: std::sync::Arc<dyn CustomNode>, layout_style: Style) -> Self {
+        Self { node, layout_style }
+    }
+
+    /// Returns the resolved [`Style`] that drives this element's layout.
+    ///
+    /// The layout engine reads [`Display`](ui_layout::Display) from it, exactly
+    /// as for a childless `LayoutNode`.
+    pub fn style(&self) -> &Style {
+        &self.layout_style
     }
 
     fn resolve_size(
@@ -70,12 +69,8 @@ impl CustomNodeBridge {
 }
 
 impl CustomLayouter for CustomNodeBridge {
-    fn formatting_context(&self) -> OuterDisplay {
-        self.display
-    }
-
     fn layout(&mut self, ctx: &LayoutContext) -> LayoutBox {
-        match self.display {
+        match self.layout_style.display.outer {
             OuterDisplay::Inline => {
                 let x = ctx.start_pos.0;
                 let y = ctx.start_pos.1;
@@ -190,20 +185,21 @@ mod tests {
     }
 
     fn bridge(display: OuterDisplay) -> CustomNodeBridge {
+        let mut style = Style::default();
+        style.display.outer = display;
         CustomNodeBridge::new(
             std::sync::Arc::new(TestNode {
                 width: 200.0,
                 height: 100.0,
             }),
-            Style::default(),
-            display,
+            style,
         )
     }
 
     #[test]
     fn block_context_reports_block() {
         assert_eq!(
-            bridge(OuterDisplay::Block).formatting_context(),
+            bridge(OuterDisplay::Block).style().display.outer,
             OuterDisplay::Block
         );
     }
@@ -233,7 +229,7 @@ mod tests {
     #[test]
     fn inline_context_reports_inline() {
         assert_eq!(
-            bridge(OuterDisplay::Inline).formatting_context(),
+            bridge(OuterDisplay::Inline).style().display.outer,
             OuterDisplay::Inline
         );
     }
@@ -273,7 +269,7 @@ mod tests {
     #[test]
     fn none_context_skips_element() {
         let mut b = bridge(OuterDisplay::None);
-        assert_eq!(b.formatting_context(), OuterDisplay::None);
+        assert_eq!(b.style().display.outer, OuterDisplay::None);
         assert!(matches!(
             b.layout(&LayoutContext::default()),
             LayoutBox::None
@@ -284,19 +280,20 @@ mod tests {
     fn inline_size_resolves_against_available_inline_size() {
         use ui_layout::{Length, LengthOrAuto};
 
+        let mut style = Style {
+            size: ui_layout::SizeStyle {
+                width: LengthOrAuto::Length(Length::Percent(50.0)),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        style.display.outer = OuterDisplay::Inline;
         let b = CustomNodeBridge::new(
             std::sync::Arc::new(TestNode {
                 width: 200.0,
                 height: 100.0,
             }),
-            Style {
-                size: ui_layout::SizeStyle {
-                    width: LengthOrAuto::Length(Length::Percent(50.0)),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            OuterDisplay::Inline,
+            style,
         );
         let mut b = b;
         let ctx = LayoutContext {

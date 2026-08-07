@@ -119,9 +119,12 @@ impl CustomNode for ButtonComponent {
             (label_width, label_height)
         };
 
+        // Intrinsic size is the pure label extent.  CSS padding/border is
+        // added by the bridge, so it must not be baked in here (otherwise a
+        // styled button would pad its content twice).
         ContentSize {
-            width: label_width + 24.0,
-            height: label_height.max(24.0) + 12.0,
+            width: label_width,
+            height: label_height,
         }
     }
 
@@ -207,9 +210,10 @@ mod tests {
     fn intrinsic_size_measured_from_label() {
         let button = component();
         let size = button.intrinsic_size();
-        // Fallback measurer produces a non-zero width for "OK".
-        assert!(size.width > 24.0);
-        assert!(size.height >= 24.0);
+        // Intrinsic size is the pure label extent; CSS padding is applied by
+        // the bridge on top of it.
+        assert!(size.width > 0.0);
+        assert!(size.height > 0.0);
     }
 
     #[test]

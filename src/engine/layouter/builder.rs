@@ -319,7 +319,8 @@ pub fn build_layout_and_info_from_snapshot(
                     outer: OuterDisplay::Inline,
                     inner: InnerDisplay::Flow,
                 };
-                let layout = LayoutNode::with_children(inline_style, [layouter]);
+                let layout =
+                    LayoutNode::with_children(inline_style.clone(), [(inline_style, layouter)]);
                 let info = InfoNode {
                     kind,
                     children: Vec::new(),
@@ -349,8 +350,7 @@ pub fn build_layout_and_info_from_snapshot(
                     })
                     .expect("registry must handle every tag it reports");
 
-                let bridge =
-                    CustomNodeBridge::new(Arc::clone(&node), style.clone(), style.display.outer);
+                let bridge = CustomNodeBridge::new(Arc::clone(&node), style.clone());
                 let kind = NodeKind::Custom {
                     node,
                     scroll_x: overflow.x,
@@ -361,7 +361,7 @@ pub fn build_layout_and_info_from_snapshot(
                     layout_style: style.clone(),
                     text_style: text_style.clone(),
                 };
-                let layout = LayoutNode::with_children(style, [bridge]);
+                let layout = LayoutNode::with_children(style.clone(), [(style, bridge)]);
                 let info = InfoNode {
                     kind,
                     children: Vec::new(),
@@ -436,8 +436,13 @@ pub fn build_layout_and_info_from_snapshot(
                         };
                         let (layouter, kind) =
                             create_text_node(t, text_style.clone(), line_height, &*measurer);
+                        let mut inline_style = style.clone();
+                        inline_style.display = Display {
+                            outer: OuterDisplay::Inline,
+                            inner: InnerDisplay::Flow,
+                        };
                         child_slots.push(ChildSlot::Inline(
-                            layouter.into(),
+                            (inline_style, layouter).into(),
                             InfoNode {
                                 kind,
                                 children: Vec::new(),

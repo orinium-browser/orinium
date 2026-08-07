@@ -96,10 +96,10 @@ src/engine/ui/
 `CustomNode` は `ui_layout` のレイアウトエンジンに直接は認識されないため、
 `ui_layout` が提供するトレイトを実装した**ブリッジ**が両者をつなぎます。
 単一の `CustomNodeBridge` が統一トレイト `CustomLayouter` を実装し、構築時に
-保持する解決済み `OuterDisplay` が `formatting_context()` で整形文脈を選び、
+保持する解決済み `ui_layout::Style` の `display.outer` が整形文脈を選び、
 `layout(ctx)` で `LayoutBox` を返します:
 
-| `formatting_context`   | 返す `LayoutBox`                                            |
+| `style.display.outer` | 返す `LayoutBox`                                            |
 | ---------------------- | ----------------------------------------------------------- |
 | `OuterDisplay::Block`  | `LayoutBox::BlockBox(BoxModel)`（原点の border-box `Rect`） |
 | `OuterDisplay::Inline` | `LayoutBox::InlineBox(InlineBox)`（spans + box model）      |
@@ -110,10 +110,12 @@ sizing と auto-height が機能します。
 
 ブリッジは `layout_style: ui_layout::Style`（CSS 解決済みスタイル）を持ち、
 `resolve_border_box_size()` に渡して実際のボックスサイズを求めます。
+`style()` アクセサで外部から参照できます（レイアウトエンジンはこれを読んで
+`display.outer` を判定するため、トレイトに整形文脈を問い合わせる必要はありません）。
 
-カスタムオブジェクトは `LayoutChild::Custom(CustomChild)` としてレイアウトツリーに
-組み込まれます（旧 `LayoutChild::Object` は廃止）。エンジンは各オブジェクトの
-`CustomObjectResult` を `CustomChild` に保存し、描画層・ヒットテストは
+カスタムオブジェクトは `LayoutChild::Custom(Box<CustomChild>)` として
+レイアウトツリーに組み込まれます（旧 `LayoutChild::Object` は廃止）。エンジンは
+各オブジェクトの `CustomObjectResult` を `CustomChild` に保存し、描画層・ヒットテストは
 `LayoutChild::custom_result()` でツリーから直接読み取るため、
 スレッドローカルキャッシュや `layout_id` は不要です。
 
@@ -162,7 +164,7 @@ HTML DOM
    │  builder.rs（CUSTOM_TAGS = ["button", "img", "input"]）
    ▼
 コンポーネント生成（Rc<dyn CustomNode>）
-   │  CustomNodeBridge::new(node, style, display.outer)（LayoutChild::Custom）
+   │  CustomNodeBridge::new(node, style)（LayoutChild::Custom）
    ▼
 LayoutNode + InfoNode（NodeKind::Custom）
    │  ui_layout::LayoutEngine::layout()
