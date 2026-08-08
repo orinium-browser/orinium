@@ -267,124 +267,132 @@
 <a href=#267 id=267 data-nosnippet>267</a>        }
 <a href=#268 id=268 data-nosnippet>268</a>    }
 <a href=#269 id=269 data-nosnippet>269</a>
-<a href=#270 id=270 data-nosnippet>270</a>    <span class="doccomment">/// Returns the current window size for the given window as `(width, height)` in floating-point pixels.
-<a href=#271 id=271 data-nosnippet>271</a>    </span><span class="kw">pub fn </span>window_size(<span class="kw-2">&amp;</span><span class="self">self</span>, window_id: WindowId) -&gt; (f32, f32) {
-<a href=#272 id=272 data-nosnippet>272</a>        <span class="kw">match </span><span class="self">self</span>.windows.get(<span class="kw-2">&amp;</span>window_id) {
-<a href=#273 id=273 data-nosnippet>273</a>            <span class="prelude-val">Some</span>(ui) =&gt; {
-<a href=#274 id=274 data-nosnippet>274</a>                <span class="kw">let </span>(width, height) = ui.window_size();
-<a href=#275 id=275 data-nosnippet>275</a>                (width <span class="kw">as </span>f32, height <span class="kw">as </span>f32)
-<a href=#276 id=276 data-nosnippet>276</a>            }
-<a href=#277 id=277 data-nosnippet>277</a>            <span class="prelude-val">None </span>=&gt; (
-<a href=#278 id=278 data-nosnippet>278</a>                <span class="self">self</span>.default_window_size.<span class="number">0 </span><span class="kw">as </span>f32,
-<a href=#279 id=279 data-nosnippet>279</a>                <span class="self">self</span>.default_window_size.<span class="number">1 </span><span class="kw">as </span>f32,
-<a href=#280 id=280 data-nosnippet>280</a>            ),
-<a href=#281 id=281 data-nosnippet>281</a>        }
-<a href=#282 id=282 data-nosnippet>282</a>    }
-<a href=#283 id=283 data-nosnippet>283</a>
-<a href=#284 id=284 data-nosnippet>284</a>    <span class="doccomment">/// Returns the window title for the given window.
-<a href=#285 id=285 data-nosnippet>285</a>    </span><span class="kw">pub fn </span>window_title(<span class="kw-2">&amp;</span><span class="self">self</span>, window_id: WindowId) -&gt; String {
-<a href=#286 id=286 data-nosnippet>286</a>        <span class="kw">match </span><span class="self">self</span>.windows.get(<span class="kw-2">&amp;</span>window_id) {
-<a href=#287 id=287 data-nosnippet>287</a>            <span class="prelude-val">Some</span>(ui) =&gt; ui.window_title(),
-<a href=#288 id=288 data-nosnippet>288</a>            <span class="prelude-val">None </span>=&gt; <span class="self">self</span>.default_window_title.clone(),
+<a href=#270 id=270 data-nosnippet>270</a>    <span class="doccomment">/// Advances background page work for a window between OS events.
+<a href=#271 id=271 data-nosnippet>271</a>    ///
+<a href=#272 id=272 data-nosnippet>272</a>    /// This keeps animated custom controls, such as an active audio timer,
+<a href=#273 id=273 data-nosnippet>273</a>    /// repainting even when the user is not moving the pointer.
+<a href=#274 id=274 data-nosnippet>274</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>poll_window(<span class="kw-2">&amp;mut </span><span class="self">self</span>, window_id: WindowId) -&gt; bool {
+<a href=#275 id=275 data-nosnippet>275</a>        <span class="macro">matches!</span>(<span class="self">self</span>.tick(window_id), BrowserCommand::RequestRedraw)
+<a href=#276 id=276 data-nosnippet>276</a>    }
+<a href=#277 id=277 data-nosnippet>277</a>
+<a href=#278 id=278 data-nosnippet>278</a>    <span class="doccomment">/// Returns the current window size for the given window as `(width, height)` in floating-point pixels.
+<a href=#279 id=279 data-nosnippet>279</a>    </span><span class="kw">pub fn </span>window_size(<span class="kw-2">&amp;</span><span class="self">self</span>, window_id: WindowId) -&gt; (f32, f32) {
+<a href=#280 id=280 data-nosnippet>280</a>        <span class="kw">match </span><span class="self">self</span>.windows.get(<span class="kw-2">&amp;</span>window_id) {
+<a href=#281 id=281 data-nosnippet>281</a>            <span class="prelude-val">Some</span>(ui) =&gt; {
+<a href=#282 id=282 data-nosnippet>282</a>                <span class="kw">let </span>(width, height) = ui.window_size();
+<a href=#283 id=283 data-nosnippet>283</a>                (width <span class="kw">as </span>f32, height <span class="kw">as </span>f32)
+<a href=#284 id=284 data-nosnippet>284</a>            }
+<a href=#285 id=285 data-nosnippet>285</a>            <span class="prelude-val">None </span>=&gt; (
+<a href=#286 id=286 data-nosnippet>286</a>                <span class="self">self</span>.default_window_size.<span class="number">0 </span><span class="kw">as </span>f32,
+<a href=#287 id=287 data-nosnippet>287</a>                <span class="self">self</span>.default_window_size.<span class="number">1 </span><span class="kw">as </span>f32,
+<a href=#288 id=288 data-nosnippet>288</a>            ),
 <a href=#289 id=289 data-nosnippet>289</a>        }
 <a href=#290 id=290 data-nosnippet>290</a>    }
 <a href=#291 id=291 data-nosnippet>291</a>
-<a href=#292 id=292 data-nosnippet>292</a>    <span class="doccomment">/// Ticks the given window's UI and forwards its fetch requests to the network.
-<a href=#293 id=293 data-nosnippet>293</a>    </span><span class="kw">fn </span>tick(<span class="kw-2">&amp;mut </span><span class="self">self</span>, window_id: WindowId) -&gt; BrowserCommand {
-<a href=#294 id=294 data-nosnippet>294</a>        <span class="self">self</span>.handle_network_messages();
-<a href=#295 id=295 data-nosnippet>295</a>
-<a href=#296 id=296 data-nosnippet>296</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(ui) = <span class="self">self</span>.windows.get_mut(<span class="kw-2">&amp;</span>window_id) <span class="kw">else </span>{
-<a href=#297 id=297 data-nosnippet>297</a>            <span class="kw">return </span>BrowserCommand::None;
-<a href=#298 id=298 data-nosnippet>298</a>        };
-<a href=#299 id=299 data-nosnippet>299</a>        <span class="kw">let </span>outcome = ui.tick();
-<a href=#300 id=300 data-nosnippet>300</a>
-<a href=#301 id=301 data-nosnippet>301</a>        <span class="kw">for </span>fetch <span class="kw">in </span>outcome.fetches {
-<a href=#302 id=302 data-nosnippet>302</a>            <span class="macro">log::info!</span>(<span class="string">"Fetch requested in App: url={}"</span>, fetch.url);
-<a href=#303 id=303 data-nosnippet>303</a>            <span class="kw">let </span>id =
-<a href=#304 id=304 data-nosnippet>304</a>                <span class="self">self</span>.pending_fetches
-<a href=#305 id=305 data-nosnippet>305</a>                    .insert(window_id, fetch.tab_id, fetch.kind, fetch.url.clone());
-<a href=#306 id=306 data-nosnippet>306</a>            <span class="self">self</span>.network.fetch_async(fetch.url, id);
-<a href=#307 id=307 data-nosnippet>307</a>        }
+<a href=#292 id=292 data-nosnippet>292</a>    <span class="doccomment">/// Returns the window title for the given window.
+<a href=#293 id=293 data-nosnippet>293</a>    </span><span class="kw">pub fn </span>window_title(<span class="kw-2">&amp;</span><span class="self">self</span>, window_id: WindowId) -&gt; String {
+<a href=#294 id=294 data-nosnippet>294</a>        <span class="kw">match </span><span class="self">self</span>.windows.get(<span class="kw-2">&amp;</span>window_id) {
+<a href=#295 id=295 data-nosnippet>295</a>            <span class="prelude-val">Some</span>(ui) =&gt; ui.window_title(),
+<a href=#296 id=296 data-nosnippet>296</a>            <span class="prelude-val">None </span>=&gt; <span class="self">self</span>.default_window_title.clone(),
+<a href=#297 id=297 data-nosnippet>297</a>        }
+<a href=#298 id=298 data-nosnippet>298</a>    }
+<a href=#299 id=299 data-nosnippet>299</a>
+<a href=#300 id=300 data-nosnippet>300</a>    <span class="doccomment">/// Ticks the given window's UI and forwards its fetch requests to the network.
+<a href=#301 id=301 data-nosnippet>301</a>    </span><span class="kw">fn </span>tick(<span class="kw-2">&amp;mut </span><span class="self">self</span>, window_id: WindowId) -&gt; BrowserCommand {
+<a href=#302 id=302 data-nosnippet>302</a>        <span class="self">self</span>.handle_network_messages();
+<a href=#303 id=303 data-nosnippet>303</a>
+<a href=#304 id=304 data-nosnippet>304</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(ui) = <span class="self">self</span>.windows.get_mut(<span class="kw-2">&amp;</span>window_id) <span class="kw">else </span>{
+<a href=#305 id=305 data-nosnippet>305</a>            <span class="kw">return </span>BrowserCommand::None;
+<a href=#306 id=306 data-nosnippet>306</a>        };
+<a href=#307 id=307 data-nosnippet>307</a>        <span class="kw">let </span>outcome = ui.tick();
 <a href=#308 id=308 data-nosnippet>308</a>
-<a href=#309 id=309 data-nosnippet>309</a>        <span class="kw">if </span>outcome.needs_redraw {
-<a href=#310 id=310 data-nosnippet>310</a>            BrowserCommand::RequestRedraw
-<a href=#311 id=311 data-nosnippet>311</a>        } <span class="kw">else </span>{
-<a href=#312 id=312 data-nosnippet>312</a>            BrowserCommand::None
-<a href=#313 id=313 data-nosnippet>313</a>        }
-<a href=#314 id=314 data-nosnippet>314</a>    }
-<a href=#315 id=315 data-nosnippet>315</a>
-<a href=#316 id=316 data-nosnippet>316</a>    <span class="kw">fn </span>handle_network_messages(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
-<a href=#317 id=317 data-nosnippet>317</a>        <span class="kw">let </span>messages = <span class="self">self</span>.network.try_receive();
-<a href=#318 id=318 data-nosnippet>318</a>
-<a href=#319 id=319 data-nosnippet>319</a>        <span class="kw">for </span>msg <span class="kw">in </span>messages {
-<a href=#320 id=320 data-nosnippet>320</a>            <span class="macro">log::info!</span>(<span class="string">"Network message received in App for fetch_id={}"</span>, msg.id);
-<a href=#321 id=321 data-nosnippet>321</a>
-<a href=#322 id=322 data-nosnippet>322</a>            <span class="comment">// pending_fetches から fetch 情報を取得
-<a href=#323 id=323 data-nosnippet>323</a>            </span><span class="kw">let </span><span class="prelude-val">Some</span>((window_id, tab_id, kind, url)) = <span class="self">self</span>.pending_fetches.remove(msg.id) <span class="kw">else </span>{
-<a href=#324 id=324 data-nosnippet>324</a>                <span class="macro">log::warn!</span>(<span class="string">"No pending fetch found for fetch_id={}"</span>, msg.id);
-<a href=#325 id=325 data-nosnippet>325</a>                <span class="kw">continue</span>;
-<a href=#326 id=326 data-nosnippet>326</a>            };
-<a href=#327 id=327 data-nosnippet>327</a>
-<a href=#328 id=328 data-nosnippet>328</a>            <span class="comment">// 該当ウィンドウの UI へ配送
-<a href=#329 id=329 data-nosnippet>329</a>            </span><span class="kw">let </span><span class="prelude-val">Some</span>(ui) = <span class="self">self</span>.windows.get_mut(<span class="kw-2">&amp;</span>window_id) <span class="kw">else </span>{
-<a href=#330 id=330 data-nosnippet>330</a>                <span class="macro">log::warn!</span>(<span class="string">"There is no window called id={:?}"</span>, window_id);
-<a href=#331 id=331 data-nosnippet>331</a>                <span class="kw">continue</span>;
-<a href=#332 id=332 data-nosnippet>332</a>            };
-<a href=#333 id=333 data-nosnippet>333</a>            ui.deliver_fetch(tab_id, kind, url, msg.response);
-<a href=#334 id=334 data-nosnippet>334</a>        }
-<a href=#335 id=335 data-nosnippet>335</a>    }
-<a href=#336 id=336 data-nosnippet>336</a>}
-<a href=#337 id=337 data-nosnippet>337</a>
-<a href=#338 id=338 data-nosnippet>338</a><span class="kw">fn </span>run_with_winit_backend(app: BrowserApp) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#339 id=339 data-nosnippet>339</a>    configure_winit_backend_for_wslg();
-<a href=#340 id=340 data-nosnippet>340</a>    <span class="kw">if </span>env::var_os(<span class="string">"ORINIUM_FORCE_X11"</span>).is_some() {
-<a href=#341 id=341 data-nosnippet>341</a>        configure_winit_backend_forced_x11();
-<a href=#342 id=342 data-nosnippet>342</a>    }
-<a href=#343 id=343 data-nosnippet>343</a>
-<a href=#344 id=344 data-nosnippet>344</a>    run_event_loop(app)
-<a href=#345 id=345 data-nosnippet>345</a>}
-<a href=#346 id=346 data-nosnippet>346</a>
-<a href=#347 id=347 data-nosnippet>347</a><span class="kw">fn </span>run_event_loop(app: BrowserApp) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#348 id=348 data-nosnippet>348</a>    <span class="kw">let </span>event_loop = winit::event_loop::EventLoop::new()<span class="question-mark">?</span>;
-<a href=#349 id=349 data-nosnippet>349</a>    event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
-<a href=#350 id=350 data-nosnippet>350</a>    <span class="kw">let </span><span class="kw-2">mut </span>app = App::new(app);
-<a href=#351 id=351 data-nosnippet>351</a>    event_loop.run_app(<span class="kw-2">&amp;mut </span>app)<span class="question-mark">?</span>;
-<a href=#352 id=352 data-nosnippet>352</a>    <span class="prelude-val">Ok</span>(())
+<a href=#309 id=309 data-nosnippet>309</a>        <span class="kw">for </span>fetch <span class="kw">in </span>outcome.fetches {
+<a href=#310 id=310 data-nosnippet>310</a>            <span class="macro">log::info!</span>(<span class="string">"Fetch requested in App: url={}"</span>, fetch.url);
+<a href=#311 id=311 data-nosnippet>311</a>            <span class="kw">let </span>id =
+<a href=#312 id=312 data-nosnippet>312</a>                <span class="self">self</span>.pending_fetches
+<a href=#313 id=313 data-nosnippet>313</a>                    .insert(window_id, fetch.tab_id, fetch.kind, fetch.url.clone());
+<a href=#314 id=314 data-nosnippet>314</a>            <span class="self">self</span>.network.fetch_async(fetch.url, id);
+<a href=#315 id=315 data-nosnippet>315</a>        }
+<a href=#316 id=316 data-nosnippet>316</a>
+<a href=#317 id=317 data-nosnippet>317</a>        <span class="kw">if </span>outcome.needs_redraw {
+<a href=#318 id=318 data-nosnippet>318</a>            BrowserCommand::RequestRedraw
+<a href=#319 id=319 data-nosnippet>319</a>        } <span class="kw">else </span>{
+<a href=#320 id=320 data-nosnippet>320</a>            BrowserCommand::None
+<a href=#321 id=321 data-nosnippet>321</a>        }
+<a href=#322 id=322 data-nosnippet>322</a>    }
+<a href=#323 id=323 data-nosnippet>323</a>
+<a href=#324 id=324 data-nosnippet>324</a>    <span class="kw">fn </span>handle_network_messages(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+<a href=#325 id=325 data-nosnippet>325</a>        <span class="kw">let </span>messages = <span class="self">self</span>.network.try_receive();
+<a href=#326 id=326 data-nosnippet>326</a>
+<a href=#327 id=327 data-nosnippet>327</a>        <span class="kw">for </span>msg <span class="kw">in </span>messages {
+<a href=#328 id=328 data-nosnippet>328</a>            <span class="macro">log::info!</span>(<span class="string">"Network message received in App for fetch_id={}"</span>, msg.id);
+<a href=#329 id=329 data-nosnippet>329</a>
+<a href=#330 id=330 data-nosnippet>330</a>            <span class="comment">// pending_fetches から fetch 情報を取得
+<a href=#331 id=331 data-nosnippet>331</a>            </span><span class="kw">let </span><span class="prelude-val">Some</span>((window_id, tab_id, kind, url)) = <span class="self">self</span>.pending_fetches.remove(msg.id) <span class="kw">else </span>{
+<a href=#332 id=332 data-nosnippet>332</a>                <span class="macro">log::warn!</span>(<span class="string">"No pending fetch found for fetch_id={}"</span>, msg.id);
+<a href=#333 id=333 data-nosnippet>333</a>                <span class="kw">continue</span>;
+<a href=#334 id=334 data-nosnippet>334</a>            };
+<a href=#335 id=335 data-nosnippet>335</a>
+<a href=#336 id=336 data-nosnippet>336</a>            <span class="comment">// 該当ウィンドウの UI へ配送
+<a href=#337 id=337 data-nosnippet>337</a>            </span><span class="kw">let </span><span class="prelude-val">Some</span>(ui) = <span class="self">self</span>.windows.get_mut(<span class="kw-2">&amp;</span>window_id) <span class="kw">else </span>{
+<a href=#338 id=338 data-nosnippet>338</a>                <span class="macro">log::warn!</span>(<span class="string">"There is no window called id={:?}"</span>, window_id);
+<a href=#339 id=339 data-nosnippet>339</a>                <span class="kw">continue</span>;
+<a href=#340 id=340 data-nosnippet>340</a>            };
+<a href=#341 id=341 data-nosnippet>341</a>            ui.deliver_fetch(tab_id, kind, url, msg.response);
+<a href=#342 id=342 data-nosnippet>342</a>        }
+<a href=#343 id=343 data-nosnippet>343</a>    }
+<a href=#344 id=344 data-nosnippet>344</a>}
+<a href=#345 id=345 data-nosnippet>345</a>
+<a href=#346 id=346 data-nosnippet>346</a><span class="kw">fn </span>run_with_winit_backend(app: BrowserApp) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#347 id=347 data-nosnippet>347</a>    configure_winit_backend_for_wslg();
+<a href=#348 id=348 data-nosnippet>348</a>    <span class="kw">if </span>env::var_os(<span class="string">"ORINIUM_FORCE_X11"</span>).is_some() {
+<a href=#349 id=349 data-nosnippet>349</a>        configure_winit_backend_forced_x11();
+<a href=#350 id=350 data-nosnippet>350</a>    }
+<a href=#351 id=351 data-nosnippet>351</a>
+<a href=#352 id=352 data-nosnippet>352</a>    run_event_loop(app)
 <a href=#353 id=353 data-nosnippet>353</a>}
 <a href=#354 id=354 data-nosnippet>354</a>
-<a href=#355 id=355 data-nosnippet>355</a><span class="kw">fn </span>configure_winit_backend_forced_x11() {
-<a href=#356 id=356 data-nosnippet>356</a>    <span class="kw">let </span>current = env::var(<span class="string">"WINIT_UNIX_BACKEND"</span>).ok();
-<a href=#357 id=357 data-nosnippet>357</a>    <span class="kw">let </span>should_force_x11 = !<span class="macro">matches!</span>(current.as_deref(), <span class="prelude-val">Some</span>(<span class="string">"x11"</span>));
-<a href=#358 id=358 data-nosnippet>358</a>
-<a href=#359 id=359 data-nosnippet>359</a>    <span class="kw">if </span>should_force_x11 {
-<a href=#360 id=360 data-nosnippet>360</a>        <span class="kw">unsafe </span>{
-<a href=#361 id=361 data-nosnippet>361</a>            env::set_var(<span class="string">"WINIT_UNIX_BACKEND"</span>, <span class="string">"x11"</span>);
-<a href=#362 id=362 data-nosnippet>362</a>            env::remove_var(<span class="string">"WAYLAND_DISPLAY"</span>);
-<a href=#363 id=363 data-nosnippet>363</a>        }
-<a href=#364 id=364 data-nosnippet>364</a>        <span class="macro">log::info!</span>(<span class="string">"Forcing X11 (WINIT_UNIX_BACKEND=x11, WAYLAND_DISPLAY cleared)"</span>);
-<a href=#365 id=365 data-nosnippet>365</a>    }
-<a href=#366 id=366 data-nosnippet>366</a>}
-<a href=#367 id=367 data-nosnippet>367</a>
-<a href=#368 id=368 data-nosnippet>368</a><span class="kw">fn </span>configure_winit_backend_for_wslg() {
-<a href=#369 id=369 data-nosnippet>369</a>    <span class="kw">let </span>is_wsl = env::var_os(<span class="string">"WSL_DISTRO_NAME"</span>).is_some() || env::var_os(<span class="string">"WSL_INTEROP"</span>).is_some();
-<a href=#370 id=370 data-nosnippet>370</a>    <span class="kw">if </span>!is_wsl {
-<a href=#371 id=371 data-nosnippet>371</a>        <span class="kw">return</span>;
-<a href=#372 id=372 data-nosnippet>372</a>    }
-<a href=#373 id=373 data-nosnippet>373</a>
-<a href=#374 id=374 data-nosnippet>374</a>    <span class="comment">// On WSLg, Wayland is often unstable; default to X11 unless explicitly requested.
-<a href=#375 id=375 data-nosnippet>375</a>    </span><span class="kw">if </span>env::var_os(<span class="string">"ORINIUM_PREFER_WAYLAND"</span>).is_some() {
-<a href=#376 id=376 data-nosnippet>376</a>        <span class="kw">return</span>;
-<a href=#377 id=377 data-nosnippet>377</a>    }
-<a href=#378 id=378 data-nosnippet>378</a>
-<a href=#379 id=379 data-nosnippet>379</a>    <span class="kw">let </span>current = env::var(<span class="string">"WINIT_UNIX_BACKEND"</span>).ok();
-<a href=#380 id=380 data-nosnippet>380</a>    <span class="kw">let </span>should_force_x11 = !<span class="macro">matches!</span>(current.as_deref(), <span class="prelude-val">Some</span>(<span class="string">"x11"</span>));
+<a href=#355 id=355 data-nosnippet>355</a><span class="kw">fn </span>run_event_loop(app: BrowserApp) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#356 id=356 data-nosnippet>356</a>    <span class="kw">let </span>event_loop = winit::event_loop::EventLoop::new()<span class="question-mark">?</span>;
+<a href=#357 id=357 data-nosnippet>357</a>    event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
+<a href=#358 id=358 data-nosnippet>358</a>    <span class="kw">let </span><span class="kw-2">mut </span>app = App::new(app);
+<a href=#359 id=359 data-nosnippet>359</a>    event_loop.run_app(<span class="kw-2">&amp;mut </span>app)<span class="question-mark">?</span>;
+<a href=#360 id=360 data-nosnippet>360</a>    <span class="prelude-val">Ok</span>(())
+<a href=#361 id=361 data-nosnippet>361</a>}
+<a href=#362 id=362 data-nosnippet>362</a>
+<a href=#363 id=363 data-nosnippet>363</a><span class="kw">fn </span>configure_winit_backend_forced_x11() {
+<a href=#364 id=364 data-nosnippet>364</a>    <span class="kw">let </span>current = env::var(<span class="string">"WINIT_UNIX_BACKEND"</span>).ok();
+<a href=#365 id=365 data-nosnippet>365</a>    <span class="kw">let </span>should_force_x11 = !<span class="macro">matches!</span>(current.as_deref(), <span class="prelude-val">Some</span>(<span class="string">"x11"</span>));
+<a href=#366 id=366 data-nosnippet>366</a>
+<a href=#367 id=367 data-nosnippet>367</a>    <span class="kw">if </span>should_force_x11 {
+<a href=#368 id=368 data-nosnippet>368</a>        <span class="kw">unsafe </span>{
+<a href=#369 id=369 data-nosnippet>369</a>            env::set_var(<span class="string">"WINIT_UNIX_BACKEND"</span>, <span class="string">"x11"</span>);
+<a href=#370 id=370 data-nosnippet>370</a>            env::remove_var(<span class="string">"WAYLAND_DISPLAY"</span>);
+<a href=#371 id=371 data-nosnippet>371</a>        }
+<a href=#372 id=372 data-nosnippet>372</a>        <span class="macro">log::info!</span>(<span class="string">"Forcing X11 (WINIT_UNIX_BACKEND=x11, WAYLAND_DISPLAY cleared)"</span>);
+<a href=#373 id=373 data-nosnippet>373</a>    }
+<a href=#374 id=374 data-nosnippet>374</a>}
+<a href=#375 id=375 data-nosnippet>375</a>
+<a href=#376 id=376 data-nosnippet>376</a><span class="kw">fn </span>configure_winit_backend_for_wslg() {
+<a href=#377 id=377 data-nosnippet>377</a>    <span class="kw">let </span>is_wsl = env::var_os(<span class="string">"WSL_DISTRO_NAME"</span>).is_some() || env::var_os(<span class="string">"WSL_INTEROP"</span>).is_some();
+<a href=#378 id=378 data-nosnippet>378</a>    <span class="kw">if </span>!is_wsl {
+<a href=#379 id=379 data-nosnippet>379</a>        <span class="kw">return</span>;
+<a href=#380 id=380 data-nosnippet>380</a>    }
 <a href=#381 id=381 data-nosnippet>381</a>
-<a href=#382 id=382 data-nosnippet>382</a>    <span class="kw">if </span>should_force_x11 {
-<a href=#383 id=383 data-nosnippet>383</a>        <span class="kw">unsafe </span>{
-<a href=#384 id=384 data-nosnippet>384</a>            env::set_var(<span class="string">"WINIT_UNIX_BACKEND"</span>, <span class="string">"x11"</span>);
-<a href=#385 id=385 data-nosnippet>385</a>            env::remove_var(<span class="string">"WAYLAND_DISPLAY"</span>);
-<a href=#386 id=386 data-nosnippet>386</a>        }
-<a href=#387 id=387 data-nosnippet>387</a>        <span class="macro">log::info!</span>(<span class="string">"WSLg detected: defaulting to X11 backend for stability"</span>);
-<a href=#388 id=388 data-nosnippet>388</a>    }
-<a href=#389 id=389 data-nosnippet>389</a>}
+<a href=#382 id=382 data-nosnippet>382</a>    <span class="comment">// On WSLg, Wayland is often unstable; default to X11 unless explicitly requested.
+<a href=#383 id=383 data-nosnippet>383</a>    </span><span class="kw">if </span>env::var_os(<span class="string">"ORINIUM_PREFER_WAYLAND"</span>).is_some() {
+<a href=#384 id=384 data-nosnippet>384</a>        <span class="kw">return</span>;
+<a href=#385 id=385 data-nosnippet>385</a>    }
+<a href=#386 id=386 data-nosnippet>386</a>
+<a href=#387 id=387 data-nosnippet>387</a>    <span class="kw">let </span>current = env::var(<span class="string">"WINIT_UNIX_BACKEND"</span>).ok();
+<a href=#388 id=388 data-nosnippet>388</a>    <span class="kw">let </span>should_force_x11 = !<span class="macro">matches!</span>(current.as_deref(), <span class="prelude-val">Some</span>(<span class="string">"x11"</span>));
+<a href=#389 id=389 data-nosnippet>389</a>
+<a href=#390 id=390 data-nosnippet>390</a>    <span class="kw">if </span>should_force_x11 {
+<a href=#391 id=391 data-nosnippet>391</a>        <span class="kw">unsafe </span>{
+<a href=#392 id=392 data-nosnippet>392</a>            env::set_var(<span class="string">"WINIT_UNIX_BACKEND"</span>, <span class="string">"x11"</span>);
+<a href=#393 id=393 data-nosnippet>393</a>            env::remove_var(<span class="string">"WAYLAND_DISPLAY"</span>);
+<a href=#394 id=394 data-nosnippet>394</a>        }
+<a href=#395 id=395 data-nosnippet>395</a>        <span class="macro">log::info!</span>(<span class="string">"WSLg detected: defaulting to X11 backend for stability"</span>);
+<a href=#396 id=396 data-nosnippet>396</a>    }
+<a href=#397 id=397 data-nosnippet>397</a>}
 </code></pre></div></section></main></body></html>
