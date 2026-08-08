@@ -48,8 +48,10 @@ symphonia = {
   version = "0.6.0",
   features = ["aac", "flac", "mp3", "vorbis", "wav"]
 }
+swash = { version = "0.2.10", features = ["scale", "render"] }
 tokio = { version = "1.52", features = ["fs", "io-std", "net", "rt", "time"] }
 tokio-rustls = "0.26.4"
+ttf-parser = "0.25.1"
 ui_layout = {
   git = "https://github.com/098orin/ui_layout-rs",
   rev = "a6b6a2c6cc9d184ed61e4001e2c6a6d7fb712989"

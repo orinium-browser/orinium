@@ -1,9 +1,15 @@
-use std::sync::Arc;
+use std::{num::NonZeroUsize, sync::Arc};
 
 use bytemuck::{Pod, Zeroable};
+use lru::LruCache;
 use orinium_text::{
-    Color as OriColor, FontStyle as OriFontStyle, FontWeight as OriFontWeight, TextLayout,
-    TextLayouter, TextStyle as OriTextStyle, fontdb,
+    Color as OriColor, FontKey, FontStyle as OriFontStyle, FontSystem, FontWeight as OriFontWeight,
+    TextLayout, TextLayouter, TextStyle as OriTextStyle, fontdb,
+};
+use swash::{
+    FontRef,
+    scale::{Render, ScaleContext, Source},
+    zeno::{Format, Vector},
 };
 use wgpu::util::DeviceExt;
 
@@ -14,6 +20,69 @@ use crate::platform::renderer::mesh::{self, TextSection};
 
 fn quantize_font_size(px: f32) -> f32 {
     (px * 64.0).round() / 64.0
+}
+
+const SUBPIXEL_PHASES_X: i32 = 4;
+const BEARING_CACHE_CAPACITY: usize = 32_768;
+
+fn quantize_subpixel_x(x: f32) -> (f32, u8) {
+    let quantized = (x * SUBPIXEL_PHASES_X as f32).round() as i32;
+    (
+        quantized.div_euclid(SUBPIXEL_PHASES_X) as f32,
+        quantized.rem_euclid(SUBPIXEL_PHASES_X) as u8,
+    )
+}
+
+struct RasterizedMask {
+    width: u32,
+    height: u32,
+    left: i32,
+    top: i32,
+    data: Vec<u8>,
+}
+
+fn rasterize_glyph(
+    scale_context: &mut ScaleContext,
+    font_system: &mut FontSystem,
+    font_key: FontKey,
+    glyph_id: u32,
+    font_size: f32,
+    phase_x: u8,
+) -> Option<RasterizedMask> {
+    let face_index = font_system.db.face(font_key.0)?.index as usize;
+    let data = font_system.get_font_data(font_key)?;
+    let font = FontRef::from_index(data.as_slice(), face_index)?;
+    let mut scaler = scale_context
+        .builder(font)
+        .size(font_size)
+        .hint(true)
+        .build();
+    let mut render = Render::new(&[Source::Outline]);
+    render
+        .format(Format::Alpha)
+        .offset(Vector::new(phase_x as f32 / SUBPIXEL_PHASES_X as f32, 0.0));
+    let image = render.render(&mut scaler, glyph_id as u16)?;
+    Some(RasterizedMask {
+        width: image.placement.width,
+        height: image.placement.height,
+        left: image.placement.left,
+        top: image.placement.top,
+        data: image.data,
+    })
+}
+
+fn unhinted_bearings(
+    font_system: &mut FontSystem,
+    font_key: FontKey,
+    glyph_id: u32,
+    font_size: f32,
+) -> Option<(f32, f32)> {
+    let face_index = font_system.db.face(font_key.0)?.index;
+    let data = font_system.get_font_data(font_key)?;
+    let face = ttf_parser::Face::parse(data.as_slice(), face_index).ok()?;
+    let bbox = face.glyph_bounding_box(ttf_parser::GlyphId(glyph_id as u16))?;
+    let scale = font_size / face.units_per_em() as f32;
+    Some((bbox.x_min as f32 * scale, bbox.y_max as f32 * scale))
 }
 
 #[repr(C)]
@@ -159,6 +228,7 @@ fn sections_hash(sections: &[TextSection]) -> u64 {
 /// テキストレンダラー (global FontSystem + wgpu グリフアトラス)
 pub struct TextRenderer {
     layouter: TextLayouter,
+    scale_context: ScaleContext,
     atlas: GlyphAtlas,
     pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
@@ -181,6 +251,7 @@ pub struct TextRenderer {
     prev_sections_count: usize,
 
     layout_cache: Vec<CachedLayout>,
+    bearing_cache: LruCache<(fontdb::ID, u32, u32), (f32, f32)>,
 }
 
 impl TextRenderer {
@@ -370,6 +441,7 @@ impl TextRenderer {
 
         Ok(Self {
             layouter,
+            scale_context: ScaleContext::with_max_entries(128),
             atlas,
             pipeline,
             bind_group_layout,
@@ -387,6 +459,7 @@ impl TextRenderer {
             prev_sections_hash: 0,
             prev_sections_count: 0,
             layout_cache: Vec::new(),
+            bearing_cache: LruCache::new(NonZeroUsize::new(BEARING_CACHE_CAPACITY).unwrap()),
         })
     }
 
@@ -569,10 +642,75 @@ impl TextRenderer {
                             continue;
                         };
 
-                        let gx = base_x + glyph.x;
-                        let gy = base_y + glyph.y;
-                        let gw = glyph.width;
-                        let gh = glyph.height;
+                        let bearing_key = (font_key.0, glyph.glyph_id, glyph.font_size.to_bits());
+                        let (bearing_x, bearing_y) = if let Some(bearings) =
+                            self.bearing_cache.get(&bearing_key)
+                        {
+                            *bearings
+                        } else {
+                            let bearings =
+                                unhinted_bearings(fs, font_key, glyph.glyph_id, glyph.font_size)
+                                    .unwrap_or((0.0, 0.0));
+                            self.bearing_cache.put(bearing_key, bearings);
+                            bearings
+                        };
+
+                        let glyph_origin_x = base_x + glyph.x - bearing_x;
+                        let glyph_baseline_y = (base_y + glyph.y + bearing_y).round();
+                        let (origin_x, phase_x) = quantize_subpixel_x(glyph_origin_x);
+
+                        let _t_atlas = std::time::Instant::now();
+                        let atlas_entry = match self.atlas.lookup(
+                            font_key,
+                            glyph.glyph_id,
+                            glyph.font_size,
+                            phase_x,
+                        ) {
+                            Some(entry) => {
+                                atlas_lookup_time += _t_atlas.elapsed();
+                                entry
+                            }
+                            None => {
+                                atlas_miss_count += 1;
+                                let _t_raster = std::time::Instant::now();
+                                if let Some(mask) = rasterize_glyph(
+                                    &mut self.scale_context,
+                                    fs,
+                                    font_key,
+                                    glyph.glyph_id,
+                                    glyph.font_size,
+                                    phase_x,
+                                ) {
+                                    atlas_rasterize_time += _t_raster.elapsed();
+                                    if mask.width == 0 || mask.height == 0 {
+                                        continue;
+                                    }
+                                    self.atlas_dirty = true;
+                                    atlas_lookup_time += _t_atlas.elapsed();
+                                    self.atlas.upload(
+                                        device,
+                                        queue,
+                                        font_key,
+                                        glyph.glyph_id,
+                                        glyph.font_size,
+                                        phase_x,
+                                        &mask.data,
+                                        mask.width,
+                                        mask.height,
+                                        mask.left,
+                                        mask.top,
+                                    )
+                                } else {
+                                    continue;
+                                }
+                            }
+                        };
+                        glyph_count += 1;
+
+                        let gx = origin_x + atlas_entry.left as f32;
+                        let gy = glyph_baseline_y - atlas_entry.top as f32;
+                        let gw = atlas_entry.pixel_width as f32;
+                        let gh = atlas_entry.pixel_height as f32;
 
                         let vis_l = gx.max(clip_l);
                         let vis_t = gy.max(clip_t);
@@ -583,59 +721,17 @@ impl TextRenderer {
                             continue;
                         }
 
-                        let _t_atlas = std::time::Instant::now();
-                        let (layer, u, v, uw, uh) =
-                            match self.atlas.lookup(font_key, glyph.glyph_id, glyph.font_size) {
-                                Some(uv) => {
-                                    atlas_lookup_time += _t_atlas.elapsed();
-                                    uv
-                                }
-                                None => {
-                                    atlas_miss_count += 1;
-                                    let _t_raster = std::time::Instant::now();
-                                    if let Some((metrics, alpha_mask)) = fs
-                                        .get_or_rasterize_with_bitmap(
-                                            font_key,
-                                            glyph.glyph_id,
-                                            glyph.font_size,
-                                        )
-                                    {
-                                        atlas_rasterize_time += _t_raster.elapsed();
-                                        if metrics.width == 0 || metrics.height == 0 {
-                                            continue;
-                                        }
-                                        let mask_w = metrics.width;
-                                        let mask_h = metrics.height;
-                                        self.atlas_dirty = true;
-                                        atlas_lookup_time += _t_atlas.elapsed();
-                                        self.atlas.upload(
-                                            device,
-                                            queue,
-                                            font_key,
-                                            glyph.glyph_id,
-                                            glyph.font_size,
-                                            &alpha_mask,
-                                            mask_w,
-                                            mask_h,
-                                        )
-                                    } else {
-                                        continue;
-                                    }
-                                }
-                            };
-                        glyph_count += 1;
-
-                        let u0 = u + (vis_l - gx) / gw * uw;
-                        let u1 = u + (vis_r - gx) / gw * uw;
-                        let v0 = v + (vis_t - gy) / gh * uh;
-                        let v1 = v + (vis_b - gy) / gh * uh;
+                        let u0 = atlas_entry.u + (vis_l - gx) / gw * atlas_entry.uv_width;
+                        let u1 = atlas_entry.u + (vis_r - gx) / gw * atlas_entry.uv_width;
+                        let v0 = atlas_entry.v + (vis_t - gy) / gh * atlas_entry.uv_height;
+                        let v1 = atlas_entry.v + (vis_b - gy) / gh * atlas_entry.uv_height;
 
                         let inst = GlyphInstance {
                             pos: pack_position(vis_l, vis_t),
                             size: pack_size(vis_r - vis_l, vis_b - vis_t),
                             uv_off: pack_uv_off(u0, v0),
                             uv_size: pack_uv_size(u1 - u0, v1 - v0),
-                            layer: pack_layer(layer),
+                            layer: pack_layer(atlas_entry.layer),
                             color: pack_color(&glyph.color),
                         };
                         self.instances.push(inst);
@@ -741,5 +837,26 @@ impl TextRenderer {
 impl mesh::TextLayoutSource for TextRenderer {
     fn layout_text(&mut self, text: &str, style: &TextStyle) -> Option<Arc<TextLayout>> {
         Some(self.create_buffer_for_text(text, style.clone()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::quantize_subpixel_x;
+
+    #[test]
+    fn horizontal_subpixel_positions_use_four_phases() {
+        assert_eq!(quantize_subpixel_x(10.0), (10.0, 0));
+        assert_eq!(quantize_subpixel_x(10.24), (10.0, 1));
+        assert_eq!(quantize_subpixel_x(10.51), (10.0, 2));
+        assert_eq!(quantize_subpixel_x(10.76), (10.0, 3));
+        assert_eq!(quantize_subpixel_x(10.99), (11.0, 0));
+    }
+
+    #[test]
+    fn horizontal_subpixel_positions_handle_negative_coordinates() {
+        assert_eq!(quantize_subpixel_x(-0.24), (-1.0, 3));
+        assert_eq!(quantize_subpixel_x(-0.51), (-1.0, 2));
+        assert_eq!(quantize_subpixel_x(-0.99), (-1.0, 0));
     }
 }

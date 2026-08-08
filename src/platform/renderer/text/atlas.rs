@@ -4,14 +4,32 @@ use etagere::{BucketedAtlasAllocator, size2};
 use lru::LruCache;
 use orinium_text::{FontKey, fontdb};
 
-/// (fontdb ID, glyph_id, font_size_bits)
-type GlyphKey = (fontdb::ID, u32, u32);
+/// (fontdb ID, glyph_id, font_size_bits, horizontal subpixel phase)
+type GlyphKey = (fontdb::ID, u32, u32, u8);
 
-/// (layer_index, alloc_id, rectangle_packed, actual_width, actual_height)
-type GlyphCacheValue = (u32, etagere::AllocId, etagere::Rectangle, u32, u32);
+/// (layer, allocation, rectangle, bitmap width/height, placement left/top)
+type GlyphCacheValue = (
+    u32,
+    etagere::AllocId,
+    etagere::Rectangle,
+    u32,
+    u32,
+    i32,
+    i32,
+);
 
-/// Normalized UV rect: (layer, u, v, width, height)
-pub type GlyphUVRect = (u32, f32, f32, f32, f32);
+#[derive(Debug, Clone, Copy)]
+pub struct GlyphAtlasEntry {
+    pub layer: u32,
+    pub u: f32,
+    pub v: f32,
+    pub uv_width: f32,
+    pub uv_height: f32,
+    pub pixel_width: u32,
+    pub pixel_height: u32,
+    pub left: i32,
+    pub top: i32,
+}
 
 /// A packed glyph atlas managed as a wgpu 2D array texture.
 ///
@@ -32,6 +50,7 @@ pub struct GlyphAtlas {
 
 const MAX_LAYERS: u32 = 16;
 const INITIAL_SIZE: u32 = 1024;
+const GLYPH_GUTTER: i32 = 1;
 /// Maximum number of glyph entries in the LRU cache.
 /// Set to roughly match the pixel capacity of a full atlas
 /// (16 layers × 1024² px ÷ ~400 px avg glyph area ≈ 40k).
@@ -87,21 +106,19 @@ impl GlyphAtlas {
         font_key: FontKey,
         glyph_id: u32,
         font_size: f32,
-    ) -> Option<GlyphUVRect> {
-        let key = (font_key.0, glyph_id, font_size.to_bits());
-        let (layer, _alloc_id, rect, aw, ah) = self.glyph_map.get(&key)?;
-        let (u, v) = (
-            rect.min.x as f32 / self.size as f32,
-            rect.min.y as f32 / self.size as f32,
-        );
-        let (w, h) = (*aw as f32 / self.size as f32, *ah as f32 / self.size as f32);
-        Some((*layer, u, v, w, h))
+        phase_x: u8,
+    ) -> Option<GlyphAtlasEntry> {
+        let key = (font_key.0, glyph_id, font_size.to_bits(), phase_x);
+        let (layer, _alloc_id, rect, width, height, left, top) = self.glyph_map.get(&key)?;
+        Some(Self::entry(
+            self.size, *layer, *rect, *width, *height, *left, *top,
+        ))
     }
 
     /// Evict a single LRU entry from the cache and free its atlas allocation.
     /// Returns `true` if an entry was evicted.
     fn evict_one(&mut self) -> bool {
-        if let Some((_key, (layer, alloc_id, _rect, _aw, _ah))) = self.glyph_map.pop_lru() {
+        if let Some((_key, (layer, alloc_id, ..))) = self.glyph_map.pop_lru() {
             self.allocators[layer as usize].deallocate(alloc_id);
             true
         } else {
@@ -116,28 +133,36 @@ impl GlyphAtlas {
         font_key: FontKey,
         glyph_id: u32,
         font_size: f32,
+        phase_x: u8,
         alpha_mask: &[u8],
         mask_width: u32,
         mask_height: u32,
-    ) -> GlyphUVRect {
+        left: i32,
+        top: i32,
+    ) -> GlyphAtlasEntry {
         if mask_width == 0 || mask_height == 0 {
-            return (0, 0.0, 0.0, 0.0, 0.0);
+            return GlyphAtlasEntry {
+                layer: 0,
+                u: 0.0,
+                v: 0.0,
+                uv_width: 0.0,
+                uv_height: 0.0,
+                pixel_width: 0,
+                pixel_height: 0,
+                left,
+                top,
+            };
         }
 
-        let key = (font_key.0, glyph_id, font_size.to_bits());
+        let key = (font_key.0, glyph_id, font_size.to_bits(), phase_x);
 
         // Check if already present (updates LRU position).
-        if let Some((layer, _alloc_id, rect, aw, ah)) = self.glyph_map.get(&key) {
-            let (u, v) = (
-                rect.min.x as f32 / self.size as f32,
-                rect.min.y as f32 / self.size as f32,
-            );
-            let (w, h) = (*aw as f32 / self.size as f32, *ah as f32 / self.size as f32);
-            return (*layer, u, v, w, h);
+        if let Some((layer, _alloc_id, rect, width, height, left, top)) = self.glyph_map.get(&key) {
+            return Self::entry(self.size, *layer, *rect, *width, *height, *left, *top);
         }
 
-        let item_w = mask_width.max(1) as i32;
-        let item_h = mask_height.max(1) as i32;
+        let item_w = mask_width.max(1) as i32 + GLYPH_GUTTER * 2;
+        let item_h = mask_height.max(1) as i32 + GLYPH_GUTTER * 2;
 
         // Try allocating (with eviction retries).
         let allocation = 'search: loop {
@@ -174,18 +199,28 @@ impl GlyphAtlas {
 
         let Some((layer_idx, allocation)) = allocation else {
             log::warn!(target:"GlyphAtlas", "glyph atlas full ({} layers, no evictable entries)", self.layers);
-            return (0, 0.0, 0.0, 0.0, 0.0);
+            return GlyphAtlasEntry {
+                layer: 0,
+                u: 0.0,
+                v: 0.0,
+                uv_width: 0.0,
+                uv_height: 0.0,
+                pixel_width: 0,
+                pixel_height: 0,
+                left,
+                top,
+            };
         };
 
         let rect = allocation.rectangle;
         let alloc_id = allocation.id;
 
         let li = layer_idx as u32;
-        let cache_val = (li, alloc_id, rect, mask_width, mask_height);
+        let cache_val = (li, alloc_id, rect, mask_width, mask_height, left, top);
 
         // Make room in the cache if full (key is guaranteed absent).
         if self.glyph_map.len() >= LRU_CAPACITY
-            && let Some((_k, (elayer, ealloc_id, _, _, _))) = self.glyph_map.pop_lru()
+            && let Some((_k, (elayer, ealloc_id, ..))) = self.glyph_map.pop_lru()
         {
             self.allocators[elayer as usize].deallocate(ealloc_id);
         }
@@ -194,12 +229,18 @@ impl GlyphAtlas {
         // Write glyph to CPU texture data cache
         let layer_data = &mut self.cpu_layers[li as usize];
 
+        for y in rect.min.y..rect.max.y {
+            let start = (y as u32 * self.size + rect.min.x as u32) as usize;
+            layer_data[start..start + item_w as usize].fill(0);
+        }
+
         for y in 0..mask_height {
             let src_start = (y * mask_width) as usize;
             let src_end = src_start + mask_width as usize;
 
-            let dst_y = rect.min.y as u32 + y;
-            let dst_start = (dst_y * self.size + rect.min.x as u32) as usize;
+            let dst_y = (rect.min.y + GLYPH_GUTTER) as u32 + y;
+            let dst_x = (rect.min.x + GLYPH_GUTTER) as u32;
+            let dst_start = (dst_y * self.size + dst_x) as usize;
 
             layer_data[dst_start..dst_start + mask_width as usize]
                 .copy_from_slice(&alpha_mask[src_start..src_end]);
@@ -207,15 +248,30 @@ impl GlyphAtlas {
 
         self.dirty_layers.insert(li);
 
-        let (u, v) = (
-            rect.min.x as f32 / self.size as f32,
-            rect.min.y as f32 / self.size as f32,
-        );
-        let (w, h) = (
-            mask_width as f32 / self.size as f32,
-            mask_height as f32 / self.size as f32,
-        );
-        (li, u, v, w, h)
+        Self::entry(self.size, li, rect, mask_width, mask_height, left, top)
+    }
+
+    fn entry(
+        atlas_size: u32,
+        layer: u32,
+        rect: etagere::Rectangle,
+        width: u32,
+        height: u32,
+        left: i32,
+        top: i32,
+    ) -> GlyphAtlasEntry {
+        let size = atlas_size as f32;
+        GlyphAtlasEntry {
+            layer,
+            u: (rect.min.x + GLYPH_GUTTER) as f32 / size,
+            v: (rect.min.y + GLYPH_GUTTER) as f32 / size,
+            uv_width: width as f32 / size,
+            uv_height: height as f32 / size,
+            pixel_width: width,
+            pixel_height: height,
+            left,
+            top,
+        }
     }
 
     pub fn flush_uploads(&mut self, queue: &wgpu::Queue) {
