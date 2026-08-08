@@ -341,7 +341,7 @@ fn draw_background(
     match &style.background {
         Background::Color(c) if c.3 > 0 => {
             cmd_buf.push(DrawCommand::Fill {
-                path: path,
+                path,
                 rule: FillRule::NonZero,
                 paint: Paint {
                     brush: Brush::Solid(*c),
@@ -351,7 +351,7 @@ fn draw_background(
         }
         Background::Gradient(g) => {
             cmd_buf.push(DrawCommand::Fill {
-                path: path,
+                path,
                 rule: FillRule::NonZero,
                 paint: Paint {
                     brush: Brush::Gradient(g.clone()),

@@ -114,7 +114,7 @@ pub fn resolve_inline_value(value: &str) -> Option<CssValue> {
         return None;
     };
 
-    return Some(value);
+    Some(value)
 }
 
 // ============================================================

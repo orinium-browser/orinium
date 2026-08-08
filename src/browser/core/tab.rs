@@ -253,9 +253,9 @@ impl Tab {
     }
 
     pub fn set_system_color_scheme(&mut self, scheme: ColorScheme) {
-        self.webview
-            .as_mut()
-            .map(|wv| wv.set_system_color_scheme(scheme));
+        if let Some(wv) = self.webview.as_mut() {
+            wv.set_system_color_scheme(scheme)
+        }
     }
 
     /// Returns title of the document
