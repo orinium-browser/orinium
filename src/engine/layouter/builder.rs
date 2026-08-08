@@ -836,33 +836,53 @@ fn apply_attribute_dimensions(
     overflow: &mut Overflow,
     color_scheme: ColorScheme,
 ) {
-    if let Some(value) = html_node.get_attr("width")
-        && let Some(value) = resolve_inline_value(value)
-    {
-        apply_declaration(
-            "width",
-            &value,
-            style,
-            container_style,
-            text_style,
-            overflow,
-            color_scheme,
-        );
+    fn apply_attribute_size(
+        attr: &str,
+        html_node: &HtmlNodeType,
+        style: &mut Style,
+        container_style: &mut ContainerStyle,
+        text_style: &mut TextStyle,
+        overflow: &mut Overflow,
+        color_scheme: ColorScheme,
+    ) {
+        if let Some(value) = html_node.get_attr(attr)
+            && let Some(mut value) = resolve_inline_value(value)
+        {
+            if let CssValue::Number(v) = value {
+                value = CssValue::Length(v, Unit::Px);
+            }
+
+            apply_declaration(
+                attr,
+                &value,
+                style,
+                container_style,
+                text_style,
+                overflow,
+                color_scheme,
+            );
+        }
     }
 
-    if let Some(value) = html_node.get_attr("height")
-        && let Some(value) = resolve_inline_value(value)
-    {
-        apply_declaration(
-            "height",
-            &value,
-            style,
-            container_style,
-            text_style,
-            overflow,
-            color_scheme,
-        );
-    }
+    apply_attribute_size(
+        "width",
+        html_node,
+        style,
+        container_style,
+        text_style,
+        overflow,
+        color_scheme,
+    );
+
+    apply_attribute_size(
+        "height",
+        html_node,
+        style,
+        container_style,
+        text_style,
+        overflow,
+        color_scheme,
+    );
 }
 
 pub fn apply_declaration(
