@@ -18,7 +18,7 @@ use ui_layout::{
     JustifyContent, LayoutChild, LayoutNode, Length, LengthOrAuto, OuterDisplay, Style,
 };
 
-use super::css_resolver::ResolvedStyles;
+use super::css_resolver::{ResolvedStyles, resolve_inline_style};
 use super::text_layouter::TextFlowLayouter;
 use super::types::{
     Background, BorderRadius, BorderStyle, Color, ColorScheme, ColorStop, ContainerRole,
@@ -285,6 +285,35 @@ pub fn build_layout_and_info_from_snapshot(
                             used_color_scheme,
                         );
                     }
+                }
+            }
+
+            // Apply the element's inline `style` attribute. Inline styles are
+            // author-origin declarations with the highest specificity, so they
+            // override stylesheet rules — unless the stylesheet rule was
+            // `!important`, which still wins over a non-`!important` inline
+            // declaration.
+            if let Some(style_attr) = html_node.get_attr("style") {
+                for (name, value, important) in resolve_inline_style(style_attr) {
+                    if name.starts_with("--") {
+                        continue;
+                    }
+                    let stylesheet_important = candidates
+                        .as_ref()
+                        .and_then(|c| c.get(&name))
+                        .is_some_and(|declaration| declaration.important);
+                    if !important && stylesheet_important {
+                        continue;
+                    }
+                    apply_declaration(
+                        &name,
+                        &value,
+                        &mut style,
+                        &mut container_style,
+                        &mut text_style,
+                        &mut overflow,
+                        used_color_scheme,
+                    );
                 }
             }
 
@@ -2269,6 +2298,11 @@ fn resolve_css_color(name: &str, css_color: &CssValue, color_scheme: ColorScheme
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::bridge::text::FallbackTextMeasurer;
+    use crate::engine::css::parser::Parser as CssParser;
+    use crate::engine::html::parser::Parser as HtmlParser;
+    use crate::engine::layouter::css_resolver::CssResolver;
+    use std::sync::Arc;
 
     fn apply_overflow(value: CssValue) -> Overflow {
         let mut style = Style::default();
@@ -2381,5 +2415,88 @@ mod tests {
             .is_none()
         );
         assert_eq!(overflow, Overflow::default());
+    }
+
+    fn layout_for(html: &str, css: &str) -> InfoNode {
+        let dom = HtmlParser::new(html).parse();
+        let mut resolved = ResolvedStyles::default();
+        if !css.is_empty() {
+            let sheet = CssParser::new(css).parse().unwrap();
+            resolved.extend(CssResolver::resolve(&sheet));
+        }
+        let (_layout, info) = build_layout_and_info(
+            &dom.root,
+            &resolved,
+            Arc::new(FallbackTextMeasurer),
+            InheritedCss {
+                text_style: TextStyle::default(),
+                color_scheme: ColorScheme::Light,
+            },
+            Vec::new(),
+            ColorScheme::Light,
+        );
+        info
+    }
+
+    /// Depth-first search for the first [`NodeKind::Text`] whose content is
+    /// `content`, returning a clone of its style.
+    fn text_style_for(info: &InfoNode, content: &str) -> TextStyle {
+        fn walk(node: &InfoNode, content: &str) -> Option<TextStyle> {
+            if let NodeKind::Text {
+                style,
+                text: actual,
+                ..
+            } = &node.kind
+                && actual == content
+            {
+                return Some(style.clone());
+            }
+            node.children.iter().find_map(|child| walk(child, content))
+        }
+        walk(info, content).expect("text node with expected content must exist")
+    }
+
+    #[test]
+    fn inline_style_overrides_stylesheet_rule() {
+        // A stylesheet sets color to blue; the inline attribute must win.
+        let html = r#"<html><body><p id="x" style="color: red;">hello</p></body></html>"#;
+        let info = layout_for(html, "p { color: blue; }");
+
+        assert_eq!(text_style_for(&info, "hello").color, Color(255, 0, 0, 255));
+    }
+
+    #[test]
+    fn inline_style_non_important_loses_to_important_stylesheet() {
+        let html = r#"<html><body><p id="x" style="color: red;">hello</p></body></html>"#;
+        let info = layout_for(html, "p { color: blue !important; }");
+
+        assert_eq!(text_style_for(&info, "hello").color, Color(0, 0, 255, 255));
+    }
+
+    #[test]
+    fn inline_style_important_beats_stylesheet_important() {
+        let html =
+            r#"<html><body><p id="x" style="color: red !important;">hello</p></body></html>"#;
+        let info = layout_for(html, "p { color: blue !important; }");
+
+        assert_eq!(text_style_for(&info, "hello").color, Color(255, 0, 0, 255));
+    }
+
+    #[test]
+    fn inline_style_sets_container_background() {
+        let html =
+            r#"<html><body><div style="background-color: rgb(0, 128, 0);">x</div></body></html>"#;
+        let info = layout_for(html, "");
+
+        fn find_div(node: &InfoNode) -> Option<&ContainerStyle> {
+            if let NodeKind::Container { style, .. } = &node.kind
+                && style.background != Background::default()
+            {
+                return Some(style);
+            }
+            node.children.iter().find_map(find_div)
+        }
+        let style = find_div(&info).expect("div container with background exists");
+        assert_eq!(style.background, Background::Color(Color(0, 128, 0, 255)));
     }
 }

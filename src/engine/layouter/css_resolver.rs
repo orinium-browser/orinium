@@ -79,6 +79,24 @@ pub fn append_resolved_styles(target: &mut ResolvedStyles, mut incoming: Resolve
     target.extend(incoming);
 }
 
+/// Resolves a `style` attribute's declarations into (name, value, important)
+/// triples, applying `var()` and `!important` handling like a rule block.
+///
+/// Inline styles participate in the cascade as author-origin declarations with
+/// the highest specificity, so callers should apply them after stylesheet
+/// declarations for the same element.
+pub fn resolve_inline_style(style_attr: &str) -> Vec<(String, CssValue, bool)> {
+    let mut parser = crate::engine::css::parser::Parser::new(style_attr);
+    let Ok(nodes) = parser.parse_declarations() else {
+        return Vec::new();
+    };
+
+    DeclarationResolver::collect(&nodes)
+        .into_iter()
+        .map(|declaration| (declaration.name, declaration.value, declaration.important))
+        .collect()
+}
+
 // ============================================================
 //  CssResolver — tree walk + rule resolution
 // ============================================================
@@ -119,7 +137,7 @@ impl CssResolver {
             return;
         };
 
-        let declarations = DeclarationResolver::collect(node);
+        let declarations = DeclarationResolver::collect(node.children());
 
         for selector in selectors {
             Self::push_resolved(selector, &declarations, styles, order, origin);
@@ -195,6 +213,35 @@ mod tests {
 
         assert!(styles[1].order > styles[0].order);
         assert!(styles[1].outranks(&styles[0]));
+    }
+
+    #[test]
+    fn resolve_inline_style_extracts_declarations_and_important() {
+        let decls = resolve_inline_style("color: red; margin: 4px 8px !important; width: 10px");
+        assert_eq!(decls.len(), 3);
+
+        assert_eq!(decls[0].0, "color");
+        assert!(!decls[0].2);
+
+        assert_eq!(decls[1].0, "margin");
+        assert!(decls[1].2);
+
+        assert_eq!(decls[2].0, "width");
+    }
+
+    #[test]
+    fn resolve_inline_style_tolerates_empty_and_malformed_input() {
+        assert!(resolve_inline_style("").is_empty());
+        assert!(resolve_inline_style(";;;").is_empty());
+    }
+
+    #[test]
+    fn resolve_inline_style_resolves_var() {
+        let decls = resolve_inline_style("--accent: blue; color: var(--accent)");
+        assert_eq!(decls.len(), 2);
+
+        let (_, color_value, _) = decls.iter().find(|(n, _, _)| n == "color").unwrap();
+        assert_eq!(color_value, &CssValue::Keyword("blue".into()));
     }
 }
 
@@ -286,11 +333,11 @@ impl SupportsEvaluator {
 struct DeclarationResolver;
 
 impl DeclarationResolver {
-    fn collect(rule_node: &CssNode) -> Vec<Declaration> {
+    fn collect(children: &[CssNode]) -> Vec<Declaration> {
         let mut custom_props: CustomProperties = HashMap::new();
         let mut result = Vec::new();
 
-        for child in rule_node.children() {
+        for child in children {
             if let CssNodeType::Declaration { name, value } = &child.node()
                 && name.starts_with("--")
             {
@@ -298,7 +345,7 @@ impl DeclarationResolver {
             }
         }
 
-        for child in rule_node.children() {
+        for child in children {
             if let CssNodeType::Declaration { name, value } = &child.node() {
                 let (raw_value, important) = Self::extract_important(value);
 
