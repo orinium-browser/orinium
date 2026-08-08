@@ -88,6 +88,7 @@ impl BrowserRenderer {
 
             if let Some((layout, info)) = tab.layout_and_info() {
                 renderer_model::generate_draw_commands(&mut draw_commands, layout, info);
+                tab.clear_redraw_flag();
                 tab.title()
             } else {
                 log::debug!("No layout/info available for tab {}", active_tab);

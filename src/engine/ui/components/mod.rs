@@ -1,3 +1,4 @@
+pub mod audio;
 pub mod button;
 pub mod custom_node_bridge;
 pub mod image;

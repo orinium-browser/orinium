@@ -141,6 +141,7 @@ pub fn build_layout_and_info_with_images(
         chain,
         system_color_scheme,
         images,
+        &HashMap::new(),
         None,
     )
 }
@@ -163,6 +164,7 @@ pub fn build_layout_and_info_from_snapshot(
     mut chain: ElementChain,
     system_color_scheme: ColorScheme,
     images: &HashMap<String, Image>,
+    audio: &HashMap<String, Arc<[u8]>>,
     write_back_sender: Option<DomWriteBack>,
 ) -> (LayoutNode, InfoNode) {
     let registry = ComponentRegistry::new();
@@ -383,14 +385,27 @@ pub fn build_layout_and_info_from_snapshot(
                 // Replaced elements (button/img/input) size by their intrinsic
                 // content when auto-sized, not by filling the containing block.
                 style.size.auto_behavior = AutoSizeBehavior::ShrinkToFit;
+                let media_source = html_node.get_attr("src").map(str::to_string).or_else(|| {
+                    snapshot
+                        .children(stack[top_idx].dom)
+                        .iter()
+                        .find_map(|&child| {
+                            let child = &snapshot.node(child).kind;
+                            (child.tag_name() == Some("source"))
+                                .then(|| child.get_attr("src").map(str::to_string))
+                                .flatten()
+                        })
+                });
                 let node = registry
                     .create(&CustomNodeContext {
                         tag,
                         inner_text: &snapshot.inner_text(stack[top_idx].dom),
+                        media_source: media_source.as_deref(),
                         container_style: &container_style,
                         text_style: &text_style,
                         measurer: Arc::clone(&measurer),
                         images,
+                        audio,
                         get_attr: &|name| html_node.get_attr(name).map(str::to_string),
                         write_back: write_back_sender
                             .as_ref()

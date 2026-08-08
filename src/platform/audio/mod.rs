@@ -161,6 +161,42 @@ impl SoundManager {
             .with_context(|| format!("Failed to read local file: {}", uri))?;
         self.play_from_bytes(&data)
     }
+
+    /// Pauses playback while preserving the current position.
+    pub fn pause(&mut self) -> Result<()> {
+        if let Some(stream) = &self.stream {
+            stream.pause()?;
+        }
+        Ok(())
+    }
+
+    /// Resumes playback from the current position.
+    pub fn resume(&mut self) -> Result<()> {
+        if self.src_channels == 0 {
+            anyhow::bail!("Cannot resume before audio is loaded");
+        }
+        self.ensure_stream()?;
+        if let Some(stream) = &self.stream {
+            stream.play()?;
+        }
+        Ok(())
+    }
+
+    /// Returns the current playback position in seconds.
+    pub fn current_seconds(&self) -> f32 {
+        if self.src_sample_rate == 0 {
+            return 0.0;
+        }
+        let frame = *self.play_pos.lock().unwrap_or_else(|e| e.into_inner());
+        frame as f32 / self.src_sample_rate as f32
+    }
+
+    /// Returns whether the decoded audio reached its end.
+    pub fn is_finished(&self) -> bool {
+        let frame = *self.play_pos.lock().unwrap_or_else(|e| e.into_inner());
+        let samples = self.samples.lock().unwrap_or_else(|e| e.into_inner());
+        self.src_channels > 0 && frame >= samples.len() / self.src_channels
+    }
 }
 
 /// 音声をデコードする

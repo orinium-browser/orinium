@@ -267,6 +267,14 @@ impl BrowserApp {
         }
     }
 
+    /// Advances background page work for a window between OS events.
+    ///
+    /// This keeps animated custom controls, such as an active audio timer,
+    /// repainting even when the user is not moving the pointer.
+    pub(crate) fn poll_window(&mut self, window_id: WindowId) -> bool {
+        matches!(self.tick(window_id), BrowserCommand::RequestRedraw)
+    }
+
     /// Returns the current window size for the given window as `(width, height)` in floating-point pixels.
     pub fn window_size(&self, window_id: WindowId) -> (f32, f32) {
         match self.windows.get(&window_id) {

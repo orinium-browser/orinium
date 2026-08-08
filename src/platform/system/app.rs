@@ -173,4 +173,15 @@ impl ApplicationHandler for App {
             BrowserCommand::None => {}
         }
     }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        let window_ids: Vec<WindowId> = self.windows.keys().copied().collect();
+        for window_id in window_ids {
+            if self.browser_app.poll_window(window_id)
+                && let Some(state) = self.windows.get(&window_id)
+            {
+                state.window.request_redraw();
+            }
+        }
+    }
 }

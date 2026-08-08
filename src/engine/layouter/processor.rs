@@ -38,6 +38,7 @@ pub struct LayoutTask {
     pub measurer: Arc<dyn TextMeasurer<TextStyle>>,
     pub system_color_scheme: ColorScheme,
     pub images: HashMap<String, Image>,
+    pub audio: HashMap<String, Arc<[u8]>>,
     pub parent: InheritedCss,
     pub chain: ElementChain,
     pub write_back_sender: Option<DomWriteBack>,
@@ -124,6 +125,7 @@ impl LayoutProcessor {
                             task.chain,
                             task.system_color_scheme,
                             &task.images,
+                            &task.audio,
                             task.write_back_sender,
                         );
                         let result = LayoutResult { layout, info };
@@ -185,6 +187,7 @@ mod tests {
             measurer: Arc::new(FallbackTextMeasurer),
             system_color_scheme: ColorScheme::Light,
             images: HashMap::new(),
+            audio: HashMap::new(),
             parent: InheritedCss {
                 text_style: TextStyle::default(),
                 color_scheme: ColorScheme::Light,

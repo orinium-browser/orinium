@@ -213,6 +213,11 @@ img {
     display: inline-block;
 }
 
+audio {
+    display: inline-block;
+    background-color: #f0f0f0;
+}
+
 /* --- Horizontal rule --- */
 hr {
     display: block;

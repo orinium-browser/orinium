@@ -1,6 +1,7 @@
 mod components;
 pub mod custom_node;
 
+pub use components::audio;
 pub use components::button;
 pub use components::custom_node_bridge;
 pub use components::image;

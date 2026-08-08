@@ -168,6 +168,13 @@ impl Tab {
         }
     }
 
+    /// Delivers encoded audio bytes to the page that requested them.
+    pub fn on_fetch_succeeded_audio(&mut self, source: String, bytes: &[u8]) {
+        if let Some(webview) = self.webview.as_mut() {
+            webview.on_audio_fetched(source, bytes);
+        }
+    }
+
     /// Display error page on fetch failure
     pub fn on_fetch_failed(&mut self, err: BrowserNetworkError, failed_url: Url) {
         self.navigate("resource:///error.html".parse().unwrap());

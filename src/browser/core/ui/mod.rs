@@ -259,12 +259,15 @@ impl BrowserUi {
                     FetchKind::Image { source } => {
                         tab.on_fetch_succeeded_image(source, &resp.body);
                     }
+                    FetchKind::Audio { source } => {
+                        tab.on_fetch_succeeded_audio(source, &resp.body);
+                    }
                 }
             }
             Err(err) => {
                 log::error!("NetworkError: {}", err);
-                if matches!(kind, FetchKind::Image { .. }) {
-                    log::warn!("Image fetch failed without aborting page load: {}", url);
+                if matches!(kind, FetchKind::Image { .. } | FetchKind::Audio { .. }) {
+                    log::warn!("Media fetch failed without aborting page load: {}", url);
                 } else {
                     tab.on_fetch_failed(err, url);
                 }

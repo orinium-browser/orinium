@@ -39,6 +39,7 @@ pub enum FetchKind {
     Html,
     Css,
     Image { source: String },
+    Audio { source: String },
 }
 
 /// CSS application strategy.
@@ -71,8 +72,10 @@ pub struct WebView {
 
     pending_css_urls: Vec<Url>,
     pending_images: Vec<(String, Url)>,
+    pending_audio: Vec<(String, Url)>,
     loaded_css: Vec<String>,
     images: HashMap<String, Image>,
+    audio: HashMap<String, Arc<[u8]>>,
 
     resolved_styles: Arc<layouter::css_resolver::ResolvedStyles>,
     layout_and_info: Option<(LayoutNode, InfoNode)>,
@@ -157,6 +160,7 @@ struct ParsedDocument {
     style_links: Vec<Url>,
     inline_styles: Vec<String>,
     image_sources: Vec<(String, Url)>,
+    audio_sources: Vec<(String, Url)>,
     scripts: Vec<String>,
 }
 
@@ -176,8 +180,10 @@ impl WebView {
 
             pending_css_urls: Vec::new(),
             pending_images: Vec::new(),
+            pending_audio: Vec::new(),
             loaded_css: Vec::new(),
             images: HashMap::new(),
+            audio: HashMap::new(),
 
             resolved_styles: Arc::new(layouter::css_resolver::ResolvedStyles::default()),
             layout_and_info: None,
@@ -245,6 +251,14 @@ impl WebView {
                     });
                 }
 
+                for (source, url) in std::mem::take(&mut self.pending_audio) {
+                    log::info!("Audio fetch requested in WebView: url={}", url);
+                    tasks.push(WebViewTask::Fetch {
+                        url,
+                        kind: FetchKind::Audio { source },
+                    });
+                }
+
                 // CSS fetch を要求
                 if self.pending_css_urls.is_empty() {
                     self.phase = PagePhase::CssApplied;
@@ -294,6 +308,7 @@ impl WebView {
 
         self.pending_css_urls = parsed.style_links;
         self.pending_images = parsed.image_sources;
+        self.pending_audio = parsed.audio_sources;
         self.pending_scripts = parsed.scripts;
         self.css_results_expected = self.pending_css_urls.len();
 
@@ -345,6 +360,12 @@ impl WebView {
         self.images.insert(source, image);
         self.update_layout();
         Ok(())
+    }
+
+    /// Stores fetched audio bytes for the matching `<audio>` control.
+    pub fn on_audio_fetched(&mut self, source: String, bytes: &[u8]) {
+        self.audio.insert(source, Arc::from(bytes));
+        self.update_layout();
     }
 
     /// Update page (e.g. DOM changed)
@@ -485,6 +506,7 @@ impl WebView {
             measurer: self.text_measurer.clone().unwrap(),
             system_color_scheme: self.system_color_scheme,
             images: self.images.clone(),
+            audio: self.audio.clone(),
             parent: InheritedCss {
                 text_style: TextStyle {
                     font_size: 16.0,
@@ -542,8 +564,10 @@ impl WebView {
         self.docment_info = None;
         self.pending_css_urls.clear();
         self.pending_images.clear();
+        self.pending_audio.clear();
         self.loaded_css.clear();
         self.images.clear();
+        self.audio.clear();
         Arc::make_mut(&mut self.resolved_styles).clear();
         self.layout_and_info = None;
 
@@ -604,6 +628,10 @@ impl WebView {
 
     pub fn needs_redraw(&self) -> bool {
         self.needs_redraw
+            || self
+                .layout_and_info
+                .as_ref()
+                .is_some_and(|(_, info)| crate::engine::input::any_custom_node_needs_repaint(info))
     }
 
     pub fn clear_redraw_flag(&mut self) {
@@ -677,6 +705,26 @@ fn parse_html(html: &str, document_url: Url) -> ParsedDocument {
         })
         .collect();
 
+    let audio_sources = dom
+        .get_elements_by_tag_name("audio")
+        .into_iter()
+        .filter_map(|node| {
+            let source = {
+                let audio = node.borrow();
+                audio.value.get_attr("src").map(str::to_string).or_else(|| {
+                    audio.children().iter().find_map(|child| {
+                        let child = child.borrow();
+                        (child.value.tag_name() == Some("source"))
+                            .then(|| child.value.get_attr("src").map(str::to_string))
+                            .flatten()
+                    })
+                })
+            }?;
+            let url = resolve_url(&base_url, &source).ok()?;
+            Some((source, url))
+        })
+        .collect();
+
     ParsedDocument {
         document_url,
         base_url,
@@ -685,6 +733,7 @@ fn parse_html(html: &str, document_url: Url) -> ParsedDocument {
         style_links,
         inline_styles,
         image_sources,
+        audio_sources,
         scripts,
     }
 }
@@ -715,6 +764,28 @@ mod tests {
         assert_eq!(
             parsed.image_sources[0].1.as_str(),
             "https://cdn.example/assets/logo.png"
+        );
+    }
+
+    #[test]
+    fn parse_html_resolves_audio_and_child_source_urls() {
+        let parsed = parse_html(
+            r#"<base href="https://cdn.example/media/"><audio src="one.mp3"></audio><audio><source src="two.ogg"></audio>"#,
+            Url::parse("https://example.test/index.html").unwrap(),
+        );
+
+        assert_eq!(
+            parsed.audio_sources,
+            [
+                (
+                    "one.mp3".to_string(),
+                    Url::parse("https://cdn.example/media/one.mp3").unwrap()
+                ),
+                (
+                    "two.ogg".to_string(),
+                    Url::parse("https://cdn.example/media/two.ogg").unwrap()
+                ),
+            ]
         );
     }
 }

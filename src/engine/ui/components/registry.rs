@@ -6,6 +6,7 @@ use std::sync::{Arc, mpsc};
 use crate::engine::bridge::text;
 use crate::engine::layouter::types::{Color, ContainerStyle, TextStyle};
 use crate::engine::renderer_model::Image;
+use crate::engine::ui::audio::AudioComponent;
 use crate::engine::ui::button::ButtonComponent;
 use crate::engine::ui::components::input_hidden::InputHiddenComponent;
 use crate::engine::ui::custom_node::CustomNode;
@@ -27,6 +28,8 @@ pub struct CustomNodeContext<'a> {
     pub tag: &'a str,
     /// Inner text of the element, if any.
     pub inner_text: &'a str,
+    /// Resolved media source from `src` or a child `<source>` element.
+    pub media_source: Option<&'a str>,
     /// Resolved container style (background, border, …).
     pub container_style: &'a ContainerStyle,
     /// Inherited text style.
@@ -35,6 +38,8 @@ pub struct CustomNodeContext<'a> {
     pub measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
     /// Decoded images keyed by `src` URL.
     pub images: &'a HashMap<String, Image>,
+    /// Encoded audio bytes keyed by `src` URL.
+    pub audio: &'a HashMap<String, Arc<[u8]>>,
     /// Attribute accessor.
     pub get_attr: &'a dyn Fn(&str) -> Option<String>,
     /// Channel + snapshot node id for value write-back (bidirectional sync).
@@ -61,6 +66,7 @@ impl ComponentRegistry {
     pub fn new() -> Self {
         let mut registry = Self::default();
         registry.register(Box::new(ButtonFactory));
+        registry.register(Box::new(AudioFactory));
         registry.register(Box::new(ImageFactory));
         registry.register(Box::new(InputTextFactory));
         registry
@@ -89,6 +95,23 @@ impl ComponentRegistry {
             }
         }
         None
+    }
+}
+
+struct AudioFactory;
+
+impl CustomNodeFactory for AudioFactory {
+    fn tags(&self) -> &'static [&'static str] {
+        &["audio"]
+    }
+
+    fn create(&self, _tag: &str, ctx: &CustomNodeContext) -> Option<Arc<dyn CustomNode>> {
+        Some(Arc::new(AudioComponent::new(
+            ctx.media_source.unwrap_or_default(),
+            ctx.media_source
+                .and_then(|source| ctx.audio.get(source))
+                .cloned(),
+        )))
     }
 }
 
@@ -172,7 +195,7 @@ mod tests {
     #[test]
     fn registry_reports_builtin_tags() {
         let tags = ComponentRegistry::new().tags();
-        for expected in ["button", "img", "input"] {
+        for expected in ["audio", "button", "img", "input"] {
             assert!(tags.contains(&expected), "missing tag {expected}");
         }
     }
@@ -187,6 +210,7 @@ mod tests {
         let container_style = ContainerStyle::default();
         let text_style = TextStyle::default();
         let images = HashMap::new();
+        let audio = HashMap::new();
         let get_attr = |name: &str| attrs.get(name).cloned();
         let measurer: Arc<dyn text::TextMeasurer<TextStyle>> = Arc::new(FallbackTextMeasurer);
 
@@ -194,10 +218,12 @@ mod tests {
             .create(&CustomNodeContext {
                 tag: "button",
                 inner_text: "",
+                media_source: None,
                 container_style: &container_style,
                 text_style: &text_style,
                 measurer: Arc::clone(&measurer),
                 images: &images,
+                audio: &audio,
                 get_attr: &get_attr,
                 write_back: None,
             })
@@ -208,10 +234,12 @@ mod tests {
             .create(&CustomNodeContext {
                 tag: "input",
                 inner_text: "",
+                media_source: None,
                 container_style: &container_style,
                 text_style: &text_style,
                 measurer: Arc::clone(&measurer),
                 images: &images,
+                audio: &audio,
                 get_attr: &get_attr,
                 write_back: None,
             })
@@ -223,10 +251,12 @@ mod tests {
             .create(&CustomNodeContext {
                 tag: "img",
                 inner_text: "",
+                media_source: None,
                 container_style: &container_style,
                 text_style: &text_style,
                 measurer: Arc::clone(&measurer),
                 images: &images,
+                audio: &audio,
                 get_attr: &get_attr,
                 write_back: None,
             })
@@ -241,14 +271,17 @@ mod tests {
         let container_style = ContainerStyle::default();
         let text_style = TextStyle::default();
         let images: HashMap<String, Image> = HashMap::new();
+        let audio = HashMap::new();
         let get_attr = |name: &str| attrs.get(name).cloned();
         let ctx = CustomNodeContext {
             tag: "video",
             inner_text: "",
+            media_source: None,
             container_style: &container_style,
             text_style: &text_style,
             measurer: Arc::new(FallbackTextMeasurer),
             images: &images,
+            audio: &audio,
             get_attr: &get_attr,
             write_back: None,
         };
