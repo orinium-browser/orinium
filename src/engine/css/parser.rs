@@ -1046,4 +1046,46 @@ mod tests {
             ])
         );
     }
+
+    #[test]
+    fn preserves_grid_functions_and_area_strings() {
+        let stylesheet = Parser::new(
+            r#"main {
+                grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+                grid-template-areas: "header header" "sidebar main";
+            }"#,
+        )
+        .parse()
+        .unwrap();
+        let declarations = stylesheet.children()[0].children();
+        let CssNodeType::Declaration { value, .. } = declarations[0].node() else {
+            panic!("expected declaration");
+        };
+        assert_eq!(
+            value,
+            &CssValue::Function(
+                "repeat".into(),
+                vec![
+                    CssValue::Keyword("auto-fit".into()),
+                    CssValue::Function(
+                        "minmax".into(),
+                        vec![
+                            CssValue::Length(100.0, Unit::Px),
+                            CssValue::Length(1.0, Unit::Fr),
+                        ],
+                    ),
+                ],
+            )
+        );
+        let CssNodeType::Declaration { value, .. } = declarations[1].node() else {
+            panic!("expected declaration");
+        };
+        assert_eq!(
+            value,
+            &CssValue::List(vec![
+                CssValue::String("header header".into()),
+                CssValue::String("sidebar main".into()),
+            ])
+        );
+    }
 }

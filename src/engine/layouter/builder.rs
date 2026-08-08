@@ -15,9 +15,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ui_layout::{
-    AlignItems, AutoSizeBehavior, BoxSizing, Display, FlexDirection, GridTrack, InnerDisplay,
-    ItemFragment, JustifyContent, LayoutChild, LayoutNode, Length, LengthOrAuto, OuterDisplay,
-    Position, Style,
+    AlignItems, AutoSizeBehavior, BoxSizing, Display, FlexDirection, GridRepeat, GridTrack,
+    InnerDisplay, ItemFragment, JustifyContent, LayoutChild, LayoutNode, Length, LengthOrAuto,
+    OuterDisplay, Position, Style,
 };
 
 use super::css_resolver::{ResolvedStyles, resolve_inline_style};
@@ -1731,6 +1731,14 @@ pub fn apply_declaration(
             style.grid_template_rows = parse_grid_tracks(name, value, text_style)?;
         }
 
+        ("grid-template-areas", _) => {
+            style.grid_template_areas = parse_grid_template_areas(value)?;
+        }
+
+        ("grid-area", CssValue::Keyword(area)) => {
+            style.grid_area = Some(area.to_string());
+        }
+
         _ => {
             // log::error!("{name}, {value:?}");
             return None;
@@ -2157,16 +2165,103 @@ fn parse_grid_tracks(
     };
     values
         .into_iter()
-        .map(|value| match value {
-            CssValue::Keyword(keyword) if keyword == "auto" => {
-                Some(GridTrack::Breadth(LengthOrAuto::Auto))
-            }
-            CssValue::Length(factor, Unit::Fr) if *factor >= 0.0 => Some(GridTrack::Flex(*factor)),
-            _ => resolve_css_len(name, value, text_style)
-                .map(LengthOrAuto::Length)
-                .map(GridTrack::Breadth),
-        })
+        .map(|value| parse_grid_track(name, value, text_style))
         .collect()
+}
+
+fn parse_grid_track(name: &str, value: &CssValue, text_style: &TextStyle) -> Option<GridTrack> {
+    match value {
+        CssValue::Keyword(keyword) if keyword == "auto" => {
+            Some(GridTrack::Breadth(LengthOrAuto::Auto))
+        }
+        CssValue::Length(factor, Unit::Fr) if *factor >= 0.0 => Some(GridTrack::Flex(*factor)),
+        CssValue::Function(function, args) if function == "minmax" => {
+            let [minimum, maximum] = args.as_slice() else {
+                return None;
+            };
+            Some(GridTrack::MinMax(
+                Box::new(parse_grid_track(name, minimum, text_style)?),
+                Box::new(parse_grid_track(name, maximum, text_style)?),
+            ))
+        }
+        CssValue::Function(function, args) if function == "repeat" => {
+            let (repeat, pattern) = args.split_first()?;
+            let repeat = match repeat {
+                CssValue::Number(count) if *count >= 1.0 && count.fract().abs() < f32::EPSILON => {
+                    GridRepeat::Count(*count as usize)
+                }
+                CssValue::Keyword(keyword) if keyword == "auto-fit" => GridRepeat::AutoFit,
+                CssValue::Keyword(keyword) if keyword == "auto-fill" => GridRepeat::AutoFill,
+                _ => return None,
+            };
+            let pattern = pattern
+                .iter()
+                .map(|value| parse_grid_track(name, value, text_style))
+                .collect::<Option<Vec<_>>>()?;
+            (!pattern.is_empty()).then_some(GridTrack::Repeat(repeat, pattern))
+        }
+        _ => resolve_css_len(name, value, text_style)
+            .map(LengthOrAuto::Length)
+            .map(GridTrack::Breadth),
+    }
+}
+
+fn parse_grid_template_areas(value: &CssValue) -> Option<Vec<Vec<String>>> {
+    if matches!(value, CssValue::Keyword(keyword) if keyword == "none") {
+        return Some(Vec::new());
+    }
+    let rows: Vec<&str> = match value {
+        CssValue::String(row) => vec![row],
+        CssValue::List(values) => values
+            .iter()
+            .map(|value| match value {
+                CssValue::String(row) => Some(row.as_str()),
+                _ => None,
+            })
+            .collect::<Option<_>>()?,
+        _ => return None,
+    };
+    let areas: Vec<Vec<String>> = rows
+        .into_iter()
+        .map(|row| {
+            row.split_whitespace()
+                .map(|name| {
+                    if name.chars().all(|character| character == '.') {
+                        ".".to_string()
+                    } else {
+                        name.to_string()
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    let width = areas.first()?.len();
+    if width == 0 || areas.iter().any(|row| row.len() != width) {
+        return None;
+    }
+    for name in areas.iter().flatten().filter(|name| name.as_str() != ".") {
+        let cells: Vec<_> = areas
+            .iter()
+            .enumerate()
+            .flat_map(|(row, areas)| {
+                areas
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, area)| *area == name)
+                    .map(move |(column, _)| (row, column))
+            })
+            .collect();
+        let min_row = cells.iter().map(|(row, _)| *row).min()?;
+        let max_row = cells.iter().map(|(row, _)| *row).max()?;
+        let min_column = cells.iter().map(|(_, column)| *column).min()?;
+        let max_column = cells.iter().map(|(_, column)| *column).max()?;
+        if (min_row..=max_row)
+            .any(|row| (min_column..=max_column).any(|column| areas[row][column] != *name))
+        {
+            return None;
+        }
+    }
+    Some(areas)
 }
 
 /// Resolve a computed CssValue into a final RGBA Color.
@@ -2599,6 +2694,59 @@ mod tests {
     }
 
     #[test]
+    fn grid_tracks_map_repeat_and_minmax() {
+        let style = apply_layout_property(
+            "grid-template-columns",
+            CssValue::Function(
+                "repeat".into(),
+                vec![
+                    CssValue::Keyword("auto-fit".into()),
+                    CssValue::Function(
+                        "minmax".into(),
+                        vec![
+                            CssValue::Length(100.0, Unit::Px),
+                            CssValue::Length(1.0, Unit::Fr),
+                        ],
+                    ),
+                ],
+            ),
+        );
+        assert_eq!(
+            style.grid_template_columns,
+            vec![GridTrack::Repeat(
+                GridRepeat::AutoFit,
+                vec![GridTrack::MinMax(
+                    Box::new(GridTrack::Breadth(LengthOrAuto::Length(Length::Px(100.0,)))),
+                    Box::new(GridTrack::Flex(1.0)),
+                )],
+            )]
+        );
+    }
+
+    #[test]
+    fn grid_named_areas_map_rows_and_item_name() {
+        let template = apply_layout_property(
+            "grid-template-areas",
+            CssValue::List(vec![
+                CssValue::String("header header".into()),
+                CssValue::String("sidebar main".into()),
+                CssValue::String("footer footer".into()),
+            ]),
+        );
+        assert_eq!(
+            template.grid_template_areas,
+            vec![
+                vec!["header".to_string(), "header".to_string()],
+                vec!["sidebar".to_string(), "main".to_string()],
+                vec!["footer".to_string(), "footer".to_string()],
+            ]
+        );
+
+        let item = apply_layout_property("grid-area", CssValue::Keyword("header".into()));
+        assert_eq!(item.grid_area.as_deref(), Some("header"));
+    }
+
+    #[test]
     fn absolute_and_fixed_inline_boxes_are_blockified() {
         for position in [Position::Absolute, Position::Fixed] {
             let mut style = Style {
@@ -2731,13 +2879,17 @@ mod tests {
     }
 
     fn layout_for(html: &str, css: &str) -> InfoNode {
+        layout_and_info_for(html, css).1
+    }
+
+    fn layout_and_info_for(html: &str, css: &str) -> (LayoutNode, InfoNode) {
         let dom = HtmlParser::new(html).parse();
         let mut resolved = ResolvedStyles::default();
         if !css.is_empty() {
             let sheet = CssParser::new(css).parse().unwrap();
             resolved.extend(CssResolver::resolve(&sheet));
         }
-        let (_layout, info) = build_layout_and_info(
+        build_layout_and_info(
             &dom.root,
             &resolved,
             Arc::new(FallbackTextMeasurer),
@@ -2747,8 +2899,46 @@ mod tests {
             },
             Vec::new(),
             ColorScheme::Light,
-        );
-        info
+        )
+    }
+
+    #[test]
+    fn named_grid_area_css_controls_final_layout() {
+        let html = r#"<html><body><div class="grid"><div class="header"></div><div class="sidebar"></div><div class="main"></div><div class="footer"></div></div></body></html>"#;
+        let css = r#"
+            .grid {
+                display: grid;
+                width: 300px;
+                grid-template-areas: "header header" "sidebar main" "footer footer";
+                grid-template-columns: 1fr 2fr;
+                gap: 10px;
+            }
+            .grid > div { height: 20px; }
+            .header { grid-area: header; }
+            .sidebar { grid-area: sidebar; }
+            .main { grid-area: main; }
+            .footer { grid-area: footer; }
+        "#;
+        let (mut layout, _) = layout_and_info_for(html, css);
+        ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+
+        fn find_grid(node: &LayoutNode) -> Option<&LayoutNode> {
+            if node.style.display.inner == InnerDisplay::Grid {
+                return Some(node);
+            }
+            node.children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .find_map(find_grid)
+        }
+        let grid = find_grid(&layout).expect("grid container");
+        let items: Vec<_> = grid.children.iter().filter_map(LayoutChild::node).collect();
+        assert_eq!(items.len(), 4);
+        assert_eq!(items[0].layout_box.width_box(), 300.0);
+        assert_eq!(items[1].layout_box.iter().next().unwrap().border_box.x, 0.0);
+        assert!((items[2].layout_box.iter().next().unwrap().border_box.x - 106.66667).abs() < 0.01);
+        assert_eq!(items[3].layout_box.width_box(), 300.0);
+        assert!(items[3].layout_box.iter().next().unwrap().border_box.y >= 60.0);
     }
 
     /// Depth-first search for the first [`NodeKind::Text`] whose content is
