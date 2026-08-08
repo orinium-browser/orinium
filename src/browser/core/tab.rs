@@ -243,10 +243,19 @@ impl Tab {
             .and_then(|wv| wv.layout_and_info_mut())
     }
 
-    pub fn set_system_color_scheme(&mut self, scheme: ColorScheme) {
+    /// Dispatches a click on a DOM node to the page's JS `onclick` handler.
+    ///
+    /// Returns whether the click mutated the DOM and needs a redraw.
+    pub fn on_js_click(&mut self, dom_id: u32) -> bool {
         self.webview
             .as_mut()
-            .map(|wv| wv.set_system_color_scheme(scheme));
+            .is_some_and(|wv| wv.on_js_click(dom_id))
+    }
+
+    pub fn set_system_color_scheme(&mut self, scheme: ColorScheme) {
+        if let Some(wv) = self.webview.as_mut() {
+            wv.set_system_color_scheme(scheme)
+        }
     }
 
     /// Returns title of the document

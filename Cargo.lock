@@ -3053,7 +3053,7 @@ dependencies = [
 [[package]]
 name = "pixi_byte"
 version = "0.1.0"
-source = "git+https://github.com/orinium-browser/pixi_byte?rev=9de1b545f412b33d864bb65896ec65d12509865e#9de1b545f412b33d864bb65896ec65d12509865e"
+source = "git+https://github.com/orinium-browser/pixi_byte?rev=dd0ca6d01cd026653fd31b9610db1ed0b7940aa4#dd0ca6d01cd026653fd31b9610db1ed0b7940aa4"
 dependencies = [
  "rustc-hash 2.1.3",
 ]
@@ -4473,7 +4473,7 @@ dependencies = [
 [[package]]
 name = "ui_layout"
 version = "0.12.1"
-source = "git+https://github.com/098orin/ui_layout-rs?rev=ee0cd0b1f7074c6e22e2afc42ed1585e24f09f58#ee0cd0b1f7074c6e22e2afc42ed1585e24f09f58"
+source = "git+https://github.com/098orin/ui_layout-rs?rev=a6b6a2c6cc9d184ed61e4001e2c6a6d7fb712989#a6b6a2c6cc9d184ed61e4001e2c6a6d7fb712989"
 
 [[package]]
 name = "unicode-bidi"

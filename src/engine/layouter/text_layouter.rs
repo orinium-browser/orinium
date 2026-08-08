@@ -170,7 +170,7 @@ impl TextFlowLayouter {
                     // Advance to next line state for content after \n
                     y_pos += lh;
                     line_index += 1;
-                    x_pos = start_pos.0;
+                    x_pos = 0.0;
 
                     let next_byte_after_nl = nl_byte + 1;
                     if next_byte_after_nl < next_byte {
@@ -194,7 +194,7 @@ impl TextFlowLayouter {
                     line_texts.push(String::new());
                     line_start = nl_byte + 1;
                     line_start_idx = i + 1;
-                    x_pos = start_pos.0;
+                    x_pos = 0.0;
                     y_pos += lh;
                     line_index += 1;
                     accumulated = 0.0;
@@ -226,7 +226,7 @@ impl TextFlowLayouter {
 
                         line_start = break_byte;
                         line_start_idx = break_at;
-                        x_pos = start_pos.0;
+                        x_pos = 0.0;
                         y_pos += lh;
                         line_index += 1;
                         last_breakable_cluster = None;

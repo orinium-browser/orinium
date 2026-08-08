@@ -6,6 +6,7 @@ use crate::engine::css::{
     values::{CssValue, Unit},
 };
 use crate::engine::html::HtmlNodeType;
+use crate::engine::layouter::css_resolver::resolve_inline_value;
 use crate::engine::layouter::dom_snapshot::{DomSnapshot, NodeId};
 use crate::engine::layouter::types::VerticalAlign;
 use crate::engine::tree::NodeRef;
@@ -18,7 +19,7 @@ use ui_layout::{
     JustifyContent, LayoutChild, LayoutNode, Length, LengthOrAuto, OuterDisplay, Position, Style,
 };
 
-use super::css_resolver::ResolvedStyles;
+use super::css_resolver::{ResolvedStyles, resolve_inline_style};
 use super::text_layouter::TextFlowLayouter;
 use super::types::{
     Background, BorderRadius, BorderStyle, Color, ColorScheme, ColorStop, ContainerRole,
@@ -245,23 +246,12 @@ pub fn build_layout_and_info_from_snapshot(
             let mut overflow = Overflow::default();
 
             // Collect CSS candidates.
-            let candidates: Option<HashMap<_, _>> =
-                if let HtmlNodeType::Element { attributes, .. } = html_node {
-                    let mut candidates = collect_candidates(resolved_styles, &chain_for_css);
-                    if let Some(inline_style) = attributes
-                        .iter()
-                        .find(|attribute| attribute.name.eq_ignore_ascii_case("style"))
-                        .map(|attribute| attribute.value.as_str())
-                    {
-                        merge_candidates(
-                            &mut candidates,
-                            super::css_resolver::CssResolver::resolve_inline_style(inline_style),
-                        );
-                    }
-                    Some(candidates)
-                } else {
-                    None
-                };
+            let candidates: Option<HashMap<_, _>> = if let HtmlNodeType::Element { .. } = html_node
+            {
+                Some(collect_candidates(resolved_styles, &chain_for_css))
+            } else {
+                None
+            };
 
             // Resolve the used color scheme for this element. `light-dark()`
             // and system colors resolve against it, and it is inherited by
@@ -298,6 +288,45 @@ pub fn build_layout_and_info_from_snapshot(
                     }
                 }
             }
+
+            // Apply the element's inline `style` attribute. Inline styles are
+            // author-origin declarations with the highest specificity, so they
+            // override stylesheet rules — unless the stylesheet rule was
+            // `!important`, which still wins over a non-`!important` inline
+            // declaration.
+            if let Some(style_attr) = html_node.get_attr("style") {
+                for (name, value, important) in resolve_inline_style(style_attr) {
+                    if name.starts_with("--") {
+                        continue;
+                    }
+                    let stylesheet_important = candidates
+                        .as_ref()
+                        .and_then(|c| c.get(&name))
+                        .is_some_and(|declaration| declaration.important);
+                    if !important && stylesheet_important {
+                        continue;
+                    }
+                    apply_declaration(
+                        &name,
+                        &value,
+                        &mut style,
+                        &mut container_style,
+                        &mut text_style,
+                        &mut overflow,
+                        used_color_scheme,
+                    );
+                }
+            }
+
+            // Apply attribute sizing
+            apply_attribute_dimensions(
+                html_node,
+                &mut style,
+                &mut container_style,
+                &mut text_style,
+                &mut overflow,
+                used_color_scheme,
+            );
 
             // Absolutely positioned boxes are blockified before layout. The
             // inner display type remains unchanged.
@@ -339,6 +368,7 @@ pub fn build_layout_and_info_from_snapshot(
                 let info = InfoNode {
                     kind,
                     children: Vec::new(),
+                    dom_id: Some(stack[top_idx].dom),
                 };
                 let ptr = stack[top_idx].dom;
                 results.insert(ptr, (layout, info));
@@ -383,6 +413,7 @@ pub fn build_layout_and_info_from_snapshot(
                 let info = InfoNode {
                     kind,
                     children: Vec::new(),
+                    dom_id: Some(stack[top_idx].dom),
                 };
                 let ptr = stack[top_idx].dom;
                 results.insert(ptr, (layout, info));
@@ -464,6 +495,7 @@ pub fn build_layout_and_info_from_snapshot(
                             InfoNode {
                                 kind,
                                 children: Vec::new(),
+                                dom_id: Some(child),
                             },
                         ));
                     } else if child_node.tag_name() == Some("br") {
@@ -472,6 +504,7 @@ pub fn build_layout_and_info_from_snapshot(
                             InfoNode {
                                 kind: NodeKind::LineBreak,
                                 children: Vec::new(),
+                                dom_id: Some(child),
                             },
                         ));
                     } else {
@@ -494,6 +527,7 @@ pub fn build_layout_and_info_from_snapshot(
                 let info = InfoNode {
                     kind,
                     children: info_children,
+                    dom_id: Some(stack[top_idx].dom),
                 };
                 let ptr = stack[top_idx].dom;
                 results.insert(ptr, (layout, info));
@@ -617,6 +651,7 @@ pub fn build_layout_and_info_from_snapshot(
             let info = InfoNode {
                 kind: final_kind,
                 children: all_info,
+                dom_id: Some(frame.dom),
             };
             let ptr = frame.dom;
             results.insert(ptr, (layout, info));
@@ -797,18 +832,61 @@ fn collect_candidates(
     candidates
 }
 
-fn merge_candidates(
-    candidates: &mut HashMap<String, super::css_resolver::ResolvedDeclaration>,
-    declarations: impl IntoIterator<Item = super::css_resolver::ResolvedDeclaration>,
+fn apply_attribute_dimensions(
+    html_node: &HtmlNodeType,
+    style: &mut Style,
+    container_style: &mut ContainerStyle,
+    text_style: &mut TextStyle,
+    overflow: &mut Overflow,
+    color_scheme: ColorScheme,
 ) {
-    for declaration in declarations {
-        let should_replace = candidates
-            .get(&declaration.name)
-            .is_none_or(|current| declaration.outranks(current));
-        if should_replace {
-            candidates.insert(declaration.name.clone(), declaration);
+    fn apply_attribute_size(
+        attr: &str,
+        html_node: &HtmlNodeType,
+        style: &mut Style,
+        container_style: &mut ContainerStyle,
+        text_style: &mut TextStyle,
+        overflow: &mut Overflow,
+        color_scheme: ColorScheme,
+    ) {
+        if let Some(value) = html_node.get_attr(attr)
+            && let Some(mut value) = resolve_inline_value(value)
+        {
+            if let CssValue::Number(v) = value {
+                value = CssValue::Length(v, Unit::Px);
+            }
+
+            apply_declaration(
+                attr,
+                &value,
+                style,
+                container_style,
+                text_style,
+                overflow,
+                color_scheme,
+            );
         }
     }
+
+    apply_attribute_size(
+        "width",
+        html_node,
+        style,
+        container_style,
+        text_style,
+        overflow,
+        color_scheme,
+    );
+
+    apply_attribute_size(
+        "height",
+        html_node,
+        style,
+        container_style,
+        text_style,
+        overflow,
+        color_scheme,
+    );
 }
 
 fn blockify_out_of_flow_positioned(style: &mut Style) {
@@ -1086,45 +1164,6 @@ pub fn apply_declaration(
          * ====================== */
         ("display", CssValue::Keyword(v)) => {
             style.display = Display::from_css_name(v.as_str())?;
-        }
-
-        /* ======================
-         * Positioning
-         * ====================== */
-        ("position", CssValue::Keyword(v)) => {
-            style.position.kind = match v.as_str() {
-                "static" => Position::Static,
-                "relative" => Position::Relative,
-                "absolute" => Position::Absolute,
-                "fixed" => Position::Fixed,
-                _ => return None,
-            };
-        }
-        ("inset", v) => {
-            expand_box(
-                name,
-                v,
-                text_style,
-                &|_, value, text_style| resolve_css_len_auto(name, value, text_style),
-                |top, right, bottom, left| {
-                    style.position.top = top;
-                    style.position.right = right;
-                    style.position.bottom = bottom;
-                    style.position.left = left;
-                },
-            )?;
-        }
-        ("top", _) => {
-            style.position.top = resolve_css_len_auto(name, value, text_style)?;
-        }
-        ("right", _) => {
-            style.position.right = resolve_css_len_auto(name, value, text_style)?;
-        }
-        ("bottom", _) => {
-            style.position.bottom = resolve_css_len_auto(name, value, text_style)?;
-        }
-        ("left", _) => {
-            style.position.left = resolve_css_len_auto(name, value, text_style)?;
         }
 
         /* ======================
@@ -1509,6 +1548,53 @@ pub fn apply_declaration(
                 }
                 _ => return None,
             };
+        }
+
+        /* ======================
+         * Position
+         * ====================== */
+        ("position", _) => {
+            style.position.kind = match value {
+                CssValue::Keyword(v) => match v.to_ascii_lowercase().as_str() {
+                    "static" => Position::Static,
+                    "relative" => Position::Relative,
+                    "absolute" => Position::Absolute,
+                    "fixed" => Position::Fixed,
+                    _ => return None,
+                },
+                _ => return None,
+            };
+        }
+        ("top", _) => {
+            style.position.top = resolve_css_len_auto(name, value, text_style)?;
+        }
+        ("right", _) => {
+            style.position.right = resolve_css_len_auto(name, value, text_style)?;
+        }
+        ("bottom", _) => {
+            style.position.bottom = resolve_css_len_auto(name, value, text_style)?;
+        }
+        ("left", _) => {
+            style.position.left = resolve_css_len_auto(name, value, text_style)?;
+        }
+        ("inset", v) => {
+            expand_box(
+                name,
+                v,
+                text_style,
+                &|_, cv, ts| match cv {
+                    CssValue::Keyword(s) if s.eq_ignore_ascii_case("auto") => {
+                        Some(ui_layout::LengthOrAuto::Auto)
+                    }
+                    _ => resolve_css_len(name, cv, ts).map(ui_layout::LengthOrAuto::Length),
+                },
+                |t, r, b, l| {
+                    style.position.top = t;
+                    style.position.right = r;
+                    style.position.bottom = b;
+                    style.position.left = l;
+                },
+            )?;
         }
 
         /* ======================
@@ -2337,6 +2423,11 @@ fn resolve_css_color(name: &str, css_color: &CssValue, color_scheme: ColorScheme
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::bridge::text::FallbackTextMeasurer;
+    use crate::engine::css::parser::Parser as CssParser;
+    use crate::engine::html::parser::Parser as HtmlParser;
+    use crate::engine::layouter::css_resolver::CssResolver;
+    use std::sync::Arc;
 
     fn apply_layout_property(name: &str, value: CssValue) -> Style {
         let mut style = Style::default();
@@ -2532,5 +2623,88 @@ mod tests {
             .is_none()
         );
         assert_eq!(overflow, Overflow::default());
+    }
+
+    fn layout_for(html: &str, css: &str) -> InfoNode {
+        let dom = HtmlParser::new(html).parse();
+        let mut resolved = ResolvedStyles::default();
+        if !css.is_empty() {
+            let sheet = CssParser::new(css).parse().unwrap();
+            resolved.extend(CssResolver::resolve(&sheet));
+        }
+        let (_layout, info) = build_layout_and_info(
+            &dom.root,
+            &resolved,
+            Arc::new(FallbackTextMeasurer),
+            InheritedCss {
+                text_style: TextStyle::default(),
+                color_scheme: ColorScheme::Light,
+            },
+            Vec::new(),
+            ColorScheme::Light,
+        );
+        info
+    }
+
+    /// Depth-first search for the first [`NodeKind::Text`] whose content is
+    /// `content`, returning a clone of its style.
+    fn text_style_for(info: &InfoNode, content: &str) -> TextStyle {
+        fn walk(node: &InfoNode, content: &str) -> Option<TextStyle> {
+            if let NodeKind::Text {
+                style,
+                text: actual,
+                ..
+            } = &node.kind
+                && actual == content
+            {
+                return Some(style.clone());
+            }
+            node.children.iter().find_map(|child| walk(child, content))
+        }
+        walk(info, content).expect("text node with expected content must exist")
+    }
+
+    #[test]
+    fn inline_style_overrides_stylesheet_rule() {
+        // A stylesheet sets color to blue; the inline attribute must win.
+        let html = r#"<html><body><p id="x" style="color: red;">hello</p></body></html>"#;
+        let info = layout_for(html, "p { color: blue; }");
+
+        assert_eq!(text_style_for(&info, "hello").color, Color(255, 0, 0, 255));
+    }
+
+    #[test]
+    fn inline_style_non_important_loses_to_important_stylesheet() {
+        let html = r#"<html><body><p id="x" style="color: red;">hello</p></body></html>"#;
+        let info = layout_for(html, "p { color: blue !important; }");
+
+        assert_eq!(text_style_for(&info, "hello").color, Color(0, 0, 255, 255));
+    }
+
+    #[test]
+    fn inline_style_important_beats_stylesheet_important() {
+        let html =
+            r#"<html><body><p id="x" style="color: red !important;">hello</p></body></html>"#;
+        let info = layout_for(html, "p { color: blue !important; }");
+
+        assert_eq!(text_style_for(&info, "hello").color, Color(255, 0, 0, 255));
+    }
+
+    #[test]
+    fn inline_style_sets_container_background() {
+        let html =
+            r#"<html><body><div style="background-color: rgb(0, 128, 0);">x</div></body></html>"#;
+        let info = layout_for(html, "");
+
+        fn find_div(node: &InfoNode) -> Option<&ContainerStyle> {
+            if let NodeKind::Container { style, .. } = &node.kind
+                && style.background != Background::default()
+            {
+                return Some(style);
+            }
+            node.children.iter().find_map(find_div)
+        }
+        let style = find_div(&info).expect("div container with background exists");
+        assert_eq!(style.background, Background::Color(Color(0, 128, 0, 255)));
     }
 }

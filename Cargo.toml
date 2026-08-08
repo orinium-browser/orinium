@@ -34,9 +34,10 @@ ipc-channel = "0.22.0"
 log = "0.4.32"
 lru = "0.18"
 once_cell = "1.21.4"
+# pixi_byte = { path = "../pixi_byte" }
 pixi_byte = {
   git = "https://github.com/orinium-browser/pixi_byte",
-  rev = "9de1b545f412b33d864bb65896ec65d12509865e"
+  rev = "dd0ca6d01cd026653fd31b9610db1ed0b7940aa4"
 }
 pollster = "1.0"
 rustls = { version = "0.23.40", default-features = false, features = ["tls12"] }
@@ -49,7 +50,10 @@ symphonia = {
 }
 tokio = { version = "1.52", features = ["fs", "io-std", "net", "rt", "time"] }
 tokio-rustls = "0.26.4"
-ui_layout = { git = "https://github.com/098orin/ui_layout-rs", rev = "ee0cd0b1f7074c6e22e2afc42ed1585e24f09f58" }
+ui_layout = {
+  git = "https://github.com/098orin/ui_layout-rs",
+  rev = "a6b6a2c6cc9d184ed61e4001e2c6a6d7fb712989"
+}
 url = "2.5"
 wgpu = "30.0.0"
 wgpu-types = "30.0.0"

@@ -264,6 +264,15 @@ impl<'a> Parser<'a> {
         self.peek_next_token(0)
     }
 
+    /// Parse a bare declaration list (e.g. the value of a `style` attribute).
+    ///
+    /// Unlike `parse()`, this does not expect selectors or a surrounding block.
+    /// It consumes declarations until EOF or `}` and returns them as
+    /// `Declaration` nodes, mirroring the body of a rule.
+    pub fn parse_declarations(&mut self) -> ParseResult<Vec<CssNode>> {
+        self.parse_declaration_list()
+    }
+
     fn consume_token(&mut self) -> Token {
         if let Some(tok) = self.lookahead.pop_front() {
             tok
@@ -861,7 +870,7 @@ impl<'a> Parser<'a> {
         Ok(declarations)
     }
 
-    fn parse_tokens_to_css_value(tokens: Vec<Token>) -> ParseResult<CssValue> {
+    pub fn parse_tokens_to_css_value(tokens: Vec<Token>) -> ParseResult<CssValue> {
         let mut values = vec![];
         let mut iter = tokens.into_iter().peekable();
 

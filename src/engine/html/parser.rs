@@ -126,16 +126,20 @@ impl DomTree {
 
     /// Replace all text content of this node with the given string
     pub fn set_text_content(node: &NodeRef<HtmlNodeType>, new_text: &str) {
-        let mut n = node.borrow_mut();
-        match &mut n.value {
-            HtmlNodeType::Text(content) => *content = new_text.to_string(),
-            HtmlNodeType::Element { .. } => {
-                // remove all children and add a single Text node
-                n.clear_children();
-                let text_node = TreeNode::new(HtmlNodeType::Text(new_text.to_string()));
-                TreeNode::add_child(node, text_node);
-            }
-            _ => { /* do nothing */ }
+        // Do not hold a borrow across child mutations (would double-borrow).
+        if let HtmlNodeType::Text(content) = &mut node.borrow_mut().value {
+            *content = new_text.to_string();
+            return;
+        }
+
+        // `node.borrow()` must end before mutating below, so evaluate the
+        // condition in its own statement.
+        let is_element = matches!(node.borrow().value, HtmlNodeType::Element { .. });
+        if is_element {
+            // remove all children and add a single Text node
+            node.borrow_mut().clear_children();
+            let text_node = TreeNode::new(HtmlNodeType::Text(new_text.to_string()));
+            TreeNode::add_child(node, text_node);
         }
     }
 
@@ -166,6 +170,24 @@ impl DomTree {
         });
 
         texts
+    }
+
+    /// Collects inline `<script>` texts, skipping blocks with a `src` attribute.
+    ///
+    /// External scripts are not supported yet and are reported via log.
+    pub fn collect_inline_scripts(&self) -> Vec<String> {
+        self.get_elements_by_tag_name("script")
+            .into_iter()
+            .filter_map(|node| {
+                let n = node.borrow();
+                if n.value.has_attr("src") {
+                    log::info!("external scripts not yet supported");
+                    None
+                } else {
+                    Some(DomTree::inner_text(&node))
+                }
+            })
+            .collect()
     }
 }
 
