@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use ui_layout::{
     AlignItems, AutoSizeBehavior, BoxSizing, Display, FlexDirection, InnerDisplay, ItemFragment,
-    JustifyContent, LayoutChild, LayoutNode, Length, LengthOrAuto, OuterDisplay, Style,
+    JustifyContent, LayoutChild, LayoutNode, Length, LengthOrAuto, OuterDisplay, Position, Style,
 };
 
 use super::css_resolver::{ResolvedStyles, resolve_inline_style};
@@ -1538,6 +1538,53 @@ pub fn apply_declaration(
                 }
                 _ => return None,
             };
+        }
+
+        /* ======================
+         * Position
+         * ====================== */
+        ("position", _) => {
+            style.position.kind = match value {
+                CssValue::Keyword(v) => match v.to_ascii_lowercase().as_str() {
+                    "static" => Position::Static,
+                    "relative" => Position::Relative,
+                    "absolute" => Position::Absolute,
+                    "fixed" => Position::Fixed,
+                    _ => return None,
+                },
+                _ => return None,
+            };
+        }
+        ("top", _) => {
+            style.position.top = resolve_css_len_auto(name, value, text_style)?;
+        }
+        ("right", _) => {
+            style.position.right = resolve_css_len_auto(name, value, text_style)?;
+        }
+        ("bottom", _) => {
+            style.position.bottom = resolve_css_len_auto(name, value, text_style)?;
+        }
+        ("left", _) => {
+            style.position.left = resolve_css_len_auto(name, value, text_style)?;
+        }
+        ("inset", v) => {
+            expand_box(
+                name,
+                v,
+                text_style,
+                &|_, cv, ts| match cv {
+                    CssValue::Keyword(s) if s.eq_ignore_ascii_case("auto") => {
+                        Some(ui_layout::LengthOrAuto::Auto)
+                    }
+                    _ => resolve_css_len(name, cv, ts).map(ui_layout::LengthOrAuto::Length),
+                },
+                |t, r, b, l| {
+                    style.position.top = t;
+                    style.position.right = r;
+                    style.position.bottom = b;
+                    style.position.left = l;
+                },
+            )?;
         }
 
         /* ======================

@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <title>Position CSS Test</title>
+        <style>
+            * {
+                box-sizing: border-box;
+            }
+
+            body {
+                margin: 0;
+                font-family: sans-serif;
+                line-height: 1.4;
+            }
+
+            section {
+                margin: 20px;
+                padding: 16px;
+                border: 2px solid #333;
+            }
+
+            h2 {
+                margin: 0 0 12px;
+            }
+
+            .box {
+                padding: 12px;
+                border: 2px solid;
+                background: #eee;
+            }
+
+            /* 1. Static */
+
+            .static-container {
+                border: 2px dashed #888;
+                padding: 8px;
+            }
+
+            .static {
+                position: static;
+                background: #ddd;
+            }
+
+            /* 2. Relative */
+
+            .relative-container {
+                border: 2px dashed #888;
+                padding: 8px;
+            }
+
+            .relative {
+                position: relative;
+                top: 10px;
+                left: 20px;
+                background: #cce;
+            }
+
+            .relative-after {
+                background: #eee;
+            }
+
+            /* 3. Absolute */
+
+            .absolute-container {
+                position: relative;
+                height: 180px;
+                border: 2px dashed #888;
+                padding: 8px;
+            }
+
+            .absolute {
+                position: absolute;
+                top: 20px;
+                right: 20px;
+                width: 100px;
+                height: 60px;
+                background: #cec;
+            }
+
+            /* 4. Inset */
+
+            .inset-container {
+                position: relative;
+                height: 160px;
+                border: 2px dashed #888;
+            }
+
+            .inset {
+                position: absolute;
+                inset: 20px 30px 40px 50px;
+                background: #ecc;
+            }
+
+            /* 5. Individual offsets */
+
+            .offset-container {
+                position: relative;
+                height: 160px;
+                border: 2px dashed #888;
+            }
+
+            .offset {
+                position: absolute;
+                top: 10px;
+                left: 20px;
+                right: 30px;
+                bottom: 40px;
+                background: #ddc;
+            }
+
+            /* 6. Absolute without positioned parent */
+
+            .no-positioned-parent {
+                border: 2px dashed #888;
+                padding: 20px;
+            }
+
+            .absolute-no-parent {
+                position: absolute;
+                top: 300px;
+                left: 30px;
+                width: 150px;
+                padding: 10px;
+                background: #fcc;
+            }
+
+            /* 7. Relative does not leave flow */
+
+            .flow-test {
+                border: 2px dashed #888;
+            }
+
+            .flow-test > div {
+                padding: 10px;
+                margin: 4px;
+                background: #ddd;
+            }
+
+            .flow-relative {
+                position: relative;
+                top: 20px;
+                left: 30px;
+                background: #ccf !important;
+            }
+
+            /* 8. Absolute leaves flow */
+
+            .absolute-flow {
+                position: relative;
+                height: 160px;
+                border: 2px dashed #888;
+            }
+
+            .absolute-flow > div {
+                padding: 10px;
+                margin: 4px;
+                background: #ddd;
+            }
+
+            .absolute-flow-item {
+                position: absolute;
+                top: 20px;
+                left: 30px;
+                background: #cfc !important;
+            }
+
+            /* 9. Overflow */
+
+            .overflow-test {
+                position: relative;
+                width: 250px;
+                height: 100px;
+                overflow: hidden;
+                border: 2px solid;
+            }
+
+            .overflow-child {
+                position: absolute;
+                top: 20px;
+                left: 180px;
+                width: 150px;
+                height: 60px;
+                background: #f99;
+            }
+
+            /* 10. Fixed */
+
+            .fixed {
+                position: fixed;
+                right: 20px;
+                bottom: 20px;
+                padding: 12px 20px;
+                background: #222;
+                color: white;
+                border-radius: 8px;
+            }
+
+            /* 11. Auto offsets */
+
+            .auto-offset {
+                position: relative;
+                left: auto;
+                right: auto;
+                top: auto;
+                bottom: auto;
+                background: #ddd;
+            }
+        </style>
+    </head>
+
+    <body>
+        <section>
+            <h2>1. Static</h2>
+
+            <div class="static-container">
+                <div class="box static">Static</div>
+                <div class="box">Normal flow after static</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>2. Relative</h2>
+
+            <div class="relative-container">
+                <div class="box relative">Relative: top 10px / left 20px</div>
+
+                <div class="box relative-after">
+                    This should remain in the original flow position.
+                </div>
+            </div>
+        </section>
+
+        <section>
+            <h2>3. Absolute</h2>
+
+            <div class="absolute-container">
+                <div class="box absolute">Absolute</div>
+
+                Normal-flow content remains here.
+            </div>
+        </section>
+
+        <section>
+            <h2>4. Inset shorthand</h2>
+
+            <div class="inset-container">
+                <div class="box inset">inset: 20px 30px 40px 50px</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>5. top / right / bottom / left</h2>
+
+            <div class="offset-container">
+                <div class="box offset">All four offsets</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>6. Absolute without positioned parent</h2>
+
+            <div class="no-positioned-parent">
+                The parent is not positioned.
+
+                <div class="absolute-no-parent">
+                    Absolute element. Its containing block should not be this
+                    parent.
+                </div>
+            </div>
+        </section>
+
+        <section>
+            <h2>7. Relative remains in normal flow</h2>
+
+            <div class="flow-test">
+                <div>Item A</div>
+                <div class="flow-relative">Item B — relative</div>
+                <div>Item C</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>8. Absolute leaves normal flow</h2>
+
+            <div class="absolute-flow">
+                <div>Item A</div>
+
+                <div class="absolute-flow-item">Item B — absolute</div>
+
+                <div>Item C</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>9. Position + overflow</h2>
+
+            <div class="overflow-test">
+                <div class="overflow-child">This should be clipped.</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>10. Auto offsets</h2>
+
+            <div class="box auto-offset">top/right/bottom/left: auto</div>
+        </section>
+
+        <div class="fixed">position: fixed</div>
+    </body>
+</html>
