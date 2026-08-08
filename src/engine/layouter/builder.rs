@@ -245,12 +245,23 @@ pub fn build_layout_and_info_from_snapshot(
             let mut overflow = Overflow::default();
 
             // Collect CSS candidates.
-            let candidates: Option<HashMap<_, _>> = if let HtmlNodeType::Element { .. } = html_node
-            {
-                Some(collect_candidates(resolved_styles, &chain_for_css))
-            } else {
-                None
-            };
+            let candidates: Option<HashMap<_, _>> =
+                if let HtmlNodeType::Element { attributes, .. } = html_node {
+                    let mut candidates = collect_candidates(resolved_styles, &chain_for_css);
+                    if let Some(inline_style) = attributes
+                        .iter()
+                        .find(|attribute| attribute.name.eq_ignore_ascii_case("style"))
+                        .map(|attribute| attribute.value.as_str())
+                    {
+                        merge_candidates(
+                            &mut candidates,
+                            super::css_resolver::CssResolver::resolve_inline_style(inline_style),
+                        );
+                    }
+                    Some(candidates)
+                } else {
+                    None
+                };
 
             // Resolve the used color scheme for this element. `light-dark()`
             // and system colors resolve against it, and it is inherited by
@@ -780,6 +791,20 @@ fn collect_candidates(
     }
 
     candidates
+}
+
+fn merge_candidates(
+    candidates: &mut HashMap<String, super::css_resolver::ResolvedDeclaration>,
+    declarations: impl IntoIterator<Item = super::css_resolver::ResolvedDeclaration>,
+) {
+    for declaration in declarations {
+        let should_replace = candidates
+            .get(&declaration.name)
+            .is_none_or(|current| declaration.outranks(current));
+        if should_replace {
+            candidates.insert(declaration.name.clone(), declaration);
+        }
+    }
 }
 
 pub fn apply_declaration(

@@ -99,6 +99,24 @@ impl CssResolver {
         styles
     }
 
+    /// Parses declarations from an HTML `style` attribute.
+    ///
+    /// Inline declarations use author origin but outrank selector-based author
+    /// rules of the same importance. Author `!important` declarations still
+    /// outrank normal inline declarations, as required by the cascade.
+    pub fn resolve_inline_style(style: &str) -> ResolvedStyles {
+        let source = format!("* {{ {style} }}");
+        let Ok(stylesheet) = crate::engine::css::parser::Parser::new(&source).parse() else {
+            return Vec::new();
+        };
+        let mut declarations = Self::resolve_with_origin(&stylesheet, StyleOrigin::Author);
+        for declaration in &mut declarations {
+            declaration.specificity = (u32::MAX, u32::MAX, u32::MAX);
+            declaration.order = usize::MAX;
+        }
+        declarations
+    }
+
     fn walk(node: &CssNode, styles: &mut ResolvedStyles, order: &mut usize, origin: StyleOrigin) {
         Self::resolve_rule(node, styles, order, origin);
 
@@ -195,6 +213,22 @@ mod tests {
 
         assert!(styles[1].order > styles[0].order);
         assert!(styles[1].outranks(&styles[0]));
+    }
+
+    #[test]
+    fn inline_style_outranks_selector_rule() {
+        let stylesheet = resolve("#target { color: blue; }", StyleOrigin::Author);
+        let inline = CssResolver::resolve_inline_style("color: red");
+
+        assert!(inline[0].outranks(&stylesheet[0]));
+    }
+
+    #[test]
+    fn important_selector_rule_outranks_normal_inline_style() {
+        let stylesheet = resolve("#target { color: blue !important; }", StyleOrigin::Author);
+        let inline = CssResolver::resolve_inline_style("color: red");
+
+        assert!(stylesheet[0].outranks(&inline[0]));
     }
 }
 
