@@ -597,196 +597,197 @@
 <a href=#597 id=597 data-nosnippet>597</a>    }
 <a href=#598 id=598 data-nosnippet>598</a>
 <a href=#599 id=599 data-nosnippet>599</a>    <span class="kw">pub fn </span>relayout(<span class="kw-2">&amp;mut </span><span class="self">self</span>, viewport: (f32, f32)) {
-<a href=#600 id=600 data-nosnippet>600</a>        <span class="kw">let </span><span class="prelude-val">Some</span>((layout, _info)) = <span class="self">self</span>.layout_and_info.as_mut() <span class="kw">else </span>{
+<a href=#600 id=600 data-nosnippet>600</a>        <span class="kw">let </span><span class="prelude-val">Some</span>((layout, info)) = <span class="self">self</span>.layout_and_info.as_mut() <span class="kw">else </span>{
 <a href=#601 id=601 data-nosnippet>601</a>            <span class="kw">return</span>;
 <a href=#602 id=602 data-nosnippet>602</a>        };
 <a href=#603 id=603 data-nosnippet>603</a>
 <a href=#604 id=604 data-nosnippet>604</a>        ui_layout::LayoutEngine::layout(layout, viewport.<span class="number">0</span>, viewport.<span class="number">1</span>);
-<a href=#605 id=605 data-nosnippet>605</a>    }
-<a href=#606 id=606 data-nosnippet>606</a>
-<a href=#607 id=607 data-nosnippet>607</a>    <span class="doccomment">/// 現在描画可能な Layout / Info を返す（なければ None）
-<a href=#608 id=608 data-nosnippet>608</a>    </span><span class="kw">pub fn </span>layout_and_info(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;(<span class="kw-2">&amp;</span>LayoutNode, <span class="kw-2">&amp;</span>InfoNode)&gt; {
-<a href=#609 id=609 data-nosnippet>609</a>        <span class="self">self</span>.layout_and_info.as_ref().map(|(l, i)| (l, i))
-<a href=#610 id=610 data-nosnippet>610</a>    }
-<a href=#611 id=611 data-nosnippet>611</a>
-<a href=#612 id=612 data-nosnippet>612</a>    <span class="kw">pub fn </span>layout_and_info_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;(<span class="kw-2">&amp;</span>LayoutNode, <span class="kw-2">&amp;mut </span>InfoNode)&gt; {
-<a href=#613 id=613 data-nosnippet>613</a>        <span class="self">self</span>.layout_and_info.as_mut().map(|(l, i)| (<span class="kw-2">&amp;*</span>l, i))
-<a href=#614 id=614 data-nosnippet>614</a>    }
-<a href=#615 id=615 data-nosnippet>615</a>
-<a href=#616 id=616 data-nosnippet>616</a>    <span class="doccomment">/// Returns document info
-<a href=#617 id=617 data-nosnippet>617</a>    </span><span class="kw">pub fn </span>document_info(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>DocumentInfo&gt; {
-<a href=#618 id=618 data-nosnippet>618</a>        <span class="self">self</span>.docment_info.as_ref()
-<a href=#619 id=619 data-nosnippet>619</a>    }
-<a href=#620 id=620 data-nosnippet>620</a>
-<a href=#621 id=621 data-nosnippet>621</a>    <span class="kw">pub fn </span>document_url(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Url&gt; {
-<a href=#622 id=622 data-nosnippet>622</a>        <span class="self">self</span>.docment_info.as_ref().map(|info| <span class="kw-2">&amp;</span>info.document_url)
-<a href=#623 id=623 data-nosnippet>623</a>    }
-<a href=#624 id=624 data-nosnippet>624</a>
-<a href=#625 id=625 data-nosnippet>625</a>    <span class="kw">pub fn </span>base_url(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Url&gt; {
-<a href=#626 id=626 data-nosnippet>626</a>        <span class="self">self</span>.docment_info.as_ref().map(|info| <span class="kw-2">&amp;</span>info.base_url)
-<a href=#627 id=627 data-nosnippet>627</a>    }
-<a href=#628 id=628 data-nosnippet>628</a>
-<a href=#629 id=629 data-nosnippet>629</a>    <span class="kw">pub fn </span>needs_redraw(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#630 id=630 data-nosnippet>630</a>        <span class="self">self</span>.needs_redraw
-<a href=#631 id=631 data-nosnippet>631</a>            || <span class="self">self
-<a href=#632 id=632 data-nosnippet>632</a>                </span>.layout_and_info
-<a href=#633 id=633 data-nosnippet>633</a>                .as_ref()
-<a href=#634 id=634 data-nosnippet>634</a>                .is_some_and(|(<span class="kw">_</span>, info)| <span class="kw">crate</span>::engine::input::any_custom_node_needs_repaint(info))
-<a href=#635 id=635 data-nosnippet>635</a>    }
-<a href=#636 id=636 data-nosnippet>636</a>
-<a href=#637 id=637 data-nosnippet>637</a>    <span class="kw">pub fn </span>clear_redraw_flag(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
-<a href=#638 id=638 data-nosnippet>638</a>        <span class="self">self</span>.needs_redraw = <span class="bool-val">false</span>;
-<a href=#639 id=639 data-nosnippet>639</a>    }
-<a href=#640 id=640 data-nosnippet>640</a>}
-<a href=#641 id=641 data-nosnippet>641</a>
-<a href=#642 id=642 data-nosnippet>642</a><span class="kw">fn </span>parse_html(html: <span class="kw-2">&amp;</span>str, document_url: Url) -&gt; ParsedDocument {
-<a href=#643 id=643 data-nosnippet>643</a>    <span class="comment">// --- DOM パース ---
-<a href=#644 id=644 data-nosnippet>644</a>    </span><span class="kw">let </span><span class="kw-2">mut </span>parser = HtmlParser::new(html);
-<a href=#645 id=645 data-nosnippet>645</a>    <span class="kw">let </span>dom = Rc::new(parser.parse());
-<a href=#646 id=646 data-nosnippet>646</a>
-<a href=#647 id=647 data-nosnippet>647</a>    <span class="comment">// --- base_url ---
-<a href=#648 id=648 data-nosnippet>648</a>    </span><span class="kw">let </span>base_url = dom
-<a href=#649 id=649 data-nosnippet>649</a>        .find_all(|n| n.tag_name() == <span class="prelude-val">Some</span>(<span class="string">"base"</span>))
-<a href=#650 id=650 data-nosnippet>650</a>        .iter()
-<a href=#651 id=651 data-nosnippet>651</a>        .filter_map(|node_ref| {
-<a href=#652 id=652 data-nosnippet>652</a>            <span class="kw">let </span>html_node = <span class="kw-2">&amp;</span>node_ref.borrow().value;
-<a href=#653 id=653 data-nosnippet>653</a>            <span class="kw">let </span>href = html_node.get_attr(<span class="string">"href"</span>)<span class="question-mark">?</span>;
-<a href=#654 id=654 data-nosnippet>654</a>            document_url.join(href).ok()
-<a href=#655 id=655 data-nosnippet>655</a>        })
-<a href=#656 id=656 data-nosnippet>656</a>        .next()
-<a href=#657 id=657 data-nosnippet>657</a>        .unwrap_or_else(|| document_url.clone());
-<a href=#658 id=658 data-nosnippet>658</a>
-<a href=#659 id=659 data-nosnippet>659</a>    <span class="comment">// --- title 抽出 ---
-<a href=#660 id=660 data-nosnippet>660</a>    </span><span class="kw">let </span>title = dom
-<a href=#661 id=661 data-nosnippet>661</a>        .collect_text_by_tag(<span class="string">"title"</span>)
-<a href=#662 id=662 data-nosnippet>662</a>        .first()
-<a href=#663 id=663 data-nosnippet>663</a>        .cloned()
-<a href=#664 id=664 data-nosnippet>664</a>        .unwrap_or(<span class="string">""</span>.into());
-<a href=#665 id=665 data-nosnippet>665</a>
-<a href=#666 id=666 data-nosnippet>666</a>    <span class="comment">// --- Style links ---
-<a href=#667 id=667 data-nosnippet>667</a>    // &lt;link rel="stylesheet" href="..."&gt;
-<a href=#668 id=668 data-nosnippet>668</a>    </span><span class="kw">let </span>link_nodes = dom.find_all(|n| n.tag_name() == <span class="prelude-val">Some</span>(<span class="string">"link"</span>));
-<a href=#669 id=669 data-nosnippet>669</a>    <span class="kw">let </span><span class="kw-2">mut </span>style_links = Vec::new();
-<a href=#670 id=670 data-nosnippet>670</a>
-<a href=#671 id=671 data-nosnippet>671</a>    <span class="kw">for </span>node <span class="kw">in </span>link_nodes {
-<a href=#672 id=672 data-nosnippet>672</a>        <span class="kw">let </span>(rel, href) = {
-<a href=#673 id=673 data-nosnippet>673</a>            <span class="kw">let </span>node_ref = node.borrow();
-<a href=#674 id=674 data-nosnippet>674</a>            <span class="kw">let </span>html_node = <span class="kw-2">&amp;</span>node_ref.value;
-<a href=#675 id=675 data-nosnippet>675</a>
-<a href=#676 id=676 data-nosnippet>676</a>            <span class="kw">let </span>rel = html_node.get_attr(<span class="string">"rel"</span>).map(|s| s.to_string());
-<a href=#677 id=677 data-nosnippet>677</a>            <span class="kw">let </span>href = html_node.get_attr(<span class="string">"href"</span>).map(|s| s.to_string());
-<a href=#678 id=678 data-nosnippet>678</a>            (rel, href)
-<a href=#679 id=679 data-nosnippet>679</a>        };
-<a href=#680 id=680 data-nosnippet>680</a>
-<a href=#681 id=681 data-nosnippet>681</a>        <span class="kw">if let </span>(<span class="prelude-val">Some</span>(rel), <span class="prelude-val">Some</span>(href)) = (rel, href)
-<a href=#682 id=682 data-nosnippet>682</a>            &amp;&amp; rel == <span class="string">"stylesheet"
-<a href=#683 id=683 data-nosnippet>683</a>        </span>{
-<a href=#684 id=684 data-nosnippet>684</a>            <span class="kw">let </span>css_url = <span class="kw">match </span>resolve_url(<span class="kw-2">&amp;</span>base_url, <span class="kw-2">&amp;</span>href) {
-<a href=#685 id=685 data-nosnippet>685</a>                <span class="prelude-val">Ok</span>(url) =&gt; url,
-<a href=#686 id=686 data-nosnippet>686</a>                <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; <span class="kw">continue</span>,
-<a href=#687 id=687 data-nosnippet>687</a>            };
-<a href=#688 id=688 data-nosnippet>688</a>            style_links.push(css_url);
-<a href=#689 id=689 data-nosnippet>689</a>        }
-<a href=#690 id=690 data-nosnippet>690</a>    }
-<a href=#691 id=691 data-nosnippet>691</a>
-<a href=#692 id=692 data-nosnippet>692</a>    <span class="comment">// --- Inline styles ---
-<a href=#693 id=693 data-nosnippet>693</a>    </span><span class="kw">let </span>inline_styles = dom.collect_text_by_tag(<span class="string">"style"</span>);
-<a href=#694 id=694 data-nosnippet>694</a>
-<a href=#695 id=695 data-nosnippet>695</a>    <span class="comment">// --- Inline scripts ---
-<a href=#696 id=696 data-nosnippet>696</a>    </span><span class="kw">let </span>scripts = dom.collect_inline_scripts();
-<a href=#697 id=697 data-nosnippet>697</a>
-<a href=#698 id=698 data-nosnippet>698</a>    <span class="kw">let </span>image_sources = dom
-<a href=#699 id=699 data-nosnippet>699</a>        .get_elements_by_tag_name(<span class="string">"img"</span>)
-<a href=#700 id=700 data-nosnippet>700</a>        .into_iter()
-<a href=#701 id=701 data-nosnippet>701</a>        .filter_map(|node| {
-<a href=#702 id=702 data-nosnippet>702</a>            <span class="kw">let </span>source = node.borrow().value.get_attr(<span class="string">"src"</span>)<span class="question-mark">?</span>.to_string();
-<a href=#703 id=703 data-nosnippet>703</a>            <span class="kw">let </span>url = resolve_url(<span class="kw-2">&amp;</span>base_url, <span class="kw-2">&amp;</span>source).ok()<span class="question-mark">?</span>;
-<a href=#704 id=704 data-nosnippet>704</a>            <span class="prelude-val">Some</span>((source, url))
-<a href=#705 id=705 data-nosnippet>705</a>        })
-<a href=#706 id=706 data-nosnippet>706</a>        .collect();
-<a href=#707 id=707 data-nosnippet>707</a>
-<a href=#708 id=708 data-nosnippet>708</a>    <span class="kw">let </span>audio_sources = dom
-<a href=#709 id=709 data-nosnippet>709</a>        .get_elements_by_tag_name(<span class="string">"audio"</span>)
-<a href=#710 id=710 data-nosnippet>710</a>        .into_iter()
-<a href=#711 id=711 data-nosnippet>711</a>        .filter_map(|node| {
-<a href=#712 id=712 data-nosnippet>712</a>            <span class="kw">let </span>source = {
-<a href=#713 id=713 data-nosnippet>713</a>                <span class="kw">let </span>audio = node.borrow();
-<a href=#714 id=714 data-nosnippet>714</a>                audio.value.get_attr(<span class="string">"src"</span>).map(str::to_string).or_else(|| {
-<a href=#715 id=715 data-nosnippet>715</a>                    audio.children().iter().find_map(|child| {
-<a href=#716 id=716 data-nosnippet>716</a>                        <span class="kw">let </span>child = child.borrow();
-<a href=#717 id=717 data-nosnippet>717</a>                        (child.value.tag_name() == <span class="prelude-val">Some</span>(<span class="string">"source"</span>))
-<a href=#718 id=718 data-nosnippet>718</a>                            .then(|| child.value.get_attr(<span class="string">"src"</span>).map(str::to_string))
-<a href=#719 id=719 data-nosnippet>719</a>                            .flatten()
-<a href=#720 id=720 data-nosnippet>720</a>                    })
-<a href=#721 id=721 data-nosnippet>721</a>                })
-<a href=#722 id=722 data-nosnippet>722</a>            }<span class="question-mark">?</span>;
-<a href=#723 id=723 data-nosnippet>723</a>            <span class="kw">let </span>url = resolve_url(<span class="kw-2">&amp;</span>base_url, <span class="kw-2">&amp;</span>source).ok()<span class="question-mark">?</span>;
-<a href=#724 id=724 data-nosnippet>724</a>            <span class="prelude-val">Some</span>((source, url))
-<a href=#725 id=725 data-nosnippet>725</a>        })
-<a href=#726 id=726 data-nosnippet>726</a>        .collect();
-<a href=#727 id=727 data-nosnippet>727</a>
-<a href=#728 id=728 data-nosnippet>728</a>    ParsedDocument {
-<a href=#729 id=729 data-nosnippet>729</a>        document_url,
-<a href=#730 id=730 data-nosnippet>730</a>        base_url,
-<a href=#731 id=731 data-nosnippet>731</a>        dom,
-<a href=#732 id=732 data-nosnippet>732</a>        title,
-<a href=#733 id=733 data-nosnippet>733</a>        style_links,
-<a href=#734 id=734 data-nosnippet>734</a>        inline_styles,
-<a href=#735 id=735 data-nosnippet>735</a>        image_sources,
-<a href=#736 id=736 data-nosnippet>736</a>        audio_sources,
-<a href=#737 id=737 data-nosnippet>737</a>        scripts,
-<a href=#738 id=738 data-nosnippet>738</a>    }
-<a href=#739 id=739 data-nosnippet>739</a>}
-<a href=#740 id=740 data-nosnippet>740</a>
-<a href=#741 id=741 data-nosnippet>741</a><span class="kw">pub fn </span>resolve_url(base_url: <span class="kw-2">&amp;</span>Url, path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Url, url::ParseError&gt; {
-<a href=#742 id=742 data-nosnippet>742</a>    <span class="comment">// absolute URL（scheme を持つ）
-<a href=#743 id=743 data-nosnippet>743</a>    </span><span class="kw">if let </span><span class="prelude-val">Ok</span>(url) = Url::parse(path) {
-<a href=#744 id=744 data-nosnippet>744</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>(url);
-<a href=#745 id=745 data-nosnippet>745</a>    }
-<a href=#746 id=746 data-nosnippet>746</a>
-<a href=#747 id=747 data-nosnippet>747</a>    <span class="comment">// relative URL
-<a href=#748 id=748 data-nosnippet>748</a>    </span>base_url.join(path)
-<a href=#749 id=749 data-nosnippet>749</a>}
-<a href=#750 id=750 data-nosnippet>750</a>
-<a href=#751 id=751 data-nosnippet>751</a><span class="attr">#[cfg(test)]
-<a href=#752 id=752 data-nosnippet>752</a></span><span class="kw">mod </span>tests {
-<a href=#753 id=753 data-nosnippet>753</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
-<a href=#754 id=754 data-nosnippet>754</a>
-<a href=#755 id=755 data-nosnippet>755</a>    <span class="attr">#[test]
-<a href=#756 id=756 data-nosnippet>756</a>    </span><span class="kw">fn </span>parse_html_resolves_image_sources_against_base_url() {
-<a href=#757 id=757 data-nosnippet>757</a>        <span class="kw">let </span>parsed = parse_html(
-<a href=#758 id=758 data-nosnippet>758</a>            <span class="string">r#"&lt;base href="https://cdn.example/assets/"&gt;&lt;img src="logo.png"&gt;&lt;img&gt;"#</span>,
-<a href=#759 id=759 data-nosnippet>759</a>            Url::parse(<span class="string">"https://example.test/page/index.html"</span>).unwrap(),
-<a href=#760 id=760 data-nosnippet>760</a>        );
-<a href=#761 id=761 data-nosnippet>761</a>
-<a href=#762 id=762 data-nosnippet>762</a>        <span class="macro">assert_eq!</span>(parsed.image_sources.len(), <span class="number">1</span>);
-<a href=#763 id=763 data-nosnippet>763</a>        <span class="macro">assert_eq!</span>(parsed.image_sources[<span class="number">0</span>].<span class="number">0</span>, <span class="string">"logo.png"</span>);
-<a href=#764 id=764 data-nosnippet>764</a>        <span class="macro">assert_eq!</span>(
-<a href=#765 id=765 data-nosnippet>765</a>            parsed.image_sources[<span class="number">0</span>].<span class="number">1</span>.as_str(),
-<a href=#766 id=766 data-nosnippet>766</a>            <span class="string">"https://cdn.example/assets/logo.png"
-<a href=#767 id=767 data-nosnippet>767</a>        </span>);
-<a href=#768 id=768 data-nosnippet>768</a>    }
-<a href=#769 id=769 data-nosnippet>769</a>
-<a href=#770 id=770 data-nosnippet>770</a>    <span class="attr">#[test]
-<a href=#771 id=771 data-nosnippet>771</a>    </span><span class="kw">fn </span>parse_html_resolves_audio_and_child_source_urls() {
-<a href=#772 id=772 data-nosnippet>772</a>        <span class="kw">let </span>parsed = parse_html(
-<a href=#773 id=773 data-nosnippet>773</a>            <span class="string">r#"&lt;base href="https://cdn.example/media/"&gt;&lt;audio src="one.mp3"&gt;&lt;/audio&gt;&lt;audio&gt;&lt;source src="two.ogg"&gt;&lt;/audio&gt;"#</span>,
-<a href=#774 id=774 data-nosnippet>774</a>            Url::parse(<span class="string">"https://example.test/index.html"</span>).unwrap(),
-<a href=#775 id=775 data-nosnippet>775</a>        );
-<a href=#776 id=776 data-nosnippet>776</a>
-<a href=#777 id=777 data-nosnippet>777</a>        <span class="macro">assert_eq!</span>(
-<a href=#778 id=778 data-nosnippet>778</a>            parsed.audio_sources,
-<a href=#779 id=779 data-nosnippet>779</a>            [
-<a href=#780 id=780 data-nosnippet>780</a>                (
-<a href=#781 id=781 data-nosnippet>781</a>                    <span class="string">"one.mp3"</span>.to_string(),
-<a href=#782 id=782 data-nosnippet>782</a>                    Url::parse(<span class="string">"https://cdn.example/media/one.mp3"</span>).unwrap()
-<a href=#783 id=783 data-nosnippet>783</a>                ),
-<a href=#784 id=784 data-nosnippet>784</a>                (
-<a href=#785 id=785 data-nosnippet>785</a>                    <span class="string">"two.ogg"</span>.to_string(),
-<a href=#786 id=786 data-nosnippet>786</a>                    Url::parse(<span class="string">"https://cdn.example/media/two.ogg"</span>).unwrap()
-<a href=#787 id=787 data-nosnippet>787</a>                ),
-<a href=#788 id=788 data-nosnippet>788</a>            ]
-<a href=#789 id=789 data-nosnippet>789</a>        );
-<a href=#790 id=790 data-nosnippet>790</a>    }
-<a href=#791 id=791 data-nosnippet>791</a>}
+<a href=#605 id=605 data-nosnippet>605</a>        layouter::align_table_columns(layout, info);
+<a href=#606 id=606 data-nosnippet>606</a>    }
+<a href=#607 id=607 data-nosnippet>607</a>
+<a href=#608 id=608 data-nosnippet>608</a>    <span class="doccomment">/// 現在描画可能な Layout / Info を返す（なければ None）
+<a href=#609 id=609 data-nosnippet>609</a>    </span><span class="kw">pub fn </span>layout_and_info(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;(<span class="kw-2">&amp;</span>LayoutNode, <span class="kw-2">&amp;</span>InfoNode)&gt; {
+<a href=#610 id=610 data-nosnippet>610</a>        <span class="self">self</span>.layout_and_info.as_ref().map(|(l, i)| (l, i))
+<a href=#611 id=611 data-nosnippet>611</a>    }
+<a href=#612 id=612 data-nosnippet>612</a>
+<a href=#613 id=613 data-nosnippet>613</a>    <span class="kw">pub fn </span>layout_and_info_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;(<span class="kw-2">&amp;</span>LayoutNode, <span class="kw-2">&amp;mut </span>InfoNode)&gt; {
+<a href=#614 id=614 data-nosnippet>614</a>        <span class="self">self</span>.layout_and_info.as_mut().map(|(l, i)| (<span class="kw-2">&amp;*</span>l, i))
+<a href=#615 id=615 data-nosnippet>615</a>    }
+<a href=#616 id=616 data-nosnippet>616</a>
+<a href=#617 id=617 data-nosnippet>617</a>    <span class="doccomment">/// Returns document info
+<a href=#618 id=618 data-nosnippet>618</a>    </span><span class="kw">pub fn </span>document_info(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>DocumentInfo&gt; {
+<a href=#619 id=619 data-nosnippet>619</a>        <span class="self">self</span>.docment_info.as_ref()
+<a href=#620 id=620 data-nosnippet>620</a>    }
+<a href=#621 id=621 data-nosnippet>621</a>
+<a href=#622 id=622 data-nosnippet>622</a>    <span class="kw">pub fn </span>document_url(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Url&gt; {
+<a href=#623 id=623 data-nosnippet>623</a>        <span class="self">self</span>.docment_info.as_ref().map(|info| <span class="kw-2">&amp;</span>info.document_url)
+<a href=#624 id=624 data-nosnippet>624</a>    }
+<a href=#625 id=625 data-nosnippet>625</a>
+<a href=#626 id=626 data-nosnippet>626</a>    <span class="kw">pub fn </span>base_url(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Url&gt; {
+<a href=#627 id=627 data-nosnippet>627</a>        <span class="self">self</span>.docment_info.as_ref().map(|info| <span class="kw-2">&amp;</span>info.base_url)
+<a href=#628 id=628 data-nosnippet>628</a>    }
+<a href=#629 id=629 data-nosnippet>629</a>
+<a href=#630 id=630 data-nosnippet>630</a>    <span class="kw">pub fn </span>needs_redraw(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#631 id=631 data-nosnippet>631</a>        <span class="self">self</span>.needs_redraw
+<a href=#632 id=632 data-nosnippet>632</a>            || <span class="self">self
+<a href=#633 id=633 data-nosnippet>633</a>                </span>.layout_and_info
+<a href=#634 id=634 data-nosnippet>634</a>                .as_ref()
+<a href=#635 id=635 data-nosnippet>635</a>                .is_some_and(|(<span class="kw">_</span>, info)| <span class="kw">crate</span>::engine::input::any_custom_node_needs_repaint(info))
+<a href=#636 id=636 data-nosnippet>636</a>    }
+<a href=#637 id=637 data-nosnippet>637</a>
+<a href=#638 id=638 data-nosnippet>638</a>    <span class="kw">pub fn </span>clear_redraw_flag(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+<a href=#639 id=639 data-nosnippet>639</a>        <span class="self">self</span>.needs_redraw = <span class="bool-val">false</span>;
+<a href=#640 id=640 data-nosnippet>640</a>    }
+<a href=#641 id=641 data-nosnippet>641</a>}
+<a href=#642 id=642 data-nosnippet>642</a>
+<a href=#643 id=643 data-nosnippet>643</a><span class="kw">fn </span>parse_html(html: <span class="kw-2">&amp;</span>str, document_url: Url) -&gt; ParsedDocument {
+<a href=#644 id=644 data-nosnippet>644</a>    <span class="comment">// --- DOM パース ---
+<a href=#645 id=645 data-nosnippet>645</a>    </span><span class="kw">let </span><span class="kw-2">mut </span>parser = HtmlParser::new(html);
+<a href=#646 id=646 data-nosnippet>646</a>    <span class="kw">let </span>dom = Rc::new(parser.parse());
+<a href=#647 id=647 data-nosnippet>647</a>
+<a href=#648 id=648 data-nosnippet>648</a>    <span class="comment">// --- base_url ---
+<a href=#649 id=649 data-nosnippet>649</a>    </span><span class="kw">let </span>base_url = dom
+<a href=#650 id=650 data-nosnippet>650</a>        .find_all(|n| n.tag_name() == <span class="prelude-val">Some</span>(<span class="string">"base"</span>))
+<a href=#651 id=651 data-nosnippet>651</a>        .iter()
+<a href=#652 id=652 data-nosnippet>652</a>        .filter_map(|node_ref| {
+<a href=#653 id=653 data-nosnippet>653</a>            <span class="kw">let </span>html_node = <span class="kw-2">&amp;</span>node_ref.borrow().value;
+<a href=#654 id=654 data-nosnippet>654</a>            <span class="kw">let </span>href = html_node.get_attr(<span class="string">"href"</span>)<span class="question-mark">?</span>;
+<a href=#655 id=655 data-nosnippet>655</a>            document_url.join(href).ok()
+<a href=#656 id=656 data-nosnippet>656</a>        })
+<a href=#657 id=657 data-nosnippet>657</a>        .next()
+<a href=#658 id=658 data-nosnippet>658</a>        .unwrap_or_else(|| document_url.clone());
+<a href=#659 id=659 data-nosnippet>659</a>
+<a href=#660 id=660 data-nosnippet>660</a>    <span class="comment">// --- title 抽出 ---
+<a href=#661 id=661 data-nosnippet>661</a>    </span><span class="kw">let </span>title = dom
+<a href=#662 id=662 data-nosnippet>662</a>        .collect_text_by_tag(<span class="string">"title"</span>)
+<a href=#663 id=663 data-nosnippet>663</a>        .first()
+<a href=#664 id=664 data-nosnippet>664</a>        .cloned()
+<a href=#665 id=665 data-nosnippet>665</a>        .unwrap_or(<span class="string">""</span>.into());
+<a href=#666 id=666 data-nosnippet>666</a>
+<a href=#667 id=667 data-nosnippet>667</a>    <span class="comment">// --- Style links ---
+<a href=#668 id=668 data-nosnippet>668</a>    // &lt;link rel="stylesheet" href="..."&gt;
+<a href=#669 id=669 data-nosnippet>669</a>    </span><span class="kw">let </span>link_nodes = dom.find_all(|n| n.tag_name() == <span class="prelude-val">Some</span>(<span class="string">"link"</span>));
+<a href=#670 id=670 data-nosnippet>670</a>    <span class="kw">let </span><span class="kw-2">mut </span>style_links = Vec::new();
+<a href=#671 id=671 data-nosnippet>671</a>
+<a href=#672 id=672 data-nosnippet>672</a>    <span class="kw">for </span>node <span class="kw">in </span>link_nodes {
+<a href=#673 id=673 data-nosnippet>673</a>        <span class="kw">let </span>(rel, href) = {
+<a href=#674 id=674 data-nosnippet>674</a>            <span class="kw">let </span>node_ref = node.borrow();
+<a href=#675 id=675 data-nosnippet>675</a>            <span class="kw">let </span>html_node = <span class="kw-2">&amp;</span>node_ref.value;
+<a href=#676 id=676 data-nosnippet>676</a>
+<a href=#677 id=677 data-nosnippet>677</a>            <span class="kw">let </span>rel = html_node.get_attr(<span class="string">"rel"</span>).map(|s| s.to_string());
+<a href=#678 id=678 data-nosnippet>678</a>            <span class="kw">let </span>href = html_node.get_attr(<span class="string">"href"</span>).map(|s| s.to_string());
+<a href=#679 id=679 data-nosnippet>679</a>            (rel, href)
+<a href=#680 id=680 data-nosnippet>680</a>        };
+<a href=#681 id=681 data-nosnippet>681</a>
+<a href=#682 id=682 data-nosnippet>682</a>        <span class="kw">if let </span>(<span class="prelude-val">Some</span>(rel), <span class="prelude-val">Some</span>(href)) = (rel, href)
+<a href=#683 id=683 data-nosnippet>683</a>            &amp;&amp; rel == <span class="string">"stylesheet"
+<a href=#684 id=684 data-nosnippet>684</a>        </span>{
+<a href=#685 id=685 data-nosnippet>685</a>            <span class="kw">let </span>css_url = <span class="kw">match </span>resolve_url(<span class="kw-2">&amp;</span>base_url, <span class="kw-2">&amp;</span>href) {
+<a href=#686 id=686 data-nosnippet>686</a>                <span class="prelude-val">Ok</span>(url) =&gt; url,
+<a href=#687 id=687 data-nosnippet>687</a>                <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; <span class="kw">continue</span>,
+<a href=#688 id=688 data-nosnippet>688</a>            };
+<a href=#689 id=689 data-nosnippet>689</a>            style_links.push(css_url);
+<a href=#690 id=690 data-nosnippet>690</a>        }
+<a href=#691 id=691 data-nosnippet>691</a>    }
+<a href=#692 id=692 data-nosnippet>692</a>
+<a href=#693 id=693 data-nosnippet>693</a>    <span class="comment">// --- Inline styles ---
+<a href=#694 id=694 data-nosnippet>694</a>    </span><span class="kw">let </span>inline_styles = dom.collect_text_by_tag(<span class="string">"style"</span>);
+<a href=#695 id=695 data-nosnippet>695</a>
+<a href=#696 id=696 data-nosnippet>696</a>    <span class="comment">// --- Inline scripts ---
+<a href=#697 id=697 data-nosnippet>697</a>    </span><span class="kw">let </span>scripts = dom.collect_inline_scripts();
+<a href=#698 id=698 data-nosnippet>698</a>
+<a href=#699 id=699 data-nosnippet>699</a>    <span class="kw">let </span>image_sources = dom
+<a href=#700 id=700 data-nosnippet>700</a>        .get_elements_by_tag_name(<span class="string">"img"</span>)
+<a href=#701 id=701 data-nosnippet>701</a>        .into_iter()
+<a href=#702 id=702 data-nosnippet>702</a>        .filter_map(|node| {
+<a href=#703 id=703 data-nosnippet>703</a>            <span class="kw">let </span>source = node.borrow().value.get_attr(<span class="string">"src"</span>)<span class="question-mark">?</span>.to_string();
+<a href=#704 id=704 data-nosnippet>704</a>            <span class="kw">let </span>url = resolve_url(<span class="kw-2">&amp;</span>base_url, <span class="kw-2">&amp;</span>source).ok()<span class="question-mark">?</span>;
+<a href=#705 id=705 data-nosnippet>705</a>            <span class="prelude-val">Some</span>((source, url))
+<a href=#706 id=706 data-nosnippet>706</a>        })
+<a href=#707 id=707 data-nosnippet>707</a>        .collect();
+<a href=#708 id=708 data-nosnippet>708</a>
+<a href=#709 id=709 data-nosnippet>709</a>    <span class="kw">let </span>audio_sources = dom
+<a href=#710 id=710 data-nosnippet>710</a>        .get_elements_by_tag_name(<span class="string">"audio"</span>)
+<a href=#711 id=711 data-nosnippet>711</a>        .into_iter()
+<a href=#712 id=712 data-nosnippet>712</a>        .filter_map(|node| {
+<a href=#713 id=713 data-nosnippet>713</a>            <span class="kw">let </span>source = {
+<a href=#714 id=714 data-nosnippet>714</a>                <span class="kw">let </span>audio = node.borrow();
+<a href=#715 id=715 data-nosnippet>715</a>                audio.value.get_attr(<span class="string">"src"</span>).map(str::to_string).or_else(|| {
+<a href=#716 id=716 data-nosnippet>716</a>                    audio.children().iter().find_map(|child| {
+<a href=#717 id=717 data-nosnippet>717</a>                        <span class="kw">let </span>child = child.borrow();
+<a href=#718 id=718 data-nosnippet>718</a>                        (child.value.tag_name() == <span class="prelude-val">Some</span>(<span class="string">"source"</span>))
+<a href=#719 id=719 data-nosnippet>719</a>                            .then(|| child.value.get_attr(<span class="string">"src"</span>).map(str::to_string))
+<a href=#720 id=720 data-nosnippet>720</a>                            .flatten()
+<a href=#721 id=721 data-nosnippet>721</a>                    })
+<a href=#722 id=722 data-nosnippet>722</a>                })
+<a href=#723 id=723 data-nosnippet>723</a>            }<span class="question-mark">?</span>;
+<a href=#724 id=724 data-nosnippet>724</a>            <span class="kw">let </span>url = resolve_url(<span class="kw-2">&amp;</span>base_url, <span class="kw-2">&amp;</span>source).ok()<span class="question-mark">?</span>;
+<a href=#725 id=725 data-nosnippet>725</a>            <span class="prelude-val">Some</span>((source, url))
+<a href=#726 id=726 data-nosnippet>726</a>        })
+<a href=#727 id=727 data-nosnippet>727</a>        .collect();
+<a href=#728 id=728 data-nosnippet>728</a>
+<a href=#729 id=729 data-nosnippet>729</a>    ParsedDocument {
+<a href=#730 id=730 data-nosnippet>730</a>        document_url,
+<a href=#731 id=731 data-nosnippet>731</a>        base_url,
+<a href=#732 id=732 data-nosnippet>732</a>        dom,
+<a href=#733 id=733 data-nosnippet>733</a>        title,
+<a href=#734 id=734 data-nosnippet>734</a>        style_links,
+<a href=#735 id=735 data-nosnippet>735</a>        inline_styles,
+<a href=#736 id=736 data-nosnippet>736</a>        image_sources,
+<a href=#737 id=737 data-nosnippet>737</a>        audio_sources,
+<a href=#738 id=738 data-nosnippet>738</a>        scripts,
+<a href=#739 id=739 data-nosnippet>739</a>    }
+<a href=#740 id=740 data-nosnippet>740</a>}
+<a href=#741 id=741 data-nosnippet>741</a>
+<a href=#742 id=742 data-nosnippet>742</a><span class="kw">pub fn </span>resolve_url(base_url: <span class="kw-2">&amp;</span>Url, path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Url, url::ParseError&gt; {
+<a href=#743 id=743 data-nosnippet>743</a>    <span class="comment">// absolute URL（scheme を持つ）
+<a href=#744 id=744 data-nosnippet>744</a>    </span><span class="kw">if let </span><span class="prelude-val">Ok</span>(url) = Url::parse(path) {
+<a href=#745 id=745 data-nosnippet>745</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>(url);
+<a href=#746 id=746 data-nosnippet>746</a>    }
+<a href=#747 id=747 data-nosnippet>747</a>
+<a href=#748 id=748 data-nosnippet>748</a>    <span class="comment">// relative URL
+<a href=#749 id=749 data-nosnippet>749</a>    </span>base_url.join(path)
+<a href=#750 id=750 data-nosnippet>750</a>}
+<a href=#751 id=751 data-nosnippet>751</a>
+<a href=#752 id=752 data-nosnippet>752</a><span class="attr">#[cfg(test)]
+<a href=#753 id=753 data-nosnippet>753</a></span><span class="kw">mod </span>tests {
+<a href=#754 id=754 data-nosnippet>754</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#755 id=755 data-nosnippet>755</a>
+<a href=#756 id=756 data-nosnippet>756</a>    <span class="attr">#[test]
+<a href=#757 id=757 data-nosnippet>757</a>    </span><span class="kw">fn </span>parse_html_resolves_image_sources_against_base_url() {
+<a href=#758 id=758 data-nosnippet>758</a>        <span class="kw">let </span>parsed = parse_html(
+<a href=#759 id=759 data-nosnippet>759</a>            <span class="string">r#"&lt;base href="https://cdn.example/assets/"&gt;&lt;img src="logo.png"&gt;&lt;img&gt;"#</span>,
+<a href=#760 id=760 data-nosnippet>760</a>            Url::parse(<span class="string">"https://example.test/page/index.html"</span>).unwrap(),
+<a href=#761 id=761 data-nosnippet>761</a>        );
+<a href=#762 id=762 data-nosnippet>762</a>
+<a href=#763 id=763 data-nosnippet>763</a>        <span class="macro">assert_eq!</span>(parsed.image_sources.len(), <span class="number">1</span>);
+<a href=#764 id=764 data-nosnippet>764</a>        <span class="macro">assert_eq!</span>(parsed.image_sources[<span class="number">0</span>].<span class="number">0</span>, <span class="string">"logo.png"</span>);
+<a href=#765 id=765 data-nosnippet>765</a>        <span class="macro">assert_eq!</span>(
+<a href=#766 id=766 data-nosnippet>766</a>            parsed.image_sources[<span class="number">0</span>].<span class="number">1</span>.as_str(),
+<a href=#767 id=767 data-nosnippet>767</a>            <span class="string">"https://cdn.example/assets/logo.png"
+<a href=#768 id=768 data-nosnippet>768</a>        </span>);
+<a href=#769 id=769 data-nosnippet>769</a>    }
+<a href=#770 id=770 data-nosnippet>770</a>
+<a href=#771 id=771 data-nosnippet>771</a>    <span class="attr">#[test]
+<a href=#772 id=772 data-nosnippet>772</a>    </span><span class="kw">fn </span>parse_html_resolves_audio_and_child_source_urls() {
+<a href=#773 id=773 data-nosnippet>773</a>        <span class="kw">let </span>parsed = parse_html(
+<a href=#774 id=774 data-nosnippet>774</a>            <span class="string">r#"&lt;base href="https://cdn.example/media/"&gt;&lt;audio src="one.mp3"&gt;&lt;/audio&gt;&lt;audio&gt;&lt;source src="two.ogg"&gt;&lt;/audio&gt;"#</span>,
+<a href=#775 id=775 data-nosnippet>775</a>            Url::parse(<span class="string">"https://example.test/index.html"</span>).unwrap(),
+<a href=#776 id=776 data-nosnippet>776</a>        );
+<a href=#777 id=777 data-nosnippet>777</a>
+<a href=#778 id=778 data-nosnippet>778</a>        <span class="macro">assert_eq!</span>(
+<a href=#779 id=779 data-nosnippet>779</a>            parsed.audio_sources,
+<a href=#780 id=780 data-nosnippet>780</a>            [
+<a href=#781 id=781 data-nosnippet>781</a>                (
+<a href=#782 id=782 data-nosnippet>782</a>                    <span class="string">"one.mp3"</span>.to_string(),
+<a href=#783 id=783 data-nosnippet>783</a>                    Url::parse(<span class="string">"https://cdn.example/media/one.mp3"</span>).unwrap()
+<a href=#784 id=784 data-nosnippet>784</a>                ),
+<a href=#785 id=785 data-nosnippet>785</a>                (
+<a href=#786 id=786 data-nosnippet>786</a>                    <span class="string">"two.ogg"</span>.to_string(),
+<a href=#787 id=787 data-nosnippet>787</a>                    Url::parse(<span class="string">"https://cdn.example/media/two.ogg"</span>).unwrap()
+<a href=#788 id=788 data-nosnippet>788</a>                ),
+<a href=#789 id=789 data-nosnippet>789</a>            ]
+<a href=#790 id=790 data-nosnippet>790</a>        );
+<a href=#791 id=791 data-nosnippet>791</a>    }
+<a href=#792 id=792 data-nosnippet>792</a>}
 </code></pre></div></section></main></body></html>
