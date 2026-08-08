@@ -11,7 +11,7 @@ use crate::engine::renderer_model::{Brush, DrawCommand, FillRule, Image, Paint, 
 use crate::engine::ui::custom_node::{ContentSize, CustomNode, PointerEvent};
 use crate::platform::audio::SoundManager;
 
-const PLAYER_WIDTH: f32 = 150.0;
+const PLAYER_WIDTH: f32 = 170.0;
 const PLAYER_HEIGHT: f32 = 32.0;
 const BUTTON_WIDTH: f32 = 32.0;
 const ICON_SIZE: f32 = 18.0;
@@ -51,11 +51,24 @@ impl std::fmt::Debug for AudioComponent {
 
 impl AudioComponent {
     pub fn new(source: impl Into<String>, data: Option<Arc<[u8]>>) -> Self {
+        let sound = SoundManager::init().expect("SoundManager initialization cannot fail");
+        let loaded = data.as_ref().is_some_and(|data| {
+            let result = sound
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .load_from_bytes(data);
+            if let Err(error) = result {
+                log::error!("Failed to decode <audio> data: {error}");
+                false
+            } else {
+                true
+            }
+        });
         Self {
             source: source.into(),
             data,
-            sound: SoundManager::init().expect("SoundManager initialization cannot fail"),
-            loaded: AtomicBool::new(false),
+            sound,
+            loaded: AtomicBool::new(loaded),
             playing: AtomicBool::new(false),
             hovered: AtomicBool::new(false),
             pressed: AtomicBool::new(false),
@@ -95,11 +108,9 @@ impl AudioComponent {
         self.dirty.store(true, Ordering::Relaxed);
     }
 
-    fn playback_seconds(&self) -> f32 {
-        self.sound
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .current_seconds()
+    fn playback_times(&self) -> (f32, f32) {
+        let sound = self.sound.lock().unwrap_or_else(|e| e.into_inner());
+        (sound.current_seconds(), sound.duration_seconds())
     }
 
     fn update_finished_state(&self) {
@@ -161,13 +172,19 @@ impl CustomNode for AudioComponent {
             });
         }
 
-        let mut seconds_style = text_style.clone();
-        seconds_style.color = Color(40, 40, 40, 255);
+        let mut time_style = text_style.clone();
+        time_style.color = Color(40, 40, 40, 255);
+        let (current, duration) = self.playback_times();
         cmd_buf.push(DrawCommand::DrawText {
             x: BUTTON_WIDTH + 10.0,
-            y: ((size.height - seconds_style.font_size) * 0.5).max(0.0),
-            text: format!("{:.1} s", self.playback_seconds()).into(),
-            style: seconds_style,
+            y: ((size.height - time_style.font_size) * 0.5).max(0.0),
+            text: format!(
+                "{} / {}",
+                format_media_time(current),
+                format_media_time(duration)
+            )
+            .into(),
+            style: time_style,
         });
     }
 
@@ -251,6 +268,18 @@ fn solid_fill(path: crate::engine::renderer_model::Path, color: Color) -> DrawCo
     }
 }
 
+fn format_media_time(seconds: f32) -> String {
+    let total_seconds = seconds.max(0.0).floor() as u64;
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes}:{seconds:02}")
+    }
+}
+
 fn rasterize_svg(svg: &[u8]) -> anyhow::Result<Image> {
     let options = resvg::usvg::Options::default();
     let tree = resvg::usvg::Tree::from_data(svg, &options)?;
@@ -295,8 +324,15 @@ mod tests {
         component.draw(&mut commands, &TextStyle::default());
         assert!(matches!(commands.first(), Some(DrawCommand::Fill { .. })));
         assert!(commands.iter().any(
-            |command| matches!(command, DrawCommand::DrawText { text, .. } if text == "0.0 s")
+            |command| matches!(command, DrawCommand::DrawText { text, .. } if text == "0:00 / 0:00")
         ));
+    }
+
+    #[test]
+    fn media_time_uses_minutes_and_hours() {
+        assert_eq!(format_media_time(0.0), "0:00");
+        assert_eq!(format_media_time(83.9), "1:23");
+        assert_eq!(format_media_time(3_661.0), "1:01:01");
     }
 
     #[test]

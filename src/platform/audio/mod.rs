@@ -107,8 +107,8 @@ impl SoundManager {
         Ok(())
     }
 
-    /// バイト列から音声を再生する
-    pub fn play_from_bytes(&mut self, data: &[u8]) -> Result<()> {
+    /// Decodes audio bytes and resets playback to the beginning.
+    pub fn load_from_bytes(&mut self, data: &[u8]) -> Result<()> {
         let (samples, channels, sample_rate) = decode(data)?;
         // replace buffer
         {
@@ -122,6 +122,13 @@ impl SoundManager {
         }
         self.src_channels = channels;
         self.src_sample_rate = sample_rate;
+
+        Ok(())
+    }
+
+    /// バイト列から音声を再生する
+    pub fn play_from_bytes(&mut self, data: &[u8]) -> Result<()> {
+        self.load_from_bytes(data)?;
 
         self.ensure_stream()?;
 
@@ -189,6 +196,16 @@ impl SoundManager {
         }
         let frame = *self.play_pos.lock().unwrap_or_else(|e| e.into_inner());
         frame as f32 / self.src_sample_rate as f32
+    }
+
+    /// Returns the decoded audio duration in seconds.
+    pub fn duration_seconds(&self) -> f32 {
+        if self.src_channels == 0 || self.src_sample_rate == 0 {
+            return 0.0;
+        }
+        let samples = self.samples.lock().unwrap_or_else(|e| e.into_inner());
+        let frames = samples.len() / self.src_channels;
+        frames as f32 / self.src_sample_rate as f32
     }
 
     /// Returns whether the decoded audio reached its end.
