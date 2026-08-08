@@ -1,5 +1,8 @@
 use orinium_browser::engine::css::parser::Parser;
-use orinium_browser::engine::layouter::css_resolver::{CssResolver, ResolvedStyles};
+use orinium_browser::engine::layouter::css_resolver::{
+    CssResolver, MediaEnvironment, ResolvedStyles, filter_media,
+};
+use orinium_browser::engine::layouter::types::ColorScheme;
 
 fn resolve(css: &str) -> ResolvedStyles {
     let mut parser = Parser::new(css);
@@ -133,11 +136,11 @@ fn test_supports_not_unsupported_property() {
 }
 
 // ============================================================
-//  @media still applies unconditionally
+//  @media
 // ============================================================
 
 #[test]
-fn test_media_always_applies() {
+fn test_media_applies_only_when_environment_matches() {
     let s = resolve(
         r#"
         @media screen and (max-width: 600px) {
@@ -145,10 +148,10 @@ fn test_media_always_applies() {
         }
         "#,
     );
-    assert!(
-        has_prop_in_rule(&s, "color"),
-        "@media should always apply children"
-    );
+    let narrow = MediaEnvironment::new((600.0, 800.0), ColorScheme::Light);
+    let wide = MediaEnvironment::new((800.0, 600.0), ColorScheme::Light);
+    assert!(has_prop_in_rule(&filter_media(&s, &narrow), "color"));
+    assert!(!has_prop_in_rule(&filter_media(&s, &wide), "color"));
 }
 
 // ============================================================

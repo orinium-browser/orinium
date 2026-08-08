@@ -85,6 +85,7 @@ pub struct WebView {
     text_measurer: Option<Arc<PlatformTextMeasurer>>,
 
     system_color_scheme: ColorScheme,
+    viewport: (f32, f32),
 
     css_processor: css::processor::CssProcessor,
     css_strategy: CssApplicationStrategy,
@@ -193,6 +194,7 @@ impl WebView {
             text_measurer: None,
 
             system_color_scheme,
+            viewport: (800.0, 600.0),
 
             css_processor: css::processor::CssProcessor::new(),
             css_strategy: CssApplicationStrategy::Incremental,
@@ -499,10 +501,14 @@ impl WebView {
         };
         let root = snapshot.roots()[0];
 
+        let media_environment =
+            layouter::css_resolver::MediaEnvironment::new(self.viewport, self.system_color_scheme);
+        let resolved_styles =
+            layouter::css_resolver::filter_media(&self.resolved_styles, &media_environment);
         let task = layouter::LayoutTask {
             snapshot,
             root,
-            resolved_styles: Arc::clone(&self.resolved_styles),
+            resolved_styles: Arc::new(resolved_styles),
             measurer: self.text_measurer.clone().unwrap(),
             system_color_scheme: self.system_color_scheme,
             images: self.images.clone(),
@@ -589,7 +595,11 @@ impl WebView {
     }
 
     pub fn set_system_color_scheme(&mut self, scheme: ColorScheme) {
+        if self.system_color_scheme == scheme {
+            return;
+        }
         self.system_color_scheme = scheme;
+        self.update_layout();
     }
 
     pub fn title(&self) -> Option<&String> {
@@ -597,6 +607,11 @@ impl WebView {
     }
 
     pub fn relayout(&mut self, viewport: (f32, f32)) {
+        if self.viewport != viewport {
+            self.viewport = viewport;
+            self.update_layout();
+        }
+
         let Some((layout, info)) = self.layout_and_info.as_mut() else {
             return;
         };

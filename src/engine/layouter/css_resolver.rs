@@ -1,7 +1,8 @@
 //! A CSS resolver that handles selector matching and value resolution.
 
 use crate::engine::css::parser::{AtQuery, ComplexSelector, CssNode, CssNodeType};
-use crate::engine::css::values::{CssIdent, CssValue};
+use crate::engine::css::values::{CssIdent, CssValue, Unit};
+use crate::engine::layouter::types::ColorScheme;
 
 use std::collections::{HashMap, HashSet};
 
@@ -49,6 +50,8 @@ pub struct ResolvedDeclaration {
     pub order: usize,
     pub important: bool,
     pub origin: StyleOrigin,
+    /// Nested `@media` conditions which must all match before this declaration applies.
+    pub media_queries: Vec<AtQuery>,
 }
 
 pub type ResolvedStyles = Vec<ResolvedDeclaration>;
@@ -64,6 +67,43 @@ impl ResolvedDeclaration {
                 other.order,
             )
     }
+
+    /// Returns whether every enclosing `@media` rule matches `environment`.
+    pub fn matches_media(&self, environment: &MediaEnvironment) -> bool {
+        self.media_queries
+            .iter()
+            .all(|query| MediaEvaluator::evaluate(query, environment))
+    }
+}
+
+/// Values used to evaluate media queries for the current page.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MediaEnvironment {
+    /// Width of the page viewport in CSS pixels.
+    pub viewport_width: f32,
+    /// Height of the page viewport in CSS pixels.
+    pub viewport_height: f32,
+    /// Operating-system color preference used by `prefers-color-scheme`.
+    pub color_scheme: ColorScheme,
+}
+
+impl MediaEnvironment {
+    pub fn new(viewport: (f32, f32), color_scheme: ColorScheme) -> Self {
+        Self {
+            viewport_width: viewport.0,
+            viewport_height: viewport.1,
+            color_scheme,
+        }
+    }
+}
+
+/// Keeps only declarations whose enclosing media queries currently match.
+pub fn filter_media(styles: &ResolvedStyles, environment: &MediaEnvironment) -> ResolvedStyles {
+    styles
+        .iter()
+        .filter(|declaration| declaration.matches_media(environment))
+        .cloned()
+        .collect()
 }
 
 /// Appends resolved declarations while preserving source order across stylesheets.
@@ -133,7 +173,7 @@ impl CssResolver {
     pub fn resolve_with_origin(stylesheet: &CssNode, origin: StyleOrigin) -> ResolvedStyles {
         let mut styles = Vec::new();
         let mut order = 0;
-        Self::walk(stylesheet, &mut styles, &mut order, origin);
+        Self::walk(stylesheet, &mut styles, &mut order, origin, &mut Vec::new());
         styles
     }
 
@@ -155,13 +195,34 @@ impl CssResolver {
         declarations
     }
 
-    fn walk(node: &CssNode, styles: &mut ResolvedStyles, order: &mut usize, origin: StyleOrigin) {
-        Self::resolve_rule(node, styles, order, origin);
-
-        if Self::should_recurse(node) {
-            for child in node.children() {
-                Self::walk(child, styles, order, origin);
+    fn walk(
+        node: &CssNode,
+        styles: &mut ResolvedStyles,
+        order: &mut usize,
+        origin: StyleOrigin,
+        media_queries: &mut Vec<AtQuery>,
+    ) {
+        if let CssNodeType::AtRule { name, params } = node.node() {
+            if name.eq_ignore_ascii_case("supports") && !SupportsEvaluator::evaluate(params) {
+                return;
             }
+
+            let is_media = name.eq_ignore_ascii_case("media");
+            if is_media {
+                media_queries.push(params.clone());
+            }
+            for child in node.children() {
+                Self::walk(child, styles, order, origin, media_queries);
+            }
+            if is_media {
+                media_queries.pop();
+            }
+            return;
+        }
+
+        Self::resolve_rule(node, styles, order, origin, media_queries);
+        for child in node.children() {
+            Self::walk(child, styles, order, origin, media_queries);
         }
     }
 
@@ -170,6 +231,7 @@ impl CssResolver {
         styles: &mut ResolvedStyles,
         order: &mut usize,
         origin: StyleOrigin,
+        media_queries: &[AtQuery],
     ) {
         let CssNodeType::Rule { selectors } = node.node() else {
             return;
@@ -178,7 +240,14 @@ impl CssResolver {
         let declarations = DeclarationResolver::collect(node.children());
 
         for selector in selectors {
-            Self::push_resolved(selector, &declarations, styles, order, origin);
+            Self::push_resolved(
+                selector,
+                &declarations,
+                styles,
+                order,
+                origin,
+                media_queries,
+            );
         }
     }
 
@@ -188,6 +257,7 @@ impl CssResolver {
         styles: &mut ResolvedStyles,
         order: &mut usize,
         origin: StyleOrigin,
+        media_queries: &[AtQuery],
     ) {
         let specificity = selector.specificity();
 
@@ -200,24 +270,134 @@ impl CssResolver {
                 order: *order,
                 important: decl.important,
                 origin,
+                media_queries: media_queries.to_vec(),
             });
             *order += 1;
         }
     }
+}
 
-    fn should_recurse(node: &CssNode) -> bool {
-        if let CssNodeType::AtRule { name, params } = node.node() {
-            Self::evaluate_at_rule(name, params)
-        } else {
-            true
+struct MediaEvaluator;
+
+impl MediaEvaluator {
+    fn evaluate(query: &AtQuery, environment: &MediaEnvironment) -> bool {
+        match query {
+            AtQuery::Group(items) => Self::evaluate_group(items, environment),
+            item => Self::evaluate_clause(std::slice::from_ref(item), environment),
         }
     }
 
-    fn evaluate_at_rule(name: &str, params: &AtQuery) -> bool {
-        if name.eq_ignore_ascii_case("supports") {
-            SupportsEvaluator::evaluate(params)
+    fn evaluate_group(items: &[AtQuery], environment: &MediaEnvironment) -> bool {
+        items
+            .split(|item| matches!(item, AtQuery::Keyword(keyword) if keyword == ","))
+            .any(|clause| Self::evaluate_clause(clause, environment))
+    }
+
+    fn evaluate_clause(items: &[AtQuery], environment: &MediaEnvironment) -> bool {
+        if items.is_empty() {
+            return false;
+        }
+        let negate = matches!(items.first(), Some(AtQuery::Keyword(keyword)) if keyword.eq_ignore_ascii_case("not"));
+        let mut saw_operand = false;
+        let matches = items
+            .iter()
+            .skip(usize::from(negate))
+            .all(|item| match item {
+                AtQuery::Keyword(keyword)
+                    if keyword.eq_ignore_ascii_case("and")
+                        || keyword.eq_ignore_ascii_case("only") =>
+                {
+                    true
+                }
+                AtQuery::Keyword(keyword)
+                    if keyword.eq_ignore_ascii_case("all")
+                        || keyword.eq_ignore_ascii_case("screen") =>
+                {
+                    saw_operand = true;
+                    true
+                }
+                AtQuery::Keyword(keyword) if keyword.eq_ignore_ascii_case("print") => {
+                    saw_operand = true;
+                    false
+                }
+                AtQuery::Keyword(_) => {
+                    saw_operand = true;
+                    false
+                }
+                AtQuery::Condition { name, value } => {
+                    saw_operand = true;
+                    Self::evaluate_condition(name, value, environment)
+                }
+                AtQuery::Group(group) => {
+                    saw_operand = true;
+                    Self::evaluate_group(group, environment)
+                }
+            });
+        if !saw_operand {
+            return false;
+        }
+        if negate { !matches } else { matches }
+    }
+
+    fn evaluate_condition(name: &str, value: &CssValue, environment: &MediaEnvironment) -> bool {
+        let name = name.to_ascii_lowercase();
+        match name.as_str() {
+            "width" | "min-width" | "max-width" => {
+                Self::compare_length(&name, value, environment.viewport_width, environment)
+            }
+            "height" | "min-height" | "max-height" => {
+                Self::compare_length(&name, value, environment.viewport_height, environment)
+            }
+            "orientation" => match value {
+                CssValue::Keyword(keyword) if keyword.eq_ignore_ascii_case("portrait") => {
+                    environment.viewport_height >= environment.viewport_width
+                }
+                CssValue::Keyword(keyword) if keyword.eq_ignore_ascii_case("landscape") => {
+                    environment.viewport_width > environment.viewport_height
+                }
+                _ => false,
+            },
+            "prefers-color-scheme" => match value {
+                CssValue::Keyword(keyword) if keyword.eq_ignore_ascii_case("dark") => {
+                    environment.color_scheme == ColorScheme::Dark
+                }
+                CssValue::Keyword(keyword) if keyword.eq_ignore_ascii_case("light") => {
+                    environment.color_scheme == ColorScheme::Light
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    fn compare_length(
+        name: &str,
+        value: &CssValue,
+        actual: f32,
+        environment: &MediaEnvironment,
+    ) -> bool {
+        let Some(expected) = Self::length_px(value, environment) else {
+            return false;
+        };
+        if name.starts_with("min-") {
+            actual >= expected
+        } else if name.starts_with("max-") {
+            actual <= expected
         } else {
-            true
+            (actual - expected).abs() <= f32::EPSILON
+        }
+    }
+
+    fn length_px(value: &CssValue, environment: &MediaEnvironment) -> Option<f32> {
+        match value {
+            CssValue::Length(value, Unit::Px) => Some(*value),
+            CssValue::Length(value, Unit::Em) | CssValue::Length(value, Unit::Rem) => {
+                Some(*value * 16.0)
+            }
+            CssValue::Length(value, Unit::Vw) => Some(*value * environment.viewport_width / 100.0),
+            CssValue::Length(value, Unit::Vh) => Some(*value * environment.viewport_height / 100.0),
+            CssValue::Number(0.0) => Some(0.0),
+            _ => None,
         }
     }
 }
@@ -280,6 +460,53 @@ mod tests {
 
         let (_, color_value, _) = decls.iter().find(|(n, _, _)| n == "color").unwrap();
         assert_eq!(color_value, &CssValue::Keyword("blue".into()));
+    }
+
+    #[test]
+    fn media_width_conditions_follow_viewport() {
+        let styles = resolve(
+            "@media screen and (max-width: 600px) { div { color: red; } }",
+            StyleOrigin::Author,
+        );
+        let narrow = MediaEnvironment::new((600.0, 800.0), ColorScheme::Light);
+        let wide = MediaEnvironment::new((601.0, 800.0), ColorScheme::Light);
+
+        assert_eq!(filter_media(&styles, &narrow).len(), 1);
+        assert!(filter_media(&styles, &wide).is_empty());
+    }
+
+    #[test]
+    fn media_query_lists_use_or_semantics() {
+        let styles = resolve(
+            "@media print, (orientation: landscape) { div { color: red; } }",
+            StyleOrigin::Author,
+        );
+        let landscape = MediaEnvironment::new((800.0, 600.0), ColorScheme::Light);
+        let portrait = MediaEnvironment::new((600.0, 800.0), ColorScheme::Light);
+
+        assert_eq!(filter_media(&styles, &landscape).len(), 1);
+        assert!(filter_media(&styles, &portrait).is_empty());
+    }
+
+    #[test]
+    fn media_color_scheme_matches_system_preference() {
+        let styles = resolve(
+            "@media (prefers-color-scheme: dark) { div { color: white; } }",
+            StyleOrigin::Author,
+        );
+        let light = MediaEnvironment::new((800.0, 600.0), ColorScheme::Light);
+        let dark = MediaEnvironment::new((800.0, 600.0), ColorScheme::Dark);
+
+        assert!(filter_media(&styles, &light).is_empty());
+        assert_eq!(filter_media(&styles, &dark).len(), 1);
+    }
+
+    #[test]
+    fn empty_media_query_does_not_match() {
+        let styles = resolve("@media { div { color: red; } }", StyleOrigin::Author);
+        let environment = MediaEnvironment::new((800.0, 600.0), ColorScheme::Light);
+
+        assert!(filter_media(&styles, &environment).is_empty());
     }
 }
 

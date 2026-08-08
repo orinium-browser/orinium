@@ -55,7 +55,7 @@ pub enum CssNodeType {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum AtQuery {
     Keyword(String), // screen, and, not
     Condition {
@@ -481,6 +481,11 @@ impl<'a> Parser<'a> {
 
                 Token::Ident(_) => {
                     items.push(Self::parse_at_query_item(tokens, cursor)?);
+                }
+
+                Token::Delim(',') => {
+                    items.push(AtQuery::Keyword(",".into()));
+                    *cursor += 1;
                 }
 
                 _ => {
