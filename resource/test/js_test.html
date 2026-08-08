@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ja">
+    <head>
+        <meta charset="UTF-8" />
+        <title>JS Test</title>
+        <style>
+            body {
+                font-family: sans-serif;
+                padding: 20px;
+                line-height: 1.6;
+            }
+
+            button {
+                padding: 8px 16px;
+                font-size: 16px;
+            }
+
+            .result {
+                margin-top: 10px;
+            }
+        </style>
+    </head>
+    <body>
+        <div id="hello">before</div>
+        <script>
+            const el = document.getElementById("hello");
+            el.textContent = "hello from js";
+            el.setAttribute("data-run", "1");
+            console.log("script executed");
+        </script>
+
+        <h2>Button Click</h2>
+        <button id="click-button">Click me</button>
+        <p id="click-result" class="result">not clicked yet</p>
+        <script>
+            const button = document.getElementById("click-button");
+            const result = document.getElementById("click-result");
+            button.onclick = function () {
+                result.textContent = "clicked!";
+                result.setAttribute("data-clicked", "true");
+            };
+        </script>
+    </body>
+</html>
