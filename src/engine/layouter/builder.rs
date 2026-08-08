@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use ui_layout::{
     AlignItems, AutoSizeBehavior, BoxSizing, Display, FlexDirection, InnerDisplay, ItemFragment,
-    JustifyContent, LayoutChild, LayoutNode, Length, LengthOrAuto, OuterDisplay, Style,
+    JustifyContent, LayoutChild, LayoutNode, Length, LengthOrAuto, OuterDisplay, Position, Style,
 };
 
 use super::css_resolver::ResolvedStyles;
@@ -298,6 +298,10 @@ pub fn build_layout_and_info_from_snapshot(
                     }
                 }
             }
+
+            // Absolutely positioned boxes are blockified before layout. The
+            // inner display type remains unchanged.
+            blockify_out_of_flow_positioned(&mut style);
 
             // Resolve line-height.
             style.line_height = match text_style.line_height {
@@ -807,6 +811,12 @@ fn merge_candidates(
     }
 }
 
+fn blockify_out_of_flow_positioned(style: &mut Style) {
+    if style.position.kind.is_out_of_flow() && style.display.outer == OuterDisplay::Inline {
+        style.display.outer = OuterDisplay::Block;
+    }
+}
+
 pub fn apply_declaration(
     name: &str,
     value: &CssValue,
@@ -1076,6 +1086,45 @@ pub fn apply_declaration(
          * ====================== */
         ("display", CssValue::Keyword(v)) => {
             style.display = Display::from_css_name(v.as_str())?;
+        }
+
+        /* ======================
+         * Positioning
+         * ====================== */
+        ("position", CssValue::Keyword(v)) => {
+            style.position.kind = match v.as_str() {
+                "static" => Position::Static,
+                "relative" => Position::Relative,
+                "absolute" => Position::Absolute,
+                "fixed" => Position::Fixed,
+                _ => return None,
+            };
+        }
+        ("inset", v) => {
+            expand_box(
+                name,
+                v,
+                text_style,
+                &|_, value, text_style| resolve_css_len_auto(name, value, text_style),
+                |top, right, bottom, left| {
+                    style.position.top = top;
+                    style.position.right = right;
+                    style.position.bottom = bottom;
+                    style.position.left = left;
+                },
+            )?;
+        }
+        ("top", _) => {
+            style.position.top = resolve_css_len_auto(name, value, text_style)?;
+        }
+        ("right", _) => {
+            style.position.right = resolve_css_len_auto(name, value, text_style)?;
+        }
+        ("bottom", _) => {
+            style.position.bottom = resolve_css_len_auto(name, value, text_style)?;
+        }
+        ("left", _) => {
+            style.position.left = resolve_css_len_auto(name, value, text_style)?;
         }
 
         /* ======================
@@ -2288,6 +2337,89 @@ fn resolve_css_color(name: &str, css_color: &CssValue, color_scheme: ColorScheme
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn apply_layout_property(name: &str, value: CssValue) -> Style {
+        let mut style = Style::default();
+        let mut container_style = ContainerStyle::default();
+        let mut text_style = TextStyle::default();
+        let mut overflow = Overflow::default();
+        let parsed = apply_declaration(
+            name,
+            &value,
+            &mut style,
+            &mut container_style,
+            &mut text_style,
+            &mut overflow,
+            ColorScheme::Light,
+        );
+        assert!(parsed.is_some());
+        style
+    }
+
+    #[test]
+    fn position_keywords_map_to_layout_position() {
+        for (keyword, expected) in [
+            ("static", Position::Static),
+            ("relative", Position::Relative),
+            ("absolute", Position::Absolute),
+            ("fixed", Position::Fixed),
+        ] {
+            let style = apply_layout_property("position", CssValue::Keyword(keyword.into()));
+            assert_eq!(style.position.kind, expected);
+        }
+    }
+
+    #[test]
+    fn inset_shorthand_expands_lengths_and_auto() {
+        let style = apply_layout_property(
+            "inset",
+            CssValue::List(vec![
+                CssValue::Length(10.0, Unit::Px),
+                CssValue::Length(20.0, Unit::Percent),
+                CssValue::Keyword("auto".into()),
+                CssValue::Length(4.0, Unit::Px),
+            ]),
+        );
+
+        assert_eq!(style.position.top, Length::Px(10.0).into());
+        assert_eq!(style.position.right, Length::Percent(20.0).into());
+        assert_eq!(style.position.bottom, LengthOrAuto::Auto);
+        assert_eq!(style.position.left, Length::Px(4.0).into());
+    }
+
+    #[test]
+    fn positioned_insets_map_to_individual_sides() {
+        for (name, value) in [("top", 1.0), ("right", 2.0), ("bottom", 3.0), ("left", 4.0)] {
+            let style = apply_layout_property(name, CssValue::Length(value, Unit::Px));
+            let actual = match name {
+                "top" => style.position.top,
+                "right" => style.position.right,
+                "bottom" => style.position.bottom,
+                "left" => style.position.left,
+                _ => unreachable!(),
+            };
+            assert_eq!(actual, Length::Px(value).into());
+        }
+    }
+
+    #[test]
+    fn absolute_and_fixed_inline_boxes_are_blockified() {
+        for position in [Position::Absolute, Position::Fixed] {
+            let mut style = Style {
+                display: Display {
+                    outer: OuterDisplay::Inline,
+                    inner: InnerDisplay::Flow,
+                },
+                position: ui_layout::PositionStyle {
+                    kind: position,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            blockify_out_of_flow_positioned(&mut style);
+            assert_eq!(style.display.outer, OuterDisplay::Block);
+        }
+    }
 
     fn apply_overflow(value: CssValue) -> Overflow {
         let mut style = Style::default();
