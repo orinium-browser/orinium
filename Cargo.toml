@@ -55,7 +55,7 @@ tokio-rustls = "0.26.4"
 ttf-parser = "0.25.1"
 ui_layout = {
   git = "https://github.com/098orin/ui_layout-rs",
-  rev = "dc993db0ddeb830a7f6cd13d1a7dece2eeed2a0b"
+  rev = "cb908fa071c9dc70b4e476573f00326f1bfca76e"
 }
 url = "2.5"
 wgpu = "30.0.0"
