@@ -15,8 +15,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ui_layout::{
-    AlignItems, AutoSizeBehavior, BoxSizing, Display, FlexDirection, InnerDisplay, ItemFragment,
-    JustifyContent, LayoutChild, LayoutNode, Length, LengthOrAuto, OuterDisplay, Position, Style,
+    AlignItems, AutoSizeBehavior, BoxSizing, Display, FlexDirection, GridTrack, InnerDisplay,
+    ItemFragment, JustifyContent, LayoutChild, LayoutNode, Length, LengthOrAuto, OuterDisplay,
+    Position, Style,
 };
 
 use super::css_resolver::{ResolvedStyles, resolve_inline_style};
@@ -1709,6 +1710,17 @@ pub fn apply_declaration(
             style.row_gap = resolve_css_len_auto(name, value, text_style)?;
         }
 
+        /* ======================
+         * Grid
+         * ====================== */
+        ("grid-template-columns", _) => {
+            style.grid_template_columns = parse_grid_tracks(name, value, text_style)?;
+        }
+
+        ("grid-template-rows", _) => {
+            style.grid_template_rows = parse_grid_tracks(name, value, text_style)?;
+        }
+
         _ => {
             // log::error!("{name}, {value:?}");
             return None;
@@ -2046,6 +2058,10 @@ fn resolve_css_len(name: &str, css_len: &CssValue, text_style: &TextStyle) -> Op
                 log::error!(target: "Layouter", "Unexpected deg unit for `{}` (expected length)", name);
                 None
             }
+            Unit::Fr => {
+                log::error!(target: "Layouter", "Unexpected fr unit for `{}` (expected length)", name);
+                None
+            }
         },
         CssValue::Number(0.0) => Some(Length::Px(0.0)),
         CssValue::Keyword(_) => None,
@@ -2115,6 +2131,32 @@ fn resolve_css_len(name: &str, css_len: &CssValue, text_style: &TextStyle) -> Op
             None
         }
     }
+}
+
+fn parse_grid_tracks(
+    name: &str,
+    value: &CssValue,
+    text_style: &TextStyle,
+) -> Option<Vec<GridTrack>> {
+    if matches!(value, CssValue::Keyword(keyword) if keyword == "none") {
+        return Some(Vec::new());
+    }
+    let values: Vec<&CssValue> = match value {
+        CssValue::List(values) => values.iter().collect(),
+        value => vec![value],
+    };
+    values
+        .into_iter()
+        .map(|value| match value {
+            CssValue::Keyword(keyword) if keyword == "auto" => {
+                Some(GridTrack::Breadth(LengthOrAuto::Auto))
+            }
+            CssValue::Length(factor, Unit::Fr) if *factor >= 0.0 => Some(GridTrack::Flex(*factor)),
+            _ => resolve_css_len(name, value, text_style)
+                .map(LengthOrAuto::Length)
+                .map(GridTrack::Breadth),
+        })
+        .collect()
 }
 
 /// Resolve a computed CssValue into a final RGBA Color.
@@ -2506,6 +2548,44 @@ mod tests {
             };
             assert_eq!(actual, Length::Px(value).into());
         }
+    }
+
+    #[test]
+    fn grid_tracks_map_lengths_fractions_and_auto() {
+        let columns = apply_layout_property(
+            "grid-template-columns",
+            CssValue::List(vec![
+                CssValue::Length(100.0, Unit::Px),
+                CssValue::Length(2.0, Unit::Fr),
+                CssValue::Keyword("auto".into()),
+            ]),
+        );
+        assert_eq!(
+            columns.grid_template_columns,
+            vec![
+                GridTrack::Breadth(LengthOrAuto::Length(Length::Px(100.0))),
+                GridTrack::Flex(2.0),
+                GridTrack::default(),
+            ]
+        );
+
+        let rows = apply_layout_property(
+            "grid-template-rows",
+            CssValue::List(vec![
+                CssValue::Keyword("auto".into()),
+                CssValue::Length(25.0, Unit::Percent),
+            ]),
+        );
+        assert_eq!(
+            rows.grid_template_rows,
+            vec![
+                GridTrack::default(),
+                GridTrack::Breadth(LengthOrAuto::Length(Length::Percent(25.0))),
+            ]
+        );
+
+        let none = apply_layout_property("grid-template-columns", CssValue::Keyword("none".into()));
+        assert!(none.grid_template_columns.is_empty());
     }
 
     #[test]

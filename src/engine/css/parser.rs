@@ -910,6 +910,7 @@ impl<'a> Parser<'a> {
                         "vw" => Unit::Vw,
                         "vh" => Unit::Vh,
                         "deg" => Unit::Deg,
+                        "fr" => Unit::Fr,
                         _ => Unit::Px,
                     };
                     values.push(CssValue::Length(value, unit));
@@ -1024,6 +1025,25 @@ mod tests {
                 name: "type".into(),
                 value: Some("hidden".into()),
             }]
+        );
+    }
+
+    #[test]
+    fn preserves_fractional_grid_units() {
+        let stylesheet = Parser::new("main { grid-template-columns: 100px 2fr auto; }")
+            .parse()
+            .unwrap();
+        let declaration = stylesheet.children()[0].children()[0].node();
+        let CssNodeType::Declaration { value, .. } = declaration else {
+            panic!("expected declaration");
+        };
+        assert_eq!(
+            value,
+            &CssValue::List(vec![
+                CssValue::Length(100.0, Unit::Px),
+                CssValue::Length(2.0, Unit::Fr),
+                CssValue::Keyword("auto".into()),
+            ])
         );
     }
 }

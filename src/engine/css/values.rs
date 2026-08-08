@@ -11,6 +11,7 @@ pub enum Unit {
     Vw,
     Vh,
     Deg,
+    Fr,
 }
 
 #[derive(Debug, Clone, PartialEq)]
