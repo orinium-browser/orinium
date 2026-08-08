@@ -1,7 +1,7 @@
 //! Generation of [`DrawCommand`]s from the layout tree (box models, borders,
 //! backgrounds and text).
 
-use ui_layout::{BoxModel, LayoutChild, LayoutNode, Rect};
+use ui_layout::{BoxModel, LayoutChild, LayoutNode, Position, Rect};
 
 use crate::engine::layouter::text_layouter::TextFlowLayouter;
 use crate::engine::layouter::types::{
@@ -500,9 +500,35 @@ pub fn generate_draw_commands(
     layout: &LayoutNode,
     info: &InfoNode,
 ) {
+    generate_draw_commands_inner(cmd_buf, layout, info, (0.0, 0.0));
+}
+
+/// Recursive draw-command generation.
+///
+/// `accumulated_scroll` is the sum of the scroll offsets of every scrollable
+/// ancestor, expressed in content space (`(x, y)`), i.e. the displacement the
+/// current subtree inherits from ancestor scrolling. A `position: fixed` box
+/// is positioned relative to the viewport, so the inherited displacement is
+/// cancelled by pushing the inverse transform before its own box models and
+/// resetting the accumulated scroll for its descendants.
+fn generate_draw_commands_inner(
+    cmd_buf: &mut Vec<DrawCommand>,
+    layout: &LayoutNode,
+    info: &InfoNode,
+    accumulated_scroll: (f32, f32),
+) {
     let mut box_states: Vec<BoxPushState> = Vec::new();
 
+    let is_fixed = layout.style.position.kind == Position::Fixed;
     let is_inline = matches!(layout.layout_box, ui_layout::LayoutBox::InlineBox(_));
+
+    // Cancel the inherited scroll displacement for fixed-position boxes.
+    let cancel_scroll = is_fixed && (accumulated_scroll.0 != 0.0 || accumulated_scroll.1 != 0.0);
+    if cancel_scroll {
+        cmd_buf.push(DrawCommand::PushTransform {
+            transform: AffineTransform::translate(-accumulated_scroll.0, accumulated_scroll.1),
+        });
+    }
 
     match &info.kind {
         NodeKind::Text { .. } | NodeKind::LineBreak => unreachable!(),
@@ -576,6 +602,19 @@ pub fn generate_draw_commands(
         (0.0, 0.0)
     };
 
+    // Scroll offsets of this node itself; they scroll the node's own content.
+    let own_scroll = info.kind.scroll_offsets();
+    // A fixed box resets the inherited displacement (already cancelled above),
+    // so its descendants only inherit its own scroll offset.
+    let child_scroll = if is_fixed {
+        own_scroll
+    } else {
+        (
+            accumulated_scroll.0 + own_scroll.0,
+            accumulated_scroll.1 + own_scroll.1,
+        )
+    };
+
     let mut layout_iter = layout.children.iter();
 
     for child_info in &info.children {
@@ -589,7 +628,7 @@ pub fn generate_draw_commands(
             }
             NodeKind::Container { .. } => {
                 if let Some(LayoutChild::Node(node)) = layout_iter.next() {
-                    generate_draw_commands(cmd_buf, node, child_info);
+                    generate_draw_commands_inner(cmd_buf, node, child_info, child_scroll);
                 }
             }
             NodeKind::Custom {
@@ -602,7 +641,12 @@ pub fn generate_draw_commands(
                 match layout_iter.next() {
                     // Block custom element: recurse into the child layout node.
                     Some(LayoutChild::Node(node_layout)) => {
-                        generate_draw_commands(cmd_buf, node_layout, child_info);
+                        generate_draw_commands_inner(
+                            cmd_buf,
+                            node_layout,
+                            child_info,
+                            child_scroll,
+                        );
                     }
                     // Inline custom element: consume the Object and draw it
                     // from the layout result stored on the tree child.
@@ -677,12 +721,18 @@ pub fn generate_draw_commands(
             pop_box_model(cmd_buf, *state);
         }
     }
+
+    if cancel_scroll {
+        cmd_buf.push(DrawCommand::PopTransform);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::layouter::types::ContainerRole;
     use crate::engine::renderer_model::geom::AffineTransform;
+    use ui_layout::Style;
 
     fn count_balanced(commands: &[DrawCommand]) -> bool {
         let mut transform_depth = 0usize;
@@ -779,5 +829,99 @@ mod tests {
     fn test_affine_transform_reexport() {
         let t = AffineTransform::translate(1.0, 2.0);
         assert_eq!(t.apply(0.0, 0.0), (1.0, 2.0));
+    }
+
+    /// Build an InfoNode subtree matching `generate_draw_commands`' expectation:
+    /// `kind` (with `style`), `children` (each with `kind`).
+    fn mk_info_node(kind: NodeKind, children: Vec<InfoNode>) -> InfoNode {
+        InfoNode {
+            kind,
+            children,
+            dom_id: None,
+        }
+    }
+
+    /// Collect the sequence of scroll-related transforms in `commands` as
+    /// `(translate_x, translate_y)` tuples, in order.
+    fn scroll_translates(commands: &[DrawCommand]) -> Vec<(f32, f32)> {
+        let mut tx: Vec<f32> = Vec::new();
+        let mut ty: Vec<f32> = Vec::new();
+        let mut out = Vec::new();
+        for cmd in commands {
+            match cmd {
+                DrawCommand::PushTransform { transform } => {
+                    tx.push(transform.apply(0.0, 0.0).0);
+                    ty.push(transform.apply(0.0, 0.0).1);
+                    out.push((transform.apply(0.0, 0.0).0, transform.apply(0.0, 0.0).1));
+                }
+                DrawCommand::PopTransform => {
+                    if let (Some(x), Some(y)) = (tx.pop(), ty.pop()) {
+                        out.push((-x, -y));
+                    }
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn fixed_node_cancels_inherited_scroll_offset() {
+        let ui_rect = |x: f32, y: f32, w: f32, h: f32| ui_layout::Rect {
+            x,
+            y,
+            width: w,
+            height: h,
+        };
+        let mk_box = |x: f32, y: f32, w: f32, h: f32| ui_layout::BoxModel {
+            border_box: ui_rect(x, y, w, h),
+            padding_box: ui_rect(x, y, w, h),
+            content_box: ui_rect(x, y, w, h),
+            children_box: ui_rect(x, y, w, h),
+        };
+
+        // A scrollable ancestor (scrolled by 50px) containing a fixed child.
+        let scroller_style = Style::default();
+        let mut scroller = LayoutNode::new(scroller_style);
+        scroller.layout_box = ui_layout::LayoutBox::BlockBox(mk_box(0.0, 0.0, 100.0, 100.0));
+
+        let mut fixed_style = Style::default();
+        fixed_style.position.kind = Position::Fixed;
+        let fixed = LayoutNode::new(fixed_style);
+        scroller.children = vec![LayoutChild::Node(Box::new(fixed))];
+
+        let scroller_info = mk_info_node(
+            NodeKind::Container {
+                scroll_x: true,
+                scroll_y: true,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 50.0,
+                style: ContainerStyle::default(),
+                role: ContainerRole::Normal,
+            },
+            vec![mk_info_node(
+                NodeKind::Container {
+                    scroll_x: false,
+                    scroll_y: false,
+                    scroll_offset_x: 0.0,
+                    scroll_offset_y: 0.0,
+                    style: ContainerStyle::default(),
+                    role: ContainerRole::Normal,
+                },
+                Vec::new(),
+            )],
+        );
+
+        let mut commands = Vec::new();
+        generate_draw_commands(&mut commands, &scroller, &scroller_info);
+        assert!(count_balanced(&commands));
+
+        // The fixed child must push a transform cancelling the ancestor's
+        // 50px scroll: `(-0, +50)` cancels the inherited `(0, -50)`.
+        let translates = scroll_translates(&commands);
+        assert!(
+            translates.contains(&(0.0, 50.0)),
+            "expected a scroll-cancelling transform, got {translates:?}"
+        );
     }
 }
