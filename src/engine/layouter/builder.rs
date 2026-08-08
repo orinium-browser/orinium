@@ -921,6 +921,47 @@ fn blockify_out_of_flow_positioned(style: &mut Style) {
     }
 }
 
+fn resolve_flex_shorthand(
+    value: &CssValue,
+    text_style: &TextStyle,
+) -> Option<(f32, f32, LengthOrAuto)> {
+    let zero_basis = LengthOrAuto::Length(Length::Percent(0.0));
+
+    match value {
+        CssValue::Keyword(keyword) => match keyword.as_str() {
+            "none" => Some((0.0, 0.0, LengthOrAuto::Auto)),
+            "auto" => Some((1.0, 1.0, LengthOrAuto::Auto)),
+            "initial" => Some((0.0, 1.0, LengthOrAuto::Auto)),
+            _ => None,
+        },
+        CssValue::Number(grow) if *grow >= 0.0 => Some((*grow, 1.0, zero_basis)),
+        CssValue::Length(_, _) => {
+            Some((1.0, 1.0, resolve_css_len_auto("flex", value, text_style)?))
+        }
+        CssValue::List(values) => match values.as_slice() {
+            [CssValue::Number(grow), CssValue::Number(shrink)]
+                if *grow >= 0.0 && *shrink >= 0.0 =>
+            {
+                Some((*grow, *shrink, zero_basis))
+            }
+            [CssValue::Number(grow), basis] if *grow >= 0.0 => {
+                Some((*grow, 1.0, resolve_css_len_auto("flex", basis, text_style)?))
+            }
+            [CssValue::Number(grow), CssValue::Number(shrink), basis]
+                if *grow >= 0.0 && *shrink >= 0.0 =>
+            {
+                Some((
+                    *grow,
+                    *shrink,
+                    resolve_css_len_auto("flex", basis, text_style)?,
+                ))
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 pub fn apply_declaration(
     name: &str,
     value: &CssValue,
@@ -1689,7 +1730,17 @@ pub fn apply_declaration(
             _ => {}
         },
 
+        ("flex", _) => {
+            let (grow, shrink, basis) = resolve_flex_shorthand(value, text_style)?;
+            style.item_style.flex_grow = grow;
+            style.item_style.flex_shrink = shrink;
+            style.item_style.flex_basis = basis;
+        }
+
         ("flex-grow", CssValue::Number(v)) => {
+            if *v < 0.0 {
+                return None;
+            }
             style.item_style.flex_grow = *v;
         }
 
@@ -1698,6 +1749,9 @@ pub fn apply_declaration(
         }
 
         ("flex-shrink", CssValue::Number(v)) => {
+            if *v < 0.0 {
+                return None;
+            }
             style.item_style.flex_shrink = *v;
         }
 
@@ -2652,6 +2706,46 @@ mod tests {
                 _ => unreachable!(),
             };
             assert_eq!(actual, Length::Px(value).into());
+        }
+    }
+
+    #[test]
+    fn flex_shorthand_expands_common_forms() {
+        let one = apply_layout_property("flex", CssValue::Number(1.0));
+        assert_eq!(one.item_style.flex_grow, 1.0);
+        assert_eq!(one.item_style.flex_shrink, 1.0);
+        assert_eq!(
+            one.item_style.flex_basis,
+            LengthOrAuto::Length(Length::Percent(0.0))
+        );
+
+        let explicit = apply_layout_property(
+            "flex",
+            CssValue::List(vec![
+                CssValue::Number(2.0),
+                CssValue::Number(0.0),
+                CssValue::Length(10.0, Unit::Px),
+            ]),
+        );
+        assert_eq!(explicit.item_style.flex_grow, 2.0);
+        assert_eq!(explicit.item_style.flex_shrink, 0.0);
+        assert_eq!(
+            explicit.item_style.flex_basis,
+            LengthOrAuto::Length(Length::Px(10.0))
+        );
+    }
+
+    #[test]
+    fn flex_shorthand_expands_keywords() {
+        for (keyword, expected_grow, expected_shrink, expected_basis) in [
+            ("none", 0.0, 0.0, LengthOrAuto::Auto),
+            ("auto", 1.0, 1.0, LengthOrAuto::Auto),
+            ("initial", 0.0, 1.0, LengthOrAuto::Auto),
+        ] {
+            let style = apply_layout_property("flex", CssValue::Keyword(keyword.into()));
+            assert_eq!(style.item_style.flex_grow, expected_grow);
+            assert_eq!(style.item_style.flex_shrink, expected_shrink);
+            assert_eq!(style.item_style.flex_basis, expected_basis);
         }
     }
 
