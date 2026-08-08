@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["bridge","css","html","input","layouter","renderer_model","tree","ui"]};
+window.SIDEBAR_ITEMS = {"mod":["bridge","css","html","input","js","layouter","renderer_model","tree","ui"]};

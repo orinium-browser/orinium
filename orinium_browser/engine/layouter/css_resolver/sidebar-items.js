@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["StyleOrigin"],"fn":["append_resolved_styles"],"struct":["CssResolver","ResolvedDeclaration"],"type":["ResolvedStyles"]};
+window.SIDEBAR_ITEMS = {"enum":["StyleOrigin"],"fn":["append_resolved_styles","resolve_inline_style","resolve_inline_value"],"struct":["CssResolver","ResolvedDeclaration"],"type":["ResolvedStyles"]};
