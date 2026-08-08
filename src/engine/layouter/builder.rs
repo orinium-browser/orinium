@@ -319,35 +319,14 @@ pub fn build_layout_and_info_from_snapshot(
             }
 
             // Apply attribute sizing
-            {
-                if let Some(value) = html_node.get_attr("width")
-                    && let Some(value) = resolve_inline_value(value)
-                {
-                    apply_declaration(
-                        "width",
-                        &value,
-                        &mut style,
-                        &mut container_style,
-                        &mut text_style,
-                        &mut overflow,
-                        used_color_scheme,
-                    );
-                }
-
-                if let Some(value) = html_node.get_attr("height")
-                    && let Some(value) = resolve_inline_value(value)
-                {
-                    apply_declaration(
-                        "height",
-                        &value,
-                        &mut style,
-                        &mut container_style,
-                        &mut text_style,
-                        &mut overflow,
-                        used_color_scheme,
-                    );
-                }
-            }
+            apply_attribute_dimensions(
+                html_node,
+                &mut style,
+                &mut container_style,
+                &mut text_style,
+                &mut overflow,
+                used_color_scheme,
+            );
 
             // Resolve line-height.
             style.line_height = match text_style.line_height {
@@ -847,6 +826,43 @@ fn collect_candidates(
     }
 
     candidates
+}
+
+fn apply_attribute_dimensions(
+    html_node: &HtmlNodeType,
+    style: &mut Style,
+    container_style: &mut ContainerStyle,
+    text_style: &mut TextStyle,
+    overflow: &mut Overflow,
+    color_scheme: ColorScheme,
+) {
+    if let Some(value) = html_node.get_attr("width")
+        && let Some(value) = resolve_inline_value(value)
+    {
+        apply_declaration(
+            "width",
+            &value,
+            style,
+            container_style,
+            text_style,
+            overflow,
+            color_scheme,
+        );
+    }
+
+    if let Some(value) = html_node.get_attr("height")
+        && let Some(value) = resolve_inline_value(value)
+    {
+        apply_declaration(
+            "height",
+            &value,
+            style,
+            container_style,
+            text_style,
+            overflow,
+            color_scheme,
+        );
+    }
 }
 
 pub fn apply_declaration(
