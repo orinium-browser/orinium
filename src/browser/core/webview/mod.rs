@@ -597,11 +597,12 @@ impl WebView {
     }
 
     pub fn relayout(&mut self, viewport: (f32, f32)) {
-        let Some((layout, _info)) = self.layout_and_info.as_mut() else {
+        let Some((layout, info)) = self.layout_and_info.as_mut() else {
             return;
         };
 
         ui_layout::LayoutEngine::layout(layout, viewport.0, viewport.1);
+        layouter::align_table_columns(layout, info);
     }
 
     /// 現在描画可能な Layout / Info を返す（なければ None）

@@ -19,14 +19,16 @@ pub struct InfoNode {
     pub dom_id: Option<NodeId>,
 }
 
-/// Role of Container
-///
-/// - Normal: A standard container with no special role.
-/// - Link: A container that acts as a hyperlink, containing a URL.
+/// Semantic role used by interaction and post-layout processing.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ContainerRole {
     Normal,
     Link { href: String },
+    Table,
+    TableRowGroup,
+    TableRow,
+    TableCell,
+    TableCaption,
 }
 
 /// CSS `overflow` scrollability resolved per axis.

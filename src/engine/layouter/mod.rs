@@ -16,6 +16,7 @@ mod builder;
 pub mod css_resolver;
 pub mod dom_snapshot;
 pub mod processor;
+mod table_layout;
 pub mod text_layouter;
 pub mod types;
 
@@ -25,3 +26,4 @@ pub use builder::{
 };
 pub use dom_snapshot::{DomSnapshot, NodeId, SnapNode};
 pub use processor::{LayoutProcessor, LayoutResult, LayoutTask};
+pub use table_layout::align_table_columns;

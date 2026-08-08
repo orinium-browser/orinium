@@ -440,6 +440,18 @@ pub fn build_layout_and_info_from_snapshot(
             // ── Element node ──
             let is_link = html_node.tag_name() == Some("a") && html_node.get_attr("href").is_some();
 
+            let role = match html_node.tag_name() {
+                Some("table") => ContainerRole::Table,
+                Some("thead" | "tbody" | "tfoot") => ContainerRole::TableRowGroup,
+                Some("tr") => ContainerRole::TableRow,
+                Some("td" | "th") => ContainerRole::TableCell,
+                Some("caption") => ContainerRole::TableCaption,
+                _ if is_link => ContainerRole::Link {
+                    href: html_node.get_attr("href").unwrap().to_string(),
+                },
+                _ => ContainerRole::Normal,
+            };
+
             let kind = if is_link {
                 NodeKind::Container {
                     scroll_x: overflow.x,
@@ -447,9 +459,7 @@ pub fn build_layout_and_info_from_snapshot(
                     scroll_offset_x: 0.0,
                     scroll_offset_y: 0.0,
                     style: container_style,
-                    role: ContainerRole::Link {
-                        href: html_node.get_attr("href").unwrap().to_string(),
-                    },
+                    role,
                 }
             } else {
                 NodeKind::Container {
@@ -458,7 +468,7 @@ pub fn build_layout_and_info_from_snapshot(
                     scroll_offset_x: 0.0,
                     scroll_offset_y: 0.0,
                     style: container_style,
-                    role: ContainerRole::Normal,
+                    role,
                 }
             };
 
