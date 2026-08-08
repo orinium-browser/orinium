@@ -855,7 +855,7 @@ impl<'a> Parser<'a> {
         Ok(declarations)
     }
 
-    fn parse_tokens_to_css_value(tokens: Vec<Token>) -> ParseResult<CssValue> {
+    pub fn parse_tokens_to_css_value(tokens: Vec<Token>) -> ParseResult<CssValue> {
         let mut values = vec![];
         let mut iter = tokens.into_iter().peekable();
 

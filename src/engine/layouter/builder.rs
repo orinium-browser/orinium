@@ -6,6 +6,7 @@ use crate::engine::css::{
     values::{CssValue, Unit},
 };
 use crate::engine::html::HtmlNodeType;
+use crate::engine::layouter::css_resolver::resolve_inline_value;
 use crate::engine::layouter::dom_snapshot::{DomSnapshot, NodeId};
 use crate::engine::layouter::types::VerticalAlign;
 use crate::engine::tree::NodeRef;
@@ -307,6 +308,37 @@ pub fn build_layout_and_info_from_snapshot(
                     }
                     apply_declaration(
                         &name,
+                        &value,
+                        &mut style,
+                        &mut container_style,
+                        &mut text_style,
+                        &mut overflow,
+                        used_color_scheme,
+                    );
+                }
+            }
+
+            // Apply attribute sizing
+            {
+                if let Some(value) = html_node.get_attr("width")
+                    && let Some(value) = resolve_inline_value(value)
+                {
+                    apply_declaration(
+                        "width",
+                        &value,
+                        &mut style,
+                        &mut container_style,
+                        &mut text_style,
+                        &mut overflow,
+                        used_color_scheme,
+                    );
+                }
+
+                if let Some(value) = html_node.get_attr("height")
+                    && let Some(value) = resolve_inline_value(value)
+                {
+                    apply_declaration(
+                        "height",
                         &value,
                         &mut style,
                         &mut container_style,

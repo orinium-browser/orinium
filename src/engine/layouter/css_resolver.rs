@@ -97,6 +97,26 @@ pub fn resolve_inline_style(style_attr: &str) -> Vec<(String, CssValue, bool)> {
         .collect()
 }
 
+pub fn resolve_inline_value(value: &str) -> Option<CssValue> {
+    let mut tokenizer = crate::engine::css::tokenizer::Tokenizer::new(value);
+    let mut tokens = Vec::new();
+
+    loop {
+        let token = tokenizer.next_token();
+        if token == crate::engine::css::tokenizer::Token::EOF {
+            break;
+        }
+
+        tokens.push(token);
+    }
+
+    let Ok(value) = crate::engine::css::parser::Parser::parse_tokens_to_css_value(tokens) else {
+        return None;
+    };
+
+    return Some(value);
+}
+
 // ============================================================
 //  CssResolver — tree walk + rule resolution
 // ============================================================
