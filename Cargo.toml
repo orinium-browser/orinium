@@ -45,11 +45,11 @@ rustls = { version = "0.23.40", default-features = false, features = ["tls12"] }
 rustls-native-certs = "0.8.4"
 serde = { version = "1", features = ["derive"] }
 smol_str = "0.3.6"
+swash = { version = "0.2.10", features = ["render", "scale"] }
 symphonia = {
   version = "0.6.0",
   features = ["aac", "flac", "mp3", "vorbis", "wav"]
 }
-swash = { version = "0.2.10", features = ["scale", "render"] }
 tokio = { version = "1.52", features = ["fs", "io-std", "net", "rt", "time"] }
 tokio-rustls = "0.26.4"
 ttf-parser = "0.25.1"
