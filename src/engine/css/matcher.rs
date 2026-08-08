@@ -21,6 +21,7 @@ impl Selector {
         id: Option<&str>,
         class_list: &[String],
         attributes: &[(String, String)],
+        is_root: bool,
     ) -> bool {
         // tag
         if let Some(tag) = &self.tag
@@ -56,9 +57,36 @@ impl Selector {
             }
         }
 
-        if let Some(_pseudo) = &self.pseudo_class {
-            // TODO
-            return false;
+        if let Some(pseudo) = &self.pseudo_class {
+            let has_attribute = |name: &str| {
+                attributes
+                    .iter()
+                    .any(|(attribute, _)| attribute.eq_ignore_ascii_case(name))
+            };
+            let is_form_control = matches!(
+                tag_name,
+                "button" | "fieldset" | "input" | "optgroup" | "option" | "select" | "textarea"
+            );
+            let matches = match pseudo.to_ascii_lowercase().as_str() {
+                "root" => is_root,
+                "link" | "any-link" => matches!(tag_name, "a" | "area") && has_attribute("href"),
+                "disabled" => is_form_control && has_attribute("disabled"),
+                "enabled" => is_form_control && !has_attribute("disabled"),
+                "checked" => {
+                    (tag_name == "input" && has_attribute("checked"))
+                        || (tag_name == "option" && has_attribute("selected"))
+                }
+                "required" => is_form_control && has_attribute("required"),
+                "optional" => is_form_control && !has_attribute("required"),
+                // These require browsing history or live interaction state.
+                "visited" | "active" | "focus" | "focus-visible" | "focus-within" | "hover" => {
+                    false
+                }
+                _ => false,
+            };
+            if !matches {
+                return false;
+            }
         }
 
         if let Some(_pseudo) = &self.pseudo_element {
@@ -87,6 +115,7 @@ impl ComplexSelector {
             element.id.as_deref(),
             &element.classes,
             &element.attributes,
+            chain_index + 1 == chain.len(),
         ) {
             return false;
         }
@@ -125,9 +154,11 @@ impl ComplexSelector {
                 a += 1;
             }
             b += (sel.classes.len() + sel.attributes.len()) as u32;
+            b += u32::from(sel.pseudo_class.is_some());
             if sel.tag.is_some() {
                 c += 1;
             }
+            c += u32::from(sel.pseudo_element.is_some());
         }
 
         (a, b, c)
@@ -215,5 +246,53 @@ mod tests {
 
         assert!(selector.matches(&[paragraph.clone(), main.clone()]));
         assert!(!selector.matches(&[paragraph, section, main]));
+    }
+
+    fn parse_selector(source: &str) -> ComplexSelector {
+        let stylesheet = Parser::new(&format!("{source} {{ color: red; }}"))
+            .parse()
+            .unwrap();
+        match stylesheet.children().first().unwrap().node() {
+            crate::engine::css::parser::CssNodeType::Rule { selectors } => selectors[0].clone(),
+            _ => panic!("expected CSS rule"),
+        }
+    }
+
+    #[test]
+    fn root_pseudo_class_only_matches_the_root_element() {
+        let selector = parse_selector(":root");
+        let html = ElementInfo {
+            tag_name: "html".into(),
+            id: None,
+            classes: Vec::new(),
+            attributes: Vec::new(),
+        };
+        let body = ElementInfo {
+            tag_name: "body".into(),
+            id: None,
+            classes: Vec::new(),
+            attributes: Vec::new(),
+        };
+
+        assert!(selector.matches(std::slice::from_ref(&html)));
+        assert!(!selector.matches(&[body, html]));
+    }
+
+    #[test]
+    fn link_pseudo_class_requires_an_href() {
+        let selector = parse_selector("a:link");
+
+        assert!(selector.matches(&[ElementInfo {
+            tag_name: "a".into(),
+            id: None,
+            classes: Vec::new(),
+            attributes: vec![("href".into(), "/next".into())],
+        }]));
+        assert!(!selector.matches(&[ElementInfo {
+            tag_name: "a".into(),
+            id: None,
+            classes: Vec::new(),
+            attributes: Vec::new(),
+        }]));
     }
 }
