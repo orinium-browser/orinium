@@ -6,7 +6,7 @@ use super::layouter::types::{InfoNode, NodeKind};
 use super::ui::PointerEvent;
 use super::ui::custom_node::CustomNode;
 use super::ui::input_text_types::InputTextEvent;
-use ui_layout::LayoutNode;
+use ui_layout::{LayoutNode, Position};
 /// ヒットしたノード情報
 pub struct HitItem<'a> {
     pub layout: &'a LayoutNode,
@@ -65,10 +65,36 @@ pub fn update_hover(path: &HitPath<'_>, previous: Option<&Arc<dyn CustomNode>>) 
 
 /// x, y: グローバル座標
 pub fn hit_test<'a>(layout: &'a LayoutNode, info: &'a InfoNode, x: f32, y: f32) -> HitPath<'a> {
+    hit_test_inner(layout, info, x, y, (0.0, 0.0))
+}
+
+fn hit_test_inner<'a>(
+    layout: &'a LayoutNode,
+    info: &'a InfoNode,
+    mut x: f32,
+    mut y: f32,
+    accumulated_scroll: (f32, f32),
+) -> HitPath<'a> {
     // layout_boxes が空なら何もヒットしない
     if layout.layout_box.is_empty() {
         return Vec::new();
     }
+
+    let is_fixed = layout.style.position.kind == Position::Fixed;
+    if is_fixed {
+        x -= accumulated_scroll.0;
+        y -= accumulated_scroll.1;
+    }
+
+    let own_scroll = info.kind.scroll_offsets();
+    let child_scroll = if is_fixed {
+        own_scroll
+    } else {
+        (
+            accumulated_scroll.0 + own_scroll.0,
+            accumulated_scroll.1 + own_scroll.1,
+        )
+    };
 
     for box_model in layout
         .layout_box
@@ -89,25 +115,14 @@ pub fn hit_test<'a>(layout: &'a LayoutNode, info: &'a InfoNode, x: f32, y: f32) 
         let mut local_x = x - box_model.content_box.x;
         let mut local_y = y - box_model.content_box.y;
 
-        if let NodeKind::Container {
-            scroll_offset_x,
-            scroll_offset_y,
-            ..
-        }
-        | NodeKind::Custom {
-            scroll_offset_x,
-            scroll_offset_y,
-            ..
-        } = &info.kind
-        {
-            local_x += *scroll_offset_x;
-            local_y += *scroll_offset_y;
-        }
+        local_x += own_scroll.0;
+        local_y += own_scroll.1;
 
         // 3. 子ノードを前面から探索
         for (child_layout, child_info) in layout.children.iter().zip(&info.children).rev() {
             if let Some(child_node) = child_layout.node() {
-                let mut path = hit_test(child_node, child_info, local_x, local_y);
+                let mut path =
+                    hit_test_inner(child_node, child_info, local_x, local_y, child_scroll);
                 if !path.is_empty() {
                     // 子がヒット → 自分を末尾に追加
                     path.push(HitItem { layout, info });
@@ -157,9 +172,37 @@ pub fn scroll_at(
     dx: f32,
     dy: f32,
 ) -> bool {
+    scroll_at_inner(layout, info, x, y, dx, dy, (0.0, 0.0))
+}
+
+fn scroll_at_inner(
+    layout: &LayoutNode,
+    info: &mut InfoNode,
+    mut x: f32,
+    mut y: f32,
+    dx: f32,
+    dy: f32,
+    accumulated_scroll: (f32, f32),
+) -> bool {
     if layout.layout_box.is_empty() {
         return false;
     }
+
+    let is_fixed = layout.style.position.kind == Position::Fixed;
+    if is_fixed {
+        x -= accumulated_scroll.0;
+        y -= accumulated_scroll.1;
+    }
+
+    let own_scroll = info.kind.scroll_offsets();
+    let child_scroll = if is_fixed {
+        own_scroll
+    } else {
+        (
+            accumulated_scroll.0 + own_scroll.0,
+            accumulated_scroll.1 + own_scroll.1,
+        )
+    };
 
     for box_model in layout
         .layout_box
@@ -175,13 +218,20 @@ pub fn scroll_at(
 
         let mut local_x = x - box_model.content_box.x;
         let mut local_y = y - box_model.content_box.y;
-        let (my_scroll_x, my_scroll_y) = info.kind.scroll_offsets();
-        local_x += my_scroll_x;
-        local_y += my_scroll_y;
+        local_x += own_scroll.0;
+        local_y += own_scroll.1;
 
         for (child_layout, child_info) in layout.children.iter().zip(&mut info.children).rev() {
             if let Some(child_node) = child_layout.node()
-                && scroll_at(child_node, child_info, local_x, local_y, dx, dy)
+                && scroll_at_inner(
+                    child_node,
+                    child_info,
+                    local_x,
+                    local_y,
+                    dx,
+                    dy,
+                    child_scroll,
+                )
             {
                 return true;
             }
@@ -464,6 +514,78 @@ mod tests {
             children: Vec::new(),
             dom_id: None,
         }
+    }
+
+    fn set_vertical_scroll(info: &mut InfoNode, offset: f32) {
+        let NodeKind::Container {
+            scroll_offset_y, ..
+        } = &mut info.kind
+        else {
+            panic!("expected container");
+        };
+        *scroll_offset_y = offset;
+    }
+
+    fn fixed_child_layout(children_height: f32) -> LayoutNode {
+        let mut style = ui_layout::Style::default();
+        style.position.kind = Position::Fixed;
+        let mut child = LayoutNode::new(style);
+        child.layout_box = ui_layout::LayoutBox::BlockBox(box_model(
+            10.0,
+            10.0,
+            30.0,
+            20.0,
+            30.0,
+            children_height,
+        ));
+        child
+    }
+
+    #[test]
+    fn hit_test_fixed_child_ignores_ancestor_scroll() {
+        let mut layout =
+            LayoutNode::with_children(ui_layout::Style::default(), [fixed_child_layout(20.0)]);
+        layout.layout_box =
+            ui_layout::LayoutBox::BlockBox(box_model(0.0, 0.0, 200.0, 100.0, 200.0, 300.0));
+
+        let mut info = scrollable_info();
+        set_vertical_scroll(&mut info, 50.0);
+        let mut fixed_info = scrollable_info();
+        fixed_info.dom_id = Some(42);
+        info.children.push(fixed_info);
+
+        let path = hit_test(&layout, &info, 15.0, 15.0);
+        assert_eq!(hit_dom_id(&path), Some(42));
+    }
+
+    #[test]
+    fn scroll_at_fixed_child_ignores_ancestor_scroll() {
+        let mut layout =
+            LayoutNode::with_children(ui_layout::Style::default(), [fixed_child_layout(80.0)]);
+        layout.layout_box =
+            ui_layout::LayoutBox::BlockBox(box_model(0.0, 0.0, 200.0, 100.0, 200.0, 300.0));
+
+        let mut info = scrollable_info();
+        set_vertical_scroll(&mut info, 50.0);
+        info.children.push(scrollable_info());
+
+        assert!(scroll_at(&layout, &mut info, 15.0, 15.0, 0.0, 10.0));
+        let NodeKind::Container {
+            scroll_offset_y: child_scroll,
+            ..
+        } = &info.children[0].kind
+        else {
+            panic!("expected fixed child container");
+        };
+        assert_eq!(*child_scroll, 10.0);
+        let NodeKind::Container {
+            scroll_offset_y: parent_scroll,
+            ..
+        } = &info.kind
+        else {
+            panic!("expected parent container");
+        };
+        assert_eq!(*parent_scroll, 50.0);
     }
 
     #[test]
