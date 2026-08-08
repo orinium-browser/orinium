@@ -324,6 +324,7 @@ pub fn build_layout_and_info_from_snapshot(
                 let info = InfoNode {
                     kind,
                     children: Vec::new(),
+                    dom_id: Some(stack[top_idx].dom),
                 };
                 let ptr = stack[top_idx].dom;
                 results.insert(ptr, (layout, info));
@@ -368,6 +369,7 @@ pub fn build_layout_and_info_from_snapshot(
                 let info = InfoNode {
                     kind,
                     children: Vec::new(),
+                    dom_id: Some(stack[top_idx].dom),
                 };
                 let ptr = stack[top_idx].dom;
                 results.insert(ptr, (layout, info));
@@ -449,6 +451,7 @@ pub fn build_layout_and_info_from_snapshot(
                             InfoNode {
                                 kind,
                                 children: Vec::new(),
+                                dom_id: Some(child),
                             },
                         ));
                     } else if child_node.tag_name() == Some("br") {
@@ -457,6 +460,7 @@ pub fn build_layout_and_info_from_snapshot(
                             InfoNode {
                                 kind: NodeKind::LineBreak,
                                 children: Vec::new(),
+                                dom_id: Some(child),
                             },
                         ));
                     } else {
@@ -479,6 +483,7 @@ pub fn build_layout_and_info_from_snapshot(
                 let info = InfoNode {
                     kind,
                     children: info_children,
+                    dom_id: Some(stack[top_idx].dom),
                 };
                 let ptr = stack[top_idx].dom;
                 results.insert(ptr, (layout, info));
@@ -602,6 +607,7 @@ pub fn build_layout_and_info_from_snapshot(
             let info = InfoNode {
                 kind: final_kind,
                 children: all_info,
+                dom_id: Some(frame.dom),
             };
             let ptr = frame.dom;
             results.insert(ptr, (layout, info));

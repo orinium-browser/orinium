@@ -3,10 +3,16 @@ use orinium_browser::{
     browser::{BrowserApp, BrowserUi, Tab, core::resource_loader::BrowserResourceLoader},
     engine::{
         css::parser::Parser as CssParser,
-        html::{HtmlNodeType, parser::Parser as HtmlParser},
+        html::{
+            HtmlNodeType,
+            parser::{DomTree, Parser as HtmlParser},
+        },
+        input::{hit_dom_id, hit_test},
+        js::JsRuntime,
         layouter::{
             InheritedCss, build_layout_and_info,
             css_resolver::{CssResolver, ResolvedStyles},
+            dom_snapshot::DomSnapshot,
             types::{ColorScheme, TextStyle},
         },
         renderer_model::generate_draw_commands,
@@ -222,11 +228,38 @@ fn main() -> Result<()> {
                     let raw_url = &args[2];
                     println!("Dumping InfoNode for URL: {}", raw_url);
 
-                    let (_layout, info) = build_layout_info(raw_url)?;
+                    let info = build_layout_info(raw_url)?.info;
 
                     println!("\nInfoNode:\n{:#?}", info);
                 } else {
                     eprintln!("Please provide a URL for dump_infonode test.");
+                }
+            }
+            "dump_domnode" => {
+                if args.len() == 3 {
+                    let raw_url = &args[2];
+                    println!("Dumping DOM node for URL: {}", raw_url);
+
+                    let parsed_url: url::Url = raw_url.parse()?;
+                    let net = NetworkCore::new().expect("Failed to create NetworkCore instansce");
+                    let loader = BrowserResourceLoader::new(Some(Rc::new(net)));
+                    let resp = loader
+                        .fetch_blocking(parsed_url)
+                        .expect("Failed to fetch URL");
+                    let html = String::from_utf8_lossy(&resp.body).to_string();
+
+                    let mut parser = HtmlParser::new(&html);
+                    let dom = Rc::new(parser.parse());
+
+                    // Run inline scripts so DOM mutations are inspectable.
+                    let mut js_runtime = JsRuntime::new(Rc::clone(&dom));
+                    for script in dom.collect_inline_scripts() {
+                        js_runtime.run_script(&script);
+                    }
+
+                    println!("DOM Tree:\n{}", dom);
+                } else {
+                    eprintln!("Please provide a URL for dump_domnode test.");
                 }
             }
             "dump_layoutnode" => {
@@ -234,12 +267,49 @@ fn main() -> Result<()> {
                     let raw_url = &args[2];
                     println!("Dumping LayoutNode for URL: {}", raw_url);
 
-                    let (mut layout, _info) = build_layout_info(raw_url)?;
-                    LayoutEngine::layout(&mut layout, 800.0, 600.0);
+                    let mut ctx = build_layout_info(raw_url)?;
+                    LayoutEngine::layout(&mut ctx.layout, 800.0, 600.0);
 
-                    println!("\nLayoutNode:\n{:#}", layout);
+                    println!("\nLayoutNode:\n{:#}", ctx.layout);
                 } else {
                     eprintln!("Please provide a URL for dump_layoutnode test.");
+                }
+            }
+            "jsclick" => {
+                if args.len() == 5 {
+                    let raw_url = &args[2];
+                    let x: f32 = args[3].parse()?;
+                    let y: f32 = args[4].parse()?;
+                    println!("Simulating a click at ({}, {}) for URL: {}", x, y, raw_url);
+
+                    let mut ctx = build_layout_info(raw_url)?;
+                    // The initial script run may have mutated the DOM; only
+                    // mutations caused by the click are interesting here.
+                    let _script_mutations = ctx.js_runtime.take_needs_redraw();
+                    LayoutEngine::layout(&mut ctx.layout, 800.0, 600.0);
+
+                    // The InfoNode dom_ids index into a snapshot's dom_refs,
+                    // built with the same pre-order walk as the layout.
+                    let (_snapshot, dom_refs) = DomSnapshot::from_tree(&ctx.dom.root);
+                    let path = hit_test(&ctx.layout, &ctx.info, x, y);
+                    let Some(dom_id) = hit_dom_id(&path) else {
+                        println!("No DOM element was hit at ({}, {})", x, y);
+                        return Ok(());
+                    };
+                    let Some(node) = dom_refs.get(dom_id as usize).and_then(|w| w.upgrade()) else {
+                        println!("Hit node is no longer in the live DOM (id={})", dom_id);
+                        return Ok(());
+                    };
+
+                    let handled = ctx.js_runtime.click(&node);
+                    println!("click dispatched: dom_id={} handler={}", dom_id, handled);
+                    if ctx.js_runtime.take_needs_redraw() {
+                        println!("click handler mutated the DOM");
+                    }
+
+                    println!("DOM Tree:\n{}", ctx.dom);
+                } else {
+                    eprintln!("Please provide a URL and click coordinates (x y).");
                 }
             }
             "dump_draw_command" => {
@@ -247,11 +317,11 @@ fn main() -> Result<()> {
                     let raw_url = &args[2];
                     println!("Dumping draw commands for URL: {}", raw_url);
 
-                    let (mut layout, info) = build_layout_info(raw_url)?;
-                    LayoutEngine::layout(&mut layout, 800.0, 600.0);
+                    let mut ctx = build_layout_info(raw_url)?;
+                    LayoutEngine::layout(&mut ctx.layout, 800.0, 600.0);
 
                     let mut draw_commands = Vec::new();
-                    generate_draw_commands(&mut draw_commands, &layout, &info);
+                    generate_draw_commands(&mut draw_commands, &ctx.layout, &ctx.info);
 
                     println!("\nGenerated {} draw commands:", draw_commands.len());
                     for (i, cmd) in draw_commands.iter().enumerate() {
@@ -296,7 +366,16 @@ fn main() -> Result<()> {
 
 use orinium_browser::engine::layouter::types::InfoNode;
 
-fn build_layout_info(raw_url: &str) -> Result<(LayoutNode, InfoNode)> {
+/// Result of building layout for a page, keeping the DOM and JS runtime alive
+/// so callers can dispatch clicks and inspect the mutated tree.
+struct LayoutInfo {
+    layout: LayoutNode,
+    info: InfoNode,
+    dom: Rc<DomTree>,
+    js_runtime: JsRuntime,
+}
+
+fn build_layout_info(raw_url: &str) -> Result<LayoutInfo> {
     let parsed_url: url::Url = raw_url.parse()?;
 
     let net = NetworkCore::new().expect("Failed to create NetworkCore instansce");
@@ -307,7 +386,13 @@ fn build_layout_info(raw_url: &str) -> Result<(LayoutNode, InfoNode)> {
     let html = String::from_utf8_lossy(&resp.body).to_string();
 
     let mut parser = HtmlParser::new(&html);
-    let dom = parser.parse();
+    let dom = Rc::new(parser.parse());
+
+    // Run inline scripts so layout dumps reflect JS mutations.
+    let mut js_runtime = JsRuntime::new(Rc::clone(&dom));
+    for script in dom.collect_inline_scripts() {
+        js_runtime.run_script(&script);
+    }
 
     let base_url = dom
         .find_all(|n| n.tag_name() == Some("base"))
@@ -385,7 +470,12 @@ fn build_layout_info(raw_url: &str) -> Result<(LayoutNode, InfoNode)> {
         }),
     );
 
-    Ok((layout, info))
+    Ok(LayoutInfo {
+        layout,
+        info,
+        dom,
+        js_runtime,
+    })
 }
 
 use strsim::levenshtein;
@@ -451,6 +541,14 @@ fn get_commands<'a>() -> HashMap<&'a str, (&'a str, &'a str, &'a str)> {
         ),
     );
     map.insert(
+        "dump_domnode",
+        (
+            "Fetch HTML, run inline scripts, and dump the DOM tree.",
+            "URL",
+            "",
+        ),
+    );
+    map.insert(
         "dump_layoutnode",
         (
             "Fetch HTML and CSS, build layout tree, run layout engine, and dump the LayoutNode tree.",
@@ -464,6 +562,14 @@ fn get_commands<'a>() -> HashMap<&'a str, (&'a str, &'a str, &'a str)> {
             "Fetch HTML and CSS, build layout tree, run layout engine, and generate draw commands.",
             "URL",
             "",
+        ),
+    );
+    map.insert(
+        "jsclick",
+        (
+            "Simulate a click at (x, y), run the element's JS onclick handler, and dump the resulting DOM tree.",
+            "URL X Y",
+            "The coordinates are page coordinates after layout at a 800x600 viewport. Elements without an onclick handler are ignored.",
         ),
     );
     map.insert(

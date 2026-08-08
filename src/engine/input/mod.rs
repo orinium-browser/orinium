@@ -27,6 +27,14 @@ pub fn hit_custom_node<'a>(path: &'a HitPath<'a>) -> Option<&'a Arc<dyn CustomNo
     })
 }
 
+/// Returns the innermost DOM node id on a hit path, if any.
+///
+/// The hit path is ordered child→parent, so the first node carrying a
+/// [`InfoNode::dom_id`] is the deepest DOM-backed element under the pointer.
+pub fn hit_dom_id(path: &HitPath<'_>) -> Option<u32> {
+    path.iter().find_map(|hit| hit.info.dom_id)
+}
+
 /// Dispatches a pointer event to the innermost custom node on the hit path.
 pub fn dispatch_pointer(path: &HitPath<'_>, event: PointerEvent) -> bool {
     hit_custom_node(path).is_some_and(|node| node.on_pointer_event(event))
@@ -307,6 +315,7 @@ mod tests {
                 text_style: TextStyle::default(),
             },
             children: Vec::new(),
+            dom_id: None,
         }
     }
 
@@ -322,6 +331,7 @@ mod tests {
                 input_info(Arc::clone(&first)),
                 input_info(Arc::clone(&second)),
             ],
+            dom_id: None,
         };
 
         assert!(focus_text_input(&root, Some(&second)));
@@ -452,6 +462,7 @@ mod tests {
                 role: crate::engine::layouter::types::ContainerRole::Normal,
             },
             children: Vec::new(),
+            dom_id: None,
         }
     }
 
@@ -518,6 +529,7 @@ mod tests {
                 role: crate::engine::layouter::types::ContainerRole::Normal,
             },
             children: Vec::new(),
+            dom_id: None,
         };
 
         assert!(!scroll_at(&layout, &mut info, 50.0, 50.0, 0.0, -100.0));

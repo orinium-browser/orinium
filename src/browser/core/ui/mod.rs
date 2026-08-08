@@ -73,6 +73,11 @@ struct InputState {
     modifiers: winit::keyboard::ModifiersState,
     /// The custom node currently under the pointer, if any.
     hovered: Option<Arc<dyn CustomNode>>,
+    /// The DOM node under the pointer when the left button was pressed.
+    ///
+    /// Used to detect a completed click (press and release on the same node),
+    /// which is forwarded to the page's JS `onclick` handler.
+    pressed_dom_id: Option<u32>,
 }
 
 /// タブから発生したリソース取得リクエスト。
@@ -491,22 +496,46 @@ impl BrowserUi {
         let (px, py) = (px, py - chrome_height);
 
         if let Some(tab) = self.tabs.get_mut(tab_id) {
-            if let Some((layout, info)) = tab.layout_and_info() {
+            // Hit-test the content area, dispatch the pointer event to custom
+            // nodes, and remember which DOM element the press/release landed on.
+            let clicked_dom_id = tab.layout_and_info().and_then(|(layout, info)| {
                 let path = crate::engine::input::hit_test(layout, info, px, py);
                 let event = match state {
                     ElementState::Pressed => PointerEvent::Down { x: px, y: py },
                     ElementState::Released => PointerEvent::Up { x: px, y: py },
                 };
                 crate::engine::input::dispatch_pointer(&path, event);
+                crate::engine::input::hit_dom_id(&path)
+            });
+
+            // A completed click (press and release on the same element) runs
+            // the element's JS `onclick` handler, if any.
+            let mut js_redraw = false;
+            match state {
+                ElementState::Pressed => {
+                    self.input.pressed_dom_id = clicked_dom_id;
+                }
+                ElementState::Released => {
+                    let pressed = self.input.pressed_dom_id.take();
+                    if let (Some(pressed), Some(released)) = (pressed, clicked_dom_id)
+                        && pressed == released
+                    {
+                        js_redraw = tab.on_js_click(released);
+                    }
+                }
             }
 
             // Clicking the page unfocuses the chrome's text input.
             self.renderer.chrome.blur();
 
             let input_focused = handle_mouse_click(tab, px, py);
-            BrowserCommand::SetImeAllowed {
-                allowed: input_focused,
-                position: (x, y),
+            if js_redraw {
+                BrowserCommand::RequestRedraw
+            } else {
+                BrowserCommand::SetImeAllowed {
+                    allowed: input_focused,
+                    position: (x, y),
+                }
             }
         } else {
             BrowserCommand::None

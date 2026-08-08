@@ -243,6 +243,15 @@ impl Tab {
             .and_then(|wv| wv.layout_and_info_mut())
     }
 
+    /// Dispatches a click on a DOM node to the page's JS `onclick` handler.
+    ///
+    /// Returns whether the click mutated the DOM and needs a redraw.
+    pub fn on_js_click(&mut self, dom_id: u32) -> bool {
+        self.webview
+            .as_mut()
+            .is_some_and(|wv| wv.on_js_click(dom_id))
+    }
+
     pub fn set_system_color_scheme(&mut self, scheme: ColorScheme) {
         self.webview
             .as_mut()

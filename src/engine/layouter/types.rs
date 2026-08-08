@@ -4,12 +4,19 @@ use std::sync::Arc;
 
 use crate::engine::ui::custom_node::CustomNode;
 
+use super::dom_snapshot::NodeId;
+
 /// InfoNode represents a node in the layout tree.
 /// It can be either a Container or Text node, each with its own properties and styles.
 #[derive(Debug, Clone)]
 pub struct InfoNode {
     pub kind: NodeKind,
     pub children: Vec<InfoNode>,
+    /// Pre-order DOM snapshot node id this node was built from, when any.
+    ///
+    /// Lets click hit-testing map a layout node back to its live DOM node via
+    /// the snapshot's `dom_refs`.
+    pub dom_id: Option<NodeId>,
 }
 
 /// Role of Container

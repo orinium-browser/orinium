@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Weak;
+use std::rc::{Rc, Weak};
 use std::sync::{Arc, mpsc};
 
 use crate::engine::layouter::types::ColorScheme;
@@ -10,6 +10,7 @@ use crate::engine::{
     css::{self, parser::Parser as CssParser},
     html::HtmlNodeType,
     html::parser::{DomTree, Parser as HtmlParser},
+    js::JsRuntime,
     layouter::{
         self, InheritedCss,
         dom_snapshot::DomSnapshot,
@@ -60,6 +61,7 @@ enum PagePhase {
     CssPending,
     CssProcessing,
     CssApplied,
+    ScriptApplied,
 }
 
 pub struct WebView {
@@ -96,6 +98,10 @@ pub struct WebView {
     /// Channel on which text inputs report value write-backs (received here).
     write_back_tx: mpsc::Sender<(u32, String)>,
     write_back_rx: mpsc::Receiver<(u32, String)>,
+    /// JS runtime sharing the current document's DOM, run once after CSS.
+    js_runtime: Option<JsRuntime>,
+    /// Inline `<script>` sources collected at parse time, run after CSS applied.
+    pending_scripts: Vec<String>,
 }
 
 /// A DOM snapshot paired with the tree mutation version it was built from.
@@ -130,7 +136,7 @@ pub struct DocumentInfo {
     document_url: Url,
     base_url: Url,
     title: String,
-    pub dom: DomTree,
+    pub dom: Rc<DomTree>,
 }
 
 /// ParsedDocument holds the result of parsing an HTML document.
@@ -142,14 +148,16 @@ pub struct DocumentInfo {
 /// - title: The title of the document.
 /// - style_links: A list of URLs for linked stylesheets.
 /// - inline_styles: A list of inline CSS styles.
+/// - scripts: A list of inline script sources.
 struct ParsedDocument {
     document_url: Url,
     base_url: Url,
-    dom: DomTree,
+    dom: Rc<DomTree>,
     title: String,
     style_links: Vec<Url>,
     inline_styles: Vec<String>,
     image_sources: Vec<(String, Url)>,
+    scripts: Vec<String>,
 }
 
 impl Default for WebView {
@@ -191,6 +199,8 @@ impl WebView {
             snapshot_cache: None,
             write_back_tx,
             write_back_rx,
+            js_runtime: None,
+            pending_scripts: Vec::new(),
         }
     }
 
@@ -262,6 +272,12 @@ impl WebView {
             }
 
             PagePhase::CssApplied => {
+                // Run inline scripts once, then settle into a stable state.
+                self.run_scripts_once();
+                self.phase = PagePhase::ScriptApplied;
+            }
+
+            PagePhase::ScriptApplied => {
                 // 安定状態
             }
         }
@@ -278,7 +294,10 @@ impl WebView {
 
         self.pending_css_urls = parsed.style_links;
         self.pending_images = parsed.image_sources;
+        self.pending_scripts = parsed.scripts;
         self.css_results_expected = self.pending_css_urls.len();
+
+        self.js_runtime = Some(JsRuntime::new(Rc::clone(&parsed.dom)));
 
         let docment_info = DocumentInfo {
             document_url: parsed.document_url,
@@ -371,6 +390,57 @@ impl WebView {
             self.apply_resolved_styles_and_relayout(resolved);
             self.needs_redraw = true;
             self.phase = PagePhase::CssApplied;
+        }
+    }
+
+    /// Runs the document's inline scripts once (after CSS is applied).
+    ///
+    /// If a script mutated the DOM, rebuilds the layout and flags a redraw.
+    fn run_scripts_once(&mut self) {
+        let scripts = std::mem::take(&mut self.pending_scripts);
+        if scripts.is_empty() {
+            return;
+        }
+
+        let needs_redraw = {
+            let Some(js_runtime) = self.js_runtime.as_mut() else {
+                return;
+            };
+            for script in &scripts {
+                js_runtime.run_script(script);
+            }
+            js_runtime.take_needs_redraw()
+        };
+
+        if needs_redraw {
+            self.update_layout();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Dispatches a click on the given DOM snapshot node id to the page's JS.
+    ///
+    /// Resolves the live DOM node behind the snapshot id, runs its `onclick`
+    /// handler if any, and relayouts + requests a redraw when the handler
+    /// mutated the DOM. Returns whether a redraw is needed.
+    pub fn on_js_click(&mut self, dom_id: u32) -> bool {
+        let Some(js_runtime) = self.js_runtime.as_mut() else {
+            return false;
+        };
+        let Some(node) = self
+            .layout_dom_refs
+            .get(dom_id as usize)
+            .and_then(|weak| weak.upgrade())
+        else {
+            return false;
+        };
+        js_runtime.click(&node);
+        if js_runtime.take_needs_redraw() {
+            self.update_layout();
+            self.needs_redraw = true;
+            true
+        } else {
+            false
         }
     }
 
@@ -487,6 +557,8 @@ impl WebView {
         self.layout_pending = false;
         self.layout_dom_refs.clear();
         self.snapshot_cache = None;
+        self.js_runtime = None;
+        self.pending_scripts.clear();
         let (write_back_tx, write_back_rx) = mpsc::channel();
         self.write_back_tx = write_back_tx;
         self.write_back_rx = write_back_rx;
@@ -542,7 +614,7 @@ impl WebView {
 fn parse_html(html: &str, document_url: Url) -> ParsedDocument {
     // --- DOM パース ---
     let mut parser = HtmlParser::new(html);
-    let dom = parser.parse();
+    let dom = Rc::new(parser.parse());
 
     // --- base_url ---
     let base_url = dom
@@ -592,6 +664,9 @@ fn parse_html(html: &str, document_url: Url) -> ParsedDocument {
     // --- Inline styles ---
     let inline_styles = dom.collect_text_by_tag("style");
 
+    // --- Inline scripts ---
+    let scripts = dom.collect_inline_scripts();
+
     let image_sources = dom
         .get_elements_by_tag_name("img")
         .into_iter()
@@ -610,6 +685,7 @@ fn parse_html(html: &str, document_url: Url) -> ParsedDocument {
         style_links,
         inline_styles,
         image_sources,
+        scripts,
     }
 }
 
