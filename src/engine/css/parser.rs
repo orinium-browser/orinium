@@ -127,6 +127,8 @@ pub struct AttributeSelector {
 pub enum Combinator {
     /// Descendant combinator (` `)
     Descendant,
+    /// Child combinator (`>`)
+    Child,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -723,7 +725,20 @@ impl<'a> Parser<'a> {
                             combinator: current_combinator.take(),
                         });
                     }
-                    current_combinator = Some(Combinator::Descendant);
+                    if current_combinator.is_none() {
+                        current_combinator = Some(Combinator::Descendant);
+                    }
+                    self.consume_token();
+                }
+
+                Token::Delim('>') => {
+                    if let Some(sel) = current_selector.take() {
+                        parts.push(SelectorPart {
+                            selector: sel,
+                            combinator: current_combinator.take(),
+                        });
+                    }
+                    current_combinator = Some(Combinator::Child);
                     self.consume_token();
                 }
 

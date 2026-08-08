@@ -105,6 +105,10 @@ impl ComplexSelector {
                 }
                 false
             }
+            Some(Combinator::Child) => {
+                chain_index + 1 < chain.len()
+                    && self.match_from(chain, chain_index + 1, selector_index + 1)
+            }
             None => false,
         }
     }
@@ -133,7 +137,7 @@ impl ComplexSelector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::css::parser::{AttributeSelector, SelectorPart};
+    use crate::engine::css::parser::{AttributeSelector, Parser, SelectorPart};
 
     fn input_selector(value: Option<&str>) -> ComplexSelector {
         ComplexSelector {
@@ -181,5 +185,35 @@ mod tests {
 
         assert!(selector.matches(&[input(&[("type", "text")])]));
         assert!(!selector.matches(&[input(&[])]));
+    }
+
+    #[test]
+    fn child_combinator_requires_direct_parent() {
+        let stylesheet = Parser::new("main > p { color: red; }").parse().unwrap();
+        let selector = match stylesheet.children().first().unwrap().node() {
+            crate::engine::css::parser::CssNodeType::Rule { selectors } => &selectors[0],
+            _ => panic!("expected CSS rule"),
+        };
+        let paragraph = ElementInfo {
+            tag_name: "p".into(),
+            id: None,
+            classes: Vec::new(),
+            attributes: Vec::new(),
+        };
+        let section = ElementInfo {
+            tag_name: "section".into(),
+            id: None,
+            classes: Vec::new(),
+            attributes: Vec::new(),
+        };
+        let main = ElementInfo {
+            tag_name: "main".into(),
+            id: None,
+            classes: Vec::new(),
+            attributes: Vec::new(),
+        };
+
+        assert!(selector.matches(&[paragraph.clone(), main.clone()]));
+        assert!(!selector.matches(&[paragraph, section, main]));
     }
 }
