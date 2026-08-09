@@ -1,6 +1,6 @@
 use orinium_browser::engine::html::parser;
 use orinium_browser::engine::html::parser::{
-    ClassicScriptDescriptor, ClassicScriptExecution, ClassicScriptSource,
+    ClassicScriptDescriptor, ClassicScriptExecution, ClassicScriptSource, DomTree,
 };
 
 #[test]
@@ -94,4 +94,36 @@ fn classic_script_scheduling_attributes_are_collected() {
             },
         ]
     );
+}
+
+#[test]
+fn query_selectors_match_in_document_order_and_with_element_scope() {
+    let html = r#"
+        <main id="content">
+            <section class="card featured"><span data-kind="first">one</span></section>
+            <section class="card"><span data-kind="second">two</span></section>
+        </main>
+        <section class="card" id="outside"></section>
+    "#;
+    let dom = parser::Parser::new(html).parse();
+
+    let first = dom.query_selector("main > section.card span[data-kind=\"first\"]");
+    assert_eq!(
+        first.unwrap().borrow().value.get_attr("data-kind"),
+        Some("first")
+    );
+
+    let cards = dom.query_selector_all("section.card");
+    assert_eq!(cards.len(), 3);
+    assert_eq!(cards[2].borrow().value.get_attr("id"), Some("outside"));
+
+    let content = dom.get_element_by_id("content").unwrap();
+    let scoped = DomTree::query_selector_all_within(&content, ".card, [data-kind=\"second\"]");
+    assert_eq!(scoped.len(), 3);
+    assert!(
+        scoped
+            .iter()
+            .all(|node| { node.borrow().value.get_attr("id") != Some("outside") })
+    );
+    assert!(DomTree::query_selector_within(&content, "#content").is_none());
 }
