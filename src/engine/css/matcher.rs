@@ -1,38 +1,58 @@
 //! CSSセレクターマッチング処理。DOM要素とセレクターの照合を行う。
 
-use super::parser::{Combinator, ComplexSelector, Selector};
+use std::sync::Arc;
 
-#[derive(Debug, Clone)]
+use super::parser::{Combinator, ComplexSelector, PseudoClass, Selector};
+
+#[derive(Debug, Clone, Default)]
 pub struct ElementInfo {
     pub tag_name: String,
     pub id: Option<String>,
     pub classes: Vec<String>,
     pub attributes: Vec<(String, String)>,
+    /// One-based index among element siblings.
+    pub element_index: usize,
+    /// Number of element siblings including this element.
+    pub element_count: usize,
+    /// One-based index among siblings with the same tag name.
+    pub type_index: usize,
+    /// Number of siblings with the same tag name.
+    pub type_count: usize,
+    /// Element siblings preceding this element in document order.
+    pub previous_siblings: Arc<[ElementInfo]>,
 }
 
 /// 右（自分）→ 左（祖先）
 pub type ElementChain = Vec<ElementInfo>;
 
+#[derive(Clone, Copy)]
+struct MatchCursor {
+    chain_index: usize,
+    sibling_index: Option<usize>,
+}
+
+fn matches_an_plus_b(index: usize, a: i32, b: i32) -> bool {
+    let index = index as i32;
+    if a == 0 {
+        return index == b;
+    }
+    let delta = index - b;
+    delta % a == 0 && delta / a >= 0
+}
+
 impl Selector {
-    /// Matches this simple selector against one element.
-    pub fn matches(
-        &self,
-        tag_name: &str,
-        id: Option<&str>,
-        class_list: &[String],
-        attributes: &[(String, String)],
-        is_root: bool,
-    ) -> bool {
+    /// Matches the non-structural portion of this selector against one element.
+    fn matches_base(&self, element: &ElementInfo) -> bool {
         // tag
         if let Some(tag) = &self.tag
-            && tag != tag_name
+            && tag != &element.tag_name
         {
             return false;
         }
 
         // id
         if let Some(expected_id) = &self.id {
-            match id {
+            match element.id.as_deref() {
                 Some(actual_id) if actual_id == expected_id => {}
                 _ => return false,
             }
@@ -40,13 +60,14 @@ impl Selector {
 
         // class
         for class in &self.classes {
-            if !class_list.iter().any(|c| c == class) {
+            if !element.classes.iter().any(|c| c == class) {
                 return false;
             }
         }
 
         for expected in &self.attributes {
-            let actual = attributes
+            let actual = element
+                .attributes
                 .iter()
                 .find(|(name, _)| name.eq_ignore_ascii_case(&expected.name));
             match (&expected.value, actual) {
@@ -57,38 +78,92 @@ impl Selector {
             }
         }
 
-        if let Some(pseudo) = &self.pseudo_class {
-            let has_attribute = |name: &str| {
-                attributes
-                    .iter()
-                    .any(|(attribute, _)| attribute.eq_ignore_ascii_case(name))
-            };
-            let is_form_control = matches!(
-                tag_name,
-                "button" | "fieldset" | "input" | "optgroup" | "option" | "select" | "textarea"
-            );
-            let matches = match pseudo.to_ascii_lowercase().as_str() {
-                "root" => is_root,
-                "link" | "any-link" => matches!(tag_name, "a" | "area") && has_attribute("href"),
-                "disabled" => is_form_control && has_attribute("disabled"),
-                "enabled" => is_form_control && !has_attribute("disabled"),
-                "checked" => {
-                    (tag_name == "input" && has_attribute("checked"))
-                        || (tag_name == "option" && has_attribute("selected"))
-                }
-                "required" => is_form_control && has_attribute("required"),
-                "optional" => is_form_control && !has_attribute("required"),
-                // These require browsing history or live interaction state.
-                "visited" | "active" | "focus" | "focus-visible" | "focus-within" | "hover" => {
-                    false
-                }
-                _ => false,
-            };
-            if !matches {
-                return false;
-            }
-        }
+        true
+    }
 
+    fn matches_pseudo_classes(
+        &self,
+        chain: &[ElementInfo],
+        cursor: MatchCursor,
+        is_root: bool,
+    ) -> bool {
+        let element = ComplexSelector::element_at(chain, cursor);
+        self.pseudo_classes.iter().all(|pseudo| match pseudo {
+            PseudoClass::Simple(pseudo) => {
+                let has_attribute = |name: &str| {
+                    element
+                        .attributes
+                        .iter()
+                        .any(|(attribute, _)| attribute.eq_ignore_ascii_case(name))
+                };
+                let is_form_control = matches!(
+                    element.tag_name.as_str(),
+                    "button" | "fieldset" | "input" | "optgroup" | "option" | "select" | "textarea"
+                );
+                match pseudo.to_ascii_lowercase().as_str() {
+                    "root" => is_root,
+                    "link" | "any-link" => {
+                        matches!(element.tag_name.as_str(), "a" | "area") && has_attribute("href")
+                    }
+                    "disabled" => is_form_control && has_attribute("disabled"),
+                    "enabled" => is_form_control && !has_attribute("disabled"),
+                    "checked" => {
+                        (element.tag_name == "input" && has_attribute("checked"))
+                            || (element.tag_name == "option" && has_attribute("selected"))
+                    }
+                    "required" => is_form_control && has_attribute("required"),
+                    "optional" => is_form_control && !has_attribute("required"),
+                    "first-child" => element.element_index == 1,
+                    "last-child" => element.element_index == element.element_count,
+                    "only-child" => element.element_count == 1,
+                    "first-of-type" => element.type_index == 1,
+                    "last-of-type" => element.type_index == element.type_count,
+                    "only-of-type" => element.type_count == 1,
+                    // These require browsing history or live interaction state.
+                    "visited" | "active" | "focus" | "focus-visible" | "focus-within" | "hover" => {
+                        false
+                    }
+                    _ => false,
+                }
+            }
+            PseudoClass::SelectorList { name, selectors } => {
+                if selectors.is_empty() {
+                    return false;
+                }
+                let any_matches = selectors
+                    .iter()
+                    .any(|selector| selector.matches_from(chain, cursor, 0));
+                match name.as_str() {
+                    "is" | "where" => any_matches,
+                    "not" => !any_matches,
+                    _ => false,
+                }
+            }
+            PseudoClass::Nth { name, a, b } => {
+                let index = match name.as_str() {
+                    "nth-child" => element.element_index,
+                    "nth-last-child" => element
+                        .element_count
+                        .saturating_add(1)
+                        .saturating_sub(element.element_index),
+                    "nth-of-type" => element.type_index,
+                    "nth-last-of-type" => element
+                        .type_count
+                        .saturating_add(1)
+                        .saturating_sub(element.type_index),
+                    _ => return false,
+                };
+                matches_an_plus_b(index, *a, *b)
+            }
+        })
+    }
+
+    fn matches_at(&self, chain: &[ElementInfo], cursor: MatchCursor) -> bool {
+        let element = ComplexSelector::element_at(chain, cursor);
+        let is_root = cursor.sibling_index.is_none() && cursor.chain_index + 1 == chain.len();
+        if !self.matches_base(element) || !self.matches_pseudo_classes(chain, cursor, is_root) {
+            return false;
+        }
         if let Some(_pseudo) = &self.pseudo_element {
             // TODO
             return false;
@@ -103,20 +178,42 @@ impl ComplexSelector {
         if chain.is_empty() || self.parts.is_empty() {
             return false;
         }
-        self.match_from(chain, 0, 0)
+        self.matches_from(
+            chain,
+            MatchCursor {
+                chain_index: 0,
+                sibling_index: None,
+            },
+            0,
+        )
     }
 
-    fn match_from(&self, chain: &[ElementInfo], chain_index: usize, selector_index: usize) -> bool {
-        let element = &chain[chain_index];
+    fn element_at(chain: &[ElementInfo], cursor: MatchCursor) -> &ElementInfo {
+        match cursor.sibling_index {
+            Some(index) => &chain[cursor.chain_index].previous_siblings[index],
+            None => &chain[cursor.chain_index],
+        }
+    }
+
+    fn previous_sibling_cursor(chain: &[ElementInfo], cursor: MatchCursor) -> Option<MatchCursor> {
+        let position = cursor
+            .sibling_index
+            .unwrap_or(chain[cursor.chain_index].previous_siblings.len());
+        position.checked_sub(1).map(|sibling_index| MatchCursor {
+            chain_index: cursor.chain_index,
+            sibling_index: Some(sibling_index),
+        })
+    }
+
+    fn matches_from(
+        &self,
+        chain: &[ElementInfo],
+        cursor: MatchCursor,
+        selector_index: usize,
+    ) -> bool {
         let part = &self.parts[selector_index];
 
-        if !part.selector.matches(
-            &element.tag_name,
-            element.id.as_deref(),
-            &element.classes,
-            &element.attributes,
-            chain_index + 1 == chain.len(),
-        ) {
+        if !part.selector.matches_at(chain, cursor) {
             return false;
         }
 
@@ -127,16 +224,42 @@ impl ComplexSelector {
 
         match part.combinator {
             Some(Combinator::Descendant) => {
-                for next in (chain_index + 1)..chain.len() {
-                    if self.match_from(chain, next, selector_index + 1) {
+                for next in (cursor.chain_index + 1)..chain.len() {
+                    if self.matches_from(
+                        chain,
+                        MatchCursor {
+                            chain_index: next,
+                            sibling_index: None,
+                        },
+                        selector_index + 1,
+                    ) {
                         return true;
                     }
                 }
                 false
             }
             Some(Combinator::Child) => {
-                chain_index + 1 < chain.len()
-                    && self.match_from(chain, chain_index + 1, selector_index + 1)
+                cursor.chain_index + 1 < chain.len()
+                    && self.matches_from(
+                        chain,
+                        MatchCursor {
+                            chain_index: cursor.chain_index + 1,
+                            sibling_index: None,
+                        },
+                        selector_index + 1,
+                    )
+            }
+            Some(Combinator::NextSibling) => Self::previous_sibling_cursor(chain, cursor)
+                .is_some_and(|previous| self.matches_from(chain, previous, selector_index + 1)),
+            Some(Combinator::SubsequentSibling) => {
+                let mut previous = Self::previous_sibling_cursor(chain, cursor);
+                while let Some(candidate) = previous {
+                    if self.matches_from(chain, candidate, selector_index + 1) {
+                        return true;
+                    }
+                    previous = Self::previous_sibling_cursor(chain, candidate);
+                }
+                false
             }
             None => false,
         }
@@ -154,7 +277,22 @@ impl ComplexSelector {
                 a += 1;
             }
             b += (sel.classes.len() + sel.attributes.len()) as u32;
-            b += u32::from(sel.pseudo_class.is_some());
+            for pseudo in &sel.pseudo_classes {
+                match pseudo {
+                    PseudoClass::Simple(_) | PseudoClass::Nth { .. } => b += 1,
+                    PseudoClass::SelectorList { name, selectors } if name == "where" => {}
+                    PseudoClass::SelectorList { selectors, .. } => {
+                        let nested = selectors
+                            .iter()
+                            .map(ComplexSelector::specificity)
+                            .max()
+                            .unwrap_or_default();
+                        a += nested.0;
+                        b += nested.1;
+                        c += nested.2;
+                    }
+                }
+            }
             if sel.tag.is_some() {
                 c += 1;
             }
@@ -181,7 +319,7 @@ mod tests {
                         name: "type".into(),
                         value: value.map(Into::into),
                     }],
-                    pseudo_class: None,
+                    pseudo_classes: Vec::new(),
                     pseudo_element: None,
                 },
                 combinator: None,
@@ -198,6 +336,7 @@ mod tests {
                 .iter()
                 .map(|(name, value)| ((*name).into(), (*value).into()))
                 .collect(),
+            ..ElementInfo::default()
         }
     }
 
@@ -230,18 +369,21 @@ mod tests {
             id: None,
             classes: Vec::new(),
             attributes: Vec::new(),
+            ..ElementInfo::default()
         };
         let section = ElementInfo {
             tag_name: "section".into(),
             id: None,
             classes: Vec::new(),
             attributes: Vec::new(),
+            ..ElementInfo::default()
         };
         let main = ElementInfo {
             tag_name: "main".into(),
             id: None,
             classes: Vec::new(),
             attributes: Vec::new(),
+            ..ElementInfo::default()
         };
 
         assert!(selector.matches(&[paragraph.clone(), main.clone()]));
@@ -266,12 +408,14 @@ mod tests {
             id: None,
             classes: Vec::new(),
             attributes: Vec::new(),
+            ..ElementInfo::default()
         };
         let body = ElementInfo {
             tag_name: "body".into(),
             id: None,
             classes: Vec::new(),
             attributes: Vec::new(),
+            ..ElementInfo::default()
         };
 
         assert!(selector.matches(std::slice::from_ref(&html)));
@@ -287,12 +431,99 @@ mod tests {
             id: None,
             classes: Vec::new(),
             attributes: vec![("href".into(), "/next".into())],
+            ..ElementInfo::default()
         }]));
         assert!(!selector.matches(&[ElementInfo {
             tag_name: "a".into(),
             id: None,
             classes: Vec::new(),
             attributes: Vec::new(),
+            ..ElementInfo::default()
         }]));
+    }
+
+    fn element(
+        tag_name: &str,
+        classes: &[&str],
+        element_index: usize,
+        element_count: usize,
+        type_index: usize,
+        type_count: usize,
+    ) -> ElementInfo {
+        ElementInfo {
+            tag_name: tag_name.into(),
+            classes: classes.iter().map(|class| (*class).into()).collect(),
+            element_index,
+            element_count,
+            type_index,
+            type_count,
+            ..ElementInfo::default()
+        }
+    }
+
+    #[test]
+    fn sibling_combinators_match_preceding_elements() {
+        let heading = element("h2", &[], 1, 3, 1, 1);
+        let aside = element("aside", &[], 2, 3, 1, 1);
+        let mut paragraph = element("p", &[], 3, 3, 1, 1);
+        paragraph.previous_siblings = vec![heading, aside].into();
+
+        assert!(parse_selector("aside + p").matches(std::slice::from_ref(&paragraph)));
+        assert!(!parse_selector("h2 + p").matches(std::slice::from_ref(&paragraph)));
+        assert!(parse_selector("h2 ~ p").matches(std::slice::from_ref(&paragraph)));
+        assert!(!parse_selector("nav ~ p").matches(std::slice::from_ref(&paragraph)));
+    }
+
+    #[test]
+    fn structural_pseudo_classes_use_element_and_type_positions() {
+        let second_paragraph = element("p", &[], 3, 5, 2, 3);
+
+        assert!(
+            parse_selector("p:nth-child(2n+1)").matches(std::slice::from_ref(&second_paragraph))
+        );
+        assert!(
+            parse_selector("p:nth-of-type(even)").matches(std::slice::from_ref(&second_paragraph))
+        );
+        assert!(
+            parse_selector("p:nth-last-child(3)").matches(std::slice::from_ref(&second_paragraph))
+        );
+        assert!(
+            parse_selector("p:nth-last-of-type(2)")
+                .matches(std::slice::from_ref(&second_paragraph))
+        );
+        assert!(
+            parse_selector("p:nth-child(-n+3)").matches(std::slice::from_ref(&second_paragraph))
+        );
+        assert!(!parse_selector("p:first-child").matches(std::slice::from_ref(&second_paragraph)));
+        assert!(!parse_selector("p:last-of-type").matches(std::slice::from_ref(&second_paragraph)));
+    }
+
+    #[test]
+    fn selector_list_pseudo_classes_and_multiple_pseudos_match() {
+        let visible_first = element("li", &["item"], 1, 3, 1, 3);
+        let hidden_first = element("li", &["item", "hidden"], 1, 3, 1, 3);
+        let selector = parse_selector("li.item:first-child:not(.hidden)");
+
+        assert!(selector.matches(std::slice::from_ref(&visible_first)));
+        assert!(!selector.matches(std::slice::from_ref(&hidden_first)));
+        assert!(
+            parse_selector(":is(article, li.item)").matches(std::slice::from_ref(&visible_first))
+        );
+        assert!(
+            parse_selector(":where(.item, .card)").matches(std::slice::from_ref(&visible_first))
+        );
+    }
+
+    #[test]
+    fn selector_list_pseudo_classes_follow_specificity_rules() {
+        assert_eq!(
+            parse_selector(":where(#main, .item)").specificity(),
+            (0, 0, 0)
+        );
+        assert_eq!(parse_selector(":is(#main, .item)").specificity(), (1, 0, 0));
+        assert_eq!(
+            parse_selector("li:not(.hidden):first-child").specificity(),
+            (0, 2, 1)
+        );
     }
 }

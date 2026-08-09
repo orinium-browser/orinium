@@ -34,6 +34,80 @@ use crate::engine::ui::registry::{ComponentRegistry, CustomNodeContext, DomWrite
 
 const DEFAULT_LINE_FACTOR: f32 = 1.2;
 
+fn element_info(html_node: &HtmlNodeType) -> Option<ElementInfo> {
+    let HtmlNodeType::Element {
+        tag_name,
+        attributes,
+        ..
+    } = html_node
+    else {
+        return None;
+    };
+    Some(ElementInfo {
+        tag_name: tag_name.clone(),
+        id: attributes
+            .iter()
+            .find(|attribute| attribute.name == "id")
+            .map(|attribute| attribute.value.clone()),
+        classes: attributes
+            .iter()
+            .find(|attribute| attribute.name == "class")
+            .map(|attribute| {
+                attribute
+                    .value
+                    .split_whitespace()
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        attributes: attributes
+            .iter()
+            .map(|attribute| (attribute.name.clone(), attribute.value.clone()))
+            .collect(),
+        element_index: 1,
+        element_count: 1,
+        type_index: 1,
+        type_count: 1,
+        previous_siblings: Arc::default(),
+    })
+}
+
+fn element_sibling_infos(snapshot: &DomSnapshot, children: &[NodeId]) -> Vec<Option<ElementInfo>> {
+    let mut type_counts = HashMap::<String, usize>::new();
+    for &child in children {
+        if let Some(tag_name) = snapshot.node(child).kind.tag_name() {
+            *type_counts.entry(tag_name.to_string()).or_default() += 1;
+        }
+    }
+    let element_count = type_counts.values().sum();
+
+    let mut seen_types = HashMap::<String, usize>::new();
+    let mut previous_siblings = Vec::new();
+    let mut element_index = 0;
+    children
+        .iter()
+        .map(|&child| {
+            let mut info = match element_info(&snapshot.node(child).kind) {
+                Some(info) => info,
+                None => return None,
+            };
+            element_index += 1;
+            let seen = seen_types.entry(info.tag_name.clone()).or_default();
+            *seen += 1;
+            info.element_index = element_index;
+            info.element_count = element_count;
+            info.type_index = *seen;
+            info.type_count = type_counts[&info.tag_name];
+            info.previous_siblings = Arc::from(previous_siblings.clone());
+
+            let mut sibling = info.clone();
+            sibling.previous_siblings = Arc::default();
+            previous_siblings.push(sibling);
+            Some(info)
+        })
+        .collect()
+}
+
 /// Inherited values from parent, passed down through the tree.
 ///
 /// `text_style` carries all inherited text/line-height values.
@@ -172,38 +246,8 @@ pub fn build_layout_and_info_from_snapshot(
     /*
      * Build the initial element chain for the root node.
      */
-    if let HtmlNodeType::Element {
-        tag_name,
-        attributes,
-        ..
-    } = &snapshot.node(root).kind
-    {
-        let id = attributes
-            .iter()
-            .find(|a| a.name == "id")
-            .map(|a| a.value.clone());
-        let class_list: Vec<String> = attributes
-            .iter()
-            .find(|attr| attr.name == "class")
-            .map(|attr| {
-                attr.value
-                    .split_whitespace()
-                    .map(|s| s.to_string())
-                    .collect()
-            })
-            .unwrap_or_default();
-        chain.insert(
-            0,
-            ElementInfo {
-                tag_name: tag_name.clone(),
-                id,
-                classes: class_list,
-                attributes: attributes
-                    .iter()
-                    .map(|attr| (attr.name.clone(), attr.value.clone()))
-                    .collect(),
-            },
-        );
+    if let Some(info) = element_info(&snapshot.node(root).kind) {
+        chain.insert(0, info);
     }
 
     // ── Explicit post-order stack (index-based to avoid borrow conflicts) ──
@@ -575,40 +619,11 @@ pub fn build_layout_and_info_from_snapshot(
                     f.element_children.clone()
                 };
                 let child_css = stack[top_idx].child.clone();
-                for &kid in kids_for_push.iter().rev() {
+                let kid_infos = element_sibling_infos(snapshot, &kids_for_push);
+                for (&kid, info) in kids_for_push.iter().zip(kid_infos).rev() {
                     let mut kid_chain = parent_chain.clone();
-                    if let HtmlNodeType::Element {
-                        tag_name,
-                        attributes,
-                        ..
-                    } = &snapshot.node(kid).kind
-                    {
-                        let id = attributes
-                            .iter()
-                            .find(|a| a.name == "id")
-                            .map(|a| a.value.clone());
-                        let class_list: Vec<String> = attributes
-                            .iter()
-                            .find(|attr| attr.name == "class")
-                            .map(|attr| {
-                                attr.value
-                                    .split_whitespace()
-                                    .map(|s| s.to_string())
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        kid_chain.insert(
-                            0,
-                            ElementInfo {
-                                tag_name: tag_name.clone(),
-                                id,
-                                classes: class_list,
-                                attributes: attributes
-                                    .iter()
-                                    .map(|attr| (attr.name.clone(), attr.value.clone()))
-                                    .collect(),
-                            },
-                        );
+                    if let Some(info) = info {
+                        kid_chain.insert(0, info);
                     }
                     stack.push(StackFrame {
                         dom: kid,
@@ -3181,6 +3196,31 @@ mod tests {
         assert_eq!(
             items[1].layout_box.iter().next().unwrap().border_box.y,
             20.0
+        );
+    }
+
+    #[test]
+    fn structural_selectors_apply_styles_from_html_context() {
+        let html = r#"
+            <html><body>
+                <ul><li>first</li><li>second</li><li>third</li></ul>
+                <h2>heading</h2><p>adjacent</p>
+            </body></html>
+        "#;
+        let css = r#"
+            li:first-child { color: #ff0000; }
+            li:nth-child(2) { color: #008000; }
+            li:last-child:not(.skip) { color: #0000ff; }
+            h2 + p { color: #663399; }
+        "#;
+        let info = layout_for(html, css);
+
+        assert_eq!(text_style_for(&info, "first").color, Color(255, 0, 0, 255));
+        assert_eq!(text_style_for(&info, "second").color, Color(0, 128, 0, 255));
+        assert_eq!(text_style_for(&info, "third").color, Color(0, 0, 255, 255));
+        assert_eq!(
+            text_style_for(&info, "adjacent").color,
+            Color(102, 51, 153, 255)
         );
     }
 

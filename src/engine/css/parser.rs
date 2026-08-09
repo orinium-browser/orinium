@@ -104,11 +104,34 @@ pub struct Selector {
     /// Attribute selectors (e.g. `[hidden]`, `[type="text"]`)
     pub attributes: Vec<AttributeSelector>,
 
-    /// Pseudo-class (e.g. `:hover`)
-    pub pseudo_class: Option<String>,
+    /// Pseudo-classes (e.g. `:hover`, `:first-child`, `:not(.hidden)`)
+    pub pseudo_classes: Vec<PseudoClass>,
 
     /// Pseudo-element (e.g. `::before`)
     pub pseudo_element: Option<String>,
+}
+
+/// A pseudo-class attached to a simple selector.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PseudoClass {
+    /// A non-functional pseudo-class such as `:first-child`.
+    Simple(String),
+    /// A selector-list pseudo-class such as `:is()` or `:not()`.
+    SelectorList {
+        /// Lower-level function name.
+        name: String,
+        /// Parsed selector arguments.
+        selectors: Vec<ComplexSelector>,
+    },
+    /// A structural `An+B` pseudo-class such as `:nth-child(2n+1)`.
+    Nth {
+        /// Function name (`nth-child`, `nth-last-child`, etc.).
+        name: String,
+        /// Step coefficient in `An+B`.
+        a: i32,
+        /// Offset in `An+B`.
+        b: i32,
+    },
 }
 
 /// An attribute-presence or exact-value selector.
@@ -122,13 +145,16 @@ pub struct AttributeSelector {
 
 /// Combinator defining the relationship between selectors.
 ///
-/// Additional combinators (`>`, `+`, `~`) may be added later.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Combinator {
     /// Descendant combinator (` `)
     Descendant,
     /// Child combinator (`>`)
     Child,
+    /// Next-sibling combinator (`+`)
+    NextSibling,
+    /// Subsequent-sibling combinator (`~`)
+    SubsequentSibling,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -162,6 +188,50 @@ pub struct SelectorPart {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ComplexSelector {
     pub parts: Vec<SelectorPart>,
+}
+
+/// Parse the integer `An+B` grammar used by structural pseudo-classes.
+fn parse_an_plus_b(tokens: &[Token]) -> Option<(i32, i32)> {
+    let mut expression = String::new();
+    for token in tokens {
+        match token {
+            Token::Whitespace | Token::Comment(_) => {}
+            Token::Ident(value) => expression.push_str(&value.to_ascii_lowercase()),
+            Token::Number(value) if value.fract() == 0.0 => {
+                expression.push_str(&(*value as i32).to_string());
+            }
+            Token::Dimension(value, unit) if value.fract() == 0.0 => {
+                expression.push_str(&(*value as i32).to_string());
+                expression.push_str(&unit.to_ascii_lowercase());
+            }
+            Token::Delim(value @ ('+' | '-')) => expression.push(*value),
+            _ => return None,
+        }
+    }
+
+    match expression.as_str() {
+        "odd" => return Some((2, 1)),
+        "even" => return Some((2, 0)),
+        _ => {}
+    }
+
+    if let Some(n_index) = expression.find('n') {
+        if expression[n_index + 1..].contains('n') {
+            return None;
+        }
+        let coefficient = match &expression[..n_index] {
+            "" | "+" => 1,
+            "-" => -1,
+            value => value.parse().ok()?,
+        };
+        let offset = match &expression[n_index + 1..] {
+            "" => 0,
+            value => value.parse().ok()?,
+        };
+        Some((coefficient, offset))
+    } else {
+        Some((0, expression.parse().ok()?))
+    }
 }
 
 /// CSS parser consuming tokens and producing syntax structures.
@@ -603,6 +673,12 @@ impl<'a> Parser<'a> {
     ///
     /// Each selector is represented as a `ComplexSelector`.
     fn parse_selector_list(&mut self) -> Vec<ComplexSelector> {
+        self.parse_selector_list_until(None)
+    }
+
+    /// Parse a selector list up to a rule block or a functional pseudo-class
+    /// closing delimiter.
+    fn parse_selector_list_until(&mut self, terminator: Option<char>) -> Vec<ComplexSelector> {
         let mut selectors = vec![];
         let mut parts = vec![];
 
@@ -618,7 +694,7 @@ impl<'a> Parser<'a> {
                         id: None,
                         classes: vec![],
                         attributes: vec![],
-                        pseudo_class: None,
+                        pseudo_classes: vec![],
                         pseudo_element: None,
                     });
 
@@ -635,7 +711,7 @@ impl<'a> Parser<'a> {
                         id: None,
                         classes: vec![],
                         attributes: vec![],
-                        pseudo_class: None,
+                        pseudo_classes: vec![],
                         pseudo_element: None,
                     });
                     sel.id = Some(id);
@@ -650,7 +726,7 @@ impl<'a> Parser<'a> {
                             id: None,
                             classes: vec![],
                             attributes: vec![],
-                            pseudo_class: None,
+                            pseudo_classes: vec![],
                             pseudo_element: None,
                         });
                         sel.classes.push(class);
@@ -668,21 +744,61 @@ impl<'a> Parser<'a> {
                                 id: None,
                                 classes: vec![],
                                 attributes: vec![],
-                                pseudo_class: None,
+                                pseudo_classes: vec![],
                                 pseudo_element: None,
                             });
                             sel.pseudo_element = Some(name);
                         }
-                    } else if let Token::Ident(name) = self.consume_token() {
-                        let sel = current_selector.get_or_insert_with(|| Selector {
-                            tag: None,
-                            id: None,
-                            classes: vec![],
-                            attributes: vec![],
-                            pseudo_class: None,
-                            pseudo_element: None,
-                        });
-                        sel.pseudo_class = Some(name);
+                    } else {
+                        let pseudo_class = match self.consume_token() {
+                            Token::Ident(name) => Some(PseudoClass::Simple(name)),
+                            Token::Function(name) => {
+                                if self.peek_token() == &Token::Delim('(') {
+                                    self.consume_token();
+                                }
+                                let lower_name = name.to_ascii_lowercase();
+                                let pseudo = match lower_name.as_str() {
+                                    "is" | "where" | "not" => PseudoClass::SelectorList {
+                                        name: lower_name,
+                                        selectors: self.parse_selector_list_until(Some(')')),
+                                    },
+                                    "nth-child" | "nth-last-child" | "nth-of-type"
+                                    | "nth-last-of-type" => {
+                                        let tokens = self.consume_until_closing_parenthesis();
+                                        let (a, b) =
+                                            parse_an_plus_b(&tokens).unwrap_or((0, i32::MIN));
+                                        PseudoClass::Nth {
+                                            name: lower_name,
+                                            a,
+                                            b,
+                                        }
+                                    }
+                                    _ => {
+                                        self.consume_until_closing_parenthesis();
+                                        PseudoClass::SelectorList {
+                                            name: lower_name,
+                                            selectors: Vec::new(),
+                                        }
+                                    }
+                                };
+                                if self.peek_token() == &Token::Delim(')') {
+                                    self.consume_token();
+                                }
+                                Some(pseudo)
+                            }
+                            _ => None,
+                        };
+                        if let Some(pseudo_class) = pseudo_class {
+                            let sel = current_selector.get_or_insert_with(|| Selector {
+                                tag: None,
+                                id: None,
+                                classes: vec![],
+                                attributes: vec![],
+                                pseudo_classes: vec![],
+                                pseudo_element: None,
+                            });
+                            sel.pseudo_classes.push(pseudo_class);
+                        }
                     }
                 }
 
@@ -724,7 +840,7 @@ impl<'a> Parser<'a> {
                             id: None,
                             classes: vec![],
                             attributes: vec![],
-                            pseudo_class: None,
+                            pseudo_classes: vec![],
                             pseudo_element: None,
                         });
                         sel.attributes.push(AttributeSelector { name, value });
@@ -756,13 +872,28 @@ impl<'a> Parser<'a> {
                     self.consume_token();
                 }
 
+                Token::Delim('+') | Token::Delim('~') => {
+                    if let Some(sel) = current_selector.take() {
+                        parts.push(SelectorPart {
+                            selector: sel,
+                            combinator: current_combinator.take(),
+                        });
+                    }
+                    current_combinator = Some(if token == Token::Delim('+') {
+                        Combinator::NextSibling
+                    } else {
+                        Combinator::SubsequentSibling
+                    });
+                    self.consume_token();
+                }
+
                 Token::Delim('*') => {
                     current_selector.get_or_insert_with(|| Selector {
                         tag: None,
                         id: None,
                         classes: vec![],
                         attributes: vec![],
-                        pseudo_class: None,
+                        pseudo_classes: vec![],
                         pseudo_element: None,
                     });
                     self.consume_token();
@@ -788,6 +919,20 @@ impl<'a> Parser<'a> {
                     }
                 }
 
+                Token::Delim(')') if terminator == Some(')') => {
+                    if let Some(sel) = current_selector.take() {
+                        parts.push(SelectorPart {
+                            selector: sel,
+                            combinator: current_combinator.take(),
+                        });
+                    }
+                    if !parts.is_empty() {
+                        parts.reverse();
+                        selectors.push(ComplexSelector { parts });
+                    }
+                    break;
+                }
+
                 Token::Delim('{') | Token::EOF => {
                     if let Some(sel) = current_selector.take() {
                         parts.push(SelectorPart {
@@ -809,6 +954,28 @@ impl<'a> Parser<'a> {
         }
 
         selectors
+    }
+
+    /// Consume tokens through the matching `)` of a functional pseudo-class.
+    fn consume_until_closing_parenthesis(&mut self) -> Vec<Token> {
+        let mut tokens = Vec::new();
+        let mut depth = 0;
+        loop {
+            match self.peek_token() {
+                Token::EOF => break,
+                Token::Delim(')') if depth == 0 => break,
+                Token::Delim('(') => {
+                    depth += 1;
+                    tokens.push(self.consume_token());
+                }
+                Token::Delim(')') => {
+                    depth -= 1;
+                    tokens.push(self.consume_token());
+                }
+                _ => tokens.push(self.consume_token()),
+            }
+        }
+        tokens
     }
 
     /// Parse declaration until `Token::Delim('}')`.
