@@ -495,6 +495,14 @@ fn make_element(tag_name: String, attr_id: String, dom_id: u64) -> Rc<RefCell<JS
         "innerText".to_string(),
         accessor_property(get_inner_text, set_inner_text),
     );
+    obj.define_property(
+        "parentNode".to_string(),
+        read_only_accessor_property(get_parent_node),
+    );
+    obj.define_property(
+        "children".to_string(),
+        read_only_accessor_property(get_element_children),
+    );
     obj.set(
         "getAttribute".to_string(),
         JSValue::NativeFunction(get_attribute),
@@ -537,6 +545,10 @@ fn make_text_node(dom_id: u64) -> Rc<RefCell<JSObject>> {
     obj.define_property(
         "textContent".to_string(),
         accessor_property(get_text_content, set_text_content),
+    );
+    obj.define_property(
+        "parentNode".to_string(),
+        read_only_accessor_property(get_parent_node),
     );
     obj.set("remove".to_string(), JSValue::NativeFunction(remove_node));
     Rc::new(RefCell::new(obj))
@@ -656,6 +668,41 @@ fn accessor_property(
         getter: Some(JSValue::NativeFunction(getter)),
         setter: Some(JSValue::NativeFunction(setter)),
     }
+}
+
+fn read_only_accessor_property(getter: pixi_byte::NativeFunctionType) -> Property {
+    Property {
+        value: JSValue::Undefined,
+        enumerable: true,
+        writable: false,
+        configurable: false,
+        getter: Some(JSValue::NativeFunction(getter)),
+        setter: None,
+    }
+}
+
+fn get_parent_node(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Null);
+    };
+    let Some(parent) = node.borrow().parent() else {
+        return Ok(JSValue::Null);
+    };
+    Ok(expose_node(vm, parent).unwrap_or(JSValue::Null))
+}
+
+fn get_element_children(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSArray::new().to_object());
+    };
+    let children = node
+        .borrow()
+        .children()
+        .iter()
+        .filter(|child| matches!(child.borrow().value, HtmlNodeType::Element { .. }))
+        .cloned()
+        .collect();
+    Ok(expose_node_list(vm, children))
 }
 
 fn get_text_content(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -1020,5 +1067,39 @@ mod tests {
         assert!(DomTree::query_selector_within(&first, "#moving").is_none());
         assert!(DomTree::query_selector_within(&second, "#moving").is_some());
         assert!(runtime.needs_redraw());
+    }
+
+    #[test]
+    fn parent_node_and_children_expose_tree_relationships() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<div id="parent">text<span id="first"></span><span id="second"></span></div>"#,
+        );
+        runtime.run_script(
+            r##"
+            const first = document.querySelector("#first");
+            first.parentNode.setAttribute("data-parent", "yes");
+            const children = first.parentNode.children;
+            children[1].setAttribute("data-second", "yes");
+            first.parentNode.setAttribute("data-child-count", children.length);
+
+            const text = document.createTextNode("dynamic");
+            first.appendChild(text);
+            text.parentNode.setAttribute("data-text-parent", "yes");
+            "##,
+        );
+
+        let parent = dom.get_element_by_id("parent").unwrap();
+        assert_eq!(parent.borrow().value.get_attr("data-parent"), Some("yes"));
+        assert_eq!(
+            parent.borrow().value.get_attr("data-child-count"),
+            Some("2")
+        );
+        let first = dom.get_element_by_id("first").unwrap();
+        assert_eq!(
+            first.borrow().value.get_attr("data-text-parent"),
+            Some("yes")
+        );
+        let second = dom.get_element_by_id("second").unwrap();
+        assert_eq!(second.borrow().value.get_attr("data-second"), Some("yes"));
     }
 }
