@@ -156,6 +156,12 @@ const TEST_PAGE_CATALOG: &[TestPageMeta] = &[
         title: "Fetch",
         description: "fetchによる取得、Responseの状態・URL・本文、ネットワークエラーのreject",
     },
+    TestPageMeta {
+        file: "js_headers.html",
+        group: "JavaScript",
+        title: "Headers",
+        description: "Headersの取得・変更・コピー、大文字小文字の正規化、fetchとResponse.headers",
+    },
 ];
 
 /// テスト一覧に表示するグループ順。未登録ファイルは "Other" に載せ、

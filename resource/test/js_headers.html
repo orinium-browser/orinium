@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <title>JavaScript Headers Test</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 32px;
+        }
+
+        .result {
+            border: 2px solid #777;
+            margin: 12px 0 24px;
+            padding: 12px;
+        }
+
+        .result[data-complete="true"] {
+            background: #d9f7df;
+            border-color: #25813b;
+        }
+    </style>
+</head>
+<body>
+    <h1>JavaScript Headers</h1>
+
+    <h2>get / has / case-insensitive names</h2>
+    <div id="lookup-result" class="result">waiting</div>
+
+    <h2>set / append / delete</h2>
+    <div id="mutation-result" class="result">waiting</div>
+
+    <h2>copy constructor</h2>
+    <div id="copy-result" class="result">waiting</div>
+
+    <h2>fetch options / Response.headers</h2>
+    <div id="fetch-result" class="result">waiting</div>
+
+    <script>
+        const headers = new Headers({ Accept: "application/json" });
+        headers.set("X-Replace", "before");
+        headers.set("x-replace", "after");
+        headers.append("X-List", "one");
+        headers.append("x-list", "two");
+
+        const lookupResult = document.getElementById("lookup-result");
+        lookupResult.textContent =
+            "accept=" + headers.get("ACCEPT") +
+            ", has=" + headers.has("accept") +
+            ", missing=" + (headers.get("missing") === null);
+        lookupResult.setAttribute("data-complete", "true");
+
+        headers.delete("Accept");
+        const mutationResult = document.getElementById("mutation-result");
+        mutationResult.textContent =
+            "replace=" + headers.get("X-REPLACE") +
+            ", list=" + headers.get("x-list") +
+            ", deleted=" + (!headers.has("accept"));
+        mutationResult.setAttribute("data-complete", "true");
+
+        const copied = new Headers(headers);
+        const copyResult = document.getElementById("copy-result");
+        copyResult.textContent =
+            "replace=" + copied.get("x-replace") +
+            ", list=" + copied.get("X-LIST");
+        copyResult.setAttribute("data-complete", "true");
+
+        const fetchResult = document.getElementById("fetch-result");
+        fetch("data:text/plain,headers%20accepted", { headers: copied })
+            .then(response => {
+                fetchResult.textContent =
+                    "response.headers=" + (response.headers !== null) +
+                    ", missing=" + (response.headers.get("x-missing") === null);
+                fetchResult.setAttribute("data-complete", "true");
+            })
+            .catch(reason => {
+                fetchResult.textContent = "failed: " + reason;
+            });
+    </script>
+</body>
+</html>
