@@ -31,6 +31,7 @@ pub struct JsHost {
     objects: HashMap<u64, Rc<RefCell<JSObject>>>,
     document: Option<Rc<RefCell<JSObject>>>,
     document_event_listeners: HashMap<String, Vec<JSValue>>,
+    element_event_listeners: HashMap<u64, HashMap<String, Vec<JSValue>>>,
     dom_content_loaded_fired: bool,
     next_id: u64,
     needs_redraw: Rc<Cell<bool>>,
@@ -65,6 +66,7 @@ impl JsRuntime {
             objects: HashMap::new(),
             document: None,
             document_event_listeners: HashMap::new(),
+            element_event_listeners: HashMap::new(),
             dom_content_loaded_fired: false,
             next_id: 0,
             needs_redraw: Rc::clone(&needs_redraw),
@@ -139,10 +141,10 @@ impl JsRuntime {
         self.needs_redraw.replace(false)
     }
 
-    /// Dispatches a click to the `onclick` handler of `node`, if one was
-    /// registered on its JS element object.
+    /// Dispatches a click to the handlers registered on `node`.
     ///
-    /// Returns whether the handler ran (regardless of DOM mutation).
+    /// Both the `onclick` property and `addEventListener("click", ...)` are
+    /// supported. Returns whether at least one handler ran.
     pub fn click(&mut self, node: &NodeRef<HtmlNodeType>) -> bool {
         let Some(dom_id) = with_host(self.engine.vm(), |host| host.dom_id_for_node(node)).flatten()
         else {
@@ -155,14 +157,37 @@ impl JsRuntime {
         };
 
         let onclick = obj.borrow().get("onclick");
-        if !matches!(
-            onclick,
-            JSValue::Function(..) | JSValue::NativeFunction(_) | JSValue::BoundFunction(..)
-        ) {
+        let listeners = with_host(self.engine.vm(), |host| {
+            host.element_event_listeners
+                .get(&dom_id)
+                .and_then(|events| events.get("click"))
+                .cloned()
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+        let has_onclick = is_callable(&onclick);
+        if !has_onclick && listeners.is_empty() {
             return false;
         }
-        if let Err(err) = self.engine.call(onclick, JSValue::Object(obj), Vec::new()) {
-            log::info!("JS error on click: {}", err);
+
+        let event = make_event("click", Rc::clone(&obj));
+        if has_onclick {
+            if let Err(err) = self.engine.call(
+                onclick,
+                JSValue::Object(Rc::clone(&obj)),
+                vec![JSValue::Object(Rc::clone(&event))],
+            ) {
+                log::info!("JS error in onclick: {}", err);
+            }
+        }
+        for listener in listeners {
+            if let Err(err) = self.engine.call(
+                listener,
+                JSValue::Object(Rc::clone(&obj)),
+                vec![JSValue::Object(Rc::clone(&event))],
+            ) {
+                log::info!("JS error in click listener: {}", err);
+            }
         }
         true
     }
@@ -403,7 +428,33 @@ fn make_element(tag_name: String, attr_id: String, dom_id: u64) -> Rc<RefCell<JS
         "setAttribute".to_string(),
         JSValue::NativeFunction(set_attribute),
     );
+    obj.set(
+        "addEventListener".to_string(),
+        JSValue::NativeFunction(add_element_event_listener),
+    );
     Rc::new(RefCell::new(obj))
+}
+
+fn add_element_event_listener(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(dom_id) = element_dom_id(args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Undefined);
+    };
+    let Some(JSValue::String(event_type)) = args.get(1) else {
+        return Ok(JSValue::Undefined);
+    };
+    let Some(listener) = args.get(2).filter(|value| is_callable(value)).cloned() else {
+        return Ok(JSValue::Undefined);
+    };
+
+    let _ = with_host_mut(vm, |host| {
+        host.element_event_listeners
+            .entry(dom_id)
+            .or_default()
+            .entry(event_type.clone())
+            .or_default()
+            .push(listener);
+    });
+    Ok(JSValue::Undefined)
 }
 
 fn accessor_property(
@@ -583,6 +634,55 @@ mod tests {
         let node = dom.get_element_by_id("x").unwrap();
         assert!(!runtime.click(&node));
         assert!(!runtime.needs_redraw());
+    }
+
+    #[test]
+    fn click_invokes_element_event_listeners_in_registration_order() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<button id="button">click</button><div id="result"></div>"#);
+        runtime.run_script(
+            r#"
+            const button = document.getElementById("button");
+            const result = document.getElementById("result");
+            let order = "";
+            button.addEventListener("click", function (event) {
+                order = order + "a";
+                result.setAttribute("data-event-type", event.type);
+            });
+            button.addEventListener("click", function () {
+                order = order + "b";
+                result.setAttribute("data-order", order);
+            });
+            "#,
+        );
+
+        let button = dom.get_element_by_id("button").unwrap();
+        assert!(runtime.click(&button));
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-order"), Some("ab"));
+        assert_eq!(
+            result.borrow().value.get_attr("data-event-type"),
+            Some("click")
+        );
+        assert!(runtime.needs_redraw());
+    }
+
+    #[test]
+    fn click_does_not_invoke_other_event_types() {
+        let (mut runtime, dom) = runtime_from_html(r#"<button id="button">click</button>"#);
+        runtime.run_script(
+            r#"
+            const button = document.getElementById("button");
+            button.addEventListener("mouseover", function () {
+                button.setAttribute("data-ran", "yes");
+            });
+            "#,
+        );
+
+        let button = dom.get_element_by_id("button").unwrap();
+        assert!(!runtime.click(&button));
+        assert_eq!(button.borrow().value.get_attr("data-ran"), None);
     }
 
     #[test]
