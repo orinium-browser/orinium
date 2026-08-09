@@ -267,7 +267,8 @@ impl BrowserUi {
                         tab.on_fetch_succeeded_audio(source, &resp.body);
                     }
                     FetchKind::JavaScript { request_id, .. } => {
-                        tab.on_fetch_succeeded_js(request_id, resp);
+                        let redirected = resp.url != url.as_str();
+                        tab.on_fetch_succeeded_js(request_id, resp, redirected);
                     }
                 }
             }

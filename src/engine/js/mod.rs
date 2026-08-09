@@ -43,6 +43,8 @@ pub(crate) struct JsFetchRequest {
 pub(crate) struct JsFetchResponse {
     pub(crate) url: String,
     pub(crate) status: u16,
+    pub(crate) status_text: String,
+    pub(crate) redirected: bool,
     pub(crate) body: Vec<u8>,
     pub(crate) headers: Vec<(String, String)>,
 }
@@ -527,6 +529,7 @@ const HEADERS_DATA: &str = "__orinium_headers_data";
 const HEADERS_IMMUTABLE: &str = "__orinium_headers_immutable";
 const REQUEST_MARKER: &str = "__orinium_request";
 const REQUEST_BODY: &str = "__orinium_request_body";
+const RESPONSE_BODY_USED: &str = "__orinium_response_body_used";
 
 fn install_headers(engine: &mut pixi_byte::JSEngine) {
     let mut constructor = JSObject::new();
@@ -873,6 +876,25 @@ fn make_fetch_response(response: JsFetchResponse) -> Rc<RefCell<JSObject>> {
         Property::read_only(JSValue::Number(response.status as f64)),
     );
     object.define_property(
+        "statusText".to_string(),
+        Property::read_only(JSValue::String(response.status_text)),
+    );
+    object.define_property(
+        "redirected".to_string(),
+        Property::read_only(JSValue::Boolean(response.redirected)),
+    );
+    object.define_property(
+        "bodyUsed".to_string(),
+        Property {
+            value: JSValue::Undefined,
+            enumerable: true,
+            writable: false,
+            configurable: false,
+            getter: Some(JSValue::NativeFunction(fetch_response_body_used)),
+            setter: None,
+        },
+    );
+    object.define_property(
         "url".to_string(),
         Property::read_only(JSValue::String(response.url)),
     );
@@ -888,36 +910,22 @@ fn make_fetch_response(response: JsFetchResponse) -> Rc<RefCell<JSObject>> {
         "__orinium_response_body".to_string(),
         JSValue::String(String::from_utf8_lossy(&response.body).into_owned()),
     );
+    object.set(RESPONSE_BODY_USED.to_string(), JSValue::Boolean(false));
     Rc::new(RefCell::new(object))
 }
 
 fn fetch_response_text(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let body = match args.first() {
-        Some(JSValue::Object(response)) => response.borrow().get("__orinium_response_body"),
-        _ => {
-            return Err(JSError::TypeError(
-                "Response.text called on incompatible receiver".to_string(),
-            ));
-        }
+    let body = match consume_response_body(vm, &args, "text")? {
+        Ok(body) => body,
+        Err(rejection) => return Ok(rejection),
     };
-    settle_promise(vm, "resolve", body)
+    settle_promise(vm, "resolve", JSValue::String(body))
 }
 
 fn fetch_response_json(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let body = match args.first() {
-        Some(JSValue::Object(response)) => response.borrow().get("__orinium_response_body"),
-        _ => {
-            return Err(JSError::TypeError(
-                "Response.json called on incompatible receiver".to_string(),
-            ));
-        }
-    };
-    let JSValue::String(body) = body else {
-        return settle_promise(
-            vm,
-            "reject",
-            JSValue::String("Response body is unavailable".to_string()),
-        );
+    let body = match consume_response_body(vm, &args, "json")? {
+        Ok(body) => body,
+        Err(rejection) => return Ok(rejection),
     };
     match serde_json::from_str::<serde_json::Value>(&body) {
         Ok(value) => settle_promise(vm, "resolve", json_to_js_value(value)),
@@ -926,6 +934,43 @@ fn fetch_response_json(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
             "reject",
             JSValue::String(format!("Failed to parse JSON: {error}")),
         ),
+    }
+}
+
+fn fetch_response_body_used(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(JSValue::Object(response)) = args.first() else {
+        return Err(JSError::TypeError(
+            "Response.bodyUsed called on incompatible receiver".to_string(),
+        ));
+    };
+    Ok(response.borrow().get(RESPONSE_BODY_USED))
+}
+
+fn consume_response_body(
+    vm: &mut VM,
+    args: &[JSValue],
+    method: &str,
+) -> JSResult<Result<String, JSValue>> {
+    let Some(JSValue::Object(response)) = args.first() else {
+        return Err(JSError::TypeError(format!(
+            "Response.{method} called on incompatible receiver"
+        )));
+    };
+    let mut response = response.borrow_mut();
+    if matches!(response.get(RESPONSE_BODY_USED), JSValue::Boolean(true)) {
+        let rejection = settle_promise(
+            vm,
+            "reject",
+            JSValue::String("Response body has already been consumed".to_string()),
+        )?;
+        return Ok(Err(rejection));
+    }
+    response.set(RESPONSE_BODY_USED.to_string(), JSValue::Boolean(true));
+    match response.get("__orinium_response_body") {
+        JSValue::String(body) => Ok(Ok(body)),
+        _ => Err(JSError::InternalError(
+            "Response body is unavailable".to_string(),
+        )),
     }
 }
 
@@ -2188,8 +2233,13 @@ mod tests {
                 const result = document.querySelector("#result");
                 result.setAttribute("data-ok", response.ok);
                 result.setAttribute("data-status", response.status);
+                result.setAttribute("data-status-text", response.statusText);
                 result.setAttribute("data-url", response.url);
-                return response.text();
+                result.setAttribute("data-redirected", response.redirected);
+                result.setAttribute("data-body-used-before", response.bodyUsed);
+                const body = response.text();
+                result.setAttribute("data-body-used-after", response.bodyUsed);
+                return body;
             }).then(text => {
                 document.querySelector("#result").setAttribute("data-text", text);
             });
@@ -2204,6 +2254,8 @@ mod tests {
             JsFetchResponse {
                 url: "data:text/plain,hello".to_string(),
                 status: 200,
+                status_text: "All Good".to_string(),
+                redirected: true,
                 body: b"hello".to_vec(),
                 headers: Vec::new(),
             },
@@ -2214,10 +2266,56 @@ mod tests {
         assert_eq!(result.value.get_attr("data-ok"), Some("true"));
         assert_eq!(result.value.get_attr("data-status"), Some("200"));
         assert_eq!(
+            result.value.get_attr("data-status-text"),
+            Some("All Good")
+        );
+        assert_eq!(result.value.get_attr("data-redirected"), Some("true"));
+        assert_eq!(
+            result.value.get_attr("data-body-used-before"),
+            Some("false")
+        );
+        assert_eq!(
+            result.value.get_attr("data-body-used-after"),
+            Some("true")
+        );
+        assert_eq!(
             result.value.get_attr("data-url"),
             Some("data:text/plain,hello")
         );
         assert_eq!(result.value.get_attr("data-text"), Some("hello"));
+    }
+
+    #[test]
+    fn response_body_cannot_be_consumed_twice() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            fetch("data:text/plain,hello").then(response => {
+                return response.text().then(() => response.text());
+            }).catch(reason => {
+                document.querySelector("#result").setAttribute("data-error", reason);
+            });
+            "##,
+        );
+
+        let requests = runtime.take_fetch_requests();
+        runtime.resolve_fetch(
+            requests[0].id,
+            JsFetchResponse {
+                url: "data:text/plain,hello".to_string(),
+                status: 200,
+                status_text: "OK".to_string(),
+                redirected: false,
+                body: b"hello".to_vec(),
+                headers: Vec::new(),
+            },
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-error"),
+            Some("Response body has already been consumed")
+        );
     }
 
     #[test]
@@ -2313,6 +2411,8 @@ mod tests {
             JsFetchResponse {
                 url: "data:text/plain,hello".to_string(),
                 status: 200,
+                status_text: "OK".to_string(),
+                redirected: false,
                 body: b"hello".to_vec(),
                 headers: vec![
                     ("content-type".to_string(), "text/plain".to_string()),
@@ -2391,6 +2491,8 @@ mod tests {
             JsFetchResponse {
                 url: "data:application/json,pending".to_string(),
                 status: 200,
+                status_text: "OK".to_string(),
+                redirected: false,
                 body: br#"{"name":"Orinium","items":[1,2],"enabled":true,"empty":null}"#.to_vec(),
                 headers: Vec::new(),
             },
@@ -2423,6 +2525,8 @@ mod tests {
             JsFetchResponse {
                 url: "data:application/json,invalid".to_string(),
                 status: 200,
+                status_text: "OK".to_string(),
+                redirected: false,
                 body: b"not json".to_vec(),
                 headers: Vec::new(),
             },

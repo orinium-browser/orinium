@@ -460,6 +460,8 @@ impl WebView {
         request_id: u64,
         url: String,
         status: u16,
+        status_text: String,
+        redirected: bool,
         body: Vec<u8>,
         headers: Vec<(String, String)>,
     ) {
@@ -469,6 +471,8 @@ impl WebView {
                 JsFetchResponse {
                     url,
                     status,
+                    status_text,
+                    redirected,
                     body,
                     headers,
                 },
@@ -1375,6 +1379,8 @@ mod tests {
             request_id,
             "https://example.test/message.txt".to_string(),
             200,
+            "OK".to_string(),
+            false,
             b"hello from fetch".to_vec(),
             Vec::new(),
         );

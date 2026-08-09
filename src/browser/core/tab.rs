@@ -190,12 +190,19 @@ impl Tab {
     }
 
     /// Delivers a completed JavaScript `fetch()` response.
-    pub fn on_fetch_succeeded_js(&mut self, request_id: u64, response: BrowserResponse) {
+    pub fn on_fetch_succeeded_js(
+        &mut self,
+        request_id: u64,
+        response: BrowserResponse,
+        redirected: bool,
+    ) {
         if let Some(webview) = self.webview.as_mut() {
             webview.on_js_fetch_succeeded(
                 request_id,
                 response.url,
                 response.status.as_u16(),
+                response.status_text,
+                redirected,
                 response.body,
                 response.headers,
             );

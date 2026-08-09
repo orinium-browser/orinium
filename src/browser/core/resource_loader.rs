@@ -125,6 +125,7 @@ impl BrowserResourceLoader {
             .map(|resp| BrowserResponse {
                 url: resp.url,
                 status: resp.status,
+                status_text: resp.reason_phrase,
                 body: resp.body,
                 headers: resp.headers,
             })
@@ -146,6 +147,7 @@ impl BrowserResourceLoader {
                             .map(|resp| BrowserResponse {
                                 url: resp.url,
                                 status: resp.status,
+                                status_text: resp.reason_phrase,
                                 body: resp.body,
                                 headers: resp.headers,
                             })
@@ -176,6 +178,7 @@ fn make_response(url: &Url, body: Vec<u8>) -> BrowserResponse {
     BrowserResponse {
         url: url.to_string(),
         status: hyper::StatusCode::OK.into(),
+        status_text: "OK".to_string(),
         body,
         headers: vec![],
     }
@@ -185,6 +188,7 @@ fn make_response(url: &Url, body: Vec<u8>) -> BrowserResponse {
 pub struct BrowserResponse {
     pub url: String,
     pub status: StatusCode,
+    pub status_text: String,
     pub body: Vec<u8>,
     pub headers: Vec<(String, String)>,
 }
