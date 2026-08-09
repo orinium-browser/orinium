@@ -74,6 +74,7 @@ pub struct JsHost {
     document: Option<Rc<RefCell<JSObject>>>,
     document_event_listeners: HashMap<String, Vec<JSValue>>,
     element_event_listeners: HashMap<u64, HashMap<String, Vec<JSValue>>>,
+    active_element: Option<u64>,
     /// Keeps JS-created or removed nodes alive while their wrappers exist.
     detached_nodes: HashMap<u64, NodeRef<HtmlNodeType>>,
     timers: Vec<JsTimer>,
@@ -119,6 +120,7 @@ impl JsRuntime {
             document: None,
             document_event_listeners: HashMap::new(),
             element_event_listeners: HashMap::new(),
+            active_element: None,
             detached_nodes: HashMap::new(),
             timers: Vec::new(),
             fetch_requests: Vec::new(),
@@ -1036,6 +1038,14 @@ fn install_document(engine: &mut pixi_byte::JSEngine) {
             "body".to_string(),
             read_only_accessor_property(get_document_body),
         );
+        document.define_property(
+            "activeElement".to_string(),
+            read_only_accessor_property(get_active_element),
+        );
+        document.set(
+            "hasFocus".to_string(),
+            JSValue::NativeFunction(document_has_focus),
+        );
         document.set(
             "getElementById".to_string(),
             JSValue::NativeFunction(get_element_by_id),
@@ -1239,6 +1249,22 @@ fn get_document_body(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
         .unwrap_or(JSValue::Null))
 }
 
+fn get_active_element(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let active = with_host(vm, |host| {
+        host.active_element
+            .and_then(|dom_id| host.objects.get(&dom_id).cloned())
+    })
+    .flatten();
+    if let Some(active) = active {
+        return Ok(JSValue::Object(active));
+    }
+    get_document_body(vm, Vec::new())
+}
+
+fn document_has_focus(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::Boolean(true))
+}
+
 fn expose_detached_node(vm: &mut VM, node: NodeRef<HtmlNodeType>) -> Option<JSValue> {
     let value = expose_node(vm, Rc::clone(&node))?;
     let dom_id = node_dom_id(&value)?;
@@ -1412,6 +1438,8 @@ fn make_element(tag_name: String, attr_id: String, dom_id: u64) -> Rc<RefCell<JS
         JSValue::NativeFunction(element_query_selector_all),
     );
     obj.set("contains".to_string(), JSValue::NativeFunction(element_contains));
+    obj.set("focus".to_string(), JSValue::NativeFunction(focus_element));
+    obj.set("blur".to_string(), JSValue::NativeFunction(blur_element));
     obj.set(
         "appendChild".to_string(),
         JSValue::NativeFunction(append_child),
@@ -1637,6 +1665,28 @@ fn element_contains(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         };
         candidate = parent;
     }
+}
+
+fn focus_element(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(dom_id) = node_dom_id(args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Undefined);
+    };
+    let _ = with_host_mut(vm, |host| {
+        host.active_element = Some(dom_id);
+    });
+    Ok(JSValue::Undefined)
+}
+
+fn blur_element(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(dom_id) = node_dom_id(args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Undefined);
+    };
+    let _ = with_host_mut(vm, |host| {
+        if host.active_element == Some(dom_id) {
+            host.active_element = None;
+        }
+    });
+    Ok(JSValue::Undefined)
 }
 
 fn add_element_event_listener(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -2653,6 +2703,36 @@ mod tests {
         assert_eq!(root.value.get_attr("data-nested"), Some("true"));
         assert_eq!(root.value.get_attr("data-other"), Some("false"));
         assert_eq!(root.value.get_attr("data-null"), Some("false"));
+    }
+
+    #[test]
+    fn document_tracks_the_focused_element() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<body><input id="field"><button id="other"></button><div id="result"></div></body>"#,
+        );
+        runtime.run_script(
+            r##"
+            const field = document.querySelector("#field");
+            const other = document.querySelector("#other");
+            const result = document.querySelector("#result");
+            result.setAttribute("data-initial", document.activeElement === document.body);
+            field.focus();
+            result.setAttribute("data-field", document.activeElement === field);
+            other.focus();
+            result.setAttribute("data-other", document.activeElement === other);
+            other.blur();
+            result.setAttribute("data-blurred", document.activeElement === document.body);
+            result.setAttribute("data-has-focus", document.hasFocus());
+            "##,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-initial"), Some("true"));
+        assert_eq!(result.value.get_attr("data-field"), Some("true"));
+        assert_eq!(result.value.get_attr("data-other"), Some("true"));
+        assert_eq!(result.value.get_attr("data-blurred"), Some("true"));
+        assert_eq!(result.value.get_attr("data-has-focus"), Some("true"));
     }
 
     #[test]
