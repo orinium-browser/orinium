@@ -114,6 +114,12 @@ const TEST_PAGE_CATALOG: &[TestPageMeta] = &[
         title: "Events & Scheduling",
         description: "DOMContentLoaded / addEventListener / async / defer",
     },
+    TestPageMeta {
+        file: "js_selectors.html",
+        group: "JavaScript",
+        title: "DOM Query Selectors",
+        description: "document / Element の querySelector と querySelectorAll",
+    },
 ];
 
 /// テスト一覧に表示するグループ順。未登録ファイルは "Other" に載せ、
