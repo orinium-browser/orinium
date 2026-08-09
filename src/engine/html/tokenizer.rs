@@ -432,12 +432,18 @@ impl<'a> Tokenizer<'a> {
     fn state_after_attribute_name(&mut self, c: char) {
         match c {
             c if c.is_whitespace() => {}
-            '/' => self.state = TokenizerState::SelfClosingStartTag,
+            '/' => {
+                self.push_current_attribute();
+                self.state = TokenizerState::SelfClosingStartTag;
+            }
+            '=' => self.state = TokenizerState::BeforeAttributeValue,
             '>' => {
+                self.push_current_attribute();
                 self.commit_token();
                 self.state = TokenizerState::Data;
             }
             c if c.is_ascii_alphanumeric() => {
+                self.push_current_attribute();
                 self.state = TokenizerState::AttributeName;
                 self.buffer.push(c);
                 self.current_attribute = Some(Attribute {
@@ -682,6 +688,38 @@ mod tests {
                 Token::EndTag {
                     name: "a".to_string()
                 }
+            ]
+        );
+    }
+
+    #[test]
+    fn test_boolean_attributes() {
+        let input = r#"<script async defer src="script.js"></script>"#;
+        let tokens = collect_tokens(input);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::StartTag {
+                    name: "script".to_string(),
+                    attributes: vec![
+                        Attribute {
+                            name: "async".to_string(),
+                            value: String::new(),
+                        },
+                        Attribute {
+                            name: "defer".to_string(),
+                            value: String::new(),
+                        },
+                        Attribute {
+                            name: "src".to_string(),
+                            value: "script.js".to_string(),
+                        },
+                    ],
+                    self_closing: false,
+                },
+                Token::EndTag {
+                    name: "script".to_string(),
+                },
             ]
         );
     }
