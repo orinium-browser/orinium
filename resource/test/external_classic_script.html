@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <title>External Classic Script Test</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 32px;
+        }
+
+        #result {
+            border: 2px solid #777;
+            padding: 16px;
+        }
+
+        #result[data-complete="true"] {
+            background: #d9f7df;
+            border-color: #25813b;
+        }
+    </style>
+</head>
+<body>
+    <h1>External classic script</h1>
+    <p>緑色の枠内に4段階の実行順が表示されれば成功です。</p>
+    <div id="result">waiting</div>
+
+    <script>
+        let executionOrder = "inline-1";
+    </script>
+    <script src="external_classic_script_first.js"></script>
+    <script>
+        executionOrder = executionOrder + " > inline-2";
+    </script>
+    <script src="external_classic_script_second.js"></script>
+</body>
+</html>
