@@ -29,6 +29,9 @@ pub struct JsHost {
     /// Element JS objects per DOM id, kept alive so `onclick` handlers
     /// registered on them survive and can be invoked on user clicks.
     objects: HashMap<u64, Rc<RefCell<JSObject>>>,
+    document: Option<Rc<RefCell<JSObject>>>,
+    document_event_listeners: HashMap<String, Vec<JSValue>>,
+    dom_content_loaded_fired: bool,
     next_id: u64,
     needs_redraw: Rc<Cell<bool>>,
 }
@@ -60,6 +63,9 @@ impl JsRuntime {
             dom,
             refs: HashMap::new(),
             objects: HashMap::new(),
+            document: None,
+            document_event_listeners: HashMap::new(),
+            dom_content_loaded_fired: false,
             next_id: 0,
             needs_redraw: Rc::clone(&needs_redraw),
         }));
@@ -82,6 +88,45 @@ impl JsRuntime {
             Ok(_) => {}
             Err(err) => log::info!("JS error: {}", err),
         }
+    }
+
+    /// Dispatches `DOMContentLoaded` to document listeners once.
+    ///
+    /// Returns `true` only for the first dispatch attempt. Listener errors are
+    /// logged and do not prevent the remaining listeners from running.
+    pub fn dispatch_dom_content_loaded(&mut self) -> bool {
+        let Some((document, listeners)) = with_host_mut(self.engine.vm(), |host| {
+            if host.dom_content_loaded_fired {
+                return None;
+            }
+
+            host.dom_content_loaded_fired = true;
+            Some((
+                host.document.as_ref().cloned(),
+                host.document_event_listeners
+                    .get("DOMContentLoaded")
+                    .cloned()
+                    .unwrap_or_default(),
+            ))
+        })
+        .flatten() else {
+            return false;
+        };
+
+        let Some(document) = document else {
+            return true;
+        };
+        for listener in listeners {
+            let event = make_event("DOMContentLoaded", Rc::clone(&document));
+            if let Err(err) = self.engine.call(
+                listener,
+                JSValue::Object(Rc::clone(&document)),
+                vec![JSValue::Object(event)],
+            ) {
+                log::info!("JS error on DOMContentLoaded: {}", err);
+            }
+        }
+        true
     }
 
     /// Returns whether a script mutated the DOM and a relayout is needed.
@@ -214,11 +259,59 @@ fn install_document(engine: &mut pixi_byte::JSEngine) {
             "getElementById".to_string(),
             JSValue::NativeFunction(get_element_by_id),
         );
+        document.set(
+            "addEventListener".to_string(),
+            JSValue::NativeFunction(add_document_event_listener),
+        );
     }
+    let _ = with_host_mut(engine.vm(), |host| {
+        host.document = Some(Rc::clone(&document_obj));
+    });
     engine
         .global_mut()
         .borrow_mut()
         .set("document".to_string(), JSValue::Object(document_obj));
+}
+
+fn add_document_event_listener(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(JSValue::String(event_type)) = args.get(1) else {
+        return Ok(JSValue::Undefined);
+    };
+    let Some(listener) = args.get(2).filter(|value| is_callable(value)).cloned() else {
+        return Ok(JSValue::Undefined);
+    };
+
+    let _ = with_host_mut(vm, |host| {
+        host.document_event_listeners
+            .entry(event_type.clone())
+            .or_default()
+            .push(listener);
+    });
+    Ok(JSValue::Undefined)
+}
+
+fn is_callable(value: &JSValue) -> bool {
+    matches!(
+        value,
+        JSValue::Function(..) | JSValue::NativeFunction(_) | JSValue::BoundFunction(..)
+    )
+}
+
+fn make_event(event_type: &str, target: Rc<RefCell<JSObject>>) -> Rc<RefCell<JSObject>> {
+    let mut event = JSObject::new();
+    event.define_property(
+        "type".to_string(),
+        Property::read_only(JSValue::String(event_type.to_string())),
+    );
+    event.define_property(
+        "target".to_string(),
+        Property::read_only(JSValue::Object(Rc::clone(&target))),
+    );
+    event.define_property(
+        "currentTarget".to_string(),
+        Property::read_only(JSValue::Object(target)),
+    );
+    Rc::new(RefCell::new(event))
 }
 
 fn get_element_by_id(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -503,5 +596,48 @@ mod tests {
             if (a !== b) { throw new Error("expected the same object"); }
             "#,
         );
+    }
+
+    #[test]
+    fn dom_content_loaded_listener_runs_when_dispatched() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r#"
+            document.addEventListener("DOMContentLoaded", function (event) {
+                const result = document.getElementById("result");
+                result.setAttribute("data-ready", "yes");
+                result.setAttribute("data-event-type", event.type);
+            });
+            "#,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-ready"), None);
+        assert!(runtime.dispatch_dom_content_loaded());
+        assert_eq!(result.borrow().value.get_attr("data-ready"), Some("yes"));
+        assert_eq!(
+            result.borrow().value.get_attr("data-event-type"),
+            Some("DOMContentLoaded")
+        );
+        assert!(runtime.needs_redraw());
+    }
+
+    #[test]
+    fn dom_content_loaded_is_dispatched_only_once() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r#"
+            let dispatchCount = 0;
+            document.addEventListener("DOMContentLoaded", function () {
+                dispatchCount = dispatchCount + 1;
+                document.getElementById("result").setAttribute("data-count", dispatchCount);
+            });
+            "#,
+        );
+
+        assert!(runtime.dispatch_dom_content_loaded());
+        assert!(!runtime.dispatch_dom_content_loaded());
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-count"), Some("1"));
     }
 }
