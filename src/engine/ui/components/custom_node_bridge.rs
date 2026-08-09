@@ -22,9 +22,9 @@ use super::inline_cache::resolve_border_box_size;
 /// The element participates in the formatting context reported by the owned
 /// style's [`OuterDisplay`]:
 ///
-/// - [`OuterDisplay::Inline`] → `layout` returns a
-///   [`LayoutBox::InlineBox`] carrying positioned [`LineSpan`]s plus the box
-///   model, so the element shares the current line.
+/// - [`OuterDisplay::Inline`] → `layout` returns an atomic
+///   [`LayoutBox::InlineBox`]. The flow engine creates its line span so the
+///   element's full border-box height contributes to the line box.
 /// - [`OuterDisplay::Block`] → `layout` returns a [`LayoutBox::BlockBox`]
 ///   positioned at the origin; the engine translates it to its final position.
 /// - [`OuterDisplay::None`] → the element produces nothing.
@@ -83,12 +83,6 @@ impl CustomLayouter for CustomNodeBridge {
                 );
                 let (use_width, use_height) = (resolved.width, resolved.height);
 
-                let spans = vec![ui_layout::LineSpan {
-                    x_range: x..(x + use_width),
-                    line_pos: (x, y),
-                    line_index: 0,
-                }];
-
                 let rect = Rect {
                     x,
                     y,
@@ -104,7 +98,11 @@ impl CustomLayouter for CustomNodeBridge {
 
                 LayoutBox::InlineBox(InlineBox {
                     box_model,
-                    line_spans: spans,
+                    // Atomic inline replaced elements leave positioning to
+                    // the flow engine. A pre-populated span is interpreted as
+                    // text-flow output and only contributes `line-height`,
+                    // which collapses a tall image's containing inline-block.
+                    line_spans: Vec::new(),
                 })
             }
             OuterDisplay::Block => {
@@ -235,7 +233,7 @@ mod tests {
     }
 
     #[test]
-    fn inline_layout_positions_spans_at_start_pos() {
+    fn inline_layout_returns_an_atomic_unpositioned_box() {
         let mut b = bridge(OuterDisplay::Inline);
         let ctx = LayoutContext {
             start_pos: (10.0, 20.0),
@@ -250,9 +248,7 @@ mod tests {
                 assert_eq!(inline.box_model.border_box.y, 20.0);
                 assert_eq!(inline.box_model.border_box.width, 200.0);
                 assert_eq!(inline.box_model.border_box.height, 100.0);
-                assert_eq!(inline.line_spans.len(), 1);
-                assert_eq!(inline.line_spans[0].line_pos, (10.0, 20.0));
-                assert_eq!(inline.line_spans[0].x_range, 10.0..210.0);
+                assert!(inline.line_spans.is_empty());
             }
             other => panic!("expected InlineBox, got {:?}", other),
         }

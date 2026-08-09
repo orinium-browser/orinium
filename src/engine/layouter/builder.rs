@@ -3224,6 +3224,52 @@ mod tests {
         );
     }
 
+    #[test]
+    fn inline_image_keeps_intrinsic_dimensions_after_layout() {
+        let dom = HtmlParser::new(
+            r#"<html><body><div><img src="profile.png" alt="profile"></div></body></html>"#,
+        )
+        .parse();
+        let mut images = HashMap::new();
+        images.insert(
+            "profile.png".to_string(),
+            Image::from_rgba(460, 460, vec![255; 460 * 460 * 4]).unwrap(),
+        );
+        let stylesheet = CssParser::new("img { display: inline-block; }")
+            .parse()
+            .unwrap();
+        let resolved_styles = CssResolver::resolve(&stylesheet);
+        let (mut layout, _) = build_layout_and_info_with_images(
+            &dom.root,
+            &resolved_styles,
+            Arc::new(FallbackTextMeasurer),
+            InheritedCss {
+                text_style: TextStyle::default(),
+                color_scheme: ColorScheme::Light,
+            },
+            Vec::new(),
+            ColorScheme::Light,
+            &images,
+        );
+        ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+
+        fn image_layout_size(node: &LayoutNode) -> Option<(f32, f32)> {
+            if node.style.size.auto_behavior == AutoSizeBehavior::ShrinkToFit {
+                return node
+                    .layout_box
+                    .iter()
+                    .next()
+                    .map(|box_model| (box_model.content_box.width, box_model.content_box.height));
+            }
+            node.children.iter().find_map(|child| match child {
+                LayoutChild::Node(child) => image_layout_size(child),
+                _ => None,
+            })
+        }
+
+        assert_eq!(image_layout_size(&layout), Some((460.0, 460.0)));
+    }
+
     /// Depth-first search for the first [`NodeKind::Text`] whose content is
     /// `content`, returning a clone of its style.
     fn text_style_for(info: &InfoNode, content: &str) -> TextStyle {
