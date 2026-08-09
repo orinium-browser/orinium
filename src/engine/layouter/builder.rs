@@ -1695,6 +1695,7 @@ pub fn apply_declaration(
                     "relative" => Position::Relative,
                     "absolute" => Position::Absolute,
                     "fixed" => Position::Fixed,
+                    "sticky" => Position::Sticky,
                     _ => return None,
                 },
                 _ => return None,

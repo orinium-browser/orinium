@@ -184,7 +184,16 @@
                 background: #f99;
             }
 
-            /* 10. Fixed */
+            /* 10. Auto offset */
+
+            .auto-offset {
+                position: relative;
+                left: auto;
+                right: auto;
+                top: auto;
+                bottom: auto;
+                background: #ddd;
+            }
 
             .fixed {
                 position: fixed;
@@ -196,15 +205,14 @@
                 border-radius: 8px;
             }
 
-            /* 11. Auto offsets */
-
-            .auto-offset {
-                position: relative;
-                left: auto;
-                right: auto;
-                top: auto;
-                bottom: auto;
-                background: #ddd;
+            .sticky {
+                max-width: 100px;
+                position: sticky;
+                top: 10px;
+                margin: 24px;
+                padding: 12px;
+                background: #ffc;
+                border: 2px solid #cc9;
             }
         </style>
     </head>
@@ -240,6 +248,8 @@
                 Normal-flow content remains here.
             </div>
         </section>
+
+        <div class="sticky">position: sticky</div>
 
         <section>
             <h2>4. Inset shorthand</h2>
