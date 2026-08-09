@@ -25,6 +25,24 @@ struct JsTimer {
     interval: Option<Duration>,
 }
 
+struct JsFetchCapability {
+    resolve: JSValue,
+    reject: JSValue,
+}
+
+/// A fetch request waiting to be dispatched by the browser network layer.
+pub(crate) struct JsFetchRequest {
+    pub(crate) id: u64,
+    pub(crate) url: String,
+}
+
+/// The response data exposed to a JavaScript `Response` object.
+pub(crate) struct JsFetchResponse {
+    pub(crate) url: String,
+    pub(crate) status: u16,
+    pub(crate) body: Vec<u8>,
+}
+
 /// State shared between the JS natives and the browser side.
 ///
 /// The JS-facing `u64` counter (`__orinium_dom_id`) maps to a live DOM node so
@@ -45,6 +63,10 @@ pub struct JsHost {
     /// Keeps JS-created or removed nodes alive while their wrappers exist.
     detached_nodes: HashMap<u64, NodeRef<HtmlNodeType>>,
     timers: Vec<JsTimer>,
+    fetch_requests: Vec<JsFetchRequest>,
+    fetch_capabilities: HashMap<u64, JsFetchCapability>,
+    constructing_fetch_capability: Option<JsFetchCapability>,
+    next_fetch_id: u64,
     next_timer_id: u64,
     dom_content_loaded_fired: bool,
     next_id: u64,
@@ -83,6 +105,10 @@ impl JsRuntime {
             element_event_listeners: HashMap::new(),
             detached_nodes: HashMap::new(),
             timers: Vec::new(),
+            fetch_requests: Vec::new(),
+            fetch_capabilities: HashMap::new(),
+            constructing_fetch_capability: None,
+            next_fetch_id: 0,
             next_timer_id: 0,
             dom_content_loaded_fired: false,
             next_id: 0,
@@ -96,6 +122,7 @@ impl JsRuntime {
         install_document(&mut engine);
         install_timers(&mut engine);
         install_microtasks(&mut engine);
+        install_fetch(&mut engine);
         install_global_aliases(&mut engine);
 
         Self {
@@ -200,6 +227,49 @@ impl JsRuntime {
     /// Clears and returns the redraw flag.
     pub fn take_needs_redraw(&self) -> bool {
         self.needs_redraw.replace(false)
+    }
+
+    /// Takes fetch requests queued by JavaScript since the previous call.
+    pub(crate) fn take_fetch_requests(&mut self) -> Vec<JsFetchRequest> {
+        with_host_mut(self.engine.vm(), |host| {
+            std::mem::take(&mut host.fetch_requests)
+        })
+        .unwrap_or_default()
+    }
+
+    /// Resolves a pending JavaScript fetch and runs its microtask checkpoint.
+    pub(crate) fn resolve_fetch(&mut self, id: u64, response: JsFetchResponse) {
+        let capability =
+            with_host_mut(self.engine.vm(), |host| host.fetch_capabilities.remove(&id)).flatten();
+        let Some(capability) = capability else {
+            return;
+        };
+        let response = make_fetch_response(response);
+        if let Err(err) = self.engine.call(
+            capability.resolve,
+            JSValue::Undefined,
+            vec![JSValue::Object(response)],
+        ) {
+            log::info!("JS error while resolving fetch: {}", err);
+        }
+        self.perform_microtask_checkpoint();
+    }
+
+    /// Rejects a pending JavaScript fetch and runs its microtask checkpoint.
+    pub(crate) fn reject_fetch(&mut self, id: u64, reason: String) {
+        let capability =
+            with_host_mut(self.engine.vm(), |host| host.fetch_capabilities.remove(&id)).flatten();
+        let Some(capability) = capability else {
+            return;
+        };
+        if let Err(err) = self.engine.call(
+            capability.reject,
+            JSValue::Undefined,
+            vec![JSValue::String(reason)],
+        ) {
+            log::info!("JS error while rejecting fetch: {}", err);
+        }
+        self.perform_microtask_checkpoint();
     }
 
     /// Dispatches a click to the handlers registered on `node`.
@@ -443,6 +513,104 @@ fn queue_microtask(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     };
     vm.enqueue_job(callback, JSValue::Undefined, Vec::new());
     Ok(JSValue::Undefined)
+}
+
+// --- fetch ---
+
+fn install_fetch(engine: &mut pixi_byte::JSEngine) {
+    engine
+        .global_mut()
+        .borrow_mut()
+        .set("fetch".to_string(), JSValue::NativeFunction(fetch));
+}
+
+fn fetch(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let url = args
+        .get(1)
+        .cloned()
+        .unwrap_or(JSValue::Undefined)
+        .to_string();
+    let promise_constructor = vm.global_object.borrow().get("Promise");
+    let JSValue::Object(constructor) = &promise_constructor else {
+        return Err(JSError::InternalError(
+            "Promise constructor is unavailable".to_string(),
+        ));
+    };
+    let construct = constructor.borrow().get("__construct__");
+    let _ = with_host_mut(vm, |host| host.constructing_fetch_capability = None);
+    let promise = vm.call(
+        construct,
+        promise_constructor,
+        vec![JSValue::NativeFunction(capture_fetch_capability)],
+    )?;
+    let capability = with_host_mut(vm, |host| host.constructing_fetch_capability.take())
+        .flatten()
+        .ok_or_else(|| JSError::InternalError("Failed to create fetch Promise".to_string()))?;
+
+    let _ = with_host_mut(vm, |host| {
+        host.next_fetch_id += 1;
+        let id = host.next_fetch_id;
+        host.fetch_capabilities.insert(id, capability);
+        host.fetch_requests.push(JsFetchRequest { id, url });
+    });
+    Ok(promise)
+}
+
+fn capture_fetch_capability(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let resolve = args.get(1).cloned().unwrap_or(JSValue::Undefined);
+    let reject = args.get(2).cloned().unwrap_or(JSValue::Undefined);
+    let Some(()) = with_host_mut(vm, |host| {
+        host.constructing_fetch_capability = Some(JsFetchCapability { resolve, reject });
+    }) else {
+        return Err(JSError::InternalError(
+            "Fetch host state is unavailable".to_string(),
+        ));
+    };
+    Ok(JSValue::Undefined)
+}
+
+fn make_fetch_response(response: JsFetchResponse) -> Rc<RefCell<JSObject>> {
+    let mut object = JSObject::new();
+    object.define_property(
+        "ok".to_string(),
+        Property::read_only(JSValue::Boolean((200..=299).contains(&response.status))),
+    );
+    object.define_property(
+        "status".to_string(),
+        Property::read_only(JSValue::Number(response.status as f64)),
+    );
+    object.define_property(
+        "url".to_string(),
+        Property::read_only(JSValue::String(response.url)),
+    );
+    object.define_property(
+        "text".to_string(),
+        Property::read_only(JSValue::NativeFunction(fetch_response_text)),
+    );
+    object.set(
+        "__orinium_response_body".to_string(),
+        JSValue::String(String::from_utf8_lossy(&response.body).into_owned()),
+    );
+    Rc::new(RefCell::new(object))
+}
+
+fn fetch_response_text(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let body = match args.first() {
+        Some(JSValue::Object(response)) => response.borrow().get("__orinium_response_body"),
+        _ => {
+            return Err(JSError::TypeError(
+                "Response.text called on incompatible receiver".to_string(),
+            ));
+        }
+    };
+    let promise = vm.global_object.borrow().get("Promise");
+    let JSValue::Object(constructor) = &promise else {
+        return Err(JSError::InternalError(
+            "Promise constructor is unavailable".to_string(),
+        ));
+    };
+    let resolve = constructor.borrow().get("resolve");
+    vm.call(resolve, promise, vec![body])
 }
 
 // --- document ---
@@ -1663,5 +1831,65 @@ mod tests {
         assert_eq!(result.value.get_attr("data-same-global"), Some("true"));
         assert_eq!(result.value.get_attr("data-document"), Some("true"));
         assert_eq!(result.value.get_attr("data-microtask"), Some("yes"));
+    }
+
+    #[test]
+    fn fetch_resolves_response_metadata_and_text_promise() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            fetch("data:text/plain,hello").then(response => {
+                const result = document.querySelector("#result");
+                result.setAttribute("data-ok", response.ok);
+                result.setAttribute("data-status", response.status);
+                result.setAttribute("data-url", response.url);
+                return response.text();
+            }).then(text => {
+                document.querySelector("#result").setAttribute("data-text", text);
+            });
+            "##,
+        );
+
+        let requests = runtime.take_fetch_requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].url, "data:text/plain,hello");
+        runtime.resolve_fetch(
+            requests[0].id,
+            JsFetchResponse {
+                url: "data:text/plain,hello".to_string(),
+                status: 200,
+                body: b"hello".to_vec(),
+            },
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-ok"), Some("true"));
+        assert_eq!(result.value.get_attr("data-status"), Some("200"));
+        assert_eq!(
+            result.value.get_attr("data-url"),
+            Some("data:text/plain,hello")
+        );
+        assert_eq!(result.value.get_attr("data-text"), Some("hello"));
+    }
+
+    #[test]
+    fn fetch_rejection_runs_catch_reaction() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            fetch("https://invalid.test/").catch(reason => {
+                document.querySelector("#result").setAttribute("data-error", reason);
+            });
+            "##,
+        );
+
+        let requests = runtime.take_fetch_requests();
+        runtime.reject_fetch(requests[0].id, "network failed".to_string());
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-error"),
+            Some("network failed")
+        );
     }
 }
