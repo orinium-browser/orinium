@@ -17,6 +17,10 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
+const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
+const MATHML_NAMESPACE: &str = "http://www.w3.org/1998/Math/MathML";
+
 struct JsTimer {
     id: u64,
     callback: JSValue,
@@ -65,6 +69,8 @@ pub struct JsHost {
     objects: HashMap<u64, Rc<RefCell<JSObject>>>,
     /// Stable `CSSStyleDeclaration` wrappers for exposed elements.
     styles: HashMap<u64, Rc<RefCell<JSObject>>>,
+    /// Explicit namespaces assigned through `document.createElementNS`.
+    namespaces: HashMap<u64, String>,
     document: Option<Rc<RefCell<JSObject>>>,
     document_event_listeners: HashMap<String, Vec<JSValue>>,
     element_event_listeners: HashMap<u64, HashMap<String, Vec<JSValue>>>,
@@ -109,6 +115,7 @@ impl JsRuntime {
             refs: HashMap::new(),
             objects: HashMap::new(),
             styles: HashMap::new(),
+            namespaces: HashMap::new(),
             document: None,
             document_event_listeners: HashMap::new(),
             element_event_listeners: HashMap::new(),
@@ -1046,6 +1053,10 @@ fn install_document(engine: &mut pixi_byte::JSEngine) {
             JSValue::NativeFunction(create_element),
         );
         document.set(
+            "createElementNS".to_string(),
+            JSValue::NativeFunction(create_element_ns),
+        );
+        document.set(
             "createTextNode".to_string(),
             JSValue::NativeFunction(create_text_node),
         );
@@ -1167,6 +1178,33 @@ fn create_element(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         attributes: Vec::new(),
     });
     Ok(expose_detached_node(vm, node).unwrap_or(JSValue::Null))
+}
+
+fn create_element_ns(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let namespace = match args.get(1) {
+        Some(JSValue::String(namespace)) => namespace.clone(),
+        Some(JSValue::Null) | Some(JSValue::Undefined) | None => String::new(),
+        Some(value) => value.to_console_string(),
+    };
+    let Some(JSValue::String(qualified_name)) = args.get(2) else {
+        return Ok(JSValue::Null);
+    };
+    let tag_name = qualified_name.trim().to_ascii_lowercase();
+    if tag_name.is_empty() {
+        return Ok(JSValue::Null);
+    }
+
+    let node = TreeNode::new(HtmlNodeType::Element {
+        tag_name,
+        attributes: Vec::new(),
+    });
+    let value = expose_detached_node(vm, node).unwrap_or(JSValue::Null);
+    if let Some(dom_id) = node_dom_id(&value) {
+        let _ = with_host_mut(vm, |host| {
+            host.namespaces.insert(dom_id, namespace);
+        });
+    }
+    Ok(value)
 }
 
 fn create_text_node(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -1302,6 +1340,10 @@ fn make_element(tag_name: String, attr_id: String, dom_id: u64) -> Rc<RefCell<JS
         read_only_accessor_property(get_owner_document),
     );
     obj.define_property(
+        "namespaceURI".to_string(),
+        read_only_accessor_property(get_namespace_uri),
+    );
+    obj.define_property(
         "childNodes".to_string(),
         read_only_accessor_property(get_child_nodes),
     );
@@ -1348,6 +1390,10 @@ fn make_element(tag_name: String, attr_id: String, dom_id: u64) -> Rc<RefCell<JS
     obj.set(
         "setAttribute".to_string(),
         JSValue::NativeFunction(set_attribute),
+    );
+    obj.set(
+        "setAttributeNS".to_string(),
+        JSValue::NativeFunction(set_attribute_ns),
     );
     obj.set(
         "removeAttribute".to_string(),
@@ -1634,6 +1680,42 @@ fn get_owner_document(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
         .flatten()
         .map(JSValue::Object)
         .unwrap_or(JSValue::Null))
+}
+
+fn get_namespace_uri(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let this = args.first().unwrap_or(&JSValue::Undefined);
+    if let Some(dom_id) = node_dom_id(this) {
+        if let Some(namespace) = with_host(vm, |host| host.namespaces.get(&dom_id).cloned()).flatten()
+        {
+            return if namespace.is_empty() {
+                Ok(JSValue::Null)
+            } else {
+                Ok(JSValue::String(namespace))
+            };
+        }
+    }
+
+    let Some(mut node) = dom_node(vm, this) else {
+        return Ok(JSValue::Null);
+    };
+    loop {
+        let (tag_name, parent) = {
+            let node = node.borrow();
+            (
+                node.value.tag_name().map(str::to_ascii_lowercase),
+                node.parent(),
+            )
+        };
+        match tag_name.as_deref() {
+            Some("svg") => return Ok(JSValue::String(SVG_NAMESPACE.to_string())),
+            Some("math") => return Ok(JSValue::String(MATHML_NAMESPACE.to_string())),
+            _ => {}
+        }
+        let Some(parent) = parent else {
+            return Ok(JSValue::String(HTML_NAMESPACE.to_string()));
+        };
+        node = parent;
+    }
 }
 
 fn get_child_nodes(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -2156,6 +2238,15 @@ fn set_attribute(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(JSValue::Undefined)
 }
 
+fn set_attribute_ns(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let forwarded = vec![
+        args.first().cloned().unwrap_or(JSValue::Undefined),
+        args.get(2).cloned().unwrap_or(JSValue::Undefined),
+        args.get(3).cloned().unwrap_or(JSValue::Undefined),
+    ];
+    set_attribute(vm, forwarded)
+}
+
 fn remove_attribute(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
         return Ok(JSValue::Undefined);
@@ -2483,6 +2574,35 @@ mod tests {
 
         let item = dom.query_selector("li.dynamic").unwrap();
         assert_eq!(DomTree::inner_text(&item), "created by JavaScript");
+        assert!(runtime.needs_redraw());
+    }
+
+    #[test]
+    fn namespace_dom_apis_create_svg_elements_and_attributes() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<main id="root"></main><div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            path.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", "#shape");
+            svg.appendChild(path);
+            document.querySelector("#root").appendChild(svg);
+
+            const result = document.querySelector("#result");
+            result.setAttribute("data-svg-ns", svg.namespaceURI);
+            result.setAttribute("data-path-ns", path.namespaceURI);
+            result.setAttribute("data-html-ns", result.namespaceURI);
+            "##,
+        );
+
+        let path = dom.query_selector("path").unwrap();
+        assert_eq!(path.borrow().value.get_attr("xlink:href"), Some("#shape"));
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-svg-ns"), Some(SVG_NAMESPACE));
+        assert_eq!(result.value.get_attr("data-path-ns"), Some(SVG_NAMESPACE));
+        assert_eq!(result.value.get_attr("data-html-ns"), Some(HTML_NAMESPACE));
         assert!(runtime.needs_redraw());
     }
 
