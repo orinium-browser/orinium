@@ -263,16 +263,19 @@ fn main() -> Result<()> {
                 }
             }
             "dump_layoutnode" => {
-                if args.len() == 3 {
+                if args.len() == 3 || args.len() == 5 {
                     let raw_url = &args[2];
+                    let (viewport_w, viewport_h) = viewport_args(&args, 800.0, 600.0)?;
                     println!("Dumping LayoutNode for URL: {}", raw_url);
 
                     let mut ctx = build_layout_info(raw_url)?;
-                    LayoutEngine::layout(&mut ctx.layout, 800.0, 600.0);
+                    LayoutEngine::layout(&mut ctx.layout, viewport_w, viewport_h);
 
                     println!("\nLayoutNode:\n{:#}", ctx.layout);
                 } else {
-                    eprintln!("Please provide a URL for dump_layoutnode test.");
+                    eprintln!(
+                        "Please provide a URL and optional viewport size (URL [WIDTH HEIGHT])."
+                    );
                 }
             }
             "jsclick" => {
@@ -313,12 +316,13 @@ fn main() -> Result<()> {
                 }
             }
             "dump_draw_command" => {
-                if args.len() == 3 {
+                if args.len() == 3 || args.len() == 5 {
                     let raw_url = &args[2];
+                    let (viewport_w, viewport_h) = viewport_args(&args, 800.0, 600.0)?;
                     println!("Dumping draw commands for URL: {}", raw_url);
 
                     let mut ctx = build_layout_info(raw_url)?;
-                    LayoutEngine::layout(&mut ctx.layout, 800.0, 600.0);
+                    LayoutEngine::layout(&mut ctx.layout, viewport_w, viewport_h);
 
                     let mut draw_commands = Vec::new();
                     generate_draw_commands(&mut draw_commands, &ctx.layout, &ctx.info);
@@ -328,7 +332,9 @@ fn main() -> Result<()> {
                         println!("  [{:>3}] {:?}", i, cmd);
                     }
                 } else {
-                    eprintln!("Please provide a URL for dump draw commands test.");
+                    eprintln!(
+                        "Please provide a URL and optional viewport size (URL [WIDTH HEIGHT])."
+                    );
                 }
             }
             "simple_render" => {
@@ -478,6 +484,16 @@ fn build_layout_info(raw_url: &str) -> Result<LayoutInfo> {
     })
 }
 
+/// Reads the optional viewport dimensions (`WIDTH HEIGHT`) from `args`,
+/// falling back to `default_w`/`default_h` when they are omitted.
+fn viewport_args(args: &[String], default_w: f32, default_h: f32) -> Result<(f32, f32)> {
+    if args.len() >= 5 {
+        Ok((args[3].parse()?, args[4].parse()?))
+    } else {
+        Ok((default_w, default_h))
+    }
+}
+
 use strsim::levenshtein;
 
 fn suggest_command<'a>(input: &'a str, commands: &'a [&'a str]) -> Option<&'a str> {
@@ -552,16 +568,16 @@ fn get_commands<'a>() -> HashMap<&'a str, (&'a str, &'a str, &'a str)> {
         "dump_layoutnode",
         (
             "Fetch HTML and CSS, build layout tree, run layout engine, and dump the LayoutNode tree.",
-            "URL",
-            "",
+            "URL [WIDTH HEIGHT]",
+            "The optional WIDTH HEIGHT specify the layout viewport size; it defaults to 800x600.",
         ),
     );
     map.insert(
         "dump_draw_command",
         (
             "Fetch HTML and CSS, build layout tree, run layout engine, and generate draw commands.",
-            "URL",
-            "",
+            "URL [WIDTH HEIGHT]",
+            "The optional WIDTH HEIGHT specify the layout viewport size; it defaults to 800x600.",
         ),
     );
     map.insert(
