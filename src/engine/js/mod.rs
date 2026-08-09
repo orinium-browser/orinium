@@ -1411,6 +1411,7 @@ fn make_element(tag_name: String, attr_id: String, dom_id: u64) -> Rc<RefCell<JS
         "querySelectorAll".to_string(),
         JSValue::NativeFunction(element_query_selector_all),
     );
+    obj.set("contains".to_string(), JSValue::NativeFunction(element_contains));
     obj.set(
         "appendChild".to_string(),
         JSValue::NativeFunction(append_child),
@@ -1616,6 +1617,26 @@ fn element_query_selector_all(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVal
     };
     let nodes = DomTree::query_selector_all_within(&scope, selector);
     Ok(expose_node_list(vm, nodes))
+}
+
+fn element_contains(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(container) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Boolean(false));
+    };
+    let Some(mut candidate) = args.get(1).and_then(|value| dom_node(vm, value)) else {
+        return Ok(JSValue::Boolean(false));
+    };
+
+    loop {
+        if Rc::ptr_eq(&container, &candidate) {
+            return Ok(JSValue::Boolean(true));
+        }
+        let parent = { candidate.borrow().parent() };
+        let Some(parent) = parent else {
+            return Ok(JSValue::Boolean(false));
+        };
+        candidate = parent;
+    }
 }
 
 fn add_element_event_listener(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -2604,6 +2625,34 @@ mod tests {
         assert_eq!(result.value.get_attr("data-path-ns"), Some(SVG_NAMESPACE));
         assert_eq!(result.value.get_attr("data-html-ns"), Some(HTML_NAMESPACE));
         assert!(runtime.needs_redraw());
+    }
+
+    #[test]
+    fn element_contains_checks_self_descendants_and_unrelated_nodes() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<main id="root"><section id="child"><span id="nested"></span></section></main><aside id="other"></aside>"#,
+        );
+        runtime.run_script(
+            r##"
+            const root = document.querySelector("#root");
+            const child = document.querySelector("#child");
+            const nested = document.querySelector("#nested");
+            const other = document.querySelector("#other");
+            root.setAttribute("data-self", root.contains(root));
+            root.setAttribute("data-child", root.contains(child));
+            root.setAttribute("data-nested", root.contains(nested));
+            root.setAttribute("data-other", root.contains(other));
+            root.setAttribute("data-null", root.contains(null));
+            "##,
+        );
+
+        let root = dom.get_element_by_id("root").unwrap();
+        let root = root.borrow();
+        assert_eq!(root.value.get_attr("data-self"), Some("true"));
+        assert_eq!(root.value.get_attr("data-child"), Some("true"));
+        assert_eq!(root.value.get_attr("data-nested"), Some("true"));
+        assert_eq!(root.value.get_attr("data-other"), Some("false"));
+        assert_eq!(root.value.get_attr("data-null"), Some("false"));
     }
 
     #[test]
