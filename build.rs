@@ -174,6 +174,12 @@ const TEST_PAGE_CATALOG: &[TestPageMeta] = &[
         title: "React DOM Primitives",
         description: "ReactDOMが利用するNode識別・親子兄弟参照・insertBefore・removeChild・属性操作",
     },
+    TestPageMeta {
+        file: "js_style.html",
+        group: "JavaScript",
+        title: "CSSStyleDeclaration",
+        description: "element.styleの動的プロパティ・cssText・setProperty・removeProperty",
+    },
 ];
 
 /// テスト一覧に表示するグループ順。未登録ファイルは "Other" に載せ、
