@@ -12,9 +12,9 @@ use crate::engine::{
     html::parser::{DomTree, Parser as HtmlParser},
     js::JsRuntime,
     layouter::{
-        self, InheritedCss,
+        self, InheritedCss, LayoutResult, NodeId,
         dom_snapshot::DomSnapshot,
-        types::{InfoNode, TextStyle},
+        types::{InfoNode, NodeKind, TextStyle},
     },
     renderer_model::Image,
     tree::TreeNode,
@@ -532,7 +532,19 @@ impl WebView {
     /// Takes completed layout results from the worker and makes them drawable.
     fn try_apply_layout_results(&mut self) {
         while let Some(result) = self.layout_processor.try_receive() {
-            self.layout_and_info = Some((result.layout, result.info));
+            let LayoutResult { layout, mut info } = result;
+
+            // The builder initializes every node's scroll offset to 0, so a
+            // rebuilt tree would otherwise drop the scroll position (e.g. the
+            // viewport change on a window resize). Re-apply the offsets of the
+            // previous tree before swapping the new one in.
+            if let Some((_, old_info)) = self.layout_and_info.as_ref() {
+                let mut scroll_offsets = HashMap::new();
+                capture_scroll_offsets(old_info, &mut scroll_offsets);
+                apply_scroll_offsets(&mut info, &scroll_offsets);
+            }
+
+            self.layout_and_info = Some((layout, info));
             self.layout_pending = false;
             self.needs_redraw = true;
         }
@@ -652,6 +664,56 @@ impl WebView {
 
     pub fn clear_redraw_flag(&mut self) {
         self.needs_redraw = false;
+    }
+}
+
+/// Records the nonzero scroll offsets of every scrollable node in `info`,
+/// keyed by the node's DOM snapshot id.
+///
+/// The layout builder initializes each node's `scroll_offset` to 0, so a
+/// rebuild would otherwise drop the scroll position (e.g. after a window
+/// resize). `dom_id` stays stable across rebuilds while the DOM is unchanged,
+/// which makes it a reliable key for restoring state onto the new tree.
+fn capture_scroll_offsets(info: &InfoNode, offsets: &mut HashMap<NodeId, (f32, f32)>) {
+    let (x, y) = info.kind.scroll_offsets();
+    if (x != 0.0 || y != 0.0)
+        && let Some(dom_id) = info.dom_id
+    {
+        offsets.insert(dom_id, (x, y));
+    }
+    for child in &info.children {
+        capture_scroll_offsets(child, offsets);
+    }
+}
+
+/// Restores scroll offsets captured by [`capture_scroll_offsets`] onto a newly
+/// built tree.
+///
+/// Offsets are copied verbatim for every matching node regardless of its
+/// `scroll_x`/`scroll_y` flags: the flags describe whether an axis *can*
+/// scroll, not whether a scroll position was captured, so gating on them here
+/// would drop positions (e.g. the viewport/page scroll carried by the root).
+fn apply_scroll_offsets(info: &mut InfoNode, offsets: &HashMap<NodeId, (f32, f32)>) {
+    if let Some((x, y)) = info.dom_id.and_then(|id| offsets.get(&id)) {
+        match &mut info.kind {
+            NodeKind::Container {
+                scroll_offset_x,
+                scroll_offset_y,
+                ..
+            }
+            | NodeKind::Custom {
+                scroll_offset_x,
+                scroll_offset_y,
+                ..
+            } => {
+                *scroll_offset_x = *x;
+                *scroll_offset_y = *y;
+            }
+            _ => {}
+        }
+    }
+    for child in &mut info.children {
+        apply_scroll_offsets(child, offsets);
     }
 }
 
