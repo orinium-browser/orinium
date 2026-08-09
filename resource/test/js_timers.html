@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <title>JavaScript Timers Test</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 32px;
+        }
+
+        .result {
+            border: 2px solid #777;
+            margin: 12px 0 24px;
+            padding: 12px;
+        }
+
+        .result[data-complete="true"] {
+            background: #d9f7df;
+            border-color: #25813b;
+        }
+    </style>
+</head>
+<body>
+    <h1>JavaScript Timers</h1>
+
+    <h2>setTimeout</h2>
+    <div id="timeout-result" class="result">waiting</div>
+
+    <h2>setInterval</h2>
+    <div id="interval-result" class="result">count: 0</div>
+
+    <h2>clearTimeout</h2>
+    <div id="cancel-result" class="result" data-complete="true">cancelled correctly</div>
+
+    <script>
+        setTimeout(function (message) {
+            const result = document.querySelector("#timeout-result");
+            result.textContent = message;
+            result.setAttribute("data-complete", "true");
+        }, 250, "timeout completed");
+
+        let count = 0;
+        const intervalId = setInterval(function () {
+            count = count + 1;
+            const result = document.querySelector("#interval-result");
+            result.textContent = "count: " + count;
+            if (count >= 5) {
+                clearInterval(intervalId);
+                result.setAttribute("data-complete", "true");
+            }
+        }, 100);
+
+        const cancelledId = setTimeout(function () {
+            const result = document.querySelector("#cancel-result");
+            result.textContent = "clearTimeout failed";
+            result.setAttribute("data-complete", "false");
+        }, 200);
+        clearTimeout(cancelledId);
+    </script>
+</body>
+</html>

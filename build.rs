@@ -126,6 +126,12 @@ const TEST_PAGE_CATALOG: &[TestPageMeta] = &[
         title: "DOM Creation & Mutation",
         description: "createElement / createTextNode / appendChild / remove / parentNode / children / classList",
     },
+    TestPageMeta {
+        file: "js_timers.html",
+        group: "JavaScript",
+        title: "Timers",
+        description: "setTimeout / clearTimeout / setInterval / clearInterval",
+    },
 ];
 
 /// テスト一覧に表示するグループ順。未登録ファイルは "Other" に載せ、
