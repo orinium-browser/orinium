@@ -168,6 +168,12 @@ const TEST_PAGE_CATALOG: &[TestPageMeta] = &[
         title: "Request",
         description: "RequestのURL・method・headers・コピー・options上書きとfetchへの受け渡し",
     },
+    TestPageMeta {
+        file: "js_react_dom.html",
+        group: "JavaScript",
+        title: "React DOM Primitives",
+        description: "ReactDOMが利用するNode識別・親子兄弟参照・insertBefore・removeChild・属性操作",
+    },
 ];
 
 /// テスト一覧に表示するグループ順。未登録ファイルは "Other" に載せ、
