@@ -22,7 +22,7 @@
 
 <div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>orinium_browser::browser::{BrowserApp, BrowserUi, Tab};
 
-<span class="kw">let </span><span class="kw-2">mut </span>tab = Tab::new();
+<span class="kw">let </span><span class="kw-2">mut </span>tab = Tab::default();
 tab.navigate(<span class="string">"resource:///test/test.html"</span>.parse().unwrap());
 <span class="kw">let </span><span class="kw-2">mut </span>app = BrowserApp::default();
 app.set_default_ui(BrowserUi::with_tab(tab));
