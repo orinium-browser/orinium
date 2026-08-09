@@ -1061,6 +1061,24 @@ fn install_document(engine: &mut pixi_byte::JSEngine) {
         .global_mut()
         .borrow_mut()
         .set("document".to_string(), JSValue::Object(document_obj));
+
+    let mut iframe_constructor = JSObject::new();
+    iframe_constructor.set(
+        "__host_has_instance__".to_string(),
+        JSValue::NativeFunction(html_iframe_element_has_instance),
+    );
+    engine.global_mut().borrow_mut().set(
+        "HTMLIFrameElement".to_string(),
+        JSValue::Object(Rc::new(RefCell::new(iframe_constructor))),
+    );
+}
+
+fn html_iframe_element_has_instance(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = args.get(1).and_then(|value| dom_node(vm, value)) else {
+        return Ok(JSValue::Boolean(false));
+    };
+    let is_iframe = node.borrow().value.tag_name() == Some("iframe");
+    Ok(JSValue::Boolean(is_iframe))
 }
 
 fn add_document_event_listener(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -2519,6 +2537,26 @@ mod tests {
         let root = dom.get_element_by_id("root").unwrap();
         assert_eq!(root.borrow().children().len(), 1);
         assert_eq!(root.borrow().children()[0].borrow().value.get_attr("data-remove"), None);
+    }
+
+    #[test]
+    fn html_iframe_element_supports_host_instance_checks() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<body><iframe id="frame"></iframe><div id="result"></div></body>"#,
+        );
+        runtime.run_script(
+            r#"
+            const frame = document.getElementById("frame");
+            const result = document.getElementById("result");
+            result.setAttribute("data-frame", frame instanceof HTMLIFrameElement);
+            result.setAttribute("data-body", document.body instanceof HTMLIFrameElement);
+            "#,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-frame"), Some("true"));
+        assert_eq!(result.value.get_attr("data-body"), Some("false"));
     }
 
     #[test]
