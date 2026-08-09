@@ -317,29 +317,30 @@
 <a href=#317 id=317 data-nosnippet>317</a>            height: total_height,
 <a href=#318 id=318 data-nosnippet>318</a>        };
 <a href=#319 id=319 data-nosnippet>319</a>        <span class="kw">let </span>box_model = BoxModel {
-<a href=#320 id=320 data-nosnippet>320</a>            border_box: rect,
-<a href=#321 id=321 data-nosnippet>321</a>            padding_box: rect,
-<a href=#322 id=322 data-nosnippet>322</a>            content_box: rect,
-<a href=#323 id=323 data-nosnippet>323</a>            children_box: rect,
-<a href=#324 id=324 data-nosnippet>324</a>        };
-<a href=#325 id=325 data-nosnippet>325</a>
-<a href=#326 id=326 data-nosnippet>326</a>        LayoutBox::InlineBox(InlineBox {
-<a href=#327 id=327 data-nosnippet>327</a>            box_model,
-<a href=#328 id=328 data-nosnippet>328</a>            line_spans: spans,
-<a href=#329 id=329 data-nosnippet>329</a>        })
-<a href=#330 id=330 data-nosnippet>330</a>    }
-<a href=#331 id=331 data-nosnippet>331</a>
-<a href=#332 id=332 data-nosnippet>332</a>    <span class="kw">fn </span>measure(<span class="kw-2">&amp;</span><span class="self">self</span>, _ctx: <span class="kw-2">&amp;</span>LayoutContext) -&gt; MeasureResult {
-<a href=#333 id=333 data-nosnippet>333</a>        <span class="kw">let </span>total_width: f32 = <span class="self">self</span>.clusters.iter().map(|c| c.width).sum();
-<a href=#334 id=334 data-nosnippet>334</a>        <span class="kw">let </span>total_height = <span class="self">self</span>.line_height.max(<span class="number">1.0</span>);
-<a href=#335 id=335 data-nosnippet>335</a>        MeasureResult {
-<a href=#336 id=336 data-nosnippet>336</a>            width: total_width,
-<a href=#337 id=337 data-nosnippet>337</a>            height: total_height,
-<a href=#338 id=338 data-nosnippet>338</a>        }
-<a href=#339 id=339 data-nosnippet>339</a>    }
-<a href=#340 id=340 data-nosnippet>340</a>
-<a href=#341 id=341 data-nosnippet>341</a>    <span class="kw">fn </span>write_debug(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>std::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; std::fmt::Result {
-<a href=#342 id=342 data-nosnippet>342</a>        <span class="macro">write!</span>(f, <span class="string">"TextFlowLayouter [{}]"</span>, <span class="self">self</span>.text)
-<a href=#343 id=343 data-nosnippet>343</a>    }
-<a href=#344 id=344 data-nosnippet>344</a>}
+<a href=#320 id=320 data-nosnippet>320</a>            sticky_edges: <span class="prelude-val">None</span>,
+<a href=#321 id=321 data-nosnippet>321</a>            border_box: rect,
+<a href=#322 id=322 data-nosnippet>322</a>            padding_box: rect,
+<a href=#323 id=323 data-nosnippet>323</a>            content_box: rect,
+<a href=#324 id=324 data-nosnippet>324</a>            children_box: rect,
+<a href=#325 id=325 data-nosnippet>325</a>        };
+<a href=#326 id=326 data-nosnippet>326</a>
+<a href=#327 id=327 data-nosnippet>327</a>        LayoutBox::InlineBox(InlineBox {
+<a href=#328 id=328 data-nosnippet>328</a>            box_model,
+<a href=#329 id=329 data-nosnippet>329</a>            line_spans: spans,
+<a href=#330 id=330 data-nosnippet>330</a>        })
+<a href=#331 id=331 data-nosnippet>331</a>    }
+<a href=#332 id=332 data-nosnippet>332</a>
+<a href=#333 id=333 data-nosnippet>333</a>    <span class="kw">fn </span>measure(<span class="kw-2">&amp;</span><span class="self">self</span>, _ctx: <span class="kw-2">&amp;</span>LayoutContext) -&gt; MeasureResult {
+<a href=#334 id=334 data-nosnippet>334</a>        <span class="kw">let </span>total_width: f32 = <span class="self">self</span>.clusters.iter().map(|c| c.width).sum();
+<a href=#335 id=335 data-nosnippet>335</a>        <span class="kw">let </span>total_height = <span class="self">self</span>.line_height.max(<span class="number">1.0</span>);
+<a href=#336 id=336 data-nosnippet>336</a>        MeasureResult {
+<a href=#337 id=337 data-nosnippet>337</a>            width: total_width,
+<a href=#338 id=338 data-nosnippet>338</a>            height: total_height,
+<a href=#339 id=339 data-nosnippet>339</a>        }
+<a href=#340 id=340 data-nosnippet>340</a>    }
+<a href=#341 id=341 data-nosnippet>341</a>
+<a href=#342 id=342 data-nosnippet>342</a>    <span class="kw">fn </span>write_debug(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>std::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; std::fmt::Result {
+<a href=#343 id=343 data-nosnippet>343</a>        <span class="macro">write!</span>(f, <span class="string">"TextFlowLayouter [{}]"</span>, <span class="self">self</span>.text)
+<a href=#344 id=344 data-nosnippet>344</a>    }
+<a href=#345 id=345 data-nosnippet>345</a>}
 </code></pre></div></section></main></body></html>
