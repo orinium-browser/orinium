@@ -144,6 +144,12 @@ const TEST_PAGE_CATALOG: &[TestPageMeta] = &[
         title: "Promises",
         description: "Promiseのresolve / reject / then / catch / chainingとmicrotask順序",
     },
+    TestPageMeta {
+        file: "js_arrow_functions.html",
+        group: "JavaScript",
+        title: "Arrow Functions",
+        description: "arrow functionの引数・expression/block body・closure・lexical this・Promise callback",
+    },
 ];
 
 /// テスト一覧に表示するグループ順。未登録ファイルは "Other" に載せ、

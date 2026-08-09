@@ -1580,4 +1580,32 @@ mod tests {
             Some("expected")
         );
     }
+
+    #[test]
+    fn arrow_callbacks_work_with_promises_and_lexical_this() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<button id="target"></button><div id="other"></div>"#);
+        runtime.run_script(
+            r##"
+            const target = document.querySelector("#target");
+            Promise.resolve("promise").then(value => {
+                target.setAttribute("data-promise", value);
+            });
+            target.addEventListener("click", function () {
+                const update = () => this.setAttribute("data-this", "target");
+                update.call(document.querySelector("#other"));
+            });
+            "##,
+        );
+
+        let target = dom.get_element_by_id("target").unwrap();
+        assert!(runtime.click(&target));
+        assert_eq!(
+            target.borrow().value.get_attr("data-promise"),
+            Some("promise")
+        );
+        assert_eq!(target.borrow().value.get_attr("data-this"), Some("target"));
+        let other = dom.get_element_by_id("other").unwrap();
+        assert_eq!(other.borrow().value.get_attr("data-this"), None);
+    }
 }
