@@ -85,6 +85,43 @@ impl<T> TreeNode<T> {
         true
     }
 
+    /// Inserts `child` immediately before `reference`, moving it from its
+    /// current parent when necessary.
+    pub fn insert_before(
+        parent: &NodeRef<T>,
+        child: NodeRef<T>,
+        reference: &NodeRef<T>,
+    ) -> bool {
+        if Rc::ptr_eq(&child, reference) {
+            return reference
+                .borrow()
+                .parent()
+                .is_some_and(|candidate| Rc::ptr_eq(&candidate, parent));
+        }
+        if Self::is_inclusive_ancestor(&child, parent) {
+            return false;
+        }
+        if !reference
+            .borrow()
+            .parent()
+            .is_some_and(|candidate| Rc::ptr_eq(&candidate, parent))
+        {
+            return false;
+        }
+
+        Self::detach(&child);
+        let Some(index) = parent
+            .borrow()
+            .children
+            .iter()
+            .position(|candidate| Rc::ptr_eq(candidate, reference))
+        else {
+            return false;
+        };
+        Self::insert_child_at(parent, index, child);
+        true
+    }
+
     fn is_inclusive_ancestor(ancestor: &NodeRef<T>, node: &NodeRef<T>) -> bool {
         let mut current = Some(Rc::clone(node));
         while let Some(candidate) = current {
@@ -339,5 +376,27 @@ mod tests {
         assert!(first.borrow().parent().is_none());
         root.borrow_mut().clear_children();
         assert!(second.borrow().parent().is_none());
+    }
+
+    #[test]
+    fn insert_before_moves_nodes_and_preserves_order() {
+        let root = TreeNode::new("root");
+        let first = TreeNode::new("first");
+        let second = TreeNode::new("second");
+        let moving = TreeNode::new("moving");
+        TreeNode::add_child(&root, Rc::clone(&first));
+        TreeNode::add_child(&root, Rc::clone(&second));
+        TreeNode::add_child(&first, Rc::clone(&moving));
+
+        assert!(TreeNode::insert_before(
+            &root,
+            Rc::clone(&moving),
+            &second
+        ));
+        let children = root.borrow().children().to_vec();
+        assert!(Rc::ptr_eq(&children[0], &first));
+        assert!(Rc::ptr_eq(&children[1], &moving));
+        assert!(Rc::ptr_eq(&children[2], &second));
+        assert!(first.borrow().children().is_empty());
     }
 }

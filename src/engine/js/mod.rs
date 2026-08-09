@@ -1010,6 +1010,22 @@ fn install_document(engine: &mut pixi_byte::JSEngine) {
     let document_obj = Rc::new(RefCell::new(JSObject::new()));
     {
         let mut document = document_obj.borrow_mut();
+        document.define_property(
+            "nodeType".to_string(),
+            Property::read_only(JSValue::Number(9.0)),
+        );
+        document.define_property(
+            "nodeName".to_string(),
+            Property::read_only(JSValue::String("#document".to_string())),
+        );
+        document.define_property(
+            "documentElement".to_string(),
+            read_only_accessor_property(get_document_element),
+        );
+        document.define_property(
+            "body".to_string(),
+            read_only_accessor_property(get_document_body),
+        );
         document.set(
             "getElementById".to_string(),
             JSValue::NativeFunction(get_element_by_id),
@@ -1141,6 +1157,29 @@ fn create_text_node(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(expose_detached_node(vm, node).unwrap_or(JSValue::Null))
 }
 
+fn get_document_element(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let node = with_host(vm, |host| {
+        host.dom
+            .root
+            .borrow()
+            .children()
+            .iter()
+            .find(|child| matches!(child.borrow().value, HtmlNodeType::Element { .. }))
+            .cloned()
+    })
+    .flatten();
+    Ok(node
+        .and_then(|node| expose_node(vm, node))
+        .unwrap_or(JSValue::Null))
+}
+
+fn get_document_body(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let node = with_host(vm, |host| host.dom.query_selector("body")).flatten();
+    Ok(node
+        .and_then(|node| expose_node(vm, node))
+        .unwrap_or(JSValue::Null))
+}
+
 fn expose_detached_node(vm: &mut VM, node: NodeRef<HtmlNodeType>) -> Option<JSValue> {
     let value = expose_node(vm, Rc::clone(&node))?;
     let dom_id = node_dom_id(&value)?;
@@ -1208,9 +1247,18 @@ fn expose_node_list(vm: &mut VM, nodes: Vec<NodeRef<HtmlNodeType>>) -> JSValue {
 fn make_element(tag_name: String, attr_id: String, dom_id: u64) -> Rc<RefCell<JSObject>> {
     let mut obj = JSObject::new();
     define_node_id(&mut obj, dom_id);
+    let html_name = tag_name.to_ascii_uppercase();
+    obj.define_property(
+        "nodeType".to_string(),
+        Property::read_only(JSValue::Number(1.0)),
+    );
+    obj.define_property(
+        "nodeName".to_string(),
+        Property::read_only(JSValue::String(html_name.clone())),
+    );
     obj.define_property(
         "tagName".to_string(),
-        Property::read_only(JSValue::String(tag_name)),
+        Property::read_only(JSValue::String(html_name)),
     );
     obj.define_property(
         "id".to_string(),
@@ -1229,6 +1277,30 @@ fn make_element(tag_name: String, attr_id: String, dom_id: u64) -> Rc<RefCell<JS
         read_only_accessor_property(get_parent_node),
     );
     obj.define_property(
+        "ownerDocument".to_string(),
+        read_only_accessor_property(get_owner_document),
+    );
+    obj.define_property(
+        "childNodes".to_string(),
+        read_only_accessor_property(get_child_nodes),
+    );
+    obj.define_property(
+        "firstChild".to_string(),
+        read_only_accessor_property(get_first_child),
+    );
+    obj.define_property(
+        "lastChild".to_string(),
+        read_only_accessor_property(get_last_child),
+    );
+    obj.define_property(
+        "nextSibling".to_string(),
+        read_only_accessor_property(get_next_sibling),
+    );
+    obj.define_property(
+        "previousSibling".to_string(),
+        read_only_accessor_property(get_previous_sibling),
+    );
+    obj.define_property(
         "children".to_string(),
         read_only_accessor_property(get_element_children),
     );
@@ -1236,13 +1308,25 @@ fn make_element(tag_name: String, attr_id: String, dom_id: u64) -> Rc<RefCell<JS
         "classList".to_string(),
         read_only_accessor_property(get_class_list),
     );
+    obj.define_property(
+        "className".to_string(),
+        accessor_property(get_class_name, set_class_name),
+    );
     obj.set(
         "getAttribute".to_string(),
         JSValue::NativeFunction(get_attribute),
     );
     obj.set(
+        "hasAttribute".to_string(),
+        JSValue::NativeFunction(has_attribute),
+    );
+    obj.set(
         "setAttribute".to_string(),
         JSValue::NativeFunction(set_attribute),
+    );
+    obj.set(
+        "removeAttribute".to_string(),
+        JSValue::NativeFunction(remove_attribute),
     );
     obj.set(
         "addEventListener".to_string(),
@@ -1259,6 +1343,14 @@ fn make_element(tag_name: String, attr_id: String, dom_id: u64) -> Rc<RefCell<JS
     obj.set(
         "appendChild".to_string(),
         JSValue::NativeFunction(append_child),
+    );
+    obj.set(
+        "insertBefore".to_string(),
+        JSValue::NativeFunction(insert_before),
+    );
+    obj.set(
+        "removeChild".to_string(),
+        JSValue::NativeFunction(remove_child),
     );
     obj.set("remove".to_string(), JSValue::NativeFunction(remove_node));
     Rc::new(RefCell::new(obj))
@@ -1280,8 +1372,40 @@ fn make_text_node(dom_id: u64) -> Rc<RefCell<JSObject>> {
         accessor_property(get_text_content, set_text_content),
     );
     obj.define_property(
+        "nodeValue".to_string(),
+        accessor_property(get_text_content, set_text_content),
+    );
+    obj.define_property(
+        "data".to_string(),
+        accessor_property(get_text_content, set_text_content),
+    );
+    obj.define_property(
         "parentNode".to_string(),
         read_only_accessor_property(get_parent_node),
+    );
+    obj.define_property(
+        "ownerDocument".to_string(),
+        read_only_accessor_property(get_owner_document),
+    );
+    obj.define_property(
+        "childNodes".to_string(),
+        read_only_accessor_property(get_child_nodes),
+    );
+    obj.define_property(
+        "firstChild".to_string(),
+        read_only_accessor_property(get_first_child),
+    );
+    obj.define_property(
+        "lastChild".to_string(),
+        read_only_accessor_property(get_last_child),
+    );
+    obj.define_property(
+        "nextSibling".to_string(),
+        read_only_accessor_property(get_next_sibling),
+    );
+    obj.define_property(
+        "previousSibling".to_string(),
+        read_only_accessor_property(get_previous_sibling),
     );
     obj.set("remove".to_string(), JSValue::NativeFunction(remove_node));
     Rc::new(RefCell::new(obj))
@@ -1321,6 +1445,62 @@ fn append_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     if let Some(dom_id) = node_dom_id(&child_value) {
         let _ = with_host_mut(vm, |host| {
             host.detached_nodes.remove(&dom_id);
+        });
+    }
+    mark_dom_dirty(vm);
+    Ok(child_value)
+}
+
+fn insert_before(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(parent) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Null);
+    };
+    let Some(child_value) = args.get(1).cloned() else {
+        return Ok(JSValue::Null);
+    };
+    let Some(child) = dom_node(vm, &child_value) else {
+        return Ok(JSValue::Null);
+    };
+
+    let inserted = match args.get(2) {
+        None | Some(JSValue::Null) | Some(JSValue::Undefined) => {
+            TreeNode::append_child(&parent, child)
+        }
+        Some(reference_value) => {
+            let Some(reference) = dom_node(vm, reference_value) else {
+                return Ok(JSValue::Null);
+            };
+            TreeNode::insert_before(&parent, child, &reference)
+        }
+    };
+    if !inserted {
+        return Ok(JSValue::Null);
+    }
+    if let Some(dom_id) = node_dom_id(&child_value) {
+        let _ = with_host_mut(vm, |host| {
+            host.detached_nodes.remove(&dom_id);
+        });
+    }
+    mark_dom_dirty(vm);
+    Ok(child_value)
+}
+
+fn remove_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(parent) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Null);
+    };
+    let Some(child_value) = args.get(1).cloned() else {
+        return Ok(JSValue::Null);
+    };
+    let Some(child) = dom_node(vm, &child_value) else {
+        return Ok(JSValue::Null);
+    };
+    let Some(detached) = TreeNode::remove_child(&parent, &child) else {
+        return Ok(JSValue::Null);
+    };
+    if let Some(dom_id) = node_dom_id(&child_value) {
+        let _ = with_host_mut(vm, |host| {
+            host.detached_nodes.insert(dom_id, detached);
         });
     }
     mark_dom_dirty(vm);
@@ -1424,6 +1604,77 @@ fn get_parent_node(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(expose_node(vm, parent).unwrap_or(JSValue::Null))
 }
 
+fn get_owner_document(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(with_host(vm, |host| host.document.as_ref().cloned())
+        .flatten()
+        .map(JSValue::Object)
+        .unwrap_or(JSValue::Null))
+}
+
+fn get_child_nodes(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSArray::new().to_object());
+    };
+    let children = node.borrow().children().to_vec();
+    Ok(expose_node_list(vm, children))
+}
+
+fn get_first_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    get_edge_child(vm, &args, true)
+}
+
+fn get_last_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    get_edge_child(vm, &args, false)
+}
+
+fn get_edge_child(vm: &mut VM, args: &[JSValue], first: bool) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Null);
+    };
+    let child = if first {
+        node.borrow().children().first().cloned()
+    } else {
+        node.borrow().children().last().cloned()
+    };
+    Ok(child
+        .and_then(|child| expose_node(vm, child))
+        .unwrap_or(JSValue::Null))
+}
+
+fn get_next_sibling(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    get_sibling(vm, &args, 1)
+}
+
+fn get_previous_sibling(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    get_sibling(vm, &args, -1)
+}
+
+fn get_sibling(vm: &mut VM, args: &[JSValue], offset: isize) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Null);
+    };
+    let Some(parent) = node.borrow().parent() else {
+        return Ok(JSValue::Null);
+    };
+    let sibling = {
+        let parent = parent.borrow();
+        let Some(index) = parent
+            .children()
+            .iter()
+            .position(|candidate| Rc::ptr_eq(candidate, &node))
+        else {
+            return Ok(JSValue::Null);
+        };
+        let sibling_index = index as isize + offset;
+        (sibling_index >= 0)
+            .then(|| parent.children().get(sibling_index as usize).cloned())
+            .flatten()
+    };
+    Ok(sibling
+        .and_then(|sibling| expose_node(vm, sibling))
+        .unwrap_or(JSValue::Null))
+}
+
 fn get_element_children(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
         return Ok(JSArray::new().to_object());
@@ -1458,6 +1709,29 @@ fn get_class_list(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         JSValue::NativeFunction(class_list_toggle),
     );
     Ok(JSValue::Object(Rc::new(RefCell::new(class_list))))
+}
+
+fn get_class_name(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::String(String::new()));
+    };
+    let value = node
+        .borrow()
+        .value
+        .get_attr("class")
+        .unwrap_or("")
+        .to_string();
+    Ok(JSValue::String(value))
+}
+
+fn set_class_name(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Undefined);
+    };
+    let value = args.get(1).map(JSValue::to_string).unwrap_or_default();
+    node.borrow_mut().value.set_attr("class", value);
+    mark_dom_dirty(vm);
+    Ok(JSValue::Undefined)
 }
 
 fn class_list_contains(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -1607,6 +1881,16 @@ fn get_attribute(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     }
 }
 
+fn has_attribute(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Boolean(false));
+    };
+    let Some(JSValue::String(name)) = args.get(1) else {
+        return Ok(JSValue::Boolean(false));
+    };
+    Ok(JSValue::Boolean(node.borrow().value.get_attr(name).is_some()))
+}
+
 fn set_attribute(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
         return Ok(JSValue::Undefined);
@@ -1620,6 +1904,19 @@ fn set_attribute(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         .unwrap_or_default();
     node.borrow_mut().value.set_attr(name, value);
     mark_dom_dirty(vm);
+    Ok(JSValue::Undefined)
+}
+
+fn remove_attribute(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Undefined);
+    };
+    let Some(JSValue::String(name)) = args.get(1) else {
+        return Ok(JSValue::Undefined);
+    };
+    if node.borrow_mut().value.remove_attr(name).is_some() {
+        mark_dom_dirty(vm);
+    }
     Ok(JSValue::Undefined)
 }
 
@@ -1908,6 +2205,59 @@ mod tests {
         let item = dom.query_selector("li.dynamic").unwrap();
         assert_eq!(DomTree::inner_text(&item), "created by JavaScript");
         assert!(runtime.needs_redraw());
+    }
+
+    #[test]
+    fn react_dom_node_primitives_identify_and_reorder_nodes() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<main id="root"></main><div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const root = document.querySelector("#root");
+            const first = document.createElement("span");
+            first.setAttribute("data-name", "first");
+            const second = document.createElement("span");
+            second.setAttribute("data-name", "second");
+            const text = document.createTextNode("before");
+            text.nodeValue = "after";
+            second.appendChild(text);
+            root.appendChild(first);
+            root.insertBefore(second, first);
+            root.removeChild(first);
+            second.className = "react-node";
+            second.setAttribute("data-remove", "yes");
+            second.removeAttribute("data-remove");
+
+            const result = document.querySelector("#result");
+            result.setAttribute("data-document-type", document.nodeType);
+            result.setAttribute("data-root-type", root.nodeType);
+            result.setAttribute("data-root-name", root.nodeName);
+            result.setAttribute("data-owner", root.ownerDocument === document);
+            result.setAttribute("data-first", root.firstChild.getAttribute("data-name"));
+            result.setAttribute("data-last", root.lastChild.getAttribute("data-name"));
+            result.setAttribute("data-count", root.childNodes.length);
+            result.setAttribute("data-text", root.firstChild.firstChild.data);
+            result.setAttribute("data-class", root.firstChild.className);
+            result.setAttribute("data-removed", root.firstChild.hasAttribute("data-remove"));
+            "##,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-document-type"), Some("9"));
+        assert_eq!(result.value.get_attr("data-root-type"), Some("1"));
+        assert_eq!(result.value.get_attr("data-root-name"), Some("MAIN"));
+        assert_eq!(result.value.get_attr("data-owner"), Some("true"));
+        assert_eq!(result.value.get_attr("data-first"), Some("second"));
+        assert_eq!(result.value.get_attr("data-last"), Some("second"));
+        assert_eq!(result.value.get_attr("data-count"), Some("1"));
+        assert_eq!(result.value.get_attr("data-text"), Some("after"));
+        assert_eq!(result.value.get_attr("data-class"), Some("react-node"));
+        assert_eq!(result.value.get_attr("data-removed"), Some("false"));
+
+        let root = dom.get_element_by_id("root").unwrap();
+        assert_eq!(root.borrow().children().len(), 1);
+        assert_eq!(root.borrow().children()[0].borrow().value.get_attr("data-remove"), None);
     }
 
     #[test]
