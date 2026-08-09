@@ -27,9 +27,32 @@ use std::{env, io, process};
 
 #[derive(Deserialize, Serialize)]
 pub enum NetworkCommand {
-    Fetch { url: String, msg_id: usize },
+    Fetch {
+        request: NetworkRequest,
+        msg_id: usize,
+    },
     SetConfig(NetworkConfig),
     ClearCache,
+}
+
+/// Serializable HTTP request passed to the network process.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct NetworkRequest {
+    pub url: String,
+    pub method: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+impl NetworkRequest {
+    pub fn get(url: impl Into<String>) -> Self {
+        Self {
+            url: url.into(),
+            method: "GET".to_string(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -79,7 +102,11 @@ impl NetworkCore {
 
     /// 非同期送信のみ。結果は try_receive で取得
     pub fn fetch_async(&self, url: String, msg_id: usize) {
-        let _ = self.cmd_tx.send(NetworkCommand::Fetch { url, msg_id });
+        self.fetch_request_async(NetworkRequest::get(url), msg_id);
+    }
+
+    pub fn fetch_request_async(&self, request: NetworkRequest, msg_id: usize) {
+        let _ = self.cmd_tx.send(NetworkCommand::Fetch { request, msg_id });
     }
 
     /// UIスレッドから呼ぶ: 完了しているメッセージを取り込む
@@ -114,8 +141,8 @@ pub fn network_main(rx: IpcReceiver<NetworkCommand>, tx: IpcSender<NetworkMessag
                 core.clear_cache();
                 log::info!("NetworkCore: cache cleared");
             }
-            NetworkCommand::Fetch { url, msg_id } => {
-                let res = core.fetch_blocking(&url);
+            NetworkCommand::Fetch { request, msg_id } => {
+                let res = core.fetch_request_blocking(&request);
                 log::info!("NetworkCore: fetched URL for msg_id={}", msg_id);
                 let _ = tx.send(NetworkMessage {
                     msg_id,

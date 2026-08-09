@@ -34,6 +34,9 @@ struct JsFetchCapability {
 pub(crate) struct JsFetchRequest {
     pub(crate) id: u64,
     pub(crate) url: String,
+    pub(crate) method: String,
+    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) body: Vec<u8>,
 }
 
 /// The response data exposed to a JavaScript `Response` object.
@@ -530,6 +533,7 @@ fn fetch(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         .cloned()
         .unwrap_or(JSValue::Undefined)
         .to_string();
+    let (method, headers, body) = parse_fetch_init(args.get(2));
     let promise_constructor = vm.global_object.borrow().get("Promise");
     let JSValue::Object(constructor) = &promise_constructor else {
         return Err(JSError::InternalError(
@@ -551,9 +555,45 @@ fn fetch(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         host.next_fetch_id += 1;
         let id = host.next_fetch_id;
         host.fetch_capabilities.insert(id, capability);
-        host.fetch_requests.push(JsFetchRequest { id, url });
+        host.fetch_requests.push(JsFetchRequest {
+            id,
+            url,
+            method,
+            headers,
+            body,
+        });
     });
     Ok(promise)
+}
+
+fn parse_fetch_init(init: Option<&JSValue>) -> (String, Vec<(String, String)>, Vec<u8>) {
+    let Some(JSValue::Object(init)) = init else {
+        return ("GET".to_string(), Vec::new(), Vec::new());
+    };
+    let init = init.borrow();
+    let method = match init.get("method") {
+        JSValue::Undefined | JSValue::Null => "GET".to_string(),
+        value => value.to_string().to_ascii_uppercase(),
+    };
+    let body = match init.get("body") {
+        JSValue::Undefined | JSValue::Null => Vec::new(),
+        value => value.to_string().into_bytes(),
+    };
+    let headers = match init.get("headers") {
+        JSValue::Object(headers) => {
+            let headers = headers.borrow();
+            headers
+                .keys()
+                .into_iter()
+                .map(|name| {
+                    let value = headers.get(&name).to_string();
+                    (name, value)
+                })
+                .collect()
+        }
+        _ => Vec::new(),
+    };
+    (method, headers, body)
 }
 
 fn capture_fetch_capability(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -1924,6 +1964,38 @@ mod tests {
             Some("data:text/plain,hello")
         );
         assert_eq!(result.value.get_attr("data-text"), Some("hello"));
+    }
+
+    #[test]
+    fn fetch_captures_method_headers_and_body() {
+        let (mut runtime, _dom) = runtime_from_html("<div></div>");
+        runtime.run_script(
+            r#"
+            const headers = {};
+            headers["Content-Type"] = "application/json";
+            headers["X-Test"] = "yes";
+            fetch("https://example.test/messages", {
+                method: "post",
+                headers: headers,
+                body: "{\"message\":\"hello\"}"
+            });
+            "#,
+        );
+
+        let requests = runtime.take_fetch_requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "POST");
+        assert!(
+            requests[0]
+                .headers
+                .contains(&("Content-Type".to_string(), "application/json".to_string()))
+        );
+        assert!(
+            requests[0]
+                .headers
+                .contains(&("X-Test".to_string(), "yes".to_string()))
+        );
+        assert_eq!(requests[0].body, br#"{"message":"hello"}"#);
     }
 
     #[test]

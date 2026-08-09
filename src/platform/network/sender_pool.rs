@@ -1,7 +1,7 @@
 //! HTTP Sender Pool.
 //! HTTP/1 と HTTP/2 の Sender を統一的に管理できるプール。
 
-use http_body_util::Empty;
+use http_body_util::Full;
 use hyper::{
     body::Bytes,
     client::conn::{http1, http2},
@@ -17,8 +17,8 @@ pub struct HostKey {
 
 /// HTTP/1 と HTTP/2 の Sender を統一的に扱う型
 pub enum HttpSender {
-    Http1(http1::SendRequest<Empty<Bytes>>),
-    Http2(http2::SendRequest<Empty<Bytes>>),
+    Http1(http1::SendRequest<Full<Bytes>>),
+    Http2(http2::SendRequest<Full<Bytes>>),
 }
 
 pub struct SenderPool {

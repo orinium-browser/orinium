@@ -38,10 +38,21 @@ pub enum WebViewTask {
 pub enum FetchKind {
     Html,
     Css,
-    Script { index: usize },
-    Image { source: String },
-    Audio { source: String },
-    JavaScript { request_id: u64 },
+    Script {
+        index: usize,
+    },
+    Image {
+        source: String,
+    },
+    Audio {
+        source: String,
+    },
+    JavaScript {
+        request_id: u64,
+        method: String,
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
+    },
 }
 
 /// CSS application strategy.
@@ -658,6 +669,9 @@ impl WebView {
                     url,
                     kind: FetchKind::JavaScript {
                         request_id: request.id,
+                        method: request.method,
+                        headers: request.headers,
+                        body: request.body,
                     },
                 }),
                 Err(error) => self
@@ -1339,7 +1353,7 @@ mod tests {
             [
                 WebViewTask::Fetch {
                     url,
-                    kind: FetchKind::JavaScript { request_id },
+                    kind: FetchKind::JavaScript { request_id, .. },
                 },
             ] => {
                 assert_eq!(url.as_str(), "https://example.test/message.txt");
@@ -1388,7 +1402,7 @@ mod tests {
         let request_id = match tasks.as_slice() {
             [
                 WebViewTask::Fetch {
-                    kind: FetchKind::JavaScript { request_id },
+                    kind: FetchKind::JavaScript { request_id, .. },
                     ..
                 },
             ] => *request_id,

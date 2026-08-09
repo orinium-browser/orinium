@@ -3,7 +3,7 @@
 //! Supports the `http(s)://` scheme (via the platform `NetworkCore`), and the
 //! network-free `resource:///` and `data:` schemes.
 
-use crate::platform::network::{NetworkCore, NetworkError, StatusCode};
+use crate::platform::network::{NetworkCore, NetworkError, NetworkRequest, StatusCode};
 use anyhow::{Context, Result, anyhow};
 use base64::Engine;
 use std::{fmt, rc::Rc};
@@ -77,17 +77,39 @@ impl BrowserResourceLoader {
     /// Async fetch: resolve immediate schemes (`resource` / `data`) in place and
     /// push the result to `immediate_pool`; delegate all other schemes to `NetworkCore`.
     pub fn fetch_async(&mut self, url: Url, id: usize) {
+        self.fetch_request_async(NetworkRequest::get(url.to_string()), id);
+    }
+
+    /// Fetches a request while preserving method, headers, and body for HTTP(S).
+    pub fn fetch_request_async(&mut self, request: NetworkRequest, id: usize) {
+        let Ok(url) = Url::parse(&request.url) else {
+            self.immediate_pool.push(BrowserNetworkMessage {
+                id,
+                response: Err(BrowserNetworkError::AnyhowError(anyhow!(
+                    "Invalid request URL: {}",
+                    request.url
+                ))),
+            });
+            return;
+        };
         let Some(body) = load_immediate(&url) else {
             if let Some(net) = &self.network {
-                net.fetch_async(url.to_string(), id);
+                net.fetch_request_async(request, id);
             }
             return;
         };
         let msg = BrowserNetworkMessage {
             id,
-            response: body
-                .map(|body| make_response(&url, body))
-                .map_err(BrowserNetworkError::AnyhowError),
+            response: if request.method == "GET" && request.body.is_empty() {
+                body.map(|body| make_response(&url, body))
+                    .map_err(BrowserNetworkError::AnyhowError)
+            } else {
+                Err(BrowserNetworkError::AnyhowError(anyhow!(
+                    "{} is not supported for {} URLs",
+                    request.method,
+                    url.scheme()
+                )))
+            },
         };
         self.immediate_pool.push(msg);
     }
@@ -331,6 +353,25 @@ mod tests {
         assert_eq!(msgs[0].id, 7);
         let resp = msgs[0].response.as_ref().unwrap();
         assert_eq!(resp.body, b"hi");
+    }
+
+    #[test]
+    fn immediate_urls_reject_non_get_requests() {
+        let mut loader = BrowserResourceLoader::new(None);
+        loader.fetch_request_async(
+            NetworkRequest {
+                url: "data:text/plain,hi".to_string(),
+                method: "POST".to_string(),
+                headers: Vec::new(),
+                body: b"request body".to_vec(),
+            },
+            8,
+        );
+
+        let messages = loader.try_receive();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].id, 8);
+        assert!(messages[0].response.is_err());
     }
 
     #[test]

@@ -42,7 +42,7 @@ use winit::window::WindowId;
 use super::tab::FetchKind;
 use super::ui::BrowserUi;
 use super::{BrowserCommand, resource_loader::BrowserResourceLoader};
-use crate::platform::network::NetworkCore;
+use crate::platform::network::{NetworkCore, NetworkRequest};
 use crate::platform::renderer::gpu::GpuRenderer;
 use crate::platform::system::App;
 
@@ -308,10 +308,24 @@ impl BrowserApp {
 
         for fetch in outcome.fetches {
             log::info!("Fetch requested in App: url={}", fetch.url);
+            let request = match &fetch.kind {
+                FetchKind::JavaScript {
+                    method,
+                    headers,
+                    body,
+                    ..
+                } => NetworkRequest {
+                    url: fetch.url.to_string(),
+                    method: method.clone(),
+                    headers: headers.clone(),
+                    body: body.clone(),
+                },
+                _ => NetworkRequest::get(fetch.url.to_string()),
+            };
             let id =
                 self.pending_fetches
                     .insert(window_id, fetch.tab_id, fetch.kind, fetch.url.clone());
-            self.network.fetch_async(fetch.url, id);
+            self.network.fetch_request_async(request, id);
         }
 
         if outcome.needs_redraw {
