@@ -83,6 +83,7 @@ pub struct JsHost {
     constructing_fetch_capability: Option<JsFetchCapability>,
     next_fetch_id: u64,
     next_timer_id: u64,
+    time_origin: Instant,
     dom_content_loaded_fired: bool,
     next_id: u64,
     needs_redraw: Rc<Cell<bool>>,
@@ -128,6 +129,7 @@ impl JsRuntime {
             constructing_fetch_capability: None,
             next_fetch_id: 0,
             next_timer_id: 0,
+            time_origin: Instant::now(),
             dom_content_loaded_fired: false,
             next_id: 0,
             needs_redraw: Rc::clone(&needs_redraw),
@@ -139,6 +141,7 @@ impl JsRuntime {
         install_console(&mut engine);
         install_document(&mut engine);
         install_timers(&mut engine);
+        install_performance(&mut engine);
         install_microtasks(&mut engine);
         install_headers(&mut engine);
         install_request(&mut engine);
@@ -551,6 +554,26 @@ fn clear_timer(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         host.timers.retain(|timer| timer.id != id);
     });
     Ok(JSValue::Undefined)
+}
+
+// --- performance ---
+
+fn install_performance(engine: &mut pixi_byte::JSEngine) {
+    let mut performance = JSObject::new();
+    performance.set(
+        "now".to_string(),
+        JSValue::NativeFunction(performance_now),
+    );
+    engine.global_mut().borrow_mut().set(
+        "performance".to_string(),
+        JSValue::Object(Rc::new(RefCell::new(performance))),
+    );
+}
+
+fn performance_now(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let milliseconds = with_host(vm, |host| host.time_origin.elapsed().as_secs_f64() * 1_000.0)
+        .unwrap_or(0.0);
+    Ok(JSValue::Number(milliseconds))
 }
 
 // --- microtasks ---
@@ -3327,6 +3350,24 @@ mod tests {
         assert!(!runtime.run_due_timers());
         let result = dom.get_element_by_id("result").unwrap();
         assert_eq!(result.borrow().value.get_attr("data-ran"), Some("once"));
+    }
+
+    #[test]
+    fn performance_now_exposes_monotonic_runtime_time() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r#"
+            const first = performance.now();
+            const second = performance.now();
+            document.getElementById("result").setAttribute(
+                "data-monotonic",
+                typeof first === "number" && second >= first
+            );
+            "#,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-monotonic"), Some("true"));
     }
 
     #[test]
