@@ -95,10 +95,30 @@ const TEST_PAGE_CATALOG: &[TestPageMeta] = &[
         title: "Table & Form",
         description: "テーブルレイアウト (thead/tbody/tfoot) とフォーム (button)",
     },
+    // ── JavaScript ──
+    TestPageMeta {
+        file: "js_test.html",
+        group: "JavaScript",
+        title: "DOM & Click",
+        description: "基本的なDOM操作とonclickによるクリックイベント",
+    },
+    TestPageMeta {
+        file: "external_classic_script.html",
+        group: "JavaScript",
+        title: "External Classic Script",
+        description: "inlineと外部classic scriptを混在させた文書順実行",
+    },
+    TestPageMeta {
+        file: "js_events.html",
+        group: "JavaScript",
+        title: "Events & Scheduling",
+        description: "DOMContentLoaded / addEventListener / async / defer",
+    },
 ];
 
-/// テスト一覧に表示するグループ順 (未登録ファイルは末尾の "Other" に載る)
-const TEST_GROUP_ORDER: &[&str] = &["Layout", "CSS", "HTML", "Other"];
+/// テスト一覧に表示するグループ順。未登録ファイルは "Other" に載せ、
+/// JavaScriptの手動テストは一覧の末尾にまとめる。
+const TEST_GROUP_ORDER: &[&str] = &["Layout", "CSS", "HTML", "Other", "JavaScript"];
 
 fn main() {
     clear_build_log();
