@@ -10,7 +10,7 @@ use crate::engine::{
     css::{self, parser::Parser as CssParser},
     html::HtmlNodeType,
     html::parser::{ClassicScriptExecution, ClassicScriptSource, DomTree, Parser as HtmlParser},
-    js::JsRuntime,
+    js::{JsFetchResponse, JsRuntime},
     layouter::{
         self, InheritedCss,
         dom_snapshot::DomSnapshot,
@@ -41,6 +41,7 @@ pub enum FetchKind {
     Script { index: usize },
     Image { source: String },
     Audio { source: String },
+    JavaScript { request_id: u64 },
 }
 
 /// CSS application strategy.
@@ -316,6 +317,7 @@ impl WebView {
             }
         }
 
+        self.schedule_js_fetches(&mut tasks);
         self.run_due_js_timers();
         self.try_apply_layout_results();
         self.drain_write_backs();
@@ -438,6 +440,36 @@ impl WebView {
                 self.deferred_script_results.insert(index, None);
             }
             ClassicScriptExecution::Async => {}
+        }
+    }
+
+    /// Resolves a JavaScript `fetch()` request with a network response.
+    pub fn on_js_fetch_succeeded(
+        &mut self,
+        request_id: u64,
+        url: String,
+        status: u16,
+        body: Vec<u8>,
+    ) {
+        let needs_redraw = self.js_runtime.as_mut().is_some_and(|runtime| {
+            runtime.resolve_fetch(request_id, JsFetchResponse { url, status, body });
+            runtime.take_needs_redraw()
+        });
+        if needs_redraw {
+            self.update_layout();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Rejects a JavaScript `fetch()` request after a network failure.
+    pub fn on_js_fetch_failed(&mut self, request_id: u64, reason: String) {
+        let needs_redraw = self.js_runtime.as_mut().is_some_and(|runtime| {
+            runtime.reject_fetch(request_id, reason);
+            runtime.take_needs_redraw()
+        });
+        if needs_redraw {
+            self.update_layout();
+            self.needs_redraw = true;
         }
     }
 
@@ -603,6 +635,34 @@ impl WebView {
         if needs_redraw {
             self.update_layout();
             self.needs_redraw = true;
+        }
+    }
+
+    fn schedule_js_fetches(&mut self, tasks: &mut Vec<WebViewTask>) {
+        let requests = self
+            .js_runtime
+            .as_mut()
+            .map(JsRuntime::take_fetch_requests)
+            .unwrap_or_default();
+        let base_url = self.docment_info.as_ref().map(|info| info.base_url.clone());
+
+        for request in requests {
+            let url = Url::parse(&request.url).or_else(|_| {
+                base_url
+                    .as_ref()
+                    .ok_or(url::ParseError::RelativeUrlWithoutBase)?
+                    .join(&request.url)
+            });
+            match url {
+                Ok(url) => tasks.push(WebViewTask::Fetch {
+                    url,
+                    kind: FetchKind::JavaScript {
+                        request_id: request.id,
+                    },
+                }),
+                Err(error) => self
+                    .on_js_fetch_failed(request.id, format!("Failed to parse fetch URL: {error}")),
+            }
         }
     }
 
@@ -1253,6 +1313,104 @@ mod tests {
             r#"document.getElementById("result").setAttribute("data-async", "yes");"#.to_string(),
         );
         assert_eq!(result.borrow().value.get_attr("data-async"), Some("yes"));
+    }
+
+    #[test]
+    fn javascript_fetch_uses_document_url_and_resolves_response() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"
+                <div id="result"></div>
+                <script>
+                    fetch("../message.txt")
+                        .then(response => response.text())
+                        .then(text => {
+                            document.getElementById("result").setAttribute("data-text", text);
+                        });
+                </script>
+            "#
+            .to_string(),
+            Url::parse("https://example.test/path/index.html").unwrap(),
+        );
+
+        assert!(webview.tick().is_empty());
+        let tasks = webview.tick();
+        let request_id = match tasks.as_slice() {
+            [
+                WebViewTask::Fetch {
+                    url,
+                    kind: FetchKind::JavaScript { request_id },
+                },
+            ] => {
+                assert_eq!(url.as_str(), "https://example.test/message.txt");
+                *request_id
+            }
+            _ => panic!("expected JavaScript fetch request"),
+        };
+
+        webview.on_js_fetch_succeeded(
+            request_id,
+            "https://example.test/message.txt".to_string(),
+            200,
+            b"hello from fetch".to_vec(),
+        );
+
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-text"),
+            Some("hello from fetch")
+        );
+    }
+
+    #[test]
+    fn failed_javascript_fetch_rejects_without_navigating() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"
+                <div id="result"></div>
+                <script>
+                    fetch("missing.txt").catch(error => {
+                        document.getElementById("result").setAttribute("data-error", error);
+                    });
+                </script>
+            "#
+            .to_string(),
+            Url::parse("https://example.test/index.html").unwrap(),
+        );
+
+        assert!(webview.tick().is_empty());
+        let tasks = webview.tick();
+        let request_id = match tasks.as_slice() {
+            [
+                WebViewTask::Fetch {
+                    kind: FetchKind::JavaScript { request_id },
+                    ..
+                },
+            ] => *request_id,
+            _ => panic!("expected JavaScript fetch request"),
+        };
+
+        webview.on_js_fetch_failed(request_id, "network error".to_string());
+
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-error"),
+            Some("network error")
+        );
+        assert_eq!(
+            webview.document_info().unwrap().base_url.as_str(),
+            "https://example.test/index.html"
+        );
     }
 
     #[test]

@@ -266,6 +266,9 @@ impl BrowserUi {
                     FetchKind::Audio { source } => {
                         tab.on_fetch_succeeded_audio(source, &resp.body);
                     }
+                    FetchKind::JavaScript { request_id } => {
+                        tab.on_fetch_succeeded_js(request_id, resp);
+                    }
                 }
             }
             Err(err) => {
@@ -277,6 +280,9 @@ impl BrowserUi {
                     FetchKind::Script { index } => {
                         log::warn!("Classic script fetch failed without aborting page load: {url}");
                         tab.on_fetch_failed_script(index);
+                    }
+                    FetchKind::JavaScript { request_id } => {
+                        tab.on_fetch_failed_js(request_id, err.to_string());
                     }
                     FetchKind::Html | FetchKind::Css => tab.on_fetch_failed(err, url),
                 }
