@@ -494,7 +494,10 @@ fn add_document_event_listener(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVa
 fn is_callable(value: &JSValue) -> bool {
     matches!(
         value,
-        JSValue::Function(..) | JSValue::NativeFunction(_) | JSValue::BoundFunction(..)
+        JSValue::Function(..)
+            | JSValue::ArrowFunction(..)
+            | JSValue::NativeFunction(_)
+            | JSValue::BoundFunction(..)
     )
 }
 
@@ -1607,5 +1610,24 @@ mod tests {
         assert_eq!(target.borrow().value.get_attr("data-this"), Some("target"));
         let other = dom.get_element_by_id("other").unwrap();
         assert_eq!(other.borrow().value.get_attr("data-this"), None);
+    }
+
+    #[test]
+    fn queue_microtask_accepts_an_arrow_callback() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const result = document.querySelector("#result");
+            queueMicrotask(() => {
+                result.setAttribute("data-microtask", "yes");
+            });
+            "##,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-microtask"),
+            Some("yes")
+        );
     }
 }
