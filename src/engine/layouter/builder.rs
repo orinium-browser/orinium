@@ -15,9 +15,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ui_layout::{
-    AlignItems, AutoSizeBehavior, BoxSizing, Display, FlexDirection, GridRepeat, GridTrack,
-    InnerDisplay, ItemFragment, JustifyContent, LayoutChild, LayoutNode, Length, LengthOrAuto,
-    OuterDisplay, Position, Style,
+    AlignContent, AlignItems, AutoSizeBehavior, BoxSizing, Display, FlexDirection, FlexWrap,
+    GridRepeat, GridTrack, InnerDisplay, ItemFragment, JustifyContent, LayoutChild, LayoutNode,
+    Length, LengthOrAuto, OuterDisplay, Position, Style,
 };
 
 use super::css_resolver::{ResolvedStyles, resolve_inline_style};
@@ -962,6 +962,59 @@ fn resolve_flex_shorthand(
     }
 }
 
+fn flex_direction_keyword(keyword: &str) -> Option<FlexDirection> {
+    match keyword {
+        "row" => Some(FlexDirection::Row),
+        "column" => Some(FlexDirection::Column),
+        "row-reverse" => Some(FlexDirection::RowReverse),
+        "column-reverse" => Some(FlexDirection::ColumnReverse),
+        _ => None,
+    }
+}
+
+fn flex_wrap_keyword(keyword: &str) -> Option<FlexWrap> {
+    match keyword {
+        "nowrap" => Some(FlexWrap::NoWrap),
+        "wrap" => Some(FlexWrap::Wrap),
+        "wrap-reverse" => Some(FlexWrap::WrapReverse),
+        _ => None,
+    }
+}
+
+fn resolve_flex_flow(value: &CssValue) -> Option<(FlexDirection, FlexWrap)> {
+    let values = match value {
+        CssValue::Keyword(keyword) if keyword == "initial" => {
+            return Some((FlexDirection::Row, FlexWrap::NoWrap));
+        }
+        CssValue::Keyword(_) => std::slice::from_ref(value),
+        CssValue::List(values) if (1..=2).contains(&values.len()) => values.as_slice(),
+        _ => return None,
+    };
+    let mut direction = None;
+    let mut wrap = None;
+    for value in values {
+        let CssValue::Keyword(keyword) = value else {
+            return None;
+        };
+        if let Some(parsed) = flex_direction_keyword(keyword) {
+            if direction.replace(parsed).is_some() {
+                return None;
+            }
+        } else if let Some(parsed) = flex_wrap_keyword(keyword) {
+            if wrap.replace(parsed).is_some() {
+                return None;
+            }
+        } else {
+            return None;
+        }
+    }
+
+    Some((
+        direction.unwrap_or(FlexDirection::Row),
+        wrap.unwrap_or(FlexWrap::NoWrap),
+    ))
+}
+
 pub fn apply_declaration(
     name: &str,
     value: &CssValue,
@@ -1683,13 +1736,17 @@ pub fn apply_declaration(
          * Flex
          * ====================== */
         ("flex-direction", CssValue::Keyword(v)) => {
-            style.flex_direction = match v.as_str() {
-                "row" => FlexDirection::Row,
-                "column" => FlexDirection::Column,
-                "row-reverse" => FlexDirection::RowReverse,
-                "column-reverse" => FlexDirection::ColumnReverse,
-                _ => return None,
-            };
+            style.flex_direction = flex_direction_keyword(v)?;
+        }
+
+        ("flex-wrap", CssValue::Keyword(v)) => {
+            style.flex_wrap = flex_wrap_keyword(v)?;
+        }
+
+        ("flex-flow", _) => {
+            let (direction, wrap) = resolve_flex_flow(value)?;
+            style.flex_direction = direction;
+            style.flex_wrap = wrap;
         }
 
         ("justify-content", CssValue::Keyword(v)) => {
@@ -1710,6 +1767,19 @@ pub fn apply_declaration(
                 "flex-start" | "start" => AlignItems::Start,
                 "center" => AlignItems::Center,
                 "flex-end" | "end" => AlignItems::End,
+                _ => return None,
+            };
+        }
+
+        ("align-content", CssValue::Keyword(v)) => {
+            style.align_content = match v.as_str() {
+                "normal" | "stretch" => AlignContent::Stretch,
+                "flex-start" | "start" => AlignContent::Start,
+                "center" => AlignContent::Center,
+                "flex-end" | "end" => AlignContent::End,
+                "space-between" => AlignContent::SpaceBetween,
+                "space-around" => AlignContent::SpaceAround,
+                "space-evenly" => AlignContent::SpaceEvenly,
                 _ => return None,
             };
         }
@@ -2750,6 +2820,48 @@ mod tests {
     }
 
     #[test]
+    fn flex_wrap_and_align_content_map_to_layout() {
+        let wrap = apply_layout_property("flex-wrap", CssValue::Keyword("wrap-reverse".into()));
+        assert_eq!(wrap.flex_wrap, FlexWrap::WrapReverse);
+
+        for (keyword, expected) in [
+            ("normal", AlignContent::Stretch),
+            ("flex-start", AlignContent::Start),
+            ("center", AlignContent::Center),
+            ("flex-end", AlignContent::End),
+            ("space-between", AlignContent::SpaceBetween),
+            ("space-around", AlignContent::SpaceAround),
+            ("space-evenly", AlignContent::SpaceEvenly),
+        ] {
+            let style = apply_layout_property("align-content", CssValue::Keyword(keyword.into()));
+            assert_eq!(style.align_content, expected);
+        }
+    }
+
+    #[test]
+    fn flex_flow_expands_direction_and_wrap_in_either_order() {
+        for values in [
+            vec![
+                CssValue::Keyword("column".into()),
+                CssValue::Keyword("wrap".into()),
+            ],
+            vec![
+                CssValue::Keyword("wrap".into()),
+                CssValue::Keyword("column".into()),
+            ],
+        ] {
+            let style = apply_layout_property("flex-flow", CssValue::List(values));
+            assert_eq!(style.flex_direction, FlexDirection::Column);
+            assert_eq!(style.flex_wrap, FlexWrap::Wrap);
+        }
+
+        let wrap_only =
+            apply_layout_property("flex-flow", CssValue::Keyword("wrap-reverse".into()));
+        assert_eq!(wrap_only.flex_direction, FlexDirection::Row);
+        assert_eq!(wrap_only.flex_wrap, FlexWrap::WrapReverse);
+    }
+
+    #[test]
     fn grid_tracks_map_lengths_fractions_and_auto() {
         let columns = apply_layout_property(
             "grid-template-columns",
@@ -3033,6 +3145,43 @@ mod tests {
         assert!((items[2].layout_box.iter().next().unwrap().border_box.x - 106.66667).abs() < 0.01);
         assert_eq!(items[3].layout_box.width_box(), 300.0);
         assert!(items[3].layout_box.iter().next().unwrap().border_box.y >= 60.0);
+    }
+
+    #[test]
+    fn flex_wrap_css_creates_multiple_lines() {
+        let html = r#"<html><body><div class="flex"><div></div><div></div></div></body></html>"#;
+        let css = r#"
+            .flex {
+                display: flex;
+                width: 100px;
+                flex-flow: row wrap;
+                align-content: flex-start;
+            }
+            .flex > div {
+                width: 60px;
+                height: 20px;
+            }
+        "#;
+        let (mut layout, _) = layout_and_info_for(html, css);
+        ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+
+        fn find_flex(node: &LayoutNode) -> Option<&LayoutNode> {
+            if node.style.display.inner == InnerDisplay::Flex {
+                return Some(node);
+            }
+            node.children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .find_map(find_flex)
+        }
+        let flex = find_flex(&layout).expect("flex container");
+        let items: Vec<_> = flex.children.iter().filter_map(LayoutChild::node).collect();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].layout_box.iter().next().unwrap().border_box.y, 0.0);
+        assert_eq!(
+            items[1].layout_box.iter().next().unwrap().border_box.y,
+            20.0
+        );
     }
 
     /// Depth-first search for the first [`NodeKind::Text`] whose content is
