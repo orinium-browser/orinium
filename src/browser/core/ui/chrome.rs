@@ -78,7 +78,17 @@ pub trait Chrome: std::fmt::Debug {
     ///
     /// The chrome receives every pointer event, including moves over the page
     /// area, so it can track its own hover state.
-    fn pointer_event(&mut self, width: f32, event: PointerEvent) -> ChromeEventResult;
+    fn pointer_event(&mut self, width: f32, height: f32, event: PointerEvent) -> ChromeEventResult;
+
+    fn handle_scroll(
+        &mut self,
+        width: f32,
+        height: f32,
+        x: f32,
+        y: f32,
+        scroll_x: f32,
+        scroll_y: f32,
+    );
 
     /// Whether the chrome currently owns keyboard/IME input (e.g. a focused
     /// address bar). While `true`, key and IME events are routed to the chrome

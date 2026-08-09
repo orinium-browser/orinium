@@ -194,7 +194,9 @@ pub struct BasicChrome {
     /// Wheather
     is_debug: bool,
     /// String content from LayoutNode.
-    debug_layout_node: String,
+    ///
+    /// (debug info, scroll x, scroll y)
+    debug_layout_node: (String, f32, f32),
     /// Toolbar element currently under the pointer, if any.
     hovered: Option<ChromeHit>,
 }
@@ -206,7 +208,7 @@ impl BasicChrome {
             toolbar: BrowserToolbar::new(),
             last_url: None,
             is_debug: false,
-            debug_layout_node: String::new(),
+            debug_layout_node: (String::new(), 0.0, 0.0),
             hovered: None,
         }
     }
@@ -321,9 +323,9 @@ impl Chrome for BasicChrome {
             });
 
             cmd_buf.push(DrawCommand::DrawText {
-                x: 0.0,
-                y: 0.0,
-                text: self.debug_layout_node.clone().into(),
+                x: self.debug_layout_node.1,
+                y: self.debug_layout_node.2,
+                text: self.debug_layout_node.0.clone().into(),
                 style: text_style,
             });
 
@@ -340,7 +342,12 @@ impl Chrome for BasicChrome {
         }
     }
 
-    fn pointer_event(&mut self, width: f32, event: PointerEvent) -> ChromeEventResult {
+    fn pointer_event(
+        &mut self,
+        width: f32,
+        _height: f32,
+        event: PointerEvent,
+    ) -> ChromeEventResult {
         let (x, y) = match event {
             PointerEvent::Move { x, y }
             | PointerEvent::Down { x, y }
@@ -388,6 +395,32 @@ impl Chrome for BasicChrome {
         ChromeEventResult {
             consumed: true,
             action,
+        }
+    }
+
+    fn handle_scroll(
+        &mut self,
+        width: f32,
+        height: f32,
+        x: f32,
+        y: f32,
+        scroll_x: f32,
+        scroll_y: f32,
+    ) {
+        if self.is_debug {
+            let rects = self.toolbar.rects(width);
+
+            let rect = Rect {
+                x: width / 2.0,
+                y: rects.height(),
+                width: width / 2.0,
+                height: height - rects.height(),
+            };
+
+            if rect.contains(x, y) {
+                self.debug_layout_node.1 -= scroll_x;
+                self.debug_layout_node.2 -= scroll_y;
+            }
         }
     }
 
@@ -451,7 +484,9 @@ impl Chrome for BasicChrome {
     }
 
     fn debug_set_layout_node(&mut self, node: &ui_layout::LayoutNode) {
-        self.debug_layout_node = format!("{:#}", node);
+        if self.is_debug {
+            self.debug_layout_node.0 = format!("{:#}", node);
+        }
     }
 
     fn blur(&mut self) {
@@ -504,6 +539,7 @@ mod tests {
         // A completed click on the back button requests Back.
         let result = chrome.pointer_event(
             800.0,
+            600.0,
             PointerEvent::Down {
                 x: rects.back.x + 1.0,
                 y: rects.back.y + 1.0,
@@ -514,6 +550,7 @@ mod tests {
 
         let result = chrome.pointer_event(
             800.0,
+            600.0,
             PointerEvent::Up {
                 x: rects.back.x + 1.0,
                 y: rects.back.y + 1.0,
@@ -525,6 +562,7 @@ mod tests {
         // Pressing the URL bar requests OS-level IME.
         let result = chrome.pointer_event(
             800.0,
+            600.0,
             PointerEvent::Down {
                 x: rects.url_bar.x + 1.0,
                 y: rects.url_bar.y + 1.0,
@@ -537,6 +575,7 @@ mod tests {
         // Below the toolbar is the page content area.
         let result = chrome.pointer_event(
             800.0,
+            600.0,
             PointerEvent::Down {
                 x: 400.0,
                 y: rects.toolbar.height + 10.0,
@@ -555,6 +594,7 @@ mod tests {
         // dirty, and no event falls through to the page.
         let result = chrome.pointer_event(
             800.0,
+            600.0,
             PointerEvent::Move {
                 x: rects.back.x + 1.0,
                 y: rects.back.y + 1.0,
@@ -564,6 +604,7 @@ mod tests {
 
         let result = chrome.pointer_event(
             800.0,
+            600.0,
             PointerEvent::Move {
                 x: rects.reload.x + 1.0,
                 y: rects.reload.y + 1.0,
@@ -574,6 +615,7 @@ mod tests {
         // Leaving the toolbar clears hover state.
         let result = chrome.pointer_event(
             800.0,
+            600.0,
             PointerEvent::Move {
                 x: 400.0,
                 y: rects.toolbar.height + 10.0,

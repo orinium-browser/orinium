@@ -92,6 +92,8 @@ impl BrowserRenderer {
             self.chrome.sync_url(url.as_deref());
 
             if let Some((layout, info)) = tab.layout_and_info() {
+                self.chrome.debug_set_layout_node(layout);
+
                 renderer_model::generate_draw_commands(
                     &mut draw_commands,
                     layout,

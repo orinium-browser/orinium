@@ -458,7 +458,10 @@ impl BrowserUi {
             ElementState::Pressed => PointerEvent::Down { x: px, y: py },
             ElementState::Released => PointerEvent::Up { x: px, y: py },
         };
-        let result = self.renderer.chrome.pointer_event(width, window_event);
+        let result = self
+            .renderer
+            .chrome
+            .pointer_event(width, height, window_event);
         if result.consumed {
             match result.action {
                 // Pressing the URL bar enables the OS IME so the caret and
@@ -576,10 +579,11 @@ impl BrowserUi {
         let v_height = self.renderer.render_state.viewport().1;
 
         // The chrome receives every move so it can track its own hover state.
-        let result = self
-            .renderer
-            .chrome
-            .pointer_event(v_width, PointerEvent::Move { x: px, y: py });
+        let result = self.renderer.chrome.pointer_event(
+            v_width,
+            v_height,
+            PointerEvent::Move { x: px, y: py },
+        );
         if result.consumed {
             return self.renderer.chrome.needs_repaint();
         }
@@ -612,37 +616,42 @@ impl BrowserUi {
             MouseScrollDelta::PixelDelta(pos) => (-pos.x as f32, -pos.y as f32),
         };
 
-        let (width, height) = self.renderer.render_state.viewport();
+        let (w_width, w_height) = self.renderer.render_state.viewport();
         let Rect {
-            x: dx,
-            y: dy,
+            x: sx,
+            y: sy,
             width,
             height,
-        } = self.renderer.chrome.content_rect(width, height);
+        } = self.renderer.chrome.content_rect(w_width, w_height);
         let sf = self.renderer.render_state.scale_factor;
         let (mouse_x, mouse_y) = (
-            (self.input.mouse_position.0 / sf) as f32 - dx,
-            (self.input.mouse_position.1 / sf) as f32 - dy,
+            (self.input.mouse_position.0 / sf) as f32 - sx,
+            (self.input.mouse_position.1 / sf) as f32 - sy,
         );
 
-        let tab_id = self.active_tab;
-        if let Some(tab) = self.tabs.get_mut(tab_id)
-            && let Some((layout, info)) = tab.layout_and_info_mut()
-        {
-            // Prefer the scrollable container under the cursor.
-            crate::engine::input::scroll_at(
-                layout,
-                info,
-                (width, height),
-                mouse_x,
-                mouse_y,
-                scroll_x,
-                scroll_y,
-            );
+        if mouse_x < sx || mouse_y < sy || mouse_x > sx + width || mouse_y > sy + height {
+            self.renderer
+                .chrome
+                .handle_scroll(w_width, w_height, mouse_x, mouse_y, scroll_x, scroll_y);
+        } else {
+            let tab_id = self.active_tab;
+            if let Some(tab) = self.tabs.get_mut(tab_id)
+                && let Some((layout, info)) = tab.layout_and_info_mut()
+            {
+                // Prefer the scrollable container under the cursor.
+                crate::engine::input::scroll_at(
+                    layout,
+                    info,
+                    (width, height),
+                    mouse_x,
+                    mouse_y,
+                    scroll_x,
+                    scroll_y,
+                );
+            }
         }
     }
 }
-
 /// Handles a mouse click in the given tab at the specified coordinates.
 fn handle_mouse_click(tab: &mut Tab, x: f32, y: f32) -> bool {
     let hit_path = match tab.layout_and_info() {
