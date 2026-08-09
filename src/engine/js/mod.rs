@@ -10,10 +10,10 @@ use crate::engine::tree::{NodeRef, TreeNode};
 use pixi_byte::value::JSArray;
 use pixi_byte::value::jsobject::{JSObject, Property};
 use pixi_byte::vm::VM;
-use pixi_byte::{JSResult, JSValue};
+use pixi_byte::{JSError, JSResult, JSValue};
 use std::any::Any;
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -45,6 +45,7 @@ pub struct JsHost {
     /// Keeps JS-created or removed nodes alive while their wrappers exist.
     detached_nodes: HashMap<u64, NodeRef<HtmlNodeType>>,
     timers: Vec<JsTimer>,
+    microtasks: VecDeque<JSValue>,
     next_timer_id: u64,
     dom_content_loaded_fired: bool,
     next_id: u64,
@@ -83,6 +84,7 @@ impl JsRuntime {
             element_event_listeners: HashMap::new(),
             detached_nodes: HashMap::new(),
             timers: Vec::new(),
+            microtasks: VecDeque::new(),
             next_timer_id: 0,
             dom_content_loaded_fired: false,
             next_id: 0,
@@ -95,6 +97,7 @@ impl JsRuntime {
         install_console(&mut engine);
         install_document(&mut engine);
         install_timers(&mut engine);
+        install_microtasks(&mut engine);
 
         Self {
             engine,
@@ -108,6 +111,7 @@ impl JsRuntime {
             Ok(_) => {}
             Err(err) => log::info!("JS error: {}", err),
         }
+        self.perform_microtask_checkpoint();
     }
 
     /// Dispatches `DOMContentLoaded` to document listeners once.
@@ -146,6 +150,7 @@ impl JsRuntime {
                 log::info!("JS error on DOMContentLoaded: {}", err);
             }
         }
+        self.perform_microtask_checkpoint();
         true
     }
 
@@ -183,6 +188,7 @@ impl JsRuntime {
             if let Err(err) = self.engine.call(callback, JSValue::Undefined, arguments) {
                 log::info!("JS error in timer callback: {}", err);
             }
+            self.perform_microtask_checkpoint();
         }
         ran_callback
     }
@@ -245,7 +251,23 @@ impl JsRuntime {
                 log::info!("JS error in click listener: {}", err);
             }
         }
+        self.perform_microtask_checkpoint();
         true
+    }
+
+    /// Drains queued microtasks in FIFO order, including jobs queued by jobs.
+    fn perform_microtask_checkpoint(&mut self) {
+        loop {
+            let callback =
+                with_host_mut(self.engine.vm(), |host| host.microtasks.pop_front()).flatten();
+            let Some(callback) = callback else {
+                break;
+            };
+
+            if let Err(err) = self.engine.call(callback, JSValue::Undefined, Vec::new()) {
+                log::info!("JS error in microtask: {}", err);
+            }
+        }
     }
 }
 
@@ -398,6 +420,25 @@ fn clear_timer(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let _ = with_host_mut(vm, |host| {
         host.timers.retain(|timer| timer.id != id);
     });
+    Ok(JSValue::Undefined)
+}
+
+// --- microtasks ---
+
+fn install_microtasks(engine: &mut pixi_byte::JSEngine) {
+    engine.global_mut().borrow_mut().set(
+        "queueMicrotask".to_string(),
+        JSValue::NativeFunction(queue_microtask),
+    );
+}
+
+fn queue_microtask(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(callback) = args.get(1).filter(|value| is_callable(value)).cloned() else {
+        return Err(JSError::TypeError(
+            "queueMicrotask callback must be callable".to_string(),
+        ));
+    };
+    let _ = with_host_mut(vm, |host| host.microtasks.push_back(callback));
     Ok(JSValue::Undefined)
 }
 
@@ -1423,5 +1464,54 @@ mod tests {
         assert!(!runtime.run_due_timers());
         let result = dom.get_element_by_id("result").unwrap();
         assert_eq!(result.borrow().value.get_attr("data-ran"), Some("once"));
+    }
+
+    #[test]
+    fn microtasks_run_in_fifo_order_after_script_evaluation() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const result = document.querySelector("#result");
+            queueMicrotask(function () {
+                result.setAttribute("data-order", result.getAttribute("data-order") + "-first");
+                queueMicrotask(function () {
+                    result.setAttribute("data-order", result.getAttribute("data-order") + "-second");
+                });
+            });
+            result.setAttribute("data-order", "sync");
+            "##,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-order"),
+            Some("sync-first-second")
+        );
+    }
+
+    #[test]
+    fn timer_microtasks_run_before_the_next_timer_task() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const result = document.querySelector("#result");
+            setTimeout(function () {
+                result.setAttribute("data-order", "timer");
+                queueMicrotask(function () {
+                    result.setAttribute("data-order", "timer-microtask");
+                });
+            }, 0);
+            setTimeout(function () {
+                result.setAttribute("data-observed", result.getAttribute("data-order"));
+            }, 0);
+            "##,
+        );
+
+        assert!(runtime.run_due_timers());
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-observed"),
+            Some("timer-microtask")
+        );
     }
 }
