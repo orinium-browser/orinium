@@ -40,7 +40,7 @@ pixi_byte = {
   rev = "df4671514f952393624e4acd71fd32c6e4e39c8f"
 }
 pollster = "1.0"
-resvg = "0.47.0"
+resvg = "0.48.1"
 rustls = { version = "0.23.40", default-features = false, features = ["tls12"] }
 rustls-native-certs = "0.8.4"
 serde = { version = "1", features = ["derive"] }
