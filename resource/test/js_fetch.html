@@ -30,12 +30,16 @@
     <h2>Response.text()</h2>
     <div id="text-result" class="result">waiting</div>
 
+    <h2>Response.json()</h2>
+    <div id="json-result" class="result">waiting</div>
+
     <h2>Network rejection</h2>
     <div id="error-result" class="result">waiting</div>
 
     <script>
         const metadataResult = document.getElementById("metadata-result");
         const textResult = document.getElementById("text-result");
+        const jsonResult = document.getElementById("json-result");
         const errorResult = document.getElementById("error-result");
 
         fetch("data:text/plain,hello%20from%20fetch").then(response => {
@@ -49,6 +53,13 @@
             textResult.textContent = text;
             textResult.setAttribute("data-complete", "true");
         });
+
+        fetch("data:application/json,%7B%22name%22%3A%22Orinium%22%2C%22items%22%3A%5B1%2C2%5D%7D")
+            .then(response => response.json())
+            .then(value => {
+                jsonResult.textContent = value.name + ": " + value.items[0] + ", " + value.items[1];
+                jsonResult.setAttribute("data-complete", "true");
+            });
 
         fetch("data:text/plain;base64,%%%").catch(reason => {
             errorResult.textContent = "caught: " + reason;
