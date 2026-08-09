@@ -34,7 +34,7 @@ once_cell = "1.21.4"
 # pixi_byte = { path = "../pixi_byte" }
 pixi_byte = {
   git = "https://github.com/orinium-browser/pixi_byte",
-  rev = "dd0ca6d01cd026653fd31b9610db1ed0b7940aa4"
+  rev = "8c767dec4c133f6d6381826457fb0ed6a0c1d477"
 }
 pollster = "1.0"
 resvg = "0.47.0"
