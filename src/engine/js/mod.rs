@@ -127,6 +127,7 @@ impl JsRuntime {
         install_timers(&mut engine);
         install_microtasks(&mut engine);
         install_headers(&mut engine);
+        install_request(&mut engine);
         install_fetch(&mut engine);
         install_global_aliases(&mut engine);
 
@@ -524,6 +525,8 @@ fn queue_microtask(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 
 const HEADERS_DATA: &str = "__orinium_headers_data";
 const HEADERS_IMMUTABLE: &str = "__orinium_headers_immutable";
+const REQUEST_MARKER: &str = "__orinium_request";
+const REQUEST_BODY: &str = "__orinium_request_body";
 
 fn install_headers(engine: &mut pixi_byte::JSEngine) {
     let mut constructor = JSObject::new();
@@ -695,6 +698,106 @@ fn headers_delete(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(JSValue::Undefined)
 }
 
+struct RequestParts {
+    url: String,
+    method: String,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+}
+
+fn install_request(engine: &mut pixi_byte::JSEngine) {
+    let mut constructor = JSObject::new();
+    constructor.set(
+        "__construct__".to_string(),
+        JSValue::NativeFunction(request_constructor),
+    );
+    engine.global_mut().borrow_mut().set(
+        "Request".to_string(),
+        JSValue::Object(Rc::new(RefCell::new(constructor))),
+    );
+}
+
+fn request_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(input) = args.get(1) else {
+        return Err(JSError::TypeError(
+            "Request input is required".to_string(),
+        ));
+    };
+    let parts = request_parts(input, args.get(2));
+    Ok(JSValue::Object(make_request(parts)))
+}
+
+fn make_request(parts: RequestParts) -> Rc<RefCell<JSObject>> {
+    let mut request = JSObject::new();
+    request.define_property(
+        "url".to_string(),
+        Property::read_only(JSValue::String(parts.url)),
+    );
+    request.define_property(
+        "method".to_string(),
+        Property::read_only(JSValue::String(parts.method)),
+    );
+    request.define_property(
+        "headers".to_string(),
+        Property::read_only(JSValue::Object(make_headers(parts.headers, false))),
+    );
+    request.set(
+        REQUEST_BODY.to_string(),
+        JSValue::String(String::from_utf8_lossy(&parts.body).into_owned()),
+    );
+    request.set(REQUEST_MARKER.to_string(), JSValue::Boolean(true));
+    Rc::new(RefCell::new(request))
+}
+
+fn request_parts(input: &JSValue, init: Option<&JSValue>) -> RequestParts {
+    let mut parts = match input {
+        JSValue::Object(request)
+            if matches!(request.borrow().get(REQUEST_MARKER), JSValue::Boolean(true)) =>
+        {
+            let request = request.borrow();
+            RequestParts {
+                url: request.get("url").to_string(),
+                method: request.get("method").to_string(),
+                headers: extract_header_entries(&request.get("headers")),
+                body: match request.get(REQUEST_BODY) {
+                    JSValue::String(body) => body.into_bytes(),
+                    _ => Vec::new(),
+                },
+            }
+        }
+        value => RequestParts {
+            url: value.to_string(),
+            method: "GET".to_string(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        },
+    };
+    apply_request_init(&mut parts, init);
+    parts
+}
+
+fn apply_request_init(parts: &mut RequestParts, init: Option<&JSValue>) {
+    let Some(JSValue::Object(init)) = init else {
+        return;
+    };
+    let init = init.borrow();
+    if init.has_own_property("method") {
+        match init.get("method") {
+            JSValue::Undefined | JSValue::Null => {}
+            value => parts.method = value.to_string().to_ascii_uppercase(),
+        }
+    }
+    if init.has_own_property("headers") {
+        parts.headers = extract_header_entries(&init.get("headers"));
+    }
+    if init.has_own_property("body") {
+        parts.body = match init.get("body") {
+            JSValue::Undefined | JSValue::Null => Vec::new(),
+            value => value.to_string().into_bytes(),
+        };
+    }
+}
+
 fn install_fetch(engine: &mut pixi_byte::JSEngine) {
     engine
         .global_mut()
@@ -703,12 +806,13 @@ fn install_fetch(engine: &mut pixi_byte::JSEngine) {
 }
 
 fn fetch(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let url = args
-        .get(1)
-        .cloned()
-        .unwrap_or(JSValue::Undefined)
-        .to_string();
-    let (method, headers, body) = parse_fetch_init(args.get(2));
+    let input = args.get(1).cloned().unwrap_or(JSValue::Undefined);
+    let RequestParts {
+        url,
+        method,
+        headers,
+        body,
+    } = request_parts(&input, args.get(2));
     let promise_constructor = vm.global_object.borrow().get("Promise");
     let JSValue::Object(constructor) = &promise_constructor else {
         return Err(JSError::InternalError(
@@ -739,23 +843,6 @@ fn fetch(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         });
     });
     Ok(promise)
-}
-
-fn parse_fetch_init(init: Option<&JSValue>) -> (String, Vec<(String, String)>, Vec<u8>) {
-    let Some(JSValue::Object(init)) = init else {
-        return ("GET".to_string(), Vec::new(), Vec::new());
-    };
-    let init = init.borrow();
-    let method = match init.get("method") {
-        JSValue::Undefined | JSValue::Null => "GET".to_string(),
-        value => value.to_string().to_ascii_uppercase(),
-    };
-    let body = match init.get("body") {
-        JSValue::Undefined | JSValue::Null => Vec::new(),
-        value => value.to_string().into_bytes(),
-    };
-    let headers = extract_header_entries(&init.get("headers"));
-    (method, headers, body)
 }
 
 fn capture_fetch_capability(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -2238,6 +2325,49 @@ mod tests {
         let result = result.borrow();
         assert_eq!(result.value.get_attr("data-type"), Some("text/plain"));
         assert_eq!(result.value.get_attr("data-has"), Some("true"));
+    }
+
+    #[test]
+    fn request_objects_can_be_copied_and_passed_to_fetch() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const headers = new Headers({ Accept: "application/json" });
+            const original = new Request("https://example.test/messages", {
+                method: "post",
+                headers: headers,
+                body: "hello"
+            });
+            const copied = new Request(original);
+            const result = document.querySelector("#result");
+            result.setAttribute("data-url", copied.url);
+            result.setAttribute("data-method", copied.method);
+            result.setAttribute("data-accept", copied.headers.get("accept"));
+            fetch(copied, { method: "put" });
+            "##,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(
+            result.value.get_attr("data-url"),
+            Some("https://example.test/messages")
+        );
+        assert_eq!(result.value.get_attr("data-method"), Some("POST"));
+        assert_eq!(
+            result.value.get_attr("data-accept"),
+            Some("application/json")
+        );
+
+        let requests = runtime.take_fetch_requests();
+        assert_eq!(requests[0].url, "https://example.test/messages");
+        assert_eq!(requests[0].method, "PUT");
+        assert_eq!(requests[0].body, b"hello");
+        assert!(
+            requests[0]
+                .headers
+                .contains(&("accept".to_string(), "application/json".to_string()))
+        );
     }
 
     #[test]
