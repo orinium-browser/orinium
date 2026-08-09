@@ -81,6 +81,22 @@ pub enum ClassicScriptSource {
     External(String),
 }
 
+/// Scheduling mode selected by attributes on a classic script element.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ClassicScriptExecution {
+    #[default]
+    Default,
+    Defer,
+    Async,
+}
+
+/// A classic script source together with its requested scheduling mode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassicScriptDescriptor {
+    pub source: ClassicScriptSource,
+    pub execution: ClassicScriptExecution,
+}
+
 impl DomTree {
     /// Returns all elements with the given tag name
     pub fn get_elements_by_tag_name(&self, tag_name: &str) -> Vec<NodeRef<HtmlNodeType>> {
@@ -184,6 +200,14 @@ impl DomTree {
     /// Module scripts and data blocks with a non-JavaScript MIME type are not
     /// classic scripts and are ignored here.
     pub fn collect_classic_scripts(&self) -> Vec<ClassicScriptSource> {
+        self.collect_classic_script_descriptors()
+            .into_iter()
+            .map(|script| script.source)
+            .collect()
+    }
+
+    /// Collects classic scripts and their scheduling attributes in document order.
+    pub fn collect_classic_script_descriptors(&self) -> Vec<ClassicScriptDescriptor> {
         self.get_elements_by_tag_name("script")
             .into_iter()
             .filter_map(|node| {
@@ -194,11 +218,22 @@ impl DomTree {
                 }
 
                 match n.value.get_attr("src").map(str::trim) {
-                    Some(src) if !src.is_empty() => {
-                        Some(ClassicScriptSource::External(src.to_string()))
-                    }
+                    Some(src) if !src.is_empty() => Some(ClassicScriptDescriptor {
+                        source: ClassicScriptSource::External(src.to_string()),
+                        execution: if n.value.has_attr("async") {
+                            ClassicScriptExecution::Async
+                        } else if n.value.has_attr("defer") {
+                            ClassicScriptExecution::Defer
+                        } else {
+                            ClassicScriptExecution::Default
+                        },
+                    }),
                     Some(_) => None,
-                    None => Some(ClassicScriptSource::Inline(DomTree::inner_text(&node))),
+                    None => Some(ClassicScriptDescriptor {
+                        source: ClassicScriptSource::Inline(DomTree::inner_text(&node)),
+                        // `async` and `defer` have no effect on inline classic scripts.
+                        execution: ClassicScriptExecution::Default,
+                    }),
                 }
             })
             .collect()

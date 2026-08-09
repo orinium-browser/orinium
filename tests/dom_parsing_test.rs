@@ -1,5 +1,7 @@
 use orinium_browser::engine::html::parser;
-use orinium_browser::engine::html::parser::ClassicScriptSource;
+use orinium_browser::engine::html::parser::{
+    ClassicScriptDescriptor, ClassicScriptExecution, ClassicScriptSource,
+};
 
 #[test]
 fn test_dom_parse() {
@@ -57,6 +59,39 @@ fn classic_scripts_are_collected_in_document_order() {
             ClassicScriptSource::External("one.js".to_string()),
             ClassicScriptSource::Inline("window.order = \"inline-2\";".to_string()),
             ClassicScriptSource::External("two.js".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn classic_script_scheduling_attributes_are_collected() {
+    let html = r#"
+        <script async defer src="async-wins.js"></script>
+        <script defer src="defer.js"></script>
+        <script src="default.js"></script>
+        <script async>window.inline = true;</script>
+    "#;
+
+    let dom = parser::Parser::new(html).parse();
+    assert_eq!(
+        dom.collect_classic_script_descriptors(),
+        [
+            ClassicScriptDescriptor {
+                source: ClassicScriptSource::External("async-wins.js".to_string()),
+                execution: ClassicScriptExecution::Async,
+            },
+            ClassicScriptDescriptor {
+                source: ClassicScriptSource::External("defer.js".to_string()),
+                execution: ClassicScriptExecution::Defer,
+            },
+            ClassicScriptDescriptor {
+                source: ClassicScriptSource::External("default.js".to_string()),
+                execution: ClassicScriptExecution::Default,
+            },
+            ClassicScriptDescriptor {
+                source: ClassicScriptSource::Inline("window.inline = true;".to_string()),
+                execution: ClassicScriptExecution::Default,
+            },
         ]
     );
 }
