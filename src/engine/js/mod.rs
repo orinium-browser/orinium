@@ -1552,4 +1552,32 @@ mod tests {
         let result = dom.get_element_by_id("result").unwrap();
         assert_eq!(result.borrow().value.get_attr("data-ran"), Some("yes"));
     }
+
+    #[test]
+    fn promise_static_methods_complete_during_script_checkpoint() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const result = document.querySelector("#result");
+            Promise.all([Promise.resolve("first"), "second"])
+                .then(function (values) {
+                    result.setAttribute("data-all", values[0] + "-" + values[1]);
+                    return Promise.reject("expected");
+                })
+                .catch(function (reason) {
+                    result.setAttribute("data-catch", reason);
+                });
+            "##,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-all"),
+            Some("first-second")
+        );
+        assert_eq!(
+            result.borrow().value.get_attr("data-catch"),
+            Some("expected")
+        );
+    }
 }

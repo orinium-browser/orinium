@@ -33,6 +33,12 @@
     <h2>Promise and queueMicrotask ordering</h2>
     <div id="order-result" class="result">sync</div>
 
+    <h2>Static resolve and reject</h2>
+    <div id="static-result" class="result">waiting</div>
+
+    <h2>Promise.all</h2>
+    <div id="all-result" class="result">waiting</div>
+
     <script>
         const chainResult = document.querySelector("#chain-result");
         new Promise(function (resolve) {
@@ -65,6 +71,22 @@
             orderResult.textContent = orderResult.textContent + " -> queued last";
             orderResult.setAttribute("data-complete", "true");
         });
+
+        const staticResult = document.querySelector("#static-result");
+        Promise.resolve("resolved").then(function (value) {
+            staticResult.textContent = value;
+            return Promise.reject("rejected");
+        }).catch(function (reason) {
+            staticResult.textContent = staticResult.textContent + " -> " + reason;
+            staticResult.setAttribute("data-complete", "true");
+        });
+
+        const allResult = document.querySelector("#all-result");
+        Promise.all([Promise.resolve("first"), "second", Promise.resolve("third")])
+            .then(function (values) {
+                allResult.textContent = values[0] + " -> " + values[1] + " -> " + values[2];
+                allResult.setAttribute("data-complete", "true");
+            });
     </script>
 </body>
 </html>
