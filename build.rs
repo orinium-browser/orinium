@@ -138,6 +138,12 @@ const TEST_PAGE_CATALOG: &[TestPageMeta] = &[
         title: "Microtasks",
         description: "queueMicrotaskのFIFO順序とscript / timer / event後のcheckpoint",
     },
+    TestPageMeta {
+        file: "js_promises.html",
+        group: "JavaScript",
+        title: "Promises",
+        description: "Promiseのresolve / reject / then / catch / chainingとmicrotask順序",
+    },
 ];
 
 /// テスト一覧に表示するグループ順。未登録ファイルは "Other" に載せ、
