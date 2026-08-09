@@ -1473,7 +1473,7 @@ fn expose_node_list(vm: &mut VM, nodes: Vec<NodeRef<HtmlNodeType>>) -> JSValue {
 
 // --- Element ---
 
-fn make_element(tag_name: String, attr_id: String, dom_id: u64) -> Rc<RefCell<JSObject>> {
+fn make_element(tag_name: String, _attr_id: String, dom_id: u64) -> Rc<RefCell<JSObject>> {
     let mut obj = JSObject::new();
     define_node_id(&mut obj, dom_id);
     let html_name = tag_name.to_ascii_uppercase();
@@ -1491,7 +1491,7 @@ fn make_element(tag_name: String, attr_id: String, dom_id: u64) -> Rc<RefCell<JS
     );
     obj.define_property(
         "id".to_string(),
-        Property::read_only(JSValue::String(attr_id)),
+        accessor_property(get_element_id, set_element_id),
     );
     obj.define_property(
         "textContent".to_string(),
@@ -2098,6 +2098,27 @@ fn get_class_name(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(JSValue::String(value))
 }
 
+fn get_element_id(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::String(String::new()));
+    };
+    let id = node.borrow().value.get_attr("id").unwrap_or("").to_string();
+    Ok(JSValue::String(id))
+}
+
+fn set_element_id(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Undefined);
+    };
+    let id = args
+        .get(1)
+        .map(JSValue::to_console_string)
+        .unwrap_or_default();
+    node.borrow_mut().value.set_attr("id", id);
+    mark_dom_dirty(vm);
+    Ok(JSValue::Undefined)
+}
+
 fn set_class_name(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
         return Ok(JSValue::Undefined);
@@ -2649,6 +2670,24 @@ mod tests {
 
         let node = dom.get_element_by_id("hello").unwrap();
         assert_eq!(node.borrow().value.get_attr("data-run"), Some("1"));
+    }
+
+    #[test]
+    fn element_id_is_a_live_reflected_property() {
+        let (mut runtime, dom) = runtime_from_html(r#"<main id="root"></main>"#);
+        runtime.run_script(
+            r#"
+            const child = document.createElement("button");
+            child.id = "first";
+            document.getElementById("root").appendChild(child);
+            child.setAttribute("id", "second");
+            child.setAttribute("data-current-id", child.id);
+            "#,
+        );
+
+        let child = dom.get_element_by_id("second").unwrap();
+        assert_eq!(child.borrow().value.get_attr("data-current-id"), Some("second"));
+        assert!(runtime.needs_redraw());
     }
 
     #[test]
