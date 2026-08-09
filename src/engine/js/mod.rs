@@ -71,6 +71,8 @@ pub struct JsHost {
     styles: HashMap<u64, Rc<RefCell<JSObject>>>,
     /// Explicit namespaces assigned through `document.createElementNS`.
     namespaces: HashMap<u64, String>,
+    element_prototype: Rc<RefCell<JSObject>>,
+    element_constructor: Rc<RefCell<JSObject>>,
     document: Option<Rc<RefCell<JSObject>>>,
     document_event_listeners: HashMap<String, Vec<JSValue>>,
     element_event_listeners: HashMap<u64, HashMap<String, Vec<JSValue>>>,
@@ -112,12 +114,15 @@ impl JsRuntime {
     /// Creates a runtime sharing the given DOM tree with the browser side.
     pub fn new(dom: Rc<DomTree>) -> Self {
         let needs_redraw = Rc::new(Cell::new(false));
+        let (element_prototype, element_constructor) = make_element_interface();
         let host = Rc::new(RefCell::new(JsHost {
             dom,
             refs: HashMap::new(),
             objects: HashMap::new(),
             styles: HashMap::new(),
             namespaces: HashMap::new(),
+            element_prototype,
+            element_constructor,
             document: None,
             document_event_listeners: HashMap::new(),
             element_event_listeners: HashMap::new(),
@@ -1147,6 +1152,20 @@ fn install_document(engine: &mut pixi_byte::JSEngine) {
         .borrow_mut()
         .set("document".to_string(), JSValue::Object(document_obj));
 
+    if let Some(element_constructor) = with_host(engine.vm(), |host| {
+        Rc::clone(&host.element_constructor)
+    }) {
+        let mut global = engine.global_mut().borrow_mut();
+        global.set(
+            "Element".to_string(),
+            JSValue::Object(Rc::clone(&element_constructor)),
+        );
+        global.set(
+            "HTMLElement".to_string(),
+            JSValue::Object(element_constructor),
+        );
+    }
+
     let mut iframe_constructor = JSObject::new();
     iframe_constructor.set(
         "__host_has_instance__".to_string(),
@@ -1453,7 +1472,13 @@ fn expose_node(vm: &mut VM, node: NodeRef<HtmlNodeType>) -> Option<JSValue> {
             return Rc::clone(existing);
         }
         let obj = match node_kind {
-            Some((tag_name, attr_id)) => make_element(tag_name, attr_id, dom_id),
+            Some((tag_name, attr_id)) => make_element(
+                tag_name,
+                attr_id,
+                dom_id,
+                Rc::clone(&host.element_prototype),
+                Rc::clone(&host.element_constructor),
+            ),
             None => make_text_node(dom_id),
         };
         host.objects.insert(dom_id, Rc::clone(&obj));
@@ -1473,9 +1498,50 @@ fn expose_node_list(vm: &mut VM, nodes: Vec<NodeRef<HtmlNodeType>>) -> JSValue {
 
 // --- Element ---
 
-fn make_element(tag_name: String, _attr_id: String, dom_id: u64) -> Rc<RefCell<JSObject>> {
-    let mut obj = JSObject::new();
+fn make_element_interface() -> (Rc<RefCell<JSObject>>, Rc<RefCell<JSObject>>) {
+    let mut prototype = JSObject::new();
+    prototype.define_property(
+        "value".to_string(),
+        accessor_property(get_element_value, set_element_value),
+    );
+    prototype.define_property(
+        "checked".to_string(),
+        accessor_property(get_element_checked, set_element_checked),
+    );
+    prototype.define_property(
+        "selected".to_string(),
+        accessor_property(get_element_selected, set_element_selected),
+    );
+    prototype.define_property(
+        "disabled".to_string(),
+        accessor_property(get_element_disabled, set_element_disabled),
+    );
+    prototype.define_property(
+        "multiple".to_string(),
+        accessor_property(get_element_multiple, set_element_multiple),
+    );
+    let prototype = Rc::new(RefCell::new(prototype));
+    let mut constructor = JSObject::new();
+    constructor.define_property(
+        "prototype".to_string(),
+        Property::read_only(JSValue::Object(Rc::clone(&prototype))),
+    );
+    (prototype, Rc::new(RefCell::new(constructor)))
+}
+
+fn make_element(
+    tag_name: String,
+    _attr_id: String,
+    dom_id: u64,
+    prototype: Rc<RefCell<JSObject>>,
+    constructor: Rc<RefCell<JSObject>>,
+) -> Rc<RefCell<JSObject>> {
+    let mut obj = JSObject::with_prototype(Some(prototype));
     define_node_id(&mut obj, dom_id);
+    obj.define_property(
+        "constructor".to_string(),
+        Property::read_only(JSValue::Object(constructor)),
+    );
     let html_name = tag_name.to_ascii_uppercase();
     obj.define_property(
         "nodeType".to_string(),
@@ -1548,26 +1614,6 @@ fn make_element(tag_name: String, _attr_id: String, dom_id: u64) -> Rc<RefCell<J
     obj.define_property(
         "style".to_string(),
         read_only_accessor_property(get_style),
-    );
-    obj.define_property(
-        "value".to_string(),
-        accessor_property(get_element_value, set_element_value),
-    );
-    obj.define_property(
-        "checked".to_string(),
-        accessor_property(get_element_checked, set_element_checked),
-    );
-    obj.define_property(
-        "selected".to_string(),
-        accessor_property(get_element_selected, set_element_selected),
-    );
-    obj.define_property(
-        "disabled".to_string(),
-        accessor_property(get_element_disabled, set_element_disabled),
-    );
-    obj.define_property(
-        "multiple".to_string(),
-        accessor_property(get_element_multiple, set_element_multiple),
     );
     obj.set(
         "getAttribute".to_string(),
@@ -2720,6 +2766,33 @@ mod tests {
         let select = dom.get_element_by_id("select").unwrap();
         assert_eq!(select.borrow().value.get_attr("multiple"), Some(""));
         assert!(runtime.needs_redraw());
+    }
+
+    #[test]
+    fn form_properties_are_accessors_on_the_element_prototype() {
+        let (mut runtime, dom) = runtime_from_html(r#"<input id="field">"#);
+        runtime.run_script(
+            r#"
+            const field = document.getElementById("field");
+            const prototype = field.constructor.prototype;
+            const descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
+            field.setAttribute("data-prototype", Object.getPrototypeOf(field) === prototype);
+            field.setAttribute("data-interface", field.constructor === HTMLElement && field instanceof Element);
+            field.setAttribute("data-own-value", field.hasOwnProperty("value"));
+            field.setAttribute("data-accessor", typeof descriptor.get + ":" + typeof descriptor.set);
+            descriptor.set.call(field, "tracked");
+            field.setAttribute("data-read", descriptor.get.call(field));
+            "#,
+        );
+
+        let field = dom.get_element_by_id("field").unwrap();
+        let field = field.borrow();
+        assert_eq!(field.value.get_attr("data-prototype"), Some("true"));
+        assert_eq!(field.value.get_attr("data-interface"), Some("true"));
+        assert_eq!(field.value.get_attr("data-own-value"), Some("false"));
+        assert_eq!(field.value.get_attr("data-accessor"), Some("function:function"));
+        assert_eq!(field.value.get_attr("data-read"), Some("tracked"));
+        assert_eq!(field.value.get_attr("value"), Some("tracked"));
     }
 
     #[test]
