@@ -167,17 +167,19 @@ fn hit_test_inner<'a>(
 pub fn scroll_at(
     layout: &LayoutNode,
     info: &mut InfoNode,
+    viewport: (f32, f32),
     x: f32,
     y: f32,
     dx: f32,
     dy: f32,
 ) -> bool {
-    scroll_at_inner(layout, info, x, y, dx, dy, (0.0, 0.0))
+    scroll_at_inner(layout, info, viewport, x, y, dx, dy, (0.0, 0.0))
 }
 
 fn scroll_at_inner(
     layout: &LayoutNode,
     info: &mut InfoNode,
+    viewport: (f32, f32),
     mut x: f32,
     mut y: f32,
     dx: f32,
@@ -226,6 +228,7 @@ fn scroll_at_inner(
                 && scroll_at_inner(
                     child_node,
                     child_info,
+                    viewport,
                     local_x,
                     local_y,
                     dx,
@@ -253,16 +256,23 @@ fn scroll_at_inner(
                 ..
             } => {
                 let mut changed = false;
+
+                let (vw, vh) = viewport;
+
                 if *scroll_y {
-                    let max_scroll = box_model.children_box.height;
-                    let next = (*scroll_offset_y + dy).clamp(0.0, max_scroll);
+                    let max_scroll = (box_model.children_box.height
+                        - box_model.content_box.height.min(vh))
+                    .max(0.0);
+                    let next = (*scroll_offset_y + dy).clamp(0.0, dbg!(max_scroll));
                     if (next - *scroll_offset_y).abs() > f32::EPSILON {
                         changed = true;
                     }
                     *scroll_offset_y = next;
                 }
                 if *scroll_x {
-                    let max_scroll = box_model.children_box.width;
+                    let max_scroll = (box_model.children_box.width
+                        - box_model.content_box.width.min(vw))
+                    .max(0.0);
                     let next = (*scroll_offset_x + dx).clamp(0.0, max_scroll);
                     if (next - *scroll_offset_x).abs() > f32::EPSILON {
                         changed = true;

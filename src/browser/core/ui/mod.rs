@@ -613,7 +613,12 @@ impl BrowserUi {
         };
 
         let (width, height) = self.renderer.render_state.viewport();
-        let Rect { x: dx, y: dy, .. } = self.renderer.chrome.content_rect(width, height);
+        let Rect {
+            x: dx,
+            y: dy,
+            width,
+            height,
+        } = self.renderer.chrome.content_rect(width, height);
         let sf = self.renderer.render_state.scale_factor;
         let (mouse_x, mouse_y) = (
             (self.input.mouse_position.0 / sf) as f32 - dx,
@@ -625,7 +630,15 @@ impl BrowserUi {
             && let Some((layout, info)) = tab.layout_and_info_mut()
         {
             // Prefer the scrollable container under the cursor.
-            crate::engine::input::scroll_at(layout, info, mouse_x, mouse_y, scroll_x, scroll_y);
+            crate::engine::input::scroll_at(
+                layout,
+                info,
+                (width, height),
+                mouse_x,
+                mouse_y,
+                scroll_x,
+                scroll_y,
+            );
         }
     }
 }
