@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <title>JavaScript Fetch Test</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 32px;
+        }
+
+        .result {
+            border: 2px solid #777;
+            margin: 12px 0 24px;
+            padding: 12px;
+        }
+
+        .result[data-complete="true"] {
+            background: #d9f7df;
+            border-color: #25813b;
+        }
+    </style>
+</head>
+<body>
+    <h1>JavaScript Fetch</h1>
+
+    <h2>Response metadata</h2>
+    <div id="metadata-result" class="result">waiting</div>
+
+    <h2>Response.text()</h2>
+    <div id="text-result" class="result">waiting</div>
+
+    <h2>Network rejection</h2>
+    <div id="error-result" class="result">waiting</div>
+
+    <script>
+        const metadataResult = document.getElementById("metadata-result");
+        const textResult = document.getElementById("text-result");
+        const errorResult = document.getElementById("error-result");
+
+        fetch("data:text/plain,hello%20from%20fetch").then(response => {
+            metadataResult.textContent =
+                "ok=" + response.ok +
+                ", status=" + response.status +
+                ", url=" + response.url;
+            metadataResult.setAttribute("data-complete", "true");
+            return response.text();
+        }).then(text => {
+            textResult.textContent = text;
+            textResult.setAttribute("data-complete", "true");
+        });
+
+        fetch("data:text/plain;base64,%%%").catch(reason => {
+            errorResult.textContent = "caught: " + reason;
+            errorResult.setAttribute("data-complete", "true");
+        });
+    </script>
+</body>
+</html>

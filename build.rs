@@ -150,6 +150,12 @@ const TEST_PAGE_CATALOG: &[TestPageMeta] = &[
         title: "Arrow Functions",
         description: "arrow functionの引数・expression/block body・closure・lexical this・Promise callback",
     },
+    TestPageMeta {
+        file: "js_fetch.html",
+        group: "JavaScript",
+        title: "Fetch",
+        description: "fetchによる取得、Responseの状態・URL・本文、ネットワークエラーのreject",
+    },
 ];
 
 /// テスト一覧に表示するグループ順。未登録ファイルは "Other" に載せ、
