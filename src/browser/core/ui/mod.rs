@@ -613,43 +613,19 @@ impl BrowserUi {
         };
 
         let (width, height) = self.renderer.render_state.viewport();
+        let Rect { x: dx, y: dy, .. } = self.renderer.chrome.content_rect(width, height);
+        let sf = self.renderer.render_state.scale_factor;
         let (mouse_x, mouse_y) = (
-            self.input.mouse_position.0 as f32,
-            self.input.mouse_position.1 as f32,
+            (self.input.mouse_position.0 / sf) as f32 - dx,
+            (self.input.mouse_position.1 / sf) as f32 - dy,
         );
 
         let tab_id = self.active_tab;
         if let Some(tab) = self.tabs.get_mut(tab_id)
             && let Some((layout, info)) = tab.layout_and_info_mut()
         {
-            // Prefer the scrollable container under the cursor; the wheel
-            // event chains to the root when nothing nested consumes it.
-            if crate::engine::input::scroll_at(layout, info, mouse_x, mouse_y, scroll_x, scroll_y) {
-                return;
-            }
-
-            if let layouter::types::NodeKind::Container {
-                scroll_offset_y, ..
-            } = &mut info.kind
-            {
-                // The page is laid out below the chrome, so the visible height
-                // is the window height minus the chrome height.
-                let Rect {
-                    width: _visible_width,
-                    height: visible_height,
-                    ..
-                } = self.renderer.chrome.content_rect(width, height);
-                *scroll_offset_y = (*scroll_offset_y + scroll_y).clamp(
-                    0.0,
-                    (layout
-                        .layout_box
-                        .iter()
-                        .map(|l| l.children_box.height)
-                        .sum::<f32>()
-                        - visible_height)
-                        .max(0.0),
-                );
-            }
+            // Prefer the scrollable container under the cursor.
+            crate::engine::input::scroll_at(layout, info, mouse_x, mouse_y, scroll_x, scroll_y);
         }
     }
 }

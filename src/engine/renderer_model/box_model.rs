@@ -501,7 +501,7 @@ fn push_box_model(
     }
 
     let content = push_transform(cmd_buf, dx, dy);
-    let scroll = push_transform(cmd_buf, scroll_offset_x, -scroll_offset_y);
+    let scroll = push_transform(cmd_buf, -scroll_offset_x, -scroll_offset_y);
 
     BoxPushState {
         clip,

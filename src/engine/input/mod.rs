@@ -254,8 +254,7 @@ fn scroll_at_inner(
             } => {
                 let mut changed = false;
                 if *scroll_y {
-                    let max_scroll =
-                        (box_model.children_box.height - box_model.content_box.height).max(0.0);
+                    let max_scroll = box_model.children_box.height;
                     let next = (*scroll_offset_y + dy).clamp(0.0, max_scroll);
                     if (next - *scroll_offset_y).abs() > f32::EPSILON {
                         changed = true;
@@ -263,8 +262,7 @@ fn scroll_at_inner(
                     *scroll_offset_y = next;
                 }
                 if *scroll_x {
-                    let max_scroll =
-                        (box_model.children_box.width - box_model.content_box.width).max(0.0);
+                    let max_scroll = box_model.children_box.width;
                     let next = (*scroll_offset_x + dx).clamp(0.0, max_scroll);
                     if (next - *scroll_offset_x).abs() > f32::EPSILON {
                         changed = true;
@@ -278,7 +276,6 @@ fn scroll_at_inner(
         if scrolled {
             return true;
         }
-        return false;
     }
 
     false
