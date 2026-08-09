@@ -74,6 +74,13 @@ impl HtmlNodeType {
 
 pub type DomTree = Tree<HtmlNodeType>;
 
+/// Source of a classic JavaScript script in document order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClassicScriptSource {
+    Inline(String),
+    External(String),
+}
+
 impl DomTree {
     /// Returns all elements with the given tag name
     pub fn get_elements_by_tag_name(&self, tag_name: &str) -> Vec<NodeRef<HtmlNodeType>> {
@@ -172,23 +179,58 @@ impl DomTree {
         texts
     }
 
-    /// Collects inline `<script>` texts, skipping blocks with a `src` attribute.
+    /// Collects classic scripts in document order.
     ///
-    /// External scripts are not supported yet and are reported via log.
-    pub fn collect_inline_scripts(&self) -> Vec<String> {
+    /// Module scripts and data blocks with a non-JavaScript MIME type are not
+    /// classic scripts and are ignored here.
+    pub fn collect_classic_scripts(&self) -> Vec<ClassicScriptSource> {
         self.get_elements_by_tag_name("script")
             .into_iter()
             .filter_map(|node| {
                 let n = node.borrow();
-                if n.value.has_attr("src") {
-                    log::info!("external scripts not yet supported");
-                    None
-                } else {
-                    Some(DomTree::inner_text(&node))
+                let script_type = n.value.get_attr("type").unwrap_or("").trim();
+                if !is_classic_javascript_type(script_type) {
+                    return None;
+                }
+
+                match n.value.get_attr("src").map(str::trim) {
+                    Some(src) if !src.is_empty() => {
+                        Some(ClassicScriptSource::External(src.to_string()))
+                    }
+                    Some(_) => None,
+                    None => Some(ClassicScriptSource::Inline(DomTree::inner_text(&node))),
                 }
             })
             .collect()
     }
+
+    /// Collects only inline classic scripts.
+    ///
+    /// Kept for callers that do not yet fetch external script resources.
+    pub fn collect_inline_scripts(&self) -> Vec<String> {
+        self.collect_classic_scripts()
+            .into_iter()
+            .filter_map(|script| match script {
+                ClassicScriptSource::Inline(source) => Some(source),
+                ClassicScriptSource::External(_) => None,
+            })
+            .collect()
+    }
+}
+
+fn is_classic_javascript_type(script_type: &str) -> bool {
+    if script_type.is_empty() {
+        return true;
+    }
+
+    matches!(
+        script_type.to_ascii_lowercase().as_str(),
+        "text/javascript"
+            | "application/javascript"
+            | "text/ecmascript"
+            | "application/ecmascript"
+            | "application/x-javascript"
+    )
 }
 
 pub struct Parser<'a> {

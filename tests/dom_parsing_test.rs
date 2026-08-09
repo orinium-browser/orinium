@@ -1,4 +1,5 @@
 use orinium_browser::engine::html::parser;
+use orinium_browser::engine::html::parser::ClassicScriptSource;
 
 #[test]
 fn test_dom_parse() {
@@ -35,4 +36,27 @@ fn test_dom_parse_malformed() {
     let mut parser = parser::Parser::new(&html);
     let dom = parser.parse();
     println!("DOM Tree:\n{}", dom);
+}
+
+#[test]
+fn classic_scripts_are_collected_in_document_order() {
+    let html = r#"
+        <script>window.order = "inline-1";</script>
+        <script src="one.js"></script>
+        <script type="module" src="module.js"></script>
+        <script type="application/json">{"not":"javascript"}</script>
+        <script type="text/javascript">window.order = "inline-2";</script>
+        <script src="two.js"></script>
+    "#;
+
+    let dom = parser::Parser::new(html).parse();
+    assert_eq!(
+        dom.collect_classic_scripts(),
+        [
+            ClassicScriptSource::Inline("window.order = \"inline-1\";".to_string()),
+            ClassicScriptSource::External("one.js".to_string()),
+            ClassicScriptSource::Inline("window.order = \"inline-2\";".to_string()),
+            ClassicScriptSource::External("two.js".to_string()),
+        ]
+    );
 }
