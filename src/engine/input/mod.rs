@@ -359,6 +359,9 @@ mod tests {
     use crate::engine::ui::input_text_types::InputTextEvent;
     use std::sync::Arc;
 
+    const VIEWPORT_WIDTH: f32 = 800.0;
+    const VIEWPORT_HEIGHT: f32 = 600.0;
+
     fn input_info(node: Arc<dyn CustomNode>) -> InfoNode {
         InfoNode {
             kind: NodeKind::Custom {
@@ -577,7 +580,15 @@ mod tests {
         set_vertical_scroll(&mut info, 50.0);
         info.children.push(scrollable_info());
 
-        assert!(scroll_at(&layout, &mut info, 15.0, 15.0, 0.0, 10.0));
+        assert!(scroll_at(
+            &layout,
+            &mut info,
+            (VIEWPORT_WIDTH, VIEWPORT_HEIGHT),
+            15.0,
+            15.0,
+            0.0,
+            10.0
+        ));
         let NodeKind::Container {
             scroll_offset_y: child_scroll,
             ..
@@ -604,7 +615,15 @@ mod tests {
         let mut info = scrollable_info();
 
         // Cursor inside the box. Positive dy scrolls down.
-        assert!(scroll_at(&layout, &mut info, 50.0, 50.0, 0.0, 100.0));
+        assert!(scroll_at(
+            &layout,
+            &mut info,
+            (VIEWPORT_WIDTH, VIEWPORT_HEIGHT),
+            50.0,
+            50.0,
+            0.0,
+            100.0
+        ));
         let NodeKind::Container {
             scroll_offset_y, ..
         } = &info.kind
@@ -614,7 +633,15 @@ mod tests {
         assert_eq!(*scroll_offset_y, 100.0);
 
         // Clamp to children_box.height - content_box.height = 200.
-        assert!(scroll_at(&layout, &mut info, 50.0, 50.0, 0.0, 300.0));
+        assert!(scroll_at(
+            &layout,
+            &mut info,
+            (VIEWPORT_WIDTH, VIEWPORT_HEIGHT),
+            50.0,
+            50.0,
+            0.0,
+            300.0
+        ));
         let NodeKind::Container {
             scroll_offset_y, ..
         } = &info.kind
@@ -624,7 +651,15 @@ mod tests {
         assert_eq!(*scroll_offset_y, 200.0);
 
         // Cannot scroll past 0 (negative dy scrolls up).
-        assert!(scroll_at(&layout, &mut info, 50.0, 50.0, 0.0, -500.0));
+        assert!(scroll_at(
+            &layout,
+            &mut info,
+            (VIEWPORT_WIDTH, VIEWPORT_HEIGHT),
+            50.0,
+            50.0,
+            0.0,
+            -500.0
+        ));
         let NodeKind::Container {
             scroll_offset_y, ..
         } = &info.kind
@@ -641,7 +676,15 @@ mod tests {
             ui_layout::LayoutBox::BlockBox(box_model(0.0, 0.0, 200.0, 100.0, 200.0, 300.0));
         let mut info = scrollable_info();
 
-        assert!(!scroll_at(&layout, &mut info, 250.0, 50.0, 0.0, -100.0));
+        assert!(!scroll_at(
+            &layout,
+            &mut info,
+            (VIEWPORT_WIDTH, VIEWPORT_HEIGHT),
+            250.0,
+            50.0,
+            0.0,
+            -100.0
+        ));
     }
 
     #[test]
@@ -662,7 +705,15 @@ mod tests {
             dom_id: None,
         };
 
-        assert!(!scroll_at(&layout, &mut info, 50.0, 50.0, 0.0, -100.0));
+        assert!(!scroll_at(
+            &layout,
+            &mut info,
+            (VIEWPORT_WIDTH, VIEWPORT_HEIGHT),
+            50.0,
+            50.0,
+            0.0,
+            -100.0
+        ));
         let NodeKind::Container {
             scroll_offset_y, ..
         } = &info.kind
@@ -699,6 +750,7 @@ mod tests {
         assert!(scroll_at(
             &outer_layout,
             &mut outer_info,
+            (VIEWPORT_WIDTH, VIEWPORT_HEIGHT),
             50.0,
             50.0,
             0.0,
