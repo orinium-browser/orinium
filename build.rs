@@ -175,6 +175,12 @@ const TEST_PAGE_CATALOG: &[TestPageMeta] = &[
         description: "ReactDOMが利用するNode識別・親子兄弟参照・insertBefore・removeChild・属性操作",
     },
     TestPageMeta {
+        file: "js_react_tailwind.html",
+        group: "JavaScript",
+        title: "React 18 & Tailwind CSS",
+        description: "実React production UMDのcreateRoot・useState・クリック更新と生成済みTailwind CSS",
+    },
+    TestPageMeta {
         file: "js_style.html",
         group: "JavaScript",
         title: "CSSStyleDeclaration",

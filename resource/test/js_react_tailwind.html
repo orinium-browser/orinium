@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <title>React & Tailwind CSS Runtime Test</title>
+    <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css"
+    >
+</head>
+<body class="bg-gray-100 text-gray-900">
+    <div id="root" class="p-8">Reactを読み込んでいます…</div>
+
+    <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+    <script>
+        const element = React.createElement;
+
+        function App() {
+            const state = React.useState(0);
+            const count = state[0];
+            const setCount = state[1];
+
+            return element(
+                "main",
+                { className: "max-w-xl mx-auto bg-white rounded-xl shadow-lg p-8 space-y-4" },
+                element(
+                    "h1",
+                    { className: "text-3xl font-bold text-blue-600" },
+                    "React + Tailwind CSS"
+                ),
+                element(
+                    "p",
+                    { className: "text-gray-600" },
+                    "カードの余白・角丸・影・色が表示されればTailwind CSSの読み込み成功です。"
+                ),
+                element(
+                    "button",
+                    {
+                        id: "counter",
+                        className: "px-4 py-2 rounded bg-blue-600 text-white font-semibold",
+                        onClick: function () { setCount(count + 1); }
+                    },
+                    "クリック回数: " + count
+                ),
+                element(
+                    "p",
+                    { id: "status", className: "text-sm text-green-700" },
+                    "React 18 createRootで描画済み"
+                )
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById("root"));
+        root.render(element(App));
+    </script>
+</body>
+</html>
