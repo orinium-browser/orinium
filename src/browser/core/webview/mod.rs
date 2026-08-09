@@ -316,6 +316,7 @@ impl WebView {
             }
         }
 
+        self.run_due_js_timers();
         self.try_apply_layout_results();
         self.drain_write_backs();
 
@@ -584,6 +585,18 @@ impl WebView {
     fn dispatch_dom_content_loaded(&mut self) {
         let needs_redraw = self.js_runtime.as_mut().is_some_and(|runtime| {
             runtime.dispatch_dom_content_loaded();
+            runtime.take_needs_redraw()
+        });
+
+        if needs_redraw {
+            self.update_layout();
+            self.needs_redraw = true;
+        }
+    }
+
+    fn run_due_js_timers(&mut self) {
+        let needs_redraw = self.js_runtime.as_mut().is_some_and(|runtime| {
+            runtime.run_due_timers();
             runtime.take_needs_redraw()
         });
 
@@ -1240,5 +1253,33 @@ mod tests {
             r#"document.getElementById("result").setAttribute("data-async", "yes");"#.to_string(),
         );
         assert_eq!(result.borrow().value.get_attr("data-async"), Some("yes"));
+    }
+
+    #[test]
+    fn zero_delay_timer_runs_from_webview_tick_and_updates_dom() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r##"
+                <div id="result"></div>
+                <script>
+                    setTimeout(function () {
+                        document.querySelector("#result").setAttribute("data-timer", "ran");
+                    }, 0);
+                </script>
+            "##
+            .to_string(),
+            Url::parse("https://example.test/index.html").unwrap(),
+        );
+
+        assert!(webview.tick().is_empty());
+        assert!(webview.tick().is_empty());
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-timer"), Some("ran"));
+        assert!(webview.needs_redraw());
     }
 }
