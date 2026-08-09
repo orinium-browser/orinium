@@ -120,6 +120,12 @@ const TEST_PAGE_CATALOG: &[TestPageMeta] = &[
         title: "DOM Query Selectors",
         description: "document / Element の querySelector と querySelectorAll",
     },
+    TestPageMeta {
+        file: "js_dom_mutation.html",
+        group: "JavaScript",
+        title: "DOM Creation & Mutation",
+        description: "createElement / createTextNode / appendChild / remove / parentNode / children / classList",
+    },
 ];
 
 /// テスト一覧に表示するグループ順。未登録ファイルは "Other" に載せ、
