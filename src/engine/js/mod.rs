@@ -587,6 +587,10 @@ fn make_fetch_response(response: JsFetchResponse) -> Rc<RefCell<JSObject>> {
         "text".to_string(),
         Property::read_only(JSValue::NativeFunction(fetch_response_text)),
     );
+    object.define_property(
+        "json".to_string(),
+        Property::read_only(JSValue::NativeFunction(fetch_response_json)),
+    );
     object.set(
         "__orinium_response_body".to_string(),
         JSValue::String(String::from_utf8_lossy(&response.body).into_owned()),
@@ -603,14 +607,63 @@ fn fetch_response_text(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
             ));
         }
     };
+    settle_promise(vm, "resolve", body)
+}
+
+fn fetch_response_json(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let body = match args.first() {
+        Some(JSValue::Object(response)) => response.borrow().get("__orinium_response_body"),
+        _ => {
+            return Err(JSError::TypeError(
+                "Response.json called on incompatible receiver".to_string(),
+            ));
+        }
+    };
+    let JSValue::String(body) = body else {
+        return settle_promise(
+            vm,
+            "reject",
+            JSValue::String("Response body is unavailable".to_string()),
+        );
+    };
+    match serde_json::from_str::<serde_json::Value>(&body) {
+        Ok(value) => settle_promise(vm, "resolve", json_to_js_value(value)),
+        Err(error) => settle_promise(
+            vm,
+            "reject",
+            JSValue::String(format!("Failed to parse JSON: {error}")),
+        ),
+    }
+}
+
+fn settle_promise(vm: &mut VM, method: &str, value: JSValue) -> JSResult<JSValue> {
     let promise = vm.global_object.borrow().get("Promise");
     let JSValue::Object(constructor) = &promise else {
         return Err(JSError::InternalError(
             "Promise constructor is unavailable".to_string(),
         ));
     };
-    let resolve = constructor.borrow().get("resolve");
-    vm.call(resolve, promise, vec![body])
+    let settle = constructor.borrow().get(method);
+    vm.call(settle, promise, vec![value])
+}
+
+fn json_to_js_value(value: serde_json::Value) -> JSValue {
+    match value {
+        serde_json::Value::Null => JSValue::Null,
+        serde_json::Value::Bool(value) => JSValue::Boolean(value),
+        serde_json::Value::Number(value) => JSValue::Number(value.as_f64().unwrap_or(f64::NAN)),
+        serde_json::Value::String(value) => JSValue::String(value),
+        serde_json::Value::Array(values) => {
+            JSArray::from_vec(values.into_iter().map(json_to_js_value).collect()).to_object()
+        }
+        serde_json::Value::Object(properties) => {
+            let mut object = JSObject::new();
+            for (key, value) in properties {
+                object.set(key, json_to_js_value(value));
+            }
+            JSValue::Object(Rc::new(RefCell::new(object)))
+        }
+    }
 }
 
 // --- document ---
@@ -1871,6 +1924,73 @@ mod tests {
             Some("data:text/plain,hello")
         );
         assert_eq!(result.value.get_attr("data-text"), Some("hello"));
+    }
+
+    #[test]
+    fn response_json_resolves_objects_and_arrays() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            fetch("data:application/json,pending").then(response => response.json()).then(value => {
+                const result = document.querySelector("#result");
+                result.setAttribute("data-name", value.name);
+                result.setAttribute("data-second", value.items[1]);
+                result.setAttribute("data-enabled", value.enabled);
+                result.setAttribute("data-empty", value.empty === null);
+            });
+            "##,
+        );
+
+        let requests = runtime.take_fetch_requests();
+        runtime.resolve_fetch(
+            requests[0].id,
+            JsFetchResponse {
+                url: "data:application/json,pending".to_string(),
+                status: 200,
+                body: br#"{"name":"Orinium","items":[1,2],"enabled":true,"empty":null}"#.to_vec(),
+            },
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-name"), Some("Orinium"));
+        assert_eq!(result.value.get_attr("data-second"), Some("2"));
+        assert_eq!(result.value.get_attr("data-enabled"), Some("true"));
+        assert_eq!(result.value.get_attr("data-empty"), Some("true"));
+    }
+
+    #[test]
+    fn response_json_rejects_invalid_json() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            fetch("data:application/json,invalid")
+                .then(response => response.json())
+                .catch(reason => {
+                    document.querySelector("#result").setAttribute("data-error", reason);
+                });
+            "##,
+        );
+
+        let requests = runtime.take_fetch_requests();
+        runtime.resolve_fetch(
+            requests[0].id,
+            JsFetchResponse {
+                url: "data:application/json,invalid".to_string(),
+                status: 200,
+                body: b"not json".to_vec(),
+            },
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert!(
+            result
+                .borrow()
+                .value
+                .get_attr("data-error")
+                .unwrap()
+                .starts_with("Failed to parse JSON:")
+        );
     }
 
     #[test]

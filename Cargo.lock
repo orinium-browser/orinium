@@ -2957,6 +2957,7 @@ dependencies = [
  "rustls",
  "rustls-native-certs",
  "serde",
+ "serde_json",
  "smol_str 0.3.6",
  "strsim",
  "swash",

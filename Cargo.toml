@@ -41,6 +41,7 @@ resvg = "0.47.0"
 rustls = { version = "0.23.40", default-features = false, features = ["tls12"] }
 rustls-native-certs = "0.8.4"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 smol_str = "0.3.6"
 swash = { version = "0.2.10", features = ["render", "scale"] }
 symphonia = {
