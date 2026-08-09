@@ -1493,6 +1493,26 @@ fn make_element(tag_name: String, attr_id: String, dom_id: u64) -> Rc<RefCell<JS
         "style".to_string(),
         read_only_accessor_property(get_style),
     );
+    obj.define_property(
+        "value".to_string(),
+        accessor_property(get_element_value, set_element_value),
+    );
+    obj.define_property(
+        "checked".to_string(),
+        accessor_property(get_element_checked, set_element_checked),
+    );
+    obj.define_property(
+        "selected".to_string(),
+        accessor_property(get_element_selected, set_element_selected),
+    );
+    obj.define_property(
+        "disabled".to_string(),
+        accessor_property(get_element_disabled, set_element_disabled),
+    );
+    obj.define_property(
+        "multiple".to_string(),
+        accessor_property(get_element_multiple, set_element_multiple),
+    );
     obj.set(
         "getAttribute".to_string(),
         JSValue::NativeFunction(get_attribute),
@@ -2358,6 +2378,94 @@ fn set_inner_text(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     set_text_content(vm, args)
 }
 
+fn reflected_string_property(
+    vm: &mut VM,
+    args: &[JSValue],
+    name: &str,
+) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::String(String::new()));
+    };
+    let value = node
+        .borrow()
+        .value
+        .get_attr(name)
+        .unwrap_or("")
+        .to_string();
+    Ok(JSValue::String(value))
+}
+
+fn set_reflected_string_property(
+    vm: &mut VM,
+    args: &[JSValue],
+    name: &str,
+) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Undefined);
+    };
+    let value = args
+        .get(1)
+        .map(JSValue::to_console_string)
+        .unwrap_or_default();
+    node.borrow_mut().value.set_attr(name, value);
+    mark_dom_dirty(vm);
+    Ok(JSValue::Undefined)
+}
+
+fn reflected_boolean_property(
+    vm: &mut VM,
+    args: &[JSValue],
+    name: &str,
+) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Boolean(false));
+    };
+    Ok(JSValue::Boolean(node.borrow().value.get_attr(name).is_some()))
+}
+
+fn set_reflected_boolean_property(
+    vm: &mut VM,
+    args: &[JSValue],
+    name: &str,
+) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Undefined);
+    };
+    let enabled = args.get(1).map(JSValue::to_boolean).unwrap_or(false);
+    if enabled {
+        node.borrow_mut().value.set_attr(name, String::new());
+        mark_dom_dirty(vm);
+    } else if node.borrow_mut().value.remove_attr(name).is_some() {
+        mark_dom_dirty(vm);
+    }
+    Ok(JSValue::Undefined)
+}
+
+fn get_element_value(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    reflected_string_property(vm, &args, "value")
+}
+
+fn set_element_value(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    set_reflected_string_property(vm, &args, "value")
+}
+
+macro_rules! reflected_boolean_accessors {
+    ($getter:ident, $setter:ident, $name:literal) => {
+        fn $getter(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+            reflected_boolean_property(vm, &args, $name)
+        }
+
+        fn $setter(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+            set_reflected_boolean_property(vm, &args, $name)
+        }
+    };
+}
+
+reflected_boolean_accessors!(get_element_checked, set_element_checked, "checked");
+reflected_boolean_accessors!(get_element_selected, set_element_selected, "selected");
+reflected_boolean_accessors!(get_element_disabled, set_element_disabled, "disabled");
+reflected_boolean_accessors!(get_element_multiple, set_element_multiple, "multiple");
+
 fn get_attribute(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
         return Ok(JSValue::Null);
@@ -2453,6 +2561,38 @@ mod tests {
 
         let node = dom.get_element_by_id("hello").unwrap();
         assert_eq!(node.borrow().value.get_attr("data-run"), Some("1"));
+    }
+
+    #[test]
+    fn form_properties_reflect_to_dom_attributes() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<input id="field"><option id="option"></option><select id="select"></select>"#,
+        );
+        runtime.run_script(
+            r#"
+            const field = document.getElementById("field");
+            field.value = "hello";
+            field.checked = true;
+            field.disabled = true;
+            field.checked = false;
+            const option = document.getElementById("option");
+            option.selected = true;
+            const select = document.getElementById("select");
+            select.multiple = true;
+            "#,
+        );
+
+        let field = dom.get_element_by_id("field").unwrap();
+        let field = field.borrow();
+        assert_eq!(field.value.get_attr("value"), Some("hello"));
+        assert_eq!(field.value.get_attr("checked"), None);
+        assert_eq!(field.value.get_attr("disabled"), Some(""));
+        drop(field);
+        let option = dom.get_element_by_id("option").unwrap();
+        assert_eq!(option.borrow().value.get_attr("selected"), Some(""));
+        let select = dom.get_element_by_id("select").unwrap();
+        assert_eq!(select.borrow().value.get_attr("multiple"), Some(""));
+        assert!(runtime.needs_redraw());
     }
 
     #[test]
