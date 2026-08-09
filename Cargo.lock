@@ -3098,7 +3098,7 @@ dependencies = [
 [[package]]
 name = "pixi_byte"
 version = "0.1.0"
-source = "git+https://github.com/orinium-browser/pixi_byte?rev=0f45ab0b94e74764b26cb883162e8539d75c0ec5#0f45ab0b94e74764b26cb883162e8539d75c0ec5"
+source = "git+https://github.com/orinium-browser/pixi_byte?rev=df4671514f952393624e4acd71fd32c6e4e39c8f#df4671514f952393624e4acd71fd32c6e4e39c8f"
 dependencies = [
  "regex",
  "rustc-hash 2.1.3",
