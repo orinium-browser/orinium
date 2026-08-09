@@ -11,10 +11,7 @@ resolver = "3"
 dhat = "0.3.3"
 
 # orinium_text = { path = "../orinium_text" }
-orinium_text = {
-  git = "https://github.com/orinium-browser/orinium_text",
-  rev = "e647a94996f72caacaaa06322ddb75cde06077f5",
-}
+orinium_text = { git = "https://github.com/orinium-browser/orinium_text" }
 
 ab_glyph = "0.2"
 anyhow = "1.0"
@@ -54,8 +51,7 @@ tokio = { version = "1.52", features = ["fs", "io-std", "net", "rt", "time"] }
 tokio-rustls = "0.26.4"
 ttf-parser = "0.25.1"
 ui_layout = {
-  git = "https://github.com/tas0dev/ui_layout-rs",
-  rev = "182d1030fc9b5b9fe9c1de3c18dea568b08aba30"
+  git = "https://github.com/098orin/ui_layout-rs",
 }
 url = "2.5"
 wgpu = "30.0.0"
