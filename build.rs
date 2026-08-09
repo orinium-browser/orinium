@@ -162,6 +162,12 @@ const TEST_PAGE_CATALOG: &[TestPageMeta] = &[
         title: "Headers",
         description: "Headersの取得・変更・コピー、大文字小文字の正規化、fetchとResponse.headers",
     },
+    TestPageMeta {
+        file: "js_request.html",
+        group: "JavaScript",
+        title: "Request",
+        description: "RequestのURL・method・headers・コピー・options上書きとfetchへの受け渡し",
+    },
 ];
 
 /// テスト一覧に表示するグループ順。未登録ファイルは "Other" に載せ、
