@@ -132,6 +132,12 @@ const TEST_PAGE_CATALOG: &[TestPageMeta] = &[
         title: "Timers",
         description: "setTimeout / clearTimeout / setInterval / clearInterval",
     },
+    TestPageMeta {
+        file: "js_microtasks.html",
+        group: "JavaScript",
+        title: "Microtasks",
+        description: "queueMicrotaskのFIFO順序とscript / timer / event後のcheckpoint",
+    },
 ];
 
 /// テスト一覧に表示するグループ順。未登録ファイルは "Other" に載せ、
