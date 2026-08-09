@@ -33,6 +33,9 @@
     <h2>Response.json()</h2>
     <div id="json-result" class="result">waiting</div>
 
+    <h2>Body consumption</h2>
+    <div id="body-used-result" class="result">waiting</div>
+
     <h2>Network rejection</h2>
     <div id="error-result" class="result">waiting</div>
 
@@ -40,17 +43,23 @@
         const metadataResult = document.getElementById("metadata-result");
         const textResult = document.getElementById("text-result");
         const jsonResult = document.getElementById("json-result");
+        const bodyUsedResult = document.getElementById("body-used-result");
         const errorResult = document.getElementById("error-result");
 
         fetch("data:text/plain,hello%20from%20fetch").then(response => {
             metadataResult.textContent =
                 "ok=" + response.ok +
                 ", status=" + response.status +
+                ", statusText=" + response.statusText +
+                ", redirected=" + response.redirected +
                 ", url=" + response.url;
             metadataResult.setAttribute("data-complete", "true");
-            return response.text();
+            textResult.textContent = "bodyUsed before=" + response.bodyUsed;
+            const body = response.text();
+            textResult.textContent = textResult.textContent + ", after=" + response.bodyUsed;
+            return body;
         }).then(text => {
-            textResult.textContent = text;
+            textResult.textContent = textResult.textContent + ", text=" + text;
             textResult.setAttribute("data-complete", "true");
         });
 
@@ -59,6 +68,13 @@
             .then(value => {
                 jsonResult.textContent = value.name + ": " + value.items[0] + ", " + value.items[1];
                 jsonResult.setAttribute("data-complete", "true");
+            });
+
+        fetch("data:text/plain,read%20once")
+            .then(response => response.text().then(() => response.text()))
+            .catch(reason => {
+                bodyUsedResult.textContent = "caught: " + reason;
+                bodyUsedResult.setAttribute("data-complete", "true");
             });
 
         fetch("data:text/plain;base64,%%%").catch(reason => {
