@@ -15,6 +15,15 @@ use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
+
+struct JsTimer {
+    id: u64,
+    callback: JSValue,
+    arguments: Vec<JSValue>,
+    deadline: Instant,
+    interval: Option<Duration>,
+}
 
 /// State shared between the JS natives and the browser side.
 ///
@@ -35,6 +44,8 @@ pub struct JsHost {
     element_event_listeners: HashMap<u64, HashMap<String, Vec<JSValue>>>,
     /// Keeps JS-created or removed nodes alive while their wrappers exist.
     detached_nodes: HashMap<u64, NodeRef<HtmlNodeType>>,
+    timers: Vec<JsTimer>,
+    next_timer_id: u64,
     dom_content_loaded_fired: bool,
     next_id: u64,
     needs_redraw: Rc<Cell<bool>>,
@@ -71,6 +82,8 @@ impl JsRuntime {
             document_event_listeners: HashMap::new(),
             element_event_listeners: HashMap::new(),
             detached_nodes: HashMap::new(),
+            timers: Vec::new(),
+            next_timer_id: 0,
             dom_content_loaded_fired: false,
             next_id: 0,
             needs_redraw: Rc::clone(&needs_redraw),
@@ -81,6 +94,7 @@ impl JsRuntime {
 
         install_console(&mut engine);
         install_document(&mut engine);
+        install_timers(&mut engine);
 
         Self {
             engine,
@@ -133,6 +147,44 @@ impl JsRuntime {
             }
         }
         true
+    }
+
+    /// Runs timer callbacks whose deadlines have elapsed.
+    ///
+    /// Returns whether at least one callback was invoked. Repeating timers are
+    /// rescheduled before invocation so they can cancel themselves.
+    pub fn run_due_timers(&mut self) -> bool {
+        let invocations = with_host_mut(self.engine.vm(), |host| {
+            let now = Instant::now();
+            let mut invocations = Vec::new();
+            let mut index = 0;
+            while index < host.timers.len() {
+                if host.timers[index].deadline > now {
+                    index += 1;
+                    continue;
+                }
+
+                let callback = host.timers[index].callback.clone();
+                let arguments = host.timers[index].arguments.clone();
+                if let Some(interval) = host.timers[index].interval {
+                    host.timers[index].deadline = now + interval;
+                    index += 1;
+                } else {
+                    host.timers.remove(index);
+                }
+                invocations.push((callback, arguments));
+            }
+            invocations
+        })
+        .unwrap_or_default();
+
+        let ran_callback = !invocations.is_empty();
+        for (callback, arguments) in invocations {
+            if let Err(err) = self.engine.call(callback, JSValue::Undefined, arguments) {
+                log::info!("JS error in timer callback: {}", err);
+            }
+        }
+        ran_callback
     }
 
     /// Returns whether a script mutated the DOM and a relayout is needed.
@@ -276,6 +328,77 @@ fn console_warn(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 
 fn console_error(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     console_message(vm, args, log::Level::Error)
+}
+
+// --- timers ---
+
+fn install_timers(engine: &mut pixi_byte::JSEngine) {
+    let mut global = engine.global_mut().borrow_mut();
+    global.set(
+        "setTimeout".to_string(),
+        JSValue::NativeFunction(set_timeout),
+    );
+    global.set(
+        "clearTimeout".to_string(),
+        JSValue::NativeFunction(clear_timer),
+    );
+    global.set(
+        "setInterval".to_string(),
+        JSValue::NativeFunction(set_interval),
+    );
+    global.set(
+        "clearInterval".to_string(),
+        JSValue::NativeFunction(clear_timer),
+    );
+}
+
+fn set_timeout(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    schedule_timer(vm, args, false)
+}
+
+fn set_interval(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    schedule_timer(vm, args, true)
+}
+
+fn schedule_timer(vm: &mut VM, args: Vec<JSValue>, repeating: bool) -> JSResult<JSValue> {
+    let Some(callback) = args.get(1).filter(|value| is_callable(value)).cloned() else {
+        return Ok(JSValue::Number(0.0));
+    };
+    let delay = timer_delay(args.get(2));
+    let arguments = args.into_iter().skip(3).collect();
+    let Some(id) = with_host_mut(vm, |host| {
+        host.next_timer_id += 1;
+        let id = host.next_timer_id;
+        host.timers.push(JsTimer {
+            id,
+            callback,
+            arguments,
+            deadline: Instant::now() + delay,
+            interval: repeating.then_some(delay),
+        });
+        id
+    }) else {
+        return Ok(JSValue::Number(0.0));
+    };
+    Ok(JSValue::Number(id as f64))
+}
+
+fn timer_delay(value: Option<&JSValue>) -> Duration {
+    let milliseconds = value.map(JSValue::to_number).unwrap_or(0.0);
+    if !milliseconds.is_finite() || milliseconds <= 0.0 {
+        Duration::ZERO
+    } else {
+        let milliseconds = milliseconds.min(i32::MAX as f64);
+        Duration::from_secs_f64(milliseconds / 1000.0)
+    }
+}
+
+fn clear_timer(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let id = args.get(1).map(JSValue::to_number).unwrap_or(0.0) as u64;
+    let _ = with_host_mut(vm, |host| {
+        host.timers.retain(|timer| timer.id != id);
+    });
+    Ok(JSValue::Undefined)
 }
 
 // --- document ---
@@ -1260,5 +1383,45 @@ mod tests {
         assert_eq!(target.value.get_attr("data-forced-off"), Some("false"));
         assert_eq!(target.value.get_attr("data-forced-on"), Some("true"));
         assert!(runtime.needs_redraw());
+    }
+
+    #[test]
+    fn timeout_runs_once_with_additional_arguments_and_can_be_cancelled() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            setTimeout(function (value) {
+                document.querySelector("#result").setAttribute("data-value", value);
+            }, 0, "done");
+            const cancelled = setTimeout(function () {
+                document.querySelector("#result").setAttribute("data-cancelled", "no");
+            }, 0);
+            clearTimeout(cancelled);
+            "##,
+        );
+
+        assert!(runtime.run_due_timers());
+        assert!(!runtime.run_due_timers());
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-value"), Some("done"));
+        assert_eq!(result.borrow().value.get_attr("data-cancelled"), None);
+    }
+
+    #[test]
+    fn interval_can_clear_itself() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const intervalId = setInterval(function () {
+                document.querySelector("#result").setAttribute("data-ran", "once");
+                clearInterval(intervalId);
+            }, 0);
+            "##,
+        );
+
+        assert!(runtime.run_due_timers());
+        assert!(!runtime.run_due_timers());
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-ran"), Some("once"));
     }
 }
