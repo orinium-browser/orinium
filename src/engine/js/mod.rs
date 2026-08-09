@@ -7,6 +7,7 @@
 
 use crate::engine::html::{DomTree, HtmlNodeType};
 use crate::engine::tree::NodeRef;
+use pixi_byte::value::JSArray;
 use pixi_byte::value::jsobject::{JSObject, Property};
 use pixi_byte::vm::VM;
 use pixi_byte::{JSResult, JSValue};
@@ -285,6 +286,14 @@ fn install_document(engine: &mut pixi_byte::JSEngine) {
             JSValue::NativeFunction(get_element_by_id),
         );
         document.set(
+            "querySelector".to_string(),
+            JSValue::NativeFunction(document_query_selector),
+        );
+        document.set(
+            "querySelectorAll".to_string(),
+            JSValue::NativeFunction(document_query_selector_all),
+        );
+        document.set(
             "addEventListener".to_string(),
             JSValue::NativeFunction(add_document_event_listener),
         );
@@ -344,37 +353,50 @@ fn get_element_by_id(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         return Ok(JSValue::Null);
     };
 
-    // Look up the node and capture its static attributes first.
-    let Some((node, tag_name, attr_id)) = with_host(vm, |host| {
-        host.dom.get_element_by_id(id).map(|node| {
-            let (tag_name, attr_id) = {
-                let n = node.borrow();
-                (
-                    n.value.tag_name().unwrap_or("").to_string(),
-                    n.value.get_attr("id").unwrap_or("").to_string(),
-                )
-            };
-            (node, tag_name, attr_id)
-        })
-    })
-    .flatten() else {
+    let Some(node) = with_host(vm, |host| host.dom.get_element_by_id(id)).flatten() else {
         return Ok(JSValue::Null);
+    };
+    Ok(expose_element(vm, node).unwrap_or(JSValue::Null))
+}
+
+fn document_query_selector(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(JSValue::String(selector)) = args.get(1) else {
+        return Ok(JSValue::Null);
+    };
+    let Some(node) = with_host(vm, |host| host.dom.query_selector(selector)).flatten() else {
+        return Ok(JSValue::Null);
+    };
+    Ok(expose_element(vm, node).unwrap_or(JSValue::Null))
+}
+
+fn document_query_selector_all(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(JSValue::String(selector)) = args.get(1) else {
+        return Ok(JSArray::new().to_object());
+    };
+    let nodes = with_host(vm, |host| host.dom.query_selector_all(selector)).unwrap_or_default();
+    Ok(expose_element_list(vm, nodes))
+}
+
+fn expose_element(vm: &mut VM, node: NodeRef<HtmlNodeType>) -> Option<JSValue> {
+    let (tag_name, attr_id) = {
+        let node = node.borrow();
+        (
+            node.value.tag_name()?.to_string(),
+            node.value.get_attr("id").unwrap_or("").to_string(),
+        )
     };
 
     // Register the live node so later property access can resolve it. Reuse
     // the existing id and element object when this node was already exposed.
-    let Some(dom_id) = with_host_mut(vm, |host| {
+    let dom_id = with_host_mut(vm, |host| {
         if let Some(dom_id) = host.dom_id_for_node(&node) {
-            return Some(dom_id);
+            return dom_id;
         }
         host.next_id += 1;
         let dom_id = host.next_id;
         host.refs.insert(dom_id, Rc::downgrade(&node));
-        Some(dom_id)
-    })
-    .flatten() else {
-        return Ok(JSValue::Null);
-    };
+        dom_id
+    })?;
 
     let obj = with_host_mut(vm, |host| {
         if let Some(existing) = host.objects.get(&dom_id) {
@@ -383,10 +405,17 @@ fn get_element_by_id(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         let obj = make_element(tag_name, attr_id, dom_id);
         host.objects.insert(dom_id, Rc::clone(&obj));
         obj
-    })
-    .expect("host must be present");
+    })?;
 
-    Ok(JSValue::Object(obj))
+    Some(JSValue::Object(obj))
+}
+
+fn expose_element_list(vm: &mut VM, nodes: Vec<NodeRef<HtmlNodeType>>) -> JSValue {
+    let values = nodes
+        .into_iter()
+        .filter_map(|node| expose_element(vm, node))
+        .collect();
+    JSArray::from_vec(values).to_object()
 }
 
 // --- Element ---
@@ -432,7 +461,39 @@ fn make_element(tag_name: String, attr_id: String, dom_id: u64) -> Rc<RefCell<JS
         "addEventListener".to_string(),
         JSValue::NativeFunction(add_element_event_listener),
     );
+    obj.set(
+        "querySelector".to_string(),
+        JSValue::NativeFunction(element_query_selector),
+    );
+    obj.set(
+        "querySelectorAll".to_string(),
+        JSValue::NativeFunction(element_query_selector_all),
+    );
     Rc::new(RefCell::new(obj))
+}
+
+fn element_query_selector(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(scope) = element_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Null);
+    };
+    let Some(JSValue::String(selector)) = args.get(1) else {
+        return Ok(JSValue::Null);
+    };
+    let Some(node) = DomTree::query_selector_within(&scope, selector) else {
+        return Ok(JSValue::Null);
+    };
+    Ok(expose_element(vm, node).unwrap_or(JSValue::Null))
+}
+
+fn element_query_selector_all(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(scope) = element_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSArray::new().to_object());
+    };
+    let Some(JSValue::String(selector)) = args.get(1) else {
+        return Ok(JSArray::new().to_object());
+    };
+    let nodes = DomTree::query_selector_all_within(&scope, selector);
+    Ok(expose_element_list(vm, nodes))
 }
 
 fn add_element_event_listener(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -739,5 +800,61 @@ mod tests {
         assert!(!runtime.dispatch_dom_content_loaded());
         let result = dom.get_element_by_id("result").unwrap();
         assert_eq!(result.borrow().value.get_attr("data-count"), Some("1"));
+    }
+
+    #[test]
+    fn document_query_selector_and_query_selector_all_expose_elements() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"
+            <div id="result"></div>
+            <main><p class="item">first</p><p class="item featured">second</p></main>
+            "#,
+        );
+        runtime.run_script(
+            r#"
+            const featured = document.querySelector("main > p.featured");
+            featured.setAttribute("data-selected", "yes");
+            const items = document.querySelectorAll("p.item");
+            items[0].setAttribute("data-first", "yes");
+            document.getElementById("result").setAttribute("data-count", items.length);
+            "#,
+        );
+
+        let items = dom.get_elements_by_class_name("item");
+        assert_eq!(items[0].borrow().value.get_attr("data-first"), Some("yes"));
+        assert_eq!(
+            items[1].borrow().value.get_attr("data-selected"),
+            Some("yes")
+        );
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-count"), Some("2"));
+    }
+
+    #[test]
+    fn element_query_selectors_are_scoped_to_descendants() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"
+            <section id="scope"><span class="item">one</span><span class="item">two</span></section>
+            <span class="item" id="outside">outside</span>
+            "#,
+        );
+        runtime.run_script(
+            r##"
+            const scope = document.querySelector("#scope");
+            scope.querySelector(".item").setAttribute("data-first", "yes");
+            const items = scope.querySelectorAll(".item");
+            items[1].setAttribute("data-second", "yes");
+            scope.setAttribute("data-count", items.length);
+            "##,
+        );
+
+        let scope = dom.get_element_by_id("scope").unwrap();
+        assert_eq!(scope.borrow().value.get_attr("data-count"), Some("2"));
+        let items = DomTree::query_selector_all_within(&scope, ".item");
+        assert_eq!(items[0].borrow().value.get_attr("data-first"), Some("yes"));
+        assert_eq!(items[1].borrow().value.get_attr("data-second"), Some("yes"));
+        let outside = dom.get_element_by_id("outside").unwrap();
+        assert_eq!(outside.borrow().value.get_attr("data-first"), None);
+        assert_eq!(outside.borrow().value.get_attr("data-second"), None);
     }
 }
