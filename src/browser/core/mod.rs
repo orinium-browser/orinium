@@ -37,7 +37,6 @@
 
 mod app;
 mod command;
-pub mod renderer;
 pub mod resource_loader;
 pub mod tab;
 pub mod ui;
@@ -45,6 +44,7 @@ pub mod webview;
 
 pub use app::BrowserApp;
 pub use command::BrowserCommand;
-pub use renderer::BrowserRenderer;
 pub use tab::Tab;
-pub use ui::{BasicChrome, BrowserUi, Chrome, ChromeAction, ChromeEventResult, RenderState};
+pub use ui::{
+    BasicChrome, BrowserRenderer, BrowserUi, Chrome, ChromeAction, ChromeEventResult, RenderState,
+};

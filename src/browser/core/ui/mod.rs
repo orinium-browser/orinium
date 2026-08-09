@@ -1,17 +1,25 @@
 //! Browser UI components and window render state.
 
+// Sub-modules
+mod basic_chrome;
+mod chrome;
+mod renderer;
+
+pub use basic_chrome::BasicChrome;
+pub use chrome::{Chrome, ChromeAction, ChromeEventResult};
+pub use renderer::BrowserRenderer;
+
 use std::sync::Arc;
 
 use url::Url;
 use winit::event::{ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 
 use crate::browser::Tab;
-use crate::browser::core::renderer::BrowserRenderer;
 use crate::browser::core::resource_loader::{BrowserNetworkError, BrowserResponse};
 use crate::browser::core::tab::{FetchKind, TabTask};
 use crate::engine::layouter;
 use crate::engine::layouter::types::ColorScheme;
-use crate::engine::renderer_model::DrawCommand;
+use crate::engine::renderer_model::{DrawCommand, Rect};
 use crate::engine::ui::PointerEvent;
 use crate::engine::ui::custom_node::CustomNode;
 use crate::engine::ui::input_text_types::{InputTextEvent, InputTextKey};
@@ -443,6 +451,7 @@ impl BrowserUi {
 
         let tab_id = self.active_tab;
         let width = self.renderer.render_state.viewport().0;
+        let height = self.renderer.render_state.viewport().1;
 
         // Click inside the chrome.
         let window_event = match state {
@@ -481,6 +490,15 @@ impl BrowserUi {
                         tab.navigate(url);
                     }
                 }
+                ChromeAction::DumpLayoutNode => {
+                    let node_opt = self
+                        .tabs
+                        .get(self.active_tab)
+                        .and_then(|t| t.layout_and_info().unzip().0);
+                    if let Some(node) = node_opt {
+                        self.renderer.chrome.debug_set_layout_node(node);
+                    }
+                }
                 ChromeAction::Repaint | ChromeAction::None => {}
             }
 
@@ -495,8 +513,9 @@ impl BrowserUi {
         }
 
         // Content area: dispatch to the active tab in page coordinates.
-        let chrome_height = self.renderer.chrome.chrome_height(width);
-        let (px, py) = (px, py - chrome_height);
+        let Rect { x: dx, y: dy, .. } = self.renderer.chrome.content_rect(width, height);
+
+        let (px, py) = (px - dx, py - dy);
 
         if let Some(tab) = self.tabs.get_mut(tab_id) {
             // Hit-test the content area, dispatch the pointer event to custom
@@ -553,20 +572,21 @@ impl BrowserUi {
         let tab_id = self.active_tab;
         let sf = self.renderer.render_state.scale_factor;
         let (px, py) = ((x / sf) as f32, (y / sf) as f32);
-        let width = self.renderer.render_state.viewport().0;
+        let v_width = self.renderer.render_state.viewport().0;
+        let v_height = self.renderer.render_state.viewport().1;
 
         // The chrome receives every move so it can track its own hover state.
         let result = self
             .renderer
             .chrome
-            .pointer_event(width, PointerEvent::Move { x: px, y: py });
+            .pointer_event(v_width, PointerEvent::Move { x: px, y: py });
         if result.consumed {
             return self.renderer.chrome.needs_repaint();
         }
 
         // Content area: dispatch to the page in page coordinates.
-        let chrome_height = self.renderer.chrome.chrome_height(width);
-        let (px, py) = (px, py - chrome_height);
+        let viewport = self.renderer.chrome.content_rect(v_width, v_height);
+        let Rect { x: px, y: py, .. } = viewport;
 
         let Some(tab) = self.tabs.get_mut(tab_id) else {
             return false;
@@ -592,11 +612,7 @@ impl BrowserUi {
             MouseScrollDelta::PixelDelta(pos) => (-pos.x as f32, -pos.y as f32),
         };
 
-        let (width, window_height, sf) = (
-            self.renderer.render_state.viewport().0,
-            self.renderer.render_state.window_size.1 as f32,
-            self.renderer.render_state.scale_factor as f32,
-        );
+        let (width, height) = self.renderer.render_state.viewport();
         let (mouse_x, mouse_y) = (
             self.input.mouse_position.0 as f32,
             self.input.mouse_position.1 as f32,
@@ -618,8 +634,11 @@ impl BrowserUi {
             {
                 // The page is laid out below the chrome, so the visible height
                 // is the window height minus the chrome height.
-                let visible_height =
-                    (window_height / sf - self.renderer.chrome.chrome_height(width)).max(0.0);
+                let Rect {
+                    width: _visible_width,
+                    height: visible_height,
+                    ..
+                } = self.renderer.chrome.content_rect(width, height);
                 *scroll_offset_y = (*scroll_offset_y + scroll_y).clamp(
                     0.0,
                     (layout
@@ -634,13 +653,6 @@ impl BrowserUi {
         }
     }
 }
-
-// Sub-modules
-mod basic_chrome;
-mod chrome;
-
-pub use basic_chrome::BasicChrome;
-pub use chrome::{Chrome, ChromeAction, ChromeEventResult};
 
 /// Handles a mouse click in the given tab at the specified coordinates.
 fn handle_mouse_click(tab: &mut Tab, x: f32, y: f32) -> bool {

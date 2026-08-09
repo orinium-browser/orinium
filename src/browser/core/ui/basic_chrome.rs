@@ -48,6 +48,8 @@ enum ChromeHit {
     Back,
     /// Reload current page button.
     Reload,
+    /// Debug tool button (dumps the current layout result).
+    Debug,
     /// URL entry bar.
     UrlBar,
 }
@@ -61,6 +63,8 @@ struct ToolbarRects {
     back: Rect,
     /// Reload button.
     reload: Rect,
+    /// Debug tool button.
+    debug: Rect,
     /// URL bar.
     url_bar: Rect,
 }
@@ -79,6 +83,8 @@ struct BrowserToolbar {
     back_button: ButtonComponent,
     /// Reload current page button.
     reload_button: ButtonComponent,
+    /// Show the current LayoutNode
+    debug_button: ButtonComponent,
     /// URL entry bar.
     url_bar: InputTextComponent,
 }
@@ -100,10 +106,17 @@ impl BrowserToolbar {
             LABEL_COLOR,
             Arc::clone(&measurer),
         );
+        let debug_button = ButtonComponent::new(
+            "Debug",
+            BUTTON_BACKGROUND,
+            LABEL_COLOR,
+            Arc::clone(&measurer),
+        );
         let url_bar = InputTextComponent::new("", "Enter URL", measurer);
         Self {
             back_button,
             reload_button,
+            debug_button,
             url_bar,
         }
     }
@@ -112,6 +125,7 @@ impl BrowserToolbar {
     fn rects(&self, width: f32) -> ToolbarRects {
         let back_size = self.back_button.intrinsic_size();
         let reload_size = self.reload_button.intrinsic_size();
+        let debug_size = self.debug_button.intrinsic_size();
         let url_size = self.url_bar.intrinsic_size();
 
         let row_height = [back_size.height, reload_size.height, url_size.height]
@@ -132,7 +146,13 @@ impl BrowserToolbar {
             reload_size.width,
             reload_size.height,
         );
-        let url_x = (reload.x + reload.width + CHROME_GAP).min(width - CHROME_PADDING);
+        let debug = Rect::new(
+            reload.x + reload.width + CHROME_GAP,
+            center_y(debug_size.height),
+            debug_size.width,
+            debug_size.height,
+        );
+        let url_x = (debug.x + debug.width + CHROME_GAP).min(width - CHROME_PADDING);
         let url_width = (width - CHROME_PADDING - url_x).max(0.0);
         let url_bar = Rect::new(url_x, center_y(url_size.height), url_width, url_size.height);
 
@@ -140,6 +160,7 @@ impl BrowserToolbar {
             toolbar: Rect::new(0.0, 0.0, width, row_height + CHROME_PADDING * 2.0),
             back,
             reload,
+            debug,
             url_bar,
         }
     }
@@ -152,6 +173,8 @@ impl BrowserToolbar {
             Some(ChromeHit::Back)
         } else if rects.reload.contains(x, y) {
             Some(ChromeHit::Reload)
+        } else if rects.debug.contains(x, y) {
+            Some(ChromeHit::Debug)
         } else if rects.url_bar.contains(x, y) {
             Some(ChromeHit::UrlBar)
         } else {
@@ -168,6 +191,10 @@ pub struct BasicChrome {
     /// URL currently shown in the address bar, used to avoid overwriting text
     /// the user is editing.
     last_url: Option<String>,
+    /// Wheather
+    is_debug: bool,
+    /// String content from LayoutNode.
+    debug_layout_node: String,
     /// Toolbar element currently under the pointer, if any.
     hovered: Option<ChromeHit>,
 }
@@ -178,6 +205,8 @@ impl BasicChrome {
         Self {
             toolbar: BrowserToolbar::new(),
             last_url: None,
+            is_debug: false,
+            debug_layout_node: String::new(),
             hovered: None,
         }
     }
@@ -189,6 +218,7 @@ impl BasicChrome {
         let node: &dyn CustomNode = match hit {
             ChromeHit::Back => &self.toolbar.back_button,
             ChromeHit::Reload => &self.toolbar.reload_button,
+            ChromeHit::Debug => &self.toolbar.debug_button,
             ChromeHit::UrlBar => &self.toolbar.url_bar,
         };
         node.on_pointer_event(event)
@@ -209,11 +239,16 @@ impl Default for BasicChrome {
 }
 
 impl Chrome for BasicChrome {
-    fn chrome_height(&self, width: f32) -> f32 {
-        self.toolbar.rects(width).height()
+    fn content_rect(&self, width: f32, height: f32) -> Rect {
+        let toolbar_height = self.toolbar.rects(width).height();
+        if self.is_debug {
+            Rect::new(0.0, toolbar_height, width / 2.0, height - toolbar_height)
+        } else {
+            Rect::new(0.0, toolbar_height, width, height - toolbar_height)
+        }
     }
 
-    fn draw(&self, cmd_buf: &mut Vec<DrawCommand>, width: f32) {
+    fn draw(&self, cmd_buf: &mut Vec<DrawCommand>, width: f32, height: f32) {
         let rects = self.toolbar.rects(width);
 
         cmd_buf.push(DrawCommand::Fill {
@@ -233,9 +268,10 @@ impl Chrome for BasicChrome {
         let text_style = TextStyle::default();
         let style = Style::default();
 
-        let components: [(&dyn CustomNode, Rect); 3] = [
+        let components: [(&dyn CustomNode, Rect); 4] = [
             (&self.toolbar.back_button, rects.back),
             (&self.toolbar.reload_button, rects.reload),
+            (&self.toolbar.debug_button, rects.debug),
             (&self.toolbar.url_bar, rects.url_bar),
         ];
 
@@ -263,6 +299,36 @@ impl Chrome for BasicChrome {
                 },
             );
             cmd_buf.push(DrawCommand::PopTransform);
+        }
+
+        if self.is_debug {
+            cmd_buf.push(DrawCommand::PushTransform {
+                transform: AffineTransform::translate(width / 2.0, rects.height()),
+            });
+
+            let rect_path = rect_path(0.0, 0.0, width / 2.0, height - rects.height());
+            cmd_buf.push(DrawCommand::Fill {
+                path: rect_path.clone(),
+                rule: FillRule::NonZero,
+                paint: Paint {
+                    brush: Brush::Solid(Color(200, 200, 200, 200)),
+                    opacity: 1.0,
+                },
+            });
+            cmd_buf.push(DrawCommand::PushClip {
+                path: rect_path,
+                rule: FillRule::NonZero,
+            });
+
+            cmd_buf.push(DrawCommand::DrawText {
+                x: 0.0,
+                y: 0.0,
+                text: self.debug_layout_node.clone().into(),
+                style: text_style,
+            });
+
+            cmd_buf.push(DrawCommand::PopTransform);
+            cmd_buf.push(DrawCommand::PopClip);
         }
     }
 
@@ -308,6 +374,14 @@ impl Chrome for BasicChrome {
             }
             ChromeHit::Back if clicked => ChromeAction::Back,
             ChromeHit::Reload if clicked => ChromeAction::Reload,
+            ChromeHit::Debug if clicked => {
+                if self.is_debug {
+                    self.is_debug = false
+                } else {
+                    self.is_debug = true
+                }
+                ChromeAction::DumpLayoutNode
+            }
             _ => ChromeAction::None,
         };
 
@@ -376,6 +450,10 @@ impl Chrome for BasicChrome {
         }
     }
 
+    fn debug_set_layout_node(&mut self, node: &ui_layout::LayoutNode) {
+        self.debug_layout_node = format!("{:#}", node);
+    }
+
     fn blur(&mut self) {
         self.toolbar.url_bar.set_focused(false);
     }
@@ -416,13 +494,6 @@ mod tests {
         assert!(rects.toolbar.height > 0.0);
         // URL bar must not extend past the window edge.
         assert!(rects.url_bar.x + rects.url_bar.width <= 120.0 + 0.001);
-    }
-
-    #[test]
-    fn chrome_height_matches_toolbar() {
-        let chrome = BasicChrome::new();
-        let rects = chrome.toolbar.rects(800.0);
-        assert_eq!(chrome.chrome_height(800.0), rects.height());
     }
 
     #[test]
@@ -517,7 +588,7 @@ mod tests {
     fn draw_emits_background_and_components() {
         let chrome = BasicChrome::new();
         let mut commands = Vec::new();
-        chrome.draw(&mut commands, 800.0);
+        chrome.draw(&mut commands, 800.0, 600.0);
 
         // Toolbar background fill.
         assert!(matches!(commands[0], DrawCommand::Fill { .. }));

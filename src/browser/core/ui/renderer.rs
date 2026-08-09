@@ -1,12 +1,13 @@
 //! ブラウザの描画機能。タブと chrome の描画リクエストを DrawCommand に変換し、
 //! プラットフォームの GPU レンダラへ送る。
 
-use crate::engine::renderer_model;
-use crate::engine::renderer_model::{AffineTransform, DrawCommand, FillRule, rect_path};
+use crate::engine::renderer_model::{
+    self, AffineTransform, DrawCommand, FillRule, Rect, rect_path,
+};
 use crate::platform::renderer::gpu::GpuRenderer;
 
-use super::tab::Tab;
-use super::ui::{BasicChrome, Chrome, RenderState};
+use super::{BasicChrome, Chrome, RenderState};
+use crate::browser::core::tab::Tab;
 
 /// BrowserRenderer は実際の描画を担当する。
 ///
@@ -63,8 +64,12 @@ impl BrowserRenderer {
     /// DrawCommand を再生成する。
     pub fn rebuild(&mut self, tabs: &mut [Tab], active_tab: usize) {
         let (width, height) = self.render_state.viewport();
-        let chrome_height = self.chrome.chrome_height(width);
-        let content_height = (height - chrome_height).max(0.0);
+        let Rect {
+            x,
+            y,
+            width: content_width,
+            height: content_height,
+        } = self.chrome.content_rect(width, height);
 
         // Reuse allocation
         let mut draw_commands = std::mem::take(&mut self.render_state.draw_commands);
@@ -72,15 +77,15 @@ impl BrowserRenderer {
 
         // Page area: below the chrome, clipped so page content never overlaps it.
         draw_commands.push(DrawCommand::PushClip {
-            path: rect_path(0.0, chrome_height, width, content_height),
+            path: rect_path(x, y, content_width, content_height),
             rule: FillRule::NonZero,
         });
         draw_commands.push(DrawCommand::PushTransform {
-            transform: AffineTransform::translate(0.0, chrome_height),
+            transform: AffineTransform::translate(x, y),
         });
 
         let title = if let Some(tab) = tabs.get_mut(active_tab) {
-            tab.relayout((width, content_height));
+            tab.relayout((content_width, content_height));
 
             // Keep the chrome in sync with the active tab.
             let url = tab.document_url().map(|url| url.to_string());
@@ -91,7 +96,7 @@ impl BrowserRenderer {
                     &mut draw_commands,
                     layout,
                     info,
-                    (width, content_height),
+                    (content_width, content_height),
                 );
                 tab.clear_redraw_flag();
                 tab.title()
@@ -107,7 +112,7 @@ impl BrowserRenderer {
         draw_commands.push(DrawCommand::PopClip);
 
         // Chrome drawn on top of the page area.
-        self.chrome.draw(&mut draw_commands, width);
+        self.chrome.draw(&mut draw_commands, width, height);
 
         // Return reused buffer
         self.render_state.draw_commands = draw_commands;

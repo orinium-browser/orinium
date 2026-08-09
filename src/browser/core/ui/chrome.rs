@@ -8,10 +8,11 @@
 //!
 //! All coordinates are logical pixels in window space.
 
+use ui_layout::LayoutNode;
 use url::Url;
 use winit::event::{Ime, KeyEvent};
 
-use crate::engine::renderer_model::DrawCommand;
+use crate::engine::renderer_model::{DrawCommand, Rect};
 use crate::engine::ui::PointerEvent;
 
 /// An action the chrome wants the browser core to perform on the active tab or
@@ -28,6 +29,9 @@ pub enum ChromeAction {
     Back,
     /// Reload the active tab.
     Reload,
+    /// Dump the active tab's layout result to the console (like
+    /// `dump_layoutnode`).
+    DumpLayoutNode,
     /// The chrome acquired a text field and wants OS-level IME enabled.
     EnableIme,
 }
@@ -58,14 +62,14 @@ impl ChromeEventResult {
 /// in window coordinates; the chrome answers whether it consumed them and which
 /// [`ChromeAction`] they produced.
 pub trait Chrome: std::fmt::Debug {
-    /// Height of the chrome strip occupying the top of the window.
+    /// Rect of the content (web view).
     ///
-    /// A chrome that covers the whole window returns `0.0`; the page then fills
-    /// the entire window behind the chrome.
-    fn chrome_height(&self, width: f32) -> f32;
+    /// # Return:
+    /// - (width, height)
+    fn content_rect(&self, width: f32, height: f32) -> Rect;
 
     /// Draws the chrome into `cmd_buf` in window coordinates.
-    fn draw(&self, cmd_buf: &mut Vec<DrawCommand>, width: f32);
+    fn draw(&self, cmd_buf: &mut Vec<DrawCommand>, width: f32, height: f32);
 
     /// Reflects the active tab's URL, if the chrome shows one.
     fn sync_url(&mut self, url: Option<&str>);
@@ -86,6 +90,8 @@ pub trait Chrome: std::fmt::Debug {
 
     /// Dispatches an IME event while the chrome owns text input.
     fn ime_event(&mut self, event: &Ime) -> ChromeAction;
+
+    fn debug_set_layout_node(&mut self, node: &LayoutNode);
 
     /// Drops any text-input focus held by the chrome (e.g. the user clicked the
     /// page).
