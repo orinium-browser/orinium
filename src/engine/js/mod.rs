@@ -503,6 +503,10 @@ fn make_element(tag_name: String, attr_id: String, dom_id: u64) -> Rc<RefCell<JS
         "children".to_string(),
         read_only_accessor_property(get_element_children),
     );
+    obj.define_property(
+        "classList".to_string(),
+        read_only_accessor_property(get_class_list),
+    );
     obj.set(
         "getAttribute".to_string(),
         JSValue::NativeFunction(get_attribute),
@@ -703,6 +707,134 @@ fn get_element_children(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         .cloned()
         .collect();
     Ok(expose_node_list(vm, children))
+}
+
+fn get_class_list(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(dom_id) = node_dom_id(args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Null);
+    };
+    let mut class_list = JSObject::new();
+    define_node_id(&mut class_list, dom_id);
+    class_list.set(
+        "contains".to_string(),
+        JSValue::NativeFunction(class_list_contains),
+    );
+    class_list.set("add".to_string(), JSValue::NativeFunction(class_list_add));
+    class_list.set(
+        "remove".to_string(),
+        JSValue::NativeFunction(class_list_remove),
+    );
+    class_list.set(
+        "toggle".to_string(),
+        JSValue::NativeFunction(class_list_toggle),
+    );
+    Ok(JSValue::Object(Rc::new(RefCell::new(class_list))))
+}
+
+fn class_list_contains(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Boolean(false));
+    };
+    let Some(token) = class_token(args.get(1)) else {
+        return Ok(JSValue::Boolean(false));
+    };
+    Ok(JSValue::Boolean(
+        class_tokens(&node).iter().any(|class| class == token),
+    ))
+}
+
+fn class_list_add(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Undefined);
+    };
+    let mut classes = class_tokens(&node);
+    let mut changed = false;
+    for value in args.iter().skip(1) {
+        let Some(token) = class_token(Some(value)) else {
+            continue;
+        };
+        if !classes.iter().any(|class| class == token) {
+            classes.push(token.to_string());
+            changed = true;
+        }
+    }
+    if changed {
+        set_class_tokens(&node, &classes);
+        mark_dom_dirty(vm);
+    }
+    Ok(JSValue::Undefined)
+}
+
+fn class_list_remove(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Undefined);
+    };
+    let removals: Vec<&str> = args
+        .iter()
+        .skip(1)
+        .filter_map(|value| class_token(Some(value)))
+        .collect();
+    let mut classes = class_tokens(&node);
+    let old_len = classes.len();
+    classes.retain(|class| !removals.iter().any(|removal| class == removal));
+    if classes.len() != old_len {
+        set_class_tokens(&node, &classes);
+        mark_dom_dirty(vm);
+    }
+    Ok(JSValue::Undefined)
+}
+
+fn class_list_toggle(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Boolean(false));
+    };
+    let Some(token) = class_token(args.get(1)) else {
+        return Ok(JSValue::Boolean(false));
+    };
+    let mut classes = class_tokens(&node);
+    let position = classes.iter().position(|class| class == token);
+    let should_have = args
+        .get(2)
+        .map(JSValue::to_boolean)
+        .unwrap_or(position.is_none());
+
+    let changed = match (position, should_have) {
+        (Some(position), false) => {
+            classes.remove(position);
+            true
+        }
+        (None, true) => {
+            classes.push(token.to_string());
+            true
+        }
+        _ => false,
+    };
+    if changed {
+        set_class_tokens(&node, &classes);
+        mark_dom_dirty(vm);
+    }
+    Ok(JSValue::Boolean(should_have))
+}
+
+fn class_token(value: Option<&JSValue>) -> Option<&str> {
+    let JSValue::String(token) = value? else {
+        return None;
+    };
+    (!token.is_empty() && !token.chars().any(char::is_whitespace)).then_some(token)
+}
+
+fn class_tokens(node: &NodeRef<HtmlNodeType>) -> Vec<String> {
+    node.borrow()
+        .value
+        .get_attr("class")
+        .unwrap_or("")
+        .split_whitespace()
+        .map(str::to_string)
+        .collect()
+}
+
+fn set_class_tokens(node: &NodeRef<HtmlNodeType>, classes: &[String]) {
+    node.borrow_mut().value.set_attr("class", classes.join(" "));
 }
 
 fn get_text_content(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -1101,5 +1233,32 @@ mod tests {
         );
         let second = dom.get_element_by_id("second").unwrap();
         assert_eq!(second.borrow().value.get_attr("data-second"), Some("yes"));
+    }
+
+    #[test]
+    fn class_list_mutates_class_attribute_and_reports_membership() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="target" class="one two"></div>"#);
+        runtime.run_script(
+            r##"
+            const target = document.querySelector("#target");
+            target.classList.add("two", "three");
+            target.classList.remove("one", "missing");
+            target.setAttribute("data-has-three", target.classList.contains("three"));
+            target.setAttribute("data-removed-three", target.classList.toggle("three"));
+            target.setAttribute("data-added-four", target.classList.toggle("four"));
+            target.setAttribute("data-forced-off", target.classList.toggle("four", false));
+            target.setAttribute("data-forced-on", target.classList.toggle("five", true));
+            "##,
+        );
+
+        let target = dom.get_element_by_id("target").unwrap();
+        let target = target.borrow();
+        assert_eq!(target.value.get_attr("class"), Some("two five"));
+        assert_eq!(target.value.get_attr("data-has-three"), Some("true"));
+        assert_eq!(target.value.get_attr("data-removed-three"), Some("false"));
+        assert_eq!(target.value.get_attr("data-added-four"), Some("true"));
+        assert_eq!(target.value.get_attr("data-forced-off"), Some("false"));
+        assert_eq!(target.value.get_attr("data-forced-on"), Some("true"));
+        assert!(runtime.needs_redraw());
     }
 }
