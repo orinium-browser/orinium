@@ -325,7 +325,12 @@ fn main() -> Result<()> {
                     LayoutEngine::layout(&mut ctx.layout, viewport_w, viewport_h);
 
                     let mut draw_commands = Vec::new();
-                    generate_draw_commands(&mut draw_commands, &ctx.layout, &ctx.info);
+                    generate_draw_commands(
+                        &mut draw_commands,
+                        &ctx.layout,
+                        &ctx.info,
+                        (viewport_w, viewport_h),
+                    );
 
                     println!("\nGenerated {} draw commands:", draw_commands.len());
                     for (i, cmd) in draw_commands.iter().enumerate() {

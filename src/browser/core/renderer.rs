@@ -87,7 +87,12 @@ impl BrowserRenderer {
             self.chrome.sync_url(url.as_deref());
 
             if let Some((layout, info)) = tab.layout_and_info() {
-                renderer_model::generate_draw_commands(&mut draw_commands, layout, info);
+                renderer_model::generate_draw_commands(
+                    &mut draw_commands,
+                    layout,
+                    info,
+                    (width, content_height),
+                );
                 tab.clear_redraw_flag();
                 tab.title()
             } else {

@@ -1,7 +1,7 @@
 //! Generation of [`DrawCommand`]s from the layout tree (box models, borders,
 //! backgrounds and text).
 
-use ui_layout::{BoxModel, LayoutChild, LayoutNode, Position, Rect};
+use ui_layout::{BoxModel, EdgeOption, LayoutChild, LayoutNode, Position, Rect};
 
 use crate::engine::layouter::text_layouter::TextFlowLayouter;
 use crate::engine::layouter::types::{
@@ -37,6 +37,103 @@ fn push_transform(cmd_buf: &mut Vec<DrawCommand>, dx: f32, dy: f32) -> bool {
     } else {
         false
     }
+}
+
+/// State of the nearest scrollport, used to resolve `position: sticky` offsets.
+///
+/// All coordinates are expressed in the current node's parent-content space
+/// (the same space its `border_box` coordinates live in).
+#[derive(Default, Clone, Copy)]
+struct StickyViewport {
+    /// Top-left corner of the scrollport's visible region, scroll offset already
+    /// applied. The renderer's scroll transform is `translate(scroll_x,
+    /// -scroll_y)`, so in the scrollport's content space this is
+    /// `(padding.left - scroll_x, padding.top + scroll_y)`; the value is rebased
+    /// into each descendant's content space.
+    top_left: (f32, f32),
+    /// Visible (padding-box) size of the nearest scrollport.
+    size: (f32, f32),
+}
+
+/// Whether the node scrolls its own content and thus establishes a scrollport
+/// for its subtree. The document root always does, because the UI layer scrolls
+/// it directly without necessarily setting its scroll flags.
+fn is_scrollport(kind: &NodeKind) -> bool {
+    match kind {
+        NodeKind::Container {
+            scroll_x, scroll_y, ..
+        }
+        | NodeKind::Custom {
+            scroll_x, scroll_y, ..
+        } => *scroll_x || *scroll_y,
+        _ => false,
+    }
+}
+
+/// Compute the sticky translate for a box relative to its nearest scrollport.
+///
+/// `box_rect` is the sticky box's border box (its natural position, in
+/// parent-content space) and `containing` is the parent content-box size — the
+/// containing block the box may not leave. Per CSS-POSITION-3 §3.4 the box is
+/// shifted inward just enough to keep each specified edge inside the
+/// scrollport's "sticky view rectangle" (the visible region, whose top-left is
+/// `viewport.top_left`), while staying within the containing block.
+fn sticky_offset(
+    edges: &EdgeOption,
+    box_rect: &Rect,
+    viewport: StickyViewport,
+    containing: (f32, f32),
+) -> (f32, f32) {
+    let x = box_rect.x;
+    let y = box_rect.y;
+    let w = box_rect.width;
+    let h = box_rect.height;
+
+    let mut dy: f32 = 0.0;
+    let port_top = viewport.top_left.1;
+    let port_bottom = viewport.top_left.1 + viewport.size.1;
+    if let Some(top) = edges.top {
+        dy = dy.max((port_top + top) - y);
+    }
+    if let Some(bottom) = edges.bottom {
+        // CSS-POSITION-3 §3.4: when the sticky view rectangle is shorter than
+        // the box, the end-edge inset is ignored and the box sticks to its
+        // start edge instead.
+        let has_room = match edges.top {
+            Some(top) => (port_bottom - bottom) - (port_top + top) >= h,
+            None => true,
+        };
+        if has_room {
+            dy = dy.min((port_bottom - bottom) - (y + h));
+        }
+    }
+    // Containing-block constraint (parent content box). The bounds are
+    // zero-clamped so an already-overflowing box is never forced to move
+    // (matching Chromium/Firefox "clamp sticky offset bounds by zero").
+    let dy_lo = (-y).min(0.0);
+    let dy_hi = (containing.1 - y - h).max(0.0);
+    dy = dy.max(dy_lo).min(dy_hi);
+
+    let mut dx: f32 = 0.0;
+    let port_left = viewport.top_left.0;
+    let port_right = viewport.top_left.0 + viewport.size.0;
+    if let Some(left) = edges.left {
+        dx = dx.max((port_left + left) - x);
+    }
+    if let Some(right) = edges.right {
+        let has_room = match edges.left {
+            Some(left) => (port_right - right) - (port_left + left) >= w,
+            None => true,
+        };
+        if has_room {
+            dx = dx.min((port_right - right) - (x + w));
+        }
+    }
+    let dx_lo = (-x).min(0.0);
+    let dx_hi = (containing.0 - x - w).max(0.0);
+    dx = dx.max(dx_lo).min(dx_hi);
+
+    (dx, dy)
 }
 
 /// Resolve the four outer corner radii to pixels against the border box.
@@ -495,12 +592,34 @@ fn draw_text(
 // --------------------------------
 
 /// LayoutNode + InfoNode → DrawCommand
+///
+/// `viewport` is the visible (window) size of the page area; it establishes the
+/// root scrollport that page-level `position: sticky` boxes stick to.
 pub fn generate_draw_commands(
     cmd_buf: &mut Vec<DrawCommand>,
     layout: &LayoutNode,
     info: &InfoNode,
+    viewport: (f32, f32),
 ) {
-    generate_draw_commands_inner(cmd_buf, layout, info, (0.0, 0.0));
+    let (scroll_x, scroll_y) = info.kind.scroll_offsets();
+    let root_viewport = StickyViewport {
+        top_left: (-scroll_x, scroll_y),
+        size: viewport,
+    };
+    let containing = layout
+        .layout_box
+        .iter()
+        .next()
+        .map_or((0.0, 0.0), |b| (b.content_box.width, b.content_box.height));
+    generate_draw_commands_inner(
+        cmd_buf,
+        layout,
+        info,
+        (0.0, 0.0),
+        root_viewport,
+        containing,
+        true,
+    );
 }
 
 /// Recursive draw-command generation.
@@ -511,11 +630,20 @@ pub fn generate_draw_commands(
 /// is positioned relative to the viewport, so the inherited displacement is
 /// cancelled by pushing the inverse transform before its own box models and
 /// resetting the accumulated scroll for its descendants.
+///
+/// `viewport` is the nearest scrollport as seen from this node's parent-content
+/// space (used to resolve `position: sticky`), `containing` is this node's
+/// parent content-box size (the containing block sticky boxes must stay in),
+/// and `is_root` marks the document root, which always establishes the page
+/// scrollport.
 fn generate_draw_commands_inner(
     cmd_buf: &mut Vec<DrawCommand>,
     layout: &LayoutNode,
     info: &InfoNode,
     accumulated_scroll: (f32, f32),
+    viewport: StickyViewport,
+    containing: (f32, f32),
+    is_root: bool,
 ) {
     let mut box_states: Vec<BoxPushState> = Vec::new();
 
@@ -530,6 +658,24 @@ fn generate_draw_commands_inner(
             transform: AffineTransform::translate(-accumulated_scroll.0, accumulated_scroll.1),
         });
     }
+
+    // Shift sticky boxes so each specified inset stays within the visible area
+    // of the nearest scrollport. Fixed boxes are positioned relative to the
+    // viewport, so sticky offsets never apply to them.
+    let sticky_pushed = if is_sticky && !is_fixed {
+        match layout.layout_box.iter().next() {
+            Some(bm) => {
+                let (dx, dy) = bm
+                    .sticky_edges
+                    .map(|edges| sticky_offset(&edges, &bm.border_box, viewport, containing))
+                    .unwrap_or((0.0, 0.0));
+                push_transform(cmd_buf, dx, dy)
+            }
+            None => false,
+        }
+    } else {
+        false
+    };
 
     match &info.kind {
         NodeKind::Text { .. } | NodeKind::LineBreak => unreachable!(),
@@ -616,6 +762,47 @@ fn generate_draw_commands_inner(
         )
     };
 
+    // Sticky viewport state for this node's subtree, rebased into each child's
+    // parent-content space. A node that scrolls its own content (or the root,
+    // which the UI layer scrolls directly) becomes the scrollport for its
+    // descendants; otherwise the inherited visible region is shifted by the
+    // node's content-box offset.
+    let child_viewport = if is_root || is_scrollport(&info.kind) {
+        let bm = layout.layout_box.iter().next();
+        let (scroll_x, scroll_y) = own_scroll;
+        StickyViewport {
+            top_left: bm.as_ref().map_or((0.0, 0.0), |b| {
+                (
+                    b.padding_box.x - b.content_box.x - scroll_x,
+                    b.padding_box.y - b.content_box.y + scroll_y,
+                )
+            }),
+            size: if is_root {
+                viewport.size
+            } else {
+                bm.map_or(viewport.size, |b| {
+                    (b.padding_box.width, b.padding_box.height)
+                })
+            },
+        }
+    } else {
+        let bm = layout.layout_box.iter().next();
+        StickyViewport {
+            top_left: bm.map_or(viewport.top_left, |b| {
+                (
+                    viewport.top_left.0 - b.content_box.x,
+                    viewport.top_left.1 - b.content_box.y,
+                )
+            }),
+            size: viewport.size,
+        }
+    };
+    let child_containing = layout
+        .layout_box
+        .iter()
+        .next()
+        .map_or(containing, |b| (b.content_box.width, b.content_box.height));
+
     let mut layout_iter = layout.children.iter();
 
     for child_info in &info.children {
@@ -629,7 +816,15 @@ fn generate_draw_commands_inner(
             }
             NodeKind::Container { .. } => {
                 if let Some(LayoutChild::Node(node)) = layout_iter.next() {
-                    generate_draw_commands_inner(cmd_buf, node, child_info, child_scroll);
+                    generate_draw_commands_inner(
+                        cmd_buf,
+                        node,
+                        child_info,
+                        child_scroll,
+                        child_viewport,
+                        child_containing,
+                        false,
+                    );
                 }
             }
             NodeKind::Custom {
@@ -647,6 +842,9 @@ fn generate_draw_commands_inner(
                             node_layout,
                             child_info,
                             child_scroll,
+                            child_viewport,
+                            child_containing,
+                            false,
                         );
                     }
                     // Inline custom element: consume the Object and draw it
@@ -662,8 +860,7 @@ fn generate_draw_commands_inner(
 
                             let bm = &result.box_model;
                             let rect = BoxModel {
-                                // Stub implementation
-                                sticky_edges: None,
+                                sticky_edges: bm.sticky_edges,
                                 border_box: Rect {
                                     x: bm.border_box.x - text_origin.0,
                                     y: bm.border_box.y - text_origin.1,
@@ -723,6 +920,10 @@ fn generate_draw_commands_inner(
         for state in box_states.iter().rev() {
             pop_box_model(cmd_buf, *state);
         }
+    }
+
+    if sticky_pushed {
+        cmd_buf.push(DrawCommand::PopTransform);
     }
 
     if cancel_scroll {
@@ -919,7 +1120,7 @@ mod tests {
         );
 
         let mut commands = Vec::new();
-        generate_draw_commands(&mut commands, &scroller, &scroller_info);
+        generate_draw_commands(&mut commands, &scroller, &scroller_info, (100.0, 100.0));
         assert!(count_balanced(&commands));
 
         // The fixed child must push a transform cancelling the ancestor's
@@ -928,6 +1129,230 @@ mod tests {
         assert!(
             translates.contains(&(0.0, 50.0)),
             "expected a scroll-cancelling transform, got {translates:?}"
+        );
+    }
+
+    fn sticky_viewport(scroll: (f32, f32)) -> StickyViewport {
+        StickyViewport {
+            top_left: (-scroll.0, scroll.1),
+            size: (800.0, 500.0),
+        }
+    }
+
+    fn sticky_edges(top: Option<f32>, bottom: Option<f32>) -> EdgeOption {
+        EdgeOption {
+            left: None,
+            top,
+            right: None,
+            bottom,
+        }
+    }
+
+    #[test]
+    fn test_sticky_offset_top_sticks_to_viewport_top() {
+        // Natural y=600, viewport scrolled 600px: the box's top edge is pinned
+        // at the viewport top + 10.
+        let (dx, dy) = sticky_offset(
+            &sticky_edges(Some(10.0), None),
+            &ui_rect(0.0, 600.0, 100.0, 50.0),
+            sticky_viewport((0.0, 600.0)),
+            (800.0, 2000.0),
+        );
+        assert_eq!((dx, dy), (0.0, 10.0));
+    }
+
+    #[test]
+    fn test_sticky_offset_bottom_pushes_up() {
+        // Natural bottom (1000) is below the viewport bottom minus the inset
+        // (490): the box is pulled up by 510.
+        let (dx, dy) = sticky_offset(
+            &sticky_edges(None, Some(10.0)),
+            &ui_rect(0.0, 900.0, 100.0, 100.0),
+            sticky_viewport((0.0, 0.0)),
+            (800.0, 2000.0),
+        );
+        assert_eq!((dx, dy), (0.0, -510.0));
+    }
+
+    #[test]
+    fn test_sticky_offset_no_movement_when_in_view() {
+        let (dx, dy) = sticky_offset(
+            &sticky_edges(Some(10.0), None),
+            &ui_rect(0.0, 50.0, 100.0, 50.0),
+            sticky_viewport((0.0, 0.0)),
+            (800.0, 2000.0),
+        );
+        assert_eq!((dx, dy), (0.0, 0.0));
+    }
+
+    #[test]
+    fn test_sticky_offset_containing_block_hi_clamp() {
+        // A box taller than the visible area near the container end must not
+        // be pushed past the containing block bottom (natural bottom is
+        // already at 1300, the container end).
+        let (dx, dy) = sticky_offset(
+            &sticky_edges(Some(10.0), None),
+            &ui_rect(0.0, 900.0, 100.0, 400.0),
+            sticky_viewport((0.0, 900.0)),
+            (800.0, 1300.0),
+        );
+        assert_eq!((dx, dy), (0.0, 0.0));
+    }
+
+    #[test]
+    fn test_sticky_offset_inset_fit_ignores_end_edge_without_room() {
+        // Both insets set but the sticky view rectangle is shorter than the
+        // box: the bottom inset is ignored, the box sticks to its top edge.
+        let (dx, dy) = sticky_offset(
+            &sticky_edges(Some(10.0), Some(10.0)),
+            &ui_rect(0.0, 100.0, 100.0, 500.0),
+            sticky_viewport((0.0, 0.0)),
+            (800.0, 2000.0),
+        );
+        assert_eq!((dx, dy), (0.0, 0.0));
+    }
+
+    #[test]
+    fn test_sticky_offset_horizontal_right_pushes_left() {
+        // Box spans [850, 950], off-screen right of the 800-wide viewport; a
+        // right inset of 10 pulls it left so its right edge sits at 790.
+        let edges = EdgeOption {
+            left: None,
+            top: None,
+            right: Some(10.0),
+            bottom: None,
+        };
+        let (dx, dy) = sticky_offset(
+            &edges,
+            &ui_rect(850.0, 0.0, 100.0, 50.0),
+            sticky_viewport((0.0, 0.0)),
+            (2000.0, 2000.0),
+        );
+        assert_eq!((dx, dy), (-160.0, 0.0));
+    }
+
+    #[test]
+    fn sticky_node_pushes_sticky_offset_transform() {
+        // Root acts as the page scrollport (scrolled 600px). A sticky child at
+        // natural y=600 with top:10 must push a translate(0, 10).
+        let ui_rect = |x: f32, y: f32, w: f32, h: f32| ui_layout::Rect {
+            x,
+            y,
+            width: w,
+            height: h,
+        };
+        let mk_box = |x: f32, y: f32, w: f32, h: f32| ui_layout::BoxModel {
+            sticky_edges: None,
+            border_box: ui_rect(x, y, w, h),
+            padding_box: ui_rect(x, y, w, h),
+            content_box: ui_rect(x, y, w, h),
+            children_box: ui_rect(x, y, w, h),
+        };
+
+        let root_style = Style::default();
+        let mut root = LayoutNode::new(root_style);
+        root.layout_box = ui_layout::LayoutBox::BlockBox(mk_box(0.0, 0.0, 800.0, 2000.0));
+
+        let mut sticky_style = Style::default();
+        sticky_style.position.kind = Position::Sticky;
+        let mut sticky = LayoutNode::new(sticky_style);
+        let mut sticky_bm = mk_box(0.0, 600.0, 800.0, 100.0);
+        sticky_bm.sticky_edges = Some(sticky_edges(Some(10.0), None));
+        sticky.layout_box = ui_layout::LayoutBox::BlockBox(sticky_bm);
+        root.children = vec![LayoutChild::Node(Box::new(sticky))];
+
+        let root_info = mk_info_node(
+            NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 600.0,
+                style: ContainerStyle::default(),
+                role: ContainerRole::Normal,
+            },
+            vec![mk_info_node(
+                NodeKind::Container {
+                    scroll_x: false,
+                    scroll_y: false,
+                    scroll_offset_x: 0.0,
+                    scroll_offset_y: 0.0,
+                    style: ContainerStyle::default(),
+                    role: ContainerRole::Normal,
+                },
+                Vec::new(),
+            )],
+        );
+
+        let mut commands = Vec::new();
+        generate_draw_commands(&mut commands, &root, &root_info, (800.0, 500.0));
+        assert!(count_balanced(&commands));
+
+        let translates = scroll_translates(&commands);
+        assert!(
+            translates.contains(&(0.0, 10.0)),
+            "expected a sticky top offset, got {translates:?}"
+        );
+    }
+
+    #[test]
+    fn sticky_node_bottom_pushes_up() {
+        // Same setup but bottom:10, unscrolled, natural y=900: pulled up by 510.
+        let ui_rect = |x: f32, y: f32, w: f32, h: f32| ui_layout::Rect {
+            x,
+            y,
+            width: w,
+            height: h,
+        };
+        let mk_box = |x: f32, y: f32, w: f32, h: f32| ui_layout::BoxModel {
+            sticky_edges: None,
+            border_box: ui_rect(x, y, w, h),
+            padding_box: ui_rect(x, y, w, h),
+            content_box: ui_rect(x, y, w, h),
+            children_box: ui_rect(x, y, w, h),
+        };
+
+        let root_style = Style::default();
+        let mut root = LayoutNode::new(root_style);
+        root.layout_box = ui_layout::LayoutBox::BlockBox(mk_box(0.0, 0.0, 800.0, 2000.0));
+
+        let mut sticky_style = Style::default();
+        sticky_style.position.kind = Position::Sticky;
+        let mut sticky = LayoutNode::new(sticky_style);
+        let mut sticky_bm = mk_box(0.0, 900.0, 800.0, 100.0);
+        sticky_bm.sticky_edges = Some(sticky_edges(None, Some(10.0)));
+        sticky.layout_box = ui_layout::LayoutBox::BlockBox(sticky_bm);
+        root.children = vec![LayoutChild::Node(Box::new(sticky))];
+
+        let root_info = mk_info_node(
+            NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: ContainerStyle::default(),
+                role: ContainerRole::Normal,
+            },
+            vec![mk_info_node(
+                NodeKind::Container {
+                    scroll_x: false,
+                    scroll_y: false,
+                    scroll_offset_x: 0.0,
+                    scroll_offset_y: 0.0,
+                    style: ContainerStyle::default(),
+                    role: ContainerRole::Normal,
+                },
+                Vec::new(),
+            )],
+        );
+
+        let mut commands = Vec::new();
+        generate_draw_commands(&mut commands, &root, &root_info, (800.0, 500.0));
+        assert!(count_balanced(&commands));
+
+        let translates = scroll_translates(&commands);
+        assert!(
+            translates.contains(&(0.0, -510.0)),
+            "expected a sticky bottom offset, got {translates:?}"
         );
     }
 }
