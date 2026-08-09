@@ -5,7 +5,7 @@
 //! The engine never imports `platform`; DOM access goes through the shared
 //! host slot that `JsRuntime` registers on the VM.
 
-use crate::engine::html::{DomTree, HtmlNodeType};
+use crate::engine::html::{DomTree, HtmlNodeType, Parser as HtmlParser};
 use crate::engine::tree::{NodeRef, TreeNode};
 use pixi_byte::value::JSArray;
 use pixi_byte::value::jsobject::{JSObject, Property};
@@ -1568,6 +1568,10 @@ fn make_element(
         accessor_property(get_inner_text, set_inner_text),
     );
     obj.define_property(
+        "innerHTML".to_string(),
+        accessor_property(get_inner_html, set_inner_html),
+    );
+    obj.define_property(
         "parentNode".to_string(),
         read_only_accessor_property(get_parent_node),
     );
@@ -2533,6 +2537,115 @@ fn set_inner_text(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     set_text_content(vm, args)
 }
 
+fn escape_html_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn escape_html_attribute(value: &str) -> String {
+    escape_html_text(value).replace('"', "&quot;")
+}
+
+fn is_void_html_element(tag_name: &str) -> bool {
+    matches!(
+        tag_name,
+        "area"
+            | "base"
+            | "br"
+            | "col"
+            | "embed"
+            | "hr"
+            | "img"
+            | "input"
+            | "link"
+            | "meta"
+            | "param"
+            | "source"
+            | "track"
+            | "wbr"
+    )
+}
+
+fn serialize_html_node(node: &NodeRef<HtmlNodeType>) -> String {
+    let (value, children) = {
+        let node = node.borrow();
+        (node.value.clone(), node.children().to_vec())
+    };
+    match value {
+        HtmlNodeType::Text(text) => escape_html_text(&text),
+        HtmlNodeType::Comment(comment) => format!("<!--{comment}-->"),
+        HtmlNodeType::Element {
+            tag_name,
+            attributes,
+        } => {
+            let mut html = format!("<{tag_name}");
+            for attribute in attributes {
+                html.push(' ');
+                html.push_str(&attribute.name);
+                html.push_str("=\"");
+                html.push_str(&escape_html_attribute(&attribute.value));
+                html.push('"');
+            }
+            html.push('>');
+            if !is_void_html_element(&tag_name) {
+                for child in children {
+                    html.push_str(&serialize_html_node(&child));
+                }
+                html.push_str("</");
+                html.push_str(&tag_name);
+                html.push('>');
+            }
+            html
+        }
+        _ => String::new(),
+    }
+}
+
+fn get_inner_html(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Null);
+    };
+    let children = node.borrow().children().to_vec();
+    Ok(JSValue::String(
+        children
+            .iter()
+            .map(serialize_html_node)
+            .collect::<String>(),
+    ))
+}
+
+fn set_inner_html(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Undefined);
+    };
+    if !matches!(node.borrow().value, HtmlNodeType::Element { .. }) {
+        return Ok(JSValue::Undefined);
+    }
+    let html = args.get(1).map(JSValue::to_string).unwrap_or_default();
+    let old_children = node.borrow().children().to_vec();
+    let _ = with_host_mut(vm, |host| {
+        for child in &old_children {
+            if let Some(dom_id) = host.dom_id_for_node(child) {
+                host.detached_nodes.insert(dom_id, Rc::clone(child));
+            }
+        }
+    });
+    node.borrow_mut().clear_children();
+
+    let mut parser = HtmlParser::new(&html);
+    let fragment = parser.parse();
+    if let Some(body) = fragment.get_elements_by_tag_name("body").into_iter().next() {
+        let children = body.borrow().children().to_vec();
+        for child in children {
+            TreeNode::append_child(&node, child);
+        }
+    }
+    mark_dom_dirty(vm);
+    Ok(JSValue::Undefined)
+}
+
 fn reflected_string_property(
     vm: &mut VM,
     args: &[JSValue],
@@ -2685,7 +2798,6 @@ fn remove_attribute(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::html::parser::Parser as HtmlParser;
 
     fn runtime_from_html(html: &str) -> (JsRuntime, Rc<DomTree>) {
         let mut parser = HtmlParser::new(html);
@@ -2812,6 +2924,35 @@ mod tests {
         assert_eq!(
             node.borrow().value.get_attr("style"),
             Some("--accent: blue; margin-top: 4px;")
+        );
+        assert!(runtime.needs_redraw());
+    }
+
+    #[test]
+    fn inner_html_parses_replaces_and_serializes_children() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<div id="target"><em id="old">old</em></div><div id="result"></div>"#,
+        );
+        runtime.run_script(
+            r#"
+            const target = document.getElementById("target");
+            const old = document.getElementById("old");
+            target.innerHTML = '<span id="child" data-label="a&b">hello</span><br>';
+            old.setAttribute("data-detached", "yes");
+            document.getElementById("result").setAttribute("data-html", target.innerHTML);
+            "#,
+        );
+
+        let target = dom.get_element_by_id("target").unwrap();
+        assert_eq!(target.borrow().children().len(), 2);
+        assert!(dom.get_element_by_id("old").is_none());
+        assert_eq!(
+            dom.get_element_by_id("result")
+                .unwrap()
+                .borrow()
+                .value
+                .get_attr("data-html"),
+            Some("<span id=\"child\" data-label=\"a&amp;b\">hello</span><br>")
         );
         assert!(runtime.needs_redraw());
     }
