@@ -13,7 +13,7 @@ use pixi_byte::vm::VM;
 use pixi_byte::{JSError, JSResult, JSValue};
 use std::any::Any;
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -45,7 +45,6 @@ pub struct JsHost {
     /// Keeps JS-created or removed nodes alive while their wrappers exist.
     detached_nodes: HashMap<u64, NodeRef<HtmlNodeType>>,
     timers: Vec<JsTimer>,
-    microtasks: VecDeque<JSValue>,
     next_timer_id: u64,
     dom_content_loaded_fired: bool,
     next_id: u64,
@@ -84,7 +83,6 @@ impl JsRuntime {
             element_event_listeners: HashMap::new(),
             detached_nodes: HashMap::new(),
             timers: Vec::new(),
-            microtasks: VecDeque::new(),
             next_timer_id: 0,
             dom_content_loaded_fired: false,
             next_id: 0,
@@ -257,16 +255,10 @@ impl JsRuntime {
 
     /// Drains queued microtasks in FIFO order, including jobs queued by jobs.
     fn perform_microtask_checkpoint(&mut self) {
-        loop {
-            let callback =
-                with_host_mut(self.engine.vm(), |host| host.microtasks.pop_front()).flatten();
-            let Some(callback) = callback else {
-                break;
-            };
-
-            if let Err(err) = self.engine.call(callback, JSValue::Undefined, Vec::new()) {
-                log::info!("JS error in microtask: {}", err);
-            }
+        while let Err(err) = self.engine.run_jobs() {
+            // A failed callback must not prevent later jobs in the same
+            // checkpoint from running. PixiByte leaves those jobs queued.
+            log::info!("JS error in microtask: {}", err);
         }
     }
 }
@@ -438,7 +430,7 @@ fn queue_microtask(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
             "queueMicrotask callback must be callable".to_string(),
         ));
     };
-    let _ = with_host_mut(vm, |host| host.microtasks.push_back(callback));
+    vm.enqueue_job(callback, JSValue::Undefined, Vec::new());
     Ok(JSValue::Undefined)
 }
 
@@ -1513,5 +1505,51 @@ mod tests {
             result.borrow().value.get_attr("data-observed"),
             Some("timer-microtask")
         );
+    }
+
+    #[test]
+    fn promise_reactions_share_fifo_order_with_queued_microtasks() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const result = document.querySelector("#result");
+            result.setAttribute("data-order", "sync");
+            queueMicrotask(function () {
+                result.setAttribute("data-order", result.getAttribute("data-order") + "-first");
+            });
+            new Promise(function (resolve) {
+                resolve("promise");
+            }).then(function (value) {
+                result.setAttribute("data-order", result.getAttribute("data-order") + "-" + value);
+            });
+            queueMicrotask(function () {
+                result.setAttribute("data-order", result.getAttribute("data-order") + "-last");
+            });
+            "##,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-order"),
+            Some("sync-first-promise-last")
+        );
+    }
+
+    #[test]
+    fn a_failed_microtask_does_not_block_later_jobs() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            queueMicrotask(function () {
+                missingFunction();
+            });
+            queueMicrotask(function () {
+                document.querySelector("#result").setAttribute("data-ran", "yes");
+            });
+            "##,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-ran"), Some("yes"));
     }
 }
