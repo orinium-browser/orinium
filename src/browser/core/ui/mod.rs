@@ -256,6 +256,10 @@ impl BrowserUi {
                         let css = String::from_utf8_lossy(&resp.body).to_string();
                         tab.on_fetch_succeeded_css(css);
                     }
+                    FetchKind::Script { index } => {
+                        let source = String::from_utf8_lossy(&resp.body).to_string();
+                        tab.on_fetch_succeeded_script(index, source);
+                    }
                     FetchKind::Image { source } => {
                         tab.on_fetch_succeeded_image(source, &resp.body);
                     }
@@ -266,10 +270,15 @@ impl BrowserUi {
             }
             Err(err) => {
                 log::error!("NetworkError: {}", err);
-                if matches!(kind, FetchKind::Image { .. } | FetchKind::Audio { .. }) {
-                    log::warn!("Media fetch failed without aborting page load: {}", url);
-                } else {
-                    tab.on_fetch_failed(err, url);
+                match kind {
+                    FetchKind::Image { .. } | FetchKind::Audio { .. } => {
+                        log::warn!("Media fetch failed without aborting page load: {}", url);
+                    }
+                    FetchKind::Script { index } => {
+                        log::warn!("Classic script fetch failed without aborting page load: {url}");
+                        tab.on_fetch_failed_script(index);
+                    }
+                    FetchKind::Html | FetchKind::Css => tab.on_fetch_failed(err, url),
                 }
             }
         }

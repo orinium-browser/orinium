@@ -175,6 +175,20 @@ impl Tab {
         }
     }
 
+    /// Delivers a fetched external classic script in document order.
+    pub fn on_fetch_succeeded_script(&mut self, index: usize, source: String) {
+        if let Some(webview) = self.webview.as_mut() {
+            webview.on_script_fetched(index, source);
+        }
+    }
+
+    /// Skips a failed external classic script without replacing the page.
+    pub fn on_fetch_failed_script(&mut self, index: usize) {
+        if let Some(webview) = self.webview.as_mut() {
+            webview.on_script_fetch_failed(index);
+        }
+    }
+
     /// Display error page on fetch failure
     pub fn on_fetch_failed(&mut self, err: BrowserNetworkError, failed_url: Url) {
         self.navigate("resource:///error.html".parse().unwrap());
