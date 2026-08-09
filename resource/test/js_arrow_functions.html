@@ -30,6 +30,9 @@
     <h2>Promise reaction</h2>
     <div id="promise-result" class="result">waiting</div>
 
+    <h2>Browser globals</h2>
+    <div id="globals-result" class="result">waiting</div>
+
     <h2>Lexical this</h2>
     <button id="this-button">Run lexical this test</button>
     <div id="this-result" class="result">waiting for click</div>
@@ -50,6 +53,12 @@
                 promiseResult.textContent = "resolved value: " + value;
                 promiseResult.setAttribute("data-complete", "true");
             });
+
+        const globalsResult = window.document.querySelector("#globals-result");
+        if (window === self && self === globalThis && window.document === document) {
+            globalsResult.textContent = "window === self === globalThis";
+            globalsResult.setAttribute("data-complete", "true");
+        }
 
         const button = document.querySelector("#this-button");
         button.addEventListener("click", function () {
