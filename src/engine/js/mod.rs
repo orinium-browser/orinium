@@ -434,6 +434,14 @@ fn dom_node(vm: &VM, this: &JSValue) -> Option<NodeRef<HtmlNodeType>> {
 fn install_global_aliases(engine: &mut pixi_byte::JSEngine) {
     let global = Rc::clone(engine.global_mut());
     let mut global_object = global.borrow_mut();
+    global_object.set(
+        "addEventListener".to_string(),
+        JSValue::NativeFunction(add_document_event_listener),
+    );
+    global_object.set(
+        "removeEventListener".to_string(),
+        JSValue::NativeFunction(remove_document_event_listener),
+    );
     for name in ["window", "self", "globalThis"] {
         global_object.set(name.to_string(), JSValue::Object(Rc::clone(&global)));
     }
@@ -1103,6 +1111,10 @@ fn install_document(engine: &mut pixi_byte::JSEngine) {
             "addEventListener".to_string(),
             JSValue::NativeFunction(add_document_event_listener),
         );
+        document.set(
+            "removeEventListener".to_string(),
+            JSValue::NativeFunction(remove_document_event_listener),
+        );
     }
     let _ = with_host_mut(engine.vm(), |host| {
         host.document = Some(Rc::clone(&document_obj));
@@ -1140,10 +1152,31 @@ fn add_document_event_listener(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVa
     };
 
     let _ = with_host_mut(vm, |host| {
-        host.document_event_listeners
+        let listeners = host
+            .document_event_listeners
             .entry(event_type.clone())
-            .or_default()
-            .push(listener);
+            .or_default();
+        if !listeners
+            .iter()
+            .any(|candidate| candidate.strict_equals(&listener))
+        {
+            listeners.push(listener);
+        }
+    });
+    Ok(JSValue::Undefined)
+}
+
+fn remove_document_event_listener(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(JSValue::String(event_type)) = args.get(1) else {
+        return Ok(JSValue::Undefined);
+    };
+    let Some(listener) = args.get(2) else {
+        return Ok(JSValue::Undefined);
+    };
+    let _ = with_host_mut(vm, |host| {
+        if let Some(listeners) = host.document_event_listeners.get_mut(event_type) {
+            listeners.retain(|candidate| !candidate.strict_equals(listener));
+        }
     });
     Ok(JSValue::Undefined)
 }
@@ -1538,6 +1571,10 @@ fn make_element(tag_name: String, attr_id: String, dom_id: u64) -> Rc<RefCell<JS
         JSValue::NativeFunction(add_element_event_listener),
     );
     obj.set(
+        "removeEventListener".to_string(),
+        JSValue::NativeFunction(remove_element_event_listener),
+    );
+    obj.set(
         "querySelector".to_string(),
         JSValue::NativeFunction(element_query_selector),
     );
@@ -1809,12 +1846,40 @@ fn add_element_event_listener(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVal
     };
 
     let _ = with_host_mut(vm, |host| {
-        host.element_event_listeners
+        let listeners = host
+            .element_event_listeners
             .entry(dom_id)
             .or_default()
             .entry(event_type.clone())
-            .or_default()
-            .push(listener);
+            .or_default();
+        if !listeners
+            .iter()
+            .any(|candidate| candidate.strict_equals(&listener))
+        {
+            listeners.push(listener);
+        }
+    });
+    Ok(JSValue::Undefined)
+}
+
+fn remove_element_event_listener(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(dom_id) = node_dom_id(args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Undefined);
+    };
+    let Some(JSValue::String(event_type)) = args.get(1) else {
+        return Ok(JSValue::Undefined);
+    };
+    let Some(listener) = args.get(2) else {
+        return Ok(JSValue::Undefined);
+    };
+    let _ = with_host_mut(vm, |host| {
+        if let Some(listeners) = host
+            .element_event_listeners
+            .get_mut(&dom_id)
+            .and_then(|events| events.get_mut(event_type))
+        {
+            listeners.retain(|candidate| !candidate.strict_equals(listener));
+        }
     });
     Ok(JSValue::Undefined)
 }
@@ -2727,6 +2792,56 @@ mod tests {
             Some("click")
         );
         assert!(runtime.needs_redraw());
+    }
+
+    #[test]
+    fn event_listeners_are_deduplicated_and_removable() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<button id="button">click</button><div id="result"></div>"#);
+        runtime.run_script(
+            r#"
+            const button = document.getElementById("button");
+            const result = document.getElementById("result");
+            function listener() {
+                const count = result.getAttribute("data-count");
+                result.setAttribute("data-count", count === null ? 1 : Number(count) + 1);
+            }
+            button.addEventListener("click", listener);
+            button.addEventListener("click", listener);
+            "#,
+        );
+
+        let button = dom.get_element_by_id("button").unwrap();
+        assert!(runtime.click(&button));
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-count"), Some("1"));
+
+        runtime.run_script(
+            r#"
+            button.removeEventListener("click", listener);
+            window.addEventListener("test", listener);
+            window.removeEventListener("test", listener);
+            "#,
+        );
+        assert!(!runtime.click(&button));
+        assert_eq!(result.borrow().value.get_attr("data-count"), Some("1"));
+    }
+
+    #[test]
+    fn document_event_listeners_can_be_removed() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r#"
+            const result = document.getElementById("result");
+            function listener() { result.setAttribute("data-ran", "yes"); }
+            document.addEventListener("DOMContentLoaded", listener);
+            document.removeEventListener("DOMContentLoaded", listener);
+            "#,
+        );
+
+        assert!(runtime.dispatch_dom_content_loaded());
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-ran"), None);
     }
 
     #[test]
