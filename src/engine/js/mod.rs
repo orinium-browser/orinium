@@ -96,6 +96,7 @@ impl JsRuntime {
         install_document(&mut engine);
         install_timers(&mut engine);
         install_microtasks(&mut engine);
+        install_global_aliases(&mut engine);
 
         Self {
             engine,
@@ -307,6 +308,16 @@ fn node_dom_id(this: &JSValue) -> Option<u64> {
 fn dom_node(vm: &VM, this: &JSValue) -> Option<NodeRef<HtmlNodeType>> {
     let dom_id = node_dom_id(this)?;
     with_host(vm, |host| host.refs.get(&dom_id).and_then(|w| w.upgrade())).flatten()
+}
+
+// --- global aliases ---
+
+fn install_global_aliases(engine: &mut pixi_byte::JSEngine) {
+    let global = Rc::clone(engine.global_mut());
+    let mut global_object = global.borrow_mut();
+    for name in ["window", "self", "globalThis"] {
+        global_object.set(name.to_string(), JSValue::Object(Rc::clone(&global)));
+    }
 }
 
 // --- console ---
@@ -1629,5 +1640,28 @@ mod tests {
             result.borrow().value.get_attr("data-microtask"),
             Some("yes")
         );
+    }
+
+    #[test]
+    fn browser_global_aliases_share_window_properties() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const result = window.document.querySelector("#result");
+            result.setAttribute("data-same-self", window === self);
+            result.setAttribute("data-same-global", window === globalThis);
+            result.setAttribute("data-document", window.document === document);
+            window.queueMicrotask(() => {
+                result.setAttribute("data-microtask", "yes");
+            });
+            "##,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-same-self"), Some("true"));
+        assert_eq!(result.value.get_attr("data-same-global"), Some("true"));
+        assert_eq!(result.value.get_attr("data-document"), Some("true"));
+        assert_eq!(result.value.get_attr("data-microtask"), Some("yes"));
     }
 }
