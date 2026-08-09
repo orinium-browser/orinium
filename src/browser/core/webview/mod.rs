@@ -461,9 +461,18 @@ impl WebView {
         url: String,
         status: u16,
         body: Vec<u8>,
+        headers: Vec<(String, String)>,
     ) {
         let needs_redraw = self.js_runtime.as_mut().is_some_and(|runtime| {
-            runtime.resolve_fetch(request_id, JsFetchResponse { url, status, body });
+            runtime.resolve_fetch(
+                request_id,
+                JsFetchResponse {
+                    url,
+                    status,
+                    body,
+                    headers,
+                },
+            );
             runtime.take_needs_redraw()
         });
         if needs_redraw {
@@ -1367,6 +1376,7 @@ mod tests {
             "https://example.test/message.txt".to_string(),
             200,
             b"hello from fetch".to_vec(),
+            Vec::new(),
         );
 
         let result = webview

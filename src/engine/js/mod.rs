@@ -44,6 +44,7 @@ pub(crate) struct JsFetchResponse {
     pub(crate) url: String,
     pub(crate) status: u16,
     pub(crate) body: Vec<u8>,
+    pub(crate) headers: Vec<(String, String)>,
 }
 
 /// State shared between the JS natives and the browser side.
@@ -125,6 +126,7 @@ impl JsRuntime {
         install_document(&mut engine);
         install_timers(&mut engine);
         install_microtasks(&mut engine);
+        install_headers(&mut engine);
         install_fetch(&mut engine);
         install_global_aliases(&mut engine);
 
@@ -520,6 +522,179 @@ fn queue_microtask(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 
 // --- fetch ---
 
+const HEADERS_DATA: &str = "__orinium_headers_data";
+const HEADERS_IMMUTABLE: &str = "__orinium_headers_immutable";
+
+fn install_headers(engine: &mut pixi_byte::JSEngine) {
+    let mut constructor = JSObject::new();
+    constructor.set(
+        "__construct__".to_string(),
+        JSValue::NativeFunction(headers_constructor),
+    );
+    engine.global_mut().borrow_mut().set(
+        "Headers".to_string(),
+        JSValue::Object(Rc::new(RefCell::new(constructor))),
+    );
+}
+
+fn headers_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let entries = args.get(1).map(extract_header_entries).unwrap_or_default();
+    Ok(JSValue::Object(make_headers(entries, false)))
+}
+
+fn make_headers(entries: Vec<(String, String)>, immutable: bool) -> Rc<RefCell<JSObject>> {
+    let data = Rc::new(RefCell::new(JSObject::new()));
+    for (name, value) in entries {
+        append_header_value(&mut data.borrow_mut(), &name, &value);
+    }
+
+    let mut headers = JSObject::new();
+    headers.set(HEADERS_DATA.to_string(), JSValue::Object(data));
+    headers.set(HEADERS_IMMUTABLE.to_string(), JSValue::Boolean(immutable));
+    headers.set("get".to_string(), JSValue::NativeFunction(headers_get));
+    headers.set("has".to_string(), JSValue::NativeFunction(headers_has));
+    headers.set("set".to_string(), JSValue::NativeFunction(headers_set));
+    headers.set(
+        "append".to_string(),
+        JSValue::NativeFunction(headers_append),
+    );
+    headers.set(
+        "delete".to_string(),
+        JSValue::NativeFunction(headers_delete),
+    );
+    Rc::new(RefCell::new(headers))
+}
+
+fn extract_header_entries(value: &JSValue) -> Vec<(String, String)> {
+    let JSValue::Object(object) = value else {
+        return Vec::new();
+    };
+    let object = object.borrow();
+    if let JSValue::Object(data) = object.get(HEADERS_DATA) {
+        let data = data.borrow();
+        return data
+            .keys()
+            .into_iter()
+            .map(|name| {
+                let value = data.get(&name).to_string();
+                (name, value)
+            })
+            .collect();
+    }
+    object
+        .keys()
+        .into_iter()
+        .map(|name| {
+            let value = object.get(&name).to_string();
+            (name, value)
+        })
+        .collect()
+}
+
+fn headers_data(args: &[JSValue]) -> JSResult<Rc<RefCell<JSObject>>> {
+    let Some(JSValue::Object(headers)) = args.first() else {
+        return Err(JSError::TypeError(
+            "Headers method called on incompatible receiver".to_string(),
+        ));
+    };
+    let data = headers.borrow().get(HEADERS_DATA);
+    match data {
+        JSValue::Object(data) => Ok(data),
+        _ => Err(JSError::TypeError(
+            "Headers method called on incompatible receiver".to_string(),
+        )),
+    }
+}
+
+fn ensure_headers_mutable(args: &[JSValue]) -> JSResult<()> {
+    let Some(JSValue::Object(headers)) = args.first() else {
+        return Err(JSError::TypeError(
+            "Headers method called on incompatible receiver".to_string(),
+        ));
+    };
+    if matches!(
+        headers.borrow().get(HEADERS_IMMUTABLE),
+        JSValue::Boolean(true)
+    ) {
+        return Err(JSError::TypeError(
+            "Response headers are immutable".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn header_argument(args: &[JSValue], index: usize, label: &str) -> JSResult<String> {
+    let Some(value) = args.get(index) else {
+        return Err(JSError::TypeError(format!("Missing header {label}")));
+    };
+    Ok(value.to_string())
+}
+
+fn normalize_header_name(name: &str) -> String {
+    name.trim().to_ascii_lowercase()
+}
+
+fn normalize_header_value(value: &str) -> String {
+    value.trim().to_string()
+}
+
+fn append_header_value(data: &mut JSObject, name: &str, value: &str) {
+    let name = normalize_header_name(name);
+    if name.is_empty() {
+        return;
+    }
+    let value = normalize_header_value(value);
+    let combined = match data.get(&name) {
+        JSValue::Undefined => value,
+        current => format!("{}, {}", current.to_string(), value),
+    };
+    data.set(name, JSValue::String(combined));
+}
+
+fn headers_get(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let data = headers_data(&args)?;
+    let name = normalize_header_name(&header_argument(&args, 1, "name")?);
+    Ok(match data.borrow().get(&name) {
+        JSValue::Undefined => JSValue::Null,
+        value => value,
+    })
+}
+
+fn headers_has(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let data = headers_data(&args)?;
+    let name = normalize_header_name(&header_argument(&args, 1, "name")?);
+    let has = data.borrow().has_own_property(&name);
+    Ok(JSValue::Boolean(has))
+}
+
+fn headers_set(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    ensure_headers_mutable(&args)?;
+    let data = headers_data(&args)?;
+    let name = normalize_header_name(&header_argument(&args, 1, "name")?);
+    let value = normalize_header_value(&header_argument(&args, 2, "value")?);
+    if !name.is_empty() {
+        data.borrow_mut().set(name, JSValue::String(value));
+    }
+    Ok(JSValue::Undefined)
+}
+
+fn headers_append(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    ensure_headers_mutable(&args)?;
+    let data = headers_data(&args)?;
+    let name = header_argument(&args, 1, "name")?;
+    let value = header_argument(&args, 2, "value")?;
+    append_header_value(&mut data.borrow_mut(), &name, &value);
+    Ok(JSValue::Undefined)
+}
+
+fn headers_delete(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    ensure_headers_mutable(&args)?;
+    let data = headers_data(&args)?;
+    let name = normalize_header_name(&header_argument(&args, 1, "name")?);
+    data.borrow_mut().delete(&name);
+    Ok(JSValue::Undefined)
+}
+
 fn install_fetch(engine: &mut pixi_byte::JSEngine) {
     engine
         .global_mut()
@@ -579,20 +754,7 @@ fn parse_fetch_init(init: Option<&JSValue>) -> (String, Vec<(String, String)>, V
         JSValue::Undefined | JSValue::Null => Vec::new(),
         value => value.to_string().into_bytes(),
     };
-    let headers = match init.get("headers") {
-        JSValue::Object(headers) => {
-            let headers = headers.borrow();
-            headers
-                .keys()
-                .into_iter()
-                .map(|name| {
-                    let value = headers.get(&name).to_string();
-                    (name, value)
-                })
-                .collect()
-        }
-        _ => Vec::new(),
-    };
+    let headers = extract_header_entries(&init.get("headers"));
     (method, headers, body)
 }
 
@@ -611,6 +773,10 @@ fn capture_fetch_capability(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue
 
 fn make_fetch_response(response: JsFetchResponse) -> Rc<RefCell<JSObject>> {
     let mut object = JSObject::new();
+    object.define_property(
+        "headers".to_string(),
+        Property::read_only(JSValue::Object(make_headers(response.headers, true))),
+    );
     object.define_property(
         "ok".to_string(),
         Property::read_only(JSValue::Boolean((200..=299).contains(&response.status))),
@@ -1952,6 +2118,7 @@ mod tests {
                 url: "data:text/plain,hello".to_string(),
                 status: 200,
                 body: b"hello".to_vec(),
+                headers: Vec::new(),
             },
         );
 
@@ -1999,6 +2166,81 @@ mod tests {
     }
 
     #[test]
+    fn headers_are_case_insensitive_and_mutable() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const headers = new Headers({ Accept: "application/json" });
+            headers.append("X-Test", "one");
+            headers.append("x-test", "two");
+            headers.set("X-Replace", "before");
+            headers.set("x-replace", "after");
+            headers.delete("ACCEPT");
+
+            const result = document.querySelector("#result");
+            result.setAttribute("data-test", headers.get("X-TEST"));
+            result.setAttribute("data-replace", headers.get("X-Replace"));
+            result.setAttribute("data-has-accept", headers.has("accept"));
+            result.setAttribute("data-missing", headers.get("missing") === null);
+
+            fetch("https://example.test/", { headers: headers });
+            "##,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-test"), Some("one, two"));
+        assert_eq!(result.value.get_attr("data-replace"), Some("after"));
+        assert_eq!(result.value.get_attr("data-has-accept"), Some("false"));
+        assert_eq!(result.value.get_attr("data-missing"), Some("true"));
+
+        let requests = runtime.take_fetch_requests();
+        assert!(
+            requests[0]
+                .headers
+                .contains(&("x-test".to_string(), "one, two".to_string()))
+        );
+        assert!(
+            requests[0]
+                .headers
+                .contains(&("x-replace".to_string(), "after".to_string()))
+        );
+    }
+
+    #[test]
+    fn response_exposes_read_only_headers() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            fetch("data:text/plain,hello").then(response => {
+                const result = document.querySelector("#result");
+                result.setAttribute("data-type", response.headers.get("Content-Type"));
+                result.setAttribute("data-has", response.headers.has("X-Test"));
+            });
+            "##,
+        );
+
+        let requests = runtime.take_fetch_requests();
+        runtime.resolve_fetch(
+            requests[0].id,
+            JsFetchResponse {
+                url: "data:text/plain,hello".to_string(),
+                status: 200,
+                body: b"hello".to_vec(),
+                headers: vec![
+                    ("content-type".to_string(), "text/plain".to_string()),
+                    ("X-Test".to_string(), "yes".to_string()),
+                ],
+            },
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-type"), Some("text/plain"));
+        assert_eq!(result.value.get_attr("data-has"), Some("true"));
+    }
+
+    #[test]
     fn response_json_resolves_objects_and_arrays() {
         let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
         runtime.run_script(
@@ -2020,6 +2262,7 @@ mod tests {
                 url: "data:application/json,pending".to_string(),
                 status: 200,
                 body: br#"{"name":"Orinium","items":[1,2],"enabled":true,"empty":null}"#.to_vec(),
+                headers: Vec::new(),
             },
         );
 
@@ -2051,6 +2294,7 @@ mod tests {
                 url: "data:application/json,invalid".to_string(),
                 status: 200,
                 body: b"not json".to_vec(),
+                headers: Vec::new(),
             },
         );
 

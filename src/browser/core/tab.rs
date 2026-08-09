@@ -197,6 +197,7 @@ impl Tab {
                 response.url,
                 response.status.as_u16(),
                 response.body,
+                response.headers,
             );
         }
     }
