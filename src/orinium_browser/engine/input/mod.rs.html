@@ -263,7 +263,7 @@
 <a href=#263 id=263 data-nosnippet>263</a>                    <span class="kw">let </span>max_scroll = (box_model.children_box.height
 <a href=#264 id=264 data-nosnippet>264</a>                        - box_model.content_box.height.min(vh))
 <a href=#265 id=265 data-nosnippet>265</a>                    .max(<span class="number">0.0</span>);
-<a href=#266 id=266 data-nosnippet>266</a>                    <span class="kw">let </span>next = (<span class="kw-2">*</span>scroll_offset_y + dy).clamp(<span class="number">0.0</span>, <span class="macro">dbg!</span>(max_scroll));
+<a href=#266 id=266 data-nosnippet>266</a>                    <span class="kw">let </span>next = (<span class="kw-2">*</span>scroll_offset_y + dy).clamp(<span class="number">0.0</span>, max_scroll);
 <a href=#267 id=267 data-nosnippet>267</a>                    <span class="kw">if </span>(next - <span class="kw-2">*</span>scroll_offset_y).abs() &gt; f32::EPSILON {
 <a href=#268 id=268 data-nosnippet>268</a>                        changed = <span class="bool-val">true</span>;
 <a href=#269 id=269 data-nosnippet>269</a>                    }
