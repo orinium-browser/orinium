@@ -471,6 +471,7 @@ impl WebView {
             }
         }
 
+        self.dispatch_dom_content_loaded();
         self.phase = PagePhase::ScriptApplied;
     }
 
@@ -486,6 +487,18 @@ impl WebView {
     fn run_script_source(&mut self, source: &str) {
         let needs_redraw = self.js_runtime.as_mut().is_some_and(|runtime| {
             runtime.run_script(source);
+            runtime.take_needs_redraw()
+        });
+
+        if needs_redraw {
+            self.update_layout();
+            self.needs_redraw = true;
+        }
+    }
+
+    fn dispatch_dom_content_loaded(&mut self) {
+        let needs_redraw = self.js_runtime.as_mut().is_some_and(|runtime| {
+            runtime.dispatch_dom_content_loaded();
             runtime.take_needs_redraw()
         });
 
@@ -980,5 +993,53 @@ mod tests {
             .get_element_by_id("result")
             .unwrap();
         assert_eq!(result.borrow().value.get_attr("data-ran"), Some("yes"));
+    }
+
+    #[test]
+    fn dom_content_loaded_fires_after_external_classic_scripts_finish() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"
+                <div id="result"></div>
+                <script>
+                    document.addEventListener("DOMContentLoaded", function () {
+                        const result = document.getElementById("result");
+                        result.setAttribute("data-ready", result.getAttribute("data-external"));
+                    });
+                </script>
+                <script src="setup.js"></script>
+            "#
+            .to_string(),
+            Url::parse("https://example.test/index.html").unwrap(),
+        );
+
+        assert!(webview.tick().is_empty());
+        let tasks = webview.tick();
+        assert!(matches!(
+            tasks.as_slice(),
+            [WebViewTask::Fetch {
+                kind: FetchKind::Script { index: 1 },
+                ..
+            }]
+        ));
+
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-ready"), None);
+
+        webview.on_script_fetched(
+            1,
+            r#"document.getElementById("result").setAttribute("data-external", "yes");"#
+                .to_string(),
+        );
+        assert_eq!(result.borrow().value.get_attr("data-ready"), None);
+
+        assert!(webview.tick().is_empty());
+        assert_eq!(result.borrow().value.get_attr("data-ready"), Some("yes"));
+        assert_eq!(webview.phase, PagePhase::ScriptApplied);
     }
 }
