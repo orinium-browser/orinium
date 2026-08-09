@@ -235,6 +235,7 @@ fn parse_an_plus_b(tokens: &[Token]) -> Option<(i32, i32)> {
 }
 
 /// CSS parser consuming tokens and producing syntax structures.
+#[derive(Clone)]
 pub struct Parser<'a> {
     /// Source of tokens produced by the tokenizer
     tokenizer: Tokenizer<'a>,
@@ -392,6 +393,83 @@ impl<'a> Parser<'a> {
         }
 
         Ok(stylesheet)
+    }
+
+    /// Parses a stylesheet while recovering from unsupported top-level items.
+    ///
+    /// Browser stylesheets are frequently generated and may contain selectors
+    /// or declarations that this engine does not support yet. Dropping the
+    /// entire stylesheet for one such rule would also discard all compatible
+    /// rules, so this mode skips the failing item and resumes at the next
+    /// top-level boundary. The strict [`Self::parse`] entry point remains
+    /// available for validation and unit tests.
+    pub fn parse_lossy(&mut self) -> CssNode {
+        let mut stylesheet = CssNode {
+            node: CssNodeType::Stylesheet,
+            children: vec![],
+        };
+
+        loop {
+            let token = self.peek_token().clone();
+            let checkpoint = self.clone();
+            match token {
+                Token::EOF => break,
+                Token::Whitespace | Token::Comment(_) => {
+                    self.consume_token();
+                }
+                Token::AtKeyword(_) => match self.parse_at_rule() {
+                    Ok(node) => stylesheet.children.push(node),
+                    Err(error) => {
+                        log::warn!(
+                            target: "CssParser",
+                            "Skipping unsupported at-rule: {error}"
+                        );
+                        *self = checkpoint;
+                        self.recover_top_level_item();
+                    }
+                },
+                _ => match self.parse_rule() {
+                    Ok(node) => stylesheet.children.push(node),
+                    Err(error) => {
+                        log::warn!(
+                            target: "CssParser",
+                            "Skipping unsupported CSS rule: {error}"
+                        );
+                        *self = checkpoint;
+                        self.recover_top_level_item();
+                    }
+                },
+            }
+        }
+
+        stylesheet
+    }
+
+    fn recover_top_level_item(&mut self) {
+        let mut depth = 0_usize;
+        loop {
+            match self.peek_token().clone() {
+                Token::EOF => break,
+                Token::Delim('{') => {
+                    depth += 1;
+                    self.consume_token();
+                }
+                Token::Delim('}') => {
+                    self.consume_token();
+                    if depth <= 1 {
+                        break;
+                    }
+                    depth -= 1;
+                }
+                Token::Delim(';') if depth == 0 => {
+                    self.consume_token();
+                    break;
+                }
+                _ => {
+                    self.consume_token();
+                }
+            }
+        }
     }
 
     fn parse_at_rule(&mut self) -> ParseResult<CssNode> {
@@ -1258,6 +1336,22 @@ mod tests {
                 CssValue::String("header header".into()),
                 CssValue::String("sidebar main".into()),
             ])
+        );
+    }
+
+    #[test]
+    fn lossy_parser_resumes_after_recovering_a_failed_at_rule() {
+        let mut parser = Parser::new("@media { @broken } .valid { color: green; }");
+        let stylesheet = parser.parse_lossy();
+
+        assert_eq!(stylesheet.children().len(), 1);
+        let CssNodeType::Rule { selectors } = stylesheet.children()[0].node() else {
+            panic!("expected recovered CSS rule");
+        };
+        assert_eq!(selectors[0].parts[0].selector.tag.as_deref(), None);
+        assert_eq!(
+            selectors[0].parts[0].selector.classes,
+            vec![String::from("valid")]
         );
     }
 }

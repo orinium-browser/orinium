@@ -17,7 +17,7 @@
 //! ```no_run
 //! use orinium_browser::browser::{BrowserApp, BrowserUi, Tab};
 //!
-//! let mut tab = Tab::new();
+//! let mut tab = Tab::default();
 //! tab.navigate("resource:///test/test.html".parse().unwrap());
 //! let mut app = BrowserApp::default();
 //! app.set_default_ui(BrowserUi::with_tab(tab));
@@ -119,7 +119,7 @@ impl PendingFetches {
 /// ```no_run
 /// use orinium_browser::browser::{BrowserApp, BrowserUi, Tab};
 ///
-/// let mut tab = Tab::new();
+/// let mut tab = Tab::default();
 /// tab.navigate("resource:///test/test.html".parse().unwrap());
 /// let mut app = BrowserApp::default();
 /// app.set_default_ui(BrowserUi::with_tab(tab));

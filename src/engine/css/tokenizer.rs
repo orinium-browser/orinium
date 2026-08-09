@@ -77,6 +77,7 @@ pub enum Token {
 /// - Parsing declarations or selectors
 /// - Interpreting values (length, color, etc.)
 /// - Building trees or higher-level structures
+#[derive(Clone)]
 pub struct Tokenizer<'a> {
     /// Iterator over the input characters
     chars: std::str::Chars<'a>,

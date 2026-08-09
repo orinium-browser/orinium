@@ -87,11 +87,7 @@ impl<T> TreeNode<T> {
 
     /// Inserts `child` immediately before `reference`, moving it from its
     /// current parent when necessary.
-    pub fn insert_before(
-        parent: &NodeRef<T>,
-        child: NodeRef<T>,
-        reference: &NodeRef<T>,
-    ) -> bool {
+    pub fn insert_before(parent: &NodeRef<T>, child: NodeRef<T>, reference: &NodeRef<T>) -> bool {
         if Rc::ptr_eq(&child, reference) {
             return reference
                 .borrow()
@@ -388,11 +384,7 @@ mod tests {
         TreeNode::add_child(&root, Rc::clone(&second));
         TreeNode::add_child(&first, Rc::clone(&moving));
 
-        assert!(TreeNode::insert_before(
-            &root,
-            Rc::clone(&moving),
-            &second
-        ));
+        assert!(TreeNode::insert_before(&root, Rc::clone(&moving), &second));
         let children = root.borrow().children().to_vec();
         assert!(Rc::ptr_eq(&children[0], &first));
         assert!(Rc::ptr_eq(&children[1], &moving));

@@ -17,7 +17,7 @@
 //! use orinium_browser::browser::{BrowserApp, BrowserUi, Tab};
 //!
 //! // Navigate the tab to a resource or URL (error handling elided)
-//! let mut tab = Tab::new();
+//! let mut tab = Tab::default();
 //! tab.navigate("resource:///test/test.html".parse().unwrap());
 //!
 //! // Create browser with the pre-configured tab and run it

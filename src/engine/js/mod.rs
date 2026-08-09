@@ -343,11 +343,7 @@ impl JsRuntime {
             }
 
             ran_handler = true;
-            let event = make_event(
-                "click",
-                Rc::clone(&target),
-                Rc::clone(&current_target),
-            );
+            let event = make_event("click", Rc::clone(&target), Rc::clone(&current_target));
             if has_onclick {
                 if let Err(err) = self.engine.call(
                     onclick,
@@ -565,10 +561,7 @@ fn clear_timer(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 
 fn install_performance(engine: &mut pixi_byte::JSEngine) {
     let mut performance = JSObject::new();
-    performance.set(
-        "now".to_string(),
-        JSValue::NativeFunction(performance_now),
-    );
+    performance.set("now".to_string(), JSValue::NativeFunction(performance_now));
     engine.global_mut().borrow_mut().set(
         "performance".to_string(),
         JSValue::Object(Rc::new(RefCell::new(performance))),
@@ -576,8 +569,10 @@ fn install_performance(engine: &mut pixi_byte::JSEngine) {
 }
 
 fn performance_now(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
-    let milliseconds = with_host(vm, |host| host.time_origin.elapsed().as_secs_f64() * 1_000.0)
-        .unwrap_or(0.0);
+    let milliseconds = with_host(vm, |host| {
+        host.time_origin.elapsed().as_secs_f64() * 1_000.0
+    })
+    .unwrap_or(0.0);
     Ok(JSValue::Number(milliseconds))
 }
 
@@ -799,9 +794,7 @@ fn install_request(engine: &mut pixi_byte::JSEngine) {
 
 fn request_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(input) = args.get(1) else {
-        return Err(JSError::TypeError(
-            "Request input is required".to_string(),
-        ));
+        return Err(JSError::TypeError("Request input is required".to_string()));
     };
     let parts = request_parts(input, args.get(2));
     Ok(JSValue::Object(make_request(parts)))
@@ -1107,6 +1100,14 @@ fn install_document(engine: &mut pixi_byte::JSEngine) {
             "activeElement".to_string(),
             read_only_accessor_property(get_active_element),
         );
+        document.define_property(
+            "defaultView".to_string(),
+            read_only_accessor_property(get_document_default_view),
+        );
+        document.define_property(
+            "readyState".to_string(),
+            read_only_accessor_property(get_document_ready_state),
+        );
         document.set(
             "hasFocus".to_string(),
             JSValue::NativeFunction(document_has_focus),
@@ -1152,9 +1153,9 @@ fn install_document(engine: &mut pixi_byte::JSEngine) {
         .borrow_mut()
         .set("document".to_string(), JSValue::Object(document_obj));
 
-    if let Some(element_constructor) = with_host(engine.vm(), |host| {
-        Rc::clone(&host.element_constructor)
-    }) {
+    if let Some(element_constructor) =
+        with_host(engine.vm(), |host| Rc::clone(&host.element_constructor))
+    {
         let mut global = engine.global_mut().borrow_mut();
         global.set(
             "Element".to_string(),
@@ -1424,6 +1425,17 @@ fn get_active_element(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     get_document_body(vm, Vec::new())
 }
 
+fn get_document_default_view(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::Object(Rc::clone(&vm.global_object)))
+}
+
+fn get_document_ready_state(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let complete = with_host(vm, |host| host.dom_content_loaded_fired).unwrap_or(false);
+    Ok(JSValue::String(
+        if complete { "complete" } else { "loading" }.to_string(),
+    ))
+}
+
 fn document_has_focus(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(JSValue::Boolean(true))
 }
@@ -1437,7 +1449,7 @@ fn expose_detached_node(vm: &mut VM, node: NodeRef<HtmlNodeType>) -> Option<JSVa
     Some(value)
 }
 
-fn expose_node(vm: &mut VM, node: NodeRef<HtmlNodeType>) -> Option<JSValue> {
+fn expose_node(vm: &VM, node: NodeRef<HtmlNodeType>) -> Option<JSValue> {
     let node_kind = {
         let node = node.borrow();
         match &node.value {
@@ -1556,6 +1568,10 @@ fn make_element(
         Property::read_only(JSValue::String(html_name)),
     );
     obj.define_property(
+        "localName".to_string(),
+        Property::read_only(JSValue::String(tag_name)),
+    );
+    obj.define_property(
         "id".to_string(),
         accessor_property(get_element_id, set_element_id),
     );
@@ -1574,6 +1590,14 @@ fn make_element(
     obj.define_property(
         "parentNode".to_string(),
         read_only_accessor_property(get_parent_node),
+    );
+    obj.define_property(
+        "parentElement".to_string(),
+        read_only_accessor_property(get_parent_element),
+    );
+    obj.define_property(
+        "isConnected".to_string(),
+        read_only_accessor_property(get_is_connected),
     );
     obj.define_property(
         "ownerDocument".to_string(),
@@ -1615,10 +1639,7 @@ fn make_element(
         "className".to_string(),
         accessor_property(get_class_name, set_class_name),
     );
-    obj.define_property(
-        "style".to_string(),
-        read_only_accessor_property(get_style),
-    );
+    obj.define_property("style".to_string(), read_only_accessor_property(get_style));
     obj.set(
         "getAttribute".to_string(),
         JSValue::NativeFunction(get_attribute),
@@ -1655,7 +1676,10 @@ fn make_element(
         "querySelectorAll".to_string(),
         JSValue::NativeFunction(element_query_selector_all),
     );
-    obj.set("contains".to_string(), JSValue::NativeFunction(element_contains));
+    obj.set(
+        "contains".to_string(),
+        JSValue::NativeFunction(element_contains),
+    );
     obj.set("focus".to_string(), JSValue::NativeFunction(focus_element));
     obj.set("blur".to_string(), JSValue::NativeFunction(blur_element));
     obj.set(
@@ -1700,6 +1724,14 @@ fn make_text_node(dom_id: u64) -> Rc<RefCell<JSObject>> {
     obj.define_property(
         "parentNode".to_string(),
         read_only_accessor_property(get_parent_node),
+    );
+    obj.define_property(
+        "parentElement".to_string(),
+        read_only_accessor_property(get_parent_element),
+    );
+    obj.define_property(
+        "isConnected".to_string(),
+        read_only_accessor_property(get_is_connected),
     );
     obj.define_property(
         "ownerDocument".to_string(),
@@ -1992,6 +2024,39 @@ fn get_parent_node(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(expose_node(vm, parent).unwrap_or(JSValue::Null))
 }
 
+fn get_parent_element(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Null);
+    };
+    let Some(parent) = node.borrow().parent() else {
+        return Ok(JSValue::Null);
+    };
+    if !matches!(parent.borrow().value, HtmlNodeType::Element { .. }) {
+        return Ok(JSValue::Null);
+    }
+    Ok(expose_node(vm, parent).unwrap_or(JSValue::Null))
+}
+
+fn get_is_connected(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(mut node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Boolean(false));
+    };
+
+    loop {
+        let (is_document, parent) = {
+            let node = node.borrow();
+            (matches!(node.value, HtmlNodeType::Document), node.parent())
+        };
+        if is_document {
+            return Ok(JSValue::Boolean(true));
+        }
+        let Some(parent) = parent else {
+            return Ok(JSValue::Boolean(false));
+        };
+        node = parent;
+    }
+}
+
 fn get_owner_document(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(with_host(vm, |host| host.document.as_ref().cloned())
         .flatten()
@@ -2002,7 +2067,8 @@ fn get_owner_document(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
 fn get_namespace_uri(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let this = args.first().unwrap_or(&JSValue::Undefined);
     if let Some(dom_id) = node_dom_id(this) {
-        if let Some(namespace) = with_host(vm, |host| host.namespaces.get(&dom_id).cloned()).flatten()
+        if let Some(namespace) =
+            with_host(vm, |host| host.namespaces.get(&dom_id).cloned()).flatten()
         {
             return if namespace.is_empty() {
                 Ok(JSValue::Null)
@@ -2609,10 +2675,7 @@ fn get_inner_html(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     };
     let children = node.borrow().children().to_vec();
     Ok(JSValue::String(
-        children
-            .iter()
-            .map(serialize_html_node)
-            .collect::<String>(),
+        children.iter().map(serialize_html_node).collect::<String>(),
     ))
 }
 
@@ -2646,28 +2709,15 @@ fn set_inner_html(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(JSValue::Undefined)
 }
 
-fn reflected_string_property(
-    vm: &mut VM,
-    args: &[JSValue],
-    name: &str,
-) -> JSResult<JSValue> {
+fn reflected_string_property(vm: &mut VM, args: &[JSValue], name: &str) -> JSResult<JSValue> {
     let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
         return Ok(JSValue::String(String::new()));
     };
-    let value = node
-        .borrow()
-        .value
-        .get_attr(name)
-        .unwrap_or("")
-        .to_string();
+    let value = node.borrow().value.get_attr(name).unwrap_or("").to_string();
     Ok(JSValue::String(value))
 }
 
-fn set_reflected_string_property(
-    vm: &mut VM,
-    args: &[JSValue],
-    name: &str,
-) -> JSResult<JSValue> {
+fn set_reflected_string_property(vm: &mut VM, args: &[JSValue], name: &str) -> JSResult<JSValue> {
     let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
         return Ok(JSValue::Undefined);
     };
@@ -2680,22 +2730,16 @@ fn set_reflected_string_property(
     Ok(JSValue::Undefined)
 }
 
-fn reflected_boolean_property(
-    vm: &mut VM,
-    args: &[JSValue],
-    name: &str,
-) -> JSResult<JSValue> {
+fn reflected_boolean_property(vm: &mut VM, args: &[JSValue], name: &str) -> JSResult<JSValue> {
     let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
         return Ok(JSValue::Boolean(false));
     };
-    Ok(JSValue::Boolean(node.borrow().value.get_attr(name).is_some()))
+    Ok(JSValue::Boolean(
+        node.borrow().value.get_attr(name).is_some(),
+    ))
 }
 
-fn set_reflected_boolean_property(
-    vm: &mut VM,
-    args: &[JSValue],
-    name: &str,
-) -> JSResult<JSValue> {
+fn set_reflected_boolean_property(vm: &mut VM, args: &[JSValue], name: &str) -> JSResult<JSValue> {
     let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
         return Ok(JSValue::Undefined);
     };
@@ -2754,7 +2798,9 @@ fn has_attribute(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(JSValue::String(name)) = args.get(1) else {
         return Ok(JSValue::Boolean(false));
     };
-    Ok(JSValue::Boolean(node.borrow().value.get_attr(name).is_some()))
+    Ok(JSValue::Boolean(
+        node.borrow().value.get_attr(name).is_some(),
+    ))
 }
 
 fn set_attribute(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -2844,7 +2890,10 @@ mod tests {
         );
 
         let child = dom.get_element_by_id("second").unwrap();
-        assert_eq!(child.borrow().value.get_attr("data-current-id"), Some("second"));
+        assert_eq!(
+            child.borrow().value.get_attr("data-current-id"),
+            Some("second")
+        );
         assert!(runtime.needs_redraw());
     }
 
@@ -2902,9 +2951,59 @@ mod tests {
         assert_eq!(field.value.get_attr("data-prototype"), Some("true"));
         assert_eq!(field.value.get_attr("data-interface"), Some("true"));
         assert_eq!(field.value.get_attr("data-own-value"), Some("false"));
-        assert_eq!(field.value.get_attr("data-accessor"), Some("function:function"));
+        assert_eq!(
+            field.value.get_attr("data-accessor"),
+            Some("function:function")
+        );
         assert_eq!(field.value.get_attr("data-read"), Some("tracked"));
         assert_eq!(field.value.get_attr("value"), Some("tracked"));
+    }
+
+    #[test]
+    fn exposes_document_and_node_metadata_used_by_react_dom() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<html><body><main id="root"><span id="child">text</span></main></body></html>"#,
+        );
+        runtime.run_script(
+            r#"
+            const root = document.getElementById("root");
+            const child = document.getElementById("child");
+            child.setAttribute("data-default-view", document.defaultView === window);
+            child.setAttribute("data-ready-before", document.readyState);
+            child.setAttribute("data-local-name", child.localName);
+            child.setAttribute("data-parent-element", child.parentElement === root);
+            child.setAttribute("data-connected", child.isConnected);
+            child.setAttribute("data-text-connected", child.firstChild.isConnected);
+            "#,
+        );
+
+        let child = dom.get_element_by_id("child").unwrap();
+        let child = child.borrow();
+        assert_eq!(child.value.get_attr("data-default-view"), Some("true"));
+        assert_eq!(child.value.get_attr("data-ready-before"), Some("loading"));
+        assert_eq!(child.value.get_attr("data-local-name"), Some("span"));
+        assert_eq!(child.value.get_attr("data-parent-element"), Some("true"));
+        assert_eq!(child.value.get_attr("data-connected"), Some("true"));
+        assert_eq!(child.value.get_attr("data-text-connected"), Some("true"));
+        drop(child);
+
+        assert!(runtime.dispatch_dom_content_loaded());
+        runtime.run_script(
+            r#"
+            document.getElementById("child").setAttribute(
+                "data-ready-after",
+                document.readyState
+            );
+            "#,
+        );
+        assert_eq!(
+            dom.get_element_by_id("child")
+                .unwrap()
+                .borrow()
+                .value
+                .get_attr("data-ready-after"),
+            Some("complete")
+        );
     }
 
     #[test]
@@ -3461,7 +3560,13 @@ mod tests {
 
         let root = dom.get_element_by_id("root").unwrap();
         assert_eq!(root.borrow().children().len(), 1);
-        assert_eq!(root.borrow().children()[0].borrow().value.get_attr("data-remove"), None);
+        assert_eq!(
+            root.borrow().children()[0]
+                .borrow()
+                .value
+                .get_attr("data-remove"),
+            None
+        );
     }
 
     #[test]
@@ -3620,7 +3725,10 @@ mod tests {
         );
 
         let result = dom.get_element_by_id("result").unwrap();
-        assert_eq!(result.borrow().value.get_attr("data-monotonic"), Some("true"));
+        assert_eq!(
+            result.borrow().value.get_attr("data-monotonic"),
+            Some("true")
+        );
     }
 
     #[test]
@@ -3857,19 +3965,13 @@ mod tests {
         let result = result.borrow();
         assert_eq!(result.value.get_attr("data-ok"), Some("true"));
         assert_eq!(result.value.get_attr("data-status"), Some("200"));
-        assert_eq!(
-            result.value.get_attr("data-status-text"),
-            Some("All Good")
-        );
+        assert_eq!(result.value.get_attr("data-status-text"), Some("All Good"));
         assert_eq!(result.value.get_attr("data-redirected"), Some("true"));
         assert_eq!(
             result.value.get_attr("data-body-used-before"),
             Some("false")
         );
-        assert_eq!(
-            result.value.get_attr("data-body-used-after"),
-            Some("true")
-        );
+        assert_eq!(result.value.get_attr("data-body-used-after"), Some("true"));
         assert_eq!(
             result.value.get_attr("data-url"),
             Some("data:text/plain,hello")
