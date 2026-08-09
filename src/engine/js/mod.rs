@@ -63,6 +63,8 @@ pub struct JsHost {
     /// Element JS objects per DOM id, kept alive so `onclick` handlers
     /// registered on them survive and can be invoked on user clicks.
     objects: HashMap<u64, Rc<RefCell<JSObject>>>,
+    /// Stable `CSSStyleDeclaration` wrappers for exposed elements.
+    styles: HashMap<u64, Rc<RefCell<JSObject>>>,
     document: Option<Rc<RefCell<JSObject>>>,
     document_event_listeners: HashMap<String, Vec<JSValue>>,
     element_event_listeners: HashMap<u64, HashMap<String, Vec<JSValue>>>,
@@ -106,6 +108,7 @@ impl JsRuntime {
             dom,
             refs: HashMap::new(),
             objects: HashMap::new(),
+            styles: HashMap::new(),
             document: None,
             document_event_listeners: HashMap::new(),
             element_event_listeners: HashMap::new(),
@@ -1312,6 +1315,10 @@ fn make_element(tag_name: String, attr_id: String, dom_id: u64) -> Rc<RefCell<JS
         "className".to_string(),
         accessor_property(get_class_name, set_class_name),
     );
+    obj.define_property(
+        "style".to_string(),
+        read_only_accessor_property(get_style),
+    );
     obj.set(
         "getAttribute".to_string(),
         JSValue::NativeFunction(get_attribute),
@@ -1734,6 +1741,230 @@ fn set_class_name(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(JSValue::Undefined)
 }
 
+fn get_style(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(dom_id) = node_dom_id(args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Null);
+    };
+    let style = with_host_mut(vm, |host| {
+        if let Some(style) = host.styles.get(&dom_id) {
+            return Rc::clone(style);
+        }
+
+        let style = make_style_declaration(dom_id);
+        host.styles.insert(dom_id, Rc::clone(&style));
+        style
+    })
+    .ok_or_else(|| JSError::InternalError("JS host is unavailable".to_string()))?;
+    Ok(JSValue::Object(style))
+}
+
+fn make_style_declaration(dom_id: u64) -> Rc<RefCell<JSObject>> {
+    let mut style = JSObject::new();
+    define_node_id(&mut style, dom_id);
+    style.define_property(
+        "cssText".to_string(),
+        accessor_property(get_style_css_text, set_style_css_text),
+    );
+    style.set(
+        "setProperty".to_string(),
+        JSValue::NativeFunction(style_set_property),
+    );
+    style.set(
+        "getPropertyValue".to_string(),
+        JSValue::NativeFunction(style_get_property_value),
+    );
+    style.set(
+        "removeProperty".to_string(),
+        JSValue::NativeFunction(style_remove_property),
+    );
+    style.set(
+        "__host_get_property__".to_string(),
+        JSValue::NativeFunction(style_host_get_property),
+    );
+    style.set(
+        "__host_set_property__".to_string(),
+        JSValue::NativeFunction(style_host_set_property),
+    );
+    Rc::new(RefCell::new(style))
+}
+
+fn get_style_css_text(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::String(String::new()));
+    };
+    let css_text = node
+        .borrow()
+        .value
+        .get_attr("style")
+        .unwrap_or("")
+        .to_string();
+    Ok(JSValue::String(css_text))
+}
+
+fn set_style_css_text(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Undefined);
+    };
+    let css_text = args.get(1).map(JSValue::to_string).unwrap_or_default();
+    if css_text.is_empty() {
+        node.borrow_mut().value.remove_attr("style");
+    } else {
+        node.borrow_mut().value.set_attr("style", css_text);
+    }
+    mark_dom_dirty(vm);
+    Ok(JSValue::Undefined)
+}
+
+fn style_set_property(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(name) = args.get(1).map(JSValue::to_string) else {
+        return Ok(JSValue::Undefined);
+    };
+    let value = args.get(2).map(JSValue::to_string).unwrap_or_default();
+    let priority = args.get(3).map(JSValue::to_string).unwrap_or_default();
+    set_style_property(vm, &args, &name, &value, &priority)?;
+    Ok(JSValue::Undefined)
+}
+
+fn style_get_property_value(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(name) = args.get(1).map(JSValue::to_string) else {
+        return Ok(JSValue::String(String::new()));
+    };
+    Ok(JSValue::String(read_style_property(vm, &args, &name)))
+}
+
+fn style_remove_property(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(name) = args.get(1).map(JSValue::to_string) else {
+        return Ok(JSValue::String(String::new()));
+    };
+    let previous = read_style_property(vm, &args, &name);
+    set_style_property(vm, &args, &name, "", "")?;
+    Ok(JSValue::String(previous))
+}
+
+fn style_host_get_property(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(name) = args.get(1).map(JSValue::to_string) else {
+        return Ok(JSValue::Undefined);
+    };
+    Ok(JSValue::String(read_style_property(
+        vm,
+        &args,
+        &style_property_name(&name),
+    )))
+}
+
+fn style_host_set_property(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(name) = args.get(1).map(JSValue::to_string) else {
+        return Ok(JSValue::Undefined);
+    };
+    let value = args.get(2).map(JSValue::to_string).unwrap_or_default();
+    set_style_property(vm, &args, &style_property_name(&name), &value, "")?;
+    Ok(JSValue::Undefined)
+}
+
+fn read_style_property(vm: &mut VM, args: &[JSValue], name: &str) -> String {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return String::new();
+    };
+    let style = node
+        .borrow()
+        .value
+        .get_attr("style")
+        .unwrap_or("")
+        .to_string();
+    parse_style_declarations(&style)
+        .into_iter()
+        .rev()
+        .find(|(property, _)| property.eq_ignore_ascii_case(name))
+        .map(|(_, value)| strip_important(&value).to_string())
+        .unwrap_or_default()
+}
+
+fn set_style_property(
+    vm: &mut VM,
+    args: &[JSValue],
+    name: &str,
+    value: &str,
+    priority: &str,
+) -> JSResult<()> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(());
+    };
+    let style = node
+        .borrow()
+        .value
+        .get_attr("style")
+        .unwrap_or("")
+        .to_string();
+    let mut declarations = parse_style_declarations(&style);
+    declarations.retain(|(property, _)| !property.eq_ignore_ascii_case(name));
+    if !value.is_empty() {
+        let value = if priority.eq_ignore_ascii_case("important") {
+            format!("{} !important", value.trim())
+        } else {
+            value.trim().to_string()
+        };
+        declarations.push((name.to_string(), value));
+    }
+
+    let css_text = serialize_style_declarations(&declarations);
+    if css_text.is_empty() {
+        node.borrow_mut().value.remove_attr("style");
+    } else {
+        node.borrow_mut().value.set_attr("style", css_text);
+    }
+    mark_dom_dirty(vm);
+    Ok(())
+}
+
+fn parse_style_declarations(css_text: &str) -> Vec<(String, String)> {
+    css_text
+        .split(';')
+        .filter_map(|declaration| {
+            let (name, value) = declaration.split_once(':')?;
+            let name = name.trim();
+            (!name.is_empty()).then(|| (name.to_string(), value.trim().to_string()))
+        })
+        .collect()
+}
+
+fn serialize_style_declarations(declarations: &[(String, String)]) -> String {
+    declarations
+        .iter()
+        .map(|(name, value)| format!("{name}: {value};"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn strip_important(value: &str) -> &str {
+    value
+        .strip_suffix("!important")
+        .map(str::trim_end)
+        .unwrap_or(value)
+}
+
+fn style_property_name(name: &str) -> String {
+    if name.starts_with("--") {
+        return name.to_string();
+    }
+    if name == "cssFloat" {
+        return "float".to_string();
+    }
+
+    let mut result = String::new();
+    if name.starts_with("ms") && name.chars().nth(2).is_some_and(char::is_uppercase) {
+        result.push('-');
+    }
+    for character in name.chars() {
+        if character.is_uppercase() {
+            result.push('-');
+            result.extend(character.to_lowercase());
+        } else {
+            result.push(character);
+        }
+    }
+    result
+}
+
 fn class_list_contains(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
         return Ok(JSValue::Boolean(false));
@@ -1954,6 +2185,36 @@ mod tests {
 
         let node = dom.get_element_by_id("hello").unwrap();
         assert_eq!(node.borrow().value.get_attr("data-run"), Some("1"));
+    }
+
+    #[test]
+    fn style_declaration_mutates_inline_style() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="target"></div>"#);
+        runtime.run_script(
+            r#"
+            const target = document.getElementById("target");
+            target.style.backgroundColor = "red";
+            target.style.setProperty("--accent", "blue");
+            target.style.marginTop = "4px";
+            target.style.removeProperty("background-color");
+            "#,
+        );
+
+        let node = dom.get_element_by_id("target").unwrap();
+        assert_eq!(
+            node.borrow().value.get_attr("style"),
+            Some("--accent: blue; margin-top: 4px;")
+        );
+        assert!(runtime.needs_redraw());
+    }
+
+    #[test]
+    fn style_property_names_follow_cssom_spelling() {
+        assert_eq!(style_property_name("backgroundColor"), "background-color");
+        assert_eq!(style_property_name("msTransition"), "-ms-transition");
+        assert_eq!(style_property_name("WebkitTransform"), "-webkit-transform");
+        assert_eq!(style_property_name("cssFloat"), "float");
+        assert_eq!(style_property_name("--accent"), "--accent");
     }
 
     #[test]
