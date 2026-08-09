@@ -20,6 +20,7 @@
             const state = React.useState(0);
             const count = state[0];
             const setCount = state[1];
+            const technologies = ["React 18", "PixiByte", "Tailwind CSS"];
 
             return element(
                 "main",
@@ -34,6 +35,19 @@
                     { className: "text-gray-600" },
                     "カードの余白・角丸・影・色が表示されればTailwind CSSの読み込み成功です。"
                 ),
+                element(
+                    "ul",
+                    { id: "technology-list", className: "list-disc pl-6 text-gray-700" },
+                    technologies.map(function (technology) {
+                        return element("li", { key: technology }, technology);
+                    })
+                ),
+                element("input", {
+                    id: "controlled-input",
+                    className: "w-full border rounded px-3 py-2",
+                    value: "React controlled input",
+                    readOnly: true
+                }),
                 element(
                     "button",
                     {
