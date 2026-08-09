@@ -187,7 +187,11 @@ impl JsRuntime {
             return true;
         };
         for listener in listeners {
-            let event = make_event("DOMContentLoaded", Rc::clone(&document));
+            let event = make_event(
+                "DOMContentLoaded",
+                Rc::clone(&document),
+                Rc::clone(&document),
+            );
             if let Err(err) = self.engine.call(
                 listener,
                 JSValue::Object(Rc::clone(&document)),
@@ -295,53 +299,78 @@ impl JsRuntime {
     /// Dispatches a click to the handlers registered on `node`.
     ///
     /// Both the `onclick` property and `addEventListener("click", ...)` are
-    /// supported. Returns whether at least one handler ran.
+    /// supported. The event bubbles through exposed ancestor elements so
+    /// delegated listeners such as React's root listener receive it.
+    /// Returns whether at least one handler ran.
     pub fn click(&mut self, node: &NodeRef<HtmlNodeType>) -> bool {
-        let Some(dom_id) = with_host(self.engine.vm(), |host| host.dom_id_for_node(node)).flatten()
-        else {
-            return false;
-        };
-        let Some(obj) =
-            with_host(self.engine.vm(), |host| host.objects.get(&dom_id).cloned()).flatten()
-        else {
+        let mut path = Vec::new();
+        let mut current = Some(Rc::clone(node));
+        while let Some(node) = current {
+            current = node.borrow().parent();
+            if let Some(JSValue::Object(object)) = expose_node(self.engine.vm(), node) {
+                path.push(object);
+            }
+        }
+        let Some(target) = path.first().cloned() else {
             return false;
         };
 
-        let onclick = obj.borrow().get("onclick");
-        let listeners = with_host(self.engine.vm(), |host| {
-            host.element_event_listeners
-                .get(&dom_id)
-                .and_then(|events| events.get("click"))
-                .cloned()
-                .unwrap_or_default()
-        })
-        .unwrap_or_default();
-        let has_onclick = is_callable(&onclick);
-        if !has_onclick && listeners.is_empty() {
-            return false;
-        }
+        let mut ran_handler = false;
+        for current_target in path {
+            let Some(dom_id) = node_dom_id(&JSValue::Object(Rc::clone(&current_target))) else {
+                continue;
+            };
+            let onclick = current_target.borrow().get("onclick");
+            let listeners = with_host(self.engine.vm(), |host| {
+                host.element_event_listeners
+                    .get(&dom_id)
+                    .and_then(|events| events.get("click"))
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+            let has_onclick = is_callable(&onclick);
+            if !has_onclick && listeners.is_empty() {
+                continue;
+            }
 
-        let event = make_event("click", Rc::clone(&obj));
-        if has_onclick {
-            if let Err(err) = self.engine.call(
-                onclick,
-                JSValue::Object(Rc::clone(&obj)),
-                vec![JSValue::Object(Rc::clone(&event))],
-            ) {
-                log::info!("JS error in onclick: {}", err);
+            ran_handler = true;
+            let event = make_event(
+                "click",
+                Rc::clone(&target),
+                Rc::clone(&current_target),
+            );
+            if has_onclick {
+                if let Err(err) = self.engine.call(
+                    onclick,
+                    JSValue::Object(Rc::clone(&current_target)),
+                    vec![JSValue::Object(Rc::clone(&event))],
+                ) {
+                    log::info!("JS error in onclick: {}", err);
+                }
+            }
+            if !event_flag(&event, "__orinium_immediate_propagation_stopped") {
+                for listener in listeners {
+                    if let Err(err) = self.engine.call(
+                        listener,
+                        JSValue::Object(Rc::clone(&current_target)),
+                        vec![JSValue::Object(Rc::clone(&event))],
+                    ) {
+                        log::info!("JS error in click listener: {}", err);
+                    }
+                    if event_flag(&event, "__orinium_immediate_propagation_stopped") {
+                        break;
+                    }
+                }
+            }
+            if event_flag(&event, "cancelBubble") {
+                break;
             }
         }
-        for listener in listeners {
-            if let Err(err) = self.engine.call(
-                listener,
-                JSValue::Object(Rc::clone(&obj)),
-                vec![JSValue::Object(Rc::clone(&event))],
-            ) {
-                log::info!("JS error in click listener: {}", err);
-            }
+        if ran_handler {
+            self.perform_microtask_checkpoint();
         }
-        self.perform_microtask_checkpoint();
-        true
+        ran_handler
     }
 
     /// Drains queued microtasks in FIFO order, including jobs queued by jobs.
@@ -1129,7 +1158,11 @@ fn is_callable(value: &JSValue) -> bool {
     )
 }
 
-fn make_event(event_type: &str, target: Rc<RefCell<JSObject>>) -> Rc<RefCell<JSObject>> {
+fn make_event(
+    event_type: &str,
+    target: Rc<RefCell<JSObject>>,
+    current_target: Rc<RefCell<JSObject>>,
+) -> Rc<RefCell<JSObject>> {
     let mut event = JSObject::new();
     event.define_property(
         "type".to_string(),
@@ -1141,9 +1174,64 @@ fn make_event(event_type: &str, target: Rc<RefCell<JSObject>>) -> Rc<RefCell<JSO
     );
     event.define_property(
         "currentTarget".to_string(),
-        Property::read_only(JSValue::Object(target)),
+        Property::read_only(JSValue::Object(current_target)),
+    );
+    event.define_property(
+        "bubbles".to_string(),
+        Property::read_only(JSValue::Boolean(true)),
+    );
+    event.define_property(
+        "cancelable".to_string(),
+        Property::read_only(JSValue::Boolean(true)),
+    );
+    event.set("defaultPrevented".to_string(), JSValue::Boolean(false));
+    event.set("cancelBubble".to_string(), JSValue::Boolean(false));
+    event.set(
+        "preventDefault".to_string(),
+        JSValue::NativeFunction(event_prevent_default),
+    );
+    event.set(
+        "stopPropagation".to_string(),
+        JSValue::NativeFunction(event_stop_propagation),
+    );
+    event.set(
+        "stopImmediatePropagation".to_string(),
+        JSValue::NativeFunction(event_stop_immediate_propagation),
     );
     Rc::new(RefCell::new(event))
+}
+
+fn event_flag(event: &Rc<RefCell<JSObject>>, name: &str) -> bool {
+    matches!(event.borrow().get(name), JSValue::Boolean(true))
+}
+
+fn event_prevent_default(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    if let Some(JSValue::Object(event)) = args.first() {
+        event
+            .borrow_mut()
+            .set("defaultPrevented".to_string(), JSValue::Boolean(true));
+    }
+    Ok(JSValue::Undefined)
+}
+
+fn event_stop_propagation(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    if let Some(JSValue::Object(event)) = args.first() {
+        event
+            .borrow_mut()
+            .set("cancelBubble".to_string(), JSValue::Boolean(true));
+    }
+    Ok(JSValue::Undefined)
+}
+
+fn event_stop_immediate_propagation(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    event_stop_propagation(vm, args.clone())?;
+    if let Some(JSValue::Object(event)) = args.first() {
+        event.borrow_mut().set(
+            "__orinium_immediate_propagation_stopped".to_string(),
+            JSValue::Boolean(true),
+        );
+    }
+    Ok(JSValue::Undefined)
 }
 
 fn get_element_by_id(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -2499,6 +2587,63 @@ mod tests {
             Some("click")
         );
         assert!(runtime.needs_redraw());
+    }
+
+    #[test]
+    fn click_bubbles_to_delegated_ancestor_listeners() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<main id="root"><button id="button">click</button></main><div id="result"></div>"#,
+        );
+        runtime.run_script(
+            r#"
+            const root = document.getElementById("root");
+            const result = document.getElementById("result");
+            root.addEventListener("click", function (event) {
+                result.setAttribute("data-target", event.target.id);
+                result.setAttribute("data-current", event.currentTarget.id);
+                result.setAttribute("data-this", this.id);
+                event.preventDefault();
+                result.setAttribute("data-prevented", event.defaultPrevented);
+            });
+            "#,
+        );
+
+        let button = dom.get_element_by_id("button").unwrap();
+        assert!(runtime.click(&button));
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-target"), Some("button"));
+        assert_eq!(result.value.get_attr("data-current"), Some("root"));
+        assert_eq!(result.value.get_attr("data-this"), Some("root"));
+        assert_eq!(result.value.get_attr("data-prevented"), Some("true"));
+    }
+
+    #[test]
+    fn click_propagation_can_be_stopped() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<main id="root"><button id="button">click</button></main><div id="result"></div>"#,
+        );
+        runtime.run_script(
+            r#"
+            const root = document.getElementById("root");
+            const button = document.getElementById("button");
+            const result = document.getElementById("result");
+            button.addEventListener("click", function (event) {
+                result.setAttribute("data-child", "ran");
+                event.stopPropagation();
+            });
+            root.addEventListener("click", function () {
+                result.setAttribute("data-root", "ran");
+            });
+            "#,
+        );
+
+        let button = dom.get_element_by_id("button").unwrap();
+        assert!(runtime.click(&button));
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-child"), Some("ran"));
+        assert_eq!(result.value.get_attr("data-root"), None);
     }
 
     #[test]
