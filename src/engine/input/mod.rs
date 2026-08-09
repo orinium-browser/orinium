@@ -263,7 +263,7 @@ fn scroll_at_inner(
                     let max_scroll = (box_model.children_box.height
                         - box_model.content_box.height.min(vh))
                     .max(0.0);
-                    let next = (*scroll_offset_y + dy).clamp(0.0, dbg!(max_scroll));
+                    let next = (*scroll_offset_y + dy).clamp(0.0, max_scroll);
                     if (next - *scroll_offset_y).abs() > f32::EPSILON {
                         changed = true;
                     }
