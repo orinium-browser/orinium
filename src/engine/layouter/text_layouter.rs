@@ -383,9 +383,7 @@ mod tests {
 
     #[test]
     fn wraps_cjk_per_character() {
-        let clusters: Vec<GlyphCluster> = (0..10)
-            .map(|i| cluster(i, 10.0, true))
-            .collect();
+        let clusters: Vec<GlyphCluster> = (0..10).map(|i| cluster(i, 10.0, true)).collect();
         let result = layout("aaaaaaaaaa", clusters, 40.0);
         assert_eq!(result.line_texts, vec!["aaaa", "aaaa", "aa"]);
         assert_eq!(result.spans.len(), 3);
@@ -396,9 +394,7 @@ mod tests {
 
     #[test]
     fn splits_unbreakable_run() {
-        let clusters: Vec<GlyphCluster> = (0..6)
-            .map(|i| cluster(i, 20.0, false))
-            .collect();
+        let clusters: Vec<GlyphCluster> = (0..6).map(|i| cluster(i, 20.0, false)).collect();
         let result = layout("abcdef", clusters, 80.0);
         assert_eq!(result.line_texts, vec!["abcd", "ef"]);
         assert_eq!(result.spans[0].width(), 80.0);
