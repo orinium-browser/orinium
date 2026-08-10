@@ -2308,7 +2308,24 @@ fn resolve_css_len(name: &str, css_len: &CssValue, text_style: &TextStyle) -> Op
         CssValue::Keyword(_) => None,
         CssValue::Function(fn_name, args) if fn_name == "calc" && !args.is_empty() => {
             let mut iter = args.iter();
-            let mut result = resolve_css_len(name, iter.next().unwrap(), text_style)?;
+
+            let mut result = match iter.next().unwrap() {
+                CssValue::Number(factor) => match (iter.next(), iter.next()) {
+                    (Some(CssValue::Keyword(op)), Some(val)) if op == "*" => {
+                        let val_resolved = resolve_css_len(name, val, text_style)?;
+                        Length::Mul(Box::new(val_resolved), *factor)
+                    }
+                    _ => {
+                        log::error!(
+                            target: "Layouter",
+                            "Invalid calc() expression for `{}`",
+                            name
+                        );
+                        return None;
+                    }
+                },
+                value => resolve_css_len(name, value, text_style)?,
+            };
 
             while let (Some(op), Some(val)) = (iter.next(), iter.next()) {
                 match op {
@@ -2324,24 +2341,43 @@ fn resolve_css_len(name: &str, css_len: &CssValue, text_style: &TextStyle) -> Op
                         if let CssValue::Number(factor) = val {
                             result = Length::Mul(Box::new(result), *factor);
                         } else {
-                            log::error!(target: "Layouter", "Invalid operand for multiplication in calc() for `{}`: {:?}", name, val);
+                            log::error!(
+                                target: "Layouter",
+                                "Invalid operand for multiplication in calc() for `{}`: {:?}",
+                                name,
+                                val
+                            );
                             return None;
                         }
                     }
                     CssValue::Keyword(o) if o == "/" => {
                         if let CssValue::Number(factor) = val {
                             if *factor == 0.0 {
-                                log::error!(target: "Layouter", "Division by zero in calc() for `{}`", name);
+                                log::error!(
+                                    target: "Layouter",
+                                    "Division by zero in calc() for `{}`",
+                                    name
+                                );
                                 return None;
                             }
                             result = Length::Div(Box::new(result), *factor);
                         } else {
-                            log::error!(target: "Layouter", "Invalid operand for division in calc() for `{}`: {:?}", name, val);
+                            log::error!(
+                                target: "Layouter",
+                                "Invalid operand for division in calc() for `{}`: {:?}",
+                                name,
+                                val
+                            );
                             return None;
                         }
                     }
                     _ => {
-                        log::error!(target: "Layouter", "Unknown operator in calc() for `{}`: {:?}", name, op);
+                        log::error!(
+                            target: "Layouter",
+                            "Unknown operator in calc() for `{}`: {:?}",
+                            name,
+                            op
+                        );
                         return None;
                     }
                 }
