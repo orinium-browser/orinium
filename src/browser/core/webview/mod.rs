@@ -87,6 +87,7 @@ pub struct WebView {
     pending_images: Vec<(String, Url)>,
     pending_audio: Vec<(String, Url)>,
     loaded_css: Vec<String>,
+    linked_css: Vec<String>,
     images: HashMap<String, Image>,
     audio: HashMap<String, Arc<[u8]>>,
 
@@ -210,6 +211,7 @@ impl WebView {
             pending_images: Vec::new(),
             pending_audio: Vec::new(),
             loaded_css: Vec::new(),
+            linked_css: Vec::new(),
             images: HashMap::new(),
             audio: HashMap::new(),
 
@@ -363,18 +365,17 @@ impl WebView {
         self.snapshot_cache = None;
 
         for inline_css in &parsed.inline_styles {
-            if let Ok(sheet) = CssParser::new(inline_css).parse() {
-                layouter::css_resolver::append_resolved_styles(
-                    Arc::make_mut(&mut self.resolved_styles),
-                    layouter::css_resolver::CssResolver::resolve(&sheet),
-                );
-            }
+            let sheet = CssParser::new(inline_css).parse_lossy();
+            layouter::css_resolver::append_resolved_styles(
+                Arc::make_mut(&mut self.resolved_styles),
+                layouter::css_resolver::CssResolver::resolve(&sheet),
+            );
         }
-
         self.phase = PagePhase::HtmlParsed;
     }
 
     pub fn on_css_fetched(&mut self, css: String) {
+        self.linked_css.push(css.clone());
         match self.css_strategy {
             CssApplicationStrategy::Batch => {
                 self.loaded_css.push(css);
@@ -480,7 +481,7 @@ impl WebView {
             runtime.take_needs_redraw()
         });
         if needs_redraw {
-            self.update_layout();
+            self.rebuild_styles_and_layout();
             self.needs_redraw = true;
         }
     }
@@ -492,7 +493,7 @@ impl WebView {
             runtime.take_needs_redraw()
         });
         if needs_redraw {
-            self.update_layout();
+            self.rebuild_styles_and_layout();
             self.needs_redraw = true;
         }
     }
@@ -519,6 +520,33 @@ impl WebView {
             Arc::make_mut(&mut self.resolved_styles),
             resolved,
         );
+        self.update_layout();
+    }
+
+    fn rebuild_styles_and_layout(&mut self) {
+        let Some(document) = self.docment_info.as_ref() else {
+            self.update_layout();
+            return;
+        };
+        let mut resolved = layouter::css_resolver::CssResolver::resolve_with_origin(
+            &CssParser::new(USER_AGENT_CSS).parse().unwrap(),
+            layouter::css_resolver::StyleOrigin::UserAgent,
+        );
+        for source in &self.linked_css {
+            let sheet = CssParser::new(source).parse_lossy();
+            layouter::css_resolver::append_resolved_styles(
+                &mut resolved,
+                layouter::css_resolver::CssResolver::resolve(&sheet),
+            );
+        }
+        for source in document.dom.collect_text_by_tag("style") {
+            let sheet = CssParser::new(&source).parse_lossy();
+            layouter::css_resolver::append_resolved_styles(
+                &mut resolved,
+                layouter::css_resolver::CssResolver::resolve(&sheet),
+            );
+        }
+        self.resolved_styles = Arc::new(resolved);
         self.update_layout();
     }
 
@@ -633,7 +661,7 @@ impl WebView {
         });
 
         if needs_redraw {
-            self.update_layout();
+            self.rebuild_styles_and_layout();
             self.needs_redraw = true;
         }
     }
@@ -645,7 +673,7 @@ impl WebView {
         });
 
         if needs_redraw {
-            self.update_layout();
+            self.rebuild_styles_and_layout();
             self.needs_redraw = true;
         }
     }
@@ -657,7 +685,7 @@ impl WebView {
         });
 
         if needs_redraw {
-            self.update_layout();
+            self.rebuild_styles_and_layout();
             self.needs_redraw = true;
         }
     }
@@ -711,7 +739,7 @@ impl WebView {
         };
         js_runtime.click(&node);
         if js_runtime.take_needs_redraw() {
-            self.update_layout();
+            self.rebuild_styles_and_layout();
             self.needs_redraw = true;
             true
         } else {
@@ -824,6 +852,7 @@ impl WebView {
         self.pending_images.clear();
         self.pending_audio.clear();
         self.loaded_css.clear();
+        self.linked_css.clear();
         self.images.clear();
         self.audio.clear();
         Arc::make_mut(&mut self.resolved_styles).clear();
@@ -1038,6 +1067,50 @@ pub fn resolve_url(base_url: &Url, path: &str) -> Result<Url, url::ParseError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inline_styles_recover_after_an_unsupported_rule() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"<style>@media { @broken } .valid { color: green; }</style><div class="valid">ok</div>"#
+                .to_string(),
+            Url::parse("https://example.test/").unwrap(),
+        );
+
+        assert!(webview.resolved_styles.iter().any(|declaration| {
+            declaration.name == "color"
+                && declaration
+                    .selector
+                    .parts
+                    .iter()
+                    .any(|part| part.selector.classes.iter().any(|class| class == "valid"))
+        }));
+    }
+
+    #[test]
+    fn javascript_inserted_style_elements_are_resolved() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"<html><body><div class="dynamic">ok</div></body></html>"#.to_string(),
+            Url::parse("https://example.test/").unwrap(),
+        );
+        webview.run_script_source(
+            r#"
+            const style = document.createElement("style");
+            style.textContent = ".dynamic { color: red; }";
+            document.documentElement.appendChild(style);
+            "#,
+        );
+
+        assert!(webview.resolved_styles.iter().any(|declaration| {
+            declaration.name == "color"
+                && declaration
+                    .selector
+                    .parts
+                    .iter()
+                    .any(|part| part.selector.classes.iter().any(|class| class == "dynamic"))
+        }));
+    }
 
     #[test]
     fn parse_html_resolves_image_sources_against_base_url() {
