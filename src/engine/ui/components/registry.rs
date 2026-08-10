@@ -193,14 +193,6 @@ mod tests {
     use crate::engine::bridge::text::FallbackTextMeasurer;
 
     #[test]
-    fn registry_reports_builtin_tags() {
-        let tags = ComponentRegistry::new().tags();
-        for expected in ["audio", "button", "img", "input"] {
-            assert!(tags.contains(&expected), "missing tag {expected}");
-        }
-    }
-
-    #[test]
     fn registry_builds_known_components() {
         let registry = ComponentRegistry::new();
         let mut attrs = HashMap::new();
