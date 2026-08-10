@@ -3,16 +3,11 @@ use orinium_browser::{
     browser::{BrowserApp, BrowserUi, Tab, core::resource_loader::BrowserResourceLoader},
     engine::{
         css::parser::Parser as CssParser,
-        html::{
-            HtmlNodeType,
-            parser::{DomTree, Parser as HtmlParser},
-        },
-        input::{hit_dom_id, hit_test},
+        html::{HtmlNodeType, parser::Parser as HtmlParser},
         js::JsRuntime,
         layouter::{
             InheritedCss, build_layout_and_info,
             css_resolver::{CssResolver, ResolvedStyles},
-            dom_snapshot::DomSnapshot,
             types::{ColorScheme, TextStyle},
         },
         renderer_model::generate_draw_commands,
@@ -278,43 +273,6 @@ fn main() -> Result<()> {
                     );
                 }
             }
-            "jsclick" => {
-                if args.len() == 5 {
-                    let raw_url = &args[2];
-                    let x: f32 = args[3].parse()?;
-                    let y: f32 = args[4].parse()?;
-                    println!("Simulating a click at ({}, {}) for URL: {}", x, y, raw_url);
-
-                    let mut ctx = build_layout_info(raw_url)?;
-                    // The initial script run may have mutated the DOM; only
-                    // mutations caused by the click are interesting here.
-                    let _script_mutations = ctx.js_runtime.take_needs_redraw();
-                    LayoutEngine::layout(&mut ctx.layout, 800.0, 600.0);
-
-                    // The InfoNode dom_ids index into a snapshot's dom_refs,
-                    // built with the same pre-order walk as the layout.
-                    let (_snapshot, dom_refs) = DomSnapshot::from_tree(&ctx.dom.root);
-                    let path = hit_test(&ctx.layout, &ctx.info, x, y);
-                    let Some(dom_id) = hit_dom_id(&path) else {
-                        println!("No DOM element was hit at ({}, {})", x, y);
-                        return Ok(());
-                    };
-                    let Some(node) = dom_refs.get(dom_id as usize).and_then(|w| w.upgrade()) else {
-                        println!("Hit node is no longer in the live DOM (id={})", dom_id);
-                        return Ok(());
-                    };
-
-                    let handled = ctx.js_runtime.click(&node);
-                    println!("click dispatched: dom_id={} handler={}", dom_id, handled);
-                    if ctx.js_runtime.take_needs_redraw() {
-                        println!("click handler mutated the DOM");
-                    }
-
-                    println!("DOM Tree:\n{}", ctx.dom);
-                } else {
-                    eprintln!("Please provide a URL and click coordinates (x y).");
-                }
-            }
             "dump_draw_command" => {
                 if args.len() == 3 || args.len() == 5 {
                     let raw_url = &args[2];
@@ -336,6 +294,20 @@ fn main() -> Result<()> {
                     for (i, cmd) in draw_commands.iter().enumerate() {
                         println!("  [{:>3}] {:?}", i, cmd);
                     }
+                } else {
+                    eprintln!(
+                        "Please provide a URL and optional viewport size (URL [WIDTH HEIGHT])."
+                    );
+                }
+            }
+            "run_layout" => {
+                if args.len() == 3 || args.len() == 5 {
+                    let raw_url = &args[2];
+                    let (viewport_w, viewport_h) = viewport_args(&args, 800.0, 600.0)?;
+                    println!("Dumping LayoutNode for URL: {}", raw_url);
+
+                    let mut ctx = build_layout_info(raw_url)?;
+                    LayoutEngine::layout(&mut ctx.layout, viewport_w, viewport_h);
                 } else {
                     eprintln!(
                         "Please provide a URL and optional viewport size (URL [WIDTH HEIGHT])."
@@ -382,8 +354,6 @@ use orinium_browser::engine::layouter::types::InfoNode;
 struct LayoutInfo {
     layout: LayoutNode,
     info: InfoNode,
-    dom: Rc<DomTree>,
-    js_runtime: JsRuntime,
 }
 
 fn build_layout_info(raw_url: &str) -> Result<LayoutInfo> {
@@ -481,12 +451,7 @@ fn build_layout_info(raw_url: &str) -> Result<LayoutInfo> {
         }),
     );
 
-    Ok(LayoutInfo {
-        layout,
-        info,
-        dom,
-        js_runtime,
-    })
+    Ok(LayoutInfo { layout, info })
 }
 
 /// Reads the optional viewport dimensions (`WIDTH HEIGHT`) from `args`,
@@ -586,11 +551,11 @@ fn get_commands<'a>() -> HashMap<&'a str, (&'a str, &'a str, &'a str)> {
         ),
     );
     map.insert(
-        "jsclick",
+        "run_layout",
         (
-            "Simulate a click at (x, y), run the element's JS onclick handler, and dump the resulting DOM tree.",
-            "URL X Y",
-            "The coordinates are page coordinates after layout at a 800x600 viewport. Elements without an onclick handler are ignored.",
+            "Fetch HTML and CSS, build layout tree, and run layout engine.",
+            "URL",
+            ""
         ),
     );
     map.insert(
