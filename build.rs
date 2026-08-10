@@ -193,6 +193,12 @@ const TEST_PAGE_CATALOG: &[TestPageMeta] = &[
 const TEST_GROUP_ORDER: &[&str] = &["Layout", "CSS", "HTML", "Other", "JavaScript"];
 
 fn main() {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("gnu")
+    {
+        println!("cargo:rustc-link-arg=-Wl,--stack,8388608");
+    }
+
     clear_build_log();
 
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
