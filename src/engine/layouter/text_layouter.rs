@@ -105,7 +105,7 @@ impl TextFlowLayouter {
         let first_line_width = if available_first_line_space > 0.0 {
             available_first_line_space
         } else {
-            available_space
+            0.0
         };
         let line_width = |line_index: usize| {
             if line_index == 0 {
@@ -216,36 +216,60 @@ impl TextFlowLayouter {
             }
 
             // Check if placing this cluster would overflow the line.
-            // Break at the last known breakable cluster, or at the current
-            // cluster if nothing earlier was breakable (unbreakable run).
             let current_line_width = line_width(line_index);
             if accumulated > 0.0 && accumulated + frag.width > current_line_width {
-                let break_at = last_breakable_cluster.unwrap_or(i);
+                if let Some(break_at) = last_breakable_cluster {
+                    // Break at the last known breakable cluster (word boundary).
+                    let break_byte = if break_at < clusters.len() {
+                        clusters[break_at].byte_offset
+                    } else {
+                        text_len
+                    };
 
-                let break_byte = if break_at < clusters.len() {
-                    clusters[break_at].byte_offset
-                } else {
-                    text_len
-                };
+                    if break_byte > line_start || spans.is_empty() {
+                        emit_line!(break_at, break_byte);
 
-                if break_byte > line_start || spans.is_empty() {
-                    emit_line!(break_at, break_byte);
+                        line_start = break_byte;
+                        line_start_idx = break_at;
+                        x_pos = 0.0;
+                        y_pos += lh;
+                        line_index += 1;
+                        last_breakable_cluster = None;
 
-                    line_start = break_byte;
-                    line_start_idx = break_at;
-                    x_pos = 0.0;
+                        // Carry over the width of any non-breakable clusters
+                        // that move to the new line together with this one.
+                        accumulated = if break_at < i {
+                            clusters[break_at..i].iter().map(|c| c.width).sum()
+                        } else {
+                            0.0
+                        };
+                    }
+                } else if accumulated + frag.width <= available_space {
+                    // The current line holds a single unbreakable run and the
+                    // next line is wide enough to take the whole word: move it
+                    // there instead of splitting it mid-word. This keeps the
+                    // first word intact when the first line is narrower than
+                    // the following ones.
                     y_pos += lh;
                     line_index += 1;
+                    x_pos = 0.0;
+                    accumulated = clusters[line_start_idx..i].iter().map(|c| c.width).sum();
                     last_breakable_cluster = None;
+                } else {
+                    // Unbreakable run that is wider than the next line as
+                    // well: split at the current cluster boundary.
+                    let break_byte = clusters[i].byte_offset;
+                    if break_byte > line_start || spans.is_empty() {
+                        emit_line!(i, break_byte);
 
-                    // Carry over the width of any non-breakable clusters that
-                    // move to the new line together with this one. break_at <=
-                    // i, so the range is empty in the common cases.
-                    accumulated = if break_at < i {
-                        clusters[break_at..i].iter().map(|c| c.width).sum()
-                    } else {
-                        0.0
-                    };
+                        line_start = break_byte;
+                        line_start_idx = i;
+                        x_pos = 0.0;
+                        y_pos += lh;
+                        line_index += 1;
+                        last_breakable_cluster = None;
+                        accumulated = 0.0;
+                    }
                 }
             }
 
@@ -467,5 +491,48 @@ mod tests {
         assert_eq!(result.spans[0].width(), 24.0);
         assert_eq!(result.spans[1].width(), 48.0);
         assert_eq!(result.spans[2].width(), 20.0);
+    }
+
+    #[test]
+    fn first_word_moves_to_next_line_when_first_line_is_narrow() {
+        let clusters = vec![
+            cluster(0, 9.0, false),
+            cluster(1, 9.0, false),
+            cluster(2, 9.0, false),
+            cluster(3, 9.0, false),
+            cluster(4, 9.0, false),
+            cluster(5, 4.0, true),
+            cluster(6, 10.0, false),
+            cluster(7, 10.0, false),
+            cluster(8, 10.0, false),
+            cluster(9, 10.0, false),
+            cluster(10, 10.0, false),
+        ];
+        let result = TextFlowLayouter::new(
+            "Hello world".to_string(),
+            TextStyle::default(),
+            clusters,
+            16.0,
+        )
+        .compute_layout(30.0, 100.0, (0.0, 0.0));
+        assert_eq!(result.line_texts, vec!["Hello world"]);
+        assert_eq!(result.spans.len(), 1);
+        assert_eq!(result.spans[0].line_index, 1);
+        assert_eq!(result.spans[0].width(), 99.0);
+    }
+
+    #[test]
+    fn first_word_splits_when_too_wide_for_every_line() {
+        let clusters = vec![
+            cluster(0, 9.0, false),
+            cluster(1, 9.0, false),
+            cluster(2, 9.0, false),
+            cluster(3, 9.0, false),
+            cluster(4, 9.0, false),
+        ];
+        let result =
+            TextFlowLayouter::new("Hello".to_string(), TextStyle::default(), clusters, 16.0)
+                .compute_layout(30.0, 40.0, (0.0, 0.0));
+        assert_eq!(result.line_texts, vec!["Hell", "o"]);
     }
 }
