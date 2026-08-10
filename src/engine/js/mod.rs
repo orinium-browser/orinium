@@ -145,6 +145,7 @@ impl JsRuntime {
 
         install_console(&mut engine);
         install_document(&mut engine);
+        install_mutation_observer(&mut engine);
         install_timers(&mut engine);
         install_performance(&mut engine);
         install_microtasks(&mut engine);
@@ -593,6 +594,63 @@ fn queue_microtask(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     };
     vm.enqueue_job(callback, JSValue::Undefined, Vec::new());
     Ok(JSValue::Undefined)
+}
+
+// --- MutationObserver ---
+
+const MUTATION_OBSERVER_CALLBACK: &str = "__orinium_mutation_observer_callback";
+
+fn install_mutation_observer(engine: &mut pixi_byte::JSEngine) {
+    let mut constructor = JSObject::new();
+    constructor.set(
+        "__construct__".to_string(),
+        JSValue::NativeFunction(mutation_observer_constructor),
+    );
+    engine.global_mut().borrow_mut().set(
+        "MutationObserver".to_string(),
+        JSValue::Object(Rc::new(RefCell::new(constructor))),
+    );
+}
+
+fn mutation_observer_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let callback = args.get(1).cloned().unwrap_or(JSValue::Undefined);
+    if !is_callable(&callback) {
+        return Err(JSError::TypeError(
+            "MutationObserver callback must be callable".to_string(),
+        ));
+    }
+    let mut observer = JSObject::new();
+    observer.set(MUTATION_OBSERVER_CALLBACK.to_string(), callback);
+    observer.set(
+        "observe".to_string(),
+        JSValue::NativeFunction(mutation_observer_observe),
+    );
+    observer.set(
+        "disconnect".to_string(),
+        JSValue::NativeFunction(mutation_observer_disconnect),
+    );
+    observer.set(
+        "takeRecords".to_string(),
+        JSValue::NativeFunction(mutation_observer_take_records),
+    );
+    Ok(JSValue::Object(Rc::new(RefCell::new(observer))))
+}
+
+fn mutation_observer_observe(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    if !matches!(args.get(1), Some(JSValue::Object(_))) {
+        return Err(JSError::TypeError(
+            "MutationObserver.observe target must be a Node".to_string(),
+        ));
+    }
+    Ok(JSValue::Undefined)
+}
+
+fn mutation_observer_disconnect(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::Undefined)
+}
+
+fn mutation_observer_take_records(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(vm.array_from_values(Vec::new()))
 }
 
 // --- fetch ---
@@ -1333,7 +1391,7 @@ fn document_query_selector(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue>
 
 fn document_query_selector_all(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(JSValue::String(selector)) = args.get(1) else {
-        return Ok(JSArray::new().to_object());
+        return Ok(vm.array_from_values(Vec::new()));
     };
     let nodes = with_host(vm, |host| host.dom.query_selector_all(selector)).unwrap_or_default();
     Ok(expose_node_list(vm, nodes))
@@ -1505,7 +1563,7 @@ fn expose_node_list(vm: &mut VM, nodes: Vec<NodeRef<HtmlNodeType>>) -> JSValue {
         .into_iter()
         .filter_map(|node| expose_node(vm, node))
         .collect();
-    JSArray::from_vec(values).to_object()
+    vm.array_from_values(values)
 }
 
 // --- Element ---
@@ -1888,10 +1946,10 @@ fn element_query_selector(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> 
 
 fn element_query_selector_all(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(scope) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
-        return Ok(JSArray::new().to_object());
+        return Ok(vm.array_from_values(Vec::new()));
     };
     let Some(JSValue::String(selector)) = args.get(1) else {
-        return Ok(JSArray::new().to_object());
+        return Ok(vm.array_from_values(Vec::new()));
     };
     let nodes = DomTree::query_selector_all_within(&scope, selector);
     Ok(expose_node_list(vm, nodes))
@@ -2103,7 +2161,7 @@ fn get_namespace_uri(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 
 fn get_child_nodes(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
-        return Ok(JSArray::new().to_object());
+        return Ok(vm.array_from_values(Vec::new()));
     };
     let children = node.borrow().children().to_vec();
     Ok(expose_node_list(vm, children))
@@ -2167,7 +2225,7 @@ fn get_sibling(vm: &mut VM, args: &[JSValue], offset: isize) -> JSResult<JSValue
 
 fn get_element_children(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
-        return Ok(JSArray::new().to_object());
+        return Ok(vm.array_from_values(Vec::new()));
     };
     let children = node
         .borrow()
@@ -2877,6 +2935,24 @@ mod tests {
     }
 
     #[test]
+    fn mutation_observer_can_register_for_dom_changes() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<html><body><div id="target"></div></body></html>"#);
+        runtime.run_script(
+            r#"
+            const observer = new MutationObserver(function () {});
+            observer.observe(document.documentElement, { childList: true, subtree: true });
+            const records = observer.takeRecords();
+            observer.disconnect();
+            document.getElementById("target").setAttribute("data-records", records.length);
+            "#,
+        );
+
+        let node = dom.get_element_by_id("target").unwrap();
+        assert_eq!(node.borrow().value.get_attr("data-records"), Some("0"));
+    }
+
+    #[test]
     fn element_id_is_a_live_reflected_property() {
         let (mut runtime, dom) = runtime_from_html(r#"<main id="root"></main>"#);
         runtime.run_script(
@@ -3363,12 +3439,17 @@ mod tests {
             featured.setAttribute("data-selected", "yes");
             const items = document.querySelectorAll("p.item");
             items[0].setAttribute("data-first", "yes");
+            items.forEach(function (item, index) {
+                item.setAttribute("data-index", index);
+            });
             document.getElementById("result").setAttribute("data-count", items.length);
             "#,
         );
 
         let items = dom.get_elements_by_class_name("item");
         assert_eq!(items[0].borrow().value.get_attr("data-first"), Some("yes"));
+        assert_eq!(items[0].borrow().value.get_attr("data-index"), Some("0"));
+        assert_eq!(items[1].borrow().value.get_attr("data-index"), Some("1"));
         assert_eq!(
             items[1].borrow().value.get_attr("data-selected"),
             Some("yes")
