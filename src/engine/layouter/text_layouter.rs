@@ -206,47 +206,44 @@ impl TextFlowLayouter {
                 continue;
             }
 
+            // Check if placing this cluster would overflow the line.
+            // Break at the last known breakable cluster, or at the current
+            // cluster if nothing earlier was breakable (unbreakable run).
+            if accumulated > 0.0 && accumulated + frag.width > line_width {
+                let break_at = last_breakable_cluster.unwrap_or(i);
+
+                let break_byte = if break_at < clusters.len() {
+                    clusters[break_at].byte_offset
+                } else {
+                    text_len
+                };
+
+                if break_byte > line_start || spans.is_empty() {
+                    emit_line!(break_at, break_byte);
+
+                    line_start = break_byte;
+                    line_start_idx = break_at;
+                    x_pos = 0.0;
+                    y_pos += lh;
+                    line_index += 1;
+                    last_breakable_cluster = None;
+
+                    // Carry over the width of any non-breakable clusters that
+                    // move to the new line together with this one. break_at <=
+                    // i, so the range is empty in the common cases.
+                    accumulated = if break_at < i {
+                        clusters[break_at..i].iter().map(|c| c.width).sum()
+                    } else {
+                        0.0
+                    };
+                }
+            }
+
             // Accumulate width
             accumulated += frag.width;
 
             if frag.break_allowed {
                 last_breakable_cluster = Some(i + 1);
-            }
-
-            // Check if we need to break
-            if accumulated > line_width {
-                if let Some(break_at) = last_breakable_cluster {
-                    let break_byte = if break_at < clusters.len() {
-                        clusters[break_at].byte_offset
-                    } else {
-                        text_len
-                    };
-
-                    if break_byte > line_start || spans.is_empty() {
-                        emit_line!(break_at, break_byte);
-
-                        line_start = break_byte;
-                        line_start_idx = break_at;
-                        x_pos = 0.0;
-                        y_pos += lh;
-                        line_index += 1;
-                        last_breakable_cluster = None;
-                    }
-
-                    if break_at <= i {
-                        accumulated = clusters[break_at..=i].iter().map(|c| c.width).sum::<f32>();
-                    } else {
-                        accumulated = frag.width;
-                    }
-
-                    // If the break is after the current cluster, we've already
-                    // included frag.width in accumulated; keep accumulated.
-                    // If break_at == i+1 (break after current), accumulated is correct.
-                } else {
-                    // No breakable point found – this should not happen with normal text.
-                    // Just accumulate and continue (or break at cluster boundary).
-                    // If this is the last cluster, it will be emitted at the end.
-                }
             }
 
             i += 1;
@@ -342,5 +339,94 @@ impl CustomLayouter for TextFlowLayouter {
 
     fn write_debug(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "TextFlowLayouter [{}]", self.text)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cluster(byte_offset: usize, width: f32, break_allowed: bool) -> GlyphCluster {
+        GlyphCluster {
+            byte_offset,
+            width,
+            break_allowed,
+        }
+    }
+
+    fn layout(text: &str, clusters: Vec<GlyphCluster>, line_width: f32) -> TextLayoutResult {
+        TextFlowLayouter::new(text.to_string(), TextStyle::default(), clusters, 16.0)
+            .compute_layout(line_width, (0.0, 0.0))
+    }
+
+    #[test]
+    fn wraps_at_word_boundaries() {
+        let result = layout(
+            "aaa bbb ccc",
+            vec![
+                cluster(0, 30.0, false),
+                cluster(3, 5.0, true),
+                cluster(4, 30.0, false),
+                cluster(7, 5.0, true),
+                cluster(8, 30.0, false),
+            ],
+            70.0,
+        );
+        assert_eq!(result.line_texts.len(), 2);
+        assert_eq!(result.line_texts[0].trim_end(), "aaa bbb");
+        assert_eq!(result.line_texts[1], "ccc");
+        assert_eq!(result.spans[0].width(), 70.0);
+        assert_eq!(result.spans[1].width(), 30.0);
+        assert_eq!(result.spans[0].line_index, 0);
+        assert_eq!(result.spans[1].line_index, 1);
+    }
+
+    #[test]
+    fn wraps_cjk_per_character() {
+        let clusters: Vec<GlyphCluster> = (0..10)
+            .map(|i| cluster(i, 10.0, true))
+            .collect();
+        let result = layout("aaaaaaaaaa", clusters, 40.0);
+        assert_eq!(result.line_texts, vec!["aaaa", "aaaa", "aa"]);
+        assert_eq!(result.spans.len(), 3);
+        for span in &result.spans {
+            assert!(span.width() <= 40.0);
+        }
+    }
+
+    #[test]
+    fn splits_unbreakable_run() {
+        let clusters: Vec<GlyphCluster> = (0..6)
+            .map(|i| cluster(i, 20.0, false))
+            .collect();
+        let result = layout("abcdef", clusters, 80.0);
+        assert_eq!(result.line_texts, vec!["abcd", "ef"]);
+        assert_eq!(result.spans[0].width(), 80.0);
+        assert_eq!(result.spans[1].width(), 40.0);
+    }
+
+    #[test]
+    fn no_overhang_for_word_wider_than_line() {
+        let result = layout(
+            "hello supercalifragilistic",
+            vec![
+                cluster(0, 30.0, false),
+                cluster(5, 5.0, true),
+                cluster(6, 93.0, false),
+            ],
+            80.0,
+        );
+        assert_eq!(result.line_texts.len(), 2);
+        assert_eq!(result.line_texts[0].trim_end(), "hello");
+        assert_eq!(result.spans[0].width(), 35.0);
+        assert_eq!(result.spans[1].width(), 93.0);
+    }
+
+    #[test]
+    fn single_cluster_wider_than_line_stays_alone() {
+        let result = layout("x", vec![cluster(0, 93.0, false)], 80.0);
+        assert_eq!(result.line_texts, vec!["x"]);
+        assert_eq!(result.spans.len(), 1);
+        assert_eq!(result.spans[0].width(), 93.0);
     }
 }
