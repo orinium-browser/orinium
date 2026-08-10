@@ -379,6 +379,59 @@ impl MeshBuilder {
                             }
                         }
                     }
+                    GradientKind::Conic { angle, position } => {
+                        let (cx, cy) = (
+                            min_x + position.0 * (max_x - min_x),
+                            min_y + position.1 * (max_y - min_y),
+                        );
+                        // Like the radial case, sample per grid cell because a
+                        // conic gradient is not affine.
+                        let divisions =
+                            ((x2 - x1).max(y2 - y1) / 8.0).ceil().clamp(8.0, 64.0) as usize;
+                        let step_x = (x2 - x1) / divisions as f32;
+                        let step_y = (y2 - y1) / divisions as f32;
+                        for gy in 0..divisions {
+                            let cell_t = y1 + gy as f32 * step_y;
+                            let cell_b = cell_t + step_y;
+                            for gx in 0..divisions {
+                                let cell_l = x1 + gx as f32 * step_x;
+                                let cell_r = cell_l + step_x;
+                                for ring in &self.ring_scratch {
+                                    let count = clip_ring_to_rect(
+                                        ring,
+                                        cell_l,
+                                        cell_t,
+                                        cell_r,
+                                        cell_b,
+                                        &mut self.clip_in,
+                                        &mut self.clip_out,
+                                    );
+                                    if count == 0 {
+                                        continue;
+                                    }
+                                    emit_polygon_fill_with_colors(
+                                        &mut self.mesh.vertices,
+                                        &self.clip_out[..count],
+                                        &mut self.tri_indices,
+                                        self.screen_width,
+                                        self.screen_height,
+                                        |sx, sy| {
+                                            // CSS conic angles start at the top
+                                            // and increase clockwise (y grows
+                                            // downward on screen).
+                                            let deg = (sy - cy).atan2(sx - cx).to_degrees();
+                                            let t =
+                                                ((deg + 90.0 - angle).rem_euclid(360.0)) / 360.0;
+                                            let mut c = sample_gradient_stops(&gradient.stops, t)
+                                                .to_linear_f32_array();
+                                            c[3] *= paint.opacity;
+                                            c
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
             }
             Brush::Image(image) => {

@@ -237,6 +237,12 @@ pub enum GradientKind {
         size: RadialSizeKind,
         position: (f32, f32),
     },
+    Conic {
+        /// Start angle in degrees (default 0).
+        angle: f32,
+        /// Center position as normalized (0..1) coordinates (default 0.5, 0.5).
+        position: (f32, f32),
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

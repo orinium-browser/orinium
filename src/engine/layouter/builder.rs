@@ -1925,7 +1925,9 @@ fn parse_background_shorthand(
 
         // gradient
         if let CssValue::Function(fn_name, args) = v
-            && (fn_name == "linear-gradient" || fn_name == "radial-gradient")
+            && (fn_name == "linear-gradient"
+                || fn_name == "radial-gradient"
+                || fn_name == "conic-gradient")
         {
             maybe_gradient = Some(parse_gradient(fn_name, args, text_style, color_scheme)?);
             continue;
@@ -1961,6 +1963,7 @@ fn parse_gradient(
     match fn_name {
         "linear-gradient" => parse_linear_gradient(args, text_style, color_scheme),
         "radial-gradient" => parse_radial_gradient(args, text_style, color_scheme),
+        "conic-gradient" => parse_conic_gradient(args, text_style, color_scheme),
         _ => None,
     }
 }
@@ -2140,30 +2143,110 @@ fn parse_color_stops(args: &[CssValue], color_scheme: ColorScheme) -> Option<Vec
         let color = resolve_css_color("gradient", &args[i], color_scheme)?;
         i += 1;
 
-        let position = if i < args.len() {
+        // Consume up to two position lengths (a double-position stop is
+        // equivalent to two stops at the same color).
+        let mut positions: Vec<f32> = Vec::new();
+        while positions.len() < 2 && i < args.len() {
             match &args[i] {
                 CssValue::Length(v, Unit::Percent) => {
+                    positions.push((*v / 100.0).clamp(0.0, 1.0));
                     i += 1;
-                    Some((*v / 100.0).clamp(0.0, 1.0))
+                }
+                CssValue::Length(v, Unit::Deg) => {
+                    positions.push((*v / 360.0).clamp(0.0, 1.0));
+                    i += 1;
                 }
                 CssValue::Length(_v, Unit::Px) => {
+                    // Absolute lengths are not resolvable here; treat as auto.
                     i += 1;
-                    None
                 }
                 CssValue::Number(0.0) => {
                     i += 1;
-                    None
                 }
-                _ => None,
+                _ => break,
             }
-        } else {
-            None
-        };
+        }
 
-        stops.push(ColorStop { color, position });
+        if positions.is_empty() {
+            stops.push(ColorStop {
+                color,
+                position: None,
+            });
+        } else {
+            for p in positions {
+                stops.push(ColorStop {
+                    color,
+                    position: Some(p),
+                });
+            }
+        }
     }
 
     Some(stops)
+}
+
+fn parse_conic_gradient(
+    args: &[CssValue],
+    _text_style: &TextStyle,
+    color_scheme: ColorScheme,
+) -> Option<Gradient> {
+    if args.is_empty() {
+        return None;
+    }
+
+    let mut angle = 0.0f32;
+    let mut position = (0.5f32, 0.5f32);
+    let mut idx = 0;
+
+    // Optional `from <angle>`
+    if idx + 1 < args.len()
+        && matches!(&args[idx], CssValue::Keyword(k) if k.eq_ignore_ascii_case("from"))
+        && let CssValue::Length(v, Unit::Deg) = &args[idx + 1]
+    {
+        angle = *v;
+        idx += 2;
+    }
+
+    // Optional `at <position>`
+    if idx + 1 < args.len()
+        && matches!(&args[idx], CssValue::Keyword(k) if k.eq_ignore_ascii_case("at"))
+    {
+        idx += 1;
+        if idx < args.len()
+            && let CssValue::Keyword(k) = &args[idx]
+        {
+            match k.as_str() {
+                "center" => position = (0.5, 0.5),
+                "top" => position = (0.5, 0.0),
+                "bottom" => position = (0.5, 1.0),
+                "left" => position = (0.0, 0.5),
+                "right" => position = (1.0, 0.5),
+                _ => {}
+            }
+            idx += 1;
+            if idx < args.len()
+                && let CssValue::Keyword(k2) = &args[idx]
+            {
+                match (k.as_str(), k2.as_str()) {
+                    ("top", "left") | ("left", "top") => position = (0.0, 0.0),
+                    ("top", "right") | ("right", "top") => position = (1.0, 0.0),
+                    ("bottom", "left") | ("left", "bottom") => position = (0.0, 1.0),
+                    ("bottom", "right") | ("right", "bottom") => position = (1.0, 1.0),
+                    _ => {}
+                }
+                idx += 1;
+            }
+        }
+    }
+
+    let stops = parse_color_stops(&args[idx..], color_scheme)?;
+    if stops.is_empty() {
+        return None;
+    }
+    Some(Gradient {
+        kind: GradientKind::Conic { angle, position },
+        stops,
+    })
 }
 
 /// Extract font family names from a `font-family` CSS value.
@@ -2402,6 +2485,230 @@ fn parse_grid_template_areas(value: &CssValue) -> Option<Vec<Vec<String>>> {
         }
     }
     Some(areas)
+}
+
+/// Mix two or more colors according to the `color-mix()` interpolation
+/// rules: weights are normalized, alpha is premultiplied, and the
+/// interpolation happens in the requested color space.
+fn mix_colors(colors: &[Color], weights: &[f32], space: &str) -> Color {
+    let n = colors.len().min(weights.len());
+    let mut acc = colors[0];
+    let mut acc_w = weights[0];
+    for i in 1..n {
+        if weights[i] <= 0.0 {
+            continue;
+        }
+        acc = match space {
+            "lch" => mix_two_lch(acc, colors[i], acc_w, weights[i]),
+            _ => mix_two_srgb(acc, colors[i], acc_w, weights[i]),
+        };
+        acc_w += weights[i];
+    }
+    acc
+}
+
+/// Interpolate between two colors in sRGB with premultiplied alpha.
+fn mix_two_srgb(a: Color, b: Color, wa: f32, wb: f32) -> Color {
+    let total = wa + wb;
+    if total <= 0.0 {
+        return Color(0, 0, 0, 0);
+    }
+    let f = wb / total;
+    let al = a.to_linear_f32_array();
+    let bl = b.to_linear_f32_array();
+    let mut c = [0.0f32; 4];
+    for i in 0..4 {
+        c[i] = al[i] * al[3] * (1.0 - f) + bl[i] * bl[3] * f;
+    }
+    let alpha = al[3] * (1.0 - f) + bl[3] * f;
+    if alpha > 0.0 {
+        for i in 0..3 {
+            c[i] /= alpha;
+        }
+    }
+    c[3] = alpha;
+    Color::from_linear_f32_array(c)
+}
+
+/// Interpolate between two colors in LCH with premultiplied alpha.
+fn mix_two_lch(a: Color, b: Color, wa: f32, wb: f32) -> Color {
+    let total = wa + wb;
+    if total <= 0.0 {
+        return Color(0, 0, 0, 0);
+    }
+    let f = wb / total;
+    let a_alpha = a.3 as f32 / 255.0;
+    let b_alpha = b.3 as f32 / 255.0;
+    let (al, ac, ah) = rgb_to_lch(a);
+    let (bl, bc, bh) = rgb_to_lch(b);
+    let lm = al * a_alpha * (1.0 - f) + bl * b_alpha * f;
+    let cm = ac * a_alpha * (1.0 - f) + bc * b_alpha * f;
+    let hm = lerp_hue(ah, bh, f);
+    let alpha = a_alpha * (1.0 - f) + b_alpha * f;
+    let (l, c) = if alpha > 0.0 {
+        (lm / alpha, cm / alpha)
+    } else {
+        (lm, cm)
+    };
+    lch_to_color(l, c, hm, alpha)
+}
+
+/// Interpolate a hue angle along the shortest arc.
+fn lerp_hue(a: f32, b: f32, t: f32) -> f32 {
+    let mut d = b - a;
+    if d > 180.0 {
+        d -= 360.0;
+    } else if d < -180.0 {
+        d += 360.0;
+    }
+    (a + d * t).rem_euclid(360.0)
+}
+
+const D65_WHITE: (f32, f32, f32) = (0.95047, 1.0, 1.08883);
+
+fn lab_f(t: f32) -> f32 {
+    const EPS: f32 = 6.0 / 29.0;
+    if t > EPS * EPS * EPS {
+        t.cbrt()
+    } else {
+        t / (3.0 * EPS * EPS) + 4.0 / 29.0
+    }
+}
+
+fn lab_f_inv(t: f32) -> f32 {
+    const EPS: f32 = 6.0 / 29.0;
+    if t > EPS {
+        t * t * t
+    } else {
+        3.0 * EPS * EPS * (t - 4.0 / 29.0)
+    }
+}
+
+/// Convert sRGB (0..1 channels) to CIE XYZ (D65).
+fn srgb_to_xyz(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    let r = Color::srgb_to_linear(r);
+    let g = Color::srgb_to_linear(g);
+    let b = Color::srgb_to_linear(b);
+    let x = 0.4124564 * r + 0.3575761 * g + 0.1804375 * b;
+    let y = 0.2126729 * r + 0.7151522 * g + 0.0721750 * b;
+    let z = 0.0193339 * r + 0.1191920 * g + 0.9503041 * b;
+    (x, y, z)
+}
+
+/// Convert CIE XYZ (D65) to sRGB (0..1 channels).
+fn xyz_to_srgb(x: f32, y: f32, z: f32) -> (f32, f32, f32) {
+    let r = 3.2404542 * x - 1.5371385 * y - 0.4985314 * z;
+    let g = -0.9692660 * x + 1.8760108 * y + 0.0415560 * z;
+    let b = 0.0556434 * x - 0.2040259 * y + 1.0572252 * z;
+    (
+        Color::linear_to_srgb(r),
+        Color::linear_to_srgb(g),
+        Color::linear_to_srgb(b),
+    )
+}
+
+fn xyz_to_lab(x: f32, y: f32, z: f32) -> (f32, f32, f32) {
+    let (wx, wy, wz) = D65_WHITE;
+    let fx = lab_f(x / wx);
+    let fy = lab_f(y / wy);
+    let fz = lab_f(z / wz);
+    let l = 116.0 * fy - 16.0;
+    let a = 500.0 * (fx - fy);
+    let b = 200.0 * (fy - fz);
+    (l, a, b)
+}
+
+fn lab_to_xyz(l: f32, a: f32, b: f32) -> (f32, f32, f32) {
+    let (wx, wy, wz) = D65_WHITE;
+    let fy = (l + 16.0) / 116.0;
+    let fx = fy + a / 500.0;
+    let fz = fy - b / 200.0;
+    (wx * lab_f_inv(fx), wy * lab_f_inv(fy), wz * lab_f_inv(fz))
+}
+
+/// Convert an sRGB color to LCH (L 0..100, C >= 0, H 0..360).
+fn rgb_to_lch(c: Color) -> (f32, f32, f32) {
+    let (x, y, z) = srgb_to_xyz(c.0 as f32 / 255.0, c.1 as f32 / 255.0, c.2 as f32 / 255.0);
+    let (l, a, b) = xyz_to_lab(x, y, z);
+    let chroma = (a * a + b * b).sqrt();
+    let hue = b.atan2(a).to_degrees().rem_euclid(360.0);
+    (l, chroma, hue)
+}
+
+/// Convert LCH (L 0..100, C >= 0, H 0..360) back to an sRGB color.
+fn lch_to_color(l: f32, chroma: f32, hue: f32, alpha: f32) -> Color {
+    let hr = hue.to_radians();
+    let a = chroma * hr.cos();
+    let b = chroma * hr.sin();
+    let (x, y, z) = lab_to_xyz(l, a, b);
+    let (r, g, b) = xyz_to_srgb(x, y, z);
+    Color(
+        (r.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (g.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (b.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (alpha.clamp(0.0, 1.0) * 255.0).round() as u8,
+    )
+}
+
+/// Parse `color-mix(in <space>, <color> [<percentage>], ...)`.
+fn parse_color_mix(args: &[CssValue], name: &str, color_scheme: ColorScheme) -> Option<Color> {
+    // args: [Keyword("in"), Keyword("<space>"), <color>..., ...]
+    if !matches!(args.first(), Some(CssValue::Keyword(k)) if k.eq_ignore_ascii_case("in")) {
+        return None;
+    }
+    let space = match args.get(1) {
+        Some(CssValue::Keyword(k)) => k.to_ascii_lowercase(),
+        _ => return None,
+    };
+
+    let mut colors: Vec<Color> = Vec::new();
+    let mut weights: Vec<Option<f32>> = Vec::new();
+    let mut i = 2;
+    while i < args.len() {
+        let color = resolve_css_color(name, &args[i], color_scheme)?;
+        i += 1;
+        let mut weight = None;
+        if i < args.len() {
+            match &args[i] {
+                CssValue::Number(n) => {
+                    weight = Some(*n);
+                    i += 1;
+                }
+                CssValue::Length(p, Unit::Percent) => {
+                    weight = Some(*p);
+                    i += 1;
+                }
+                _ => {}
+            }
+        }
+        colors.push(color);
+        weights.push(weight);
+    }
+
+    if colors.len() < 2 {
+        return None;
+    }
+
+    // Resolve missing weights to the remaining percentage.
+    let specified_sum: f32 = weights.iter().flatten().sum();
+    let missing = weights.iter().filter(|w| w.is_none()).count();
+    let remainder = (100.0 - specified_sum).max(0.0);
+    let mut resolved: Vec<f32> = Vec::with_capacity(colors.len());
+    for weight in &weights {
+        match weight {
+            Some(v) => resolved.push(*v),
+            None if missing > 0 => resolved.push(remainder / missing as f32),
+            None => resolved.push(0.0),
+        }
+    }
+    let total: f32 = resolved.iter().sum();
+    let normalized: Vec<f32> = if total > 0.0 {
+        resolved.iter().map(|v| v / total).collect()
+    } else {
+        vec![1.0 / colors.len() as f32; colors.len()]
+    };
+
+    Some(mix_colors(&colors, &normalized, &space))
 }
 
 /// Resolve a computed CssValue into a final RGBA Color.
@@ -2709,6 +3016,11 @@ fn resolve_css_color(name: &str, css_color: &CssValue, color_scheme: ColorScheme
             resolve_css_color(name, chosen, color_scheme)
         }
 
+        // color-mix(in <space>, <color> [<percentage>], <color> [<percentage>])
+        CssValue::Function(func, args) if func == "color-mix" => {
+            parse_color_mix(args, name, color_scheme)
+        }
+
         // Any other value reaching here is a pipeline error
         _ => {
             log::error!(
@@ -2747,6 +3059,24 @@ mod tests {
         );
         assert!(parsed.is_some());
         style
+    }
+
+    fn apply_container_property(name: &str, value: CssValue) -> ContainerStyle {
+        let mut style = Style::default();
+        let mut container_style = ContainerStyle::default();
+        let mut text_style = TextStyle::default();
+        let mut overflow = Overflow::default();
+        let parsed = apply_declaration(
+            name,
+            &value,
+            &mut style,
+            &mut container_style,
+            &mut text_style,
+            &mut overflow,
+            ColorScheme::Light,
+        );
+        assert!(parsed.is_some());
+        container_style
     }
 
     #[test]
@@ -3331,5 +3661,141 @@ mod tests {
         }
         let style = find_div(&info).expect("div container with background exists");
         assert_eq!(style.background, Background::Color(Color(0, 128, 0, 255)));
+    }
+
+    fn resolve_color(value: CssValue) -> Color {
+        resolve_css_color("test", &value, ColorScheme::Light).expect("color resolves")
+    }
+
+    #[test]
+    fn color_mix_in_srgb_blends_weights() {
+        let mixed = resolve_color(CssValue::Function(
+            "color-mix".into(),
+            vec![
+                CssValue::Keyword("in".into()),
+                CssValue::Keyword("srgb".into()),
+                CssValue::Keyword("red".into()),
+                CssValue::Keyword("blue".into()),
+            ],
+        ));
+        // 50/50 of red and blue in linear sRGB.
+        assert_eq!(mixed, Color(188, 0, 188, 255));
+    }
+
+    #[test]
+    fn color_mix_with_percentages_and_missing_weight() {
+        let mixed = resolve_color(CssValue::Function(
+            "color-mix".into(),
+            vec![
+                CssValue::Keyword("in".into()),
+                CssValue::Keyword("srgb".into()),
+                CssValue::Keyword("red".into()),
+                CssValue::Length(25.0, Unit::Percent),
+                CssValue::Keyword("blue".into()),
+            ],
+        ));
+        // red 25% + blue (missing weight takes the remaining 75%).
+        assert_eq!(mixed, Color(137, 0, 225, 255));
+    }
+
+    #[test]
+    fn color_mix_in_lch_produces_purple() {
+        let mixed = resolve_color(CssValue::Function(
+            "color-mix".into(),
+            vec![
+                CssValue::Keyword("in".into()),
+                CssValue::Keyword("lch".into()),
+                CssValue::Keyword("red".into()),
+                CssValue::Keyword("blue".into()),
+            ],
+        ));
+        // Mixing red and blue in LCH stays on the purple hue arc.
+        assert!(
+            mixed.0 > 0 && mixed.2 > 0,
+            "purple has red and blue: {mixed:?}"
+        );
+        assert!(mixed.1 < 50, "not green: {mixed:?}");
+        assert_eq!(mixed.3, 255, "alpha is preserved");
+        assert_ne!(mixed, Color(255, 0, 0, 255));
+        assert_ne!(mixed, Color(0, 0, 255, 255));
+    }
+
+    #[test]
+    fn color_mix_alpha_is_premultiplied() {
+        let mixed = resolve_color(CssValue::Function(
+            "color-mix".into(),
+            vec![
+                CssValue::Keyword("in".into()),
+                CssValue::Keyword("srgb".into()),
+                CssValue::Keyword("transparent".into()),
+                CssValue::Keyword("blue".into()),
+            ],
+        ));
+        // transparent is (0,0,0,0); mixing with opaque blue gives half alpha.
+        assert_eq!(mixed.3, 128);
+    }
+
+    #[test]
+    fn conic_gradient_parses_stops_and_kind() {
+        let args = vec![
+            CssValue::Keyword("red".into()),
+            CssValue::Length(0.0, Unit::Deg),
+            CssValue::Keyword("red".into()),
+            CssValue::Length(0.0, Unit::Deg),
+            CssValue::Length(1.0, Unit::Deg),
+            CssValue::Keyword("red".into()),
+            CssValue::Length(2.0, Unit::Deg),
+        ];
+        let gradient = parse_gradient(
+            "conic-gradient",
+            &args,
+            &TextStyle::default(),
+            ColorScheme::Light,
+        )
+        .expect("conic gradient parses");
+
+        assert!(matches!(
+            gradient.kind,
+            GradientKind::Conic {
+                angle: 0.0,
+                position: (0.5, 0.5)
+            }
+        ));
+        assert_eq!(gradient.stops.len(), 4);
+        for (stop, expected) in gradient
+            .stops
+            .iter()
+            .zip([0.0f32, 0.0, 1.0 / 360.0, 2.0 / 360.0])
+        {
+            assert_eq!(stop.position, Some(expected));
+            assert_eq!(stop.color, Color(255, 0, 0, 255));
+        }
+    }
+
+    #[test]
+    fn conic_gradient_background_shorthand() {
+        let container = apply_container_property(
+            "background",
+            CssValue::Function(
+                "conic-gradient".into(),
+                vec![
+                    CssValue::Keyword("red".into()),
+                    CssValue::Length(0.0, Unit::Deg),
+                    CssValue::Keyword("blue".into()),
+                    CssValue::Length(180.0, Unit::Deg),
+                ],
+            ),
+        );
+        let Background::Gradient(gradient) = container.background else {
+            panic!("expected gradient background");
+        };
+        assert!(matches!(
+            gradient.kind,
+            GradientKind::Conic {
+                angle: 0.0,
+                position: (0.5, 0.5)
+            }
+        ));
+        assert_eq!(gradient.stops.len(), 2);
     }
 }
