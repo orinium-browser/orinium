@@ -71,7 +71,8 @@ impl TextFlowLayouter {
 
     fn compute_layout(
         &self,
-        available_inline_size: f32,
+        available_first_line_space: f32,
+        available_space: f32,
         start_pos: (f32, f32),
     ) -> TextLayoutResult {
         let lh = self.line_height.max(1.0);
@@ -96,14 +97,22 @@ impl TextFlowLayouter {
             };
         }
 
-        // Resolved line width: available_inline_size, capped at default 80px if zero.
-        let line_width = if available_inline_size > 0.0 {
-            available_inline_size
+        // Resolved line widths. The first line may share its line with
+        // preceding inline content, so it can be narrower than subsequent
+        // lines. If a width is unknown (zero at the start of a layout pass
+        // with no prior content), fall back to the other one, or to a large
+        // value so nothing wraps unexpectedly.
+        let first_line_width = if available_first_line_space > 0.0 {
+            available_first_line_space
         } else {
-            // If the available size is zero (e.g. at the start of a layout pass
-            // with no prior content), use the container's intrinsic size.
-            // We conservatively use a large value so nothing wraps unexpectedly.
-            f32::MAX
+            available_space
+        };
+        let line_width = |line_index: usize| {
+            if line_index == 0 {
+                first_line_width
+            } else {
+                available_space
+            }
         };
 
         let mut spans: Vec<LineSpan> = Vec::new();
@@ -209,7 +218,8 @@ impl TextFlowLayouter {
             // Check if placing this cluster would overflow the line.
             // Break at the last known breakable cluster, or at the current
             // cluster if nothing earlier was breakable (unbreakable run).
-            if accumulated > 0.0 && accumulated + frag.width > line_width {
+            let current_line_width = line_width(line_index);
+            if accumulated > 0.0 && accumulated + frag.width > current_line_width {
                 let break_at = last_breakable_cluster.unwrap_or(i);
 
                 let break_byte = if break_at < clusters.len() {
@@ -286,7 +296,11 @@ impl Drop for TextFlowLayouter {
 
 impl CustomLayouter for TextFlowLayouter {
     fn layout(&mut self, ctx: &LayoutContext) -> LayoutBox {
-        let result = self.compute_layout(ctx.available_inline_size, ctx.start_pos);
+        let result = self.compute_layout(
+            ctx.available_inline_size,
+            ctx.containing_block_width.unwrap_or(f32::MAX),
+            ctx.start_pos,
+        );
         let spans = result.spans.clone();
 
         TEXT_RESULTS.with(|cache| {
@@ -356,7 +370,7 @@ mod tests {
 
     fn layout(text: &str, clusters: Vec<GlyphCluster>, line_width: f32) -> TextLayoutResult {
         TextFlowLayouter::new(text.to_string(), TextStyle::default(), clusters, 16.0)
-            .compute_layout(line_width, (0.0, 0.0))
+            .compute_layout(line_width, line_width, (0.0, 0.0))
     }
 
     #[test]
@@ -424,5 +438,34 @@ mod tests {
         assert_eq!(result.line_texts, vec!["x"]);
         assert_eq!(result.spans.len(), 1);
         assert_eq!(result.spans[0].width(), 93.0);
+    }
+
+    #[test]
+    fn first_line_uses_narrower_space() {
+        let clusters = vec![
+            cluster(0, 20.0, false),
+            cluster(2, 4.0, true),
+            cluster(3, 20.0, false),
+            cluster(5, 4.0, true),
+            cluster(6, 20.0, false),
+            cluster(8, 4.0, true),
+            cluster(9, 20.0, false),
+        ];
+        let result = TextFlowLayouter::new(
+            "aa bb cc dd".to_string(),
+            TextStyle::default(),
+            clusters,
+            16.0,
+        )
+        .compute_layout(32.0, 64.0, (0.0, 0.0));
+        let texts: Vec<String> = result
+            .line_texts
+            .iter()
+            .map(|s| s.trim_end().to_string())
+            .collect();
+        assert_eq!(texts, vec!["aa", "bb cc", "dd"]);
+        assert_eq!(result.spans[0].width(), 24.0);
+        assert_eq!(result.spans[1].width(), 48.0);
+        assert_eq!(result.spans[2].width(), 20.0);
     }
 }
