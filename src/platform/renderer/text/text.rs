@@ -33,6 +33,32 @@ fn quantize_subpixel_x(x: f32) -> (f32, u8) {
     )
 }
 
+/// Pre-clip test for a glyph using layout metrics alone, before any atlas
+/// lookup. `glyph.x` already includes the x-bearing and `width`/`height` are
+/// ink sizes, so the ink rect is known without rasterization. A small slack
+/// covers subpixel quantization and hinting differences between the layout
+/// metrics and the rasterized mask.
+fn glyph_fully_outside_clip(
+    section: &TextSection,
+    glyph_x: f32,
+    glyph_y: f32,
+    glyph_width: f32,
+    glyph_height: f32,
+) -> bool {
+    const CLIP_SLACK_PX: f32 = 4.0;
+    let base_x = section.screen_position.0;
+    let base_y = section.screen_position.1;
+    let clip_l = section.clip_origin.0;
+    let clip_t = section.clip_origin.1;
+    let clip_r = section.clip_origin.0 + section.bounds.0;
+    let clip_b = section.clip_origin.1 + section.bounds.1;
+    let ink_l = base_x + glyph_x - CLIP_SLACK_PX;
+    let ink_t = base_y + glyph_y - CLIP_SLACK_PX;
+    let ink_r = ink_l + glyph_width + 2.0 * CLIP_SLACK_PX;
+    let ink_b = ink_t + glyph_height + 2.0 * CLIP_SLACK_PX;
+    ink_r < clip_l || ink_l > clip_r || ink_b < clip_t || ink_t > clip_b
+}
+
 struct RasterizedMask {
     width: u32,
     height: u32,
@@ -620,6 +646,7 @@ impl TextRenderer {
         self.instances.clear();
 
         let mut glyph_count = 0u32;
+        let mut culled_count = 0u32;
         let mut atlas_miss_count = 0u32;
         let mut atlas_lookup_time = std::time::Duration::ZERO;
         let mut atlas_rasterize_time = std::time::Duration::ZERO;
@@ -638,6 +665,17 @@ impl TextRenderer {
 
                 for line in &layout.lines {
                     for glyph in &line.glyphs {
+                        if glyph_fully_outside_clip(
+                            section,
+                            glyph.x,
+                            glyph.y,
+                            glyph.width,
+                            glyph.height,
+                        ) {
+                            culled_count += 1;
+                            continue;
+                        }
+
                         let Some(font_key) = glyph.font_key else {
                             continue;
                         };
@@ -801,9 +839,10 @@ impl TextRenderer {
         let t_total = _t0.elapsed();
         log::info!(
             target: "TextRenderer",
-            "queue: {} sections, {} glyphs ({} atlas misses), lookup={:?} rasterize={:?} flush={:?} buf={:?} total={:?}",
+            "queue: {} sections, {} glyphs ({} culled, {} atlas misses), lookup={:?} rasterize={:?} flush={:?} buf={:?} total={:?}",
             sections.len(),
             glyph_count,
+            culled_count,
             atlas_miss_count,
             atlas_lookup_time,
             atlas_rasterize_time,
@@ -842,7 +881,28 @@ impl mesh::TextLayoutSource for TextRenderer {
 
 #[cfg(test)]
 mod tests {
-    use super::quantize_subpixel_x;
+    use std::sync::Arc;
+
+    use orinium_text::TextLayout;
+
+    use super::{TextSection, glyph_fully_outside_clip, quantize_subpixel_x};
+
+    fn section(
+        screen_position: (f32, f32),
+        clip_origin: (f32, f32),
+        bounds: (f32, f32),
+    ) -> TextSection {
+        TextSection {
+            screen_position,
+            clip_origin,
+            bounds,
+            layout: Arc::new(TextLayout {
+                lines: Vec::new(),
+                width: 0.0,
+                height: 0.0,
+            }),
+        }
+    }
 
     #[test]
     fn horizontal_subpixel_positions_use_four_phases() {
@@ -858,5 +918,42 @@ mod tests {
         assert_eq!(quantize_subpixel_x(-0.24), (-1.0, 3));
         assert_eq!(quantize_subpixel_x(-0.51), (-1.0, 2));
         assert_eq!(quantize_subpixel_x(-0.99), (-1.0, 0));
+    }
+
+    #[test]
+    fn pre_clip_keeps_glyphs_inside_clip() {
+        let s = section((0.0, 0.0), (0.0, 0.0), (100.0, 100.0));
+        // Glyph fully inside the clip rect.
+        assert!(!glyph_fully_outside_clip(&s, 10.0, 20.0, 8.0, 12.0));
+        // Glyph straddling the clip boundary is kept (post-clip handles the split).
+        assert!(!glyph_fully_outside_clip(&s, 98.0, 20.0, 8.0, 12.0));
+    }
+
+    #[test]
+    fn pre_clip_culls_glyphs_far_outside() {
+        let s = section((0.0, 0.0), (0.0, 0.0), (100.0, 100.0));
+        // Far left, far right, above, and below the clip rect are all culled.
+        assert!(glyph_fully_outside_clip(&s, -1000.0, 20.0, 8.0, 12.0));
+        assert!(glyph_fully_outside_clip(&s, 2000.0, 20.0, 8.0, 12.0));
+        assert!(glyph_fully_outside_clip(&s, 10.0, -2000.0, 8.0, 12.0));
+        assert!(glyph_fully_outside_clip(&s, 10.0, 3000.0, 8.0, 12.0));
+    }
+
+    #[test]
+    fn pre_clip_keeps_glyphs_within_slack_of_boundary() {
+        let s = section((0.0, 0.0), (0.0, 0.0), (100.0, 100.0));
+        // Within 4px slack of the edge: the real (hinted/quantized) ink rect may
+        // still touch the clip, so it must not be culled here.
+        assert!(!glyph_fully_outside_clip(&s, 3.0, 20.0, 8.0, 12.0));
+        assert!(!glyph_fully_outside_clip(&s, 96.0, 20.0, 8.0, 12.0));
+        assert!(!glyph_fully_outside_clip(&s, 10.0, -3.0, 8.0, 12.0));
+    }
+
+    #[test]
+    fn pre_clip_culls_once_beyond_slack() {
+        let s = section((0.0, 0.0), (0.0, 0.0), (100.0, 100.0));
+        // Just past the 4px slack from the boundary.
+        assert!(glyph_fully_outside_clip(&s, -20.0, 20.0, 8.0, 12.0));
+        assert!(glyph_fully_outside_clip(&s, 105.0, 20.0, 8.0, 12.0));
     }
 }
