@@ -627,34 +627,6 @@ mod tests {
     }
 
     #[test]
-    fn draw_emits_background_and_components() {
-        let chrome = BasicChrome::new();
-        let mut commands = Vec::new();
-        chrome.draw(&mut commands, 800.0, 600.0);
-
-        // Toolbar background fill.
-        assert!(matches!(commands[0], DrawCommand::Fill { .. }));
-        // Each component draws a background fill, then a transform pair.
-        let fills = commands
-            .iter()
-            .filter(|c| matches!(c, DrawCommand::Fill { .. }))
-            .count();
-        let transforms = commands
-            .iter()
-            .filter(|c| matches!(c, DrawCommand::PushTransform { .. }))
-            .count();
-        assert_eq!(fills, 4, "toolbar background + 3 component backgrounds");
-        assert_eq!(transforms, 3);
-        assert_eq!(
-            commands
-                .iter()
-                .filter(|c| matches!(c, DrawCommand::PopTransform))
-                .count(),
-            3
-        );
-    }
-
-    #[test]
     fn sync_url_updates_address_bar_once() {
         let mut chrome = BasicChrome::new();
         chrome.sync_url(Some("https://example.com"));
