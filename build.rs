@@ -39,12 +39,24 @@ const TEST_PAGE_CATALOG: &[TestPageMeta] = &[
         title: "Inline Layout",
         description: "インライン要素のネストと margin の挙動",
     },
+    TestPageMeta {
+        file: "button_center.html",
+        group: "Layout",
+        title: "Button Centering",
+        description: "ブロック化した button を margin: 0 auto で中央寄せ",
+    },
     // ── CSS ──
     TestPageMeta {
         file: "css_color.html",
         group: "CSS",
         title: "Color & Gradient",
         description: "名前付き色 / hex / rgb / hsl / inherit・currentColor / グラデーション",
+    },
+    TestPageMeta {
+        file: "gradient_edge_cases_test.html",
+        group: "CSS",
+        title: "Gradient Edge Cases",
+        description: "グラデーションのエッジケース: 角度・calc() 位置・負値・複数ストップ・repeating ・currentColor",
     },
     TestPageMeta {
         file: "css_length.html",
@@ -65,6 +77,18 @@ const TEST_PAGE_CATALOG: &[TestPageMeta] = &[
         description: "min/max-width/height によるサイズ制約",
     },
     TestPageMeta {
+        file: "media_queries.html",
+        group: "CSS",
+        title: "Media Queries",
+        description: "@media による width/height / orientation / prefers-color-scheme / not・クエリリスト",
+    },
+    TestPageMeta {
+        file: "position_css_test.html",
+        group: "CSS",
+        title: "Position",
+        description: "static / relative / absolute / fixed / sticky と inset・offset・overflow の組み合わせ",
+    },
+    TestPageMeta {
         file: "border_radius.html",
         group: "CSS",
         title: "Border Radius",
@@ -82,6 +106,12 @@ const TEST_PAGE_CATALOG: &[TestPageMeta] = &[
         title: "CSS Selector",
         description: "タグ / クラス / id / 子孫 / 複数クラス / 複合セレクタ",
     },
+    TestPageMeta {
+        file: "css_selectors.html",
+        group: "CSS",
+        title: "CSS Selectors (Advanced)",
+        description: "隣接・一般兄弟セレクタ / :first-child / :nth-child / :not / :is / :where",
+    },
     // ── HTML ──
     TestPageMeta {
         file: "compatibility_test.html",
@@ -94,6 +124,25 @@ const TEST_PAGE_CATALOG: &[TestPageMeta] = &[
         group: "HTML",
         title: "Table & Form",
         description: "テーブルレイアウト (thead/tbody/tfoot) とフォーム (button)",
+    },
+    TestPageMeta {
+        file: "image.html",
+        group: "HTML",
+        title: "Image Rendering",
+        description: "img 置換要素: resource:// 画像のサイズ指定付き描画",
+    },
+    TestPageMeta {
+        file: "ime.html",
+        group: "HTML",
+        title: "IME Text Input",
+        description: "テキスト入力 (input) への日本語 IME による文字入力",
+    },
+    // ── Media ──
+    TestPageMeta {
+        file: "audio_player.html",
+        group: "Media",
+        title: "Audio Player",
+        description: "audio 要素 (controls) による音声ファイルの再生",
     },
     // ── JavaScript ──
     TestPageMeta {
@@ -190,7 +239,7 @@ const TEST_PAGE_CATALOG: &[TestPageMeta] = &[
 
 /// テスト一覧に表示するグループ順。未登録ファイルは "Other" に載せ、
 /// JavaScriptの手動テストは一覧の末尾にまとめる。
-const TEST_GROUP_ORDER: &[&str] = &["Layout", "CSS", "HTML", "Other", "JavaScript"];
+const TEST_GROUP_ORDER: &[&str] = &["Layout", "CSS", "HTML", "Media", "Other", "JavaScript"];
 
 fn main() {
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
