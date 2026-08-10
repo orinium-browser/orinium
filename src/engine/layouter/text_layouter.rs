@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ui_layout::{
@@ -10,7 +11,7 @@ use crate::engine::bridge::text::GlyphCluster;
 use crate::engine::layouter::types::TextStyle;
 
 thread_local! {
-    static TEXT_RESULTS: RefCell<HashMap<usize, TextLayoutResult>> =
+    static TEXT_RESULTS: RefCell<HashMap<usize, Arc<TextLayoutResult>>> =
         RefCell::new(HashMap::new());
 }
 
@@ -58,7 +59,7 @@ impl TextFlowLayouter {
     }
 
     /// Retrieve the layout result for `id` from the thread-local cache.
-    pub fn get_result(id: usize) -> Option<TextLayoutResult> {
+    pub fn get_result(id: usize) -> Option<Arc<TextLayoutResult>> {
         TEXT_RESULTS.with(|cache| cache.borrow().get(&id).cloned())
     }
 
@@ -292,7 +293,7 @@ impl CustomLayouter for TextFlowLayouter {
         let spans = result.spans.clone();
 
         TEXT_RESULTS.with(|cache| {
-            cache.borrow_mut().insert(self.id, result);
+            cache.borrow_mut().insert(self.id, Arc::new(result));
         });
 
         let (start_x, start_y) = ctx.start_pos;

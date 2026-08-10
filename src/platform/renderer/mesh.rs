@@ -11,7 +11,7 @@ use orinium_text::TextLayout;
 use smol_str::SmolStr;
 
 use crate::engine::layouter::types::{
-    Color, ColorStop, Gradient, GradientKind, RadialShape, RadialSizeKind, TextStyle,
+    Color, ColorStop, Gradient, GradientKind, LineHeight, RadialShape, RadialSizeKind, TextStyle,
 };
 use crate::engine::renderer_model::{
     AffineTransform, Brush, DrawCommand, Image, Paint, Path, Rect,
@@ -423,53 +423,59 @@ impl MeshBuilder {
         let th = clip.h;
         let font_size = style.font_size;
 
-        // Text culling: skip creating a layout when the text's estimated
-        // bounding box is fully outside the current clip.
-        let mut skip_text = false;
-        if self.enable_text_culling {
-            let sx1 = (x + tdx) * sf;
-            let sy1 = (y + tdy) * sf;
-            let est_w = if !tw.is_finite() || tw <= 0.0 {
-                (font_size * sf) * (text_str.len().max(1) as f32) * 0.5
-            } else {
-                tw * sf
-            };
-            let est_h = if !th.is_finite() || th <= 0.0 {
-                (font_size * sf) * 1.2 * (text_str.lines().count() as f32).max(1.0)
-            } else {
-                th * sf
-            };
-            let sx2 = sx1 + est_w;
-            let sy2 = sy1 + est_h;
+        // Line pitch in logical pixels, matching the text renderer's
+        // line-height resolution (`text.rs::create_buffer_for_text_inner`).
+        let line_height_ratio = match style.line_height {
+            LineHeight::Normal => 1.2,
+            LineHeight::Number(n) => n.max(0.0),
+            LineHeight::Px(px) => px / font_size.max(1e-3),
+        };
+        let pitch = font_size * line_height_ratio;
+        // Margin so glyph ink that spills past the em box (ascenders,
+        // descenders) is never culled while still partially visible.
+        let line_cull_h = pitch * 1.2;
 
-            let clip_l = clip.x * sf;
-            let clip_t = clip.y * sf;
-            let clip_r = (clip.x + clip.w) * sf;
-            let clip_b = (clip.y + clip.h) * sf;
+        let clip_l = clip.x * sf;
+        let clip_t = clip.y * sf;
+        let clip_r = (clip.x + clip.w) * sf;
+        let clip_b = (clip.y + clip.h) * sf;
 
-            if sx2 <= clip_l || sx1 >= clip_r || sy2 <= clip_t || sy1 >= clip_b {
-                skip_text = true;
-            }
-        }
-        if skip_text {
-            return;
-        }
-
+        // Culling is done per line: split the input text up front so that a
+        // mostly off-screen blob only lays out the lines intersecting the
+        // clip, and a tall/long text no longer disappears mid-scroll when the
+        // whole-block estimate (previously the clip size) would reject it.
+        let sx1 = (x + tdx) * sf;
         let Some(tr) = text.as_mut() else {
             return;
         };
-        let mut scaled = style.clone();
-        scaled.font_size = ((font_size * sf) * 64.0).round() / 64.0;
-        let Some(layout) = tr.layout_text(text_str.as_str(), &scaled) else {
-            return;
-        };
+        for (line_index, line) in text_str.split('\n').enumerate() {
+            let sy1 = (y + line_index as f32 * pitch + tdy) * sf;
+            let sy2 = sy1 + line_cull_h * sf;
 
-        self.mesh.sections.push(TextSection {
-            screen_position: ((x + tdx) * sf, (y + tdy) * sf),
-            clip_origin: (clip.x * sf, clip.y * sf),
-            bounds: (tw * sf, th * sf),
-            layout,
-        });
+            if self.enable_text_culling {
+                let est_w = (font_size * sf) * (line.len().max(1) as f32) * 0.5;
+                if sy2 <= clip_t || sy1 >= clip_b || sx1 + est_w <= clip_l || sx1 >= clip_r {
+                    continue;
+                }
+            }
+
+            if line.is_empty() {
+                continue;
+            }
+
+            let mut scaled = style.clone();
+            scaled.font_size = ((font_size * sf) * 64.0).round() / 64.0;
+            let Some(layout) = tr.layout_text(line, &scaled) else {
+                return;
+            };
+
+            self.mesh.sections.push(TextSection {
+                screen_position: (sx1, sy1),
+                clip_origin: (clip.x * sf, clip.y * sf),
+                bounds: (tw * sf, th * sf),
+                layout,
+            });
+        }
     }
 }
 
