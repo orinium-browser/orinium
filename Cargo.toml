@@ -61,3 +61,6 @@ strsim = "0.11.1"
 
 [features]
 dhat-heap = []
+
+[profile.dev.package.pixi_byte]
+opt-level = 3
