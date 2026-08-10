@@ -383,7 +383,18 @@ impl JsRuntime {
         while let Err(err) = self.engine.run_jobs() {
             // A failed callback must not prevent later jobs in the same
             // checkpoint from running. PixiByte leaves those jobs queued.
-            log::info!("JS error in microtask: {}", err);
+            if let JSError::Thrown(JSValue::Object(object)) = &err {
+                let object = object.borrow();
+                let details = object
+                    .keys()
+                    .into_iter()
+                    .map(|key| format!("{key}={}", object.get(&key).to_console_string()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                log::info!("JS error in microtask: {} ({details})", err);
+            } else {
+                log::info!("JS error in microtask: {}", err);
+            }
         }
     }
 }
@@ -599,6 +610,7 @@ fn queue_microtask(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 // --- MutationObserver ---
 
 const MUTATION_OBSERVER_CALLBACK: &str = "__orinium_mutation_observer_callback";
+const MUTATION_OBSERVER_SCHEDULED: &str = "__orinium_mutation_observer_scheduled";
 
 fn install_mutation_observer(engine: &mut pixi_byte::JSEngine) {
     let mut constructor = JSObject::new();
@@ -636,11 +648,35 @@ fn mutation_observer_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<J
     Ok(JSValue::Object(Rc::new(RefCell::new(observer))))
 }
 
-fn mutation_observer_observe(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+fn mutation_observer_observe(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     if !matches!(args.get(1), Some(JSValue::Object(_))) {
         return Err(JSError::TypeError(
             "MutationObserver.observe target must be a Node".to_string(),
         ));
+    }
+    let Some(JSValue::Object(observer)) = args.first() else {
+        return Err(JSError::TypeError(
+            "MutationObserver.observe called on an invalid receiver".to_string(),
+        ));
+    };
+    if !observer
+        .borrow()
+        .get(MUTATION_OBSERVER_SCHEDULED)
+        .to_boolean()
+    {
+        let callback = observer.borrow().get(MUTATION_OBSERVER_CALLBACK);
+        observer.borrow_mut().set(
+            MUTATION_OBSERVER_SCHEDULED.to_string(),
+            JSValue::Boolean(true),
+        );
+        vm.enqueue_job(
+            callback,
+            JSValue::Undefined,
+            vec![
+                vm.array_from_values(Vec::new()),
+                JSValue::Object(Rc::clone(observer)),
+            ],
+        );
     }
     Ok(JSValue::Undefined)
 }
@@ -1155,6 +1191,10 @@ fn install_document(engine: &mut pixi_byte::JSEngine) {
             read_only_accessor_property(get_document_body),
         );
         document.define_property(
+            "head".to_string(),
+            read_only_accessor_property(get_document_head),
+        );
+        document.define_property(
             "activeElement".to_string(),
             read_only_accessor_property(get_active_element),
         );
@@ -1471,6 +1511,13 @@ fn get_document_body(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
         .unwrap_or(JSValue::Null))
 }
 
+fn get_document_head(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let node = with_host(vm, |host| host.dom.query_selector("head")).flatten();
+    Ok(node
+        .and_then(|node| expose_node(vm, node))
+        .unwrap_or(JSValue::Null))
+}
+
 fn get_active_element(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     let active = with_host(vm, |host| {
         host.active_element
@@ -1745,6 +1792,10 @@ fn make_element(
         JSValue::NativeFunction(append_child),
     );
     obj.set(
+        "append".to_string(),
+        JSValue::NativeFunction(element_append),
+    );
+    obj.set(
         "insertBefore".to_string(),
         JSValue::NativeFunction(insert_before),
     );
@@ -1857,6 +1908,19 @@ fn append_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     }
     mark_dom_dirty(vm);
     Ok(child_value)
+}
+
+fn element_append(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let receiver = args.first().cloned().unwrap_or(JSValue::Undefined);
+    for value in args.into_iter().skip(1) {
+        let child = if dom_node(vm, &value).is_some() {
+            value
+        } else {
+            create_text_node(vm, vec![JSValue::Undefined, value])?
+        };
+        append_child(vm, vec![receiver.clone(), child])?;
+    }
+    Ok(JSValue::Undefined)
 }
 
 fn insert_before(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -2237,11 +2301,23 @@ fn get_element_children(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(expose_node_list(vm, children))
 }
 
-fn get_class_list(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+fn get_class_list(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(dom_id) = node_dom_id(args.first().unwrap_or(&JSValue::Undefined)) else {
         return Ok(JSValue::Null);
     };
-    let mut class_list = JSObject::new();
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Null);
+    };
+    let class_list = vm.array_from_values(
+        class_tokens(&node)
+            .into_iter()
+            .map(JSValue::String)
+            .collect(),
+    );
+    let JSValue::Object(class_list_object) = class_list else {
+        unreachable!("array_from_values must return an object");
+    };
+    let mut class_list = class_list_object.borrow_mut();
     define_node_id(&mut class_list, dom_id);
     class_list.set(
         "contains".to_string(),
@@ -2256,7 +2332,8 @@ fn get_class_list(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         "toggle".to_string(),
         JSValue::NativeFunction(class_list_toggle),
     );
-    Ok(JSValue::Object(Rc::new(RefCell::new(class_list))))
+    drop(class_list);
+    Ok(JSValue::Object(class_list_object))
 }
 
 fn get_class_name(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -2940,7 +3017,9 @@ mod tests {
             runtime_from_html(r#"<html><body><div id="target"></div></body></html>"#);
         runtime.run_script(
             r#"
-            const observer = new MutationObserver(function () {});
+            const observer = new MutationObserver(function () {
+                document.getElementById("target").setAttribute("data-observed", "yes");
+            });
             observer.observe(document.documentElement, { childList: true, subtree: true });
             const records = observer.takeRecords();
             observer.disconnect();
@@ -2950,6 +3029,7 @@ mod tests {
 
         let node = dom.get_element_by_id("target").unwrap();
         assert_eq!(node.borrow().value.get_attr("data-records"), Some("0"));
+        assert_eq!(node.borrow().value.get_attr("data-observed"), Some("yes"));
     }
 
     #[test]
@@ -3438,11 +3518,13 @@ mod tests {
             const featured = document.querySelector("main > p.featured");
             featured.setAttribute("data-selected", "yes");
             const items = document.querySelectorAll("p.item");
+            const classified = document.querySelectorAll("[class]");
             items[0].setAttribute("data-first", "yes");
             items.forEach(function (item, index) {
                 item.setAttribute("data-index", index);
             });
             document.getElementById("result").setAttribute("data-count", items.length);
+            document.getElementById("result").setAttribute("data-class-count", classified.length);
             "#,
         );
 
@@ -3456,6 +3538,10 @@ mod tests {
         );
         let result = dom.get_element_by_id("result").unwrap();
         assert_eq!(result.borrow().value.get_attr("data-count"), Some("2"));
+        assert_eq!(
+            result.borrow().value.get_attr("data-class-count"),
+            Some("2")
+        );
     }
 
     #[test]
@@ -3501,6 +3587,22 @@ mod tests {
 
         let item = dom.query_selector("li.dynamic").unwrap();
         assert_eq!(DomTree::inner_text(&item), "created by JavaScript");
+        assert!(runtime.needs_redraw());
+    }
+
+    #[test]
+    fn document_head_and_element_append_insert_dynamic_styles() {
+        let (mut runtime, dom) = runtime_from_html(r#"<html><head></head><body></body></html>"#);
+        runtime.run_script(
+            r#"
+            const style = document.createElement("style");
+            style.append("body { color: red; }");
+            document.head.append(style);
+            "#,
+        );
+
+        let style = dom.query_selector("head style").unwrap();
+        assert_eq!(DomTree::inner_text(&style), "body { color: red; }");
         assert!(runtime.needs_redraw());
     }
 
@@ -3730,6 +3832,9 @@ mod tests {
         runtime.run_script(
             r##"
             const target = document.querySelector("#target");
+            let initial = "";
+            for (const token of target.classList) initial += token + ",";
+            target.setAttribute("data-initial-classes", initial);
             target.classList.add("two", "three");
             target.classList.remove("one", "missing");
             target.setAttribute("data-has-three", target.classList.contains("three"));
@@ -3743,6 +3848,10 @@ mod tests {
         let target = dom.get_element_by_id("target").unwrap();
         let target = target.borrow();
         assert_eq!(target.value.get_attr("class"), Some("two five"));
+        assert_eq!(
+            target.value.get_attr("data-initial-classes"),
+            Some("one,two,")
+        );
         assert_eq!(target.value.get_attr("data-has-three"), Some("true"));
         assert_eq!(target.value.get_attr("data-removed-three"), Some("false"));
         assert_eq!(target.value.get_attr("data-added-four"), Some("true"));
