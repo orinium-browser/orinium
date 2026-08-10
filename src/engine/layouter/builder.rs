@@ -1925,9 +1925,15 @@ fn parse_background_shorthand(
 
         // gradient
         if let CssValue::Function(fn_name, args) = v
-            && (fn_name == "linear-gradient"
-                || fn_name == "radial-gradient"
-                || fn_name == "conic-gradient")
+            && matches!(
+                fn_name.as_str(),
+                "linear-gradient"
+                    | "repeating-linear-gradient"
+                    | "radial-gradient"
+                    | "repeating-radial-gradient"
+                    | "conic-gradient"
+                    | "repeating-conic-gradient"
+            )
         {
             maybe_gradient = Some(parse_gradient(fn_name, args, text_style, color_scheme)?);
             continue;
@@ -1961,16 +1967,22 @@ fn parse_gradient(
     color_scheme: ColorScheme,
 ) -> Option<Gradient> {
     match fn_name {
-        "linear-gradient" => parse_linear_gradient(args, text_style, color_scheme),
-        "radial-gradient" => parse_radial_gradient(args, text_style, color_scheme),
-        "conic-gradient" => parse_conic_gradient(args, text_style, color_scheme),
+        "linear-gradient" | "repeating-linear-gradient" => {
+            parse_linear_gradient(args, text_style, color_scheme)
+        }
+        "radial-gradient" | "repeating-radial-gradient" => {
+            parse_radial_gradient(args, text_style, color_scheme)
+        }
+        "conic-gradient" | "repeating-conic-gradient" => {
+            parse_conic_gradient(args, text_style, color_scheme)
+        }
         _ => None,
     }
 }
 
 fn parse_linear_gradient(
     args: &[CssValue],
-    _text_style: &TextStyle,
+    text_style: &TextStyle,
     color_scheme: ColorScheme,
 ) -> Option<Gradient> {
     if args.is_empty() {
@@ -1979,7 +1991,7 @@ fn parse_linear_gradient(
 
     let (skip, angle) = parse_linear_direction(args);
     let angle = angle.unwrap_or(180.0);
-    let stops = parse_color_stops(&args[skip..], color_scheme)?;
+    let stops = parse_color_stops(&args[skip..], text_style, color_scheme)?;
 
     Some(Gradient {
         kind: GradientKind::Linear { angle },
@@ -2039,7 +2051,7 @@ fn parse_linear_direction(args: &[CssValue]) -> (usize, Option<f32>) {
 
 fn parse_radial_gradient(
     args: &[CssValue],
-    _text_style: &TextStyle,
+    text_style: &TextStyle,
     color_scheme: ColorScheme,
 ) -> Option<Gradient> {
     let mut shape = RadialShape::Ellipse;
@@ -2121,7 +2133,7 @@ fn parse_radial_gradient(
         }
     }
 
-    let stops = parse_color_stops(&args[idx..], color_scheme)?;
+    let stops = parse_color_stops(&args[idx..], text_style, color_scheme)?;
     if stops.is_empty() {
         return None;
     }
@@ -2135,35 +2147,36 @@ fn parse_radial_gradient(
     })
 }
 
-fn parse_color_stops(args: &[CssValue], color_scheme: ColorScheme) -> Option<Vec<ColorStop>> {
+fn parse_color_stops(
+    args: &[CssValue],
+    text_style: &TextStyle,
+    color_scheme: ColorScheme,
+) -> Option<Vec<ColorStop>> {
     let mut stops = Vec::new();
     let mut i = 0;
 
     while i < args.len() {
-        let color = resolve_css_color("gradient", &args[i], color_scheme)?;
+        let color = match &args[i] {
+            CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentColor") => text_style.color,
+            _ => resolve_css_color("gradient", &args[i], color_scheme)?,
+        };
         i += 1;
 
         // Consume up to two position lengths (a double-position stop is
         // equivalent to two stops at the same color).
         let mut positions: Vec<f32> = Vec::new();
         while positions.len() < 2 && i < args.len() {
-            match &args[i] {
-                CssValue::Length(v, Unit::Percent) => {
-                    positions.push((*v / 100.0).clamp(0.0, 1.0));
+            if let CssValue::Length(_v, Unit::Px) = &args[i] {
+                // Absolute lengths are not resolvable here; treat as auto.
+                i += 1;
+                continue;
+            }
+            match resolve_gradient_position(&args[i], text_style) {
+                Some(position) => {
+                    positions.push(position.clamp(0.0, 1.0));
                     i += 1;
                 }
-                CssValue::Length(v, Unit::Deg) => {
-                    positions.push((*v / 360.0).clamp(0.0, 1.0));
-                    i += 1;
-                }
-                CssValue::Length(_v, Unit::Px) => {
-                    // Absolute lengths are not resolvable here; treat as auto.
-                    i += 1;
-                }
-                CssValue::Number(0.0) => {
-                    i += 1;
-                }
-                _ => break,
+                None => break,
             }
         }
 
@@ -2187,7 +2200,7 @@ fn parse_color_stops(args: &[CssValue], color_scheme: ColorScheme) -> Option<Vec
 
 fn parse_conic_gradient(
     args: &[CssValue],
-    _text_style: &TextStyle,
+    text_style: &TextStyle,
     color_scheme: ColorScheme,
 ) -> Option<Gradient> {
     if args.is_empty() {
@@ -2239,7 +2252,7 @@ fn parse_conic_gradient(
         }
     }
 
-    let stops = parse_color_stops(&args[idx..], color_scheme)?;
+    let stops = parse_color_stops(&args[idx..], text_style, color_scheme)?;
     if stops.is_empty() {
         return None;
     }
@@ -2247,6 +2260,48 @@ fn parse_conic_gradient(
         kind: GradientKind::Conic { angle, position },
         stops,
     })
+}
+
+/// Resolve a gradient stop position into a normalized fraction of the
+/// gradient length (100% == 1.0). `None` means the value is not resolvable
+/// at this stage and should be treated as an auto position.
+fn resolve_gradient_position(value: &CssValue, text_style: &TextStyle) -> Option<f32> {
+    match value {
+        CssValue::Length(v, Unit::Percent) => Some(*v / 100.0),
+        CssValue::Length(v, Unit::Deg) => Some(*v / 360.0),
+        CssValue::Number(0.0) => Some(0.0),
+        CssValue::Function(fn_name, args) if fn_name == "calc" => {
+            let value = CssValue::Function(fn_name.clone(), args.clone());
+            let length = resolve_css_len("gradient", &value, text_style)?;
+            length_to_fraction(&length)
+        }
+        _ => None,
+    }
+}
+
+/// Convert a resolved [`Length`] into a normalized gradient fraction. Percent
+/// values are relative to the gradient length (100% == 1.0). Absolute lengths
+/// (px/vw/vh) cannot be resolved without the gradient box and yield `None`.
+fn length_to_fraction(length: &Length) -> Option<f32> {
+    match length {
+        Length::Percent(v) => Some(*v / 100.0),
+        Length::Add(a, b) => Some(length_to_fraction(a)? + length_to_fraction(b)?),
+        Length::Sub(a, b) => Some(length_to_fraction(a)? - length_to_fraction(b)?),
+        Length::Mul(a, factor) => Some(length_to_fraction(a)? * factor),
+        Length::Div(a, factor) => {
+            if *factor == 0.0 {
+                None
+            } else {
+                Some(length_to_fraction(a)? / factor)
+            }
+        }
+        Length::Min(a, b) => Some(length_to_fraction(a)?.min(length_to_fraction(b)?)),
+        Length::Max(a, b) => Some(length_to_fraction(a)?.max(length_to_fraction(b)?)),
+        Length::Clamp { min, val, max } => {
+            Some(length_to_fraction(val)?.clamp(length_to_fraction(min)?, length_to_fraction(max)?))
+        }
+        Length::Px(_) | Length::Vw(_) | Length::Vh(_) => None,
+    }
 }
 
 /// Extract font family names from a `font-family` CSS value.
@@ -3833,5 +3888,118 @@ mod tests {
             }
         ));
         assert_eq!(gradient.stops.len(), 2);
+    }
+
+    #[test]
+    fn linear_gradient_calc_position_resolves() {
+        let args = vec![
+            CssValue::Keyword("red".into()),
+            CssValue::Length(0.0, Unit::Percent),
+            CssValue::Keyword("blue".into()),
+            CssValue::Function(
+                "calc".into(),
+                vec![
+                    CssValue::Length(50.0, Unit::Percent),
+                    CssValue::Keyword("+".into()),
+                    CssValue::Length(10.0, Unit::Percent),
+                ],
+            ),
+            CssValue::Keyword("green".into()),
+            CssValue::Length(100.0, Unit::Percent),
+        ];
+        let gradient = parse_gradient(
+            "linear-gradient",
+            &args,
+            &TextStyle::default(),
+            ColorScheme::Light,
+        )
+        .expect("gradient parses");
+        assert_eq!(gradient.stops[0].position, Some(0.0));
+        assert_eq!(gradient.stops[1].position, Some(0.6));
+        assert_eq!(gradient.stops[2].position, Some(1.0));
+    }
+
+    #[test]
+    fn linear_gradient_calc_negative_position_clamps() {
+        let args = vec![
+            CssValue::Keyword("red".into()),
+            CssValue::Function(
+                "calc".into(),
+                vec![
+                    CssValue::Length(50.0, Unit::Percent),
+                    CssValue::Keyword("*".into()),
+                    CssValue::Number(-1.0),
+                ],
+            ),
+            CssValue::Keyword("blue".into()),
+            CssValue::Length(100.0, Unit::Percent),
+        ];
+        let gradient = parse_gradient(
+            "linear-gradient",
+            &args,
+            &TextStyle::default(),
+            ColorScheme::Light,
+        )
+        .expect("gradient parses");
+        assert_eq!(gradient.stops[0].position, Some(0.0));
+    }
+
+    #[test]
+    fn linear_gradient_calc_zero_position() {
+        let args = vec![
+            CssValue::Keyword("red".into()),
+            CssValue::Function("calc".into(), vec![CssValue::Length(0.0, Unit::Percent)]),
+            CssValue::Keyword("blue".into()),
+            CssValue::Length(100.0, Unit::Percent),
+        ];
+        let gradient = parse_gradient(
+            "linear-gradient",
+            &args,
+            &TextStyle::default(),
+            ColorScheme::Light,
+        )
+        .expect("gradient parses");
+        assert_eq!(gradient.stops[0].position, Some(0.0));
+    }
+
+    #[test]
+    fn repeating_gradient_parses_through_background_shorthand() {
+        let container = apply_container_property(
+            "background",
+            CssValue::Function(
+                "repeating-linear-gradient".into(),
+                vec![
+                    CssValue::Length(90.0, Unit::Deg),
+                    CssValue::Keyword("red".into()),
+                    CssValue::Length(0.0, Unit::Percent),
+                    CssValue::Length(10.0, Unit::Percent),
+                    CssValue::Keyword("blue".into()),
+                    CssValue::Length(10.0, Unit::Percent),
+                    CssValue::Length(20.0, Unit::Percent),
+                ],
+            ),
+        );
+        let Background::Gradient(gradient) = container.background else {
+            panic!("expected gradient background");
+        };
+        assert!(matches!(
+            gradient.kind,
+            GradientKind::Linear { angle: 90.0 }
+        ));
+        assert_eq!(gradient.stops.len(), 4);
+    }
+
+    #[test]
+    fn gradient_current_color_stop_resolves_to_text_color() {
+        let args = vec![
+            CssValue::Keyword("currentColor".into()),
+            CssValue::Keyword("white".into()),
+            CssValue::Keyword("black".into()),
+        ];
+        let mut text_style = TextStyle::default();
+        text_style.color = Color(255, 0, 0, 255);
+        let gradient = parse_gradient("linear-gradient", &args, &text_style, ColorScheme::Light)
+            .expect("gradient parses");
+        assert_eq!(gradient.stops[0].color, Color(255, 0, 0, 255));
     }
 }
