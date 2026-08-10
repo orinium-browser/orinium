@@ -304,10 +304,12 @@ fn main() -> Result<()> {
                 if args.len() == 3 || args.len() == 5 {
                     let raw_url = &args[2];
                     let (viewport_w, viewport_h) = viewport_args(&args, 800.0, 600.0)?;
-                    println!("Dumping LayoutNode for URL: {}", raw_url);
+                    println!("Running layout for URL: {}", raw_url);
 
                     let mut ctx = build_layout_info(raw_url)?;
                     LayoutEngine::layout(&mut ctx.layout, viewport_w, viewport_h);
+
+                    println!("Done!");
                 } else {
                     eprintln!(
                         "Please provide a URL and optional viewport size (URL [WIDTH HEIGHT])."
