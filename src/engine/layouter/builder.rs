@@ -396,36 +396,8 @@ pub fn build_layout_and_info_from_snapshot(
                 color_scheme: used_color_scheme,
             };
 
-            if let HtmlNodeType::Text(t) = html_node {
-                // ── Text node (leaf) ──
-                let t = normalize_whitespace(t);
-                let t = match text_style.text_transform {
-                    TextTransform::None => t,
-                    TextTransform::Uppercase => t.to_ascii_uppercase(),
-                    TextTransform::Lowercase => t.to_ascii_lowercase(),
-                };
-                let Length::Px(line_height) = style.line_height else {
-                    unreachable!()
-                };
-                let (layouter, kind) =
-                    create_text_node(t, text_style.clone(), line_height, &*measurer);
-
-                let mut inline_style = style.clone();
-                inline_style.display = Display {
-                    outer: OuterDisplay::Inline,
-                    inner: InnerDisplay::Flow,
-                };
-                let layout =
-                    LayoutNode::with_children(inline_style.clone(), [(inline_style, layouter)]);
-                let info = InfoNode {
-                    kind,
-                    children: Vec::new(),
-                    dom_id: Some(stack[top_idx].dom),
-                };
-                let ptr = stack[top_idx].dom;
-                results.insert(ptr, (layout, info));
-                stack.pop();
-                continue;
+            if let HtmlNodeType::Text(_) = html_node {
+                unreachable!();
             }
 
             // ── Custom / replaced element (leaf) ──
@@ -547,10 +519,19 @@ pub fn build_layout_and_info_from_snapshot(
             let mut element_kids: Vec<NodeId> = Vec::new();
 
             if style.display.outer != OuterDisplay::None {
+                let tag_name = snapshot.node(stack[top_idx].dom).kind.tag_name();
                 for &child in snapshot.children(stack[top_idx].dom) {
                     let child_node = &snapshot.node(child).kind;
                     if let HtmlNodeType::Text(t) = child_node {
-                        let t = normalize_whitespace(t);
+                        let t = if tag_name == Some("pre") {
+                            let t = t.strip_prefix('\n').unwrap_or(t);
+                            normalize_whitespace(t, false)
+                        } else if t.trim().is_empty() {
+                            continue;
+                        } else {
+                            normalize_whitespace(t, true)
+                        };
+
                         let t = match text_style.text_transform {
                             TextTransform::None => t,
                             TextTransform::Uppercase => t.to_ascii_uppercase(),
@@ -574,7 +555,7 @@ pub fn build_layout_and_info_from_snapshot(
                                 dom_id: Some(child),
                             },
                         ));
-                    } else if child_node.tag_name() == Some("br") {
+                    } else if tag_name == Some("br") {
                         child_slots.push(ChildSlot::Inline(
                             ItemFragment::LineBreak.into(),
                             InfoNode {
@@ -583,7 +564,7 @@ pub fn build_layout_and_info_from_snapshot(
                                 dom_id: Some(child),
                             },
                         ));
-                    } else if child_node.tag_name() == Some("noscript")
+                    } else if tag_name == Some("noscript")
                         && scripting_mode == ScriptingMode::Enabled
                     {
                         // Skip
@@ -714,16 +695,19 @@ pub fn build_layout_and_info_from_snapshot(
         .expect("root must have been processed")
 }
 
-pub fn normalize_whitespace(text: &str) -> String {
+pub fn normalize_whitespace(text: &str, collapse_newlines: bool) -> String {
     let mut result = String::new();
     let mut prev_was_space = false;
 
     for c in text.chars() {
-        if c.is_whitespace() {
+        if c == '\n' && !collapse_newlines {
+            result.push('\n');
+            prev_was_space = false;
+        } else if c.is_whitespace() {
             if !prev_was_space {
                 result.push(' ');
-                prev_was_space = true;
             }
+            prev_was_space = true;
         } else {
             result.push(c);
             prev_was_space = false;

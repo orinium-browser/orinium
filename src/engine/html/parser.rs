@@ -721,21 +721,6 @@ impl<'a> Parser<'a> {
                 return;
             }
 
-            // 親ノードが pre, textarea, script, style でない場合、空白改行を無視する
-            if let Some(parent_node) = parent.borrow().parent() {
-                let parent_node_borrow = parent_node.borrow();
-                if let HtmlNodeType::Element { tag_name, .. } = &parent_node_borrow.value {
-                    if !matches!(tag_name.as_str(), "pre" | "textarea" | "script" | "style")
-                        && data.trim().is_empty()
-                    {
-                        return;
-                    }
-                } else if data.trim().is_empty() {
-                    return;
-                }
-            } else if data.trim().is_empty() {
-                return;
-            }
             TreeNode::add_child_value(&parent, HtmlNodeType::Text(data));
         }
     }

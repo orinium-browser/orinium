@@ -230,7 +230,7 @@ impl CustomNodeFactory for SelectFactory {
                                 .get_attr("value")
                                 .unwrap_or_default()
                                 .to_string(),
-                            label: normalize_whitespace(&ctx.dom_snapshot.inner_text(*child)),
+                            label: normalize_whitespace(&ctx.dom_snapshot.inner_text(*child), true),
                             selected: child_node.kind.has_attr("selected"),
                             disabled: group_disabled || child_node.kind.has_attr("disabled"),
                             group: Some(group.clone()),
@@ -239,7 +239,7 @@ impl CustomNodeFactory for SelectFactory {
                 }
                 Some("option") => options.push(SelectOption {
                     value: node.kind.get_attr("value").unwrap_or_default().to_string(),
-                    label: normalize_whitespace(&ctx.dom_snapshot.inner_text(*id)),
+                    label: normalize_whitespace(&ctx.dom_snapshot.inner_text(*id), true),
                     selected: node.kind.has_attr("selected"),
                     disabled: node.kind.has_attr("disabled"),
                     group: None,
