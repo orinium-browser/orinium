@@ -158,10 +158,9 @@ impl<'a> Tokenizer<'a> {
 
     /// Debug log for emitted tokens
     #[inline(always)]
-    #[allow(unused_variables)]
-    fn debug_emit(&self, token: &Token) {
+    fn debug_emit(&self, _token: &Token) {
         #[cfg(debug_assertions)]
-        match token {
+        match _token {
             Token::StartTag { name, .. } => {
                 log::debug!(target:"HtmlTokenizer::EmitToken::TagStart", "Emitting token: {name}, Pos: {}", self.pos)
             }
