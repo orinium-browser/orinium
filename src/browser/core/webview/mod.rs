@@ -82,12 +82,20 @@ pub enum JsPolicy {
     Disabled,
 }
 
-impl JsPolicy {
-    /// The parser scripting mode implied by this policy.
-    pub(crate) fn scripting_mode(self) -> ScriptingMode {
-        match self {
+impl From<JsPolicy> for ScriptingMode {
+    fn from(value: JsPolicy) -> ScriptingMode {
+        match value {
             JsPolicy::Enabled => ScriptingMode::Enabled,
             JsPolicy::Disabled => ScriptingMode::Disabled,
+        }
+    }
+}
+
+impl From<ScriptingMode> for JsPolicy {
+    fn from(value: ScriptingMode) -> JsPolicy {
+        match value {
+            ScriptingMode::Enabled => JsPolicy::Enabled,
+            ScriptingMode::Disabled => JsPolicy::Disabled,
         }
     }
 }
@@ -415,7 +423,7 @@ impl WebView {
 
     pub fn on_html_fetched(&mut self, html: String, document_url: Url) {
         log::info!("Fetched HTML: {}", document_url);
-        let parsed = parse_html(&html, document_url, self.js_policy.scripting_mode());
+        let parsed = parse_html(&html, document_url, self.js_policy.into());
 
         self.pending_css_urls = parsed.style_links;
         self.pending_images = parsed.image_sources;
@@ -875,7 +883,7 @@ impl WebView {
             resolved_styles: Arc::new(resolved_styles),
             measurer: self.text_measurer.clone().unwrap(),
             system_color_scheme: self.system_color_scheme,
-            scripting_mode: self.js_policy.scripting_mode(),
+            scripting_mode: self.js_policy.into(),
             images: self.images.clone(),
             audio: self.audio.clone(),
             parent: InheritedCss {

@@ -521,6 +521,7 @@ impl BrowserUi {
                 ChromeAction::SetJsPolicy(policy) => {
                     if let Some(tab) = self.tabs.get_mut(tab_id) {
                         tab.set_js_policy(policy);
+                        tab.reload();
                     }
                 }
                 ChromeAction::Repaint | ChromeAction::None => {}
