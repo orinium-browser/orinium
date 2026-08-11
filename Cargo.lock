@@ -3099,7 +3099,7 @@ dependencies = [
 [[package]]
 name = "pixi_byte"
 version = "0.1.0"
-source = "git+https://github.com/orinium-browser/pixi_byte#bf90a44dde541f6ab64814a8fe6009613901baa2"
+source = "git+https://github.com/orinium-browser/pixi_byte#3a4a31fd70e25613a06b0992dfa037827d4c95c7"
 dependencies = [
  "num-bigint",
  "num-traits",
