@@ -9,8 +9,8 @@ use crate::engine::layouter::types::ColorScheme;
 use crate::engine::{
     css::{self, parser::Parser as CssParser},
     html::HtmlNodeType,
-    html::parser::{DomTree, Parser as HtmlParser},
-    js::JsRuntime,
+    html::parser::{ClassicScriptExecution, ClassicScriptSource, DomTree, Parser as HtmlParser},
+    js::{JsFetchResponse, JsRuntime},
     layouter::{
         self, InheritedCss, LayoutResult, NodeId,
         dom_snapshot::DomSnapshot,
@@ -38,8 +38,21 @@ pub enum WebViewTask {
 pub enum FetchKind {
     Html,
     Css,
-    Image { source: String },
-    Audio { source: String },
+    Script {
+        index: usize,
+    },
+    Image {
+        source: String,
+    },
+    Audio {
+        source: String,
+    },
+    JavaScript {
+        request_id: u64,
+        method: String,
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
+    },
 }
 
 /// CSS application strategy.
@@ -74,6 +87,7 @@ pub struct WebView {
     pending_images: Vec<(String, Url)>,
     pending_audio: Vec<(String, Url)>,
     loaded_css: Vec<String>,
+    linked_css: Vec<String>,
     images: HashMap<String, Image>,
     audio: HashMap<String, Arc<[u8]>>,
 
@@ -102,10 +116,24 @@ pub struct WebView {
     /// Channel on which text inputs report value write-backs (received here).
     write_back_tx: mpsc::Sender<(u32, String)>,
     write_back_rx: mpsc::Receiver<(u32, String)>,
-    /// JS runtime sharing the current document's DOM, run once after CSS.
+    /// JS runtime sharing the current document's DOM.
     js_runtime: Option<JsRuntime>,
-    /// Inline `<script>` sources collected at parse time, run after CSS applied.
-    pending_scripts: Vec<String>,
+    /// Classic scripts in document order. Execution starts after CSS is applied.
+    classic_scripts: Vec<ClassicScript>,
+    next_script_index: usize,
+    pending_script_fetches: HashMap<usize, ClassicScriptExecution>,
+    non_blocking_scripts_scheduled: bool,
+    deferred_script_results: HashMap<usize, Option<String>>,
+    next_deferred_script_index: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum ClassicScript {
+    Inline(String),
+    External {
+        url: Url,
+        execution: ClassicScriptExecution,
+    },
 }
 
 /// A DOM snapshot paired with the tree mutation version it was built from.
@@ -162,7 +190,7 @@ struct ParsedDocument {
     inline_styles: Vec<String>,
     image_sources: Vec<(String, Url)>,
     audio_sources: Vec<(String, Url)>,
-    scripts: Vec<String>,
+    scripts: Vec<ClassicScript>,
 }
 
 impl Default for WebView {
@@ -183,6 +211,7 @@ impl WebView {
             pending_images: Vec::new(),
             pending_audio: Vec::new(),
             loaded_css: Vec::new(),
+            linked_css: Vec::new(),
             images: HashMap::new(),
             audio: HashMap::new(),
 
@@ -208,7 +237,12 @@ impl WebView {
             write_back_tx,
             write_back_rx,
             js_runtime: None,
-            pending_scripts: Vec::new(),
+            classic_scripts: Vec::new(),
+            next_script_index: 0,
+            pending_script_fetches: HashMap::new(),
+            non_blocking_scripts_scheduled: false,
+            deferred_script_results: HashMap::new(),
+            next_deferred_script_index: 0,
         }
     }
 
@@ -288,9 +322,7 @@ impl WebView {
             }
 
             PagePhase::CssApplied => {
-                // Run inline scripts once, then settle into a stable state.
-                self.run_scripts_once();
-                self.phase = PagePhase::ScriptApplied;
+                self.advance_classic_scripts(&mut tasks);
             }
 
             PagePhase::ScriptApplied => {
@@ -298,6 +330,8 @@ impl WebView {
             }
         }
 
+        self.schedule_js_fetches(&mut tasks);
+        self.run_due_js_timers();
         self.try_apply_layout_results();
         self.drain_write_backs();
 
@@ -311,7 +345,12 @@ impl WebView {
         self.pending_css_urls = parsed.style_links;
         self.pending_images = parsed.image_sources;
         self.pending_audio = parsed.audio_sources;
-        self.pending_scripts = parsed.scripts;
+        self.classic_scripts = parsed.scripts;
+        self.next_script_index = 0;
+        self.pending_script_fetches.clear();
+        self.non_blocking_scripts_scheduled = false;
+        self.deferred_script_results.clear();
+        self.next_deferred_script_index = 0;
         self.css_results_expected = self.pending_css_urls.len();
 
         self.js_runtime = Some(JsRuntime::new(Rc::clone(&parsed.dom)));
@@ -326,18 +365,17 @@ impl WebView {
         self.snapshot_cache = None;
 
         for inline_css in &parsed.inline_styles {
-            if let Ok(sheet) = CssParser::new(inline_css).parse() {
-                layouter::css_resolver::append_resolved_styles(
-                    Arc::make_mut(&mut self.resolved_styles),
-                    layouter::css_resolver::CssResolver::resolve(&sheet),
-                );
-            }
+            let sheet = CssParser::new(inline_css).parse_lossy();
+            layouter::css_resolver::append_resolved_styles(
+                Arc::make_mut(&mut self.resolved_styles),
+                layouter::css_resolver::CssResolver::resolve(&sheet),
+            );
         }
-
         self.phase = PagePhase::HtmlParsed;
     }
 
     pub fn on_css_fetched(&mut self, css: String) {
+        self.linked_css.push(css.clone());
         match self.css_strategy {
             CssApplicationStrategy::Batch => {
                 self.loaded_css.push(css);
@@ -370,6 +408,96 @@ impl WebView {
         self.update_layout();
     }
 
+    /// Executes or queues a fetched external classic script by scheduling mode.
+    pub fn on_script_fetched(&mut self, index: usize, source: String) {
+        let Some(execution) = self.pending_script_fetches.get(&index).copied() else {
+            log::warn!("Ignoring unexpected classic script response at index {index}");
+            return;
+        };
+
+        if execution == ClassicScriptExecution::Default && self.next_script_index != index {
+            log::warn!("Ignoring out-of-order blocking script response at index {index}");
+            return;
+        }
+        self.pending_script_fetches.remove(&index);
+
+        match execution {
+            ClassicScriptExecution::Default => {
+                self.next_script_index += 1;
+                self.run_script_source(&source);
+            }
+            ClassicScriptExecution::Defer => {
+                self.deferred_script_results.insert(index, Some(source));
+            }
+            ClassicScriptExecution::Async => self.run_script_source(&source),
+        }
+    }
+
+    /// Records a failed external classic script without aborting page loading.
+    pub fn on_script_fetch_failed(&mut self, index: usize) {
+        let Some(execution) = self.pending_script_fetches.get(&index).copied() else {
+            log::warn!("Ignoring unexpected classic script failure at index {index}");
+            return;
+        };
+
+        if execution == ClassicScriptExecution::Default && self.next_script_index != index {
+            log::warn!("Ignoring out-of-order blocking script failure at index {index}");
+            return;
+        }
+        self.pending_script_fetches.remove(&index);
+
+        match execution {
+            ClassicScriptExecution::Default => self.next_script_index += 1,
+            ClassicScriptExecution::Defer => {
+                self.deferred_script_results.insert(index, None);
+            }
+            ClassicScriptExecution::Async => {}
+        }
+    }
+
+    /// Resolves a JavaScript `fetch()` request with a network response.
+    pub fn on_js_fetch_succeeded(
+        &mut self,
+        request_id: u64,
+        url: String,
+        status: u16,
+        status_text: String,
+        redirected: bool,
+        body: Vec<u8>,
+        headers: Vec<(String, String)>,
+    ) {
+        let needs_redraw = self.js_runtime.as_mut().is_some_and(|runtime| {
+            runtime.resolve_fetch(
+                request_id,
+                JsFetchResponse {
+                    url,
+                    status,
+                    status_text,
+                    redirected,
+                    body,
+                    headers,
+                },
+            );
+            runtime.take_needs_redraw()
+        });
+        if needs_redraw {
+            self.rebuild_styles_and_layout();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Rejects a JavaScript `fetch()` request after a network failure.
+    pub fn on_js_fetch_failed(&mut self, request_id: u64, reason: String) {
+        let needs_redraw = self.js_runtime.as_mut().is_some_and(|runtime| {
+            runtime.reject_fetch(request_id, reason);
+            runtime.take_needs_redraw()
+        });
+        if needs_redraw {
+            self.rebuild_styles_and_layout();
+            self.needs_redraw = true;
+        }
+    }
+
     /// Update page (e.g. DOM changed)
     ///
     /// This is a stub method for now.
@@ -395,6 +523,33 @@ impl WebView {
         self.update_layout();
     }
 
+    fn rebuild_styles_and_layout(&mut self) {
+        let Some(document) = self.docment_info.as_ref() else {
+            self.update_layout();
+            return;
+        };
+        let mut resolved = layouter::css_resolver::CssResolver::resolve_with_origin(
+            &CssParser::new(USER_AGENT_CSS).parse().unwrap(),
+            layouter::css_resolver::StyleOrigin::UserAgent,
+        );
+        for source in &self.linked_css {
+            let sheet = CssParser::new(source).parse_lossy();
+            layouter::css_resolver::append_resolved_styles(
+                &mut resolved,
+                layouter::css_resolver::CssResolver::resolve(&sheet),
+            );
+        }
+        for source in document.dom.collect_text_by_tag("style") {
+            let sheet = CssParser::new(&source).parse_lossy();
+            layouter::css_resolver::append_resolved_styles(
+                &mut resolved,
+                layouter::css_resolver::CssResolver::resolve(&sheet),
+            );
+        }
+        self.resolved_styles = Arc::new(resolved);
+        self.update_layout();
+    }
+
     fn try_apply_css_results(&mut self) {
         while let Some(resolved) = self.css_processor.try_receive() {
             self.css_results_received += 1;
@@ -416,28 +571,153 @@ impl WebView {
         }
     }
 
-    /// Runs the document's inline scripts once (after CSS is applied).
-    ///
-    /// If a script mutated the DOM, rebuilds the layout and flags a redraw.
-    fn run_scripts_once(&mut self) {
-        let scripts = std::mem::take(&mut self.pending_scripts);
-        if scripts.is_empty() {
-            return;
+    fn advance_classic_scripts(&mut self, tasks: &mut Vec<WebViewTask>) {
+        self.schedule_non_blocking_scripts(tasks);
+
+        while self.next_script_index < self.classic_scripts.len() {
+            match self.classic_scripts[self.next_script_index].clone() {
+                ClassicScript::Inline(source) => {
+                    self.next_script_index += 1;
+                    self.run_script_source(&source);
+                }
+                ClassicScript::External { url, execution } => {
+                    if execution != ClassicScriptExecution::Default {
+                        self.next_script_index += 1;
+                        continue;
+                    }
+
+                    let index = self.next_script_index;
+                    if let std::collections::hash_map::Entry::Vacant(entry) =
+                        self.pending_script_fetches.entry(index)
+                    {
+                        entry.insert(ClassicScriptExecution::Default);
+                        tasks.push(WebViewTask::Fetch {
+                            url,
+                            kind: FetchKind::Script { index },
+                        });
+                    }
+                    return;
+                }
+            }
         }
 
-        let needs_redraw = {
-            let Some(js_runtime) = self.js_runtime.as_mut() else {
+        self.advance_deferred_scripts();
+    }
+
+    fn schedule_non_blocking_scripts(&mut self, tasks: &mut Vec<WebViewTask>) {
+        if self.non_blocking_scripts_scheduled {
+            return;
+        }
+        self.non_blocking_scripts_scheduled = true;
+
+        for (index, script) in self.classic_scripts.iter().enumerate() {
+            let ClassicScript::External { url, execution } = script else {
+                continue;
+            };
+            if *execution == ClassicScriptExecution::Default {
+                continue;
+            }
+
+            self.pending_script_fetches.insert(index, *execution);
+            tasks.push(WebViewTask::Fetch {
+                url: url.clone(),
+                kind: FetchKind::Script { index },
+            });
+        }
+    }
+
+    fn advance_deferred_scripts(&mut self) {
+        loop {
+            let Some(index) =
+                (self.next_deferred_script_index..self.classic_scripts.len()).find(|&index| {
+                    matches!(
+                        self.classic_scripts.get(index),
+                        Some(ClassicScript::External {
+                            execution: ClassicScriptExecution::Defer,
+                            ..
+                        })
+                    )
+                })
+            else {
+                self.dispatch_dom_content_loaded();
+                self.phase = PagePhase::ScriptApplied;
                 return;
             };
-            for script in &scripts {
-                js_runtime.run_script(script);
+
+            let Some(source) = self.deferred_script_results.remove(&index) else {
+                return;
+            };
+            self.next_deferred_script_index = index + 1;
+            if let Some(source) = source {
+                self.run_script_source(&source);
             }
-            js_runtime.take_needs_redraw()
-        };
+        }
+    }
+
+    fn run_script_source(&mut self, source: &str) {
+        let needs_redraw = self.js_runtime.as_mut().is_some_and(|runtime| {
+            runtime.run_script(source);
+            runtime.take_needs_redraw()
+        });
 
         if needs_redraw {
-            self.update_layout();
+            self.rebuild_styles_and_layout();
             self.needs_redraw = true;
+        }
+    }
+
+    fn dispatch_dom_content_loaded(&mut self) {
+        let needs_redraw = self.js_runtime.as_mut().is_some_and(|runtime| {
+            runtime.dispatch_dom_content_loaded();
+            runtime.take_needs_redraw()
+        });
+
+        if needs_redraw {
+            self.rebuild_styles_and_layout();
+            self.needs_redraw = true;
+        }
+    }
+
+    fn run_due_js_timers(&mut self) {
+        let needs_redraw = self.js_runtime.as_mut().is_some_and(|runtime| {
+            runtime.run_due_timers();
+            runtime.take_needs_redraw()
+        });
+
+        if needs_redraw {
+            self.rebuild_styles_and_layout();
+            self.needs_redraw = true;
+        }
+    }
+
+    fn schedule_js_fetches(&mut self, tasks: &mut Vec<WebViewTask>) {
+        let requests = self
+            .js_runtime
+            .as_mut()
+            .map(JsRuntime::take_fetch_requests)
+            .unwrap_or_default();
+        let base_url = self.docment_info.as_ref().map(|info| info.base_url.clone());
+
+        for request in requests {
+            let url = Url::parse(&request.url).or_else(|_| {
+                base_url
+                    .as_ref()
+                    .ok_or(url::ParseError::RelativeUrlWithoutBase)?
+                    .join(&request.url)
+            });
+            match url {
+                Ok(url) => tasks.push(WebViewTask::Fetch {
+                    url,
+                    kind: FetchKind::JavaScript {
+                        request_id: request.id,
+                        method: request.method,
+                        headers: request.headers,
+                        body: request.body,
+                    },
+                }),
+                Err(error) => self
+                    .on_js_fetch_failed(request.id, format!("Failed to parse fetch URL: {error}")),
+            }
         }
     }
 
@@ -459,7 +739,7 @@ impl WebView {
         };
         js_runtime.click(&node);
         if js_runtime.take_needs_redraw() {
-            self.update_layout();
+            self.rebuild_styles_and_layout();
             self.needs_redraw = true;
             true
         } else {
@@ -584,6 +864,7 @@ impl WebView {
         self.pending_images.clear();
         self.pending_audio.clear();
         self.loaded_css.clear();
+        self.linked_css.clear();
         self.images.clear();
         self.audio.clear();
         Arc::make_mut(&mut self.resolved_styles).clear();
@@ -600,7 +881,12 @@ impl WebView {
         self.layout_dom_refs.clear();
         self.snapshot_cache = None;
         self.js_runtime = None;
-        self.pending_scripts.clear();
+        self.classic_scripts.clear();
+        self.next_script_index = 0;
+        self.pending_script_fetches.clear();
+        self.non_blocking_scripts_scheduled = false;
+        self.deferred_script_results.clear();
+        self.next_deferred_script_index = 0;
         let (write_back_tx, write_back_rx) = mpsc::channel();
         self.write_back_tx = write_back_tx;
         self.write_back_rx = write_back_rx;
@@ -770,8 +1056,22 @@ fn parse_html(html: &str, document_url: Url) -> ParsedDocument {
     // --- Inline styles ---
     let inline_styles = dom.collect_text_by_tag("style");
 
-    // --- Inline scripts ---
-    let scripts = dom.collect_inline_scripts();
+    // --- Classic scripts ---
+    let scripts = dom
+        .collect_classic_script_descriptors()
+        .into_iter()
+        .filter_map(|script| match script.source {
+            ClassicScriptSource::Inline(source) => Some(ClassicScript::Inline(source)),
+            ClassicScriptSource::External(source) => {
+                resolve_url(&base_url, &source)
+                    .ok()
+                    .map(|url| ClassicScript::External {
+                        url,
+                        execution: script.execution,
+                    })
+            }
+        })
+        .collect();
 
     let image_sources = dom
         .get_elements_by_tag_name("img")
@@ -1046,6 +1346,50 @@ mod tests {
     }
 
     #[test]
+    fn inline_styles_recover_after_an_unsupported_rule() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"<style>@media { @broken } .valid { color: green; }</style><div class="valid">ok</div>"#
+                .to_string(),
+            Url::parse("https://example.test/").unwrap(),
+        );
+
+        assert!(webview.resolved_styles.iter().any(|declaration| {
+            declaration.name == "color"
+                && declaration
+                    .selector
+                    .parts
+                    .iter()
+                    .any(|part| part.selector.classes.iter().any(|class| class == "valid"))
+        }));
+    }
+
+    #[test]
+    fn javascript_inserted_style_elements_are_resolved() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"<html><body><div class="dynamic">ok</div></body></html>"#.to_string(),
+            Url::parse("https://example.test/").unwrap(),
+        );
+        webview.run_script_source(
+            r#"
+            const style = document.createElement("style");
+            style.textContent = ".dynamic { color: red; }";
+            document.documentElement.appendChild(style);
+            "#,
+        );
+
+        assert!(webview.resolved_styles.iter().any(|declaration| {
+            declaration.name == "color"
+                && declaration
+                    .selector
+                    .parts
+                    .iter()
+                    .any(|part| part.selector.classes.iter().any(|class| class == "dynamic"))
+        }));
+    }
+
+    #[test]
     fn parse_html_resolves_image_sources_against_base_url() {
         let parsed = parse_html(
             r#"<base href="https://cdn.example/assets/"><img src="logo.png"><img>"#,
@@ -1080,5 +1424,400 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn parse_html_resolves_external_classic_scripts_in_document_order() {
+        let parsed = parse_html(
+            r#"<base href="https://cdn.example/js/"><script>let a = 1;</script><script src="one.js"></script><script src="/two.js"></script>"#,
+            Url::parse("https://example.test/page/index.html").unwrap(),
+        );
+
+        assert_eq!(
+            parsed.scripts,
+            [
+                ClassicScript::Inline("let a = 1;".to_string()),
+                ClassicScript::External {
+                    url: Url::parse("https://cdn.example/js/one.js").unwrap(),
+                    execution: ClassicScriptExecution::Default,
+                },
+                ClassicScript::External {
+                    url: Url::parse("https://cdn.example/two.js").unwrap(),
+                    execution: ClassicScriptExecution::Default,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn external_classic_scripts_fetch_and_execute_in_document_order() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"
+                <div id="result"></div>
+                <script>let order = "a";</script>
+                <script src="one.js"></script>
+                <script>order = order + "c";</script>
+                <script src="two.js"></script>
+            "#
+            .to_string(),
+            Url::parse("https://example.test/path/index.html").unwrap(),
+        );
+
+        assert!(webview.tick().is_empty());
+        let first_tasks = webview.tick();
+        assert_eq!(first_tasks.len(), 1);
+        match &first_tasks[0] {
+            WebViewTask::Fetch {
+                url,
+                kind: FetchKind::Script { index },
+            } => {
+                assert_eq!(*index, 1);
+                assert_eq!(url.as_str(), "https://example.test/path/one.js");
+            }
+            _ => panic!("expected first external classic script fetch"),
+        }
+
+        webview.on_script_fetched(1, r#"order = order + "b";"#.to_string());
+        let second_tasks = webview.tick();
+        assert_eq!(second_tasks.len(), 1);
+        match &second_tasks[0] {
+            WebViewTask::Fetch {
+                url,
+                kind: FetchKind::Script { index },
+            } => {
+                assert_eq!(*index, 3);
+                assert_eq!(url.as_str(), "https://example.test/path/two.js");
+            }
+            _ => panic!("expected second external classic script fetch"),
+        }
+
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-order"), None);
+
+        webview.on_script_fetched(
+            3,
+            r#"document.getElementById("result").setAttribute("data-order", order + "d");"#
+                .to_string(),
+        );
+        assert_eq!(result.borrow().value.get_attr("data-order"), Some("abcd"));
+        assert!(webview.tick().is_empty());
+        assert_eq!(webview.phase, PagePhase::ScriptApplied);
+    }
+
+    #[test]
+    fn failed_external_classic_script_does_not_block_later_scripts() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"
+                <div id="result"></div>
+                <script src="missing.js"></script>
+                <script>document.getElementById("result").setAttribute("data-ran", "yes");</script>
+            "#
+            .to_string(),
+            Url::parse("https://example.test/index.html").unwrap(),
+        );
+
+        assert!(webview.tick().is_empty());
+        let tasks = webview.tick();
+        assert!(matches!(
+            tasks.as_slice(),
+            [WebViewTask::Fetch {
+                kind: FetchKind::Script { index: 0 },
+                ..
+            }]
+        ));
+
+        webview.on_script_fetch_failed(0);
+        assert!(webview.tick().is_empty());
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-ran"), Some("yes"));
+    }
+
+    #[test]
+    fn dom_content_loaded_fires_after_external_classic_scripts_finish() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"
+                <div id="result"></div>
+                <script>
+                    document.addEventListener("DOMContentLoaded", function () {
+                        const result = document.getElementById("result");
+                        result.setAttribute("data-ready", result.getAttribute("data-external"));
+                    });
+                </script>
+                <script src="setup.js"></script>
+            "#
+            .to_string(),
+            Url::parse("https://example.test/index.html").unwrap(),
+        );
+
+        assert!(webview.tick().is_empty());
+        let tasks = webview.tick();
+        assert!(matches!(
+            tasks.as_slice(),
+            [WebViewTask::Fetch {
+                kind: FetchKind::Script { index: 1 },
+                ..
+            }]
+        ));
+
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-ready"), None);
+
+        webview.on_script_fetched(
+            1,
+            r#"document.getElementById("result").setAttribute("data-external", "yes");"#
+                .to_string(),
+        );
+        assert_eq!(result.borrow().value.get_attr("data-ready"), None);
+
+        assert!(webview.tick().is_empty());
+        assert_eq!(result.borrow().value.get_attr("data-ready"), Some("yes"));
+        assert_eq!(webview.phase, PagePhase::ScriptApplied);
+    }
+
+    #[test]
+    fn deferred_scripts_fetch_in_parallel_and_execute_in_document_order() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"
+                <div id="result"></div>
+                <script>let order = "inline";</script>
+                <script defer src="first.js"></script>
+                <script defer src="second.js"></script>
+                <script>
+                    document.addEventListener("DOMContentLoaded", function () {
+                        document.getElementById("result").setAttribute("data-order", order);
+                    });
+                </script>
+            "#
+            .to_string(),
+            Url::parse("https://example.test/index.html").unwrap(),
+        );
+
+        assert!(webview.tick().is_empty());
+        let tasks = webview.tick();
+        assert_eq!(tasks.len(), 2);
+        assert!(matches!(
+            tasks[0],
+            WebViewTask::Fetch {
+                kind: FetchKind::Script { index: 1 },
+                ..
+            }
+        ));
+        assert!(matches!(
+            tasks[1],
+            WebViewTask::Fetch {
+                kind: FetchKind::Script { index: 2 },
+                ..
+            }
+        ));
+
+        webview.on_script_fetched(2, r#"order = order + " > second";"#.to_string());
+        assert!(webview.tick().is_empty());
+        assert_ne!(webview.phase, PagePhase::ScriptApplied);
+
+        webview.on_script_fetched(1, r#"order = order + " > first";"#.to_string());
+        assert!(webview.tick().is_empty());
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-order"),
+            Some("inline > first > second")
+        );
+        assert_eq!(webview.phase, PagePhase::ScriptApplied);
+    }
+
+    #[test]
+    fn async_script_executes_on_arrival_without_blocking_dom_content_loaded() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"
+                <div id="result"></div>
+                <script async src="async.js"></script>
+                <script>
+                    document.addEventListener("DOMContentLoaded", function () {
+                        document.getElementById("result").setAttribute("data-ready", "yes");
+                    });
+                </script>
+            "#
+            .to_string(),
+            Url::parse("https://example.test/index.html").unwrap(),
+        );
+
+        assert!(webview.tick().is_empty());
+        let tasks = webview.tick();
+        assert!(matches!(
+            tasks.as_slice(),
+            [WebViewTask::Fetch {
+                kind: FetchKind::Script { index: 0 },
+                ..
+            }]
+        ));
+
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-ready"), Some("yes"));
+        assert_eq!(result.borrow().value.get_attr("data-async"), None);
+        assert_eq!(webview.phase, PagePhase::ScriptApplied);
+
+        webview.on_script_fetched(
+            0,
+            r#"document.getElementById("result").setAttribute("data-async", "yes");"#.to_string(),
+        );
+        assert_eq!(result.borrow().value.get_attr("data-async"), Some("yes"));
+    }
+
+    #[test]
+    fn javascript_fetch_uses_document_url_and_resolves_response() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"
+                <div id="result"></div>
+                <script>
+                    fetch("../message.txt")
+                        .then(response => response.text())
+                        .then(text => {
+                            document.getElementById("result").setAttribute("data-text", text);
+                        });
+                </script>
+            "#
+            .to_string(),
+            Url::parse("https://example.test/path/index.html").unwrap(),
+        );
+
+        assert!(webview.tick().is_empty());
+        let tasks = webview.tick();
+        let request_id = match tasks.as_slice() {
+            [
+                WebViewTask::Fetch {
+                    url,
+                    kind: FetchKind::JavaScript { request_id, .. },
+                },
+            ] => {
+                assert_eq!(url.as_str(), "https://example.test/message.txt");
+                *request_id
+            }
+            _ => panic!("expected JavaScript fetch request"),
+        };
+
+        webview.on_js_fetch_succeeded(
+            request_id,
+            "https://example.test/message.txt".to_string(),
+            200,
+            "OK".to_string(),
+            false,
+            b"hello from fetch".to_vec(),
+            Vec::new(),
+        );
+
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-text"),
+            Some("hello from fetch")
+        );
+    }
+
+    #[test]
+    fn failed_javascript_fetch_rejects_without_navigating() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"
+                <div id="result"></div>
+                <script>
+                    fetch("missing.txt").catch(error => {
+                        document.getElementById("result").setAttribute("data-error", error);
+                    });
+                </script>
+            "#
+            .to_string(),
+            Url::parse("https://example.test/index.html").unwrap(),
+        );
+
+        assert!(webview.tick().is_empty());
+        let tasks = webview.tick();
+        let request_id = match tasks.as_slice() {
+            [
+                WebViewTask::Fetch {
+                    kind: FetchKind::JavaScript { request_id, .. },
+                    ..
+                },
+            ] => *request_id,
+            _ => panic!("expected JavaScript fetch request"),
+        };
+
+        webview.on_js_fetch_failed(request_id, "network error".to_string());
+
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-error"),
+            Some("network error")
+        );
+        assert_eq!(
+            webview.document_info().unwrap().base_url.as_str(),
+            "https://example.test/index.html"
+        );
+    }
+
+    #[test]
+    fn zero_delay_timer_runs_from_webview_tick_and_updates_dom() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r##"
+                <div id="result"></div>
+                <script>
+                    setTimeout(function () {
+                        document.querySelector("#result").setAttribute("data-timer", "ran");
+                    }, 0);
+                </script>
+            "##
+            .to_string(),
+            Url::parse("https://example.test/index.html").unwrap(),
+        );
+
+        assert!(webview.tick().is_empty());
+        assert!(webview.tick().is_empty());
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-timer"), Some("ran"));
+        assert!(webview.needs_redraw());
     }
 }

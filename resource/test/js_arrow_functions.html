@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <title>JavaScript Arrow Functions Test</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 32px;
+        }
+
+        .result {
+            border: 2px solid #777;
+            margin: 12px 0 24px;
+            padding: 12px;
+        }
+
+        .result[data-complete="true"] {
+            background: #d9f7df;
+            border-color: #25813b;
+        }
+    </style>
+</head>
+<body>
+    <h1>JavaScript Arrow Functions</h1>
+
+    <h2>Parameters, expression body, and closure</h2>
+    <div id="syntax-result" class="result">waiting</div>
+
+    <h2>Promise reaction</h2>
+    <div id="promise-result" class="result">waiting</div>
+
+    <h2>Browser globals</h2>
+    <div id="globals-result" class="result">waiting</div>
+
+    <h2>Lexical this</h2>
+    <button id="this-button">Run lexical this test</button>
+    <div id="this-result" class="result">waiting for click</div>
+    <div id="wrong-this"></div>
+
+    <script>
+        const syntaxResult = document.querySelector("#syntax-result");
+        const offset = 3;
+        const add = (a, b) => a + b + offset;
+        const double = value => { return value * 2; };
+        syntaxResult.textContent = "result: " + double(add(2, 5));
+        syntaxResult.setAttribute("data-complete", "true");
+
+        const promiseResult = document.querySelector("#promise-result");
+        Promise.resolve(20)
+            .then(value => value + 1)
+            .then(value => {
+                promiseResult.textContent = "resolved value: " + value;
+                promiseResult.setAttribute("data-complete", "true");
+            });
+
+        const globalsResult = window.document.querySelector("#globals-result");
+        if (window === self && self === globalThis && window.document === document) {
+            globalsResult.textContent = "window === self === globalThis";
+            globalsResult.setAttribute("data-complete", "true");
+        }
+
+        const button = document.querySelector("#this-button");
+        button.addEventListener("click", function () {
+            const update = () => {
+                document.querySelector("#this-result").textContent = "lexical this kept";
+                document.querySelector("#this-result").setAttribute("data-complete", "true");
+                this.setAttribute("data-arrow-this", "button");
+            };
+            update.call(document.querySelector("#wrong-this"));
+        });
+    </script>
+</body>
+</html>

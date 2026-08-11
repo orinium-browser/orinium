@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <title>CSSStyleDeclaration Test</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 32px;
+        }
+
+        #target,
+        #result {
+            border: 2px solid #777;
+            margin: 12px 0 24px;
+            padding: 16px;
+        }
+
+        #result[data-complete="true"] {
+            background: #d9f7df;
+            border-color: #25813b;
+        }
+    </style>
+</head>
+<body>
+    <h1>CSSStyleDeclaration</h1>
+    <p>下のボックスにインラインスタイルが反映され、結果欄が緑になれば成功です。</p>
+
+    <div id="target">JavaScript styled element</div>
+    <div id="result">waiting</div>
+
+    <script>
+        const target = document.getElementById("target");
+        const firstStyle = target.style;
+
+        target.style.backgroundColor = "rgb(219, 234, 254)";
+        target.style.borderColor = "rgb(37, 99, 235)";
+        target.style.color = "rgb(30, 64, 175)";
+        target.style.fontWeight = "bold";
+        target.style.setProperty("--test-accent", "blue");
+        target.style.marginTop = "20px";
+        target.style.removeProperty("margin-top");
+
+        const result = document.getElementById("result");
+        result.textContent =
+            "stable=" + (firstStyle === target.style) +
+            ", background=" + target.style.backgroundColor +
+            ", custom=" + target.style.getPropertyValue("--test-accent") +
+            ", removed=" + (target.style.marginTop === "") +
+            ", cssText=" + target.style.cssText;
+        result.setAttribute("data-complete", "true");
+    </script>
+</body>
+</html>

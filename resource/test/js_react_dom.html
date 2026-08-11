@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <title>React DOM Primitives Test</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 32px;
+        }
+
+        #root,
+        .result {
+            border: 2px solid #777;
+            margin: 12px 0 24px;
+            padding: 12px;
+        }
+
+        .result[data-complete="true"] {
+            background: #d9f7df;
+            border-color: #25813b;
+        }
+
+        .react-node {
+            color: #1756a9;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>React DOM Primitives</h1>
+
+    <h2>Mutated tree</h2>
+    <main id="root"></main>
+
+    <h2>Node metadata and traversal</h2>
+    <div id="result" class="result">waiting</div>
+
+    <script>
+        const root = document.getElementById("root");
+        const first = document.createElement("span");
+        first.setAttribute("data-name", "first");
+        first.textContent = "removed node";
+
+        const second = document.createElement("span");
+        second.setAttribute("data-name", "second");
+        second.className = "react-node";
+        const text = document.createTextNode("before");
+        text.nodeValue = "React-style committed text";
+        second.appendChild(text);
+
+        root.appendChild(first);
+        root.insertBefore(second, first);
+        root.removeChild(first);
+
+        const result = document.getElementById("result");
+        result.textContent =
+            "document=" + document.nodeType +
+            ", root=" + root.nodeType + "/" + root.nodeName +
+            ", owner=" + (root.ownerDocument === document) +
+            ", children=" + root.childNodes.length +
+            ", first=" + root.firstChild.getAttribute("data-name") +
+            ", text=" + root.firstChild.firstChild.data;
+        result.setAttribute("data-complete", "true");
+    </script>
+</body>
+</html>

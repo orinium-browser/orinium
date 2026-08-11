@@ -95,12 +95,110 @@ const TEST_PAGE_CATALOG: &[TestPageMeta] = &[
         title: "Table & Form",
         description: "テーブルレイアウト (thead/tbody/tfoot) とフォーム (button)",
     },
+    // ── JavaScript ──
+    TestPageMeta {
+        file: "js_test.html",
+        group: "JavaScript",
+        title: "DOM & Click",
+        description: "基本的なDOM操作とonclickによるクリックイベント",
+    },
+    TestPageMeta {
+        file: "external_classic_script.html",
+        group: "JavaScript",
+        title: "External Classic Script",
+        description: "inlineと外部classic scriptを混在させた文書順実行",
+    },
+    TestPageMeta {
+        file: "js_events.html",
+        group: "JavaScript",
+        title: "Events & Scheduling",
+        description: "DOMContentLoaded / addEventListener / async / defer",
+    },
+    TestPageMeta {
+        file: "js_selectors.html",
+        group: "JavaScript",
+        title: "DOM Query Selectors",
+        description: "document / Element の querySelector と querySelectorAll",
+    },
+    TestPageMeta {
+        file: "js_dom_mutation.html",
+        group: "JavaScript",
+        title: "DOM Creation & Mutation",
+        description: "createElement / createTextNode / appendChild / remove / parentNode / children / classList",
+    },
+    TestPageMeta {
+        file: "js_timers.html",
+        group: "JavaScript",
+        title: "Timers",
+        description: "setTimeout / clearTimeout / setInterval / clearInterval",
+    },
+    TestPageMeta {
+        file: "js_microtasks.html",
+        group: "JavaScript",
+        title: "Microtasks",
+        description: "queueMicrotaskのFIFO順序とscript / timer / event後のcheckpoint",
+    },
+    TestPageMeta {
+        file: "js_promises.html",
+        group: "JavaScript",
+        title: "Promises",
+        description: "Promiseのresolve / reject / then / catch / chainingとmicrotask順序",
+    },
+    TestPageMeta {
+        file: "js_arrow_functions.html",
+        group: "JavaScript",
+        title: "Arrow Functions",
+        description: "arrow functionの引数・expression/block body・closure・lexical this・Promise callback",
+    },
+    TestPageMeta {
+        file: "js_fetch.html",
+        group: "JavaScript",
+        title: "Fetch",
+        description: "fetchによる取得、Responseの状態・URL・本文、ネットワークエラーのreject",
+    },
+    TestPageMeta {
+        file: "js_headers.html",
+        group: "JavaScript",
+        title: "Headers",
+        description: "Headersの取得・変更・コピー、大文字小文字の正規化、fetchとResponse.headers",
+    },
+    TestPageMeta {
+        file: "js_request.html",
+        group: "JavaScript",
+        title: "Request",
+        description: "RequestのURL・method・headers・コピー・options上書きとfetchへの受け渡し",
+    },
+    TestPageMeta {
+        file: "js_react_dom.html",
+        group: "JavaScript",
+        title: "React DOM Primitives",
+        description: "ReactDOMが利用するNode識別・親子兄弟参照・insertBefore・removeChild・属性操作",
+    },
+    TestPageMeta {
+        file: "js_react_tailwind.html",
+        group: "JavaScript",
+        title: "React 18 & Tailwind CSS",
+        description: "実React production UMDのcreateRoot・useState・クリック更新と生成済みTailwind CSS",
+    },
+    TestPageMeta {
+        file: "js_style.html",
+        group: "JavaScript",
+        title: "CSSStyleDeclaration",
+        description: "element.styleの動的プロパティ・cssText・setProperty・removeProperty",
+    },
 ];
 
-/// テスト一覧に表示するグループ順 (未登録ファイルは末尾の "Other" に載る)
-const TEST_GROUP_ORDER: &[&str] = &["Layout", "CSS", "HTML", "Other"];
+/// テスト一覧に表示するグループ順。未登録ファイルは "Other" に載せ、
+/// JavaScriptの手動テストは一覧の末尾にまとめる。
+const TEST_GROUP_ORDER: &[&str] = &["Layout", "CSS", "HTML", "Other", "JavaScript"];
 
 fn main() {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("gnu")
+    {
+        println!("cargo:rustc-link-arg=-Wl,--stack,8388608");
+    }
+
     clear_build_log();
 
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());

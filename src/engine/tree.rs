@@ -41,6 +41,9 @@ impl<T> TreeNode<T> {
 
     /// Remove all children of this node
     pub fn clear_children(&mut self) {
+        for child in &self.children {
+            child.borrow_mut().parent = None;
+        }
         self.children.clear();
     }
 
@@ -48,6 +51,82 @@ impl<T> TreeNode<T> {
     pub fn add_child(parent: &NodeRef<T>, child: NodeRef<T>) {
         child.borrow_mut().parent = Some(Rc::downgrade(parent));
         parent.borrow_mut().children.push(child);
+    }
+
+    /// Removes `child` from `parent`, returning the detached node when found.
+    pub fn remove_child(parent: &NodeRef<T>, child: &NodeRef<T>) -> Option<NodeRef<T>> {
+        let position = parent
+            .borrow()
+            .children
+            .iter()
+            .position(|candidate| Rc::ptr_eq(candidate, child))?;
+        let removed = parent.borrow_mut().children.remove(position);
+        removed.borrow_mut().parent = None;
+        Some(removed)
+    }
+
+    /// Detaches a node from its current parent.
+    pub fn detach(node: &NodeRef<T>) -> bool {
+        let Some(parent) = node.borrow().parent() else {
+            return false;
+        };
+        Self::remove_child(&parent, node).is_some()
+    }
+
+    /// Appends `child`, moving it from its current parent when necessary.
+    ///
+    /// Returns `false` when the operation would create a tree cycle.
+    pub fn append_child(parent: &NodeRef<T>, child: NodeRef<T>) -> bool {
+        if Self::is_inclusive_ancestor(&child, parent) {
+            return false;
+        }
+        Self::detach(&child);
+        Self::add_child(parent, child);
+        true
+    }
+
+    /// Inserts `child` immediately before `reference`, moving it from its
+    /// current parent when necessary.
+    pub fn insert_before(parent: &NodeRef<T>, child: NodeRef<T>, reference: &NodeRef<T>) -> bool {
+        if Rc::ptr_eq(&child, reference) {
+            return reference
+                .borrow()
+                .parent()
+                .is_some_and(|candidate| Rc::ptr_eq(&candidate, parent));
+        }
+        if Self::is_inclusive_ancestor(&child, parent) {
+            return false;
+        }
+        if !reference
+            .borrow()
+            .parent()
+            .is_some_and(|candidate| Rc::ptr_eq(&candidate, parent))
+        {
+            return false;
+        }
+
+        Self::detach(&child);
+        let Some(index) = parent
+            .borrow()
+            .children
+            .iter()
+            .position(|candidate| Rc::ptr_eq(candidate, reference))
+        else {
+            return false;
+        };
+        Self::insert_child_at(parent, index, child);
+        true
+    }
+
+    fn is_inclusive_ancestor(ancestor: &NodeRef<T>, node: &NodeRef<T>) -> bool {
+        let mut current = Some(Rc::clone(node));
+        while let Some(candidate) = current {
+            if Rc::ptr_eq(ancestor, &candidate) {
+                return true;
+            }
+            current = candidate.borrow().parent();
+        }
+        false
     }
 
     /// Insert a child at a given position
@@ -260,5 +339,56 @@ impl<T: Clone + Debug> Display for Tree<T> {
 impl<T: Clone + Debug> Debug for Tree<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn append_child_reparents_and_prevents_cycles() {
+        let root = TreeNode::new("root");
+        let first = TreeNode::new("first");
+        let second = TreeNode::new("second");
+        TreeNode::add_child(&root, Rc::clone(&first));
+        TreeNode::add_child(&first, Rc::clone(&second));
+
+        assert!(TreeNode::append_child(&root, Rc::clone(&second)));
+        assert!(first.borrow().children().is_empty());
+        assert!(Rc::ptr_eq(&second.borrow().parent().unwrap(), &root));
+        assert!(!TreeNode::append_child(&second, Rc::clone(&root)));
+    }
+
+    #[test]
+    fn detach_and_clear_children_reset_parent_links() {
+        let root = TreeNode::new("root");
+        let first = TreeNode::new("first");
+        let second = TreeNode::new("second");
+        TreeNode::add_child(&root, Rc::clone(&first));
+        TreeNode::add_child(&root, Rc::clone(&second));
+
+        assert!(TreeNode::detach(&first));
+        assert!(first.borrow().parent().is_none());
+        root.borrow_mut().clear_children();
+        assert!(second.borrow().parent().is_none());
+    }
+
+    #[test]
+    fn insert_before_moves_nodes_and_preserves_order() {
+        let root = TreeNode::new("root");
+        let first = TreeNode::new("first");
+        let second = TreeNode::new("second");
+        let moving = TreeNode::new("moving");
+        TreeNode::add_child(&root, Rc::clone(&first));
+        TreeNode::add_child(&root, Rc::clone(&second));
+        TreeNode::add_child(&first, Rc::clone(&moving));
+
+        assert!(TreeNode::insert_before(&root, Rc::clone(&moving), &second));
+        let children = root.borrow().children().to_vec();
+        assert!(Rc::ptr_eq(&children[0], &first));
+        assert!(Rc::ptr_eq(&children[1], &moving));
+        assert!(Rc::ptr_eq(&children[2], &second));
+        assert!(first.borrow().children().is_empty());
     }
 }

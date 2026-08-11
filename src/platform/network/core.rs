@@ -1,9 +1,9 @@
 //! ネットワークコア
 //! HTTP通信とレスポンス処理を担当する。
 
-use super::{HostKey, HttpSender, NetworkConfig, NetworkError, SenderPool};
+use super::{HostKey, HttpSender, NetworkConfig, NetworkError, NetworkRequest, SenderPool};
 
-use http_body_util::{BodyExt, Empty};
+use http_body_util::{BodyExt, Full};
 use hyper::{
     Method, Request, Uri,
     body::{Bytes, Incoming},
@@ -48,11 +48,13 @@ impl AsyncNetworkCore {
     pub fn clear_cache(&self) {
         self.inner.cache.clear();
     }
-    /// UI スレッドなどから呼ばれる blocking API
-    pub fn fetch_blocking(&self, url: &str) -> Result<Response, NetworkError> {
+    pub fn fetch_request_blocking(
+        &self,
+        request: &NetworkRequest,
+    ) -> Result<Response, NetworkError> {
         // network スレッド内で完結させる
         self.local
-            .block_on(&self.rt, async { self.inner.fetch_url(url).await })
+            .block_on(&self.rt, async { self.inner.fetch_request(request).await })
     }
 }
 
@@ -129,17 +131,24 @@ impl NetworkInner {
             .with_no_client_auth()
     }
 
-    pub async fn fetch_url(&self, url: &str) -> Result<Response, NetworkError> {
-        let mut current: Uri = url.parse().map_err(|_| NetworkError::InvalidUri)?;
+    pub async fn fetch_request(&self, request: &NetworkRequest) -> Result<Response, NetworkError> {
+        let mut current: Uri = request.url.parse().map_err(|_| NetworkError::InvalidUri)?;
+        let mut method = Method::from_bytes(request.method.as_bytes())
+            .map_err(|_| NetworkError::HttpRequestFailed)?;
+        let mut body = request.body.clone();
         let mut redirects = 0usize;
 
         loop {
-            if let Some(cached) = self.cache.get(&current.to_string()) {
+            if method == Method::GET
+                && let Some(cached) = self.cache.get(&current.to_string())
+            {
                 log::info!("NetworkCache: hit for url={}", current);
                 return Ok(cached);
             }
 
-            let resp = self.send_request(&current).await?;
+            let resp = self
+                .send_request(&current, &method, &request.headers, &body)
+                .await?;
 
             if self.network_config.follow_redirects
                 && hyper::StatusCode::try_from(resp.status.0)
@@ -157,12 +166,19 @@ impl NetworkInner {
                     .map(|(_, v)| v)
                 {
                     current = resolve_redirect(&current, loc)?;
+                    if resp.status.as_u16() == 303
+                        || ((resp.status.as_u16() == 301 || resp.status.as_u16() == 302)
+                            && method == Method::POST)
+                    {
+                        method = Method::GET;
+                        body.clear();
+                    }
                     redirects += 1;
                     continue;
                 }
             }
 
-            if resp.status.is_success() {
+            if method == Method::GET && resp.status.is_success() {
                 self.cache.set(&current.to_string(), &resp);
             }
 
@@ -170,7 +186,13 @@ impl NetworkInner {
         }
     }
 
-    async fn send_request(&self, uri: &Uri) -> Result<Response, NetworkError> {
+    async fn send_request(
+        &self,
+        uri: &Uri,
+        method: &Method,
+        headers: &[(String, String)],
+        body: &[u8],
+    ) -> Result<Response, NetworkError> {
         let host = uri.host().ok_or(NetworkError::MissingHost)?;
         let scheme = uri.scheme().unwrap_or(&Scheme::HTTP);
         let port = uri
@@ -185,12 +207,16 @@ impl NetworkInner {
 
         let mut sender = self.get_or_create_sender(&key).await?;
 
-        let req = Request::builder()
-            .method(Method::GET)
+        let mut request = Request::builder()
+            .method(method.clone())
             .uri(uri.path_and_query().map_or("/", |p| p.as_str()))
             .header("Host", host)
-            .header("User-Agent", self.network_config.user_agent.as_str())
-            .body(Empty::<Bytes>::new())
+            .header("User-Agent", self.network_config.user_agent.as_str());
+        for (name, value) in headers {
+            request = request.header(name, value);
+        }
+        let req = request
+            .body(Full::new(Bytes::copy_from_slice(body)))
             .map_err(|_| NetworkError::HttpRequestFailed)?;
 
         let mut res = match &mut sender {
@@ -288,7 +314,7 @@ impl NetworkInner {
         &self,
         conn: conn::http1::Connection<
             TokioIo<impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + 'static>,
-            Empty<Bytes>,
+            Full<Bytes>,
         >,
         key: HostKey,
     ) {
@@ -324,6 +350,10 @@ fn resolve_redirect(base: &Uri, location: &str) -> Result<Uri, NetworkError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+    use std::time::Duration;
 
     #[test]
     fn enable_cache_config_is_applied_to_cache() {
@@ -335,5 +365,62 @@ mod tests {
             ..NetworkConfig::default()
         });
         assert!(!inner.cache.is_enabled());
+    }
+
+    #[test]
+    fn sends_request_method_headers_and_body() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            loop {
+                let read = stream.read(&mut buffer).unwrap();
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                let Some(header_end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n")
+                else {
+                    continue;
+                };
+                let headers = String::from_utf8_lossy(&request[..header_end]);
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap_or(0);
+                if request.len() >= header_end + 4 + content_length {
+                    break;
+                }
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .unwrap();
+            request
+        });
+
+        let core = AsyncNetworkCore::new();
+        let response = core
+            .fetch_request_blocking(&NetworkRequest {
+                url: format!("http://{address}/submit"),
+                method: "POST".to_string(),
+                headers: vec![("X-Orinium-Test".to_string(), "yes".to_string())],
+                body: b"hello".to_vec(),
+            })
+            .unwrap();
+        assert_eq!(response.body, b"ok");
+
+        let request = String::from_utf8(server.join().unwrap()).unwrap();
+        assert!(request.starts_with("POST /submit HTTP/1.1\r\n"));
+        assert!(request.to_ascii_lowercase().contains("x-orinium-test: yes"));
+        assert!(request.ends_with("\r\n\r\nhello"));
     }
 }

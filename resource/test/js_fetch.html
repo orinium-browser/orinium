@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <title>JavaScript Fetch Test</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 32px;
+        }
+
+        .result {
+            border: 2px solid #777;
+            margin: 12px 0 24px;
+            padding: 12px;
+        }
+
+        .result[data-complete="true"] {
+            background: #d9f7df;
+            border-color: #25813b;
+        }
+    </style>
+</head>
+<body>
+    <h1>JavaScript Fetch</h1>
+
+    <h2>Response metadata</h2>
+    <div id="metadata-result" class="result">waiting</div>
+
+    <h2>Response.text()</h2>
+    <div id="text-result" class="result">waiting</div>
+
+    <h2>Response.json()</h2>
+    <div id="json-result" class="result">waiting</div>
+
+    <h2>Body consumption</h2>
+    <div id="body-used-result" class="result">waiting</div>
+
+    <h2>Network rejection</h2>
+    <div id="error-result" class="result">waiting</div>
+
+    <script>
+        const metadataResult = document.getElementById("metadata-result");
+        const textResult = document.getElementById("text-result");
+        const jsonResult = document.getElementById("json-result");
+        const bodyUsedResult = document.getElementById("body-used-result");
+        const errorResult = document.getElementById("error-result");
+
+        fetch("data:text/plain,hello%20from%20fetch").then(response => {
+            metadataResult.textContent =
+                "ok=" + response.ok +
+                ", status=" + response.status +
+                ", statusText=" + response.statusText +
+                ", redirected=" + response.redirected +
+                ", url=" + response.url;
+            metadataResult.setAttribute("data-complete", "true");
+            textResult.textContent = "bodyUsed before=" + response.bodyUsed;
+            const body = response.text();
+            textResult.textContent = textResult.textContent + ", after=" + response.bodyUsed;
+            return body;
+        }).then(text => {
+            textResult.textContent = textResult.textContent + ", text=" + text;
+            textResult.setAttribute("data-complete", "true");
+        });
+
+        fetch("data:application/json,%7B%22name%22%3A%22Orinium%22%2C%22items%22%3A%5B1%2C2%5D%7D")
+            .then(response => response.json())
+            .then(value => {
+                jsonResult.textContent = value.name + ": " + value.items[0] + ", " + value.items[1];
+                jsonResult.setAttribute("data-complete", "true");
+            });
+
+        fetch("data:text/plain,read%20once")
+            .then(response => response.text().then(() => response.text()))
+            .catch(reason => {
+                bodyUsedResult.textContent = "caught: " + reason;
+                bodyUsedResult.setAttribute("data-complete", "true");
+            });
+
+        fetch("data:text/plain;base64,%%%").catch(reason => {
+            errorResult.textContent = "caught: " + reason;
+            errorResult.setAttribute("data-complete", "true");
+        });
+    </script>
+</body>
+</html>

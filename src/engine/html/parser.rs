@@ -2,9 +2,17 @@
 
 use crate::engine::html::tokenizer::{Attribute, Token, Tokenizer};
 use crate::engine::html::util as html_util;
-use crate::engine::tree::*;
+use crate::engine::{
+    css::{
+        matcher::{ElementChain, ElementInfo},
+        parser::{CssNodeType, Parser as CssParser},
+    },
+    tree::{NodeRef, Tree, TreeNode},
+};
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub enum HtmlNodeType {
@@ -73,6 +81,29 @@ impl HtmlNodeType {
 }
 
 pub type DomTree = Tree<HtmlNodeType>;
+
+/// Source of a classic JavaScript script in document order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClassicScriptSource {
+    Inline(String),
+    External(String),
+}
+
+/// Scheduling mode selected by attributes on a classic script element.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ClassicScriptExecution {
+    #[default]
+    Default,
+    Defer,
+    Async,
+}
+
+/// A classic script source together with its requested scheduling mode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassicScriptDescriptor {
+    pub source: ClassicScriptSource,
+    pub execution: ClassicScriptExecution,
+}
 
 impl DomTree {
     /// Returns all elements with the given tag name
@@ -172,23 +203,288 @@ impl DomTree {
         texts
     }
 
-    /// Collects inline `<script>` texts, skipping blocks with a `src` attribute.
+    /// Collects classic scripts in document order.
     ///
-    /// External scripts are not supported yet and are reported via log.
-    pub fn collect_inline_scripts(&self) -> Vec<String> {
+    /// Module scripts and data blocks with a non-JavaScript MIME type are not
+    /// classic scripts and are ignored here.
+    pub fn collect_classic_scripts(&self) -> Vec<ClassicScriptSource> {
+        self.collect_classic_script_descriptors()
+            .into_iter()
+            .map(|script| script.source)
+            .collect()
+    }
+
+    /// Returns the first element matching `selector` in document order.
+    pub fn query_selector(&self, selector: &str) -> Option<NodeRef<HtmlNodeType>> {
+        self.query_selector_all(selector).into_iter().next()
+    }
+
+    /// Returns all elements matching `selector` in document order.
+    pub fn query_selector_all(&self, selector: &str) -> Vec<NodeRef<HtmlNodeType>> {
+        query_selector_all_from(&self.root, selector, true)
+    }
+
+    /// Returns the first matching descendant of `scope` in document order.
+    ///
+    /// The scope element itself is not considered, matching Element's DOM API.
+    pub fn query_selector_within(
+        scope: &NodeRef<HtmlNodeType>,
+        selector: &str,
+    ) -> Option<NodeRef<HtmlNodeType>> {
+        Self::query_selector_all_within(scope, selector)
+            .into_iter()
+            .next()
+    }
+
+    /// Returns all matching descendants of `scope` in document order.
+    ///
+    /// The scope element itself is not included in the result.
+    pub fn query_selector_all_within(
+        scope: &NodeRef<HtmlNodeType>,
+        selector: &str,
+    ) -> Vec<NodeRef<HtmlNodeType>> {
+        query_selector_all_from(scope, selector, false)
+    }
+
+    /// Collects classic scripts and their scheduling attributes in document order.
+    pub fn collect_classic_script_descriptors(&self) -> Vec<ClassicScriptDescriptor> {
         self.get_elements_by_tag_name("script")
             .into_iter()
             .filter_map(|node| {
                 let n = node.borrow();
-                if n.value.has_attr("src") {
-                    log::info!("external scripts not yet supported");
-                    None
-                } else {
-                    Some(DomTree::inner_text(&node))
+                let script_type = n.value.get_attr("type").unwrap_or("").trim();
+                if !is_classic_javascript_type(script_type) {
+                    return None;
+                }
+
+                match n.value.get_attr("src").map(str::trim) {
+                    Some(src) if !src.is_empty() => Some(ClassicScriptDescriptor {
+                        source: ClassicScriptSource::External(src.to_string()),
+                        execution: if n.value.has_attr("async") {
+                            ClassicScriptExecution::Async
+                        } else if n.value.has_attr("defer") {
+                            ClassicScriptExecution::Defer
+                        } else {
+                            ClassicScriptExecution::Default
+                        },
+                    }),
+                    Some(_) => None,
+                    None => Some(ClassicScriptDescriptor {
+                        source: ClassicScriptSource::Inline(DomTree::inner_text(&node)),
+                        // `async` and `defer` have no effect on inline classic scripts.
+                        execution: ClassicScriptExecution::Default,
+                    }),
                 }
             })
             .collect()
     }
+
+    /// Collects only inline classic scripts.
+    ///
+    /// Kept for callers that do not yet fetch external script resources.
+    pub fn collect_inline_scripts(&self) -> Vec<String> {
+        self.collect_classic_scripts()
+            .into_iter()
+            .filter_map(|script| match script {
+                ClassicScriptSource::Inline(source) => Some(source),
+                ClassicScriptSource::External(_) => None,
+            })
+            .collect()
+    }
+}
+
+fn query_selector_all_from(
+    scope: &NodeRef<HtmlNodeType>,
+    selector: &str,
+    include_scope: bool,
+) -> Vec<NodeRef<HtmlNodeType>> {
+    let selectors = parse_query_selectors(selector);
+    if selectors.is_empty() {
+        return Vec::new();
+    }
+
+    let mut candidates = Vec::new();
+    collect_element_nodes(scope, include_scope, &mut candidates);
+    candidates
+        .into_iter()
+        .filter(|node| {
+            let chain = element_chain(node);
+            selectors.iter().any(|selector| selector.matches(&chain))
+        })
+        .collect()
+}
+
+fn parse_query_selectors(selector: &str) -> Vec<crate::engine::css::parser::ComplexSelector> {
+    if selector.trim().is_empty() {
+        return Vec::new();
+    }
+
+    let source = format!("{selector} {{}} ");
+    let Ok(stylesheet) = CssParser::new(&source).parse() else {
+        return Vec::new();
+    };
+    stylesheet
+        .children()
+        .iter()
+        .find_map(|node| match node.node() {
+            CssNodeType::Rule { selectors } => Some(selectors.clone()),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+fn collect_element_nodes(
+    node: &NodeRef<HtmlNodeType>,
+    include_node: bool,
+    output: &mut Vec<NodeRef<HtmlNodeType>>,
+) {
+    let (is_element, children) = {
+        let node = node.borrow();
+        (
+            matches!(node.value, HtmlNodeType::Element { .. }),
+            node.children().to_vec(),
+        )
+    };
+    if include_node && is_element {
+        output.push(Rc::clone(node));
+    }
+    for child in children {
+        collect_element_nodes(&child, true, output);
+    }
+}
+
+fn element_chain(node: &NodeRef<HtmlNodeType>) -> ElementChain {
+    let mut chain = Vec::new();
+    let mut current = Some(Rc::clone(node));
+    while let Some(node) = current {
+        if let Some(info) = element_info(&node) {
+            chain.push(info);
+        }
+        current = node.borrow().parent();
+    }
+    chain
+}
+
+fn element_info(node: &NodeRef<HtmlNodeType>) -> Option<ElementInfo> {
+    let (tag_name, attributes, parent) = {
+        let node = node.borrow();
+        let HtmlNodeType::Element {
+            tag_name,
+            attributes,
+        } = &node.value
+        else {
+            return None;
+        };
+        (tag_name.clone(), attributes.clone(), node.parent())
+    };
+
+    let siblings = parent
+        .map(|parent| parent.borrow().children().to_vec())
+        .unwrap_or_else(|| vec![Rc::clone(node)]);
+    let sibling_elements: Vec<_> = siblings
+        .into_iter()
+        .filter_map(|sibling| basic_element_info(&sibling).map(|info| (sibling, info)))
+        .collect();
+    let element_count = sibling_elements.len();
+    let mut type_counts = HashMap::<String, usize>::new();
+    for (_, sibling) in &sibling_elements {
+        *type_counts.entry(sibling.tag_name.clone()).or_default() += 1;
+    }
+
+    let position = sibling_elements
+        .iter()
+        .position(|(sibling, _)| Rc::ptr_eq(sibling, node))?;
+    let element_index = position + 1;
+    let type_index = sibling_elements[..=position]
+        .iter()
+        .filter(|(_, sibling)| sibling.tag_name == tag_name)
+        .count();
+    let previous_siblings = sibling_elements[..position]
+        .iter()
+        .map(|(_, sibling)| sibling.clone())
+        .collect::<Vec<_>>()
+        .into();
+
+    Some(ElementInfo {
+        tag_name: tag_name.clone(),
+        id: attributes
+            .iter()
+            .find(|attribute| attribute.name.eq_ignore_ascii_case("id"))
+            .map(|attribute| attribute.value.clone()),
+        classes: attributes
+            .iter()
+            .find(|attribute| attribute.name.eq_ignore_ascii_case("class"))
+            .map(|attribute| {
+                attribute
+                    .value
+                    .split_whitespace()
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        attributes: attributes
+            .into_iter()
+            .map(|attribute| (attribute.name, attribute.value))
+            .collect(),
+        element_index,
+        element_count,
+        type_index,
+        type_count: type_counts[&tag_name],
+        previous_siblings,
+    })
+}
+
+fn basic_element_info(node: &NodeRef<HtmlNodeType>) -> Option<ElementInfo> {
+    let node = node.borrow();
+    let HtmlNodeType::Element {
+        tag_name,
+        attributes,
+    } = &node.value
+    else {
+        return None;
+    };
+    Some(ElementInfo {
+        tag_name: tag_name.clone(),
+        id: attributes
+            .iter()
+            .find(|attribute| attribute.name.eq_ignore_ascii_case("id"))
+            .map(|attribute| attribute.value.clone()),
+        classes: attributes
+            .iter()
+            .find(|attribute| attribute.name.eq_ignore_ascii_case("class"))
+            .map(|attribute| {
+                attribute
+                    .value
+                    .split_whitespace()
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        attributes: attributes
+            .iter()
+            .map(|attribute| (attribute.name.clone(), attribute.value.clone()))
+            .collect(),
+        element_index: 1,
+        element_count: 1,
+        type_index: 1,
+        type_count: 1,
+        previous_siblings: Arc::default(),
+    })
+}
+
+fn is_classic_javascript_type(script_type: &str) -> bool {
+    if script_type.is_empty() {
+        return true;
+    }
+
+    matches!(
+        script_type.to_ascii_lowercase().as_str(),
+        "text/javascript"
+            | "application/javascript"
+            | "text/ecmascript"
+            | "application/ecmascript"
+            | "application/x-javascript"
+    )
 }
 
 pub struct Parser<'a> {

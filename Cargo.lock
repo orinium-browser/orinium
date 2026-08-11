@@ -2976,6 +2976,7 @@ dependencies = [
  "rustls",
  "rustls-native-certs",
  "serde",
+ "serde_json",
  "smol_str 0.3.6",
  "strsim",
  "swash",
@@ -2993,7 +2994,7 @@ dependencies = [
 [[package]]
 name = "orinium_text"
 version = "0.1.0"
-source = "git+https://github.com/orinium-browser/orinium_text?rev=e647a94996f72caacaaa06322ddb75cde06077f5#e647a94996f72caacaaa06322ddb75cde06077f5"
+source = "git+https://github.com/orinium-browser/orinium_text#e647a94996f72caacaaa06322ddb75cde06077f5"
 dependencies = [
  "dwrote",
  "fontconfig",
@@ -3117,8 +3118,10 @@ dependencies = [
 [[package]]
 name = "pixi_byte"
 version = "0.1.0"
-source = "git+https://github.com/orinium-browser/pixi_byte?rev=df4671514f952393624e4acd71fd32c6e4e39c8f#df4671514f952393624e4acd71fd32c6e4e39c8f"
+source = "git+https://github.com/orinium-browser/pixi_byte#adcf5281d19b11d2c644218553fea0e2e0772358"
 dependencies = [
+ "num-bigint",
+ "num-traits",
  "regex",
  "rustc-hash 2.1.3",
 ]

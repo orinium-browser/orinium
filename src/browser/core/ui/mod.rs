@@ -264,20 +264,36 @@ impl BrowserUi {
                         let css = String::from_utf8_lossy(&resp.body).to_string();
                         tab.on_fetch_succeeded_css(css);
                     }
+                    FetchKind::Script { index } => {
+                        let source = String::from_utf8_lossy(&resp.body).to_string();
+                        tab.on_fetch_succeeded_script(index, source);
+                    }
                     FetchKind::Image { source } => {
                         tab.on_fetch_succeeded_image(source, &resp.body);
                     }
                     FetchKind::Audio { source } => {
                         tab.on_fetch_succeeded_audio(source, &resp.body);
                     }
+                    FetchKind::JavaScript { request_id, .. } => {
+                        let redirected = resp.url != url.as_str();
+                        tab.on_fetch_succeeded_js(request_id, resp, redirected);
+                    }
                 }
             }
             Err(err) => {
                 log::error!("NetworkError: {}", err);
-                if matches!(kind, FetchKind::Image { .. } | FetchKind::Audio { .. }) {
-                    log::warn!("Media fetch failed without aborting page load: {}", url);
-                } else {
-                    tab.on_fetch_failed(err, url);
+                match kind {
+                    FetchKind::Image { .. } | FetchKind::Audio { .. } => {
+                        log::warn!("Media fetch failed without aborting page load: {}", url);
+                    }
+                    FetchKind::Script { index } => {
+                        log::warn!("Classic script fetch failed without aborting page load: {url}");
+                        tab.on_fetch_failed_script(index);
+                    }
+                    FetchKind::JavaScript { request_id, .. } => {
+                        tab.on_fetch_failed_js(request_id, err.to_string());
+                    }
+                    FetchKind::Html | FetchKind::Css => tab.on_fetch_failed(err, url),
                 }
             }
         }

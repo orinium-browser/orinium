@@ -54,13 +54,7 @@ impl CssProcessor {
         let mut resolved = ResolvedStyles::default();
 
         for css in css_sources {
-            let sheet = match CssParser::new(css).parse() {
-                Ok(sheet) => sheet,
-                Err(err) => {
-                    log::error!("[CssProcessor] Failed to parse CSS: {}", err);
-                    continue;
-                }
-            };
+            let sheet = CssParser::new(css).parse_lossy();
 
             append_resolved_styles(&mut resolved, CssResolver::resolve(&sheet));
         }

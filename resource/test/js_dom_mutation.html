@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <title>JavaScript DOM Mutation Test</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 32px;
+        }
+
+        #source,
+        #target,
+        #result {
+            border: 2px solid #777;
+            margin: 12px 0;
+            min-height: 32px;
+            padding: 12px;
+        }
+
+        .item {
+            margin: 6px;
+            padding: 8px;
+        }
+
+        .selected,
+        #result[data-complete="true"] {
+            background: #d9f7df;
+            border-color: #25813b;
+        }
+    </style>
+</head>
+<body>
+    <h1>DOM creation & mutation</h1>
+
+    <h2>Source</h2>
+    <div id="source"><div id="moving" class="item">existing node</div></div>
+
+    <h2>Target</h2>
+    <div id="target"></div>
+
+    <div id="result">waiting</div>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", function () {
+            const target = document.querySelector("#target");
+
+            const created = document.createElement("div");
+            created.classList.add("item", "created");
+            created.appendChild(document.createTextNode("created node"));
+            target.appendChild(created);
+
+            const moving = document.querySelector("#moving");
+            moving.remove();
+            target.appendChild(moving);
+            moving.classList.toggle("selected", true);
+
+            created.parentNode.classList.add("has-created-child");
+
+            const result = document.querySelector("#result");
+            result.textContent = "target element children: " + target.children.length;
+            result.setAttribute("data-complete", "true");
+        });
+    </script>
+</body>
+</html>

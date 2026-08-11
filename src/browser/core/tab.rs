@@ -1,7 +1,7 @@
 //! ブラウザのタブ機能。WebView を保持し、ページのタイトルや URL などのメタ情報を管理する。
 
 use crate::{
-    browser::core::resource_loader::BrowserNetworkError,
+    browser::core::resource_loader::{BrowserNetworkError, BrowserResponse},
     engine::{
         html::HtmlNodeType,
         layouter::types::{ColorScheme, InfoNode},
@@ -172,6 +172,47 @@ impl Tab {
     pub fn on_fetch_succeeded_audio(&mut self, source: String, bytes: &[u8]) {
         if let Some(webview) = self.webview.as_mut() {
             webview.on_audio_fetched(source, bytes);
+        }
+    }
+
+    /// Delivers a fetched external classic script in document order.
+    pub fn on_fetch_succeeded_script(&mut self, index: usize, source: String) {
+        if let Some(webview) = self.webview.as_mut() {
+            webview.on_script_fetched(index, source);
+        }
+    }
+
+    /// Skips a failed external classic script without replacing the page.
+    pub fn on_fetch_failed_script(&mut self, index: usize) {
+        if let Some(webview) = self.webview.as_mut() {
+            webview.on_script_fetch_failed(index);
+        }
+    }
+
+    /// Delivers a completed JavaScript `fetch()` response.
+    pub fn on_fetch_succeeded_js(
+        &mut self,
+        request_id: u64,
+        response: BrowserResponse,
+        redirected: bool,
+    ) {
+        if let Some(webview) = self.webview.as_mut() {
+            webview.on_js_fetch_succeeded(
+                request_id,
+                response.url,
+                response.status.as_u16(),
+                response.status_text,
+                redirected,
+                response.body,
+                response.headers,
+            );
+        }
+    }
+
+    /// Delivers a JavaScript `fetch()` network failure without navigating away.
+    pub fn on_fetch_failed_js(&mut self, request_id: u64, reason: String) {
+        if let Some(webview) = self.webview.as_mut() {
+            webview.on_js_fetch_failed(request_id, reason);
         }
     }
 
