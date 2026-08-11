@@ -237,9 +237,8 @@ const TEST_PAGE_CATALOG: &[TestPageMeta] = &[
     },
 ];
 
-/// テスト一覧に表示するグループ順。未登録ファイルは "Other" に載せ、
-/// JavaScriptの手動テストは一覧の末尾にまとめる。
-const TEST_GROUP_ORDER: &[&str] = &["Layout", "CSS", "HTML", "Media", "Other", "JavaScript"];
+/// テスト一覧に表示するグループ順。未登録ファイルは末尾の "Other" に載せる。
+const TEST_GROUP_ORDER: &[&str] = &["Layout", "CSS", "HTML", "Media", "JavaScript", "Other"];
 
 fn main() {
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
