@@ -129,6 +129,10 @@ fn move_box_x(layout_box: &mut LayoutBox, target_x: f32) {
         LayoutBox::InlineBox(inline) => {
             let dx = target_x - inline.box_model.border_box.x;
             translate_box_x(&mut inline.box_model, dx);
+            inline
+                .line_spans
+                .iter_mut()
+                .for_each(|l| l.line_pos.0 += dx);
         }
     }
 }

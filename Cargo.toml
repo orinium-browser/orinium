@@ -31,9 +31,12 @@ ipc-channel = "0.22.0"
 log = "0.4.32"
 lru = "0.18"
 once_cell = "1.21.4"
-pixi_byte = { git = "https://github.com/orinium-browser/pixi_byte" }
+pixi_byte = { 
+    git = "https://github.com/orinium-browser/pixi_byte",
+    rev = "adcf5281d19b11d2c644218553fea0e2e0772358"
+}
 pollster = "1.0"
-resvg = "0.47.0"
+resvg = "0.48.1"
 rustls = { version = "0.23.40", default-features = false, features = ["tls12"] }
 rustls-native-certs = "0.8.4"
 serde = { version = "1", features = ["derive"] }
@@ -49,6 +52,7 @@ tokio-rustls = "0.26.4"
 ttf-parser = "0.25.1"
 ui_layout = {
   git = "https://github.com/098orin/ui_layout-rs",
+  rev = "33f2e5dd495cea8f78a943b81b4fb21d70bc6130"
 }
 url = "2.5"
 wgpu = "30.0.0"

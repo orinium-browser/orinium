@@ -12,9 +12,9 @@ use crate::engine::{
     html::parser::{ClassicScriptExecution, ClassicScriptSource, DomTree, Parser as HtmlParser},
     js::{JsFetchResponse, JsRuntime},
     layouter::{
-        self, InheritedCss,
+        self, InheritedCss, LayoutResult, NodeId,
         dom_snapshot::DomSnapshot,
-        types::{InfoNode, TextStyle},
+        types::{InfoNode, NodeKind, TextStyle},
     },
     renderer_model::Image,
     tree::TreeNode,
@@ -812,7 +812,19 @@ impl WebView {
     /// Takes completed layout results from the worker and makes them drawable.
     fn try_apply_layout_results(&mut self) {
         while let Some(result) = self.layout_processor.try_receive() {
-            self.layout_and_info = Some((result.layout, result.info));
+            let LayoutResult { layout, mut info } = result;
+
+            // The builder initializes every node's scroll offset to 0, so a
+            // rebuilt tree would otherwise drop the scroll position (e.g. the
+            // viewport change on a window resize). Re-apply the offsets of the
+            // previous tree before swapping the new one in.
+            if let Some((_, old_info)) = self.layout_and_info.as_ref() {
+                let mut scroll_offsets = HashMap::new();
+                capture_scroll_offsets(old_info, &mut scroll_offsets);
+                apply_scroll_offsets(&mut info, &scroll_offsets);
+            }
+
+            self.layout_and_info = Some((layout, info));
             self.layout_pending = false;
             self.needs_redraw = true;
         }
@@ -938,6 +950,56 @@ impl WebView {
 
     pub fn clear_redraw_flag(&mut self) {
         self.needs_redraw = false;
+    }
+}
+
+/// Records the nonzero scroll offsets of every scrollable node in `info`,
+/// keyed by the node's DOM snapshot id.
+///
+/// The layout builder initializes each node's `scroll_offset` to 0, so a
+/// rebuild would otherwise drop the scroll position (e.g. after a window
+/// resize). `dom_id` stays stable across rebuilds while the DOM is unchanged,
+/// which makes it a reliable key for restoring state onto the new tree.
+fn capture_scroll_offsets(info: &InfoNode, offsets: &mut HashMap<NodeId, (f32, f32)>) {
+    let (x, y) = info.kind.scroll_offsets();
+    if (x != 0.0 || y != 0.0)
+        && let Some(dom_id) = info.dom_id
+    {
+        offsets.insert(dom_id, (x, y));
+    }
+    for child in &info.children {
+        capture_scroll_offsets(child, offsets);
+    }
+}
+
+/// Restores scroll offsets captured by [`capture_scroll_offsets`] onto a newly
+/// built tree.
+///
+/// Offsets are copied verbatim for every matching node regardless of its
+/// `scroll_x`/`scroll_y` flags: the flags describe whether an axis *can*
+/// scroll, not whether a scroll position was captured, so gating on them here
+/// would drop positions (e.g. the viewport/page scroll carried by the root).
+fn apply_scroll_offsets(info: &mut InfoNode, offsets: &HashMap<NodeId, (f32, f32)>) {
+    if let Some((x, y)) = info.dom_id.and_then(|id| offsets.get(&id)) {
+        match &mut info.kind {
+            NodeKind::Container {
+                scroll_offset_x,
+                scroll_offset_y,
+                ..
+            }
+            | NodeKind::Custom {
+                scroll_offset_x,
+                scroll_offset_y,
+                ..
+            } => {
+                *scroll_offset_x = *x;
+                *scroll_offset_y = *y;
+            }
+            _ => {}
+        }
+    }
+    for child in &mut info.children {
+        apply_scroll_offsets(child, offsets);
     }
 }
 
@@ -1067,6 +1129,221 @@ pub fn resolve_url(base_url: &Url, path: &str) -> Result<Url, url::ParseError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::layouter::types::{ContainerRole, ContainerStyle};
+
+    fn scrollable_info(dom_id: Option<NodeId>, scroll_y: bool, offset_y: f32) -> InfoNode {
+        InfoNode {
+            kind: NodeKind::Container {
+                scroll_x: false,
+                scroll_y,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: offset_y,
+                style: ContainerStyle::default(),
+                role: ContainerRole::Normal,
+            },
+            children: Vec::new(),
+            dom_id,
+        }
+    }
+
+    fn scroll_offsets(info: &InfoNode) -> (f32, f32) {
+        info.kind.scroll_offsets()
+    }
+
+    fn set_root_scroll_offset(info: &mut InfoNode, offset: f32) {
+        match &mut info.kind {
+            NodeKind::Container {
+                scroll_offset_y, ..
+            }
+            | NodeKind::Custom {
+                scroll_offset_y, ..
+            } => *scroll_offset_y = offset,
+            _ => panic!("expected a container root"),
+        }
+    }
+
+    fn root_scroll_offset(info: &InfoNode) -> Option<f32> {
+        match &info.kind {
+            NodeKind::Container {
+                scroll_offset_y, ..
+            }
+            | NodeKind::Custom {
+                scroll_offset_y, ..
+            } => Some(*scroll_offset_y),
+            _ => None,
+        }
+    }
+
+    fn find_scrollable_offset(info: &InfoNode) -> Option<f32> {
+        if let NodeKind::Container {
+            scroll_y: true,
+            scroll_offset_y,
+            ..
+        } = &info.kind
+        {
+            return Some(*scroll_offset_y);
+        }
+        info.children.iter().find_map(find_scrollable_offset)
+    }
+
+    fn set_first_scrollable_offset(info: &mut InfoNode, offset: f32) -> bool {
+        if let NodeKind::Container {
+            scroll_y: true,
+            scroll_offset_y,
+            ..
+        } = &mut info.kind
+        {
+            *scroll_offset_y = offset;
+            return true;
+        }
+        info.children
+            .iter_mut()
+            .any(|c| set_first_scrollable_offset(c, offset))
+    }
+
+    #[test]
+    fn resize_preserves_scroll_offset() {
+        // A scroll container needs a constrained height so its content_box
+        // stays smaller than children_box (auto-height boxes stretch to their
+        // content in this engine and are never scrollable).
+        let html = r#"<html><body><div style="height: 300px; overflow-y: auto;"><div style="height: 3000px;"></div></div></body></html>"#;
+        let mut wv = WebView::new(ColorScheme::Light);
+        wv.tick();
+        wv.on_html_fetched(
+            html.to_string(),
+            Url::parse("https://example.test/").unwrap(),
+        );
+
+        for _ in 0..500 {
+            wv.tick();
+            if !wv.layout_pending && wv.layout_and_info().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        {
+            let (_, info) = wv.layout_and_info_mut().expect("layout not ready");
+            assert!(
+                set_first_scrollable_offset(info, 500.0),
+                "expected a scrollable container"
+            );
+        }
+
+        wv.relayout((1000.0, 700.0));
+
+        for _ in 0..500 {
+            wv.tick();
+            if !wv.layout_pending {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+
+        let (_, info) = wv.layout_and_info().expect("layout not ready after resize");
+        assert_eq!(find_scrollable_offset(info), Some(500.0));
+    }
+
+    #[test]
+    fn resize_preserves_page_scroll_on_root() {
+        // A plain page without overflow rules: the wheel handler stores the
+        // page scroll on the root InfoNode, which has no scroll flags set.
+        let html = r#"<html><body><div style="height: 3000px;"></div></body></html>"#;
+        let mut wv = WebView::new(ColorScheme::Light);
+        wv.tick();
+        wv.on_html_fetched(
+            html.to_string(),
+            Url::parse("https://example.test/").unwrap(),
+        );
+
+        for _ in 0..500 {
+            wv.tick();
+            if !wv.layout_pending && wv.layout_and_info().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        {
+            let (_, info) = wv.layout_and_info_mut().expect("layout not ready");
+            set_root_scroll_offset(info, 500.0);
+        }
+
+        wv.relayout((1000.0, 700.0));
+
+        for _ in 0..500 {
+            wv.tick();
+            if !wv.layout_pending {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+
+        let (_, info) = wv.layout_and_info().expect("layout not ready after resize");
+        assert_eq!(root_scroll_offset(info), Some(500.0));
+    }
+
+    #[test]
+    fn captures_and_restores_scroll_offsets_across_rebuild() {
+        // Old tree: parent scrolled to 100, child to 50.
+        let mut old_info = scrollable_info(Some(1), true, 100.0);
+        old_info.children.push(scrollable_info(Some(2), true, 50.0));
+
+        let mut offsets = HashMap::new();
+        capture_scroll_offsets(&old_info, &mut offsets);
+        assert_eq!(
+            offsets,
+            HashMap::from([(1u32, (0.0, 100.0)), (2u32, (0.0, 50.0))])
+        );
+
+        // New tree: same DOM, offsets reset to 0 by the builder.
+        let mut new_info = scrollable_info(Some(1), true, 0.0);
+        new_info.children.push(scrollable_info(Some(2), true, 0.0));
+
+        apply_scroll_offsets(&mut new_info, &offsets);
+
+        assert_eq!(scroll_offsets(&new_info), (0.0, 100.0));
+        assert_eq!(scroll_offsets(&new_info.children[0]), (0.0, 50.0));
+    }
+
+    #[test]
+    fn offsets_are_restored_verbatim_even_on_non_scrollable_axes() {
+        // Old tree: the x axis was scrollable and scrolled to 50.
+        let old_info = InfoNode {
+            kind: NodeKind::Container {
+                scroll_x: true,
+                scroll_y: false,
+                scroll_offset_x: 50.0,
+                scroll_offset_y: 0.0,
+                style: ContainerStyle::default(),
+                role: ContainerRole::Normal,
+            },
+            children: Vec::new(),
+            dom_id: Some(3),
+        };
+
+        let mut offsets = HashMap::new();
+        capture_scroll_offsets(&old_info, &mut offsets);
+        assert_eq!(offsets, HashMap::from([(3u32, (50.0, 0.0))]));
+
+        // New tree: the x axis no longer scrolls. apply restores the captured
+        // position verbatim; range enforcement is clamp's job, so the flag
+        // change alone must not drop the offset.
+        let mut new_info = InfoNode {
+            kind: NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: ContainerStyle::default(),
+                role: ContainerRole::Normal,
+            },
+            children: Vec::new(),
+            dom_id: Some(3),
+        };
+
+        apply_scroll_offsets(&mut new_info, &offsets);
+
+        assert_eq!(scroll_offsets(&new_info), (50.0, 0.0));
+    }
 
     #[test]
     fn inline_styles_recover_after_an_unsupported_rule() {

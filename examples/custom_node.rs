@@ -92,7 +92,7 @@ fn main() {
 
     // ── Generate draw commands ──────────────────────────────
     let mut cmds: Vec<DrawCommand> = Vec::new();
-    generate_draw_commands(&mut cmds, &layout, &info);
+    generate_draw_commands(&mut cmds, &layout, &info, (800.0, 600.0));
 
     // ── Dump ────────────────────────────────────────────────
     println!("Generated {} draw commands:\n", cmds.len());

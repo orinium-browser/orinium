@@ -33,8 +33,7 @@ pub mod core;
 
 pub use core::BrowserApp;
 pub use core::BrowserCommand;
-pub use core::BrowserRenderer;
 pub use core::BrowserUi;
 pub use core::RenderState;
 pub use core::Tab;
-pub use core::{BasicChrome, Chrome, ChromeAction, ChromeEventResult};
+pub use core::{BasicChrome, BrowserRenderer, Chrome, ChromeAction, ChromeEventResult};
