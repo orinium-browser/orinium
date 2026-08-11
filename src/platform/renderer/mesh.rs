@@ -43,6 +43,22 @@ pub struct ImageSection {
     pub opacity: f32,
 }
 
+/// One draw in command order. The GPU renders [`Mesh::draw_items`] in order so
+/// that later commands composite over earlier ones (e.g. text drawn after a
+/// shape is no longer forced on top by buffer-type passes).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum DrawItem {
+    /// A range of [`Mesh::vertices`] to draw with the shape pipeline.
+    Fill {
+        vertex_start: u32,
+        vertex_count: u32,
+    },
+    /// An index into [`Mesh::images`].
+    Image(usize),
+    /// An index into [`Mesh::sections`].
+    Text(usize),
+}
+
 /// Source of pre-laid-out text, decoupled from the [`MeshBuilder`] so that the
 /// geometry layer stays free of font-system / GPU state.
 pub trait TextLayoutSource {
@@ -53,6 +69,7 @@ pub trait TextLayoutSource {
 /// The result of interpreting a command list: CPU-side vertices and text.
 pub struct Mesh {
     pub vertices: Vec<Vertex>,
+    pub draw_items: Vec<DrawItem>,
     pub sections: Vec<TextSection>,
     pub images: Vec<ImageSection>,
 }
@@ -96,6 +113,7 @@ impl MeshBuilder {
             enable_text_culling: true,
             mesh: Mesh {
                 vertices: Vec::new(),
+                draw_items: Vec::new(),
                 sections: Vec::new(),
                 images: Vec::new(),
             },
@@ -134,6 +152,7 @@ impl MeshBuilder {
         text: &mut Option<&mut dyn TextLayoutSource>,
     ) -> &Mesh {
         self.mesh.vertices.clear();
+        self.mesh.draw_items.clear();
         self.mesh.sections.clear();
         self.mesh.images.clear();
 
@@ -175,7 +194,20 @@ impl MeshBuilder {
                 } => {
                     let t = *self.transform_stack.last().unwrap();
                     let clip = *self.clip_stack.last().unwrap();
+                    let vertices_before = self.mesh.vertices.len() as u32;
+                    let images_before = self.mesh.images.len();
                     self.emit_fill(&t, &clip, path, paint);
+                    if self.mesh.images.len() > images_before {
+                        self.mesh.draw_items.push(DrawItem::Image(images_before));
+                    } else {
+                        let vertex_count = self.mesh.vertices.len() as u32 - vertices_before;
+                        if vertex_count > 0 {
+                            self.mesh.draw_items.push(DrawItem::Fill {
+                                vertex_start: vertices_before,
+                                vertex_count,
+                            });
+                        }
+                    }
                 }
                 DrawCommand::DrawText {
                     x,
@@ -185,7 +217,11 @@ impl MeshBuilder {
                 } => {
                     let t = *self.transform_stack.last().unwrap();
                     let clip = *self.clip_stack.last().unwrap();
+                    let sections_before = self.mesh.sections.len();
                     self.emit_text(text, *x, *y, tstr, style, &t, &clip);
+                    for section in sections_before..self.mesh.sections.len() {
+                        self.mesh.draw_items.push(DrawItem::Text(section));
+                    }
                 }
                 DrawCommand::SystemUi { .. } => {
                     // TODO: implement composite/render system UI element
@@ -1643,6 +1679,81 @@ mod tests {
         assert_eq!(section.uv.width, 0.5);
         assert_eq!(section.uv.height, 0.5);
         assert_eq!(section.opacity, 0.5);
+    }
+
+    #[test]
+    fn test_draw_items_preserve_command_order() {
+        // Regression: the GPU used to split geometry into shape/image/text
+        // passes, always compositing text on top. `draw_items` must record the
+        // command order so a single pass can respect interleaving.
+        let mut builder = MeshBuilder::new(100.0, 100.0, 1.0);
+        let mut text: Option<&mut dyn TextLayoutSource> = Some(&mut NoText);
+        let image = Image::from_rgba(2, 2, vec![255; 16]).unwrap();
+        let commands = [
+            solid_fill(rect_path(0.0, 0.0, 50.0, 50.0), Color(255, 0, 0, 255)),
+            solid_fill(rect_path(0.0, 0.0, 25.0, 25.0), Color(0, 255, 0, 255)),
+            DrawCommand::Fill {
+                path: rect_path(0.0, 0.0, 100.0, 100.0),
+                paint: Paint {
+                    brush: Brush::Image(image),
+                    opacity: 1.0,
+                },
+                rule: crate::engine::renderer_model::FillRule::NonZero,
+            },
+            DrawCommand::DrawText {
+                x: 0.0,
+                y: 0.0,
+                text: "hello".into(),
+                style: TextStyle {
+                    font_size: 12.0,
+                    ..TextStyle::default()
+                },
+            },
+        ];
+
+        let mesh = builder.build(&commands, &mut text);
+
+        // NoText never lays out text, so the DrawText command contributes no
+        // section and must not appear in the items.
+        assert_eq!(mesh.sections.len(), 0);
+        assert_eq!(mesh.images.len(), 1);
+        assert_eq!(mesh.draw_items.len(), 3);
+
+        let mut vertices_seen = 0u32;
+        match mesh.draw_items[0] {
+            DrawItem::Fill {
+                vertex_start,
+                vertex_count,
+            } => {
+                assert_eq!(vertex_start, 0);
+                vertices_seen += vertex_count;
+            }
+            ref other => panic!("expected Fill, got {other:?}"),
+        }
+        match mesh.draw_items[1] {
+            DrawItem::Fill {
+                vertex_start,
+                vertex_count,
+            } => {
+                assert_eq!(vertex_start, vertices_seen);
+                vertices_seen += vertex_count;
+            }
+            ref other => panic!("expected Fill, got {other:?}"),
+        }
+        assert_eq!(mesh.draw_items[2], DrawItem::Image(0));
+        assert_eq!(vertices_seen as usize, mesh.vertices.len());
+
+        // The same geometry must be covered exactly once: the item vertex
+        // ranges partition the vertex buffer.
+        let covered: usize = mesh
+            .draw_items
+            .iter()
+            .filter_map(|item| match item {
+                DrawItem::Fill { vertex_count, .. } => Some(*vertex_count as usize),
+                _ => None,
+            })
+            .sum();
+        assert_eq!(covered, mesh.vertices.len());
     }
 
     #[test]

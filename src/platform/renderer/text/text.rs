@@ -276,6 +276,11 @@ pub struct TextRenderer {
     prev_sections_hash: u64,
     prev_sections_count: usize,
 
+    /// Per-section instance ranges `(start, count)` into `instances`, recorded
+    /// in the same order as the sections. Enables drawing a subset of sections
+    /// while preserving interleaved draw order.
+    section_ranges: Vec<(u32, u32)>,
+
     layout_cache: Vec<CachedLayout>,
     bearing_cache: LruCache<(fontdb::ID, u32, u32), (f32, f32)>,
 }
@@ -484,6 +489,7 @@ impl TextRenderer {
             screen_size: [800.0, 600.0],
             prev_sections_hash: 0,
             prev_sections_count: 0,
+            section_ranges: Vec::new(),
             layout_cache: Vec::new(),
             bearing_cache: LruCache::new(NonZeroUsize::new(BEARING_CACHE_CAPACITY).unwrap()),
         })
@@ -644,6 +650,7 @@ impl TextRenderer {
         self.prev_sections_count = sections.len();
 
         self.instances.clear();
+        self.section_ranges.clear();
 
         let mut glyph_count = 0u32;
         let mut culled_count = 0u32;
@@ -653,6 +660,7 @@ impl TextRenderer {
 
         global_font::with_global_font_system(|fs| {
             for section in sections {
+                let range_start = self.instances.len() as u32;
                 let layout = &section.layout;
 
                 let base_x = section.screen_position.0;
@@ -775,6 +783,8 @@ impl TextRenderer {
                         self.instances.push(inst);
                     }
                 }
+                self.section_ranges
+                    .push((range_start, self.instances.len() as u32 - range_start));
             }
         });
 
@@ -854,11 +864,18 @@ impl TextRenderer {
         Ok(())
     }
 
-    pub fn draw<'a>(&mut self, rpass: &mut wgpu::RenderPass<'a>) {
+    /// Returns the `(start, count)` instance range for the section at `index`,
+    /// if it was queued this frame.
+    pub fn section_range(&self, index: usize) -> Option<(u32, u32)> {
+        self.section_ranges.get(index).copied()
+    }
+
+    /// Draws instances `start..start + count` with the glyph pipeline.
+    pub fn draw_range<'a>(&mut self, rpass: &mut wgpu::RenderPass<'a>, start: u32, count: u32) {
         let Some(ref bind_group) = self.bind_group else {
             return;
         };
-        if self.num_instances == 0 {
+        if count == 0 {
             return;
         }
 
@@ -869,7 +886,7 @@ impl TextRenderer {
             rpass.set_vertex_buffer(1, ib.slice(..));
         }
         rpass.set_index_buffer(self.quad_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-        rpass.draw_indexed(0..6, 0, 0..self.num_instances);
+        rpass.draw_indexed(0..6, 0, start..start + count);
     }
 }
 

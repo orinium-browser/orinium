@@ -32,8 +32,8 @@ pub struct GpuRenderer {
     vertex_buffer: Option<wgpu::Buffer>,
     /// 描画命令から頂点・テキストセクションを生成するジオメトリ層
     mesh_builder: MeshBuilder,
-    /// 頂点数
-    num_vertices: u32,
+    /// コマンド順を保持する描画項目
+    draw_items: Vec<mesh::DrawItem>,
 
     /// テキスト描画用ラッパー
     text_renderer: Option<TextRenderer>,
@@ -224,7 +224,7 @@ impl GpuRenderer {
                 size.height as f32,
                 scale_factor as f32,
             ),
-            num_vertices: 0,
+            draw_items: Vec::new(),
             text_renderer,
             image_renderer,
             enable_text_culling,
@@ -269,6 +269,7 @@ impl GpuRenderer {
         let vertices = built.vertices.clone();
         let sections = built.sections.clone();
         let images = built.images.clone();
+        self.draw_items.clone_from(&built.draw_items);
 
         self.set_vertex_buffer(&vertices);
         self.image_renderer.prepare(
@@ -341,55 +342,7 @@ impl GpuRenderer {
                 multiview_mask: None,
             });
 
-            // 使用するシェーダー・設定をセット
-            render_pass.set_pipeline(&self.render_pipeline);
-            // 頂点バッファをセットして描画
-            if let Some(ref vertex_buffer) = self.vertex_buffer {
-                render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-                render_pass.draw(0..self.num_vertices, 0..1);
-            }
-        }
-
-        // Render decoded page images above box fills.
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Image Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None,
-                timestamp_writes: None,
-                multiview_mask: None,
-            });
-            self.image_renderer.draw(&mut render_pass);
-        }
-
-        // テキストをレンダリング
-        if let Some(tr) = &mut self.text_renderer {
-            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Text Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None,
-                timestamp_writes: None,
-                multiview_mask: None,
-            });
-            tr.draw(&mut rpass);
+            self.draw_in_order(&mut render_pass);
         }
 
         // コマンドをGPUに送信
@@ -399,6 +352,76 @@ impl GpuRenderer {
         self.queue.present(output);
 
         Ok(())
+    }
+
+    /// Draws every [`mesh::DrawItem`] in command order within a single render
+    /// pass, merging adjacent same-kind items to minimize pipeline switches.
+    fn draw_in_order<'a>(&mut self, render_pass: &mut wgpu::RenderPass<'a>) {
+        let mut i = 0;
+        while i < self.draw_items.len() {
+            match self.draw_items[i] {
+                mesh::DrawItem::Fill {
+                    vertex_start,
+                    vertex_count,
+                } => {
+                    let start = vertex_start;
+                    let mut count = vertex_count;
+                    i += 1;
+                    while i < self.draw_items.len() {
+                        if let mesh::DrawItem::Fill {
+                            vertex_start: s,
+                            vertex_count: c,
+                        } = self.draw_items[i]
+                        {
+                            if s == start + count {
+                                count += c;
+                                i += 1;
+                            } else {
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                    if let Some(ref vertex_buffer) = self.vertex_buffer {
+                        render_pass.set_pipeline(&self.render_pipeline);
+                        render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                        render_pass.draw(start..start + count, 0..1);
+                    }
+                }
+                mesh::DrawItem::Image(index) => {
+                    self.image_renderer.draw_at(render_pass, index);
+                    i += 1;
+                }
+                mesh::DrawItem::Text(_) => {
+                    let mut start = 0u32;
+                    let mut end = 0u32;
+                    let mut any = false;
+                    while i < self.draw_items.len() {
+                        if let mesh::DrawItem::Text(idx) = self.draw_items[i] {
+                            if let Some(tr) = &self.text_renderer
+                                && let Some((s, c)) = tr.section_range(idx)
+                            {
+                                if !any {
+                                    start = s;
+                                    any = true;
+                                }
+                                end = s + c;
+                            }
+                            i += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    if let Some(tr) = &mut self.text_renderer
+                        && any
+                        && end > start
+                    {
+                        tr.draw_range(render_pass, start, end - start);
+                    }
+                }
+            }
+        }
     }
 
     fn set_vertex_buffer(&mut self, vertices: &[Vertex]) {
@@ -411,10 +434,8 @@ impl GpuRenderer {
                     usage: wgpu::BufferUsages::VERTEX,
                 },
             ));
-            self.num_vertices = vertices.len() as u32;
         } else {
             self.vertex_buffer = None;
-            self.num_vertices = 0;
         }
     }
 

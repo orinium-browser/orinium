@@ -248,13 +248,15 @@ impl ImageRenderer {
         }
     }
 
-    /// Draws all prepared image sections.
-    pub fn draw<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>) {
-        render_pass.set_pipeline(&self.pipeline);
-        for prepared in &self.prepared {
-            render_pass.set_bind_group(0, &prepared.bind_group, &[]);
-            render_pass.set_vertex_buffer(0, prepared.vertex_buffer.slice(..));
-            render_pass.draw(0..6, 0..1);
+    /// Draws the prepared image section at `index`.
+    pub fn draw_at(&self, render_pass: &mut wgpu::RenderPass<'_>, index: usize) {
+        if index >= self.prepared.len() {
+            return;
         }
+        let prepared = &self.prepared[index];
+        render_pass.set_pipeline(&self.pipeline);
+        render_pass.set_bind_group(0, &prepared.bind_group, &[]);
+        render_pass.set_vertex_buffer(0, prepared.vertex_buffer.slice(..));
+        render_pass.draw(0..6, 0..1);
     }
 }
