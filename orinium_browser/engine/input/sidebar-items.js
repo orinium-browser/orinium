@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["any_custom_node_needs_repaint","dispatch_pointer","dispatch_text_input","focus_text_input","focused_text_input_is_composing","hit_custom_node","hit_dom_id","hit_test","scroll_at","update_hover"],"struct":["HitItem"],"type":["HitPath"]};
+window.SIDEBAR_ITEMS = {"fn":["any_custom_node_needs_repaint","dismiss_open_popups","dispatch_pointer","dispatch_text_input","focus_text_input","focused_text_input_is_composing","hit_custom_node","hit_dom_id","hit_test","scroll_at","update_hover"],"struct":["HitItem"],"type":["HitPath"]};
