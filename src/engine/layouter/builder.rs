@@ -444,7 +444,6 @@ pub fn build_layout_and_info_from_snapshot(
                 let node = registry
                     .create(&CustomNodeContext {
                         tag,
-                        inner_text: &snapshot.inner_text(stack[top_idx].dom),
                         media_source: media_source.as_deref(),
                         container_style: &container_style,
                         text_style: &text_style,
@@ -455,6 +454,8 @@ pub fn build_layout_and_info_from_snapshot(
                         write_back: write_back_sender
                             .as_ref()
                             .map(|sender| (sender.clone(), stack[top_idx].dom)),
+                        dom_snapshot: &snapshot,
+                        dom_id: stack[top_idx].dom,
                     })
                     .expect("registry must handle every tag it reports");
 

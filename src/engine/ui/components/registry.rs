@@ -5,6 +5,7 @@ use std::sync::{Arc, mpsc};
 
 use crate::engine::bridge::text;
 use crate::engine::layouter::types::{Color, ContainerStyle, TextStyle};
+use crate::engine::layouter::{DomSnapshot, NodeId};
 use crate::engine::renderer_model::Image;
 use crate::engine::ui::audio::AudioComponent;
 use crate::engine::ui::button::ButtonComponent;
@@ -13,6 +14,7 @@ use crate::engine::ui::custom_node::CustomNode;
 use crate::engine::ui::image::ImageComponent;
 use crate::engine::ui::input_text::InputTextComponent;
 use crate::engine::ui::input_text::OnValueChange;
+use crate::engine::ui::select::{OnSelectChange, SelectComponent, SelectOption};
 
 /// A channel for reporting text-input value changes to the DOM owner.
 ///
@@ -27,8 +29,6 @@ pub struct CustomNodeContext<'a> {
     /// The HTML tag name (e.g. `"button"`).
     pub tag: &'a str,
     /// Inner text of the element, if any.
-    pub inner_text: &'a str,
-    /// Resolved media source from `src` or a child `<source>` element.
     pub media_source: Option<&'a str>,
     /// Resolved container style (background, border, …).
     pub container_style: &'a ContainerStyle,
@@ -44,6 +44,10 @@ pub struct CustomNodeContext<'a> {
     pub get_attr: &'a dyn Fn(&str) -> Option<String>,
     /// Channel + snapshot node id for value write-back (bidirectional sync).
     pub write_back: Option<(DomWriteBack, u32)>,
+    /// Dom snapshot.
+    pub dom_snapshot: &'a DomSnapshot,
+    /// The node id.
+    pub dom_id: NodeId,
 }
 
 /// Constructs a [`CustomNode`] for a given HTML tag.
@@ -69,6 +73,7 @@ impl ComponentRegistry {
         registry.register(Box::new(AudioFactory));
         registry.register(Box::new(ImageFactory));
         registry.register(Box::new(InputTextFactory));
+        registry.register(Box::new(SelectFactory));
         registry
     }
 
@@ -129,7 +134,7 @@ impl CustomNodeFactory for ButtonFactory {
             _ => default_bg,
         };
         Some(Arc::new(ButtonComponent::new(
-            ctx.inner_text.to_string(),
+            ctx.dom_snapshot.inner_text(ctx.dom_id),
             bg,
             ctx.text_style.color,
             Arc::clone(&ctx.measurer),
@@ -187,10 +192,71 @@ impl CustomNodeFactory for InputTextFactory {
     }
 }
 
+struct SelectFactory;
+
+impl CustomNodeFactory for SelectFactory {
+    fn tags(&self) -> &'static [&'static str] {
+        &["select"]
+    }
+
+    fn create(&self, _tag: &str, ctx: &CustomNodeContext) -> Option<Arc<dyn CustomNode>> {
+        let value = (ctx.get_attr)("value").unwrap_or_default();
+        let on_change = ctx.write_back.as_ref().map(|(sender, node_id)| {
+            let sender = sender.clone();
+            let node_id = *node_id;
+            Arc::new(move |new_value: &str| {
+                let _ = sender.send((node_id, new_value.to_string()));
+            }) as Arc<OnSelectChange>
+        });
+
+        let options: Vec<SelectOption> = ctx
+            .dom_snapshot
+            .children(ctx.dom_id)
+            .iter()
+            .map(|id| {
+                let value = ctx
+                    .dom_snapshot
+                    .node(*id)
+                    .kind
+                    .get_attr("value")
+                    .unwrap_or_default()
+                    .to_string();
+                let label = ctx.dom_snapshot.inner_text(*id);
+                let selected = ctx.dom_snapshot.node(*id).kind.has_attr("selected");
+
+                SelectOption {
+                    value,
+                    label,
+                    selected,
+                }
+            })
+            .collect();
+
+        Some(Arc::new(if let Some(cb) = on_change {
+            SelectComponent::with_on_change(options, &value, Arc::clone(&ctx.measurer), cb)
+        } else {
+            SelectComponent::new(options, &value, Arc::clone(&ctx.measurer))
+        }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::engine::bridge::text::FallbackTextMeasurer;
+    use crate::engine::html::parser::DomTree;
+    use crate::engine::html::parser::Parser as HtmlParser;
+    use crate::engine::layouter::DomSnapshot;
+
+    fn tree(html: &str) -> DomTree {
+        HtmlParser::new(html).parse()
+    }
+
+    fn empty_snapshot() -> DomSnapshot {
+        let dom = tree("<html></html>");
+        let (snapshot, _dom_refs) = DomSnapshot::from_tree(&dom.root);
+        snapshot
+    }
 
     #[test]
     fn registry_builds_known_components() {
@@ -206,10 +272,24 @@ mod tests {
         let get_attr = |name: &str| attrs.get(name).cloned();
         let measurer: Arc<dyn text::TextMeasurer<TextStyle>> = Arc::new(FallbackTextMeasurer);
 
+        let dom_snapshot = &{
+            let dom = tree(
+                "<html><button></button><input /><img /><select><option value=\"opt\">Option</option></select></html>",
+            );
+            let (snapshot, _dom_refs) = DomSnapshot::from_tree(&dom.root);
+            snapshot
+        };
+
+        let html_id = dom_snapshot.node(dom_snapshot.roots()[0]).children[0];
+
+        let button_id = dom_snapshot.children(html_id)[0];
+        let input_id = dom_snapshot.children(html_id)[1];
+        let img_id = dom_snapshot.children(html_id)[2];
+        let select_id = dom_snapshot.children(html_id)[3];
+
         let button = registry
             .create(&CustomNodeContext {
                 tag: "button",
-                inner_text: "",
                 media_source: None,
                 container_style: &container_style,
                 text_style: &text_style,
@@ -218,6 +298,8 @@ mod tests {
                 audio: &audio,
                 get_attr: &get_attr,
                 write_back: None,
+                dom_snapshot,
+                dom_id: button_id,
             })
             .unwrap();
         assert_eq!(button.role(), Some("button"));
@@ -225,7 +307,6 @@ mod tests {
         let input = registry
             .create(&CustomNodeContext {
                 tag: "input",
-                inner_text: "",
                 media_source: None,
                 container_style: &container_style,
                 text_style: &text_style,
@@ -234,6 +315,8 @@ mod tests {
                 audio: &audio,
                 get_attr: &get_attr,
                 write_back: None,
+                dom_snapshot,
+                dom_id: input_id,
             })
             .unwrap();
         assert_eq!(input.role(), Some("textbox"));
@@ -242,7 +325,6 @@ mod tests {
         let img = registry
             .create(&CustomNodeContext {
                 tag: "img",
-                inner_text: "",
                 media_source: None,
                 container_style: &container_style,
                 text_style: &text_style,
@@ -251,9 +333,29 @@ mod tests {
                 audio: &audio,
                 get_attr: &get_attr,
                 write_back: None,
+                dom_snapshot,
+                dom_id: img_id,
             })
             .unwrap();
         assert_eq!(img.role(), None);
+
+        let select = registry
+            .create(&CustomNodeContext {
+                tag: "select",
+                media_source: None,
+                container_style: &container_style,
+                text_style: &text_style,
+                measurer: Arc::clone(&measurer),
+                images: &images,
+                audio: &audio,
+                get_attr: &get_attr,
+                write_back: None,
+                dom_snapshot,
+                dom_id: select_id,
+            })
+            .unwrap();
+        assert_eq!(select.role(), Some("combobox"));
+        assert_eq!(select.value(), Some("opt".to_string()));
     }
 
     #[test]
@@ -267,7 +369,6 @@ mod tests {
         let get_attr = |name: &str| attrs.get(name).cloned();
         let ctx = CustomNodeContext {
             tag: "video",
-            inner_text: "",
             media_source: None,
             container_style: &container_style,
             text_style: &text_style,
@@ -276,6 +377,8 @@ mod tests {
             audio: &audio,
             get_attr: &get_attr,
             write_back: None,
+            dom_snapshot: &empty_snapshot(),
+            dom_id: 0,
         };
         assert!(registry.create(&ctx).is_none());
     }

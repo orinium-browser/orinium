@@ -541,6 +541,11 @@ impl BrowserUi {
             // nodes, and remember which DOM element the press/release landed on.
             let clicked_dom_id = tab.layout_and_info().and_then(|(layout, info)| {
                 let path = crate::engine::input::hit_test(layout, info, px, py);
+                // A press that does not belong to an open popup closes every
+                // open popup (top-layer overlays dismiss on outside clicks).
+                if matches!(state, ElementState::Pressed) {
+                    crate::engine::input::dismiss_open_popups(info, &path);
+                }
                 let event = match state {
                     ElementState::Pressed => PointerEvent::Down { x: px, y: py },
                     ElementState::Released => PointerEvent::Up { x: px, y: py },

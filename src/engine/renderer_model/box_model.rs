@@ -611,6 +611,12 @@ pub fn generate_draw_commands(
         .iter()
         .next()
         .map_or((0.0, 0.0), |b| (b.content_box.width, b.content_box.height));
+    let origin = layout
+        .layout_box
+        .iter()
+        .next()
+        .map_or((0.0, 0.0), |b| (b.content_box.x, b.content_box.y));
+    let mut popups: Vec<(Vec<DrawCommand>, (f32, f32))> = Vec::new();
     generate_draw_commands_inner(
         cmd_buf,
         layout,
@@ -618,8 +624,36 @@ pub fn generate_draw_commands(
         (0.0, 0.0),
         root_viewport,
         containing,
+        origin,
+        &mut popups,
         true,
     );
+    // Top-layer popups render after every other box, outside all ancestor
+    // clips and transforms.
+    for (commands, (tx, ty)) in popups {
+        if tx != 0.0 || ty != 0.0 {
+            cmd_buf.push(DrawCommand::PushTransform {
+                transform: AffineTransform::translate(tx, ty),
+            });
+        }
+        cmd_buf.extend(commands);
+        if tx != 0.0 || ty != 0.0 {
+            cmd_buf.push(DrawCommand::PopTransform);
+        }
+    }
+}
+
+/// Content-box origin of a child layout node in page space, derived from the
+/// parent's page-space origin. Children are laid out relative to the parent's
+/// content box, so the child's origin is the parent's origin plus the child's
+/// content-box offset.
+fn child_origin(child: &LayoutNode, parent_origin: (f32, f32)) -> (f32, f32) {
+    child.layout_box.iter().next().map_or(parent_origin, |b| {
+        (
+            parent_origin.0 + b.content_box.x,
+            parent_origin.1 + b.content_box.y,
+        )
+    })
 }
 
 /// Recursive draw-command generation.
@@ -634,8 +668,13 @@ pub fn generate_draw_commands(
 /// `viewport` is the nearest scrollport as seen from this node's parent-content
 /// space (used to resolve `position: sticky`), `containing` is this node's
 /// parent content-box size (the containing block sticky boxes must stay in),
-/// and `is_root` marks the document root, which always establishes the page
+/// `origin` is this node's content-box origin in page space (unscrolled), and
+/// `is_root` marks the document root, which always establishes the page
 /// scrollport.
+///
+/// Open popups owned by custom nodes are collected (with the page-space
+/// translation of their content-box origin) instead of being drawn inline, so
+/// the caller can emit them above all page content.
 fn generate_draw_commands_inner(
     cmd_buf: &mut Vec<DrawCommand>,
     layout: &LayoutNode,
@@ -643,6 +682,8 @@ fn generate_draw_commands_inner(
     accumulated_scroll: (f32, f32),
     viewport: StickyViewport,
     containing: (f32, f32),
+    origin: (f32, f32),
+    popups: &mut Vec<(Vec<DrawCommand>, (f32, f32))>,
     is_root: bool,
 ) {
     let mut box_states: Vec<BoxPushState> = Vec::new();
@@ -732,6 +773,34 @@ fn generate_draw_commands_inner(
                 },
             );
             node.draw_sized(cmd_buf, text_style, layout_style, size);
+            // Collect open popups so they render above every other box,
+            // outside all ancestor clips and transforms.
+            if let Some(popup) = node.popup(text_style) {
+                let own_scroll = info.kind.scroll_offsets();
+                // Fixed boxes are positioned relative to the viewport, so the
+                // inherited scroll displacement does not move their popup.
+                let inherited_scroll = if is_fixed {
+                    (0.0, 0.0)
+                } else {
+                    accumulated_scroll
+                };
+                let (mut tx, mut ty) = (
+                    origin.0 - inherited_scroll.0 - own_scroll.0,
+                    origin.1 - inherited_scroll.1 - own_scroll.1,
+                );
+                // Sticky boxes shift their whole subtree (and thus their
+                // popup) by the sticky offset.
+                if is_sticky
+                    && !is_fixed
+                    && let Some(bm) = layout.layout_box.iter().next()
+                    && let Some(edges) = bm.sticky_edges
+                {
+                    let (dx, dy) = sticky_offset(&edges, &bm.border_box, viewport, containing);
+                    tx += dx;
+                    ty += dy;
+                }
+                popups.push((popup.commands, (tx, ty)));
+            }
         }
     }
 
@@ -816,6 +885,7 @@ fn generate_draw_commands_inner(
             }
             NodeKind::Container { .. } => {
                 if let Some(LayoutChild::Node(node)) = layout_iter.next() {
+                    let child_origin = child_origin(node, origin);
                     generate_draw_commands_inner(
                         cmd_buf,
                         node,
@@ -823,6 +893,8 @@ fn generate_draw_commands_inner(
                         child_scroll,
                         child_viewport,
                         child_containing,
+                        child_origin,
+                        popups,
                         false,
                     );
                 }
@@ -837,6 +909,7 @@ fn generate_draw_commands_inner(
                 match layout_iter.next() {
                     // Block custom element: recurse into the child layout node.
                     Some(LayoutChild::Node(node_layout)) => {
+                        let child_origin = child_origin(node_layout, origin);
                         generate_draw_commands_inner(
                             cmd_buf,
                             node_layout,
@@ -844,6 +917,8 @@ fn generate_draw_commands_inner(
                             child_scroll,
                             child_viewport,
                             child_containing,
+                            child_origin,
+                            popups,
                             false,
                         );
                     }
@@ -936,6 +1011,8 @@ mod tests {
     use super::*;
     use crate::engine::layouter::types::ContainerRole;
     use crate::engine::renderer_model::geom::AffineTransform;
+    use crate::engine::ui::custom_node::{CustomNode, Popup};
+    use std::sync::Arc;
     use ui_layout::Style;
 
     fn count_balanced(commands: &[DrawCommand]) -> bool {
@@ -1353,6 +1430,197 @@ mod tests {
         assert!(
             translates.contains(&(0.0, -510.0)),
             "expected a sticky bottom offset, got {translates:?}"
+        );
+    }
+
+    /// A custom node that reports an open popup with a single fill command.
+    #[derive(Debug)]
+    struct PopupNode {
+        open: bool,
+        box_height: f32,
+        popup_height: f32,
+    }
+
+    impl CustomNode for PopupNode {
+        fn draw_sized(
+            &self,
+            _cmd_buf: &mut Vec<DrawCommand>,
+            _text_style: &TextStyle,
+            _style: &Style,
+            _size: ContentSize,
+        ) {
+        }
+
+        fn intrinsic_size(&self) -> ContentSize {
+            ContentSize {
+                width: 120.0,
+                height: self.box_height,
+            }
+        }
+
+        fn popup(&self, _text_style: &TextStyle) -> Option<Popup> {
+            self.open.then(|| Popup {
+                rect: crate::engine::renderer_model::Rect {
+                    x: 0.0,
+                    y: self.box_height,
+                    width: 120.0,
+                    height: self.popup_height,
+                },
+                commands: vec![DrawCommand::Fill {
+                    path: rect_path(0.0, self.box_height, 120.0, self.popup_height),
+                    rule: FillRule::NonZero,
+                    paint: Paint {
+                        brush: Brush::Solid(Color(255, 0, 0, 255)),
+                        opacity: 1.0,
+                    },
+                }],
+            })
+        }
+    }
+
+    #[test]
+    fn popup_is_emitted_as_top_layer_at_node_position() {
+        // A select-like node with an open popup nested inside a scrollable
+        // container: node content origin (10+5, 20+0) = (15, 20), inherited
+        // scroll offset 50 → popup translate (15, 20-50) = (15, -30).
+        let node: Arc<dyn CustomNode> = Arc::new(PopupNode {
+            open: true,
+            box_height: 28.0,
+            popup_height: 84.0,
+        });
+
+        let mk_box = |x: f32, y: f32, w: f32, h: f32| ui_layout::BoxModel {
+            sticky_edges: None,
+            border_box: ui_rect(x, y, w, h),
+            padding_box: ui_rect(x, y, w, h),
+            content_box: ui_rect(x, y, w, h),
+            children_box: ui_rect(x, y, w, h),
+        };
+
+        let mut root = LayoutNode::new(Style::default());
+        root.layout_box = ui_layout::LayoutBox::BlockBox(mk_box(0.0, 0.0, 200.0, 200.0));
+
+        let mut scroller = LayoutNode::new(Style::default());
+        scroller.layout_box = ui_layout::LayoutBox::BlockBox(mk_box(10.0, 20.0, 160.0, 100.0));
+
+        let mut custom = LayoutNode::new(Style::default());
+        custom.layout_box = ui_layout::LayoutBox::BlockBox(mk_box(5.0, 0.0, 120.0, 28.0));
+        scroller.children = vec![LayoutChild::Node(Box::new(custom))];
+        root.children = vec![LayoutChild::Node(Box::new(scroller))];
+
+        let root_info = mk_info_node(
+            NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: ContainerStyle::default(),
+                role: ContainerRole::Normal,
+            },
+            vec![mk_info_node(
+                NodeKind::Container {
+                    scroll_x: false,
+                    scroll_y: true,
+                    scroll_offset_x: 0.0,
+                    scroll_offset_y: 50.0,
+                    style: ContainerStyle::default(),
+                    role: ContainerRole::Normal,
+                },
+                vec![mk_info_node(
+                    NodeKind::Custom {
+                        node,
+                        scroll_x: false,
+                        scroll_y: false,
+                        scroll_offset_x: 0.0,
+                        scroll_offset_y: 0.0,
+                        style: ContainerStyle::default(),
+                        layout_style: Style::default(),
+                        text_style: TextStyle::default(),
+                    },
+                    Vec::new(),
+                )],
+            )],
+        );
+
+        let mut commands = Vec::new();
+        generate_draw_commands(&mut commands, &root, &root_info, (200.0, 200.0));
+        assert!(count_balanced(&commands));
+
+        // The default styles paint nothing, so the only fill in the buffer is
+        // the popup, emitted after every clip/transform.
+        let fills = commands
+            .iter()
+            .filter(|cmd| matches!(cmd, DrawCommand::Fill { .. }))
+            .count();
+        assert_eq!(fills, 1, "popup must be the only painted box");
+
+        match &commands[commands.len() - 3..] {
+            [
+                DrawCommand::PushTransform { transform },
+                DrawCommand::Fill { .. },
+                DrawCommand::PopTransform,
+            ] => {
+                assert_eq!(transform.apply(0.0, 0.0), (15.0, -30.0));
+            }
+            _ => panic!("expected trailing popup PushTransform/Fill/PopTransform"),
+        }
+    }
+
+    #[test]
+    fn closed_popup_is_not_emitted() {
+        let node: Arc<dyn CustomNode> = Arc::new(PopupNode {
+            open: false,
+            box_height: 28.0,
+            popup_height: 84.0,
+        });
+
+        let mk_box = |x: f32, y: f32, w: f32, h: f32| ui_layout::BoxModel {
+            sticky_edges: None,
+            border_box: ui_rect(x, y, w, h),
+            padding_box: ui_rect(x, y, w, h),
+            content_box: ui_rect(x, y, w, h),
+            children_box: ui_rect(x, y, w, h),
+        };
+
+        let mut root = LayoutNode::new(Style::default());
+        root.layout_box = ui_layout::LayoutBox::BlockBox(mk_box(0.0, 0.0, 200.0, 200.0));
+        let mut custom = LayoutNode::new(Style::default());
+        custom.layout_box = ui_layout::LayoutBox::BlockBox(mk_box(0.0, 0.0, 120.0, 28.0));
+        root.children = vec![LayoutChild::Node(Box::new(custom))];
+
+        let root_info = mk_info_node(
+            NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: ContainerStyle::default(),
+                role: ContainerRole::Normal,
+            },
+            vec![mk_info_node(
+                NodeKind::Custom {
+                    node,
+                    scroll_x: false,
+                    scroll_y: false,
+                    scroll_offset_x: 0.0,
+                    scroll_offset_y: 0.0,
+                    style: ContainerStyle::default(),
+                    layout_style: Style::default(),
+                    text_style: TextStyle::default(),
+                },
+                Vec::new(),
+            )],
+        );
+
+        let mut commands = Vec::new();
+        generate_draw_commands(&mut commands, &root, &root_info, (200.0, 200.0));
+        assert!(count_balanced(&commands));
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|cmd| matches!(cmd, DrawCommand::Fill { .. }))
+                .count(),
+            0
         );
     }
 }

@@ -2,12 +2,13 @@
 
 use std::sync::Arc;
 
-use super::layouter::types::{InfoNode, NodeKind};
+use super::layouter::types::{InfoNode, NodeKind, TextStyle};
 use super::ui::PointerEvent;
 use super::ui::custom_node::CustomNode;
 use super::ui::input_text_types::InputTextEvent;
 use ui_layout::{LayoutNode, Position};
 /// ヒットしたノード情報
+#[derive(Clone)]
 pub struct HitItem<'a> {
     pub layout: &'a LayoutNode,
     pub info: &'a InfoNode,
@@ -35,9 +36,114 @@ pub fn hit_dom_id(path: &HitPath<'_>) -> Option<u32> {
     path.iter().find_map(|hit| hit.info.dom_id)
 }
 
+/// Converts page-space pointer coordinates into the local content-box space of
+/// the custom node at `path[target]`.
+///
+/// The hit path is ordered child→parent, so each entry's `content_box` origin
+/// is expressed in its *parent's* coordinate space. Mirroring
+/// [`hit_test_inner`], the chain is walked outermost→innermost, subtracting
+/// each level's content-box origin and adding its scroll offsets.
+fn local_pointer_coords(path: &HitPath<'_>, target: usize, x: f32, y: f32) -> (f32, f32) {
+    let mut lx = x;
+    let mut ly = y;
+    for hit in path.iter().rev().take(path.len() - target) {
+        let (cx, cy) = hit
+            .layout
+            .layout_box
+            .iter()
+            .next()
+            .map_or((0.0, 0.0), |b| (b.content_box.x, b.content_box.y));
+        let (sx, sy) = hit.info.kind.scroll_offsets();
+        lx += sx - cx;
+        ly += sy - cy;
+    }
+    (lx, ly)
+}
+
 /// Dispatches a pointer event to the innermost custom node on the hit path.
+///
+/// Event coordinates are translated from page space into the node's local
+/// content-box space before delivery.
 pub fn dispatch_pointer(path: &HitPath<'_>, event: PointerEvent) -> bool {
-    hit_custom_node(path).is_some_and(|node| node.on_pointer_event(event))
+    for (target, hit) in path.iter().enumerate() {
+        if let NodeKind::Custom {
+            node, text_style, ..
+        } = &hit.info.kind
+        {
+            let (px, py) = match event {
+                PointerEvent::Move { x, y } => (x, y),
+                PointerEvent::Down { x, y } => (x, y),
+                PointerEvent::Up { x, y } => (x, y),
+                PointerEvent::Leave => (0.0, 0.0), // no coordinates for Leave
+            };
+            let (lx, ly) = local_pointer_coords(path, target, px, py);
+            let local_event = match event {
+                PointerEvent::Move { .. } => PointerEvent::Move { x: lx, y: ly },
+                PointerEvent::Down { .. } => PointerEvent::Down { x: lx, y: ly },
+                PointerEvent::Up { .. } => PointerEvent::Up { x: lx, y: ly },
+                PointerEvent::Leave => PointerEvent::Leave,
+            };
+
+            // An open popup intercepts pointer events over it. Its rect is in
+            // the same content-box space as the local coordinates.
+            if let Some(popup) = node.popup(text_style) {
+                let in_popup = lx >= popup.rect.x
+                    && ly >= popup.rect.y
+                    && lx <= popup.rect.x + popup.rect.width
+                    && ly <= popup.rect.y + popup.rect.height;
+                // Popup events are expressed relative to the popup's own
+                // top-left corner (`popup.rect` origin).
+                let popup_event = match local_event {
+                    PointerEvent::Move { x, y } => PointerEvent::Move {
+                        x: x - popup.rect.x,
+                        y: y - popup.rect.y,
+                    },
+                    PointerEvent::Down { x, y } => PointerEvent::Down {
+                        x: x - popup.rect.x,
+                        y: y - popup.rect.y,
+                    },
+                    PointerEvent::Up { x, y } => PointerEvent::Up {
+                        x: x - popup.rect.x,
+                        y: y - popup.rect.y,
+                    },
+                    PointerEvent::Leave => PointerEvent::Leave,
+                };
+
+                if in_popup {
+                    return node.on_popup_pointer_event(popup_event);
+                }
+            }
+            return node.on_pointer_event(local_event);
+        }
+    }
+    false
+}
+
+/// Dismisses every open popup whose owner is not under the pointer press.
+///
+/// Implements top-layer dismissal: a press whose hit path already contains a
+/// popup's owner is that owner's responsibility (the event is routed to the
+/// popup, or to the owning box which closes it), while every other open popup
+/// is closed. Returns whether any popup was dismissed.
+pub fn dismiss_open_popups(info: &InfoNode, path: &HitPath<'_>) -> bool {
+    let mut dismissed = false;
+    dismiss_open_popups_inner(info, path, &mut dismissed);
+    dismissed
+}
+
+fn dismiss_open_popups_inner(info: &InfoNode, path: &HitPath<'_>, dismissed: &mut bool) {
+    if let NodeKind::Custom { node, .. } = &info.kind
+        && node.popup(&TextStyle::default()).is_some()
+        && !path.iter().any(|hit| {
+            matches!(&hit.info.kind, NodeKind::Custom { node: owner, .. } if Arc::ptr_eq(node, owner))
+        })
+    {
+        node.dismiss_popup();
+        *dismissed = true;
+    }
+    for child in &info.children {
+        dismiss_open_popups_inner(child, path, dismissed);
+    }
 }
 
 /// Updates the hover state of custom nodes after a pointer move.
@@ -65,6 +171,12 @@ pub fn update_hover(path: &HitPath<'_>, previous: Option<&Arc<dyn CustomNode>>) 
 
 /// x, y: グローバル座標
 pub fn hit_test<'a>(layout: &'a LayoutNode, info: &'a InfoNode, x: f32, y: f32) -> HitPath<'a> {
+    // Open popups are top-layer overlays: they render above every box and
+    // escape all ancestor clips, so they are tested first and shadow the box
+    // tree at their position.
+    if let Some(path) = hit_test_popup(layout, info, x, y) {
+        return path;
+    }
     hit_test_inner(layout, info, x, y, (0.0, 0.0))
 }
 
@@ -152,6 +264,98 @@ fn hit_test_inner<'a>(
 
     // どの box にもヒットしなかった
     Vec::new()
+}
+
+/// Returns the hit path (child→parent) of the topmost open popup containing
+/// `(x, y)`, or `None`.
+///
+/// Popups are top-layer overlays: they render above every box and escape all
+/// ancestor clips, so they are hit-tested independently of box containment.
+/// The scan mirrors [`hit_test_inner`]'s coordinate descent but skips the
+/// padding-box checks; when several popups overlap, the one later in tree
+/// order wins because it renders on top.
+fn hit_test_popup<'a>(
+    layout: &'a LayoutNode,
+    info: &'a InfoNode,
+    x: f32,
+    y: f32,
+) -> Option<HitPath<'a>> {
+    let mut best: Option<HitPath<'a>> = None;
+    let mut prefix: HitPath<'a> = Vec::new();
+    hit_test_popup_inner(layout, info, x, y, (0.0, 0.0), &mut prefix, &mut best);
+    best
+}
+
+/// Recursive top-layer popup scan. `prefix` holds the root→current hit path;
+/// matches recorded later (tree order) overwrite earlier ones.
+fn hit_test_popup_inner<'a>(
+    layout: &'a LayoutNode,
+    info: &'a InfoNode,
+    mut x: f32,
+    mut y: f32,
+    accumulated_scroll: (f32, f32),
+    prefix: &mut HitPath<'a>,
+    best: &mut Option<HitPath<'a>>,
+) {
+    if layout.layout_box.is_empty() {
+        return;
+    }
+
+    let is_fixed = layout.style.position.kind == Position::Fixed;
+    if is_fixed {
+        x -= accumulated_scroll.0;
+        y -= accumulated_scroll.1;
+    }
+
+    let own_scroll = info.kind.scroll_offsets();
+    let child_scroll = if is_fixed {
+        own_scroll
+    } else {
+        (
+            accumulated_scroll.0 + own_scroll.0,
+            accumulated_scroll.1 + own_scroll.1,
+        )
+    };
+
+    // The popup rect lives in the node's content-box space, the same space as
+    // `draw_sized`, which is anchored to the first layout box.
+    let (local_x, local_y) = layout.layout_box.iter().next().map_or((x, y), |b| {
+        (
+            x - b.content_box.x + own_scroll.0,
+            y - b.content_box.y + own_scroll.1,
+        )
+    });
+
+    if let NodeKind::Custom {
+        node, text_style, ..
+    } = &info.kind
+        && let Some(popup) = node.popup(text_style)
+        && local_x >= popup.rect.x
+        && local_y >= popup.rect.y
+        && local_x <= popup.rect.x + popup.rect.width
+        && local_y <= popup.rect.y + popup.rect.height
+    {
+        let mut path = prefix.clone();
+        path.push(HitItem { layout, info });
+        path.reverse();
+        *best = Some(path);
+    }
+
+    prefix.push(HitItem { layout, info });
+    for (child_layout, child_info) in layout.children.iter().zip(&info.children) {
+        if let Some(child_node) = child_layout.node() {
+            hit_test_popup_inner(
+                child_node,
+                child_info,
+                local_x,
+                local_y,
+                child_scroll,
+                prefix,
+                best,
+            );
+        }
+    }
+    prefix.pop();
 }
 
 /// Scrolls the deepest scrollable container under `(x, y)` by `(dx, dy)`.
@@ -353,11 +557,16 @@ pub fn any_custom_node_needs_repaint(info: &InfoNode) -> bool {
 mod tests {
     use super::*;
     use crate::engine::bridge::text::{FallbackTextMeasurer, TextMeasurer};
-    use crate::engine::layouter::types::{Color, ContainerStyle, TextStyle};
+    use crate::engine::layouter::types::{Color, ContainerRole, ContainerStyle, TextStyle};
+    use crate::engine::renderer_model::{DrawCommand, Rect};
     use crate::engine::ui::button::ButtonComponent;
     use crate::engine::ui::input_text::InputTextComponent;
     use crate::engine::ui::input_text_types::InputTextEvent;
+    use crate::engine::ui::{ContentSize, Popup};
     use std::sync::Arc;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use ui_layout::{LayoutChild, Style};
 
     const VIEWPORT_WIDTH: f32 = 800.0;
     const VIEWPORT_HEIGHT: f32 = 600.0;
@@ -771,5 +980,303 @@ mod tests {
             panic!("expected outer container");
         };
         assert_eq!(*outer_off, 0.0);
+    }
+
+    /// Records pointer events for asserting `dispatch_pointer` coordinates.
+    #[derive(Debug)]
+    struct RecordingNode {
+        pointer_events: Mutex<Vec<PointerEvent>>,
+        popup_events: Mutex<Vec<PointerEvent>>,
+        popup_rect: Rect,
+        popup_open: AtomicBool,
+        dismissed: AtomicBool,
+    }
+
+    impl RecordingNode {
+        fn new(popup_rect: Rect) -> Self {
+            RecordingNode {
+                pointer_events: Mutex::new(Vec::new()),
+                popup_events: Mutex::new(Vec::new()),
+                popup_rect,
+                popup_open: AtomicBool::new(true),
+                dismissed: AtomicBool::new(false),
+            }
+        }
+
+        fn events(&self) -> Vec<PointerEvent> {
+            self.pointer_events.lock().unwrap().clone()
+        }
+
+        fn popup_events(&self) -> Vec<PointerEvent> {
+            self.popup_events.lock().unwrap().clone()
+        }
+    }
+
+    impl CustomNode for RecordingNode {
+        fn draw_sized(
+            &self,
+            _cmd_buf: &mut Vec<DrawCommand>,
+            _text_style: &TextStyle,
+            _style: &Style,
+            _size: ContentSize,
+        ) {
+        }
+
+        fn intrinsic_size(&self) -> ContentSize {
+            ContentSize {
+                width: 120.0,
+                height: 28.0,
+            }
+        }
+
+        fn on_pointer_event(&self, event: PointerEvent) -> bool {
+            self.pointer_events.lock().unwrap().push(event);
+            true
+        }
+
+        fn popup(&self, _text_style: &TextStyle) -> Option<Popup> {
+            self.popup_open.load(Ordering::Relaxed).then(|| Popup {
+                rect: self.popup_rect,
+                commands: Vec::new(),
+            })
+        }
+
+        fn on_popup_pointer_event(&self, event: PointerEvent) -> bool {
+            self.popup_events.lock().unwrap().push(event);
+            true
+        }
+
+        fn dismiss_popup(&self) {
+            self.dismissed.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Tree: root (0,0,200,200) → container (10,20,160,100, scroll_y) →
+    /// custom node (5,0,120,28) with an open popup at (0,28,120,84).
+    fn make_tree(a_scroll_y: f32) -> (LayoutNode, InfoNode, Arc<RecordingNode>) {
+        let node: Arc<RecordingNode> = Arc::new(RecordingNode::new(Rect {
+            x: 0.0,
+            y: 28.0,
+            width: 120.0,
+            height: 84.0,
+        }));
+        let custom_info = input_info(Arc::clone(&node) as Arc<dyn CustomNode>);
+
+        let mut a_layout = LayoutNode::new(ui_layout::Style::default());
+        a_layout.layout_box =
+            ui_layout::LayoutBox::BlockBox(box_model(10.0, 20.0, 160.0, 100.0, 160.0, 300.0));
+        let mut custom_layout = LayoutNode::new(ui_layout::Style::default());
+        custom_layout.layout_box =
+            ui_layout::LayoutBox::BlockBox(box_model(5.0, 0.0, 120.0, 28.0, 120.0, 28.0));
+        a_layout.children = vec![LayoutChild::Node(Box::new(custom_layout))];
+
+        let mut root_layout = LayoutNode::with_children(ui_layout::Style::default(), [a_layout]);
+        root_layout.layout_box =
+            ui_layout::LayoutBox::BlockBox(box_model(0.0, 0.0, 200.0, 200.0, 200.0, 200.0));
+
+        let a_info = InfoNode {
+            kind: NodeKind::Container {
+                scroll_x: false,
+                scroll_y: true,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: a_scroll_y,
+                style: ContainerStyle::default(),
+                role: ContainerRole::Normal,
+            },
+            children: vec![custom_info],
+            dom_id: None,
+        };
+        let root_info = InfoNode {
+            kind: NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: ContainerStyle::default(),
+                role: ContainerRole::Normal,
+            },
+            children: vec![a_info],
+            dom_id: None,
+        };
+
+        (root_layout, root_info, node)
+    }
+
+    /// Builds the child→parent hit path matching `make_tree`.
+    fn build_path<'a>(root_layout: &'a LayoutNode, root_info: &'a InfoNode) -> HitPath<'a> {
+        let a_layout = match &root_layout.children[0] {
+            LayoutChild::Node(node) => node,
+            _ => unreachable!("expected container child"),
+        };
+        let custom_layout = match &a_layout.children[0] {
+            LayoutChild::Node(node) => node,
+            _ => unreachable!("expected custom child"),
+        };
+        let a_info = &root_info.children[0];
+        let custom_info = &a_info.children[0];
+        vec![
+            HitItem {
+                layout: custom_layout,
+                info: custom_info,
+            },
+            HitItem {
+                layout: a_layout,
+                info: a_info,
+            },
+            HitItem {
+                layout: root_layout,
+                info: root_info,
+            },
+        ]
+    }
+
+    #[test]
+    fn dispatch_pointer_uses_node_local_coords() {
+        let (root_layout, root_info, node) = make_tree(0.0);
+        node.popup_open.store(false, Ordering::Relaxed);
+        let path = build_path(&root_layout, &root_info);
+
+        // Content origin (15,20); no scroll: (20,25) → local (5,5).
+        dispatch_pointer(&path, PointerEvent::Down { x: 20.0, y: 25.0 });
+        assert_eq!(node.events(), vec![PointerEvent::Down { x: 5.0, y: 5.0 }]);
+    }
+
+    #[test]
+    fn dispatch_pointer_folds_ancestor_scroll_into_local_coords() {
+        let (root_layout, root_info, node) = make_tree(50.0);
+        node.popup_open.store(false, Ordering::Relaxed);
+        let path = build_path(&root_layout, &root_info);
+
+        // Same click with a 50px ancestor scroll: local y += 50.
+        dispatch_pointer(&path, PointerEvent::Move { x: 20.0, y: 25.0 });
+        assert_eq!(node.events(), vec![PointerEvent::Move { x: 5.0, y: 55.0 }]);
+    }
+
+    #[test]
+    fn popup_events_use_popup_local_coords() {
+        let (root_layout, root_info, node) = make_tree(0.0);
+        let path = build_path(&root_layout, &root_info);
+
+        // Global (20,60) → local (5,40) → inside popup (y in 28..112) →
+        // popup-local (5, 40-28=12).
+        dispatch_pointer(&path, PointerEvent::Down { x: 20.0, y: 60.0 });
+        assert_eq!(
+            node.popup_events(),
+            vec![PointerEvent::Down { x: 5.0, y: 12.0 }]
+        );
+        assert!(node.events().is_empty());
+        assert!(!node.dismissed.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn down_outside_popup_routes_to_node() {
+        let (root_layout, root_info, node) = make_tree(0.0);
+        let path = build_path(&root_layout, &root_info);
+
+        // Global (20,30) → local (5,10), above the popup: the node receives
+        // the press (dismissal is handled globally by `dismiss_open_popups`).
+        dispatch_pointer(&path, PointerEvent::Down { x: 20.0, y: 30.0 });
+        assert!(!node.dismissed.load(Ordering::Relaxed));
+        assert_eq!(node.events(), vec![PointerEvent::Down { x: 5.0, y: 10.0 }]);
+        assert!(node.popup_events().is_empty());
+    }
+
+    #[test]
+    fn move_outside_popup_routes_to_node() {
+        let (root_layout, root_info, node) = make_tree(0.0);
+        let path = build_path(&root_layout, &root_info);
+
+        // Global (20,30) → local (5,10), above the popup: the node receives
+        // the move and the popup stays open.
+        dispatch_pointer(&path, PointerEvent::Move { x: 20.0, y: 30.0 });
+        assert!(!node.dismissed.load(Ordering::Relaxed));
+        assert_eq!(node.events(), vec![PointerEvent::Move { x: 5.0, y: 10.0 }]);
+        assert!(node.popup_events().is_empty());
+    }
+
+    fn popup_hit_assert(
+        root_layout: &LayoutNode,
+        root_info: &InfoNode,
+        node: &Arc<RecordingNode>,
+        x: f32,
+        y: f32,
+    ) {
+        let path = hit_test(root_layout, root_info, x, y);
+        let hit = hit_custom_node(&path).unwrap();
+        let expected: Arc<dyn CustomNode> = node.clone();
+        assert!(Arc::ptr_eq(hit, &expected));
+    }
+
+    #[test]
+    fn hit_test_finds_open_popup() {
+        let (root_layout, root_info, node) = make_tree(0.0);
+        // Custom page origin (15,20); popup page rect (15,48)-(135,132).
+        // Global (20,60) → local (5,40), inside the popup (y in 28..112).
+        popup_hit_assert(&root_layout, &root_info, &node, 20.0, 60.0);
+    }
+
+    #[test]
+    fn hit_test_ignores_closed_popup() {
+        let (root_layout, root_info, node) = make_tree(0.0);
+        node.popup_open.store(false, Ordering::Relaxed);
+        // Local (5,40) is below the custom box (y in 0..28); with the popup
+        // closed the click lands on the container instead.
+        let path = hit_test(&root_layout, &root_info, 20.0, 60.0);
+        assert_eq!(path.len(), 2);
+        assert!(hit_custom_node(&path).is_none());
+    }
+
+    #[test]
+    fn hit_test_finds_popup_escaping_ancestor_box() {
+        let (root_layout, root_info, node) = make_tree(0.0);
+        // The container box ends at y=120 but the popup reaches y=132. A click
+        // past the container is still a popup hit because popups render above
+        // ancestor boxes and clips.
+        popup_hit_assert(&root_layout, &root_info, &node, 20.0, 125.0);
+    }
+
+    #[test]
+    fn hit_test_folds_scroll_into_popup_hit() {
+        let (root_layout, root_info, node) = make_tree(50.0);
+        // With the 50px ancestor scroll, a click at page y=25 maps to local
+        // (5,55), inside the popup (y in 28..112).
+        popup_hit_assert(&root_layout, &root_info, &node, 20.0, 25.0);
+    }
+
+    #[test]
+    fn dismiss_open_popups_closes_popup_on_outside_press() {
+        let (root_layout, root_info, node) = make_tree(0.0);
+        // (10,25) lands on the container, outside the custom box and popup.
+        let path = hit_test(&root_layout, &root_info, 10.0, 25.0);
+        assert!(dismiss_open_popups(&root_info, &path));
+        assert!(node.dismissed.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn dismiss_open_popups_keeps_popup_under_press() {
+        let (root_layout, root_info, node) = make_tree(0.0);
+        // Press on the open popup itself.
+        let path = hit_test(&root_layout, &root_info, 20.0, 60.0);
+        assert!(!dismiss_open_popups(&root_info, &path));
+        assert!(!node.dismissed.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn dismiss_open_popups_keeps_popup_when_press_on_owner_box() {
+        let (root_layout, root_info, node) = make_tree(0.0);
+        // Press on the owning box (not the popup): the owner closes it itself,
+        // so no separate dismissal happens.
+        let path = hit_test(&root_layout, &root_info, 20.0, 30.0);
+        assert!(!dismiss_open_popups(&root_info, &path));
+        assert!(!node.dismissed.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn dismiss_open_popups_ignores_closed_popup() {
+        let (root_layout, root_info, node) = make_tree(0.0);
+        node.popup_open.store(false, Ordering::Relaxed);
+        let path = hit_test(&root_layout, &root_info, 10.0, 25.0);
+        assert!(!dismiss_open_popups(&root_info, &path));
+        assert!(!node.dismissed.load(Ordering::Relaxed));
     }
 }

@@ -7,3 +7,4 @@ pub mod input_hidden;
 pub mod input_text;
 pub mod input_text_types;
 pub mod registry;
+pub mod select;

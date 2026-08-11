@@ -3,7 +3,7 @@
 use ui_layout::Style;
 
 use crate::engine::layouter::types::{Background, TextStyle};
-use crate::engine::renderer_model::DrawCommand;
+use crate::engine::renderer_model::{DrawCommand, Rect};
 
 use super::input_text_types::InputTextEvent;
 
@@ -22,6 +22,21 @@ pub enum PointerEvent {
     Up { x: f32, y: f32 },
     /// The pointer left the node's bounds.
     Leave,
+}
+
+/// An open popup (top-layer overlay) owned by a custom node.
+///
+/// Both `rect` and `commands` are expressed in the node's content-box
+/// coordinate system; the engine positions them above the page content and
+/// routes pointer input to the node's [`on_popup_pointer_event`](CustomNode::on_popup_pointer_event)
+/// while the popup is open.
+#[derive(Debug, Clone)]
+pub struct Popup {
+    /// Used to hit-test the open popup and to decide whether a click lands
+    /// outside it (dismissal).
+    pub rect: Rect,
+    /// Draw commands rendered above all page content while the popup is open.
+    pub commands: Vec<DrawCommand>,
 }
 
 /// A size expressed in the content-box coordinate system.
@@ -87,6 +102,15 @@ pub trait CustomNode: std::fmt::Debug + Send + Sync + 'static {
         );
     }
 
+    /// Returns the node's open popup (top-layer overlay), if any.
+    ///
+    /// The popup is re-generated every frame; returning `None` closes it.
+    /// Commands use the same content-box coordinate space as
+    /// [`draw_sized`](Self::draw_sized).
+    fn popup(&self, _text_style: &TextStyle) -> Option<Popup> {
+        None
+    }
+
     /// Optional background override.
     ///
     /// When `Some`, the returned background replaces the CSS background for
@@ -129,6 +153,18 @@ pub trait CustomNode: std::fmt::Debug + Send + Sync + 'static {
     fn is_composing(&self) -> bool {
         false
     }
+
+    /// Dispatches a pointer event on the node's open popup.
+    ///
+    /// Coordinates are relative to the popup's top-left (the `popup.rect`
+    /// origin in content-box coordinates). The engine only dispatches while a
+    /// popup is open; nodes without a popup can ignore this.
+    fn on_popup_pointer_event(&self, _event: PointerEvent) -> bool {
+        false
+    }
+
+    /// Closes this node's popup, if open (dismiss on an outside click).
+    fn dismiss_popup(&self) {}
 
     /// Dispatches a platform-neutral pointer event.
     ///
