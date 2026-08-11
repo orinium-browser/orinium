@@ -1,7 +1,10 @@
 //! ブラウザのタブ機能。WebView を保持し、ページのタイトルや URL などのメタ情報を管理する。
 
 use crate::{
-    browser::core::resource_loader::{BrowserNetworkError, BrowserResponse},
+    browser::core::{
+        resource_loader::{BrowserNetworkError, BrowserResponse},
+        webview::JsPolicy,
+    },
     engine::{
         html::HtmlNodeType,
         layouter::types::{ColorScheme, InfoNode},
@@ -49,6 +52,10 @@ pub struct Tab {
 
     system_color_scheme: ColorScheme,
 
+    /// Policy controlling whether page scripts are executed and how
+    /// `<noscript>` contents are parsed.
+    js_policy: JsPolicy,
+
     state: TabState,
     /// Previously visited URLs, most recent last. Used by the back button.
     history: Vec<Url>,
@@ -56,12 +63,12 @@ pub struct Tab {
 
 impl Default for Tab {
     fn default() -> Self {
-        Self::new(ColorScheme::default())
+        Self::new(ColorScheme::default(), JsPolicy::default())
     }
 }
 
 impl Tab {
-    pub fn new(system_color_scheme: ColorScheme) -> Self {
+    pub fn new(system_color_scheme: ColorScheme, js_policy: JsPolicy) -> Self {
         Self {
             title: None,
             base_url: None,
@@ -69,6 +76,8 @@ impl Tab {
             webview: None,
 
             system_color_scheme,
+
+            js_policy,
 
             state: TabState::Loading,
             history: Vec::new(),
@@ -257,7 +266,7 @@ impl Tab {
             self.history.push(previous);
         }
         self.docment_url = Some(url);
-        let mut webview = WebView::new(self.system_color_scheme);
+        let mut webview = WebView::new(self.system_color_scheme, self.js_policy);
         webview.navigate();
         self.webview = Some(webview);
         self.state = TabState::Loading;
@@ -327,6 +336,13 @@ impl Tab {
     pub fn clear_redraw_flag(&mut self) {
         if let Some(wv) = self.webview.as_mut() {
             wv.clear_redraw_flag();
+        }
+    }
+
+    pub fn set_js_policy(&mut self, policy: JsPolicy) {
+        self.js_policy = policy;
+        if let Some(wv) = self.webview.as_mut() {
+            wv.set_js_policy(policy);
         }
     }
 }

@@ -451,6 +451,7 @@ fn build_layout_info(raw_url: &str) -> Result<LayoutInfo> {
             log::error!("Failed to detect system color scheme, using default: {e}");
             Default::default()
         }),
+        orinium_browser::engine::html::ScriptingMode::Enabled,
     );
 
     Ok(LayoutInfo { layout, info })

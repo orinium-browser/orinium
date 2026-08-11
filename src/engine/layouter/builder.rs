@@ -5,7 +5,7 @@ use crate::engine::css::{
     matcher::{ElementChain, ElementInfo},
     values::{CssValue, Unit},
 };
-use crate::engine::html::HtmlNodeType;
+use crate::engine::html::{HtmlNodeType, ScriptingMode};
 use crate::engine::layouter::css_resolver::resolve_inline_value;
 use crate::engine::layouter::dom_snapshot::{DomSnapshot, NodeId};
 use crate::engine::layouter::types::VerticalAlign;
@@ -184,6 +184,7 @@ pub fn build_layout_and_info(
     parent: InheritedCss,
     chain: ElementChain,
     system_color_scheme: ColorScheme,
+    scripting_mode: ScriptingMode,
 ) -> (LayoutNode, InfoNode) {
     build_layout_and_info_with_images(
         dom,
@@ -192,6 +193,7 @@ pub fn build_layout_and_info(
         parent,
         chain,
         system_color_scheme,
+        scripting_mode,
         &HashMap::new(),
     )
 }
@@ -204,6 +206,7 @@ pub fn build_layout_and_info_with_images(
     parent: InheritedCss,
     chain: ElementChain,
     system_color_scheme: ColorScheme,
+    scripting_mode: ScriptingMode,
     images: &HashMap<String, Image>,
 ) -> (LayoutNode, InfoNode) {
     let (snapshot, _dom_refs) = DomSnapshot::from_tree(dom);
@@ -215,6 +218,7 @@ pub fn build_layout_and_info_with_images(
         parent,
         chain,
         system_color_scheme,
+        scripting_mode,
         images,
         &HashMap::new(),
         None,
@@ -238,6 +242,7 @@ pub fn build_layout_and_info_from_snapshot(
     parent: InheritedCss,
     mut chain: ElementChain,
     system_color_scheme: ColorScheme,
+    scripting_mode: ScriptingMode,
     images: &HashMap<String, Image>,
     audio: &HashMap<String, Arc<[u8]>>,
     write_back_sender: Option<DomWriteBack>,
@@ -578,6 +583,10 @@ pub fn build_layout_and_info_from_snapshot(
                                 dom_id: Some(child),
                             },
                         ));
+                    } else if child_node.tag_name() == Some("noscript")
+                        && scripting_mode == ScriptingMode::Enabled
+                    {
+                        // Skip
                     } else {
                         child_slots.push(ChildSlot::Element(element_kids.len()));
                         element_kids.push(child);
@@ -3543,6 +3552,7 @@ mod tests {
             },
             Vec::new(),
             ColorScheme::Light,
+            ScriptingMode::default(),
         )
     }
 
@@ -3672,6 +3682,7 @@ mod tests {
             },
             Vec::new(),
             ColorScheme::Light,
+            ScriptingMode::default(),
             &images,
         );
         ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);

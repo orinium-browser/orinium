@@ -518,6 +518,11 @@ impl BrowserUi {
                         self.renderer.chrome.debug_set_layout_node(node);
                     }
                 }
+                ChromeAction::SetJsPolicy(policy) => {
+                    if let Some(tab) = self.tabs.get_mut(tab_id) {
+                        tab.set_js_policy(policy);
+                    }
+                }
                 ChromeAction::Repaint | ChromeAction::None => {}
             }
 

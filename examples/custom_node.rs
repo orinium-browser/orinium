@@ -85,6 +85,7 @@ fn main() {
             log::error!("Failed to detect system color scheme, using default: {e}");
             Default::default()
         }),
+        orinium_browser::engine::html::ScriptingMode::Enabled,
     );
 
     // ── Layout pass ─────────────────────────────────────────

@@ -12,6 +12,7 @@ use ui_layout::LayoutNode;
 use url::Url;
 use winit::event::{Ime, KeyEvent};
 
+use crate::browser::core::webview::JsPolicy;
 use crate::engine::renderer_model::{DrawCommand, Rect};
 use crate::engine::ui::PointerEvent;
 
@@ -23,6 +24,8 @@ pub enum ChromeAction {
     None,
     /// The chrome changed visually; repaint the window.
     Repaint,
+    /// Set the JS policy.
+    SetJsPolicy(JsPolicy),
     /// Navigate the active tab to this URL (e.g. Enter in the address bar).
     Navigate(Url),
     /// Go back in the active tab's history.

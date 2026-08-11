@@ -1,6 +1,7 @@
 use orinium_browser::engine::html::parser;
 use orinium_browser::engine::html::parser::{
-    ClassicScriptDescriptor, ClassicScriptExecution, ClassicScriptSource, DomTree,
+    ClassicScriptDescriptor, ClassicScriptExecution, ClassicScriptSource, DomTree, HtmlNodeType,
+    ScriptingMode,
 };
 
 #[test]
@@ -126,4 +127,107 @@ fn query_selectors_match_in_document_order_and_with_element_scope() {
             .all(|node| { node.borrow().value.get_attr("id") != Some("outside") })
     );
     assert!(DomTree::query_selector_within(&content, "#content").is_none());
+}
+
+fn parse_noscript(html: &str, mode: ScriptingMode) -> DomTree {
+    parser::Parser::new(html).with_scripting_mode(mode).parse()
+}
+
+#[test]
+fn noscript_plain_text_when_scripting_enabled() {
+    let dom = parse_noscript("<noscript>fallback</noscript>", ScriptingMode::Enabled);
+    let noscript = dom.get_elements_by_tag_name("noscript");
+    assert_eq!(noscript.len(), 1);
+    let children = noscript[0].borrow().children().to_vec();
+    assert_eq!(children.len(), 1);
+    assert!(matches!(
+        &children[0].borrow().value,
+        HtmlNodeType::Text(text) if text == "fallback"
+    ));
+}
+
+#[test]
+fn noscript_plain_text_when_scripting_disabled() {
+    let dom = parse_noscript("<noscript>fallback</noscript>", ScriptingMode::Disabled);
+    let noscript = dom.get_elements_by_tag_name("noscript");
+    assert_eq!(noscript.len(), 1);
+    let children = noscript[0].borrow().children().to_vec();
+    assert_eq!(children.len(), 1);
+    assert!(matches!(
+        &children[0].borrow().value,
+        HtmlNodeType::Text(text) if text == "fallback"
+    ));
+}
+
+#[test]
+fn noscript_markup_is_raw_text_when_scripting_enabled() {
+    let dom = parse_noscript(
+        "<noscript><div>fallback</div></noscript>",
+        ScriptingMode::Enabled,
+    );
+    let noscript = dom.get_elements_by_tag_name("noscript");
+    assert_eq!(noscript.len(), 1);
+    let noscript = &noscript[0];
+    let children = noscript.borrow().children().to_vec();
+    assert_eq!(children.len(), 3);
+    assert!(
+        children
+            .iter()
+            .all(|child| matches!(child.borrow().value, HtmlNodeType::Text(_)))
+    );
+    assert_eq!(DomTree::inner_text(noscript), "<div>fallback</div>");
+    assert!(DomTree::query_selector_within(noscript, "div").is_none());
+}
+
+#[test]
+fn noscript_markup_is_parsed_as_html_when_scripting_disabled() {
+    let dom = parse_noscript(
+        "<noscript><div>fallback</div></noscript>",
+        ScriptingMode::Disabled,
+    );
+    let noscript = dom.get_elements_by_tag_name("noscript");
+    assert_eq!(noscript.len(), 1);
+    let div = DomTree::query_selector_within(&noscript[0], "div").unwrap();
+    assert_eq!(DomTree::inner_text(&div), "fallback");
+}
+
+#[test]
+fn noscript_raw_text_does_not_leak_into_body_when_scripting_enabled() {
+    let html = "<p>Hello</p><noscript><p>Fallback</p></noscript><p>World</p>";
+    let dom = parse_noscript(html, ScriptingMode::Enabled);
+    let noscript = dom.get_elements_by_tag_name("noscript");
+    assert_eq!(noscript.len(), 1);
+    let noscript = &noscript[0];
+    assert_eq!(DomTree::inner_text(noscript), "<p>Fallback</p>");
+    assert!(DomTree::query_selector_within(noscript, "p").is_none());
+
+    let paragraphs = dom.get_elements_by_tag_name("p");
+    assert_eq!(paragraphs.len(), 2);
+    assert_eq!(DomTree::inner_text(&paragraphs[0]), "Hello");
+    assert_eq!(DomTree::inner_text(&paragraphs[1]), "World");
+}
+
+#[test]
+fn noscript_parsed_as_html_when_scripting_disabled_stays_nested() {
+    let html = "<p>Hello</p><noscript><p>Fallback</p></noscript><p>World</p>";
+    let dom = parse_noscript(html, ScriptingMode::Disabled);
+    let noscript = dom.get_elements_by_tag_name("noscript");
+    assert_eq!(noscript.len(), 1);
+    let fallback = DomTree::query_selector_within(&noscript[0], "p").unwrap();
+    assert_eq!(DomTree::inner_text(&fallback), "Fallback");
+
+    let paragraphs = dom.get_elements_by_tag_name("p");
+    assert_eq!(paragraphs.len(), 3);
+    assert_eq!(DomTree::inner_text(&paragraphs[0]), "Hello");
+    assert_eq!(DomTree::inner_text(&paragraphs[1]), "Fallback");
+    assert_eq!(DomTree::inner_text(&paragraphs[2]), "World");
+}
+
+#[test]
+fn noscript_defaults_to_scripting_enabled() {
+    let dom = parser::Parser::new("<noscript><div>fallback</div></noscript>").parse();
+    let noscript = dom.get_elements_by_tag_name("noscript");
+    assert_eq!(noscript.len(), 1);
+    assert!(DomTree::query_selector_within(&noscript[0], "div").is_none());
+    assert_eq!(DomTree::inner_text(&noscript[0]), "<div>fallback</div>");
 }

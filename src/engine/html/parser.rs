@@ -89,6 +89,16 @@ pub enum ClassicScriptSource {
     External(String),
 }
 
+/// Whether scripting is enabled while parsing.
+///
+/// Browsers run scripts by default, so the default mode is [`ScriptingMode::Enabled`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScriptingMode {
+    #[default]
+    Enabled,
+    Disabled,
+}
+
 /// Scheduling mode selected by attributes on a classic script element.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ClassicScriptExecution {
@@ -492,7 +502,8 @@ pub struct Parser<'a> {
     tree: DomTree,
     stack: Vec<Rc<RefCell<TreeNode<HtmlNodeType>>>>,
     tag_stack: Vec<String>,
-    special_text_mode: Option<String>, // script/style 用
+    special_text_mode: Option<String>, // script/style/noscript 用
+    scripting_mode: ScriptingMode,
 }
 
 impl<'a> Parser<'a> {
@@ -505,7 +516,14 @@ impl<'a> Parser<'a> {
             stack: vec![document.root],
             tag_stack: vec![],
             special_text_mode: None,
+            scripting_mode: ScriptingMode::default(),
         }
+    }
+
+    /// Sets the scripting mode used while parsing `<noscript>` contents.
+    pub fn with_scripting_mode(mut self, mode: ScriptingMode) -> Self {
+        self.scripting_mode = mode;
+        self
     }
 
     pub fn parse(&mut self) -> DomTree {
@@ -536,6 +554,12 @@ impl<'a> Parser<'a> {
                 // TODO:
                 // attributes, self_closing
                 TreeNode::add_child_value(&parent, HtmlNodeType::Text(format!("<{}>", name)));
+                return;
+            }
+
+            // noscript は scripting フラグに応じて特別な処理を行う
+            if name == "noscript" {
+                self.handle_noscript(attributes);
                 return;
             }
 
@@ -587,6 +611,64 @@ impl<'a> Parser<'a> {
                 log::debug!(target:"HtmlParser::Stack" ,"Stack len: {}, +Pushed <{}> to stack.", self.stack.len(), name);
             }
         }
+    }
+
+    fn handle_noscript(&mut self, attributes: Vec<Attribute>) {
+        let in_head = self
+            .stack
+            .last()
+            .and_then(|node| node.borrow().value.tag_name().map(str::to_string))
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("head"));
+
+        if in_head {
+            self.handle_noscript_in_head(attributes);
+        } else {
+            self.handle_noscript_in_body(attributes);
+        }
+    }
+
+    /// 現時点では body と同じ扱い（scripting 有効なら raw text）で、
+    /// spec の "in head noscript" 挿入モード（link/meta/style の処理など）は
+    /// head の挿入モードを導入した際に実装する。
+    fn handle_noscript_in_head(&mut self, attributes: Vec<Attribute>) {
+        match self.scripting_mode {
+            ScriptingMode::Enabled => self.parse_noscript_as_raw_text(attributes),
+            ScriptingMode::Disabled => self.parse_noscript_as_html(attributes),
+        }
+    }
+
+    /// scripting 有効なら raw text
+    /// scripting 無効なら 通常の HTML
+    fn handle_noscript_in_body(&mut self, attributes: Vec<Attribute>) {
+        match self.scripting_mode {
+            ScriptingMode::Enabled => self.parse_noscript_as_raw_text(attributes),
+            ScriptingMode::Disabled => self.parse_noscript_as_html(attributes),
+        }
+    }
+
+    /// `<noscript>` の内容を raw text としてパースする
+    fn parse_noscript_as_raw_text(&mut self, attributes: Vec<Attribute>) {
+        self.push_element("noscript", attributes);
+        self.special_text_mode = Some("noscript".to_string());
+    }
+
+    /// `<noscript>` の内容を通常の HTML としてパースする
+    fn parse_noscript_as_html(&mut self, attributes: Vec<Attribute>) {
+        self.push_element("noscript", attributes);
+    }
+
+    /// 要素を生成して stack に push する。
+    fn push_element(&mut self, name: &str, attributes: Vec<Attribute>) {
+        let parent = Rc::clone(self.stack.last().unwrap());
+        let node = TreeNode::add_child_value(
+            &parent,
+            HtmlNodeType::Element {
+                tag_name: name.to_string(),
+                attributes,
+            },
+        );
+        self.tag_stack.push(name.to_string());
+        self.stack.push(node);
     }
 
     fn handle_end_tag(&mut self, token: Token) {

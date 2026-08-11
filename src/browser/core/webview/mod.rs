@@ -9,7 +9,9 @@ use crate::engine::layouter::types::ColorScheme;
 use crate::engine::{
     css::{self, parser::Parser as CssParser},
     html::HtmlNodeType,
-    html::parser::{ClassicScriptExecution, ClassicScriptSource, DomTree, Parser as HtmlParser},
+    html::parser::{
+        ClassicScriptExecution, ClassicScriptSource, DomTree, Parser as HtmlParser, ScriptingMode,
+    },
     js::{JsFetchResponse, JsRuntime},
     layouter::{
         self, InheritedCss, LayoutResult, NodeId,
@@ -67,6 +69,29 @@ pub enum CssApplicationStrategy {
     Incremental,
 }
 
+/// JavaScript execution policy for a page.
+///
+/// This drives both the HTML parser's scripting mode (so `<noscript>` fallbacks
+/// are either hidden or shown) and whether the WebView executes scripts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum JsPolicy {
+    /// Scripts run and `<noscript>` contents are kept as raw text.
+    #[default]
+    Enabled,
+    /// Scripts are never executed and `<noscript>` fallbacks are shown.
+    Disabled,
+}
+
+impl JsPolicy {
+    /// The parser scripting mode implied by this policy.
+    pub(crate) fn scripting_mode(self) -> ScriptingMode {
+        match self {
+            JsPolicy::Enabled => ScriptingMode::Enabled,
+            JsPolicy::Disabled => ScriptingMode::Disabled,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum PagePhase {
     Init,
@@ -105,6 +130,10 @@ pub struct WebView {
     css_strategy: CssApplicationStrategy,
     css_results_expected: usize,
     css_results_received: usize,
+
+    /// Policy controlling whether page scripts are executed and how
+    /// `<noscript>` contents are parsed.
+    js_policy: JsPolicy,
 
     layout_processor: layouter::LayoutProcessor,
     layout_pending: bool,
@@ -195,12 +224,12 @@ struct ParsedDocument {
 
 impl Default for WebView {
     fn default() -> Self {
-        Self::new(ColorScheme::default())
+        Self::new(ColorScheme::default(), JsPolicy::default())
     }
 }
 
 impl WebView {
-    pub fn new(system_color_scheme: ColorScheme) -> Self {
+    pub fn new(system_color_scheme: ColorScheme, js_policy: JsPolicy) -> Self {
         let (write_back_tx, write_back_rx) = mpsc::channel();
         Self {
             phase: PagePhase::Init,
@@ -230,6 +259,8 @@ impl WebView {
             css_results_expected: 0,
             css_results_received: 0,
 
+            js_policy,
+
             layout_processor: layouter::LayoutProcessor::new(),
             layout_pending: false,
             layout_dom_refs: Vec::new(),
@@ -251,6 +282,50 @@ impl WebView {
     /// Default is `Incremental`.
     pub fn set_css_strategy(&mut self, strategy: CssApplicationStrategy) {
         self.css_strategy = strategy;
+    }
+
+    /// Sets the JavaScript execution policy.
+    ///
+    /// The policy is applied to `<noscript>` parsing on the next document load
+    /// and takes effect immediately for execution: disabling it drops the JS
+    /// runtime, cancels pending script work, and stops running scripts.
+    pub fn set_js_policy(&mut self, policy: JsPolicy) {
+        if self.js_policy == policy {
+            return;
+        }
+        self.js_policy = policy;
+
+        if policy == JsPolicy::Disabled {
+            self.teardown_script_execution();
+        } else if self.js_runtime.is_none()
+            && let Some(dom) = self.docment_info.as_ref().map(|info| Rc::clone(&info.dom))
+        {
+            // Re-enabling: install a runtime so DOM APIs work again, without
+            // replaying scripts that were skipped while disabled.
+            self.js_runtime = Some(JsRuntime::new(dom));
+        }
+    }
+
+    /// Returns the current JavaScript execution policy.
+    pub fn js_policy(&self) -> JsPolicy {
+        self.js_policy
+    }
+
+    /// Stops script execution immediately, dropping the runtime and any
+    /// pending script work.
+    fn teardown_script_execution(&mut self) {
+        self.js_runtime = None;
+        self.classic_scripts.clear();
+        self.next_script_index = 0;
+        self.pending_script_fetches.clear();
+        self.non_blocking_scripts_scheduled = false;
+        self.deferred_script_results.clear();
+        self.next_deferred_script_index = 0;
+
+        // Nothing will advance past CssApplied anymore.
+        if self.phase == PagePhase::CssApplied {
+            self.phase = PagePhase::ScriptApplied;
+        }
     }
 
     pub fn tick(&mut self) -> Vec<WebViewTask> {
@@ -340,7 +415,7 @@ impl WebView {
 
     pub fn on_html_fetched(&mut self, html: String, document_url: Url) {
         log::info!("Fetched HTML: {}", document_url);
-        let parsed = parse_html(&html, document_url);
+        let parsed = parse_html(&html, document_url, self.js_policy.scripting_mode());
 
         self.pending_css_urls = parsed.style_links;
         self.pending_images = parsed.image_sources;
@@ -353,7 +428,11 @@ impl WebView {
         self.next_deferred_script_index = 0;
         self.css_results_expected = self.pending_css_urls.len();
 
-        self.js_runtime = Some(JsRuntime::new(Rc::clone(&parsed.dom)));
+        self.js_runtime = if self.js_policy == JsPolicy::Enabled {
+            Some(JsRuntime::new(Rc::clone(&parsed.dom)))
+        } else {
+            None
+        };
 
         let docment_info = DocumentInfo {
             document_url: parsed.document_url,
@@ -572,6 +651,11 @@ impl WebView {
     }
 
     fn advance_classic_scripts(&mut self, tasks: &mut Vec<WebViewTask>) {
+        if self.js_policy == JsPolicy::Disabled {
+            self.phase = PagePhase::ScriptApplied;
+            return;
+        }
+
         self.schedule_non_blocking_scripts(tasks);
 
         while self.next_script_index < self.classic_scripts.len() {
@@ -791,6 +875,7 @@ impl WebView {
             resolved_styles: Arc::new(resolved_styles),
             measurer: self.text_measurer.clone().unwrap(),
             system_color_scheme: self.system_color_scheme,
+            scripting_mode: self.js_policy.scripting_mode(),
             images: self.images.clone(),
             audio: self.audio.clone(),
             parent: InheritedCss {
@@ -1003,9 +1088,9 @@ fn apply_scroll_offsets(info: &mut InfoNode, offsets: &HashMap<NodeId, (f32, f32
     }
 }
 
-fn parse_html(html: &str, document_url: Url) -> ParsedDocument {
+fn parse_html(html: &str, document_url: Url, scripting_mode: ScriptingMode) -> ParsedDocument {
     // --- DOM パース ---
-    let mut parser = HtmlParser::new(html);
+    let mut parser = HtmlParser::new(html).with_scripting_mode(scripting_mode);
     let dom = Rc::new(parser.parse());
 
     // --- base_url ---
@@ -1207,7 +1292,7 @@ mod tests {
         // stays smaller than children_box (auto-height boxes stretch to their
         // content in this engine and are never scrollable).
         let html = r#"<html><body><div style="height: 300px; overflow-y: auto;"><div style="height: 3000px;"></div></div></body></html>"#;
-        let mut wv = WebView::new(ColorScheme::Light);
+        let mut wv = WebView::new(ColorScheme::Light, JsPolicy::default());
         wv.tick();
         wv.on_html_fetched(
             html.to_string(),
@@ -1248,7 +1333,7 @@ mod tests {
         // A plain page without overflow rules: the wheel handler stores the
         // page scroll on the root InfoNode, which has no scroll flags set.
         let html = r#"<html><body><div style="height: 3000px;"></div></body></html>"#;
-        let mut wv = WebView::new(ColorScheme::Light);
+        let mut wv = WebView::new(ColorScheme::Light, JsPolicy::default());
         wv.tick();
         wv.on_html_fetched(
             html.to_string(),
@@ -1394,6 +1479,7 @@ mod tests {
         let parsed = parse_html(
             r#"<base href="https://cdn.example/assets/"><img src="logo.png"><img>"#,
             Url::parse("https://example.test/page/index.html").unwrap(),
+            ScriptingMode::Enabled,
         );
 
         assert_eq!(parsed.image_sources.len(), 1);
@@ -1409,6 +1495,7 @@ mod tests {
         let parsed = parse_html(
             r#"<base href="https://cdn.example/media/"><audio src="one.mp3"></audio><audio><source src="two.ogg"></audio>"#,
             Url::parse("https://example.test/index.html").unwrap(),
+            ScriptingMode::Enabled,
         );
 
         assert_eq!(
@@ -1431,6 +1518,7 @@ mod tests {
         let parsed = parse_html(
             r#"<base href="https://cdn.example/js/"><script>let a = 1;</script><script src="one.js"></script><script src="/two.js"></script>"#,
             Url::parse("https://example.test/page/index.html").unwrap(),
+            ScriptingMode::Enabled,
         );
 
         assert_eq!(
