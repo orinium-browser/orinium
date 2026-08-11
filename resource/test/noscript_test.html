@@ -1,0 +1,127 @@
+<!doctype html>
+<html>
+    <head>
+        <meta charset="utf-8" />
+        <title>noscript Tests</title>
+
+        <noscript>
+            <style>
+                .no-js-style {
+                    color: red;
+                    font-weight: bold;
+                }
+            </style>
+        </noscript>
+    </head>
+
+    <body>
+        <h1>noscript Tests</h1>
+
+        <!-- Basic noscript -->
+        <section>
+            <h2>Basic</h2>
+            <p>
+                <noscript> JavaScript is disabled. </noscript>
+            </p>
+        </section>
+
+        <!-- noscript in head -->
+        <section>
+            <h2>Head Style</h2>
+            <p class="no-js-style">
+                This text should be red when JavaScript is disabled.
+            </p>
+        </section>
+
+        <!-- Block content -->
+        <section>
+            <h2>Block Content</h2>
+            <noscript>
+                <div>
+                    <p>This is a paragraph inside noscript.</p>
+                    <ul>
+                        <li>Item 1</li>
+                        <li>Item 2</li>
+                        <li>Item 3</li>
+                    </ul>
+                </div>
+            </noscript>
+        </section>
+
+        <!-- Inline content -->
+        <section>
+            <h2>Inline Content</h2>
+            <p>
+                Before
+                <noscript>
+                    <strong>NO SCRIPT</strong>
+                </noscript>
+                After
+            </p>
+        </section>
+
+        <!-- Links -->
+        <section>
+            <h2>Fallback Link</h2>
+            <noscript>
+                <a href="https://example.com/">JavaScript is required</a>
+            </noscript>
+        </section>
+
+        <!-- Images -->
+        <section>
+            <h2>Fallback Image</h2>
+            <noscript>
+                <img
+                    src="https://via.placeholder.com/300x100"
+                    alt="Fallback image"
+                />
+            </noscript>
+        </section>
+
+        <!-- Nested elements -->
+        <section>
+            <h2>Nested Content</h2>
+            <noscript>
+                <div class="fallback">
+                    <header>
+                        <h3>Fallback Header</h3>
+                    </header>
+                    <main>
+                        <p>This entire subtree is inside noscript.</p>
+                    </main>
+                    <footer>
+                        <small>Fallback Footer</small>
+                    </footer>
+                </div>
+            </noscript>
+        </section>
+
+        <!-- Script + noscript -->
+        <section>
+            <h2>Script Interaction</h2>
+
+            <p id="status">JavaScript status: unknown</p>
+
+            <script>
+                document.getElementById("status").textContent =
+                    "JavaScript status: enabled";
+            </script>
+
+            <noscript>
+                <p>JavaScript status: disabled</p>
+            </noscript>
+        </section>
+
+        <!-- Text containing HTML-looking characters -->
+        <section>
+            <h2>Raw Text Test</h2>
+            <noscript>
+                <p>
+                    &lt;div&gt;This should be treated according to noscript
+                    parsing rules.&lt;/div&gt;
+                </p>
+            </noscript>
+        </section>
+    </body>
+</html>
