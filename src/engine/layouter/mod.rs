@@ -22,7 +22,7 @@ pub mod types;
 
 pub use builder::{
     InheritedCss, build_layout_and_info, build_layout_and_info_from_snapshot,
-    build_layout_and_info_with_images,
+    build_layout_and_info_with_images, normalize_whitespace,
 };
 pub use dom_snapshot::{DomSnapshot, NodeId, SnapNode};
 pub use processor::{LayoutProcessor, LayoutResult, LayoutTask};

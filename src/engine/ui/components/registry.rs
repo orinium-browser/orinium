@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, mpsc};
 
 use crate::engine::bridge::text;
+use crate::engine::layouter::normalize_whitespace;
 use crate::engine::layouter::types::{Color, ContainerStyle, TextStyle};
 use crate::engine::layouter::{DomSnapshot, NodeId};
 use crate::engine::renderer_model::Image;
@@ -201,6 +202,8 @@ impl CustomNodeFactory for SelectFactory {
 
     fn create(&self, _tag: &str, ctx: &CustomNodeContext) -> Option<Arc<dyn CustomNode>> {
         let value = (ctx.get_attr)("value").unwrap_or_default();
+        let disabled = (ctx.get_attr)("disabled").is_some();
+        let multiple = (ctx.get_attr)("multiple").is_some();
         let on_change = ctx.write_back.as_ref().map(|(sender, node_id)| {
             let sender = sender.clone();
             let node_id = *node_id;
@@ -209,33 +212,59 @@ impl CustomNodeFactory for SelectFactory {
             }) as Arc<OnSelectChange>
         });
 
-        let options: Vec<SelectOption> = ctx
-            .dom_snapshot
-            .children(ctx.dom_id)
-            .iter()
-            .map(|id| {
-                let value = ctx
-                    .dom_snapshot
-                    .node(*id)
-                    .kind
-                    .get_attr("value")
-                    .unwrap_or_default()
-                    .to_string();
-                let label = ctx.dom_snapshot.inner_text(*id);
-                let selected = ctx.dom_snapshot.node(*id).kind.has_attr("selected");
-
-                SelectOption {
-                    value,
-                    label,
-                    selected,
+        let mut options: Vec<SelectOption> = Vec::new();
+        for id in ctx.dom_snapshot.children(ctx.dom_id) {
+            let node = ctx.dom_snapshot.node(*id);
+            match node.kind.tag_name() {
+                Some("optgroup") => {
+                    let group = node.kind.get_attr("label").unwrap_or_default().to_string();
+                    let group_disabled = node.kind.has_attr("disabled");
+                    for child in ctx.dom_snapshot.children(*id) {
+                        let child_node = ctx.dom_snapshot.node(*child);
+                        if child_node.kind.tag_name() != Some("option") {
+                            continue;
+                        }
+                        options.push(SelectOption {
+                            value: child_node
+                                .kind
+                                .get_attr("value")
+                                .unwrap_or_default()
+                                .to_string(),
+                            label: normalize_whitespace(&ctx.dom_snapshot.inner_text(*child)),
+                            selected: child_node.kind.has_attr("selected"),
+                            disabled: group_disabled || child_node.kind.has_attr("disabled"),
+                            group: Some(group.clone()),
+                        });
+                    }
                 }
-            })
-            .collect();
+                Some("option") => options.push(SelectOption {
+                    value: node.kind.get_attr("value").unwrap_or_default().to_string(),
+                    label: normalize_whitespace(&ctx.dom_snapshot.inner_text(*id)),
+                    selected: node.kind.has_attr("selected"),
+                    disabled: node.kind.has_attr("disabled"),
+                    group: None,
+                }),
+                _ => {}
+            }
+        }
 
         Some(Arc::new(if let Some(cb) = on_change {
-            SelectComponent::with_on_change(options, &value, Arc::clone(&ctx.measurer), cb)
+            SelectComponent::with_on_change(
+                options,
+                &value,
+                Arc::clone(&ctx.measurer),
+                cb,
+                disabled,
+                multiple,
+            )
         } else {
-            SelectComponent::new(options, &value, Arc::clone(&ctx.measurer))
+            SelectComponent::new(
+                options,
+                &value,
+                Arc::clone(&ctx.measurer),
+                disabled,
+                multiple,
+            )
         }))
     }
 }
@@ -247,6 +276,7 @@ mod tests {
     use crate::engine::html::parser::DomTree;
     use crate::engine::html::parser::Parser as HtmlParser;
     use crate::engine::layouter::DomSnapshot;
+    use crate::engine::ui::custom_node::PointerEvent;
 
     fn tree(html: &str) -> DomTree {
         HtmlParser::new(html).parse()
@@ -356,6 +386,174 @@ mod tests {
             .unwrap();
         assert_eq!(select.role(), Some("combobox"));
         assert_eq!(select.value(), Some("opt".to_string()));
+    }
+
+    #[test]
+    fn select_parses_optgroup_and_disabled() {
+        fn find(snapshot: &DomSnapshot, id: NodeId, tag: &str) -> Option<NodeId> {
+            if snapshot.node(id).kind.tag_name() == Some(tag) {
+                return Some(id);
+            }
+            snapshot
+                .children(id)
+                .iter()
+                .find_map(|&c| find(snapshot, c, tag))
+        }
+
+        let registry = ComponentRegistry::new();
+        let mut attrs = HashMap::new();
+        attrs.insert("value".to_string(), "b".to_string());
+        attrs.insert("disabled".to_string(), String::new());
+        let container_style = ContainerStyle::default();
+        let text_style = TextStyle::default();
+        let images: HashMap<String, Image> = HashMap::new();
+        let audio = HashMap::new();
+        let get_attr = |name: &str| attrs.get(name).cloned();
+
+        let dom_snapshot = &{
+            let dom = tree(
+                "<html><select value=\"b\" disabled><optgroup label=\"Fruits\" disabled><option value=\"a\" selected>Apple</option><option value=\"b\" disabled>Banana</option></optgroup><option value=\"c\">Cherry</option></select></html>",
+            );
+            let (snapshot, _dom_refs) = DomSnapshot::from_tree(&dom.root);
+            snapshot
+        };
+        let select_id = find(dom_snapshot, dom_snapshot.roots()[0], "select").unwrap();
+
+        let select = registry
+            .create(&CustomNodeContext {
+                tag: "select",
+                media_source: None,
+                container_style: &container_style,
+                text_style: &text_style,
+                measurer: Arc::new(FallbackTextMeasurer),
+                images: &images,
+                audio: &audio,
+                get_attr: &get_attr,
+                write_back: None,
+                dom_snapshot,
+                dom_id: select_id,
+            })
+            .unwrap();
+
+        // The disabled `<select>` reports disabled and never opens a popup.
+        assert!(select.is_disabled());
+        select.on_pointer_event(PointerEvent::Down { x: 5.0, y: 5.0 });
+        assert!(select.popup(&TextStyle::default()).is_none());
+
+        // The value resolves to an option nested inside the `<optgroup>`.
+        assert_eq!(select.value(), Some("b".to_string()));
+        assert_eq!(select.label(), Some("Banana".to_string()));
+    }
+
+    #[test]
+    fn select_optgroup_options_are_grouped() {
+        fn find(snapshot: &DomSnapshot, id: NodeId, tag: &str) -> Option<NodeId> {
+            if snapshot.node(id).kind.tag_name() == Some(tag) {
+                return Some(id);
+            }
+            snapshot
+                .children(id)
+                .iter()
+                .find_map(|&c| find(snapshot, c, tag))
+        }
+
+        let registry = ComponentRegistry::new();
+        let attrs: HashMap<String, String> = HashMap::new();
+        let container_style = ContainerStyle::default();
+        let text_style = TextStyle::default();
+        let images: HashMap<String, Image> = HashMap::new();
+        let audio = HashMap::new();
+        let get_attr = |name: &str| attrs.get(name).cloned();
+
+        let dom_snapshot = &{
+            let dom = tree(
+                "<html><select><optgroup label=\"Fruits\"><option value=\"a\">Apple</option></optgroup><option value=\"b\">Banana</option></select></html>",
+            );
+            let (snapshot, _dom_refs) = DomSnapshot::from_tree(&dom.root);
+            snapshot
+        };
+        let select_id = find(dom_snapshot, dom_snapshot.roots()[0], "select").unwrap();
+
+        let select = registry
+            .create(&CustomNodeContext {
+                tag: "select",
+                media_source: None,
+                container_style: &container_style,
+                text_style: &text_style,
+                measurer: Arc::new(FallbackTextMeasurer),
+                images: &images,
+                audio: &audio,
+                get_attr: &get_attr,
+                write_back: None,
+                dom_snapshot,
+                dom_id: select_id,
+            })
+            .unwrap();
+
+        assert!(!select.is_disabled());
+        // The `<optgroup>` option is selectable and opens a popup.
+        select.on_pointer_event(PointerEvent::Down { x: 5.0, y: 5.0 });
+        assert!(select.popup(&TextStyle::default()).is_some());
+        assert_eq!(select.value(), Some("a".to_string()));
+    }
+
+    #[test]
+    fn select_parses_multiple_attribute() {
+        fn find(snapshot: &DomSnapshot, id: NodeId, tag: &str) -> Option<NodeId> {
+            if snapshot.node(id).kind.tag_name() == Some(tag) {
+                return Some(id);
+            }
+            snapshot
+                .children(id)
+                .iter()
+                .find_map(|&c| find(snapshot, c, tag))
+        }
+
+        let registry = ComponentRegistry::new();
+        let mut attrs = HashMap::new();
+        attrs.insert("multiple".to_string(), String::new());
+        let container_style = ContainerStyle::default();
+        let text_style = TextStyle::default();
+        let images: HashMap<String, Image> = HashMap::new();
+        let audio = HashMap::new();
+        let get_attr = |name: &str| attrs.get(name).cloned();
+
+        let dom_snapshot = &{
+            let dom = tree(
+                "<html><select multiple><option value=\"a\" selected>Apple</option><option value=\"b\">Banana</option><option value=\"c\" selected>Cherry</option></select></html>",
+            );
+            let (snapshot, _dom_refs) = DomSnapshot::from_tree(&dom.root);
+            snapshot
+        };
+        let select_id = find(dom_snapshot, dom_snapshot.roots()[0], "select").unwrap();
+
+        let select = registry
+            .create(&CustomNodeContext {
+                tag: "select",
+                media_source: None,
+                container_style: &container_style,
+                text_style: &text_style,
+                measurer: Arc::new(FallbackTextMeasurer),
+                images: &images,
+                audio: &audio,
+                get_attr: &get_attr,
+                write_back: None,
+                dom_snapshot,
+                dom_id: select_id,
+            })
+            .unwrap();
+
+        // Multiple selects render as a list box: no popup, comma-joined value.
+        assert_eq!(select.role(), Some("listbox"));
+        assert_eq!(select.value(), Some("a,c".to_string()));
+        assert!(select.popup(&TextStyle::default()).is_none());
+
+        // Clicking a row toggles it without opening a popup.
+        select.on_pointer_event(PointerEvent::Down {
+            x: 5.0,
+            y: 28.0 + 2.0,
+        });
+        assert_eq!(select.value(), Some("a,b,c".to_string()));
     }
 
     #[test]

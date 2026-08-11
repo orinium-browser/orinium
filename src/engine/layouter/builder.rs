@@ -705,7 +705,7 @@ pub fn build_layout_and_info_from_snapshot(
         .expect("root must have been processed")
 }
 
-fn normalize_whitespace(text: &str) -> String {
+pub fn normalize_whitespace(text: &str) -> String {
     let mut result = String::new();
     let mut prev_was_space = false;
 

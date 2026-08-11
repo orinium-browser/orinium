@@ -1,0 +1,240 @@
+<!doctype html>
+<html>
+    <head>
+        <meta charset="UTF-8" />
+        <title>Select Tests</title>
+        <style>
+            body {
+                margin: 20px;
+                font-family: sans-serif;
+                line-height: 1.4;
+            }
+
+            section {
+                margin-bottom: 24px;
+                padding: 16px;
+                border: 1px solid #999;
+            }
+
+            h2 {
+                margin: 0 0 12px;
+                font-size: 20px;
+            }
+
+            label {
+                display: block;
+                margin: 8px 0 4px;
+            }
+
+            select {
+                margin-bottom: 8px;
+            }
+
+            .wide {
+                width: 300px;
+            }
+
+            .narrow {
+                width: 80px;
+            }
+
+            .styled {
+                padding: 8px 12px;
+                border: 2px solid #444;
+                border-radius: 6px;
+                background: #eee;
+                font-size: 16px;
+            }
+        </style>
+    </head>
+    <body>
+        <section>
+            <h2>Basic</h2>
+
+            <label for="basic">Basic select</label>
+            <select id="basic">
+                <option>One</option>
+                <option>Two</option>
+                <option>Three</option>
+            </select>
+
+            <label for="value">With value</label>
+            <select id="value">
+                <option value="a">Alpha</option>
+                <option value="b">Beta</option>
+                <option value="c">Gamma</option>
+            </select>
+
+            <label for="selected">Initially selected</label>
+            <select id="selected">
+                <option>First</option>
+                <option selected>Second</option>
+                <option>Third</option>
+            </select>
+        </section>
+
+        <section>
+            <h2>Disabled</h2>
+
+            <label for="disabled-select">Disabled select</label>
+            <select id="disabled-select" disabled>
+                <option>One</option>
+                <option>Two</option>
+                <option>Three</option>
+            </select>
+
+            <label for="disabled-option">Disabled option</label>
+            <select id="disabled-option">
+                <option>Available</option>
+                <option disabled>Disabled</option>
+                <option>Available again</option>
+            </select>
+
+            <label for="mixed-disabled">Mixed options</label>
+            <select id="mixed-disabled">
+                <option disabled selected>Choose one...</option>
+                <option>One</option>
+                <option disabled>Two</option>
+                <option>Three</option>
+            </select>
+        </section>
+
+        <section>
+            <h2>Empty / unusual</h2>
+
+            <label for="empty">Empty select</label>
+            <select id="empty"></select>
+
+            <label for="empty-option">Empty option</label>
+            <select id="empty-option">
+                <option></option>
+                <option>Second</option>
+            </select>
+
+            <label for="long">Very long option</label>
+            <select id="long">
+                <option>
+                    This is a very long option text that should test how the
+                    select handles content wider than the control
+                </option>
+                <option>Short</option>
+            </select>
+
+            <label for="special">Special characters</label>
+            <select id="special">
+                <option>&lt;tag&gt;</option>
+                <option>&amp; &quot;quotes&quot;</option>
+                <option>日本語のオプション</option>
+                <option>😀 Emoji option</option>
+            </select>
+        </section>
+
+        <section>
+            <h2>Optgroup</h2>
+
+            <label for="groups">Grouped options</label>
+            <select id="groups">
+                <optgroup label="Fruits">
+                    <option>Apple</option>
+                    <option>Banana</option>
+                    <option>Orange</option>
+                </optgroup>
+
+                <optgroup label="Vegetables">
+                    <option>Carrot</option>
+                    <option>Potato</option>
+                    <option>Tomato</option>
+                </optgroup>
+            </select>
+
+            <label for="disabled-group">Disabled optgroup</label>
+            <select id="disabled-group">
+                <optgroup label="Enabled">
+                    <option>One</option>
+                    <option>Two</option>
+                </optgroup>
+
+                <optgroup label="Disabled" disabled>
+                    <option>Three</option>
+                    <option>Four</option>
+                </optgroup>
+            </select>
+        </section>
+
+        <section>
+            <h2>Multiple</h2>
+
+            <label for="multiple">Multiple select</label>
+            <select id="multiple" multiple>
+                <option>One</option>
+                <option selected>Two</option>
+                <option selected>Three</option>
+                <option>Four</option>
+            </select>
+
+            <label for="multiple-size">Multiple with size</label>
+            <select id="multiple-size" multiple size="4">
+                <option>Alpha</option>
+                <option>Beta</option>
+                <option>Gamma</option>
+                <option>Delta</option>
+                <option>Epsilon</option>
+                <option>Zeta</option>
+            </select>
+
+            <label for="size">Single select with size</label>
+            <select id="size" size="3">
+                <option>One</option>
+                <option>Two</option>
+                <option>Three</option>
+                <option>Four</option>
+            </select>
+        </section>
+
+        <section>
+            <h2>CSS sizing</h2>
+
+            <label for="wide">Wide</label>
+            <select id="wide" class="wide">
+                <option>One</option>
+                <option>Two</option>
+            </select>
+
+            <label for="narrow">Narrow</label>
+            <select id="narrow" class="narrow">
+                <option>Very long option</option>
+                <option>Short</option>
+            </select>
+
+            <label for="styled">Styled</label>
+            <select id="styled" class="styled">
+                <option>One</option>
+                <option>Two</option>
+                <option>Three</option>
+            </select>
+        </section>
+
+        <section>
+            <h2>Form</h2>
+
+            <form>
+                <label for="country">Country</label>
+                <select id="country" name="country" required>
+                    <option value="">Select a country</option>
+                    <option value="jp">Japan</option>
+                    <option value="us">United States</option>
+                    <option value="uk">United Kingdom</option>
+                </select>
+
+                <label for="readonly-like">With default value</label>
+                <select id="readonly-like" name="choice">
+                    <option value="first">First</option>
+                    <option value="second" selected>Second</option>
+                    <option value="third">Third</option>
+                </select>
+
+                <button type="submit">Submit</button>
+            </form>
+        </section>
+    </body>
+</html>
