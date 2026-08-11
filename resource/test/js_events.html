@@ -1,60 +1,60 @@
 <!doctype html>
 <html lang="ja">
-<head>
-    <meta charset="utf-8">
-    <title>JavaScript Events & Scheduling Test</title>
-    <style>
-        body {
-            font-family: sans-serif;
-            margin: 32px;
-        }
+    <head>
+        <meta charset="utf-8" />
+        <title>JavaScript Events & Scheduling Test</title>
+        <style>
+            body {
+                font-family: sans-serif;
+                margin: 32px;
+            }
 
-        .result {
-            border: 2px solid #777;
-            margin: 12px 0 24px;
-            padding: 12px;
-        }
+            .result {
+                border: 2px solid #777;
+                margin: 12px 0 24px;
+                padding: 12px;
+            }
 
-        .result[data-complete="true"] {
-            background: #d9f7df;
-            border-color: #25813b;
-        }
+            .result[data-complete="true"] {
+                background: #d9f7df;
+                border-color: #25813b;
+            }
 
-        button {
-            padding: 8px 16px;
-        }
-    </style>
-</head>
-<body>
-    <h1>JavaScript Events & Scheduling</h1>
+            button {
+                padding: 8px 16px;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>JavaScript Events & Scheduling</h1>
 
-    <h2>defer + DOMContentLoaded</h2>
-    <div id="defer-result" class="result">waiting</div>
+        <h2>defer + DOMContentLoaded</h2>
+        <div id="defer-result" class="result">waiting</div>
 
-    <h2>async</h2>
-    <div id="async-result" class="result">waiting</div>
+        <h2>async</h2>
+        <div id="async-result" class="result">waiting</div>
 
-    <h2>Element.addEventListener</h2>
-    <button id="event-button">Click me</button>
-    <div id="click-result" class="result">not clicked</div>
+        <h2>Element.addEventListener</h2>
+        <button id="event-button">Click me</button>
+        <div id="click-result" class="result">not clicked</div>
 
-    <script>
-        let deferredOrder = "inline";
-        document.addEventListener("DOMContentLoaded", function (event) {
-            const result = document.getElementById("defer-result");
-            result.textContent = event.type + ": " + deferredOrder;
-            result.setAttribute("data-complete", "true");
-        });
+        <script>
+            let deferredOrder = "inline";
+            document.addEventListener("DOMContentLoaded", function (event) {
+                const result = document.getElementById("defer-result");
+                result.textContent = event.type + ": " + deferredOrder;
+                result.setAttribute("data-complete", "true");
+            });
 
-        const button = document.getElementById("event-button");
-        button.addEventListener("click", function (event) {
-            const result = document.getElementById("click-result");
-            result.textContent = event.type + " listener ran";
-            result.setAttribute("data-complete", "true");
-        });
-    </script>
-    <script defer src="js_events_defer_first.js"></script>
-    <script async src="js_events_async.js"></script>
-    <script defer src="js_events_defer_second.js"></script>
-</body>
+            const button = document.getElementById("event-button");
+            button.addEventListener("click", function (event) {
+                const result = document.getElementById("click-result");
+                result.textContent = event.type + " listener ran";
+                result.setAttribute("data-complete", "true");
+            });
+        </script>
+        <script defer src="js/js_events_defer_first.js"></script>
+        <script async src="js/js_events_async.js"></script>
+        <script defer src="js/js_events_defer_second.js"></script>
+    </body>
 </html>
