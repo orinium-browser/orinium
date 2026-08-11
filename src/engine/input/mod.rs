@@ -489,6 +489,7 @@ mod tests {
             height,
         };
         ui_layout::BoxModel {
+            sticky_edges: None,
             border_box: rect,
             padding_box: rect,
             content_box: rect,

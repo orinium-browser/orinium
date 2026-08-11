@@ -661,6 +661,7 @@ fn generate_draw_commands_inner(
 
                             let bm = &result.box_model;
                             let rect = BoxModel {
+                                sticky_edges: bm.sticky_edges,
                                 border_box: Rect {
                                     x: bm.border_box.x - text_origin.0,
                                     y: bm.border_box.y - text_origin.1,
@@ -775,6 +776,7 @@ mod tests {
     #[test]
     fn test_single_box_model_is_balanced() {
         let box_model = ui_layout::BoxModel {
+            sticky_edges: None,
             border_box: ui_rect(10.0, 20.0, 120.0, 60.0),
             padding_box: ui_rect(12.0, 22.0, 116.0, 56.0),
             content_box: ui_rect(12.0, 22.0, 116.0, 56.0),
@@ -795,6 +797,7 @@ mod tests {
     #[test]
     fn test_nested_box_models_balanced() {
         let mk_box = |x: f32, y: f32, w: f32, h: f32| ui_layout::BoxModel {
+            sticky_edges: None,
             border_box: ui_rect(x, y, w, h),
             padding_box: ui_rect(x + 2.0, y + 2.0, w - 4.0, h - 4.0),
             content_box: ui_rect(x + 2.0, y + 2.0, w - 4.0, h - 4.0),
@@ -874,6 +877,7 @@ mod tests {
             height: h,
         };
         let mk_box = |x: f32, y: f32, w: f32, h: f32| ui_layout::BoxModel {
+            sticky_edges: None,
             border_box: ui_rect(x, y, w, h),
             padding_box: ui_rect(x, y, w, h),
             content_box: ui_rect(x, y, w, h),

@@ -158,6 +158,7 @@ impl<'a> Tokenizer<'a> {
 
     /// Debug log for emitted tokens
     #[inline(always)]
+    #[allow(unused_variables)]
     fn debug_emit(&self, token: &Token) {
         #[cfg(debug_assertions)]
         match token {

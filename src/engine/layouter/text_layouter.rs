@@ -317,6 +317,7 @@ impl CustomLayouter for TextFlowLayouter {
             height: total_height,
         };
         let box_model = BoxModel {
+            sticky_edges: None,
             border_box: rect,
             padding_box: rect,
             content_box: rect,

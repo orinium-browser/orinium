@@ -90,6 +90,7 @@ impl CustomLayouter for CustomNodeBridge {
                     height: use_height,
                 };
                 let box_model = BoxModel {
+                    sticky_edges: None,
                     border_box: rect,
                     padding_box: rect,
                     content_box: rect,
@@ -120,6 +121,7 @@ impl CustomLayouter for CustomNodeBridge {
                     height: resolved.height,
                 };
                 let box_model = BoxModel {
+                    sticky_edges: None,
                     border_box: rect,
                     padding_box: rect,
                     content_box: rect,
