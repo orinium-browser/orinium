@@ -132,6 +132,12 @@ const TEST_PAGE_CATALOG: &[TestPageMeta] = &[
         description: "img 置換要素: resource:// 画像のサイズ指定付き描画",
     },
     TestPageMeta {
+        file: "select_test.html",
+        group: "HTML",
+        title: "HTML Select Tag",
+        description: "Select tag のための広範なテスト",
+    },
+    TestPageMeta {
         file: "ime.html",
         group: "HTML",
         title: "IME Text Input",
