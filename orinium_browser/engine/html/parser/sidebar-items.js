@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["HtmlNodeType"],"struct":["Parser"],"type":["DomTree"]};
+window.SIDEBAR_ITEMS = {"enum":["ClassicScriptExecution","ClassicScriptSource","HtmlNodeType"],"struct":["ClassicScriptDescriptor","Parser"],"type":["DomTree"]};
