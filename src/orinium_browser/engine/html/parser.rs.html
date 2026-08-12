@@ -721,163 +721,148 @@
 <a href=#721 id=721 data-nosnippet>721</a>                <span class="kw">return</span>;
 <a href=#722 id=722 data-nosnippet>722</a>            }
 <a href=#723 id=723 data-nosnippet>723</a>
-<a href=#724 id=724 data-nosnippet>724</a>            <span class="comment">// 親ノードが pre, textarea, script, style でない場合、空白改行を無視する
-<a href=#725 id=725 data-nosnippet>725</a>            </span><span class="kw">if let </span><span class="prelude-val">Some</span>(parent_node) = parent.borrow().parent() {
-<a href=#726 id=726 data-nosnippet>726</a>                <span class="kw">let </span>parent_node_borrow = parent_node.borrow();
-<a href=#727 id=727 data-nosnippet>727</a>                <span class="kw">if let </span>HtmlNodeType::Element { tag_name, .. } = <span class="kw-2">&amp;</span>parent_node_borrow.value {
-<a href=#728 id=728 data-nosnippet>728</a>                    <span class="kw">if </span>!<span class="macro">matches!</span>(tag_name.as_str(), <span class="string">"pre" </span>| <span class="string">"textarea" </span>| <span class="string">"script" </span>| <span class="string">"style"</span>)
-<a href=#729 id=729 data-nosnippet>729</a>                        &amp;&amp; data.trim().is_empty()
-<a href=#730 id=730 data-nosnippet>730</a>                    {
-<a href=#731 id=731 data-nosnippet>731</a>                        <span class="kw">return</span>;
-<a href=#732 id=732 data-nosnippet>732</a>                    }
-<a href=#733 id=733 data-nosnippet>733</a>                } <span class="kw">else if </span>data.trim().is_empty() {
-<a href=#734 id=734 data-nosnippet>734</a>                    <span class="kw">return</span>;
-<a href=#735 id=735 data-nosnippet>735</a>                }
-<a href=#736 id=736 data-nosnippet>736</a>            } <span class="kw">else if </span>data.trim().is_empty() {
-<a href=#737 id=737 data-nosnippet>737</a>                <span class="kw">return</span>;
-<a href=#738 id=738 data-nosnippet>738</a>            }
-<a href=#739 id=739 data-nosnippet>739</a>            TreeNode::add_child_value(<span class="kw-2">&amp;</span>parent, HtmlNodeType::Text(data));
-<a href=#740 id=740 data-nosnippet>740</a>        }
-<a href=#741 id=741 data-nosnippet>741</a>    }
-<a href=#742 id=742 data-nosnippet>742</a>
-<a href=#743 id=743 data-nosnippet>743</a>    <span class="kw">fn </span>handle_comment(<span class="kw-2">&amp;mut </span><span class="self">self</span>, token: Token) {
-<a href=#744 id=744 data-nosnippet>744</a>        <span class="kw">if let </span>Token::Comment(data) = token {
-<a href=#745 id=745 data-nosnippet>745</a>            <span class="kw">let </span>parent = Rc::clone(<span class="self">self</span>.stack.last().unwrap());
-<a href=#746 id=746 data-nosnippet>746</a>            TreeNode::add_child_value(<span class="kw-2">&amp;</span>parent, HtmlNodeType::Comment(data));
-<a href=#747 id=747 data-nosnippet>747</a>        }
-<a href=#748 id=748 data-nosnippet>748</a>    }
-<a href=#749 id=749 data-nosnippet>749</a>
-<a href=#750 id=750 data-nosnippet>750</a>    <span class="kw">fn </span>handle_doctype(<span class="kw-2">&amp;mut </span><span class="self">self</span>, token: Token) {
-<a href=#751 id=751 data-nosnippet>751</a>        <span class="kw">if let </span>Token::Doctype {
-<a href=#752 id=752 data-nosnippet>752</a>            name,
-<a href=#753 id=753 data-nosnippet>753</a>            public_id,
-<a href=#754 id=754 data-nosnippet>754</a>            system_id,
-<a href=#755 id=755 data-nosnippet>755</a>            ..
-<a href=#756 id=756 data-nosnippet>756</a>        } = token
-<a href=#757 id=757 data-nosnippet>757</a>        {
-<a href=#758 id=758 data-nosnippet>758</a>            <span class="kw">let </span>parent = Rc::clone(<span class="self">self</span>.stack.last().unwrap());
-<a href=#759 id=759 data-nosnippet>759</a>            TreeNode::add_child_value(
-<a href=#760 id=760 data-nosnippet>760</a>                <span class="kw-2">&amp;</span>parent,
-<a href=#761 id=761 data-nosnippet>761</a>                HtmlNodeType::Doctype {
-<a href=#762 id=762 data-nosnippet>762</a>                    name,
-<a href=#763 id=763 data-nosnippet>763</a>                    public_id,
-<a href=#764 id=764 data-nosnippet>764</a>                    system_id,
-<a href=#765 id=765 data-nosnippet>765</a>                },
-<a href=#766 id=766 data-nosnippet>766</a>            );
-<a href=#767 id=767 data-nosnippet>767</a>        }
-<a href=#768 id=768 data-nosnippet>768</a>    }
-<a href=#769 id=769 data-nosnippet>769</a>
-<a href=#770 id=770 data-nosnippet>770</a>    <span class="kw">fn </span>check_start_tag_with_invalid_nesting(
-<a href=#771 id=771 data-nosnippet>771</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#772 id=772 data-nosnippet>772</a>        name: <span class="kw-2">&amp;</span>String,
-<a href=#773 id=773 data-nosnippet>773</a>        parent: <span class="kw-2">&amp;</span>Rc&lt;RefCell&lt;TreeNode&lt;HtmlNodeType&gt;&gt;&gt;,
-<a href=#774 id=774 data-nosnippet>774</a>    ) -&gt; bool {
-<a href=#775 id=775 data-nosnippet>775</a>        <span class="kw">if let </span>HtmlNodeType::Element { tag_name, .. } = <span class="kw-2">&amp;</span>parent.borrow().value {
-<a href=#776 id=776 data-nosnippet>776</a>            <span class="comment">// &lt;html&gt; 以外の中に &lt;body&gt; が来た場合、そのタグを閉じる
-<a href=#777 id=777 data-nosnippet>777</a>            </span><span class="kw">if </span>tag_name != <span class="string">"html" </span>&amp;&amp; name == <span class="string">"body" </span>{
-<a href=#778 id=778 data-nosnippet>778</a>                <span class="macro">println!</span>(<span class="string">"here we can see 「お行儀の悪いコード」"</span>);
-<a href=#779 id=779 data-nosnippet>779</a>                <span class="kw">return </span><span class="bool-val">true</span>;
-<a href=#780 id=780 data-nosnippet>780</a>            }
-<a href=#781 id=781 data-nosnippet>781</a>            <span class="comment">// &lt;p&gt; の中に &lt;p&gt; が来た場合、前の &lt;p&gt; を閉じる
-<a href=#782 id=782 data-nosnippet>782</a>            </span><span class="kw">if </span>tag_name == <span class="string">"p" </span>&amp;&amp; name == <span class="string">"p" </span>{
-<a href=#783 id=783 data-nosnippet>783</a>                <span class="kw">return </span><span class="bool-val">true</span>;
-<a href=#784 id=784 data-nosnippet>784</a>            }
-<a href=#785 id=785 data-nosnippet>785</a>            <span class="comment">// &lt;li&gt; の中に &lt;li&gt; が来た場合、前の &lt;li&gt; を閉じる
-<a href=#786 id=786 data-nosnippet>786</a>            </span><span class="kw">if </span>tag_name == <span class="string">"li" </span>&amp;&amp; name == <span class="string">"li" </span>{
-<a href=#787 id=787 data-nosnippet>787</a>                <span class="kw">return </span><span class="bool-val">true</span>;
-<a href=#788 id=788 data-nosnippet>788</a>            }
-<a href=#789 id=789 data-nosnippet>789</a>            <span class="comment">// &lt;a&gt; の中に &lt;a&gt; が来た場合、前の &lt;a&gt; を閉じる
-<a href=#790 id=790 data-nosnippet>790</a>            </span><span class="kw">if </span>tag_name == <span class="string">"a" </span>&amp;&amp; name == <span class="string">"a" </span>{
-<a href=#791 id=791 data-nosnippet>791</a>                <span class="kw">return </span><span class="bool-val">true</span>;
-<a href=#792 id=792 data-nosnippet>792</a>            }
-<a href=#793 id=793 data-nosnippet>793</a>            <span class="comment">// &lt;dt&gt; の中に &lt;dt&gt; または &lt;dd&gt; が来た場合、前の &lt;dt&gt; を閉じる
-<a href=#794 id=794 data-nosnippet>794</a>            </span><span class="kw">if </span>tag_name == <span class="string">"dt" </span>&amp;&amp; (name == <span class="string">"dt" </span>|| name == <span class="string">"dd"</span>) {
-<a href=#795 id=795 data-nosnippet>795</a>                <span class="kw">return </span><span class="bool-val">true</span>;
-<a href=#796 id=796 data-nosnippet>796</a>            }
-<a href=#797 id=797 data-nosnippet>797</a>            <span class="comment">// &lt;dd&gt; の中に &lt;dt&gt; または &lt;dd&gt; が来た場合、前の &lt;dd&gt; を閉じる
-<a href=#798 id=798 data-nosnippet>798</a>            </span><span class="kw">if </span>tag_name == <span class="string">"dd" </span>&amp;&amp; (name == <span class="string">"dt" </span>|| name == <span class="string">"dd"</span>) {
-<a href=#799 id=799 data-nosnippet>799</a>                <span class="kw">return </span><span class="bool-val">true</span>;
-<a href=#800 id=800 data-nosnippet>800</a>            }
-<a href=#801 id=801 data-nosnippet>801</a>            <span class="comment">// &lt;option&gt; の中に &lt;option&gt; が来た場合、前の &lt;option&gt; を閉じる
-<a href=#802 id=802 data-nosnippet>802</a>            </span><span class="kw">if </span>tag_name == <span class="string">"option" </span>&amp;&amp; name == <span class="string">"option" </span>{
-<a href=#803 id=803 data-nosnippet>803</a>                <span class="kw">return </span><span class="bool-val">true</span>;
-<a href=#804 id=804 data-nosnippet>804</a>            }
-<a href=#805 id=805 data-nosnippet>805</a>            <span class="comment">// &lt;p&gt; の中にブロック要素が来た場合、前の &lt;p&gt; を閉じる
-<a href=#806 id=806 data-nosnippet>806</a>            </span><span class="kw">if </span><span class="macro">matches!</span>(
-<a href=#807 id=807 data-nosnippet>807</a>                tag_name.as_str(),
-<a href=#808 id=808 data-nosnippet>808</a>                <span class="string">"p" </span>| <span class="string">"h1" </span>| <span class="string">"h2" </span>| <span class="string">"h3" </span>| <span class="string">"h4" </span>| <span class="string">"h5" </span>| <span class="string">"h6"
-<a href=#809 id=809 data-nosnippet>809</a>            </span>) &amp;&amp; html_util::is_block_level_element(name)
-<a href=#810 id=810 data-nosnippet>810</a>            {
-<a href=#811 id=811 data-nosnippet>811</a>                <span class="kw">return </span><span class="bool-val">true</span>;
-<a href=#812 id=812 data-nosnippet>812</a>            }
-<a href=#813 id=813 data-nosnippet>813</a>        }
-<a href=#814 id=814 data-nosnippet>814</a>        <span class="bool-val">false
-<a href=#815 id=815 data-nosnippet>815</a>    </span>}
-<a href=#816 id=816 data-nosnippet>816</a>
-<a href=#817 id=817 data-nosnippet>817</a>    <span class="doccomment">/// DOCTYPE宣言、html, head, body 要素が存在しない場合に補完する
-<a href=#818 id=818 data-nosnippet>818</a>    </span><span class="kw">fn </span>autofill_elements(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
-<a href=#819 id=819 data-nosnippet>819</a>        <span class="kw">let </span>root = Rc::clone(<span class="kw-2">&amp;</span><span class="self">self</span>.stack[<span class="number">0</span>]);
-<a href=#820 id=820 data-nosnippet>820</a>        <span class="kw">let </span>has_html = root
-<a href=#821 id=821 data-nosnippet>821</a>            .borrow()
-<a href=#822 id=822 data-nosnippet>822</a>            .children()
-<a href=#823 id=823 data-nosnippet>823</a>            .iter()
-<a href=#824 id=824 data-nosnippet>824</a>            .any(|c| <span class="macro">matches!</span>(<span class="kw-2">&amp;</span>c.borrow().value, HtmlNodeType::Element { tag_name, .. } <span class="kw">if </span>tag_name.to_lowercase() == <span class="string">"html"</span>));
-<a href=#825 id=825 data-nosnippet>825</a>
-<a href=#826 id=826 data-nosnippet>826</a>        <span class="kw">if </span>!has_html {
-<a href=#827 id=827 data-nosnippet>827</a>            <span class="kw">let </span><span class="kw-2">mut </span>doctype_node = <span class="prelude-val">None</span>;
-<a href=#828 id=828 data-nosnippet>828</a>            <span class="kw">let </span><span class="kw-2">mut </span>orphan_nodes = Vec::new();
-<a href=#829 id=829 data-nosnippet>829</a>            <span class="kw">for </span>child <span class="kw">in </span>root.borrow().children() {
-<a href=#830 id=830 data-nosnippet>830</a>                <span class="kw">match </span><span class="kw-2">&amp;</span>child.borrow().value {
-<a href=#831 id=831 data-nosnippet>831</a>                    HtmlNodeType::Doctype { .. } =&gt; {
-<a href=#832 id=832 data-nosnippet>832</a>                        doctype_node = <span class="prelude-val">Some</span>(Rc::clone(child));
-<a href=#833 id=833 data-nosnippet>833</a>                    }
-<a href=#834 id=834 data-nosnippet>834</a>                    <span class="kw">_ </span>=&gt; orphan_nodes.push(Rc::clone(child)),
-<a href=#835 id=835 data-nosnippet>835</a>                }
+<a href=#724 id=724 data-nosnippet>724</a>            TreeNode::add_child_value(<span class="kw-2">&amp;</span>parent, HtmlNodeType::Text(data));
+<a href=#725 id=725 data-nosnippet>725</a>        }
+<a href=#726 id=726 data-nosnippet>726</a>    }
+<a href=#727 id=727 data-nosnippet>727</a>
+<a href=#728 id=728 data-nosnippet>728</a>    <span class="kw">fn </span>handle_comment(<span class="kw-2">&amp;mut </span><span class="self">self</span>, token: Token) {
+<a href=#729 id=729 data-nosnippet>729</a>        <span class="kw">if let </span>Token::Comment(data) = token {
+<a href=#730 id=730 data-nosnippet>730</a>            <span class="kw">let </span>parent = Rc::clone(<span class="self">self</span>.stack.last().unwrap());
+<a href=#731 id=731 data-nosnippet>731</a>            TreeNode::add_child_value(<span class="kw-2">&amp;</span>parent, HtmlNodeType::Comment(data));
+<a href=#732 id=732 data-nosnippet>732</a>        }
+<a href=#733 id=733 data-nosnippet>733</a>    }
+<a href=#734 id=734 data-nosnippet>734</a>
+<a href=#735 id=735 data-nosnippet>735</a>    <span class="kw">fn </span>handle_doctype(<span class="kw-2">&amp;mut </span><span class="self">self</span>, token: Token) {
+<a href=#736 id=736 data-nosnippet>736</a>        <span class="kw">if let </span>Token::Doctype {
+<a href=#737 id=737 data-nosnippet>737</a>            name,
+<a href=#738 id=738 data-nosnippet>738</a>            public_id,
+<a href=#739 id=739 data-nosnippet>739</a>            system_id,
+<a href=#740 id=740 data-nosnippet>740</a>            ..
+<a href=#741 id=741 data-nosnippet>741</a>        } = token
+<a href=#742 id=742 data-nosnippet>742</a>        {
+<a href=#743 id=743 data-nosnippet>743</a>            <span class="kw">let </span>parent = Rc::clone(<span class="self">self</span>.stack.last().unwrap());
+<a href=#744 id=744 data-nosnippet>744</a>            TreeNode::add_child_value(
+<a href=#745 id=745 data-nosnippet>745</a>                <span class="kw-2">&amp;</span>parent,
+<a href=#746 id=746 data-nosnippet>746</a>                HtmlNodeType::Doctype {
+<a href=#747 id=747 data-nosnippet>747</a>                    name,
+<a href=#748 id=748 data-nosnippet>748</a>                    public_id,
+<a href=#749 id=749 data-nosnippet>749</a>                    system_id,
+<a href=#750 id=750 data-nosnippet>750</a>                },
+<a href=#751 id=751 data-nosnippet>751</a>            );
+<a href=#752 id=752 data-nosnippet>752</a>        }
+<a href=#753 id=753 data-nosnippet>753</a>    }
+<a href=#754 id=754 data-nosnippet>754</a>
+<a href=#755 id=755 data-nosnippet>755</a>    <span class="kw">fn </span>check_start_tag_with_invalid_nesting(
+<a href=#756 id=756 data-nosnippet>756</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#757 id=757 data-nosnippet>757</a>        name: <span class="kw-2">&amp;</span>String,
+<a href=#758 id=758 data-nosnippet>758</a>        parent: <span class="kw-2">&amp;</span>Rc&lt;RefCell&lt;TreeNode&lt;HtmlNodeType&gt;&gt;&gt;,
+<a href=#759 id=759 data-nosnippet>759</a>    ) -&gt; bool {
+<a href=#760 id=760 data-nosnippet>760</a>        <span class="kw">if let </span>HtmlNodeType::Element { tag_name, .. } = <span class="kw-2">&amp;</span>parent.borrow().value {
+<a href=#761 id=761 data-nosnippet>761</a>            <span class="comment">// &lt;html&gt; 以外の中に &lt;body&gt; が来た場合、そのタグを閉じる
+<a href=#762 id=762 data-nosnippet>762</a>            </span><span class="kw">if </span>tag_name != <span class="string">"html" </span>&amp;&amp; name == <span class="string">"body" </span>{
+<a href=#763 id=763 data-nosnippet>763</a>                <span class="macro">println!</span>(<span class="string">"here we can see 「お行儀の悪いコード」"</span>);
+<a href=#764 id=764 data-nosnippet>764</a>                <span class="kw">return </span><span class="bool-val">true</span>;
+<a href=#765 id=765 data-nosnippet>765</a>            }
+<a href=#766 id=766 data-nosnippet>766</a>            <span class="comment">// &lt;p&gt; の中に &lt;p&gt; が来た場合、前の &lt;p&gt; を閉じる
+<a href=#767 id=767 data-nosnippet>767</a>            </span><span class="kw">if </span>tag_name == <span class="string">"p" </span>&amp;&amp; name == <span class="string">"p" </span>{
+<a href=#768 id=768 data-nosnippet>768</a>                <span class="kw">return </span><span class="bool-val">true</span>;
+<a href=#769 id=769 data-nosnippet>769</a>            }
+<a href=#770 id=770 data-nosnippet>770</a>            <span class="comment">// &lt;li&gt; の中に &lt;li&gt; が来た場合、前の &lt;li&gt; を閉じる
+<a href=#771 id=771 data-nosnippet>771</a>            </span><span class="kw">if </span>tag_name == <span class="string">"li" </span>&amp;&amp; name == <span class="string">"li" </span>{
+<a href=#772 id=772 data-nosnippet>772</a>                <span class="kw">return </span><span class="bool-val">true</span>;
+<a href=#773 id=773 data-nosnippet>773</a>            }
+<a href=#774 id=774 data-nosnippet>774</a>            <span class="comment">// &lt;a&gt; の中に &lt;a&gt; が来た場合、前の &lt;a&gt; を閉じる
+<a href=#775 id=775 data-nosnippet>775</a>            </span><span class="kw">if </span>tag_name == <span class="string">"a" </span>&amp;&amp; name == <span class="string">"a" </span>{
+<a href=#776 id=776 data-nosnippet>776</a>                <span class="kw">return </span><span class="bool-val">true</span>;
+<a href=#777 id=777 data-nosnippet>777</a>            }
+<a href=#778 id=778 data-nosnippet>778</a>            <span class="comment">// &lt;dt&gt; の中に &lt;dt&gt; または &lt;dd&gt; が来た場合、前の &lt;dt&gt; を閉じる
+<a href=#779 id=779 data-nosnippet>779</a>            </span><span class="kw">if </span>tag_name == <span class="string">"dt" </span>&amp;&amp; (name == <span class="string">"dt" </span>|| name == <span class="string">"dd"</span>) {
+<a href=#780 id=780 data-nosnippet>780</a>                <span class="kw">return </span><span class="bool-val">true</span>;
+<a href=#781 id=781 data-nosnippet>781</a>            }
+<a href=#782 id=782 data-nosnippet>782</a>            <span class="comment">// &lt;dd&gt; の中に &lt;dt&gt; または &lt;dd&gt; が来た場合、前の &lt;dd&gt; を閉じる
+<a href=#783 id=783 data-nosnippet>783</a>            </span><span class="kw">if </span>tag_name == <span class="string">"dd" </span>&amp;&amp; (name == <span class="string">"dt" </span>|| name == <span class="string">"dd"</span>) {
+<a href=#784 id=784 data-nosnippet>784</a>                <span class="kw">return </span><span class="bool-val">true</span>;
+<a href=#785 id=785 data-nosnippet>785</a>            }
+<a href=#786 id=786 data-nosnippet>786</a>            <span class="comment">// &lt;option&gt; の中に &lt;option&gt; が来た場合、前の &lt;option&gt; を閉じる
+<a href=#787 id=787 data-nosnippet>787</a>            </span><span class="kw">if </span>tag_name == <span class="string">"option" </span>&amp;&amp; name == <span class="string">"option" </span>{
+<a href=#788 id=788 data-nosnippet>788</a>                <span class="kw">return </span><span class="bool-val">true</span>;
+<a href=#789 id=789 data-nosnippet>789</a>            }
+<a href=#790 id=790 data-nosnippet>790</a>            <span class="comment">// &lt;p&gt; の中にブロック要素が来た場合、前の &lt;p&gt; を閉じる
+<a href=#791 id=791 data-nosnippet>791</a>            </span><span class="kw">if </span><span class="macro">matches!</span>(
+<a href=#792 id=792 data-nosnippet>792</a>                tag_name.as_str(),
+<a href=#793 id=793 data-nosnippet>793</a>                <span class="string">"p" </span>| <span class="string">"h1" </span>| <span class="string">"h2" </span>| <span class="string">"h3" </span>| <span class="string">"h4" </span>| <span class="string">"h5" </span>| <span class="string">"h6"
+<a href=#794 id=794 data-nosnippet>794</a>            </span>) &amp;&amp; html_util::is_block_level_element(name)
+<a href=#795 id=795 data-nosnippet>795</a>            {
+<a href=#796 id=796 data-nosnippet>796</a>                <span class="kw">return </span><span class="bool-val">true</span>;
+<a href=#797 id=797 data-nosnippet>797</a>            }
+<a href=#798 id=798 data-nosnippet>798</a>        }
+<a href=#799 id=799 data-nosnippet>799</a>        <span class="bool-val">false
+<a href=#800 id=800 data-nosnippet>800</a>    </span>}
+<a href=#801 id=801 data-nosnippet>801</a>
+<a href=#802 id=802 data-nosnippet>802</a>    <span class="doccomment">/// DOCTYPE宣言、html, head, body 要素が存在しない場合に補完する
+<a href=#803 id=803 data-nosnippet>803</a>    </span><span class="kw">fn </span>autofill_elements(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+<a href=#804 id=804 data-nosnippet>804</a>        <span class="kw">let </span>root = Rc::clone(<span class="kw-2">&amp;</span><span class="self">self</span>.stack[<span class="number">0</span>]);
+<a href=#805 id=805 data-nosnippet>805</a>        <span class="kw">let </span>has_html = root
+<a href=#806 id=806 data-nosnippet>806</a>            .borrow()
+<a href=#807 id=807 data-nosnippet>807</a>            .children()
+<a href=#808 id=808 data-nosnippet>808</a>            .iter()
+<a href=#809 id=809 data-nosnippet>809</a>            .any(|c| <span class="macro">matches!</span>(<span class="kw-2">&amp;</span>c.borrow().value, HtmlNodeType::Element { tag_name, .. } <span class="kw">if </span>tag_name.to_lowercase() == <span class="string">"html"</span>));
+<a href=#810 id=810 data-nosnippet>810</a>
+<a href=#811 id=811 data-nosnippet>811</a>        <span class="kw">if </span>!has_html {
+<a href=#812 id=812 data-nosnippet>812</a>            <span class="kw">let </span><span class="kw-2">mut </span>doctype_node = <span class="prelude-val">None</span>;
+<a href=#813 id=813 data-nosnippet>813</a>            <span class="kw">let </span><span class="kw-2">mut </span>orphan_nodes = Vec::new();
+<a href=#814 id=814 data-nosnippet>814</a>            <span class="kw">for </span>child <span class="kw">in </span>root.borrow().children() {
+<a href=#815 id=815 data-nosnippet>815</a>                <span class="kw">match </span><span class="kw-2">&amp;</span>child.borrow().value {
+<a href=#816 id=816 data-nosnippet>816</a>                    HtmlNodeType::Doctype { .. } =&gt; {
+<a href=#817 id=817 data-nosnippet>817</a>                        doctype_node = <span class="prelude-val">Some</span>(Rc::clone(child));
+<a href=#818 id=818 data-nosnippet>818</a>                    }
+<a href=#819 id=819 data-nosnippet>819</a>                    <span class="kw">_ </span>=&gt; orphan_nodes.push(Rc::clone(child)),
+<a href=#820 id=820 data-nosnippet>820</a>                }
+<a href=#821 id=821 data-nosnippet>821</a>            }
+<a href=#822 id=822 data-nosnippet>822</a>
+<a href=#823 id=823 data-nosnippet>823</a>            root.borrow_mut().clear_children();
+<a href=#824 id=824 data-nosnippet>824</a>
+<a href=#825 id=825 data-nosnippet>825</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(dt) = doctype_node {
+<a href=#826 id=826 data-nosnippet>826</a>                TreeNode::add_child(<span class="kw-2">&amp;</span>root, dt);
+<a href=#827 id=827 data-nosnippet>827</a>            } <span class="kw">else </span>{
+<a href=#828 id=828 data-nosnippet>828</a>                TreeNode::add_child_value(
+<a href=#829 id=829 data-nosnippet>829</a>                    <span class="kw-2">&amp;</span>root,
+<a href=#830 id=830 data-nosnippet>830</a>                    HtmlNodeType::Doctype {
+<a href=#831 id=831 data-nosnippet>831</a>                        name: <span class="prelude-val">Some</span>(<span class="string">"html"</span>.to_string()),
+<a href=#832 id=832 data-nosnippet>832</a>                        public_id: <span class="prelude-val">None</span>,
+<a href=#833 id=833 data-nosnippet>833</a>                        system_id: <span class="prelude-val">None</span>,
+<a href=#834 id=834 data-nosnippet>834</a>                    },
+<a href=#835 id=835 data-nosnippet>835</a>                );
 <a href=#836 id=836 data-nosnippet>836</a>            }
 <a href=#837 id=837 data-nosnippet>837</a>
-<a href=#838 id=838 data-nosnippet>838</a>            root.borrow_mut().clear_children();
-<a href=#839 id=839 data-nosnippet>839</a>
-<a href=#840 id=840 data-nosnippet>840</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(dt) = doctype_node {
-<a href=#841 id=841 data-nosnippet>841</a>                TreeNode::add_child(<span class="kw-2">&amp;</span>root, dt);
-<a href=#842 id=842 data-nosnippet>842</a>            } <span class="kw">else </span>{
-<a href=#843 id=843 data-nosnippet>843</a>                TreeNode::add_child_value(
-<a href=#844 id=844 data-nosnippet>844</a>                    <span class="kw-2">&amp;</span>root,
-<a href=#845 id=845 data-nosnippet>845</a>                    HtmlNodeType::Doctype {
-<a href=#846 id=846 data-nosnippet>846</a>                        name: <span class="prelude-val">Some</span>(<span class="string">"html"</span>.to_string()),
-<a href=#847 id=847 data-nosnippet>847</a>                        public_id: <span class="prelude-val">None</span>,
-<a href=#848 id=848 data-nosnippet>848</a>                        system_id: <span class="prelude-val">None</span>,
-<a href=#849 id=849 data-nosnippet>849</a>                    },
-<a href=#850 id=850 data-nosnippet>850</a>                );
-<a href=#851 id=851 data-nosnippet>851</a>            }
-<a href=#852 id=852 data-nosnippet>852</a>
-<a href=#853 id=853 data-nosnippet>853</a>            <span class="kw">let </span>html_node = TreeNode::add_child_value(
-<a href=#854 id=854 data-nosnippet>854</a>                <span class="kw-2">&amp;</span>root,
-<a href=#855 id=855 data-nosnippet>855</a>                HtmlNodeType::Element {
-<a href=#856 id=856 data-nosnippet>856</a>                    tag_name: <span class="string">"html"</span>.to_string(),
-<a href=#857 id=857 data-nosnippet>857</a>                    attributes: <span class="macro">vec!</span>[],
-<a href=#858 id=858 data-nosnippet>858</a>                },
-<a href=#859 id=859 data-nosnippet>859</a>            );
-<a href=#860 id=860 data-nosnippet>860</a>
-<a href=#861 id=861 data-nosnippet>861</a>            TreeNode::add_child_value(
-<a href=#862 id=862 data-nosnippet>862</a>                <span class="kw-2">&amp;</span>html_node,
-<a href=#863 id=863 data-nosnippet>863</a>                HtmlNodeType::Element {
-<a href=#864 id=864 data-nosnippet>864</a>                    tag_name: <span class="string">"head"</span>.to_string(),
-<a href=#865 id=865 data-nosnippet>865</a>                    attributes: <span class="macro">vec!</span>[],
-<a href=#866 id=866 data-nosnippet>866</a>                },
-<a href=#867 id=867 data-nosnippet>867</a>            );
-<a href=#868 id=868 data-nosnippet>868</a>
-<a href=#869 id=869 data-nosnippet>869</a>            <span class="kw">let </span>body_node = TreeNode::add_child_value(
-<a href=#870 id=870 data-nosnippet>870</a>                <span class="kw-2">&amp;</span>html_node,
-<a href=#871 id=871 data-nosnippet>871</a>                HtmlNodeType::Element {
-<a href=#872 id=872 data-nosnippet>872</a>                    tag_name: <span class="string">"body"</span>.to_string(),
-<a href=#873 id=873 data-nosnippet>873</a>                    attributes: <span class="macro">vec!</span>[],
-<a href=#874 id=874 data-nosnippet>874</a>                },
-<a href=#875 id=875 data-nosnippet>875</a>            );
-<a href=#876 id=876 data-nosnippet>876</a>
-<a href=#877 id=877 data-nosnippet>877</a>            <span class="kw">for </span>orphan <span class="kw">in </span>orphan_nodes {
-<a href=#878 id=878 data-nosnippet>878</a>                TreeNode::add_child(<span class="kw-2">&amp;</span>body_node, orphan);
-<a href=#879 id=879 data-nosnippet>879</a>            }
-<a href=#880 id=880 data-nosnippet>880</a>        }
-<a href=#881 id=881 data-nosnippet>881</a>    }
-<a href=#882 id=882 data-nosnippet>882</a>}
+<a href=#838 id=838 data-nosnippet>838</a>            <span class="kw">let </span>html_node = TreeNode::add_child_value(
+<a href=#839 id=839 data-nosnippet>839</a>                <span class="kw-2">&amp;</span>root,
+<a href=#840 id=840 data-nosnippet>840</a>                HtmlNodeType::Element {
+<a href=#841 id=841 data-nosnippet>841</a>                    tag_name: <span class="string">"html"</span>.to_string(),
+<a href=#842 id=842 data-nosnippet>842</a>                    attributes: <span class="macro">vec!</span>[],
+<a href=#843 id=843 data-nosnippet>843</a>                },
+<a href=#844 id=844 data-nosnippet>844</a>            );
+<a href=#845 id=845 data-nosnippet>845</a>
+<a href=#846 id=846 data-nosnippet>846</a>            TreeNode::add_child_value(
+<a href=#847 id=847 data-nosnippet>847</a>                <span class="kw-2">&amp;</span>html_node,
+<a href=#848 id=848 data-nosnippet>848</a>                HtmlNodeType::Element {
+<a href=#849 id=849 data-nosnippet>849</a>                    tag_name: <span class="string">"head"</span>.to_string(),
+<a href=#850 id=850 data-nosnippet>850</a>                    attributes: <span class="macro">vec!</span>[],
+<a href=#851 id=851 data-nosnippet>851</a>                },
+<a href=#852 id=852 data-nosnippet>852</a>            );
+<a href=#853 id=853 data-nosnippet>853</a>
+<a href=#854 id=854 data-nosnippet>854</a>            <span class="kw">let </span>body_node = TreeNode::add_child_value(
+<a href=#855 id=855 data-nosnippet>855</a>                <span class="kw-2">&amp;</span>html_node,
+<a href=#856 id=856 data-nosnippet>856</a>                HtmlNodeType::Element {
+<a href=#857 id=857 data-nosnippet>857</a>                    tag_name: <span class="string">"body"</span>.to_string(),
+<a href=#858 id=858 data-nosnippet>858</a>                    attributes: <span class="macro">vec!</span>[],
+<a href=#859 id=859 data-nosnippet>859</a>                },
+<a href=#860 id=860 data-nosnippet>860</a>            );
+<a href=#861 id=861 data-nosnippet>861</a>
+<a href=#862 id=862 data-nosnippet>862</a>            <span class="kw">for </span>orphan <span class="kw">in </span>orphan_nodes {
+<a href=#863 id=863 data-nosnippet>863</a>                TreeNode::add_child(<span class="kw-2">&amp;</span>body_node, orphan);
+<a href=#864 id=864 data-nosnippet>864</a>            }
+<a href=#865 id=865 data-nosnippet>865</a>        }
+<a href=#866 id=866 data-nosnippet>866</a>    }
+<a href=#867 id=867 data-nosnippet>867</a>}
 </code></pre></div></section></main></body></html>

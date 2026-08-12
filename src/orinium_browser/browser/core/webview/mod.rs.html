@@ -5,7 +5,7 @@
 <a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span>std::rc::{Rc, Weak};
 <a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>std::sync::{Arc, mpsc};
 <a href=#7 id=7 data-nosnippet>7</a>
-<a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span><span class="kw">crate</span>::engine::layouter::types::ColorScheme;
+<a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span><span class="kw">crate</span>::engine::layouter::types::{ColorScheme, TextFlowStyle};
 <a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span><span class="kw">crate</span>::engine::{
 <a href=#10 id=10 data-nosnippet>10</a>    css::{<span class="self">self</span>, parser::Parser <span class="kw">as </span>CssParser},
 <a href=#11 id=11 data-nosnippet>11</a>    html::HtmlNodeType,
@@ -16,7 +16,7 @@
 <a href=#16 id=16 data-nosnippet>16</a>    layouter::{
 <a href=#17 id=17 data-nosnippet>17</a>        <span class="self">self</span>, InheritedCss, LayoutResult, NodeId,
 <a href=#18 id=18 data-nosnippet>18</a>        dom_snapshot::DomSnapshot,
-<a href=#19 id=19 data-nosnippet>19</a>        types::{InfoNode, NodeKind, TextStyle},
+<a href=#19 id=19 data-nosnippet>19</a>        types::{InfoNode, NodeKind},
 <a href=#20 id=20 data-nosnippet>20</a>    },
 <a href=#21 id=21 data-nosnippet>21</a>    renderer_model::Image,
 <a href=#22 id=22 data-nosnippet>22</a>    tree::TreeNode,
@@ -887,11 +887,11 @@
 <a href=#887 id=887 data-nosnippet>887</a>            images: <span class="self">self</span>.images.clone(),
 <a href=#888 id=888 data-nosnippet>888</a>            audio: <span class="self">self</span>.audio.clone(),
 <a href=#889 id=889 data-nosnippet>889</a>            parent: InheritedCss {
-<a href=#890 id=890 data-nosnippet>890</a>                text_style: TextStyle {
+<a href=#890 id=890 data-nosnippet>890</a>                text_flow_style: TextFlowStyle {
 <a href=#891 id=891 data-nosnippet>891</a>                    font_size: <span class="number">16.0</span>,
 <a href=#892 id=892 data-nosnippet>892</a>                    ..Default::default()
 <a href=#893 id=893 data-nosnippet>893</a>                },
-<a href=#894 id=894 data-nosnippet>894</a>                color_scheme: Default::default(),
+<a href=#894 id=894 data-nosnippet>894</a>                ..Default::default()
 <a href=#895 id=895 data-nosnippet>895</a>            },
 <a href=#896 id=896 data-nosnippet>896</a>            chain: Vec::new(),
 <a href=#897 id=897 data-nosnippet>897</a>            write_back_sender: <span class="prelude-val">Some</span>(<span class="self">self</span>.write_back_tx.clone()),
