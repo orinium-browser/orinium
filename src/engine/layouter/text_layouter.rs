@@ -9,7 +9,7 @@ use ui_layout::{
 
 use crate::engine::bridge::text::GlyphCluster;
 use crate::engine::layouter::builder::DEFAULT_LINE_FACTOR;
-use crate::engine::layouter::types::{LineHeight, TextFlowStyle};
+use crate::engine::layouter::types::{LineHeight, TextFlowStyle, WhiteSpace};
 
 thread_local! {
     static TEXT_RESULTS: RefCell<HashMap<usize, Arc<TextLayoutResult>>> =
@@ -84,6 +84,16 @@ impl TextFlowLayouter {
         let lh = self.line_height();
         let text_len = self.text.len();
         let clusters = &self.clusters;
+
+        let white_space = self.flow_style.white_space;
+        let wrap_overflow = matches!(
+            white_space,
+            WhiteSpace::Normal | WhiteSpace::PreWrap | WhiteSpace::PreLine | WhiteSpace::BreakSpaces
+        );
+        let forced_newline = matches!(
+            white_space,
+            WhiteSpace::Pre | WhiteSpace::PreWrap | WhiteSpace::PreLine | WhiteSpace::BreakSpaces
+        );
 
         // Edge-case: no clusters but non-empty text (e.g. spaces-only).
         if clusters.is_empty() && !self.text.is_empty() {
@@ -173,7 +183,11 @@ impl TextFlowLayouter {
 
             // Check for a forced newline in the text spanned by this cluster
             let cluster_text = &self.text[frag.byte_offset..next_byte];
-            let nl_pos = cluster_text.find('\n');
+            let nl_pos = if forced_newline {
+                cluster_text.find('\n')
+            } else {
+                None
+            };
 
             if let Some(nl_offset) = nl_pos {
                 // The cluster itself contains a newline.
@@ -223,7 +237,10 @@ impl TextFlowLayouter {
 
             // Check if placing this cluster would overflow the line.
             let current_line_width = line_width(line_index);
-            if accumulated > 0.0 && accumulated + frag.width > current_line_width {
+            if wrap_overflow
+                && accumulated > 0.0
+                && accumulated + frag.width > current_line_width
+            {
                 if let Some(break_at) = last_breakable_cluster {
                     // Break at the last known breakable cluster (word boundary).
                     let break_byte = if break_at < clusters.len() {
@@ -408,6 +425,18 @@ mod tests {
         )
     }
 
+    fn layout_with(
+        text: &str,
+        clusters: Vec<GlyphCluster>,
+        line_width: f32,
+        white_space: WhiteSpace,
+    ) -> TextLayoutResult {
+        let mut flow = TextFlowStyle::default();
+        flow.white_space = white_space;
+        TextFlowLayouter::new(text.to_string(), flow, clusters)
+            .compute_layout(line_width, line_width, (0.0, 0.0))
+    }
+
     #[test]
     fn wraps_at_word_boundaries() {
         let result = layout(
@@ -542,5 +571,89 @@ mod tests {
         let result = TextFlowLayouter::new("Hello".to_string(), TextFlowStyle::default(), clusters)
             .compute_layout(30.0, 40.0, (0.0, 0.0));
         assert_eq!(result.line_texts, vec!["Hell", "o"]);
+    }
+
+    #[test]
+    fn nowrap_never_wraps_on_overflow() {
+        let clusters = vec![
+            cluster(0, 30.0, false),
+            cluster(3, 5.0, true),
+            cluster(4, 30.0, false),
+            cluster(7, 5.0, true),
+            cluster(8, 30.0, false),
+        ];
+        let result = layout_with("aaa bbb ccc", clusters, 50.0, WhiteSpace::Nowrap);
+        assert_eq!(result.line_texts, vec!["aaa bbb ccc"]);
+        assert_eq!(result.spans.len(), 1);
+        assert_eq!(result.spans[0].width(), 100.0);
+    }
+
+    #[test]
+    fn pre_breaks_only_on_newline() {
+        let no_wrap_clusters = vec![
+            cluster(0, 40.0, false),
+            cluster(3, 4.0, true),
+            cluster(4, 40.0, false),
+            cluster(7, 4.0, true),
+            cluster(8, 40.0, false),
+        ];
+        let no_wrap = layout_with("aaa bbb ccc", no_wrap_clusters, 60.0, WhiteSpace::Pre);
+        assert_eq!(no_wrap.line_texts, vec!["aaa bbb ccc"]);
+        assert_eq!(no_wrap.spans.len(), 1);
+        assert_eq!(no_wrap.spans[0].width(), 128.0);
+
+        let newline_clusters = vec![
+            cluster(0, 40.0, false),
+            cluster(4, 4.0, true),
+            cluster(5, 40.0, false),
+        ];
+        let forced = layout_with("aaaa\nbbbb", newline_clusters, 50.0, WhiteSpace::Pre);
+        assert_eq!(forced.line_texts, vec!["aaaa", "bbbb"]);
+        assert_eq!(forced.spans.len(), 2);
+        assert_eq!(forced.spans[0].line_index, 0);
+        assert_eq!(forced.spans[1].line_index, 1);
+    }
+
+    #[test]
+    fn pre_wrap_breaks_on_newline_and_wraps() {
+        let clusters = vec![
+            cluster(0, 20.0, false),
+            cluster(2, 4.0, true),
+            cluster(3, 20.0, false),
+            cluster(5, 4.0, true),
+            cluster(6, 20.0, false),
+        ];
+        let result = layout_with("aa bb cc", clusters, 34.0, WhiteSpace::PreWrap);
+        let texts: Vec<String> = result.line_texts.iter().map(|s| s.trim_end().to_string()).collect();
+        assert_eq!(texts, vec!["aa", "bb", "cc"]);
+    }
+
+    #[test]
+    fn pre_line_breaks_on_newline_and_wraps() {
+        let clusters = vec![
+            cluster(0, 20.0, false),
+            cluster(2, 4.0, true),
+            cluster(3, 20.0, false),
+            cluster(5, 4.0, true),
+            cluster(6, 20.0, false),
+        ];
+        let result = layout_with("aa bb cc", clusters, 34.0, WhiteSpace::PreLine);
+        let texts: Vec<String> = result.line_texts.iter().map(|s| s.trim_end().to_string()).collect();
+        assert_eq!(texts, vec!["aa", "bb", "cc"]);
+        assert_eq!(result.spans.len(), 3);
+    }
+
+    #[test]
+    fn break_spaces_wraps_inside_whitespace_run() {
+        let clusters = vec![
+            cluster(0, 20.0, false),
+            cluster(2, 5.0, true),
+            cluster(3, 5.0, true),
+            cluster(4, 20.0, false),
+            cluster(5, 20.0, false),
+        ];
+        let result = layout_with("aa  bb", clusters, 25.0, WhiteSpace::BreakSpaces);
+        assert_eq!(result.line_texts, vec!["aa ", " ", "bb"]);
+        assert_eq!(result.spans.len(), 3);
     }
 }
