@@ -12,7 +12,7 @@ use crate::engine::{
     html::parser::{
         ClassicScriptExecution, ClassicScriptSource, DomTree, Parser as HtmlParser, ScriptingMode,
     },
-    js::{JsFetchResponse, JsRuntime},
+    js::{JsFetchRequest, JsFetchResponse, JsProcessor, JsTask, JsTaskResult},
     layouter::{
         self, InheritedCss, LayoutResult, NodeId,
         dom_snapshot::DomSnapshot,
@@ -153,8 +153,22 @@ pub struct WebView {
     /// Channel on which text inputs report value write-backs (received here).
     write_back_tx: mpsc::Sender<(u32, String)>,
     write_back_rx: mpsc::Receiver<(u32, String)>,
-    /// JS runtime sharing the current document's DOM.
-    js_runtime: Option<JsRuntime>,
+    /// JS runtime on a background worker, sharing a mirror of the current
+    /// document's DOM. Results are applied in [`WebView::try_apply_js_results`].
+    js_processor: Option<JsProcessor>,
+    /// JS-facing dom id per live node address of the committed tree.
+    ///
+    /// Rebuilt whenever a worker result is committed, so hit-tested layout
+    /// nodes and write-back serialization can be translated to worker ids.
+    js_dom_ids: HashMap<usize, u64>,
+    /// Ordered JS tasks sent but not yet applied. Write-backs are only synced
+    /// to the worker once this reaches zero, so the mirror and the real tree
+    /// cannot diverge mid-task.
+    pending_js_tasks: usize,
+    /// The real DOM diverged from the worker's mirror and needs syncing.
+    js_dom_dirty: bool,
+    /// `fetch()` requests collected from applied JS results.
+    pending_js_fetches: Vec<JsFetchRequest>,
     /// Classic scripts in document order. Execution starts after CSS is applied.
     classic_scripts: Vec<ClassicScript>,
     next_script_index: usize,
@@ -275,7 +289,11 @@ impl WebView {
             snapshot_cache: None,
             write_back_tx,
             write_back_rx,
-            js_runtime: None,
+            js_processor: None,
+            js_dom_ids: HashMap::new(),
+            pending_js_tasks: 0,
+            js_dom_dirty: false,
+            pending_js_fetches: Vec::new(),
             classic_scripts: Vec::new(),
             next_script_index: 0,
             pending_script_fetches: HashMap::new(),
@@ -305,12 +323,13 @@ impl WebView {
 
         if policy == JsPolicy::Disabled {
             self.teardown_script_execution();
-        } else if self.js_runtime.is_none()
+        } else if self.js_processor.is_none()
             && let Some(dom) = self.docment_info.as_ref().map(|info| Rc::clone(&info.dom))
         {
-            // Re-enabling: install a runtime so DOM APIs work again, without
+            // Re-enabling: install a processor so DOM APIs work again, without
             // replaying scripts that were skipped while disabled.
-            self.js_runtime = Some(JsRuntime::new(dom));
+            let (snapshot, _) = DomSnapshot::from_tree(&dom.root);
+            self.js_processor = Some(JsProcessor::new(snapshot));
         }
     }
 
@@ -322,7 +341,11 @@ impl WebView {
     /// Stops script execution immediately, dropping the runtime and any
     /// pending script work.
     fn teardown_script_execution(&mut self) {
-        self.js_runtime = None;
+        self.js_processor = None;
+        self.pending_js_tasks = 0;
+        self.js_dom_dirty = false;
+        self.pending_js_fetches.clear();
+        self.js_dom_ids.clear();
         self.classic_scripts.clear();
         self.next_script_index = 0;
         self.pending_script_fetches.clear();
@@ -413,10 +436,12 @@ impl WebView {
             }
         }
 
+        self.try_apply_js_results();
         self.schedule_js_fetches(&mut tasks);
         self.run_due_js_timers();
         self.try_apply_layout_results();
         self.drain_write_backs();
+        self.sync_dom_to_worker();
 
         tasks
     }
@@ -436,11 +461,16 @@ impl WebView {
         self.next_deferred_script_index = 0;
         self.css_results_expected = self.pending_css_urls.len();
 
-        self.js_runtime = if self.js_policy == JsPolicy::Enabled {
-            Some(JsRuntime::new(Rc::clone(&parsed.dom)))
+        self.js_processor = if self.js_policy == JsPolicy::Enabled {
+            let (snapshot, _) = DomSnapshot::from_tree(&parsed.dom.root);
+            Some(JsProcessor::new(snapshot))
         } else {
             None
         };
+        self.pending_js_tasks = 0;
+        self.js_dom_ids.clear();
+        self.js_dom_dirty = false;
+        self.pending_js_fetches.clear();
 
         let docment_info = DocumentInfo {
             document_url: parsed.document_url,
@@ -511,12 +541,12 @@ impl WebView {
         match execution {
             ClassicScriptExecution::Default => {
                 self.next_script_index += 1;
-                self.run_script_source(&source);
+                self.send_script(&source);
             }
             ClassicScriptExecution::Defer => {
                 self.deferred_script_results.insert(index, Some(source));
             }
-            ClassicScriptExecution::Async => self.run_script_source(&source),
+            ClassicScriptExecution::Async => self.send_script(&source),
         }
     }
 
@@ -553,10 +583,10 @@ impl WebView {
         body: Vec<u8>,
         headers: Vec<(String, String)>,
     ) {
-        let needs_redraw = self.js_runtime.as_mut().is_some_and(|runtime| {
-            runtime.resolve_fetch(
-                request_id,
-                JsFetchResponse {
+        if let Some(processor) = self.js_processor.as_ref() {
+            processor.send(JsTask::ResolveFetch {
+                id: request_id,
+                response: JsFetchResponse {
                     url,
                     status,
                     status_text,
@@ -564,24 +594,19 @@ impl WebView {
                     body,
                     headers,
                 },
-            );
-            runtime.take_needs_redraw()
-        });
-        if needs_redraw {
-            self.rebuild_styles_and_layout();
-            self.needs_redraw = true;
+            });
+            self.pending_js_tasks += 1;
         }
     }
 
     /// Rejects a JavaScript `fetch()` request after a network failure.
     pub fn on_js_fetch_failed(&mut self, request_id: u64, reason: String) {
-        let needs_redraw = self.js_runtime.as_mut().is_some_and(|runtime| {
-            runtime.reject_fetch(request_id, reason);
-            runtime.take_needs_redraw()
-        });
-        if needs_redraw {
-            self.rebuild_styles_and_layout();
-            self.needs_redraw = true;
+        if let Some(processor) = self.js_processor.as_ref() {
+            processor.send(JsTask::RejectFetch {
+                id: request_id,
+                reason,
+            });
+            self.pending_js_tasks += 1;
         }
     }
 
@@ -597,6 +622,8 @@ impl WebView {
             doc_info.dom.mark_dirty();
         }
         self.update_layout();
+        // The worker's mirror must reflect the external DOM mutation too.
+        self.js_dom_dirty = true;
     }
 
     fn apply_resolved_styles_and_relayout(
@@ -670,7 +697,7 @@ impl WebView {
             match self.classic_scripts[self.next_script_index].clone() {
                 ClassicScript::Inline(source) => {
                     self.next_script_index += 1;
-                    self.run_script_source(&source);
+                    self.send_script(&source);
                 }
                 ClassicScript::External { url, execution } => {
                     if execution != ClassicScriptExecution::Default {
@@ -741,53 +768,38 @@ impl WebView {
             };
             self.next_deferred_script_index = index + 1;
             if let Some(source) = source {
-                self.run_script_source(&source);
+                self.send_script(&source);
             }
         }
     }
 
-    fn run_script_source(&mut self, source: &str) {
-        let needs_redraw = self.js_runtime.as_mut().is_some_and(|runtime| {
-            runtime.run_script(source);
-            runtime.take_needs_redraw()
-        });
-
-        if needs_redraw {
-            self.rebuild_styles_and_layout();
-            self.needs_redraw = true;
+    /// Sends a script to the JS worker for ordered execution.
+    fn send_script(&mut self, source: &str) {
+        if let Some(processor) = self.js_processor.as_ref() {
+            processor.send(JsTask::RunScript {
+                source: source.to_string(),
+            });
+            self.pending_js_tasks += 1;
         }
     }
 
     fn dispatch_dom_content_loaded(&mut self) {
-        let needs_redraw = self.js_runtime.as_mut().is_some_and(|runtime| {
-            runtime.dispatch_dom_content_loaded();
-            runtime.take_needs_redraw()
-        });
-
-        if needs_redraw {
-            self.rebuild_styles_and_layout();
-            self.needs_redraw = true;
+        if let Some(processor) = self.js_processor.as_ref() {
+            processor.send(JsTask::DispatchDomContentLoaded);
+            self.pending_js_tasks += 1;
         }
     }
 
     fn run_due_js_timers(&mut self) {
-        let needs_redraw = self.js_runtime.as_mut().is_some_and(|runtime| {
-            runtime.run_due_timers();
-            runtime.take_needs_redraw()
-        });
-
-        if needs_redraw {
-            self.rebuild_styles_and_layout();
-            self.needs_redraw = true;
+        if let Some(processor) = self.js_processor.as_ref() {
+            // Timer pokes are coalescable: the worker skips this one when a
+            // newer task has already been queued.
+            processor.send(JsTask::RunTimers);
         }
     }
 
     fn schedule_js_fetches(&mut self, tasks: &mut Vec<WebViewTask>) {
-        let requests = self
-            .js_runtime
-            .as_mut()
-            .map(JsRuntime::take_fetch_requests)
-            .unwrap_or_default();
+        let requests = std::mem::take(&mut self.pending_js_fetches);
         let base_url = self.docment_info.as_ref().map(|info| info.base_url.clone());
 
         for request in requests {
@@ -815,11 +827,11 @@ impl WebView {
 
     /// Dispatches a click on the given DOM snapshot node id to the page's JS.
     ///
-    /// Resolves the live DOM node behind the snapshot id, runs its `onclick`
-    /// handler if any, and relayouts + requests a redraw when the handler
-    /// mutated the DOM. Returns whether a redraw is needed.
+    /// Resolves the live DOM node behind the snapshot id, translates it to the
+    /// JS-facing dom id and hands the click to the JS worker. Returns whether
+    /// a redraw is needed; the worker result triggers the relayout once applied.
     pub fn on_js_click(&mut self, dom_id: u32) -> bool {
-        let Some(js_runtime) = self.js_runtime.as_mut() else {
+        let Some(processor) = self.js_processor.as_ref() else {
             return false;
         };
         let Some(node) = self
@@ -829,14 +841,12 @@ impl WebView {
         else {
             return false;
         };
-        js_runtime.click(&node);
-        if js_runtime.take_needs_redraw() {
-            self.rebuild_styles_and_layout();
-            self.needs_redraw = true;
-            true
-        } else {
-            false
-        }
+        let Some(js_dom_id) = self.js_dom_ids.get(&(Rc::as_ptr(&node) as usize)) else {
+            return false;
+        };
+        processor.send(JsTask::Click { dom_id: *js_dom_id });
+        self.pending_js_tasks += 1;
+        false
     }
 
     fn ensure_text_measurer(&mut self) {
@@ -923,6 +933,67 @@ impl WebView {
         }
     }
 
+    /// Takes completed JS results from the worker and commits them.
+    ///
+    /// A result that mutated the DOM carries a snapshot of the worker's mirror;
+    /// committing it replaces the authoritative tree, re-registers the JS dom
+    /// id map and triggers a relayout.
+    fn try_apply_js_results(&mut self) {
+        let results: Vec<JsTaskResult> = {
+            let Some(processor) = self.js_processor.as_ref() else {
+                return;
+            };
+            let mut results = Vec::new();
+            while let Some(result) = processor.try_receive() {
+                results.push(result);
+            }
+            results
+        };
+        for result in results {
+            self.pending_js_tasks = self.pending_js_tasks.saturating_sub(1);
+            self.pending_js_fetches.extend(result.fetch_requests);
+
+            let Some(snapshot) = result.dom else {
+                continue;
+            };
+            let Some(info) = self.docment_info.as_mut() else {
+                continue;
+            };
+            // Commit the worker's mirror as the new authoritative tree. The
+            // rebuilt tree starts with a fresh version, so the cached snapshot
+            // and live layout references are stale and must be dropped.
+            let (tree, dom_ids) = snapshot.into_tree();
+            info.dom = Rc::new(tree);
+            self.js_dom_ids = dom_ids;
+            self.snapshot_cache = None;
+            self.layout_dom_refs.clear();
+
+            self.rebuild_styles_and_layout();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Syncs UI-side DOM mutations (write-backs, `update_page`) to the worker.
+    ///
+    /// Only runs when no JS task is in flight: mid-task the worker's mirror
+    /// legitimately diverges from the real tree, and committing an in-flight
+    /// snapshot after this sync would clobber the worker's newer mutations.
+    fn sync_dom_to_worker(&mut self) {
+        if !self.js_dom_dirty || self.pending_js_tasks != 0 {
+            return;
+        }
+        let Some(processor) = self.js_processor.as_ref() else {
+            return;
+        };
+        let Some(doc_info) = self.docment_info.as_ref() else {
+            return;
+        };
+        let snapshot = DomSnapshot::from_mirror(&doc_info.dom.root, &self.js_dom_ids);
+        processor.send(JsTask::UpdateDom { snapshot });
+        self.pending_js_tasks += 1;
+        self.js_dom_dirty = false;
+    }
+
     /// Applies value write-backs reported by text inputs to the live DOM.
     fn drain_write_backs(&mut self) {
         let mut applied = false;
@@ -940,6 +1011,11 @@ impl WebView {
         // on the next relayout. Future JS mutations must also bump the version.
         if applied && let Some(doc_info) = self.docment_info.as_mut() {
             doc_info.dom.mark_dirty();
+        }
+        // The worker's mirror must reflect the new input value; synced once the
+        // in-flight JS tasks have all been applied.
+        if applied {
+            self.js_dom_dirty = true;
         }
     }
 
@@ -973,7 +1049,11 @@ impl WebView {
         self.layout_pending = false;
         self.layout_dom_refs.clear();
         self.snapshot_cache = None;
-        self.js_runtime = None;
+        self.js_processor = None;
+        self.js_dom_ids.clear();
+        self.pending_js_tasks = 0;
+        self.js_dom_dirty = false;
+        self.pending_js_fetches.clear();
         self.classic_scripts.clear();
         self.next_script_index = 0;
         self.pending_script_fetches.clear();
@@ -1223,6 +1303,37 @@ pub fn resolve_url(base_url: &Url, path: &str) -> Result<Url, url::ParseError> {
 mod tests {
     use super::*;
     use crate::engine::layouter::types::{ContainerRole, ContainerStyle};
+    use std::time::{Duration, Instant};
+
+    /// Drives `tick()` until `done` holds, or panics after a timeout.
+    ///
+    /// JS runs on a background worker, so effects (DOM commits, relayouts) are
+    /// observed a few ticks after the task that produced them was sent.
+    fn pump_until(webview: &mut WebView, mut done: impl FnMut(&mut WebView) -> bool, why: &str) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !done(webview) {
+            assert!(Instant::now() < deadline, "timed out waiting for {why}");
+            webview.tick();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    /// Drives `tick()` collecting tasks until `done` accepts one, then returns it.
+    fn pump_for_task(
+        webview: &mut WebView,
+        mut done: impl FnMut(&WebViewTask) -> bool,
+        why: &str,
+    ) -> WebViewTask {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let tasks = webview.tick();
+            if let Some(task) = tasks.into_iter().find(&mut done) {
+                return task;
+            }
+            assert!(Instant::now() < deadline, "timed out waiting for {why}");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
 
     fn scrollable_info(dom_id: Option<NodeId>, scroll_y: bool, offset_y: f32) -> InfoNode {
         InfoNode {
@@ -1464,7 +1575,7 @@ mod tests {
             r#"<html><body><div class="dynamic">ok</div></body></html>"#.to_string(),
             Url::parse("https://example.test/").unwrap(),
         );
-        webview.run_script_source(
+        webview.send_script(
             r#"
             const style = document.createElement("style");
             style.textContent = ".dynamic { color: red; }";
@@ -1472,14 +1583,18 @@ mod tests {
             "#,
         );
 
-        assert!(webview.resolved_styles.iter().any(|declaration| {
-            declaration.name == "color"
-                && declaration
-                    .selector
-                    .parts
-                    .iter()
-                    .any(|part| part.selector.classes.iter().any(|class| class == "dynamic"))
-        }));
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.resolved_styles.iter().any(|declaration| {
+                    declaration.name == "color"
+                        && declaration.selector.parts.iter().any(|part| {
+                            part.selector.classes.iter().any(|class| class == "dynamic")
+                        })
+                })
+            },
+            "JS-inserted style element to be resolved",
+        );
     }
 
     #[test]
@@ -1601,8 +1716,24 @@ mod tests {
             r#"document.getElementById("result").setAttribute("data-order", order + "d");"#
                 .to_string(),
         );
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.document_info()
+                    .unwrap()
+                    .dom
+                    .get_element_by_id("result")
+                    .is_some_and(|node| node.borrow().value.get_attr("data-order").is_some())
+            },
+            "final classic script result to be committed",
+        );
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
         assert_eq!(result.borrow().value.get_attr("data-order"), Some("abcd"));
-        assert!(webview.tick().is_empty());
         assert_eq!(webview.phase, PagePhase::ScriptApplied);
     }
 
@@ -1630,7 +1761,17 @@ mod tests {
         ));
 
         webview.on_script_fetch_failed(0);
-        assert!(webview.tick().is_empty());
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.document_info()
+                    .unwrap()
+                    .dom
+                    .get_element_by_id("result")
+                    .is_some_and(|node| node.borrow().value.get_attr("data-ran").is_some())
+            },
+            "inline script after a failed external script",
+        );
         let result = webview
             .document_info()
             .unwrap()
@@ -1683,7 +1824,23 @@ mod tests {
         );
         assert_eq!(result.borrow().value.get_attr("data-ready"), None);
 
-        assert!(webview.tick().is_empty());
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.document_info()
+                    .unwrap()
+                    .dom
+                    .get_element_by_id("result")
+                    .is_some_and(|node| node.borrow().value.get_attr("data-ready").is_some())
+            },
+            "DOMContentLoaded listener to run",
+        );
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
         assert_eq!(result.borrow().value.get_attr("data-ready"), Some("yes"));
         assert_eq!(webview.phase, PagePhase::ScriptApplied);
     }
@@ -1730,7 +1887,17 @@ mod tests {
         assert_ne!(webview.phase, PagePhase::ScriptApplied);
 
         webview.on_script_fetched(1, r#"order = order + " > first";"#.to_string());
-        assert!(webview.tick().is_empty());
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.document_info()
+                    .unwrap()
+                    .dom
+                    .get_element_by_id("result")
+                    .is_some_and(|node| node.borrow().value.get_attr("data-order").is_some())
+            },
+            "deferred scripts and DOMContentLoaded to run",
+        );
         let result = webview
             .document_info()
             .unwrap()
@@ -1771,6 +1938,17 @@ mod tests {
             }]
         ));
 
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.document_info()
+                    .unwrap()
+                    .dom
+                    .get_element_by_id("result")
+                    .is_some_and(|node| node.borrow().value.get_attr("data-ready").is_some())
+            },
+            "DOMContentLoaded before the async script arrives",
+        );
         let result = webview
             .document_info()
             .unwrap()
@@ -1785,6 +1963,23 @@ mod tests {
             0,
             r#"document.getElementById("result").setAttribute("data-async", "yes");"#.to_string(),
         );
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.document_info()
+                    .unwrap()
+                    .dom
+                    .get_element_by_id("result")
+                    .is_some_and(|node| node.borrow().value.get_attr("data-async").is_some())
+            },
+            "async script to run after DOMContentLoaded",
+        );
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
         assert_eq!(result.borrow().value.get_attr("data-async"), Some("yes"));
     }
 
@@ -1806,19 +2001,28 @@ mod tests {
             Url::parse("https://example.test/path/index.html").unwrap(),
         );
 
-        assert!(webview.tick().is_empty());
-        let tasks = webview.tick();
-        let request_id = match tasks.as_slice() {
-            [
-                WebViewTask::Fetch {
-                    url,
-                    kind: FetchKind::JavaScript { request_id, .. },
-                },
-            ] => {
+        let fetch_task = pump_for_task(
+            &mut webview,
+            |task| {
+                matches!(
+                    task,
+                    WebViewTask::Fetch {
+                        kind: FetchKind::JavaScript { .. },
+                        ..
+                    }
+                )
+            },
+            "the page's fetch() to be dispatched",
+        );
+        let request_id = match fetch_task {
+            WebViewTask::Fetch {
+                url,
+                kind: FetchKind::JavaScript { request_id, .. },
+            } => {
                 assert_eq!(url.as_str(), "https://example.test/message.txt");
-                *request_id
+                request_id
             }
-            _ => panic!("expected JavaScript fetch request"),
+            _ => unreachable!("guarded by pump_for_task"),
         };
 
         webview.on_js_fetch_succeeded(
@@ -1831,6 +2035,17 @@ mod tests {
             Vec::new(),
         );
 
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.document_info()
+                    .unwrap()
+                    .dom
+                    .get_element_by_id("result")
+                    .is_some_and(|node| node.borrow().value.get_attr("data-text").is_some())
+            },
+            "the fetch response microtask to run",
+        );
         let result = webview
             .document_info()
             .unwrap()
@@ -1859,20 +2074,40 @@ mod tests {
             Url::parse("https://example.test/index.html").unwrap(),
         );
 
-        assert!(webview.tick().is_empty());
-        let tasks = webview.tick();
-        let request_id = match tasks.as_slice() {
-            [
-                WebViewTask::Fetch {
-                    kind: FetchKind::JavaScript { request_id, .. },
-                    ..
-                },
-            ] => *request_id,
-            _ => panic!("expected JavaScript fetch request"),
+        let fetch_task = pump_for_task(
+            &mut webview,
+            |task| {
+                matches!(
+                    task,
+                    WebViewTask::Fetch {
+                        kind: FetchKind::JavaScript { .. },
+                        ..
+                    }
+                )
+            },
+            "the page's fetch() to be dispatched",
+        );
+        let request_id = match fetch_task {
+            WebViewTask::Fetch {
+                kind: FetchKind::JavaScript { request_id, .. },
+                ..
+            } => request_id,
+            _ => unreachable!("guarded by pump_for_task"),
         };
 
         webview.on_js_fetch_failed(request_id, "network error".to_string());
 
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.document_info()
+                    .unwrap()
+                    .dom
+                    .get_element_by_id("result")
+                    .is_some_and(|node| node.borrow().value.get_attr("data-error").is_some())
+            },
+            "the fetch rejection to run",
+        );
         let result = webview
             .document_info()
             .unwrap()
@@ -1907,6 +2142,17 @@ mod tests {
 
         assert!(webview.tick().is_empty());
         assert!(webview.tick().is_empty());
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.document_info()
+                    .unwrap()
+                    .dom
+                    .get_element_by_id("result")
+                    .is_some_and(|node| node.borrow().value.get_attr("data-timer").is_some())
+            },
+            "the zero-delay timer callback to run",
+        );
         let result = webview
             .document_info()
             .unwrap()
