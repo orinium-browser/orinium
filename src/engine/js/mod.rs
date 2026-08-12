@@ -1840,6 +1840,14 @@ fn install_document(engine: &mut pixi_byte::JSEngine) {
             JSValue::NativeFunction(document_query_selector_all),
         );
         document.set(
+            "getElementsByTagName".to_string(),
+            JSValue::NativeFunction(document_get_elements_by_tag_name),
+        );
+        document.set(
+            "getElementsByClassName".to_string(),
+            JSValue::NativeFunction(document_get_elements_by_class_name),
+        );
+        document.set(
             "createElement".to_string(),
             JSValue::NativeFunction(create_element),
         );
@@ -2051,6 +2059,38 @@ fn document_query_selector_all(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVa
         return Ok(vm.array_from_values(Vec::new()));
     };
     let nodes = with_host(vm, |host| host.dom.query_selector_all(selector)).unwrap_or_default();
+    Ok(expose_node_list(vm, nodes))
+}
+
+fn document_get_elements_by_tag_name(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let tag_name = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
+    let nodes = with_host(vm, |host| {
+        if tag_name == "*" {
+            host.dom.find_all(|node| node.tag_name().is_some())
+        } else {
+            host.dom
+                .get_elements_by_tag_name(&tag_name.to_ascii_lowercase())
+        }
+    })
+    .unwrap_or_default();
+    Ok(expose_node_list(vm, nodes))
+}
+
+fn class_selector(value: &JSValue) -> String {
+    value
+        .to_string()
+        .split_whitespace()
+        .filter(|class| !class.is_empty())
+        .map(|class| format!(".{class}"))
+        .collect()
+}
+
+fn document_get_elements_by_class_name(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let selector = class_selector(args.get(1).unwrap_or(&JSValue::Undefined));
+    if selector.is_empty() {
+        return Ok(vm.array_from_values(Vec::new()));
+    }
+    let nodes = with_host(vm, |host| host.dom.query_selector_all(&selector)).unwrap_or_default();
     Ok(expose_node_list(vm, nodes))
 }
 
@@ -2447,6 +2487,18 @@ fn make_element(
         JSValue::NativeFunction(element_query_selector_all),
     );
     obj.set(
+        "getElementsByTagName".to_string(),
+        JSValue::NativeFunction(element_get_elements_by_tag_name),
+    );
+    obj.set(
+        "getElementsByClassName".to_string(),
+        JSValue::NativeFunction(element_get_elements_by_class_name),
+    );
+    obj.set(
+        "dispatchEvent".to_string(),
+        JSValue::NativeFunction(element_dispatch_event),
+    );
+    obj.set(
         "contains".to_string(),
         JSValue::NativeFunction(element_contains),
     );
@@ -2758,6 +2810,86 @@ fn element_query_selector_all(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVal
     };
     let nodes = DomTree::query_selector_all_within(&scope, selector);
     Ok(expose_node_list(vm, nodes))
+}
+
+fn element_get_elements_by_tag_name(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(scope) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(vm.array_from_values(Vec::new()));
+    };
+    let tag_name = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
+    let selector = if tag_name == "*" {
+        "*".to_string()
+    } else {
+        tag_name.to_ascii_lowercase()
+    };
+    let nodes = DomTree::query_selector_all_within(&scope, &selector);
+    Ok(expose_node_list(vm, nodes))
+}
+
+fn element_get_elements_by_class_name(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(scope) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(vm.array_from_values(Vec::new()));
+    };
+    let selector = class_selector(args.get(1).unwrap_or(&JSValue::Undefined));
+    if selector.is_empty() {
+        return Ok(vm.array_from_values(Vec::new()));
+    }
+    let nodes = DomTree::query_selector_all_within(&scope, &selector);
+    Ok(expose_node_list(vm, nodes))
+}
+
+fn element_dispatch_event(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(JSValue::Object(target)) = args.first() else {
+        return Err(JSError::TypeError(
+            "dispatchEvent called on incompatible receiver".to_string(),
+        ));
+    };
+    let Some(JSValue::Object(event)) = args.get(1) else {
+        return Err(JSError::TypeError(
+            "dispatchEvent requires an Event".to_string(),
+        ));
+    };
+    let event_type = event.borrow().get("type").to_string();
+    if event_type.is_empty() {
+        return Err(JSError::TypeError(
+            "Event type must not be empty".to_string(),
+        ));
+    }
+    event
+        .borrow_mut()
+        .set("target".to_string(), JSValue::Object(Rc::clone(target)));
+    event.borrow_mut().set(
+        "currentTarget".to_string(),
+        JSValue::Object(Rc::clone(target)),
+    );
+    let dom_id = node_dom_id(&JSValue::Object(Rc::clone(target))).unwrap_or(0);
+    let listeners = with_host(vm, |host| {
+        host.element_event_listeners
+            .get(&dom_id)
+            .and_then(|events| events.get(&event_type))
+            .cloned()
+            .unwrap_or_default()
+    })
+    .unwrap_or_default();
+    let handler = target.borrow().get(&format!("on{event_type}"));
+    if is_callable(&handler) {
+        vm.call(
+            handler,
+            JSValue::Object(Rc::clone(target)),
+            vec![JSValue::Object(Rc::clone(event))],
+        )?;
+    }
+    for listener in listeners {
+        vm.call(
+            listener,
+            JSValue::Object(Rc::clone(target)),
+            vec![JSValue::Object(Rc::clone(event))],
+        )?;
+        if event_flag(event, "__orinium_immediate_propagation_stopped") {
+            break;
+        }
+    }
+    Ok(JSValue::Boolean(!event_flag(event, "defaultPrevented")))
 }
 
 fn element_contains(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -5034,6 +5166,46 @@ mod tests {
         let outside = dom.get_element_by_id("outside").unwrap();
         assert_eq!(outside.borrow().value.get_attr("data-first"), None);
         assert_eq!(outside.borrow().value.get_attr("data-second"), None);
+    }
+
+    #[test]
+    fn react_dom_collection_and_event_apis_are_available() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"
+            <main id="root">
+                <button class="control primary">one</button>
+                <button class="control">two</button>
+                <span class="primary">label</span>
+            </main>
+            <div id="result"></div>
+            "#,
+        );
+        runtime.run_script(
+            r#"
+            const root = document.getElementById("root");
+            const button = root.getElementsByTagName("button")[0];
+            let received = "no";
+            button.addEventListener("scratch-ready", function (event) {
+                received = event.detail + ":" + (event.target === button);
+                event.preventDefault();
+            });
+            const accepted = button.dispatchEvent(new CustomEvent(
+                "scratch-ready", {detail: "yes", cancelable: true}
+            ));
+            document.getElementById("result").setAttribute(
+                "data-dom-apis",
+                document.getElementsByTagName("button").length + ":" +
+                    document.getElementsByClassName("control primary").length + ":" +
+                    root.getElementsByClassName("primary").length + ":" + received + ":" + accepted
+            );
+            "#,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-dom-apis"),
+            Some("2:1:2:yes:true:false")
+        );
     }
 
     #[test]
