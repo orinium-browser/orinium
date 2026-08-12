@@ -6,7 +6,7 @@ use crate::engine::layouter::types::ColorScheme;
 
 use std::collections::{HashMap, HashSet};
 
-type CustomProperties = HashMap<CssIdent, CssValue>;
+pub(super) type Properties = HashMap<String, ResolvedDeclaration>;
 
 struct Declaration {
     name: String,
@@ -596,43 +596,24 @@ impl SupportsEvaluator {
 //  DeclarationResolver — `!important` extraction, `var()` resolution
 // ============================================================
 
-struct DeclarationResolver;
+pub(super) struct DeclarationResolver;
 
 impl DeclarationResolver {
     fn collect(children: &[CssNode]) -> Vec<Declaration> {
-        let mut custom_props: CustomProperties = HashMap::new();
         let mut result = Vec::new();
 
         for child in children {
-            if let CssNodeType::Declaration { name, value } = &child.node()
-                && name.starts_with("--")
-            {
-                custom_props.insert(name.into(), value.clone());
-            }
-        }
+            let CssNodeType::Declaration { name, value } = &child.node() else {
+                continue;
+            };
 
-        for child in children {
-            if let CssNodeType::Declaration { name, value } = &child.node() {
-                let (raw_value, important) = Self::extract_important(value);
+            let (value, important) = Self::extract_important(value);
 
-                if name.starts_with("--") {
-                    // `--accent: blue` — custom property, keep as-is
-                    result.push(Declaration {
-                        name: name.clone(),
-                        value: raw_value,
-                        important,
-                    });
-                } else if let Some(resolved) =
-                    Self::resolve_var(&raw_value, &custom_props, &mut HashSet::new())
-                {
-                    // `color: var(--accent)` — resolve var() then emit
-                    result.push(Declaration {
-                        name: name.clone(),
-                        value: resolved,
-                        important,
-                    });
-                }
-            }
+            result.push(Declaration {
+                name: name.clone(),
+                value,
+                important,
+            });
         }
 
         result
@@ -670,9 +651,9 @@ impl DeclarationResolver {
         }
     }
 
-    fn resolve_var(
+    pub fn resolve_var(
         value: &CssValue,
-        custom_props: &CustomProperties,
+        custom_props: &Properties,
         visited: &mut HashSet<CssIdent>,
     ) -> Option<CssValue> {
         match value {
@@ -687,8 +668,8 @@ impl DeclarationResolver {
                     return None;
                 }
 
-                let result = if let Some(v) = custom_props.get(var_name) {
-                    Self::resolve_var(v, custom_props, visited)
+                let result = if let Some(v) = custom_props.get(var_name.as_str()) {
+                    Self::resolve_var(&v.value, custom_props, visited)
                 } else if let Some(fallback) = args.get(1) {
                     Self::resolve_var(fallback, custom_props, visited)
                 } else {

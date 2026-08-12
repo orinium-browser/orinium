@@ -15,7 +15,7 @@ use orinium_browser::engine::{
     layouter::{
         InheritedCss, build_layout_and_info,
         css_resolver::{CssResolver, ResolvedStyles},
-        types::{TextFlowStyle, TextStyle},
+        types::TextFlowStyle,
     },
     renderer_model::{DrawCommand, SystemUiKind, generate_draw_commands},
 };
@@ -74,12 +74,11 @@ fn main() {
         &resolved,
         measurer,
         InheritedCss {
-            text_style: TextStyle::default(),
             text_flow_style: TextFlowStyle {
                 font_size: 16.0,
                 ..Default::default()
             },
-            color_scheme: Default::default(),
+            ..Default::default()
         },
         Vec::new(),
         dark_light::detect().map(Into::into).unwrap_or_else(|e| {

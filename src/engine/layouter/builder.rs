@@ -6,12 +6,14 @@ use crate::engine::css::{
     values::{CssValue, Unit},
 };
 use crate::engine::html::{HtmlNodeType, ScriptingMode};
-use crate::engine::layouter::css_resolver::resolve_inline_value;
+use crate::engine::layouter::css_resolver::{
+    DeclarationResolver, Properties, resolve_inline_value,
+};
 use crate::engine::layouter::dom_snapshot::{DomSnapshot, NodeId};
 use crate::engine::layouter::types::{TextFlowStyle, VerticalAlign, WhiteSpace};
 use crate::engine::tree::NodeRef;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use ui_layout::{
@@ -116,6 +118,7 @@ fn element_sibling_infos(snapshot: &DomSnapshot, children: &[NodeId]) -> Vec<Opt
 /// Add new fields here when additional deferred-resolution properties arise.
 #[derive(Clone, Default)]
 pub struct InheritedCss {
+    pub custom_props: Properties,
     pub text_style: TextStyle,
     pub text_flow_style: TextFlowStyle,
     pub color_scheme: ColorScheme,
@@ -297,9 +300,18 @@ pub fn build_layout_and_info_from_snapshot(
             let mut overflow = Overflow::default();
 
             // Collect CSS candidates.
-            let candidates: Option<HashMap<_, _>> = if let HtmlNodeType::Element { .. } = html_node
-            {
-                Some(collect_candidates(resolved_styles, &chain_for_css))
+            let (candidates, custom_property_candidates) =
+                if let HtmlNodeType::Element { .. } = html_node {
+                    Some(collect_candidates(resolved_styles, &chain_for_css))
+                } else {
+                    None
+                }
+                .unzip();
+
+            let custom_properties = if let Some(own) = custom_property_candidates {
+                let mut inherited = child_css.custom_props.clone();
+                inherited.extend(own.clone());
+                Some(inherited)
             } else {
                 None
             };
@@ -324,20 +336,32 @@ pub fn build_layout_and_info_from_snapshot(
                 // cascade deterministic.
                 let mut candidates: Vec<_> = candidates.values().collect();
                 candidates.sort_by_key(|declaration| declaration.order);
+
                 for declaration in candidates {
-                    let name = &declaration.name;
-                    if !name.starts_with("--") {
-                        apply_declaration(
-                            name,
-                            &declaration.value,
-                            &mut style,
-                            &mut container_style,
-                            &mut text_style,
-                            &mut text_flow_style,
-                            &mut overflow,
-                            used_color_scheme,
-                        );
-                    }
+                    let value = match &custom_properties {
+                        Some(custom_properties) => {
+                            let Some(value) = DeclarationResolver::resolve_var(
+                                &declaration.value,
+                                custom_properties,
+                                &mut HashSet::new(),
+                            ) else {
+                                continue;
+                            };
+                            value
+                        }
+                        None => declaration.value.clone(),
+                    };
+
+                    apply_declaration(
+                        &declaration.name,
+                        &value,
+                        &mut style,
+                        &mut container_style,
+                        &mut text_style,
+                        &mut text_flow_style,
+                        &mut overflow,
+                        used_color_scheme,
+                    );
                 }
             }
 
@@ -394,6 +418,7 @@ pub fn build_layout_and_info_from_snapshot(
             };
 
             let child = InheritedCss {
+                custom_props: custom_properties.unwrap_or(child_css.custom_props),
                 text_style: text_style.clone(),
                 text_flow_style,
                 color_scheme: used_color_scheme,
@@ -885,25 +910,32 @@ fn resolve_used_color_scheme(
 fn collect_candidates(
     resolved_styles: &ResolvedStyles,
     chain: &ElementChain,
-) -> HashMap<String, super::css_resolver::ResolvedDeclaration> {
-    let mut candidates = HashMap::new();
+) -> (Properties, Properties) {
+    let mut properties = HashMap::new();
+    let mut custom_properties = HashMap::new();
 
     for decl in resolved_styles {
-        if decl.selector.matches(chain) {
-            let entry = candidates.get(&decl.name);
+        if !decl.selector.matches(chain) {
+            continue;
+        }
 
-            let should_replace = match entry {
-                Some(current) => decl.outranks(current),
-                None => true,
-            };
+        let target = if decl.name.starts_with("--") {
+            &mut custom_properties
+        } else {
+            &mut properties
+        };
 
-            if should_replace {
-                candidates.insert(decl.name.clone(), decl.clone());
-            }
+        let should_replace = match target.get(&decl.name) {
+            Some(current) => decl.outranks(current),
+            None => true,
+        };
+
+        if should_replace {
+            target.insert(decl.name.clone(), decl.clone());
         }
     }
 
-    candidates
+    (properties, custom_properties)
 }
 
 fn apply_attribute_dimensions(
