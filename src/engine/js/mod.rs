@@ -10,6 +10,7 @@
 use crate::engine::html::{DomTree, HtmlNodeType, Parser as HtmlParser};
 use crate::engine::layouter::dom_snapshot::DomSnapshot;
 use crate::engine::tree::{NodeRef, TreeNode};
+use base64::Engine as _;
 use pixi_byte::value::JSArray;
 use pixi_byte::value::jsobject::{JSObject, Property};
 use pixi_byte::vm::VM;
@@ -198,6 +199,7 @@ impl JsRuntime {
         install_request(&mut engine);
         install_fetch(&mut engine);
         install_url_apis(&mut engine);
+        install_encoding_apis(&mut engine);
         install_browser_environment(&mut engine);
         install_global_aliases(&mut engine);
 
@@ -2079,6 +2081,122 @@ fn search_params_delete(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 fn search_params_to_string(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let params = search_params_receiver(&args)?;
     Ok(params.borrow().get(SEARCH_PARAMS_DATA))
+}
+
+// --- string / byte encoding ---
+
+fn install_encoding_apis(engine: &mut pixi_byte::JSEngine) {
+    let mut encoder_constructor = JSObject::new();
+    encoder_constructor.set(
+        "__construct__".to_string(),
+        JSValue::NativeFunction(text_encoder_constructor),
+    );
+    let mut decoder_constructor = JSObject::new();
+    decoder_constructor.set(
+        "__construct__".to_string(),
+        JSValue::NativeFunction(text_decoder_constructor),
+    );
+    let mut global = engine.global_mut().borrow_mut();
+    global.set("atob".to_string(), JSValue::NativeFunction(atob));
+    global.set("btoa".to_string(), JSValue::NativeFunction(btoa));
+    global.set(
+        "TextEncoder".to_string(),
+        JSValue::Object(Rc::new(RefCell::new(encoder_constructor))),
+    );
+    global.set(
+        "TextDecoder".to_string(),
+        JSValue::Object(Rc::new(RefCell::new(decoder_constructor))),
+    );
+}
+
+fn btoa(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let input = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
+    let mut bytes = Vec::with_capacity(input.len());
+    for character in input.chars() {
+        if character as u32 > u8::MAX as u32 {
+            return Err(JSError::TypeError(
+                "btoa input contains characters outside Latin-1".to_string(),
+            ));
+        }
+        bytes.push(character as u8);
+    }
+    Ok(JSValue::String(
+        base64::engine::general_purpose::STANDARD.encode(bytes),
+    ))
+}
+
+fn atob(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let input = args
+        .get(1)
+        .unwrap_or(&JSValue::Undefined)
+        .to_string()
+        .chars()
+        .filter(|character| !character.is_ascii_whitespace())
+        .collect::<String>();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(input)
+        .map_err(|_| JSError::TypeError("Invalid base64 input".to_string()))?;
+    Ok(JSValue::String(bytes.into_iter().map(char::from).collect()))
+}
+
+fn text_encoder_constructor(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let mut encoder = JSObject::new();
+    encoder.define_property(
+        "encoding".to_string(),
+        Property::read_only(JSValue::String("utf-8".to_string())),
+    );
+    encoder.set("encode".to_string(), JSValue::NativeFunction(text_encode));
+    Ok(JSValue::Object(Rc::new(RefCell::new(encoder))))
+}
+
+fn text_encode(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let input = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
+    Ok(vm.array_from_values(
+        input
+            .into_bytes()
+            .into_iter()
+            .map(|byte| JSValue::Number(byte as f64))
+            .collect(),
+    ))
+}
+
+fn text_decoder_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let label = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
+    if !label.is_empty()
+        && !label.eq_ignore_ascii_case("utf-8")
+        && !label.eq_ignore_ascii_case("utf8")
+    {
+        return Err(JSError::TypeError(
+            "Only UTF-8 TextDecoder is supported".to_string(),
+        ));
+    }
+    let mut decoder = JSObject::new();
+    decoder.define_property(
+        "encoding".to_string(),
+        Property::read_only(JSValue::String("utf-8".to_string())),
+    );
+    decoder.set("decode".to_string(), JSValue::NativeFunction(text_decode));
+    Ok(JSValue::Object(Rc::new(RefCell::new(decoder))))
+}
+
+fn text_decode(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(value) = args.get(1) else {
+        return Ok(JSValue::String(String::new()));
+    };
+    let bytes = match value {
+        JSValue::Object(object) => {
+            let object = object.borrow();
+            let length = object.get("length").to_number().max(0.0) as usize;
+            (0..length)
+                .map(|index| object.get(&index.to_string()).to_number() as u8)
+                .collect()
+        }
+        JSValue::String(value) => value.as_bytes().to_vec(),
+        _ => Vec::new(),
+    };
+    Ok(JSValue::String(
+        String::from_utf8_lossy(&bytes).into_owned(),
+    ))
 }
 
 // --- document ---
@@ -4929,6 +5047,28 @@ mod tests {
             Some(
                 "https://scratch.mit.edu:/projects/assets/stage.svg:ja:true:mode=fullscreen&cloud=on"
             )
+        );
+    }
+
+    #[test]
+    fn encoding_apis_round_trip_utf8_and_base64() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r#"
+            const encoder = new TextEncoder();
+            const decoder = new TextDecoder("utf-8");
+            const bytes = encoder.encode("Scratch 日本");
+            document.getElementById("result").setAttribute(
+                "data-encoding",
+                decoder.decode(bytes) + ":" + bytes.length + ":" + atob(btoa("Scratch"))
+            );
+            "#,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-encoding"),
+            Some("Scratch 日本:14:Scratch")
         );
     }
 
