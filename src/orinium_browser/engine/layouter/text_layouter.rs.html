@@ -397,7 +397,7 @@
 <a href=#397 id=397 data-nosnippet>397</a>    }
 <a href=#398 id=398 data-nosnippet>398</a>
 <a href=#399 id=399 data-nosnippet>399</a>    <span class="kw">fn </span>write_debug(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>std::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; std::fmt::Result {
-<a href=#400 id=400 data-nosnippet>400</a>        <span class="macro">write!</span>(f, <span class="string">"TextFlowLayouter [{}]"</span>, <span class="self">self</span>.text)
+<a href=#400 id=400 data-nosnippet>400</a>        <span class="macro">write!</span>(f, <span class="string">"TextFlowLayouter [{}]"</span>, <span class="self">self</span>.text.escape_debug())
 <a href=#401 id=401 data-nosnippet>401</a>    }
 <a href=#402 id=402 data-nosnippet>402</a>}
 <a href=#403 id=403 data-nosnippet>403</a>
