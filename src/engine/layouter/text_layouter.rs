@@ -9,7 +9,7 @@ use ui_layout::{
 
 use crate::engine::bridge::text::GlyphCluster;
 use crate::engine::layouter::builder::DEFAULT_LINE_FACTOR;
-use crate::engine::layouter::types::{LineHeight, TextFlowStyle, WhiteSpace};
+use crate::engine::layouter::types::{LineHeight, TextAlign, TextFlowStyle, WhiteSpace};
 
 thread_local! {
     static TEXT_RESULTS: RefCell<HashMap<usize, Arc<TextLayoutResult>>> =
@@ -85,6 +85,7 @@ impl TextFlowLayouter {
         let text_len = self.text.len();
         let clusters = &self.clusters;
 
+        let align = self.flow_style.text_align;
         let white_space = self.flow_style.white_space;
         let wrap_overflow = matches!(
             white_space,
@@ -148,6 +149,17 @@ impl TextFlowLayouter {
             }
         };
 
+        let aligned_x = |line_index: usize, x_pos: f32, line_w: f32| {
+            let available = line_width(line_index);
+
+            x_pos
+                + match align {
+                    TextAlign::Left => 0.0,
+                    TextAlign::Center => (available - line_w) / 2.0,
+                    TextAlign::Right => available - line_w,
+                }
+        };
+
         let mut spans: Vec<LineSpan> = Vec::new();
         let mut line_texts: Vec<String> = Vec::new();
 
@@ -169,6 +181,7 @@ impl TextFlowLayouter {
                 let end_byte = $end_byte;
 
                 let line_w = clusters_between(line_start, end_byte);
+                let line_x = aligned_x(line_index, x_pos, line_w);
 
                 let line_str = &self.text[line_start..end_byte];
                 let trimmed = line_str.trim_end_matches('\n');
@@ -180,7 +193,7 @@ impl TextFlowLayouter {
 
                 spans.push(LineSpan {
                     x_range: x_pos..(x_pos + line_w),
-                    line_pos: (x_pos, y_pos),
+                    line_pos: (line_x, y_pos),
                     line_index,
                 });
                 line_texts.push(line_text);
@@ -205,7 +218,7 @@ impl TextFlowLayouter {
                     // Empty line (e.g. consecutive newlines)
                     spans.push(LineSpan {
                         x_range: x_pos..x_pos,
-                        line_pos: (x_pos, y_pos),
+                        line_pos: (aligned_x(line_index, x_pos, 0.0), y_pos),
                         line_index,
                     });
                     line_texts.push(String::new());
@@ -295,11 +308,14 @@ impl TextFlowLayouter {
         // Emit any remaining text as the last line
         if line_start < text_len {
             let line_w = clusters_between(line_start, text_len);
+            let line_x = aligned_x(line_index, x_pos, line_w);
+
             let line_str = &self.text[line_start..];
             let trimmed = line_str.trim_end_matches('\n');
+
             spans.push(LineSpan {
                 x_range: x_pos..(x_pos + line_w),
-                line_pos: (x_pos, y_pos),
+                line_pos: (line_x, y_pos),
                 line_index,
             });
             line_texts.push(trimmed.to_string());
