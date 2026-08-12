@@ -119,6 +119,7 @@ pub struct JsHost {
     constructing_fetch_capability: Option<JsFetchCapability>,
     local_storage: HashMap<String, String>,
     session_storage: HashMap<String, String>,
+    document_cookies: HashMap<String, String>,
     document_url: String,
     next_fetch_id: u64,
     next_timer_id: u64,
@@ -176,6 +177,7 @@ impl JsRuntime {
             constructing_fetch_capability: None,
             local_storage: HashMap::new(),
             session_storage: HashMap::new(),
+            document_cookies: HashMap::new(),
             document_url: "about:blank".to_string(),
             next_fetch_id: 0,
             next_timer_id: 0,
@@ -213,6 +215,16 @@ impl JsRuntime {
     pub fn run_script(&mut self, source: &str) {
         match self.engine.eval(source) {
             Ok(_) => {}
+            Err(JSError::Thrown(JSValue::Object(object))) => {
+                let object = object.borrow();
+                let details = object
+                    .keys()
+                    .into_iter()
+                    .map(|key| format!("{key}={}", object.get(&key).to_console_string()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                log::info!("JS error: uncaught object ({details})");
+            }
             Err(err) => log::info!("JS error: {}", err),
         }
         self.perform_microtask_checkpoint();
@@ -635,7 +647,7 @@ fn install_browser_environment(engine: &mut pixi_byte::JSEngine) {
     );
     navigator.define_property(
         "cookieEnabled".to_string(),
-        Property::read_only(JSValue::Boolean(false)),
+        Property::read_only(JSValue::Boolean(true)),
     );
     navigator.define_property(
         "onLine".to_string(),
@@ -2154,6 +2166,16 @@ fn install_encoding_apis(engine: &mut pixi_byte::JSEngine) {
     global.set("atob".to_string(), JSValue::NativeFunction(atob));
     global.set("btoa".to_string(), JSValue::NativeFunction(btoa));
     global.set(
+        "encodeURIComponent".to_string(),
+        JSValue::NativeFunction(encode_uri_component),
+    );
+    global.set(
+        "decodeURIComponent".to_string(),
+        JSValue::NativeFunction(decode_uri_component),
+    );
+    global.set("encodeURI".to_string(), JSValue::NativeFunction(encode_uri));
+    global.set("decodeURI".to_string(), JSValue::NativeFunction(decode_uri));
+    global.set(
         "TextEncoder".to_string(),
         JSValue::Object(Rc::new(RefCell::new(encoder_constructor))),
     );
@@ -2169,6 +2191,71 @@ fn install_encoding_apis(engine: &mut pixi_byte::JSEngine) {
         "Uint8Array".to_string(),
         JSValue::Object(Rc::new(RefCell::new(uint8_array_constructor_object))),
     );
+}
+
+fn percent_encode(input: &str, preserve_uri_syntax: bool) -> String {
+    let mut output = String::new();
+    for byte in input.bytes() {
+        let unescaped = byte.is_ascii_alphanumeric()
+            || matches!(
+                byte,
+                b'-' | b'_' | b'.' | b'!' | b'~' | b'*' | b'\'' | b'(' | b')'
+            )
+            || (preserve_uri_syntax
+                && matches!(
+                    byte,
+                    b';' | b',' | b'/' | b'?' | b':' | b'@' | b'&' | b'=' | b'+' | b'$' | b'#'
+                ));
+        if unescaped {
+            output.push(byte as char);
+        } else {
+            output.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    output
+}
+
+fn percent_decode(input: &str) -> JSResult<String> {
+    let bytes = input.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            if index + 2 >= bytes.len() {
+                return Err(JSError::TypeError("URI malformed".to_string()));
+            }
+            let hex = std::str::from_utf8(&bytes[index + 1..index + 3])
+                .ok()
+                .and_then(|value| u8::from_str_radix(value, 16).ok())
+                .ok_or_else(|| JSError::TypeError("URI malformed".to_string()))?;
+            output.push(hex);
+            index += 3;
+        } else {
+            output.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(output).map_err(|_| JSError::TypeError("URI malformed".to_string()))
+}
+
+fn encode_uri_component(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let input = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
+    Ok(JSValue::String(percent_encode(&input, false)))
+}
+
+fn decode_uri_component(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let input = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
+    Ok(JSValue::String(percent_decode(&input)?))
+}
+
+fn encode_uri(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let input = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
+    Ok(JSValue::String(percent_encode(&input, true)))
+}
+
+fn decode_uri(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let input = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
+    Ok(JSValue::String(percent_decode(&input)?))
 }
 
 fn value_bytes(value: &JSValue) -> Vec<u8> {
@@ -2360,6 +2447,10 @@ fn install_document(engine: &mut pixi_byte::JSEngine) {
         document.define_property(
             "readyState".to_string(),
             read_only_accessor_property(get_document_ready_state),
+        );
+        document.define_property(
+            "cookie".to_string(),
+            accessor_property(get_document_cookie, set_document_cookie),
         );
         document.set(
             "hasFocus".to_string(),
@@ -2734,6 +2825,53 @@ fn get_document_ready_state(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValu
     Ok(JSValue::String(
         if complete { "complete" } else { "loading" }.to_string(),
     ))
+}
+
+fn get_document_cookie(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let cookies = with_host(vm, |host| {
+        host.document_cookies
+            .iter()
+            .map(|(name, value)| format!("{name}={value}"))
+            .collect::<Vec<_>>()
+            .join("; ")
+    })
+    .unwrap_or_default();
+    Ok(JSValue::String(cookies))
+}
+
+fn set_document_cookie(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let cookie = args
+        .get(1)
+        .unwrap_or(&JSValue::Undefined)
+        .to_console_string();
+    let Some(pair) = cookie.split(';').next() else {
+        return Ok(JSValue::Undefined);
+    };
+    let Some((name, value)) = pair.split_once('=') else {
+        return Ok(JSValue::Undefined);
+    };
+    let name = name.trim();
+    if name.is_empty() {
+        return Ok(JSValue::Undefined);
+    }
+
+    let should_remove = cookie.split(';').skip(1).any(|attribute| {
+        let attribute = attribute.trim();
+        attribute.eq_ignore_ascii_case("max-age=0")
+            || attribute
+                .strip_prefix("Max-Age=")
+                .and_then(|value| value.trim().parse::<i64>().ok())
+                .is_some_and(|max_age| max_age <= 0)
+    });
+    let _ = with_host_mut(vm, |host| {
+        if should_remove {
+            host.document_cookies.remove(name);
+        } else {
+            host.document_cookies
+                .insert(name.to_string(), value.trim().to_string());
+        }
+    });
+    Ok(JSValue::Undefined)
 }
 
 fn document_has_focus(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -5148,6 +5286,30 @@ mod tests {
     }
 
     #[test]
+    fn document_cookie_is_a_string_and_supports_assignment_and_expiry() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r#"
+            const result = document.getElementById("result");
+            result.setAttribute("data-empty-cookie", typeof document.cookie + ":" + document.cookie);
+            document.cookie = "scratchlanguage=ja; Path=/";
+            result.setAttribute("data-cookie", document.cookie);
+            document.cookie = "scratchlanguage=; Max-Age=0; Path=/";
+            result.setAttribute("data-expired-cookie", document.cookie);
+            "#,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-empty-cookie"), Some("string:"));
+        assert_eq!(
+            result.value.get_attr("data-cookie"),
+            Some("scratchlanguage=ja")
+        );
+        assert_eq!(result.value.get_attr("data-expired-cookie"), Some(""));
+    }
+
+    #[test]
     fn url_apis_resolve_assets_and_manage_query_parameters() {
         let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
         runtime.run_script(
@@ -5184,7 +5346,8 @@ mod tests {
             const bytes = encoder.encode("Scratch 日本");
             document.getElementById("result").setAttribute(
                 "data-encoding",
-                decoder.decode(bytes) + ":" + bytes.length + ":" + atob(btoa("Scratch"))
+                decoder.decode(bytes) + ":" + bytes.length + ":" + atob(btoa("Scratch")) +
+                    ":" + decodeURIComponent(encodeURIComponent("日本 語"))
             );
             "#,
         );
@@ -5192,7 +5355,7 @@ mod tests {
         let result = dom.get_element_by_id("result").unwrap();
         assert_eq!(
             result.borrow().value.get_attr("data-encoding"),
-            Some("Scratch 日本:14:Scratch")
+            Some("Scratch 日本:14:Scratch:日本 語")
         );
     }
 
