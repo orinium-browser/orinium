@@ -1382,9 +1382,7 @@ pub fn apply_declaration(
             }
         }
 
-        // The used color scheme is computed before declarations are applied
-        // (see `resolve_used_color_scheme`); this arm just accepts the
-        // property so it is not treated as unsupported.
+        // `color-scheme` is resolved separately above.
         ("color-scheme", _) => {}
 
         ("font-size", CssValue::Length(_, _)) => {
