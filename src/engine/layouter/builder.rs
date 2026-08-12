@@ -523,11 +523,11 @@ pub fn build_layout_and_info_from_snapshot(
             let mut element_kids: Vec<NodeId> = Vec::new();
 
             if style.display.outer != OuterDisplay::None {
-                let tag_name = snapshot.node(stack[top_idx].dom).kind.tag_name();
+                let parent_tag_name = snapshot.node(stack[top_idx].dom).kind.tag_name();
                 for &child in snapshot.children(stack[top_idx].dom) {
                     let child_node = &snapshot.node(child).kind;
                     if let HtmlNodeType::Text(t) = child_node {
-                        let t = if tag_name == Some("pre") {
+                        let t = if parent_tag_name == Some("pre") {
                             let t = t.strip_prefix('\n').unwrap_or(t);
                             normalize_whitespace(t, text_flow_style.white_space)
                         } else if t.chars().all(is_css_whitespace) {
@@ -556,7 +556,7 @@ pub fn build_layout_and_info_from_snapshot(
                                 dom_id: Some(child),
                             },
                         ));
-                    } else if tag_name == Some("br") {
+                    } else if child_node.tag_name() == Some("br") {
                         child_slots.push(ChildSlot::Inline(
                             ItemFragment::LineBreak.into(),
                             InfoNode {
@@ -565,7 +565,7 @@ pub fn build_layout_and_info_from_snapshot(
                                 dom_id: Some(child),
                             },
                         ));
-                    } else if tag_name == Some("noscript")
+                    } else if child_node.tag_name() == Some("noscript")
                         && scripting_mode == ScriptingMode::Enabled
                     {
                         // Skip
