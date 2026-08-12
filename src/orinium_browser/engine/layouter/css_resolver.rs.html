@@ -6,7 +6,7 @@
 <a href=#6 id=6 data-nosnippet>6</a>
 <a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>std::collections::{HashMap, HashSet};
 <a href=#8 id=8 data-nosnippet>8</a>
-<a href=#9 id=9 data-nosnippet>9</a><span class="kw">type </span>CustomProperties = HashMap&lt;CssIdent, CssValue&gt;;
+<a href=#9 id=9 data-nosnippet>9</a><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">type </span>Properties = HashMap&lt;String, ResolvedDeclaration&gt;;
 <a href=#10 id=10 data-nosnippet>10</a>
 <a href=#11 id=11 data-nosnippet>11</a><span class="kw">struct </span>Declaration {
 <a href=#12 id=12 data-nosnippet>12</a>    name: String,
@@ -596,130 +596,111 @@
 <a href=#596 id=596 data-nosnippet>596</a>//  DeclarationResolver — `!important` extraction, `var()` resolution
 <a href=#597 id=597 data-nosnippet>597</a>// ============================================================
 <a href=#598 id=598 data-nosnippet>598</a>
-<a href=#599 id=599 data-nosnippet>599</a></span><span class="kw">struct </span>DeclarationResolver;
+<a href=#599 id=599 data-nosnippet>599</a></span><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">struct </span>DeclarationResolver;
 <a href=#600 id=600 data-nosnippet>600</a>
 <a href=#601 id=601 data-nosnippet>601</a><span class="kw">impl </span>DeclarationResolver {
 <a href=#602 id=602 data-nosnippet>602</a>    <span class="kw">fn </span>collect(children: <span class="kw-2">&amp;</span>[CssNode]) -&gt; Vec&lt;Declaration&gt; {
-<a href=#603 id=603 data-nosnippet>603</a>        <span class="kw">let </span><span class="kw-2">mut </span>custom_props: CustomProperties = HashMap::new();
-<a href=#604 id=604 data-nosnippet>604</a>        <span class="kw">let </span><span class="kw-2">mut </span>result = Vec::new();
-<a href=#605 id=605 data-nosnippet>605</a>
-<a href=#606 id=606 data-nosnippet>606</a>        <span class="kw">for </span>child <span class="kw">in </span>children {
-<a href=#607 id=607 data-nosnippet>607</a>            <span class="kw">if let </span>CssNodeType::Declaration { name, value } = <span class="kw-2">&amp;</span>child.node()
-<a href=#608 id=608 data-nosnippet>608</a>                &amp;&amp; name.starts_with(<span class="string">"--"</span>)
-<a href=#609 id=609 data-nosnippet>609</a>            {
-<a href=#610 id=610 data-nosnippet>610</a>                custom_props.insert(name.into(), value.clone());
-<a href=#611 id=611 data-nosnippet>611</a>            }
-<a href=#612 id=612 data-nosnippet>612</a>        }
-<a href=#613 id=613 data-nosnippet>613</a>
-<a href=#614 id=614 data-nosnippet>614</a>        <span class="kw">for </span>child <span class="kw">in </span>children {
-<a href=#615 id=615 data-nosnippet>615</a>            <span class="kw">if let </span>CssNodeType::Declaration { name, value } = <span class="kw-2">&amp;</span>child.node() {
-<a href=#616 id=616 data-nosnippet>616</a>                <span class="kw">let </span>(raw_value, important) = <span class="self">Self</span>::extract_important(value);
-<a href=#617 id=617 data-nosnippet>617</a>
-<a href=#618 id=618 data-nosnippet>618</a>                <span class="kw">if </span>name.starts_with(<span class="string">"--"</span>) {
-<a href=#619 id=619 data-nosnippet>619</a>                    <span class="comment">// `--accent: blue` — custom property, keep as-is
-<a href=#620 id=620 data-nosnippet>620</a>                    </span>result.push(Declaration {
-<a href=#621 id=621 data-nosnippet>621</a>                        name: name.clone(),
-<a href=#622 id=622 data-nosnippet>622</a>                        value: raw_value,
-<a href=#623 id=623 data-nosnippet>623</a>                        important,
-<a href=#624 id=624 data-nosnippet>624</a>                    });
-<a href=#625 id=625 data-nosnippet>625</a>                } <span class="kw">else if let </span><span class="prelude-val">Some</span>(resolved) =
-<a href=#626 id=626 data-nosnippet>626</a>                    <span class="self">Self</span>::resolve_var(<span class="kw-2">&amp;</span>raw_value, <span class="kw-2">&amp;</span>custom_props, <span class="kw-2">&amp;mut </span>HashSet::new())
-<a href=#627 id=627 data-nosnippet>627</a>                {
-<a href=#628 id=628 data-nosnippet>628</a>                    <span class="comment">// `color: var(--accent)` — resolve var() then emit
-<a href=#629 id=629 data-nosnippet>629</a>                    </span>result.push(Declaration {
-<a href=#630 id=630 data-nosnippet>630</a>                        name: name.clone(),
-<a href=#631 id=631 data-nosnippet>631</a>                        value: resolved,
-<a href=#632 id=632 data-nosnippet>632</a>                        important,
-<a href=#633 id=633 data-nosnippet>633</a>                    });
-<a href=#634 id=634 data-nosnippet>634</a>                }
-<a href=#635 id=635 data-nosnippet>635</a>            }
-<a href=#636 id=636 data-nosnippet>636</a>        }
-<a href=#637 id=637 data-nosnippet>637</a>
-<a href=#638 id=638 data-nosnippet>638</a>        result
-<a href=#639 id=639 data-nosnippet>639</a>    }
-<a href=#640 id=640 data-nosnippet>640</a>
-<a href=#641 id=641 data-nosnippet>641</a>    <span class="doccomment">/// Extract `!important` from a CSS value.
-<a href=#642 id=642 data-nosnippet>642</a>    ///
-<a href=#643 id=643 data-nosnippet>643</a>    /// `border: 1px solid black !important` is parsed as a `List` where the
-<a href=#644 id=644 data-nosnippet>644</a>    /// last two items are `Keyword("!")` and `Keyword("important")`.
-<a href=#645 id=645 data-nosnippet>645</a>    </span><span class="kw">fn </span>extract_important(value: <span class="kw-2">&amp;</span>CssValue) -&gt; (CssValue, bool) {
-<a href=#646 id=646 data-nosnippet>646</a>        <span class="kw">match </span>value {
-<a href=#647 id=647 data-nosnippet>647</a>            CssValue::List(list) <span class="kw">if </span>list.len() &gt;= <span class="number">2 </span>=&gt; {
-<a href=#648 id=648 data-nosnippet>648</a>                <span class="kw">let </span>len = list.len();
-<a href=#649 id=649 data-nosnippet>649</a>                <span class="kw">let </span>is_important = <span class="macro">matches!</span>(
-<a href=#650 id=650 data-nosnippet>650</a>                    (<span class="kw-2">&amp;</span>list[len - <span class="number">2</span>], <span class="kw-2">&amp;</span>list[len - <span class="number">1</span>]),
-<a href=#651 id=651 data-nosnippet>651</a>                    (
-<a href=#652 id=652 data-nosnippet>652</a>                        CssValue::Keyword(bang),
-<a href=#653 id=653 data-nosnippet>653</a>                        CssValue::Keyword(ident)
-<a href=#654 id=654 data-nosnippet>654</a>                    )
-<a href=#655 id=655 data-nosnippet>655</a>                    <span class="kw">if </span>bang == <span class="string">"!" </span>&amp;&amp; ident.eq_ignore_ascii_case(<span class="string">"important"</span>)
-<a href=#656 id=656 data-nosnippet>656</a>                );
-<a href=#657 id=657 data-nosnippet>657</a>
-<a href=#658 id=658 data-nosnippet>658</a>                <span class="kw">if </span>is_important {
-<a href=#659 id=659 data-nosnippet>659</a>                    <span class="kw">let </span>value = <span class="kw">if </span>len - <span class="number">2 </span>== <span class="number">1 </span>{
-<a href=#660 id=660 data-nosnippet>660</a>                        list.iter().next().unwrap().clone()
-<a href=#661 id=661 data-nosnippet>661</a>                    } <span class="kw">else </span>{
-<a href=#662 id=662 data-nosnippet>662</a>                        CssValue::List(list[..len - <span class="number">2</span>].to_vec())
-<a href=#663 id=663 data-nosnippet>663</a>                    };
-<a href=#664 id=664 data-nosnippet>664</a>                    (value, <span class="bool-val">true</span>)
-<a href=#665 id=665 data-nosnippet>665</a>                } <span class="kw">else </span>{
-<a href=#666 id=666 data-nosnippet>666</a>                    (value.clone(), <span class="bool-val">false</span>)
-<a href=#667 id=667 data-nosnippet>667</a>                }
-<a href=#668 id=668 data-nosnippet>668</a>            }
-<a href=#669 id=669 data-nosnippet>669</a>            <span class="kw">_ </span>=&gt; (value.clone(), <span class="bool-val">false</span>),
-<a href=#670 id=670 data-nosnippet>670</a>        }
-<a href=#671 id=671 data-nosnippet>671</a>    }
-<a href=#672 id=672 data-nosnippet>672</a>
-<a href=#673 id=673 data-nosnippet>673</a>    <span class="kw">fn </span>resolve_var(
-<a href=#674 id=674 data-nosnippet>674</a>        value: <span class="kw-2">&amp;</span>CssValue,
-<a href=#675 id=675 data-nosnippet>675</a>        custom_props: <span class="kw-2">&amp;</span>CustomProperties,
-<a href=#676 id=676 data-nosnippet>676</a>        visited: <span class="kw-2">&amp;mut </span>HashSet&lt;CssIdent&gt;,
-<a href=#677 id=677 data-nosnippet>677</a>    ) -&gt; <span class="prelude-ty">Option</span>&lt;CssValue&gt; {
-<a href=#678 id=678 data-nosnippet>678</a>        <span class="kw">match </span>value {
-<a href=#679 id=679 data-nosnippet>679</a>            <span class="comment">// `var(--accent)` / `var(--missing, red)` — resolve the custom property
-<a href=#680 id=680 data-nosnippet>680</a>            </span>CssValue::Function(name, args) <span class="kw">if </span>name == <span class="string">"var" </span>=&gt; {
-<a href=#681 id=681 data-nosnippet>681</a>                <span class="kw">let </span>var_name = <span class="kw">match </span>args.first() {
-<a href=#682 id=682 data-nosnippet>682</a>                    <span class="prelude-val">Some</span>(CssValue::Keyword(name)) =&gt; name,
-<a href=#683 id=683 data-nosnippet>683</a>                    <span class="kw">_ </span>=&gt; <span class="kw">return </span><span class="prelude-val">None</span>,
-<a href=#684 id=684 data-nosnippet>684</a>                };
-<a href=#685 id=685 data-nosnippet>685</a>
-<a href=#686 id=686 data-nosnippet>686</a>                <span class="kw">if </span>!visited.insert(var_name.clone()) {
-<a href=#687 id=687 data-nosnippet>687</a>                    <span class="kw">return </span><span class="prelude-val">None</span>;
-<a href=#688 id=688 data-nosnippet>688</a>                }
-<a href=#689 id=689 data-nosnippet>689</a>
-<a href=#690 id=690 data-nosnippet>690</a>                <span class="kw">let </span>result = <span class="kw">if let </span><span class="prelude-val">Some</span>(v) = custom_props.get(var_name) {
-<a href=#691 id=691 data-nosnippet>691</a>                    <span class="self">Self</span>::resolve_var(v, custom_props, visited)
-<a href=#692 id=692 data-nosnippet>692</a>                } <span class="kw">else if let </span><span class="prelude-val">Some</span>(fallback) = args.get(<span class="number">1</span>) {
-<a href=#693 id=693 data-nosnippet>693</a>                    <span class="self">Self</span>::resolve_var(fallback, custom_props, visited)
-<a href=#694 id=694 data-nosnippet>694</a>                } <span class="kw">else </span>{
-<a href=#695 id=695 data-nosnippet>695</a>                    <span class="prelude-val">None
-<a href=#696 id=696 data-nosnippet>696</a>                </span>};
-<a href=#697 id=697 data-nosnippet>697</a>
-<a href=#698 id=698 data-nosnippet>698</a>                visited.remove(var_name);
-<a href=#699 id=699 data-nosnippet>699</a>                result
-<a href=#700 id=700 data-nosnippet>700</a>            }
-<a href=#701 id=701 data-nosnippet>701</a>
-<a href=#702 id=702 data-nosnippet>702</a>            <span class="comment">// `rgb(var(--r), var(--g), var(--b))` — resolve args independently
-<a href=#703 id=703 data-nosnippet>703</a>            </span>CssValue::Function(name, args) =&gt; {
-<a href=#704 id=704 data-nosnippet>704</a>                <span class="kw">let </span>resolved_args = args
-<a href=#705 id=705 data-nosnippet>705</a>                    .iter()
-<a href=#706 id=706 data-nosnippet>706</a>                    .map(|v| <span class="self">Self</span>::resolve_var(v, custom_props, <span class="kw-2">&amp;mut </span>visited.clone()))
-<a href=#707 id=707 data-nosnippet>707</a>                    .collect::&lt;<span class="prelude-ty">Option</span>&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
-<a href=#708 id=708 data-nosnippet>708</a>                <span class="prelude-val">Some</span>(CssValue::Function(name.clone(), resolved_args))
-<a href=#709 id=709 data-nosnippet>709</a>            }
-<a href=#710 id=710 data-nosnippet>710</a>
-<a href=#711 id=711 data-nosnippet>711</a>            <span class="comment">// `1px solid var(--color)` — resolve each item independently
-<a href=#712 id=712 data-nosnippet>712</a>            </span>CssValue::List(list) =&gt; {
-<a href=#713 id=713 data-nosnippet>713</a>                <span class="kw">let </span>resolved = list
-<a href=#714 id=714 data-nosnippet>714</a>                    .iter()
-<a href=#715 id=715 data-nosnippet>715</a>                    .map(|v| <span class="self">Self</span>::resolve_var(v, custom_props, <span class="kw-2">&amp;mut </span>visited.clone()))
-<a href=#716 id=716 data-nosnippet>716</a>                    .collect::&lt;<span class="prelude-ty">Option</span>&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
-<a href=#717 id=717 data-nosnippet>717</a>                <span class="prelude-val">Some</span>(CssValue::List(resolved))
-<a href=#718 id=718 data-nosnippet>718</a>            }
-<a href=#719 id=719 data-nosnippet>719</a>
-<a href=#720 id=720 data-nosnippet>720</a>            <span class="comment">// `10px` / `"hello"` / `#fff` — already concrete, pass through
-<a href=#721 id=721 data-nosnippet>721</a>            </span><span class="kw">_ </span>=&gt; <span class="prelude-val">Some</span>(value.clone()),
-<a href=#722 id=722 data-nosnippet>722</a>        }
-<a href=#723 id=723 data-nosnippet>723</a>    }
-<a href=#724 id=724 data-nosnippet>724</a>}
+<a href=#603 id=603 data-nosnippet>603</a>        <span class="kw">let </span><span class="kw-2">mut </span>result = Vec::new();
+<a href=#604 id=604 data-nosnippet>604</a>
+<a href=#605 id=605 data-nosnippet>605</a>        <span class="kw">for </span>child <span class="kw">in </span>children {
+<a href=#606 id=606 data-nosnippet>606</a>            <span class="kw">let </span>CssNodeType::Declaration { name, value } = <span class="kw-2">&amp;</span>child.node() <span class="kw">else </span>{
+<a href=#607 id=607 data-nosnippet>607</a>                <span class="kw">continue</span>;
+<a href=#608 id=608 data-nosnippet>608</a>            };
+<a href=#609 id=609 data-nosnippet>609</a>
+<a href=#610 id=610 data-nosnippet>610</a>            <span class="kw">let </span>(value, important) = <span class="self">Self</span>::extract_important(value);
+<a href=#611 id=611 data-nosnippet>611</a>
+<a href=#612 id=612 data-nosnippet>612</a>            result.push(Declaration {
+<a href=#613 id=613 data-nosnippet>613</a>                name: name.clone(),
+<a href=#614 id=614 data-nosnippet>614</a>                value,
+<a href=#615 id=615 data-nosnippet>615</a>                important,
+<a href=#616 id=616 data-nosnippet>616</a>            });
+<a href=#617 id=617 data-nosnippet>617</a>        }
+<a href=#618 id=618 data-nosnippet>618</a>
+<a href=#619 id=619 data-nosnippet>619</a>        result
+<a href=#620 id=620 data-nosnippet>620</a>    }
+<a href=#621 id=621 data-nosnippet>621</a>
+<a href=#622 id=622 data-nosnippet>622</a>    <span class="doccomment">/// Extract `!important` from a CSS value.
+<a href=#623 id=623 data-nosnippet>623</a>    ///
+<a href=#624 id=624 data-nosnippet>624</a>    /// `border: 1px solid black !important` is parsed as a `List` where the
+<a href=#625 id=625 data-nosnippet>625</a>    /// last two items are `Keyword("!")` and `Keyword("important")`.
+<a href=#626 id=626 data-nosnippet>626</a>    </span><span class="kw">fn </span>extract_important(value: <span class="kw-2">&amp;</span>CssValue) -&gt; (CssValue, bool) {
+<a href=#627 id=627 data-nosnippet>627</a>        <span class="kw">match </span>value {
+<a href=#628 id=628 data-nosnippet>628</a>            CssValue::List(list) <span class="kw">if </span>list.len() &gt;= <span class="number">2 </span>=&gt; {
+<a href=#629 id=629 data-nosnippet>629</a>                <span class="kw">let </span>len = list.len();
+<a href=#630 id=630 data-nosnippet>630</a>                <span class="kw">let </span>is_important = <span class="macro">matches!</span>(
+<a href=#631 id=631 data-nosnippet>631</a>                    (<span class="kw-2">&amp;</span>list[len - <span class="number">2</span>], <span class="kw-2">&amp;</span>list[len - <span class="number">1</span>]),
+<a href=#632 id=632 data-nosnippet>632</a>                    (
+<a href=#633 id=633 data-nosnippet>633</a>                        CssValue::Keyword(bang),
+<a href=#634 id=634 data-nosnippet>634</a>                        CssValue::Keyword(ident)
+<a href=#635 id=635 data-nosnippet>635</a>                    )
+<a href=#636 id=636 data-nosnippet>636</a>                    <span class="kw">if </span>bang == <span class="string">"!" </span>&amp;&amp; ident.eq_ignore_ascii_case(<span class="string">"important"</span>)
+<a href=#637 id=637 data-nosnippet>637</a>                );
+<a href=#638 id=638 data-nosnippet>638</a>
+<a href=#639 id=639 data-nosnippet>639</a>                <span class="kw">if </span>is_important {
+<a href=#640 id=640 data-nosnippet>640</a>                    <span class="kw">let </span>value = <span class="kw">if </span>len - <span class="number">2 </span>== <span class="number">1 </span>{
+<a href=#641 id=641 data-nosnippet>641</a>                        list.iter().next().unwrap().clone()
+<a href=#642 id=642 data-nosnippet>642</a>                    } <span class="kw">else </span>{
+<a href=#643 id=643 data-nosnippet>643</a>                        CssValue::List(list[..len - <span class="number">2</span>].to_vec())
+<a href=#644 id=644 data-nosnippet>644</a>                    };
+<a href=#645 id=645 data-nosnippet>645</a>                    (value, <span class="bool-val">true</span>)
+<a href=#646 id=646 data-nosnippet>646</a>                } <span class="kw">else </span>{
+<a href=#647 id=647 data-nosnippet>647</a>                    (value.clone(), <span class="bool-val">false</span>)
+<a href=#648 id=648 data-nosnippet>648</a>                }
+<a href=#649 id=649 data-nosnippet>649</a>            }
+<a href=#650 id=650 data-nosnippet>650</a>            <span class="kw">_ </span>=&gt; (value.clone(), <span class="bool-val">false</span>),
+<a href=#651 id=651 data-nosnippet>651</a>        }
+<a href=#652 id=652 data-nosnippet>652</a>    }
+<a href=#653 id=653 data-nosnippet>653</a>
+<a href=#654 id=654 data-nosnippet>654</a>    <span class="kw">pub fn </span>resolve_var(
+<a href=#655 id=655 data-nosnippet>655</a>        value: <span class="kw-2">&amp;</span>CssValue,
+<a href=#656 id=656 data-nosnippet>656</a>        custom_props: <span class="kw-2">&amp;</span>Properties,
+<a href=#657 id=657 data-nosnippet>657</a>        visited: <span class="kw-2">&amp;mut </span>HashSet&lt;CssIdent&gt;,
+<a href=#658 id=658 data-nosnippet>658</a>    ) -&gt; <span class="prelude-ty">Option</span>&lt;CssValue&gt; {
+<a href=#659 id=659 data-nosnippet>659</a>        <span class="kw">match </span>value {
+<a href=#660 id=660 data-nosnippet>660</a>            <span class="comment">// `var(--accent)` / `var(--missing, red)` — resolve the custom property
+<a href=#661 id=661 data-nosnippet>661</a>            </span>CssValue::Function(name, args) <span class="kw">if </span>name == <span class="string">"var" </span>=&gt; {
+<a href=#662 id=662 data-nosnippet>662</a>                <span class="kw">let </span>var_name = <span class="kw">match </span>args.first() {
+<a href=#663 id=663 data-nosnippet>663</a>                    <span class="prelude-val">Some</span>(CssValue::Keyword(name)) =&gt; name,
+<a href=#664 id=664 data-nosnippet>664</a>                    <span class="kw">_ </span>=&gt; <span class="kw">return </span><span class="prelude-val">None</span>,
+<a href=#665 id=665 data-nosnippet>665</a>                };
+<a href=#666 id=666 data-nosnippet>666</a>
+<a href=#667 id=667 data-nosnippet>667</a>                <span class="kw">if </span>!visited.insert(var_name.clone()) {
+<a href=#668 id=668 data-nosnippet>668</a>                    <span class="kw">return </span><span class="prelude-val">None</span>;
+<a href=#669 id=669 data-nosnippet>669</a>                }
+<a href=#670 id=670 data-nosnippet>670</a>
+<a href=#671 id=671 data-nosnippet>671</a>                <span class="kw">let </span>result = <span class="kw">if let </span><span class="prelude-val">Some</span>(v) = custom_props.get(var_name.as_str()) {
+<a href=#672 id=672 data-nosnippet>672</a>                    <span class="self">Self</span>::resolve_var(<span class="kw-2">&amp;</span>v.value, custom_props, visited)
+<a href=#673 id=673 data-nosnippet>673</a>                } <span class="kw">else if let </span><span class="prelude-val">Some</span>(fallback) = args.get(<span class="number">1</span>) {
+<a href=#674 id=674 data-nosnippet>674</a>                    <span class="self">Self</span>::resolve_var(fallback, custom_props, visited)
+<a href=#675 id=675 data-nosnippet>675</a>                } <span class="kw">else </span>{
+<a href=#676 id=676 data-nosnippet>676</a>                    <span class="prelude-val">None
+<a href=#677 id=677 data-nosnippet>677</a>                </span>};
+<a href=#678 id=678 data-nosnippet>678</a>
+<a href=#679 id=679 data-nosnippet>679</a>                visited.remove(var_name);
+<a href=#680 id=680 data-nosnippet>680</a>                result
+<a href=#681 id=681 data-nosnippet>681</a>            }
+<a href=#682 id=682 data-nosnippet>682</a>
+<a href=#683 id=683 data-nosnippet>683</a>            <span class="comment">// `rgb(var(--r), var(--g), var(--b))` — resolve args independently
+<a href=#684 id=684 data-nosnippet>684</a>            </span>CssValue::Function(name, args) =&gt; {
+<a href=#685 id=685 data-nosnippet>685</a>                <span class="kw">let </span>resolved_args = args
+<a href=#686 id=686 data-nosnippet>686</a>                    .iter()
+<a href=#687 id=687 data-nosnippet>687</a>                    .map(|v| <span class="self">Self</span>::resolve_var(v, custom_props, <span class="kw-2">&amp;mut </span>visited.clone()))
+<a href=#688 id=688 data-nosnippet>688</a>                    .collect::&lt;<span class="prelude-ty">Option</span>&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
+<a href=#689 id=689 data-nosnippet>689</a>                <span class="prelude-val">Some</span>(CssValue::Function(name.clone(), resolved_args))
+<a href=#690 id=690 data-nosnippet>690</a>            }
+<a href=#691 id=691 data-nosnippet>691</a>
+<a href=#692 id=692 data-nosnippet>692</a>            <span class="comment">// `1px solid var(--color)` — resolve each item independently
+<a href=#693 id=693 data-nosnippet>693</a>            </span>CssValue::List(list) =&gt; {
+<a href=#694 id=694 data-nosnippet>694</a>                <span class="kw">let </span>resolved = list
+<a href=#695 id=695 data-nosnippet>695</a>                    .iter()
+<a href=#696 id=696 data-nosnippet>696</a>                    .map(|v| <span class="self">Self</span>::resolve_var(v, custom_props, <span class="kw-2">&amp;mut </span>visited.clone()))
+<a href=#697 id=697 data-nosnippet>697</a>                    .collect::&lt;<span class="prelude-ty">Option</span>&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
+<a href=#698 id=698 data-nosnippet>698</a>                <span class="prelude-val">Some</span>(CssValue::List(resolved))
+<a href=#699 id=699 data-nosnippet>699</a>            }
+<a href=#700 id=700 data-nosnippet>700</a>
+<a href=#701 id=701 data-nosnippet>701</a>            <span class="comment">// `10px` / `"hello"` / `#fff` — already concrete, pass through
+<a href=#702 id=702 data-nosnippet>702</a>            </span><span class="kw">_ </span>=&gt; <span class="prelude-val">Some</span>(value.clone()),
+<a href=#703 id=703 data-nosnippet>703</a>        }
+<a href=#704 id=704 data-nosnippet>704</a>    }
+<a href=#705 id=705 data-nosnippet>705</a>}
 </code></pre></div></section></main></body></html>
