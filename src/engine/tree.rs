@@ -214,6 +214,17 @@ impl<T: Clone> Tree<T> {
         }
     }
 
+    /// Wrap an already-built root in a fresh tree.
+    ///
+    /// The version counter starts at zero, so the resulting tree is treated as
+    /// a newly parsed document.
+    pub fn from_root(root: NodeRef<T>) -> Self {
+        Self {
+            root,
+            version: Cell::new(0),
+        }
+    }
+
     /// Records a DOM mutation by bumping the tree's version counter.
     pub fn mark_dirty(&self) {
         self.version.set(self.version.get() + 1);
