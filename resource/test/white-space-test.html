@@ -1,0 +1,131 @@
+<!doctype html>
+<html>
+    <head>
+        <meta charset="UTF-8" />
+        <title>white-space Test</title>
+        <style>
+            body {
+                font-family: monospace;
+                margin: 20px;
+            }
+
+            .case {
+                margin: 16px 0;
+                padding: 8px;
+                border: 1px solid #888;
+                width: 300px;
+            }
+
+            .label {
+                font-weight: bold;
+                margin-bottom: 8px;
+            }
+
+            .test {
+                border: 1px dashed #aaa;
+                padding: 4px;
+            }
+
+            .normal {
+                white-space: normal;
+            }
+
+            .nowrap {
+                white-space: nowrap;
+            }
+
+            .pre {
+                white-space: pre;
+            }
+
+            .pre-wrap {
+                white-space: pre-wrap;
+            }
+
+            .pre-line {
+                white-space: pre-line;
+            }
+
+            .break-spaces {
+                white-space: break-spaces;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>white-space Test</h1>
+
+        <div class="case">
+            <div class="label">normal</div>
+            <div class="test normal">Hello world This is a test.</div>
+        </div>
+
+        <div class="case">
+            <div class="label">nowrap</div>
+            <div class="test nowrap">Hello world This is a test.</div>
+        </div>
+
+        <div class="case">
+            <div class="label">pre</div>
+            <div class="test pre">Hello world This is a test.</div>
+        </div>
+
+        <div class="case">
+            <div class="label">pre-wrap</div>
+            <div class="test pre-wrap">
+                Hello world This is a very long line that should wrap when it
+                reaches the container boundary.
+            </div>
+        </div>
+
+        <div class="case">
+            <div class="label">pre-line</div>
+            <div class="test pre-line">
+                Hello world This is a very long line that should wrap when it
+                reaches the container boundary.
+            </div>
+        </div>
+
+        <div class="case">
+            <div class="label">break-spaces</div>
+            <div class="test break-spaces">
+                Hello world This is a test with many spaces that should wrap.
+            </div>
+        </div>
+
+        <h2>Edge Cases</h2>
+
+        <div class="case">
+            <div class="label">Leading spaces</div>
+            <div class="test pre-wrap">
+                leading spaces second line third line
+            </div>
+        </div>
+
+        <div class="case">
+            <div class="label">Trailing spaces</div>
+            <div class="test pre-wrap">trailing spaces</div>
+        </div>
+
+        <div class="case">
+            <div class="label">Multiple newlines</div>
+            <div class="test pre-wrap">line 1 line 2 line 3</div>
+        </div>
+
+        <div class="case">
+            <div class="label">Only whitespace</div>
+            <div class="test pre-wrap"></div>
+        </div>
+
+        <div class="case">
+            <div class="label">Long unbreakable text</div>
+            <div class="test pre-wrap">
+                abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz
+            </div>
+        </div>
+
+        <div class="case">
+            <div class="label">Mixed whitespace</div>
+            <div class="test pre-wrap">A B C D E F</div>
+        </div>
+    </body>
+</html>

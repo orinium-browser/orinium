@@ -1,0 +1,85 @@
+<!doctype html>
+<html>
+    <head>
+        <meta charset="UTF-8" />
+        <title>pre test</title>
+    </head>
+    <body>
+        <h1>&lt;pre&gt; test</h1>
+
+        <h2>Basic</h2>
+        <pre>
+Hello
+World</pre>
+
+        <h2>Leading spaces</h2>
+        <pre>
+    Hello
+        World
+  This line has two spaces.</pre>
+
+        <h2>Multiple spaces</h2>
+        <pre>Hello    World     !</pre>
+
+        <h2>Tabs</h2>
+        <pre>
+Hello	World
+	Indented with a tab
+		Two tabs</pre>
+
+        <h2>Empty lines</h2>
+        <pre>
+First
+
+
+Middle
+
+
+Last</pre>
+
+        <h2>Trailing spaces</h2>
+        <pre>
+Hello
+World
+End</pre>
+
+        <h2>Mixed whitespace</h2>
+        <pre>
+    Hello   World
+	Indented	with	tabs
+        Mixed    spaces
+</pre>
+
+        <h2>Special characters</h2>
+        <pre>
+&lt;div&gt;
+    &lt;span class="test"&gt;Hello&lt;/span&gt;
+&lt;/div&gt;</pre>
+
+        <h2>Inline elements</h2>
+        <pre>Hello <strong>bold</strong> world
+This is <em>italic</em>.
+<a href="#">This is a link.</a></pre>
+
+        <h2>Long line</h2>
+        <pre>
+This is a very long line that should normally remain on a single line without collapsing whitespace or automatically wrapping it when rendered inside a pre element.</pre>
+
+        <h2>Code-like content</h2>
+        <pre>
+fn main() {
+    let x = 10;
+    if x > 5 {
+        println!("large");
+    } else {
+        println!("small");
+    }
+}</pre>
+
+        <h2>Empty pre</h2>
+        <pre></pre>
+
+        <h2>Only whitespace</h2>
+        <pre></pre>
+    </body>
+</html>
