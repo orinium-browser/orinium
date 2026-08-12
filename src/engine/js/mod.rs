@@ -190,6 +190,7 @@ impl JsRuntime {
         install_console(&mut engine);
         install_document(&mut engine);
         install_mutation_observer(&mut engine);
+        install_resize_observer(&mut engine);
         install_timers(&mut engine);
         install_performance(&mut engine);
         install_microtasks(&mut engine);
@@ -1306,6 +1307,74 @@ fn mutation_observer_take_records(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<
     Ok(vm.array_from_values(Vec::new()))
 }
 
+// --- ResizeObserver ---
+
+const RESIZE_OBSERVER_CALLBACK: &str = "__orinium_resize_observer_callback";
+
+fn install_resize_observer(engine: &mut pixi_byte::JSEngine) {
+    let mut constructor = JSObject::new();
+    constructor.set(
+        "__construct__".to_string(),
+        JSValue::NativeFunction(resize_observer_constructor),
+    );
+    engine.global_mut().borrow_mut().set(
+        "ResizeObserver".to_string(),
+        JSValue::Object(Rc::new(RefCell::new(constructor))),
+    );
+}
+
+fn resize_observer_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let callback = args.get(1).cloned().unwrap_or(JSValue::Undefined);
+    if !is_callable(&callback) {
+        return Err(JSError::TypeError(
+            "ResizeObserver callback must be callable".to_string(),
+        ));
+    }
+    let mut observer = JSObject::new();
+    observer.set(RESIZE_OBSERVER_CALLBACK.to_string(), callback);
+    observer.set(
+        "observe".to_string(),
+        JSValue::NativeFunction(resize_observer_observe),
+    );
+    observer.set("unobserve".to_string(), JSValue::NativeFunction(noop));
+    observer.set("disconnect".to_string(), JSValue::NativeFunction(noop));
+    Ok(JSValue::Object(Rc::new(RefCell::new(observer))))
+}
+
+fn resize_observer_observe(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(JSValue::Object(observer)) = args.first() else {
+        return Err(JSError::TypeError(
+            "ResizeObserver.observe called on an invalid receiver".to_string(),
+        ));
+    };
+    let Some(target) = args.get(1).cloned() else {
+        return Err(JSError::TypeError(
+            "ResizeObserver.observe target must be an Element".to_string(),
+        ));
+    };
+    let Some((width, height)) = element_layout_size(vm, &target) else {
+        return Err(JSError::TypeError(
+            "ResizeObserver.observe target must be an Element".to_string(),
+        ));
+    };
+    let mut entry = JSObject::new();
+    entry.define_property("target".to_string(), Property::read_only(target));
+    entry.define_property(
+        "contentRect".to_string(),
+        Property::read_only(make_dom_rect(width, height)),
+    );
+    let callback = observer.borrow().get(RESIZE_OBSERVER_CALLBACK);
+    vm.enqueue_job(
+        callback,
+        JSValue::Undefined,
+        vec![
+            vm.array_from_values(vec![JSValue::Object(Rc::new(RefCell::new(entry)))]),
+            JSValue::Object(Rc::clone(observer)),
+        ],
+    );
+    Ok(JSValue::Undefined)
+}
+
 // --- fetch ---
 
 const HEADERS_DATA: &str = "__orinium_headers_data";
@@ -2310,6 +2379,18 @@ fn make_element_interface() -> (Rc<RefCell<JSObject>>, Rc<RefCell<JSObject>>) {
         "height".to_string(),
         accessor_property(get_element_height, set_element_height),
     );
+    for name in ["clientWidth", "offsetWidth"] {
+        prototype.define_property(
+            name.to_string(),
+            read_only_accessor_property(get_element_layout_width),
+        );
+    }
+    for name in ["clientHeight", "offsetHeight"] {
+        prototype.define_property(
+            name.to_string(),
+            read_only_accessor_property(get_element_layout_height),
+        );
+    }
     prototype.define_property(
         "checked".to_string(),
         accessor_property(get_element_checked, set_element_checked),
@@ -2341,6 +2422,10 @@ fn make_element_interface() -> (Rc<RefCell<JSObject>>, Rc<RefCell<JSObject>>) {
     prototype.set(
         "toDataURL".to_string(),
         JSValue::NativeFunction(canvas_to_data_url),
+    );
+    prototype.set(
+        "getBoundingClientRect".to_string(),
+        JSValue::NativeFunction(get_bounding_client_rect),
     );
     let prototype = Rc::new(RefCell::new(prototype));
     let mut constructor = JSObject::new();
@@ -3843,6 +3928,91 @@ fn set_element_height(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     set_canvas_dimension(vm, &args, "height")
 }
 
+fn element_layout_size(vm: &VM, value: &JSValue) -> Option<(f64, f64)> {
+    let node = dom_node(vm, value)?;
+    let node = node.borrow();
+    let tag = node.value.tag_name()?;
+    let default = match tag {
+        "canvas" => (300.0, 150.0),
+        "html" | "body" => (800.0, 600.0),
+        _ => (0.0, 0.0),
+    };
+    let attr = |name: &str, fallback: f64| {
+        node.value
+            .get_attr(name)
+            .and_then(|value| value.parse::<f64>().ok())
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .unwrap_or(fallback)
+    };
+    let mut size = (attr("width", default.0), attr("height", default.1));
+    if let Some(style) = node.value.get_attr("style") {
+        for declaration in style.split(';') {
+            let Some((name, value)) = declaration.split_once(':') else {
+                continue;
+            };
+            let Some(value) = value.trim().strip_suffix("px") else {
+                continue;
+            };
+            let Ok(value) = value.trim().parse::<f64>() else {
+                continue;
+            };
+            if !value.is_finite() || value < 0.0 {
+                continue;
+            }
+            match name.trim().to_ascii_lowercase().as_str() {
+                "width" => size.0 = value,
+                "height" => size.1 = value,
+                _ => {}
+            }
+        }
+    }
+    Some(size)
+}
+
+fn get_element_layout_width(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::Number(
+        element_layout_size(vm, args.first().unwrap_or(&JSValue::Undefined))
+            .map(|size| size.0)
+            .unwrap_or(0.0),
+    ))
+}
+
+fn get_element_layout_height(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::Number(
+        element_layout_size(vm, args.first().unwrap_or(&JSValue::Undefined))
+            .map(|size| size.1)
+            .unwrap_or(0.0),
+    ))
+}
+
+fn make_dom_rect(width: f64, height: f64) -> JSValue {
+    let mut rect = JSObject::new();
+    for (name, value) in [
+        ("x", 0.0),
+        ("y", 0.0),
+        ("left", 0.0),
+        ("top", 0.0),
+        ("width", width),
+        ("height", height),
+        ("right", width),
+        ("bottom", height),
+    ] {
+        rect.define_property(
+            name.to_string(),
+            Property::read_only(JSValue::Number(value)),
+        );
+    }
+    JSValue::Object(Rc::new(RefCell::new(rect)))
+}
+
+fn get_bounding_client_rect(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let (width, height) = element_layout_size(vm, args.first().unwrap_or(&JSValue::Undefined))
+        .ok_or_else(|| {
+            JSError::TypeError("getBoundingClientRect called on incompatible receiver".to_string())
+        })?;
+    Ok(make_dom_rect(width, height))
+}
+
 const CANVAS_NODE_ID: &str = "__orinium_canvas_node_id";
 const CANVAS_COMMANDS: &str = "__orinium_canvas_commands";
 const CANVAS_CONTEXT_KIND: &str = "__orinium_canvas_context_kind";
@@ -4506,6 +4676,39 @@ mod tests {
             node.borrow().value.get_attr("data-environment"),
             Some("en-US:42:1:false:true:/projects/editor/:loaded:true")
         );
+    }
+
+    #[test]
+    fn layout_measurement_and_resize_observer_report_element_size() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<canvas id="stage" width="480" height="360"></canvas><div id="result"></div>"#,
+        );
+        runtime.run_script(
+            r#"
+            const stage = document.getElementById("stage");
+            const rect = stage.getBoundingClientRect();
+            const observer = new ResizeObserver(function (entries) {
+                const observed = entries[0].contentRect;
+                document.getElementById("result").setAttribute(
+                    "data-resize",
+                    observed.width + ":" + observed.height
+                );
+            });
+            observer.observe(stage);
+            document.getElementById("result").setAttribute(
+                "data-measure",
+                rect.width + ":" + rect.height + ":" + stage.clientWidth + ":" + stage.offsetHeight
+            );
+            "#,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(
+            result.value.get_attr("data-measure"),
+            Some("480:360:480:360")
+        );
+        assert_eq!(result.value.get_attr("data-resize"), Some("480:360"));
     }
 
     #[test]
