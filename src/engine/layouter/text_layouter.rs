@@ -88,12 +88,16 @@ impl TextFlowLayouter {
         let white_space = self.flow_style.white_space;
         let wrap_overflow = matches!(
             white_space,
-            WhiteSpace::Normal | WhiteSpace::PreWrap | WhiteSpace::PreLine | WhiteSpace::BreakSpaces
+            WhiteSpace::Normal
+                | WhiteSpace::PreWrap
+                | WhiteSpace::PreLine
+                | WhiteSpace::BreakSpaces
         );
         let forced_newline = matches!(
             white_space,
             WhiteSpace::Pre | WhiteSpace::PreWrap | WhiteSpace::PreLine | WhiteSpace::BreakSpaces
         );
+        let split_unbreakable = matches!(white_space, WhiteSpace::Normal);
 
         // Edge-case: no clusters but non-empty text (e.g. spaces-only).
         if clusters.is_empty() && !self.text.is_empty() {
@@ -191,9 +195,7 @@ impl TextFlowLayouter {
                 .map(|f| f.byte_offset)
                 .unwrap_or(text_len);
 
-            if forced_newline
-                && let Some(rel) = self.text[line_start..next_byte].find('\n')
-            {
+            if forced_newline && let Some(rel) = self.text[line_start..next_byte].find('\n') {
                 let nl_byte = line_start + rel;
                 let nl_before_cluster = nl_byte < frag.byte_offset;
 
@@ -226,10 +228,7 @@ impl TextFlowLayouter {
 
             // Check if placing this cluster would overflow the line.
             let current_line_width = line_width(line_index);
-            if wrap_overflow
-                && accumulated > 0.0
-                && accumulated + frag.width > current_line_width
-            {
+            if wrap_overflow && accumulated > 0.0 && accumulated + frag.width > current_line_width {
                 if let Some(break_at) = last_breakable_cluster {
                     // Break at the last known breakable cluster (word boundary).
                     let break_byte = if break_at < clusters.len() {
@@ -266,7 +265,7 @@ impl TextFlowLayouter {
                     x_pos = 0.0;
                     accumulated = clusters_between(line_start, clusters[i].byte_offset);
                     last_breakable_cluster = None;
-                } else {
+                } else if split_unbreakable {
                     // Unbreakable run that is wider than the next line as
                     // well: split at the current cluster boundary.
                     let break_byte = clusters[i].byte_offset;
@@ -416,8 +415,11 @@ mod tests {
     ) -> TextLayoutResult {
         let mut flow = TextFlowStyle::default();
         flow.white_space = white_space;
-        TextFlowLayouter::new(text.to_string(), flow, clusters)
-            .compute_layout(line_width, line_width, (0.0, 0.0))
+        TextFlowLayouter::new(text.to_string(), flow, clusters).compute_layout(
+            line_width,
+            line_width,
+            (0.0, 0.0),
+        )
     }
 
     #[test]
@@ -607,7 +609,11 @@ mod tests {
             cluster(6, 20.0, false),
         ];
         let result = layout_with("aa bb cc", clusters, 34.0, WhiteSpace::PreWrap);
-        let texts: Vec<String> = result.line_texts.iter().map(|s| s.trim_end().to_string()).collect();
+        let texts: Vec<String> = result
+            .line_texts
+            .iter()
+            .map(|s| s.trim_end().to_string())
+            .collect();
         assert_eq!(texts, vec!["aa", "bb", "cc"]);
     }
 
@@ -621,7 +627,11 @@ mod tests {
             cluster(6, 20.0, false),
         ];
         let result = layout_with("aa bb cc", clusters, 34.0, WhiteSpace::PreLine);
-        let texts: Vec<String> = result.line_texts.iter().map(|s| s.trim_end().to_string()).collect();
+        let texts: Vec<String> = result
+            .line_texts
+            .iter()
+            .map(|s| s.trim_end().to_string())
+            .collect();
         assert_eq!(texts, vec!["aa", "bb", "cc"]);
         assert_eq!(result.spans.len(), 3);
     }
@@ -683,5 +693,50 @@ mod tests {
         assert_eq!(result.line_texts, vec!["ab", "c"]);
         assert_eq!(result.spans[0].width(), 30.0);
         assert_eq!(result.spans[1].width(), 15.0);
+    }
+
+    #[test]
+    fn pre_wrap_does_not_split_unbreakable_word() {
+        let clusters: Vec<GlyphCluster> = (0..6).map(|i| cluster(i, 20.0, false)).collect();
+        let result = layout_with("abcdef", clusters, 80.0, WhiteSpace::PreWrap);
+        assert_eq!(result.line_texts, vec!["abcdef"]);
+        assert_eq!(result.spans.len(), 1);
+        assert_eq!(result.spans[0].width(), 120.0);
+    }
+
+    #[test]
+    fn pre_line_does_not_split_unbreakable_word() {
+        let clusters: Vec<GlyphCluster> = (0..6).map(|i| cluster(i, 20.0, false)).collect();
+        let result = layout_with("abcdef", clusters, 80.0, WhiteSpace::PreLine);
+        assert_eq!(result.line_texts, vec!["abcdef"]);
+        assert_eq!(result.spans.len(), 1);
+    }
+
+    #[test]
+    fn break_spaces_does_not_split_unbreakable_word() {
+        let clusters: Vec<GlyphCluster> = (0..6).map(|i| cluster(i, 20.0, false)).collect();
+        let result = layout_with("abcdef", clusters, 80.0, WhiteSpace::BreakSpaces);
+        assert_eq!(result.line_texts, vec!["abcdef"]);
+        assert_eq!(result.spans.len(), 1);
+    }
+
+    #[test]
+    fn pre_wrap_wraps_at_whitespace_but_not_inside_word() {
+        let clusters = vec![
+            cluster(0, 20.0, false),
+            cluster(1, 20.0, false),
+            cluster(2, 20.0, false),
+            cluster(3, 20.0, false),
+            cluster(4, 4.0, true),
+            cluster(5, 15.0, false),
+            cluster(6, 15.0, false),
+        ];
+        let result = layout_with("abcd ef", clusters, 70.0, WhiteSpace::PreWrap);
+        let texts: Vec<String> = result
+            .line_texts
+            .iter()
+            .map(|s| s.trim_end().to_string())
+            .collect();
+        assert_eq!(texts, vec!["abcd", "ef"]);
     }
 }
