@@ -530,7 +530,7 @@ pub fn build_layout_and_info_from_snapshot(
                         let t = if tag_name == Some("pre") {
                             let t = t.strip_prefix('\n').unwrap_or(t);
                             normalize_whitespace(t, text_flow_style.white_space)
-                        } else if t.trim().is_empty() {
+                        } else if t.chars().all(is_css_whitespace) {
                             continue;
                         } else {
                             normalize_whitespace(t, text_flow_style.white_space)
@@ -696,14 +696,21 @@ pub fn build_layout_and_info_from_snapshot(
         .expect("root must have been processed")
 }
 
+fn is_css_whitespace(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0c')
+}
+
 pub fn normalize_whitespace(text: &str, white_space: WhiteSpace) -> String {
+    let text = text.replace("\r\n", "\n");
+    let text = text.replace(['\r', '\x0c'], "\n");
+
     let mut result = String::new();
     let mut prev_was_space = false;
 
     for c in text.chars() {
         match white_space {
             WhiteSpace::Normal | WhiteSpace::Nowrap => {
-                if c.is_whitespace() {
+                if is_css_whitespace(c) {
                     if !prev_was_space {
                         result.push(' ');
                     }
@@ -723,7 +730,7 @@ pub fn normalize_whitespace(text: &str, white_space: WhiteSpace) -> String {
                 if c == '\n' {
                     result.push('\n');
                     prev_was_space = false;
-                } else if c.is_whitespace() {
+                } else if is_css_whitespace(c) {
                     if !prev_was_space {
                         result.push(' ');
                     }
@@ -733,6 +740,12 @@ pub fn normalize_whitespace(text: &str, white_space: WhiteSpace) -> String {
                     prev_was_space = false;
                 }
             }
+        }
+    }
+
+    if white_space == WhiteSpace::PreLine {
+        while result.ends_with('\n') {
+            result.pop();
         }
     }
 
@@ -4084,5 +4097,48 @@ mod tests {
         )
         .expect("gradient parses");
         assert_eq!(gradient.stops[0].color, Color(255, 0, 0, 255));
+    }
+
+    #[test]
+    fn normalize_whitespace_collapses_css_whitespace_only() {
+        let normal = |s| normalize_whitespace(s, WhiteSpace::Normal);
+        assert_eq!(normal("a  b\tc\nd"), "a b c d");
+        assert_eq!(normal("a\u{a0}b"), "a\u{a0}b");
+        assert_eq!(normal("\u{2007}\u{2007}"), "\u{2007}\u{2007}");
+        assert_eq!(normal(" a\n\t b "), " a b ");
+    }
+
+    #[test]
+    fn normalize_whitespace_normalizes_segment_breaks() {
+        let normal = |s| normalize_whitespace(s, WhiteSpace::Normal);
+        let pre = |s| normalize_whitespace(s, WhiteSpace::Pre);
+        assert_eq!(normal("a\r\nb"), "a b");
+        assert_eq!(normal("a\rb"), "a b");
+        assert_eq!(normal("a\u{c}b"), "a b");
+        assert_eq!(pre("a\r\nb"), "a\nb");
+        assert_eq!(pre("a\rb"), "a\nb");
+        assert_eq!(pre("a\u{c}b"), "a\nb");
+    }
+
+    #[test]
+    fn normalize_whitespace_pre_line_drops_trailing_newline() {
+        let pre_line = |s| normalize_whitespace(s, WhiteSpace::PreLine);
+        assert_eq!(pre_line("a\nb\n"), "a\nb");
+        assert_eq!(pre_line("a\nb\n\n"), "a\nb");
+        assert_eq!(pre_line("\n"), "");
+        assert_eq!(pre_line("a  b\nc\n"), "a b\nc");
+    }
+
+    #[test]
+    fn normalize_whitespace_pre_wrap_preserves_newlines() {
+        assert_eq!(
+            normalize_whitespace("a\nb\n", WhiteSpace::PreWrap),
+            "a\nb\n"
+        );
+        assert_eq!(
+            normalize_whitespace("a  b\tc", WhiteSpace::BreakSpaces),
+            "a  b\tc"
+        );
+        assert_eq!(normalize_whitespace("a\n\nb", WhiteSpace::Nowrap), "a b");
     }
 }
