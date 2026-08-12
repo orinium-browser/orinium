@@ -397,7 +397,7 @@ impl CustomLayouter for TextFlowLayouter {
     }
 
     fn write_debug(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "TextFlowLayouter [{}]", self.text)
+        write!(f, "TextFlowLayouter [{}]", self.text.escape_debug())
     }
 }
 
