@@ -555,7 +555,12 @@ pub fn build_layout_and_info_from_snapshot(
                         let t = if parent_tag_name == Some("pre") {
                             let t = t.strip_prefix('\n').unwrap_or(t);
                             normalize_whitespace(t, text_flow_style.white_space)
-                        } else if t.chars().all(is_css_whitespace) {
+                        } else if t.chars().all(is_css_newline)
+                            && matches!(
+                                text_flow_style.white_space,
+                                WhiteSpace::Normal | WhiteSpace::Nowrap
+                            )
+                        {
                             continue;
                         } else {
                             normalize_whitespace(t, text_flow_style.white_space)
@@ -723,6 +728,10 @@ pub fn build_layout_and_info_from_snapshot(
 
 fn is_css_whitespace(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0c')
+}
+
+fn is_css_newline(c: char) -> bool {
+    matches!(c, '\n' | '\r')
 }
 
 pub fn normalize_whitespace(text: &str, white_space: WhiteSpace) -> String {
