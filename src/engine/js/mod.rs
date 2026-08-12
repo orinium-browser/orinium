@@ -63,6 +63,11 @@ pub(crate) enum JsDynamicScriptSource {
     External(String),
 }
 
+pub(crate) struct JsDynamicStyleRequest {
+    pub(crate) node_id: u64,
+    pub(crate) url: String,
+}
+
 /// The response data exposed to a JavaScript `Response` object.
 #[derive(Debug)]
 pub struct JsFetchResponse {
@@ -106,6 +111,8 @@ pub struct JsHost {
     fetch_requests: Vec<JsFetchRequest>,
     dynamic_script_requests: Vec<JsDynamicScriptRequest>,
     queued_dynamic_scripts: HashSet<u64>,
+    dynamic_style_requests: Vec<JsDynamicStyleRequest>,
+    queued_dynamic_styles: HashSet<u64>,
     fetch_capabilities: HashMap<u64, JsFetchCapability>,
     constructing_fetch_capability: Option<JsFetchCapability>,
     local_storage: HashMap<String, String>,
@@ -161,6 +168,8 @@ impl JsRuntime {
             fetch_requests: Vec::new(),
             dynamic_script_requests: Vec::new(),
             queued_dynamic_scripts: HashSet::new(),
+            dynamic_style_requests: Vec::new(),
+            queued_dynamic_styles: HashSet::new(),
             fetch_capabilities: HashMap::new(),
             constructing_fetch_capability: None,
             local_storage: HashMap::new(),
@@ -315,6 +324,13 @@ impl JsRuntime {
     pub(crate) fn take_dynamic_script_requests(&mut self) -> Vec<JsDynamicScriptRequest> {
         with_host_mut(self.engine.vm(), |host| {
             std::mem::take(&mut host.dynamic_script_requests)
+        })
+        .unwrap_or_default()
+    }
+
+    pub(crate) fn take_dynamic_style_requests(&mut self) -> Vec<JsDynamicStyleRequest> {
+        with_host_mut(self.engine.vm(), |host| {
+            std::mem::take(&mut host.dynamic_style_requests)
         })
         .unwrap_or_default()
     }
@@ -2555,6 +2571,7 @@ fn append_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         });
     }
     queue_dynamic_script(vm, &child_value);
+    queue_dynamic_stylesheet(vm, &child_value);
     mark_dom_dirty(vm);
     Ok(child_value)
 }
@@ -2603,6 +2620,7 @@ fn insert_before(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         });
     }
     queue_dynamic_script(vm, &child_value);
+    queue_dynamic_stylesheet(vm, &child_value);
     mark_dom_dirty(vm);
     Ok(child_value)
 }
@@ -2642,6 +2660,39 @@ fn queue_dynamic_script(vm: &mut VM, value: &JSValue) {
         if host.queued_dynamic_scripts.insert(node_id) {
             host.dynamic_script_requests
                 .push(JsDynamicScriptRequest { node_id, source });
+        }
+    });
+}
+
+fn queue_dynamic_stylesheet(vm: &mut VM, value: &JSValue) {
+    let Some(node_id) = node_dom_id(value) else {
+        return;
+    };
+    let Some(node) = dom_node(vm, value) else {
+        return;
+    };
+    let url = {
+        let node = node.borrow();
+        if node.value.tag_name() != Some("link")
+            || !node
+                .value
+                .get_attr("rel")
+                .is_some_and(|rel| rel.eq_ignore_ascii_case("stylesheet"))
+        {
+            return;
+        }
+        let Some(url) = node.value.get_attr("href").map(str::trim) else {
+            return;
+        };
+        if url.is_empty() {
+            return;
+        }
+        url.to_string()
+    };
+    let _ = with_host_mut(vm, |host| {
+        if host.queued_dynamic_styles.insert(node_id) {
+            host.dynamic_style_requests
+                .push(JsDynamicStyleRequest { node_id, url });
         }
     });
 }
@@ -4345,6 +4396,24 @@ mod tests {
             }
             JsDynamicScriptSource::Inline(_) => panic!("expected an external script request"),
         }
+    }
+
+    #[test]
+    fn inserting_stylesheet_link_queues_dynamic_resource_load() {
+        let (mut runtime, _dom) = runtime_from_html(r#"<html><head></head><body></body></html>"#);
+        runtime.run_script(
+            r#"
+            const link = document.createElement("link");
+            link.rel = "stylesheet";
+            link.href = "/static/css/editor.css";
+            document.head.appendChild(link);
+            "#,
+        );
+
+        let requests = runtime.take_dynamic_style_requests();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].node_id > 0);
+        assert_eq!(requests[0].url, "/static/css/editor.css");
     }
 
     #[test]

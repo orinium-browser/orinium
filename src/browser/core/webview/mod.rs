@@ -49,6 +49,9 @@ pub enum FetchKind {
     DynamicScript {
         node_id: u64,
     },
+    DynamicCss {
+        node_id: u64,
+    },
     Image {
         source: String,
     },
@@ -463,6 +466,7 @@ impl WebView {
         self.try_apply_js_results();
         self.schedule_js_fetches(&mut tasks);
         self.schedule_dynamic_scripts(&mut tasks);
+        self.schedule_dynamic_styles(&mut tasks);
         self.run_due_js_timers();
         self.try_apply_layout_results();
         self.drain_write_backs();
@@ -614,6 +618,21 @@ impl WebView {
     /// Dispatches `error` for a dynamically inserted script that failed to load.
     pub fn on_dynamic_script_fetch_failed(&mut self, node_id: u64) {
         self.dispatch_js_element_event(node_id, "error");
+    }
+
+    pub fn on_dynamic_style_fetched(&mut self, node_id: u64, source: String) {
+        self.linked_css.push(source);
+        self.rebuild_styles_and_layout();
+        self.needs_redraw = true;
+        if let Some(runtime) = self.js_runtime.as_mut() {
+            runtime.dispatch_element_event(node_id, "load");
+        }
+    }
+
+    pub fn on_dynamic_style_fetch_failed(&mut self, node_id: u64) {
+        if let Some(runtime) = self.js_runtime.as_mut() {
+            runtime.dispatch_element_event(node_id, "error");
+        }
     }
 
     /// Resolves a JavaScript `fetch()` request with a network response.
@@ -915,6 +934,35 @@ impl WebView {
                             self.on_dynamic_script_fetch_failed(request.node_id);
                         }
                     }
+                }
+            }
+        }
+    }
+
+    fn schedule_dynamic_styles(&mut self, tasks: &mut Vec<WebViewTask>) {
+        let requests = self
+            .js_runtime
+            .as_mut()
+            .map(JsRuntime::take_dynamic_style_requests)
+            .unwrap_or_default();
+        let base_url = self.docment_info.as_ref().map(|info| info.base_url.clone());
+        for request in requests {
+            let url = Url::parse(&request.url).or_else(|_| {
+                base_url
+                    .as_ref()
+                    .ok_or(url::ParseError::RelativeUrlWithoutBase)?
+                    .join(&request.url)
+            });
+            match url {
+                Ok(url) => tasks.push(WebViewTask::Fetch {
+                    url,
+                    kind: FetchKind::DynamicCss {
+                        node_id: request.node_id,
+                    },
+                }),
+                Err(error) => {
+                    log::warn!("Failed to resolve dynamic stylesheet URL: {error}");
+                    self.on_dynamic_style_fetch_failed(request.node_id);
                 }
             }
         }
