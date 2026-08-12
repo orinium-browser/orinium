@@ -7,9 +7,11 @@
 //! exactly as it walked the `Rc` tree.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 use crate::engine::html::HtmlNodeType;
+use crate::engine::html::parser::DomTree;
 use crate::engine::tree::{NodeRef, TreeNode};
 
 /// Pre-order (document-order) id of a node in the snapshot arena.
@@ -20,6 +22,10 @@ pub type NodeId = u32;
 pub struct SnapNode {
     pub kind: HtmlNodeType,
     pub children: Vec<NodeId>,
+    /// Stable id the JS runtime attaches to a node when it is first exposed to
+    /// scripts. Zero means the node has never been exposed. Layout only builds
+    /// snapshots from the real tree and leaves this zero.
+    pub dom_id: u64,
 }
 
 /// An owned snapshot of a DOM subtree.
@@ -48,6 +54,71 @@ impl DomSnapshot {
         (snapshot, dom_refs)
     }
 
+    /// Builds a snapshot of a JS worker's mirror tree.
+    ///
+    /// `dom_ids` maps `Rc::as_ptr` addresses of mirror nodes to the stable id
+    /// assigned by the JS runtime, so node identities survive the snapshot
+    /// round trip. Mirrored nodes that were never exposed to scripts carry
+    /// [`SnapNode::dom_id`] zero.
+    pub fn from_mirror(root: &NodeRef<HtmlNodeType>, dom_ids: &HashMap<usize, u64>) -> Self {
+        fn walk(
+            snapshot: &mut DomSnapshot,
+            node: &NodeRef<HtmlNodeType>,
+            dom_ids: &HashMap<usize, u64>,
+        ) -> NodeId {
+            let id = snapshot.nodes.len() as NodeId;
+            snapshot.nodes.push(SnapNode {
+                kind: node.borrow().value.clone(),
+                children: Vec::new(),
+                dom_id: dom_ids
+                    .get(&(Rc::as_ptr(node) as usize))
+                    .copied()
+                    .unwrap_or(0),
+            });
+            let children: Vec<NodeId> = node
+                .borrow()
+                .children()
+                .iter()
+                .map(|child| walk(snapshot, child, dom_ids))
+                .collect();
+            snapshot.nodes[id as usize].children = children;
+            id
+        }
+        let mut snapshot = DomSnapshot::default();
+        let id = walk(&mut snapshot, root, dom_ids);
+        snapshot.roots.push(id);
+        snapshot
+    }
+
+    /// Rebuilds a live DOM tree from the snapshot.
+    ///
+    /// The returned map keyed by `Rc::as_ptr` address pairs every non-zero
+    /// [`SnapNode::dom_id`] with the freshly built node, so the caller can
+    /// re-register the JS runtime's node references after committing.
+    pub fn into_tree(&self) -> (DomTree, HashMap<usize, u64>) {
+        fn build(id: NodeId, snapshot: &DomSnapshot) -> NodeRef<HtmlNodeType> {
+            let node = TreeNode::new(snapshot.nodes[id as usize].kind.clone());
+            for &child in &snapshot.nodes[id as usize].children {
+                let child_node = build(child, snapshot);
+                TreeNode::add_child(&node, child_node);
+            }
+            node
+        }
+
+        let root = build(self.roots[0], self);
+        let tree = DomTree::from_root(root);
+        let mut dom_ids = HashMap::new();
+        let mut index = 0usize;
+        tree.traverse(|node| {
+            let dom_id = self.nodes[index].dom_id;
+            if dom_id != 0 {
+                dom_ids.insert(Rc::as_ptr(node) as usize, dom_id);
+            }
+            index += 1;
+        });
+        (tree, dom_ids)
+    }
+
     fn walk(
         &mut self,
         node: &NodeRef<HtmlNodeType>,
@@ -57,6 +128,7 @@ impl DomSnapshot {
         self.nodes.push(SnapNode {
             kind: node.borrow().value.clone(),
             children: Vec::new(),
+            dom_id: 0,
         });
         dom_refs.push(Rc::downgrade(node));
         let children: Vec<NodeId> = node
@@ -165,5 +237,72 @@ mod tests {
 
         let live = dom_refs[input_id as usize].upgrade().unwrap();
         assert_eq!(live.borrow().value.tag_name(), Some("input"));
+    }
+
+    #[test]
+    fn from_tree_roundtrip_preserves_structure() {
+        let dom = tree("<html><body><div><p>hi</p></div><button>ok</button></body></html>");
+        let (snapshot, _) = DomSnapshot::from_tree(&dom.root);
+        let (rebuilt, dom_ids) = snapshot.into_tree();
+
+        assert_eq!(rebuilt.root.borrow().value.tag_name(), None);
+        assert!(dom_ids.is_empty());
+        assert_eq!(
+            rebuilt.root.borrow().children()[0]
+                .borrow()
+                .value
+                .tag_name(),
+            Some("html")
+        );
+        assert_eq!(
+            rebuilt.root.borrow().children()[0].borrow().children()[0]
+                .borrow()
+                .value
+                .tag_name(),
+            Some("body")
+        );
+        assert_eq!(rebuilt.version(), 0);
+    }
+
+    #[test]
+    fn from_mirror_and_into_tree_preserve_dom_ids() {
+        let dom = tree("<div><p>hi</p><p>yo</p></div>");
+
+        // Simulate the JS runtime: expose every node except the first <p>.
+        let mut dom_ids = HashMap::new();
+        let mut next = 1u64;
+        let mut counter = 0usize;
+        dom.traverse(|node| {
+            if counter.is_multiple_of(2) {
+                dom_ids.insert(Rc::as_ptr(node) as usize, next);
+                next += 1;
+            }
+            counter += 1;
+        });
+
+        let snapshot = DomSnapshot::from_mirror(&dom.root, &dom_ids);
+        let (rebuilt, rebuilt_ids) = snapshot.into_tree();
+
+        assert_eq!(rebuilt_ids.len(), dom_ids.len());
+        // Same addresses only by coincidence; verify the ids line up pre-order.
+        let mut rebuilt_preorder: Vec<u64> = Vec::new();
+        rebuilt.traverse(|node| {
+            rebuilt_preorder.push(
+                rebuilt_ids
+                    .get(&(Rc::as_ptr(node) as usize))
+                    .copied()
+                    .unwrap_or(0),
+            );
+        });
+        let mut expected: Vec<u64> = Vec::new();
+        dom.traverse(|node| {
+            expected.push(
+                dom_ids
+                    .get(&(Rc::as_ptr(node) as usize))
+                    .copied()
+                    .unwrap_or(0),
+            );
+        });
+        assert_eq!(rebuilt_preorder, expected);
     }
 }
