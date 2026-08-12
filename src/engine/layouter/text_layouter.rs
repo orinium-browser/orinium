@@ -97,6 +97,19 @@ impl TextFlowLayouter {
 
         // Edge-case: no clusters but non-empty text (e.g. spaces-only).
         if clusters.is_empty() && !self.text.is_empty() {
+            if forced_newline && self.text.bytes().all(|b| b == b'\n') {
+                let line_count = self.text.bytes().filter(|b| *b == b'\n').count();
+                return TextLayoutResult {
+                    spans: (0..line_count)
+                        .map(|i| LineSpan {
+                            x_range: start_pos.0..start_pos.0,
+                            line_pos: (start_pos.0, start_pos.1 + i as f32 * lh),
+                            line_index: i,
+                        })
+                        .collect(),
+                    line_texts: vec![String::new(); line_count],
+                };
+            }
             return TextLayoutResult {
                 spans: vec![LineSpan {
                     x_range: start_pos.0..start_pos.0,
@@ -135,26 +148,23 @@ impl TextFlowLayouter {
         let mut line_texts: Vec<String> = Vec::new();
 
         let mut line_start: usize = 0; // byte offset where current line starts
-        let mut line_start_idx: usize = 0; // cluster index where current line starts
         let mut x_pos = start_pos.0;
         let mut y_pos = start_pos.1;
         let mut line_index: usize = 0;
         let mut accumulated: f32 = 0.0;
         let mut last_breakable_cluster: Option<usize> = None; // cluster index (exclusive)
 
+        let clusters_between = |from_byte: usize, to_byte: usize| -> f32 {
+            let from_idx = clusters.partition_point(|c| c.byte_offset < from_byte);
+            let to_idx = clusters.partition_point(|c| c.byte_offset < to_byte);
+            clusters[from_idx..to_idx].iter().map(|c| c.width).sum()
+        };
+
         macro_rules! emit_line {
-            ($end_idx:expr, $end_byte:expr) => {{
-                let end_idx = $end_idx;
+            ($end_byte:expr) => {{
                 let end_byte = $end_byte;
 
-                let line_w: f32 = if end_idx > line_start_idx {
-                    clusters[line_start_idx..end_idx]
-                        .iter()
-                        .map(|c| c.width)
-                        .sum()
-                } else {
-                    0.0
-                };
+                let line_w = clusters_between(line_start, end_byte);
 
                 let line_str = &self.text[line_start..end_byte];
                 let trimmed = line_str.trim_end_matches('\n');
@@ -181,39 +191,14 @@ impl TextFlowLayouter {
                 .map(|f| f.byte_offset)
                 .unwrap_or(text_len);
 
-            // Check for a forced newline in the text spanned by this cluster
-            let cluster_text = &self.text[frag.byte_offset..next_byte];
-            let nl_pos = if forced_newline {
-                cluster_text.find('\n')
-            } else {
-                None
-            };
-
-            if let Some(nl_offset) = nl_pos {
-                // The cluster itself contains a newline.
-                // If we have content before the newline on this line, emit it.
-                let nl_byte = frag.byte_offset + nl_offset;
+            if forced_newline
+                && let Some(rel) = self.text[line_start..next_byte].find('\n')
+            {
+                let nl_byte = line_start + rel;
+                let nl_before_cluster = nl_byte < frag.byte_offset;
 
                 if nl_byte > line_start {
-                    emit_line!(i, nl_byte);
-
-                    // Advance to next line state for content after \n
-                    y_pos += lh;
-                    line_index += 1;
-                    x_pos = 0.0;
-
-                    let next_byte_after_nl = nl_byte + 1;
-                    if next_byte_after_nl < next_byte {
-                        line_start = next_byte_after_nl;
-                        line_start_idx = i;
-                        accumulated = 0.0;
-                        last_breakable_cluster = None;
-                    } else {
-                        line_start = nl_byte + 1;
-                        line_start_idx = i + 1;
-                        accumulated = 0.0;
-                        last_breakable_cluster = None;
-                    }
+                    emit_line!(nl_byte);
                 } else {
                     // Empty line (e.g. consecutive newlines)
                     spans.push(LineSpan {
@@ -222,16 +207,20 @@ impl TextFlowLayouter {
                         line_index,
                     });
                     line_texts.push(String::new());
-                    line_start = nl_byte + 1;
-                    line_start_idx = i + 1;
-                    x_pos = 0.0;
-                    y_pos += lh;
-                    line_index += 1;
-                    accumulated = 0.0;
-                    last_breakable_cluster = None;
                 }
 
-                i += 1;
+                line_start = nl_byte + 1;
+                x_pos = 0.0;
+                y_pos += lh;
+                line_index += 1;
+                accumulated = 0.0;
+                last_breakable_cluster = None;
+
+                // A newline before this cluster's glyph means the cluster
+                // starts the new line, so re-process it below.
+                if !nl_before_cluster {
+                    i += 1;
+                }
                 continue;
             }
 
@@ -250,10 +239,9 @@ impl TextFlowLayouter {
                     };
 
                     if break_byte > line_start || spans.is_empty() {
-                        emit_line!(break_at, break_byte);
+                        emit_line!(break_byte);
 
                         line_start = break_byte;
-                        line_start_idx = break_at;
                         x_pos = 0.0;
                         y_pos += lh;
                         line_index += 1;
@@ -262,7 +250,7 @@ impl TextFlowLayouter {
                         // Carry over the width of any non-breakable clusters
                         // that move to the new line together with this one.
                         accumulated = if break_at < i {
-                            clusters[break_at..i].iter().map(|c| c.width).sum()
+                            clusters_between(break_byte, clusters[i].byte_offset)
                         } else {
                             0.0
                         };
@@ -276,17 +264,16 @@ impl TextFlowLayouter {
                     y_pos += lh;
                     line_index += 1;
                     x_pos = 0.0;
-                    accumulated = clusters[line_start_idx..i].iter().map(|c| c.width).sum();
+                    accumulated = clusters_between(line_start, clusters[i].byte_offset);
                     last_breakable_cluster = None;
                 } else {
                     // Unbreakable run that is wider than the next line as
                     // well: split at the current cluster boundary.
                     let break_byte = clusters[i].byte_offset;
                     if break_byte > line_start || spans.is_empty() {
-                        emit_line!(i, break_byte);
+                        emit_line!(break_byte);
 
                         line_start = break_byte;
-                        line_start_idx = i;
                         x_pos = 0.0;
                         y_pos += lh;
                         line_index += 1;
@@ -308,11 +295,7 @@ impl TextFlowLayouter {
 
         // Emit any remaining text as the last line
         if line_start < text_len {
-            let line_w: f32 = if line_start_idx < clusters.len() {
-                clusters[line_start_idx..].iter().map(|c| c.width).sum()
-            } else {
-                0.0
-            };
+            let line_w = clusters_between(line_start, text_len);
             let line_str = &self.text[line_start..];
             let trimmed = line_str.trim_end_matches('\n');
             spans.push(LineSpan {
@@ -655,5 +638,50 @@ mod tests {
         let result = layout_with("aa  bb", clusters, 25.0, WhiteSpace::BreakSpaces);
         assert_eq!(result.line_texts, vec!["aa ", " ", "bb"]);
         assert_eq!(result.spans.len(), 3);
+    }
+
+    #[test]
+    fn leading_newline_emits_empty_first_line() {
+        let clusters = vec![
+            cluster(1, 10.0, false),
+            cluster(2, 10.0, false),
+            cluster(3, 10.0, false),
+        ];
+        let result = layout_with("\nabc", clusters, 100.0, WhiteSpace::PreWrap);
+        assert_eq!(result.line_texts, vec!["", "abc"]);
+        assert_eq!(result.spans.len(), 2);
+        assert_eq!(result.spans[0].line_index, 0);
+        assert_eq!(result.spans[0].width(), 0.0);
+        assert_eq!(result.spans[1].line_index, 1);
+        assert_eq!(result.spans[1].width(), 30.0);
+    }
+
+    #[test]
+    fn consecutive_newlines_emit_empty_lines() {
+        let clusters = vec![
+            cluster(0, 10.0, false),
+            cluster(1, 10.0, false),
+            cluster(4, 10.0, false),
+            cluster(5, 10.0, false),
+        ];
+        let result = layout_with("ab\n\ncd", clusters, 100.0, WhiteSpace::PreWrap);
+        assert_eq!(result.line_texts, vec!["ab", "", "cd"]);
+        assert_eq!(result.spans.len(), 3);
+        assert_eq!(result.spans[0].width(), 20.0);
+        assert_eq!(result.spans[1].width(), 0.0);
+        assert_eq!(result.spans[2].width(), 20.0);
+    }
+
+    #[test]
+    fn newline_between_paragraphs_keeps_span_width() {
+        let clusters = vec![
+            cluster(0, 15.0, false),
+            cluster(1, 15.0, false),
+            cluster(3, 15.0, false),
+        ];
+        let result = layout_with("ab\nc", clusters, 100.0, WhiteSpace::Pre);
+        assert_eq!(result.line_texts, vec!["ab", "c"]);
+        assert_eq!(result.spans[0].width(), 30.0);
+        assert_eq!(result.spans[1].width(), 15.0);
     }
 }
