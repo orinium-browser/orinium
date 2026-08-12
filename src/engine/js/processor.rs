@@ -12,12 +12,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
 
-use super::{JsFetchRequest, JsFetchResponse, JsRuntime};
+use super::{JsDynamicScriptRequest, JsFetchRequest, JsFetchResponse, JsRuntime};
 use crate::engine::layouter::dom_snapshot::DomSnapshot;
 
 /// What the background JS thread should do next.
 #[derive(Debug)]
 pub enum JsTask {
+    /// Set the URL exposed through `document` and related browser APIs.
+    SetDocumentUrl { url: String },
     /// Execute a classic (blocking or deferred) script.
     RunScript { source: String },
     /// Dispatch `DOMContentLoaded` to document listeners.
@@ -26,6 +28,8 @@ pub enum JsTask {
     RunTimers,
     /// Dispatch a click on the element with the given JS-facing dom id.
     Click { dom_id: u64 },
+    /// Dispatch an event on the element with the given JS-facing dom id.
+    DispatchElementEvent { dom_id: u64, event_type: String },
     /// Resolve a pending JavaScript `fetch()` with a network response.
     ResolveFetch { id: u64, response: JsFetchResponse },
     /// Reject a pending JavaScript `fetch()` after a network failure.
@@ -49,6 +53,8 @@ pub struct JsTaskResult {
     pub needs_redraw: bool,
     /// `fetch()` requests queued by scripts while running this task.
     pub fetch_requests: Vec<JsFetchRequest>,
+    /// Dynamically inserted script elements discovered while running this task.
+    pub(crate) dynamic_script_requests: Vec<JsDynamicScriptRequest>,
     /// The sequence number of the task that produced this result.
     pub version: u64,
 }
@@ -95,6 +101,7 @@ impl JsProcessor {
                 run_task(&mut runtime, task);
                 let needs_redraw = runtime.take_needs_redraw();
                 let fetch_requests = runtime.take_fetch_requests();
+                let dynamic_script_requests = runtime.take_dynamic_script_requests();
                 let dom = if needs_redraw {
                     Some(runtime.snapshot())
                 } else {
@@ -104,6 +111,7 @@ impl JsProcessor {
                     dom,
                     needs_redraw,
                     fetch_requests,
+                    dynamic_script_requests,
                     version,
                 });
             }
@@ -133,6 +141,7 @@ impl JsProcessor {
 
 fn run_task(runtime: &mut JsRuntime, task: JsTask) {
     match task {
+        JsTask::SetDocumentUrl { url } => runtime.set_document_url(&url),
         JsTask::RunScript { source } => runtime.run_script(&source),
         JsTask::DispatchDomContentLoaded => {
             runtime.dispatch_dom_content_loaded();
@@ -142,6 +151,9 @@ fn run_task(runtime: &mut JsRuntime, task: JsTask) {
         }
         JsTask::Click { dom_id } => {
             runtime.click_dom_id(dom_id);
+        }
+        JsTask::DispatchElementEvent { dom_id, event_type } => {
+            runtime.dispatch_element_event(dom_id, &event_type);
         }
         JsTask::ResolveFetch { id, response } => runtime.resolve_fetch(id, response),
         JsTask::RejectFetch { id, reason } => runtime.reject_fetch(id, reason),

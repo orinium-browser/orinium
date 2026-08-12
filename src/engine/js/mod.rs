@@ -16,7 +16,7 @@ use pixi_byte::vm::VM;
 use pixi_byte::{JSError, JSResult, JSValue};
 use std::any::Any;
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -48,6 +48,19 @@ pub struct JsFetchRequest {
     pub(crate) method: String,
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) body: Vec<u8>,
+}
+
+/// A script element inserted by JavaScript after the initial HTML parse.
+#[derive(Debug)]
+pub(crate) struct JsDynamicScriptRequest {
+    pub(crate) node_id: u64,
+    pub(crate) source: JsDynamicScriptSource,
+}
+
+#[derive(Debug)]
+pub(crate) enum JsDynamicScriptSource {
+    Inline(String),
+    External(String),
 }
 
 /// The response data exposed to a JavaScript `Response` object.
@@ -89,8 +102,13 @@ pub struct JsHost {
     detached_nodes: HashMap<u64, NodeRef<HtmlNodeType>>,
     timers: Vec<JsTimer>,
     fetch_requests: Vec<JsFetchRequest>,
+    dynamic_script_requests: Vec<JsDynamicScriptRequest>,
+    queued_dynamic_scripts: HashSet<u64>,
     fetch_capabilities: HashMap<u64, JsFetchCapability>,
     constructing_fetch_capability: Option<JsFetchCapability>,
+    local_storage: HashMap<String, String>,
+    session_storage: HashMap<String, String>,
+    document_url: String,
     next_fetch_id: u64,
     next_timer_id: u64,
     time_origin: Instant,
@@ -138,8 +156,13 @@ impl JsRuntime {
             detached_nodes: HashMap::new(),
             timers: Vec::new(),
             fetch_requests: Vec::new(),
+            dynamic_script_requests: Vec::new(),
+            queued_dynamic_scripts: HashSet::new(),
             fetch_capabilities: HashMap::new(),
             constructing_fetch_capability: None,
+            local_storage: HashMap::new(),
+            session_storage: HashMap::new(),
+            document_url: "about:blank".to_string(),
             next_fetch_id: 0,
             next_timer_id: 0,
             time_origin: Instant::now(),
@@ -160,6 +183,7 @@ impl JsRuntime {
         install_headers(&mut engine);
         install_request(&mut engine);
         install_fetch(&mut engine);
+        install_browser_environment(&mut engine);
         install_global_aliases(&mut engine);
 
         Self {
@@ -175,6 +199,13 @@ impl JsRuntime {
             Err(err) => log::info!("JS error: {}", err),
         }
         self.perform_microtask_checkpoint();
+    }
+
+    /// Updates the URL exposed through the window's `location` object.
+    pub(crate) fn set_document_url(&mut self, url: &str) {
+        let _ = with_host_mut(self.engine.vm(), |host| {
+            host.document_url = url.to_string();
+        });
     }
 
     /// Dispatches `DOMContentLoaded` to document listeners once.
@@ -276,6 +307,51 @@ impl JsRuntime {
             std::mem::take(&mut host.fetch_requests)
         })
         .unwrap_or_default()
+    }
+
+    pub(crate) fn take_dynamic_script_requests(&mut self) -> Vec<JsDynamicScriptRequest> {
+        with_host_mut(self.engine.vm(), |host| {
+            std::mem::take(&mut host.dynamic_script_requests)
+        })
+        .unwrap_or_default()
+    }
+
+    /// Dispatches a non-bubbling event to a dynamically inserted element.
+    pub(crate) fn dispatch_element_event(&mut self, node_id: u64, event_type: &str) {
+        let Some((target, listeners)) = with_host(self.engine.vm(), |host| {
+            let target = host.objects.get(&node_id).cloned()?;
+            let listeners = host
+                .element_event_listeners
+                .get(&node_id)
+                .and_then(|events| events.get(event_type))
+                .cloned()
+                .unwrap_or_default();
+            Some((target, listeners))
+        })
+        .flatten() else {
+            return;
+        };
+        let handler = target.borrow().get(&format!("on{event_type}"));
+        let event = make_event(event_type, Rc::clone(&target), Rc::clone(&target));
+        if is_callable(&handler)
+            && let Err(error) = self.engine.call(
+                handler,
+                JSValue::Object(Rc::clone(&target)),
+                vec![JSValue::Object(Rc::clone(&event))],
+            )
+        {
+            log::info!("JS error in on{event_type}: {error}");
+        }
+        for listener in listeners {
+            if let Err(error) = self.engine.call(
+                listener,
+                JSValue::Object(Rc::clone(&target)),
+                vec![JSValue::Object(Rc::clone(&event))],
+            ) {
+                log::info!("JS error in {event_type} listener: {error}");
+            }
+        }
+        self.perform_microtask_checkpoint();
     }
 
     /// Resolves a pending JavaScript fetch and runs its microtask checkpoint.
@@ -505,6 +581,465 @@ fn node_dom_id(this: &JSValue) -> Option<u64> {
 fn dom_node(vm: &VM, this: &JSValue) -> Option<NodeRef<HtmlNodeType>> {
     let dom_id = node_dom_id(this)?;
     with_host(vm, |host| host.refs.get(&dom_id).and_then(|w| w.upgrade())).flatten()
+}
+
+// --- browser environment ---
+
+const STORAGE_KIND: &str = "__orinium_storage_kind";
+
+fn install_browser_environment(engine: &mut pixi_byte::JSEngine) {
+    let mut navigator = JSObject::new();
+    navigator.define_property(
+        "userAgent".to_string(),
+        Property::read_only(JSValue::String(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Orinium/0.1".to_string(),
+        )),
+    );
+    navigator.define_property(
+        "language".to_string(),
+        Property::read_only(JSValue::String("en-US".to_string())),
+    );
+    navigator.define_property(
+        "languages".to_string(),
+        Property::read_only(
+            JSArray::from_vec(vec![JSValue::String("en-US".to_string())]).to_object(),
+        ),
+    );
+    navigator.define_property(
+        "platform".to_string(),
+        Property::read_only(JSValue::String("Win32".to_string())),
+    );
+    navigator.define_property(
+        "cookieEnabled".to_string(),
+        Property::read_only(JSValue::Boolean(false)),
+    );
+    navigator.define_property(
+        "onLine".to_string(),
+        Property::read_only(JSValue::Boolean(true)),
+    );
+
+    let mut location = JSObject::new();
+    location.define_property(
+        "href".to_string(),
+        read_only_accessor_property(location_href),
+    );
+    location.define_property(
+        "origin".to_string(),
+        read_only_accessor_property(location_origin),
+    );
+    location.define_property(
+        "protocol".to_string(),
+        read_only_accessor_property(location_protocol),
+    );
+    location.define_property(
+        "host".to_string(),
+        read_only_accessor_property(location_host),
+    );
+    location.define_property(
+        "hostname".to_string(),
+        read_only_accessor_property(location_hostname),
+    );
+    location.define_property(
+        "port".to_string(),
+        read_only_accessor_property(location_port),
+    );
+    location.define_property(
+        "pathname".to_string(),
+        read_only_accessor_property(location_pathname),
+    );
+    location.define_property(
+        "search".to_string(),
+        read_only_accessor_property(location_search),
+    );
+    location.define_property(
+        "hash".to_string(),
+        read_only_accessor_property(location_hash),
+    );
+    location.set("assign".to_string(), JSValue::NativeFunction(noop));
+    location.set("replace".to_string(), JSValue::NativeFunction(noop));
+    location.set("reload".to_string(), JSValue::NativeFunction(noop));
+
+    let mut history = JSObject::new();
+    history.define_property(
+        "length".to_string(),
+        Property::read_only(JSValue::Number(1.0)),
+    );
+    history.define_property("state".to_string(), Property::read_only(JSValue::Null));
+    history.set("back".to_string(), JSValue::NativeFunction(noop));
+    history.set("forward".to_string(), JSValue::NativeFunction(noop));
+    history.set("go".to_string(), JSValue::NativeFunction(noop));
+    history.set("pushState".to_string(), JSValue::NativeFunction(noop));
+    history.set("replaceState".to_string(), JSValue::NativeFunction(noop));
+
+    let event_constructor = make_event_constructor(false);
+    let custom_event_constructor = make_event_constructor(true);
+
+    let mut global = engine.global_mut().borrow_mut();
+    global.set(
+        "navigator".to_string(),
+        JSValue::Object(Rc::new(RefCell::new(navigator))),
+    );
+    global.set(
+        "localStorage".to_string(),
+        JSValue::Object(make_storage("local")),
+    );
+    global.set(
+        "sessionStorage".to_string(),
+        JSValue::Object(make_storage("session")),
+    );
+    global.set(
+        "location".to_string(),
+        JSValue::Object(Rc::new(RefCell::new(location))),
+    );
+    global.set(
+        "history".to_string(),
+        JSValue::Object(Rc::new(RefCell::new(history))),
+    );
+    global.set("devicePixelRatio".to_string(), JSValue::Number(1.0));
+    global.set("innerWidth".to_string(), JSValue::Number(800.0));
+    global.set("innerHeight".to_string(), JSValue::Number(600.0));
+    global.set(
+        "matchMedia".to_string(),
+        JSValue::NativeFunction(match_media),
+    );
+    global.set(
+        "getComputedStyle".to_string(),
+        JSValue::NativeFunction(get_computed_style),
+    );
+    global.set("Event".to_string(), JSValue::Object(event_constructor));
+    global.set(
+        "CustomEvent".to_string(),
+        JSValue::Object(custom_event_constructor),
+    );
+    global.set(
+        "requestAnimationFrame".to_string(),
+        JSValue::NativeFunction(request_animation_frame),
+    );
+    global.set(
+        "cancelAnimationFrame".to_string(),
+        JSValue::NativeFunction(clear_timer),
+    );
+}
+
+fn location_url(vm: &VM) -> String {
+    with_host(vm, |host| host.document_url.clone()).unwrap_or_else(|| "about:blank".to_string())
+}
+
+fn parsed_location(vm: &VM) -> Option<url::Url> {
+    url::Url::parse(&location_url(vm)).ok()
+}
+
+fn location_href(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::String(location_url(vm)))
+}
+
+fn location_origin(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let origin = parsed_location(vm)
+        .map(|url| url.origin().ascii_serialization())
+        .unwrap_or_else(|| "null".to_string());
+    Ok(JSValue::String(origin))
+}
+
+fn location_protocol(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let value = parsed_location(vm)
+        .map(|url| format!("{}:", url.scheme()))
+        .unwrap_or_default();
+    Ok(JSValue::String(value))
+}
+
+fn location_host(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let value = parsed_location(vm)
+        .and_then(|url| url.host_str().map(|host| (host.to_string(), url.port())))
+        .map(|(host, port)| port.map_or(host.clone(), |port| format!("{host}:{port}")))
+        .unwrap_or_default();
+    Ok(JSValue::String(value))
+}
+
+fn location_hostname(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let value = parsed_location(vm)
+        .and_then(|url| url.host_str().map(str::to_string))
+        .unwrap_or_default();
+    Ok(JSValue::String(value))
+}
+
+fn location_port(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let value = parsed_location(vm)
+        .and_then(|url| url.port())
+        .map(|port| port.to_string())
+        .unwrap_or_default();
+    Ok(JSValue::String(value))
+}
+
+fn location_pathname(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let value = parsed_location(vm)
+        .map(|url| url.path().to_string())
+        .unwrap_or_default();
+    Ok(JSValue::String(value))
+}
+
+fn location_search(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let value = parsed_location(vm)
+        .and_then(|url| url.query().map(|query| format!("?{query}")))
+        .unwrap_or_default();
+    Ok(JSValue::String(value))
+}
+
+fn location_hash(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let value = parsed_location(vm)
+        .and_then(|url| url.fragment().map(|fragment| format!("#{fragment}")))
+        .unwrap_or_default();
+    Ok(JSValue::String(value))
+}
+
+fn get_computed_style(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let element = args.get(1).cloned().unwrap_or(JSValue::Undefined);
+    if dom_node(vm, &element).is_none() {
+        return Err(JSError::TypeError(
+            "getComputedStyle requires an Element".to_string(),
+        ));
+    }
+    get_style(vm, vec![element])
+}
+
+fn make_event_constructor(custom: bool) -> Rc<RefCell<JSObject>> {
+    let mut constructor = JSObject::new();
+    constructor.set(
+        "__construct__".to_string(),
+        JSValue::NativeFunction(if custom {
+            custom_event_constructor
+        } else {
+            event_constructor
+        }),
+    );
+    Rc::new(RefCell::new(constructor))
+}
+
+fn event_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    make_constructed_event(args, false)
+}
+
+fn custom_event_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    make_constructed_event(args, true)
+}
+
+fn make_constructed_event(args: Vec<JSValue>, custom: bool) -> JSResult<JSValue> {
+    let event_type = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
+    let options = args.get(2).and_then(|value| match value {
+        JSValue::Object(object) => Some(Rc::clone(object)),
+        _ => None,
+    });
+    let option = |name: &str| {
+        options
+            .as_ref()
+            .map(|object| object.borrow().get(name))
+            .unwrap_or(JSValue::Undefined)
+    };
+    let mut event = JSObject::new();
+    event.define_property(
+        "type".to_string(),
+        Property::read_only(JSValue::String(event_type)),
+    );
+    event.define_property(
+        "bubbles".to_string(),
+        Property::read_only(JSValue::Boolean(option("bubbles").to_boolean())),
+    );
+    event.define_property(
+        "cancelable".to_string(),
+        Property::read_only(JSValue::Boolean(option("cancelable").to_boolean())),
+    );
+    event.set("defaultPrevented".to_string(), JSValue::Boolean(false));
+    event.set(
+        "preventDefault".to_string(),
+        JSValue::NativeFunction(event_prevent_default),
+    );
+    event.set(
+        "stopPropagation".to_string(),
+        JSValue::NativeFunction(event_stop_propagation),
+    );
+    event.set(
+        "stopImmediatePropagation".to_string(),
+        JSValue::NativeFunction(event_stop_immediate_propagation),
+    );
+    if custom {
+        event.define_property("detail".to_string(), Property::read_only(option("detail")));
+    }
+    Ok(JSValue::Object(Rc::new(RefCell::new(event))))
+}
+
+fn make_storage(kind: &str) -> Rc<RefCell<JSObject>> {
+    let mut storage = JSObject::new();
+    storage.set(STORAGE_KIND.to_string(), JSValue::String(kind.to_string()));
+    storage.define_property(
+        "length".to_string(),
+        read_only_accessor_property(storage_length),
+    );
+    storage.set(
+        "getItem".to_string(),
+        JSValue::NativeFunction(storage_get_item),
+    );
+    storage.set(
+        "setItem".to_string(),
+        JSValue::NativeFunction(storage_set_item),
+    );
+    storage.set(
+        "removeItem".to_string(),
+        JSValue::NativeFunction(storage_remove_item),
+    );
+    storage.set("clear".to_string(), JSValue::NativeFunction(storage_clear));
+    storage.set("key".to_string(), JSValue::NativeFunction(storage_key));
+    Rc::new(RefCell::new(storage))
+}
+
+fn storage_kind(args: &[JSValue]) -> JSResult<String> {
+    let Some(JSValue::Object(storage)) = args.first() else {
+        return Err(JSError::TypeError(
+            "Storage method called on incompatible receiver".to_string(),
+        ));
+    };
+    match storage.borrow().get(STORAGE_KIND) {
+        JSValue::String(kind) if kind == "local" || kind == "session" => Ok(kind),
+        _ => Err(JSError::TypeError(
+            "Storage method called on incompatible receiver".to_string(),
+        )),
+    }
+}
+
+fn storage_length(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let kind = storage_kind(&args)?;
+    let length = with_host(vm, |host| {
+        if kind == "local" {
+            host.local_storage.len()
+        } else {
+            host.session_storage.len()
+        }
+    })
+    .unwrap_or(0);
+    Ok(JSValue::Number(length as f64))
+}
+
+fn storage_get_item(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let kind = storage_kind(&args)?;
+    let key = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
+    let value = with_host(vm, |host| {
+        let storage = if kind == "local" {
+            &host.local_storage
+        } else {
+            &host.session_storage
+        };
+        storage.get(&key).cloned()
+    })
+    .flatten();
+    Ok(value.map(JSValue::String).unwrap_or(JSValue::Null))
+}
+
+fn storage_set_item(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let kind = storage_kind(&args)?;
+    let key = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
+    let value = args.get(2).unwrap_or(&JSValue::Undefined).to_string();
+    let _ = with_host_mut(vm, |host| {
+        let storage = if kind == "local" {
+            &mut host.local_storage
+        } else {
+            &mut host.session_storage
+        };
+        storage.insert(key, value);
+    });
+    Ok(JSValue::Undefined)
+}
+
+fn storage_remove_item(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let kind = storage_kind(&args)?;
+    let key = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
+    let _ = with_host_mut(vm, |host| {
+        let storage = if kind == "local" {
+            &mut host.local_storage
+        } else {
+            &mut host.session_storage
+        };
+        storage.remove(&key);
+    });
+    Ok(JSValue::Undefined)
+}
+
+fn storage_clear(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let kind = storage_kind(&args)?;
+    let _ = with_host_mut(vm, |host| {
+        if kind == "local" {
+            host.local_storage.clear();
+        } else {
+            host.session_storage.clear();
+        }
+    });
+    Ok(JSValue::Undefined)
+}
+
+fn storage_key(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let kind = storage_kind(&args)?;
+    let index = args.get(1).map(JSValue::to_number).unwrap_or(f64::NAN);
+    if !index.is_finite() || index < 0.0 {
+        return Ok(JSValue::Null);
+    }
+    let value = with_host(vm, |host| {
+        let storage = if kind == "local" {
+            &host.local_storage
+        } else {
+            &host.session_storage
+        };
+        let mut keys: Vec<_> = storage.keys().cloned().collect();
+        keys.sort();
+        keys.get(index as usize).cloned()
+    })
+    .flatten();
+    Ok(value.map(JSValue::String).unwrap_or(JSValue::Null))
+}
+
+fn match_media(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let media = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
+    let mut query = JSObject::new();
+    query.define_property(
+        "media".to_string(),
+        Property::read_only(JSValue::String(media)),
+    );
+    query.define_property(
+        "matches".to_string(),
+        Property::read_only(JSValue::Boolean(false)),
+    );
+    query.set("onchange".to_string(), JSValue::Null);
+    for name in [
+        "addEventListener",
+        "removeEventListener",
+        "addListener",
+        "removeListener",
+    ] {
+        query.set(name.to_string(), JSValue::NativeFunction(noop));
+    }
+    Ok(JSValue::Object(Rc::new(RefCell::new(query))))
+}
+
+fn noop(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::Undefined)
+}
+
+fn request_animation_frame(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(callback) = args.get(1).filter(|value| is_callable(value)).cloned() else {
+        return Ok(JSValue::Number(0.0));
+    };
+    let Some(id) = with_host_mut(vm, |host| {
+        host.next_timer_id += 1;
+        let id = host.next_timer_id;
+        let timestamp = host.time_origin.elapsed().as_secs_f64() * 1_000.0;
+        host.timers.push(JsTimer {
+            id,
+            callback,
+            arguments: vec![JSValue::Number(timestamp)],
+            deadline: Instant::now() + Duration::from_millis(16),
+            interval: None,
+        });
+        id
+    }) else {
+        return Ok(JSValue::Number(0.0));
+    };
+    Ok(JSValue::Number(id as f64))
 }
 
 // --- global aliases ---
@@ -1684,6 +2219,30 @@ fn make_element_interface() -> (Rc<RefCell<JSObject>>, Rc<RefCell<JSObject>>) {
         accessor_property(get_element_value, set_element_value),
     );
     prototype.define_property(
+        "src".to_string(),
+        accessor_property(get_element_src, set_element_src),
+    );
+    prototype.define_property(
+        "href".to_string(),
+        accessor_property(get_element_href, set_element_href),
+    );
+    prototype.define_property(
+        "rel".to_string(),
+        accessor_property(get_element_rel, set_element_rel),
+    );
+    prototype.define_property(
+        "type".to_string(),
+        accessor_property(get_element_type, set_element_type),
+    );
+    prototype.define_property(
+        "charset".to_string(),
+        accessor_property(get_element_charset, set_element_charset),
+    );
+    prototype.define_property(
+        "crossOrigin".to_string(),
+        accessor_property(get_element_cross_origin, set_element_cross_origin),
+    );
+    prototype.define_property(
         "checked".to_string(),
         accessor_property(get_element_checked, set_element_checked),
     );
@@ -1698,6 +2257,14 @@ fn make_element_interface() -> (Rc<RefCell<JSObject>>, Rc<RefCell<JSObject>>) {
     prototype.define_property(
         "multiple".to_string(),
         accessor_property(get_element_multiple, set_element_multiple),
+    );
+    prototype.define_property(
+        "async".to_string(),
+        accessor_property(get_element_async, set_element_async),
+    );
+    prototype.define_property(
+        "defer".to_string(),
+        accessor_property(get_element_defer, set_element_defer),
     );
     let prototype = Rc::new(RefCell::new(prototype));
     let mut constructor = JSObject::new();
@@ -1968,6 +2535,7 @@ fn append_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
             host.detached_nodes.remove(&dom_id);
         });
     }
+    queue_dynamic_script(vm, &child_value);
     mark_dom_dirty(vm);
     Ok(child_value)
 }
@@ -2015,8 +2583,48 @@ fn insert_before(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
             host.detached_nodes.remove(&dom_id);
         });
     }
+    queue_dynamic_script(vm, &child_value);
     mark_dom_dirty(vm);
     Ok(child_value)
+}
+
+fn queue_dynamic_script(vm: &mut VM, value: &JSValue) {
+    let Some(node_id) = node_dom_id(value) else {
+        return;
+    };
+    let Some(node) = dom_node(vm, value) else {
+        return;
+    };
+    let source = {
+        let node_ref = node.borrow();
+        if node_ref.value.tag_name() != Some("script") {
+            return;
+        }
+        let script_type = node_ref.value.get_attr("type").unwrap_or("").trim();
+        if !script_type.is_empty()
+            && !matches!(
+                script_type.to_ascii_lowercase().as_str(),
+                "text/javascript"
+                    | "application/javascript"
+                    | "text/ecmascript"
+                    | "application/ecmascript"
+                    | "application/x-javascript"
+            )
+        {
+            return;
+        }
+        match node_ref.value.get_attr("src").map(str::trim) {
+            Some(src) if !src.is_empty() => JsDynamicScriptSource::External(src.to_string()),
+            Some(_) => return,
+            None => JsDynamicScriptSource::Inline(DomTree::inner_text(&node)),
+        }
+    };
+    let _ = with_host_mut(vm, |host| {
+        if host.queued_dynamic_scripts.insert(node_id) {
+            host.dynamic_script_requests
+                .push(JsDynamicScriptRequest { node_id, source });
+        }
+    });
 }
 
 fn remove_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -2958,6 +3566,29 @@ fn set_element_value(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     set_reflected_string_property(vm, &args, "value")
 }
 
+macro_rules! reflected_string_accessors {
+    ($getter:ident, $setter:ident, $name:literal) => {
+        fn $getter(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+            reflected_string_property(vm, &args, $name)
+        }
+
+        fn $setter(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+            set_reflected_string_property(vm, &args, $name)
+        }
+    };
+}
+
+reflected_string_accessors!(get_element_src, set_element_src, "src");
+reflected_string_accessors!(get_element_href, set_element_href, "href");
+reflected_string_accessors!(get_element_rel, set_element_rel, "rel");
+reflected_string_accessors!(get_element_type, set_element_type, "type");
+reflected_string_accessors!(get_element_charset, set_element_charset, "charset");
+reflected_string_accessors!(
+    get_element_cross_origin,
+    set_element_cross_origin,
+    "crossorigin"
+);
+
 macro_rules! reflected_boolean_accessors {
     ($getter:ident, $setter:ident, $name:literal) => {
         fn $getter(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -2974,6 +3605,8 @@ reflected_boolean_accessors!(get_element_checked, set_element_checked, "checked"
 reflected_boolean_accessors!(get_element_selected, set_element_selected, "selected");
 reflected_boolean_accessors!(get_element_disabled, set_element_disabled, "disabled");
 reflected_boolean_accessors!(get_element_multiple, set_element_multiple, "multiple");
+reflected_boolean_accessors!(get_element_async, set_element_async, "async");
+reflected_boolean_accessors!(get_element_defer, set_element_defer, "defer");
 
 fn get_attribute(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
@@ -3071,6 +3704,59 @@ mod tests {
 
         let node = dom.get_element_by_id("hello").unwrap();
         assert_eq!(node.borrow().value.get_attr("data-run"), Some("1"));
+    }
+
+    #[test]
+    fn browser_environment_exposes_react_bootstrap_apis() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.set_document_url("https://scratch.mit.edu/projects/editor/?tutorial=1#stage");
+        runtime.run_script(
+            r#"
+            localStorage.setItem("answer", 42);
+            sessionStorage.setItem("temporary", "yes");
+            const query = matchMedia("(prefers-color-scheme: dark)");
+            query.addEventListener("change", function () {});
+            const event = new CustomEvent("ready", {detail: "loaded", cancelable: true});
+            event.preventDefault();
+            const frame = requestAnimationFrame(function () {});
+            cancelAnimationFrame(frame);
+            document.getElementById("result").setAttribute(
+                "data-environment",
+                navigator.language + ":" + localStorage.getItem("answer") + ":" +
+                    localStorage.length + ":" + query.matches + ":" + (frame > 0) + ":" +
+                    location.pathname + ":" + event.detail + ":" + event.defaultPrevented
+            );
+            "#,
+        );
+
+        let node = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            node.borrow().value.get_attr("data-environment"),
+            Some("en-US:42:1:false:true:/projects/editor/:loaded:true")
+        );
+    }
+
+    #[test]
+    fn inserting_script_element_queues_dynamic_resource_load() {
+        let (mut runtime, _dom) = runtime_from_html(r#"<html><head></head><body></body></html>"#);
+        runtime.run_script(
+            r#"
+            const script = document.createElement("script");
+            script.src = "/static/chunks/editor.js";
+            script.async = true;
+            document.head.appendChild(script);
+            "#,
+        );
+
+        let requests = runtime.take_dynamic_script_requests();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].node_id > 0);
+        match &requests[0].source {
+            JsDynamicScriptSource::External(source) => {
+                assert_eq!(source, "/static/chunks/editor.js")
+            }
+            JsDynamicScriptSource::Inline(_) => panic!("expected an external script request"),
+        }
     }
 
     #[test]

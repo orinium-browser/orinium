@@ -3935,6 +3935,29 @@ mod tests {
         )
     }
 
+    fn text_content(info: &InfoNode) -> String {
+        let mut text = match &info.kind {
+            NodeKind::Text { text, .. } => text.clone(),
+            _ => String::new(),
+        };
+        for child in &info.children {
+            text.push_str(&text_content(child));
+        }
+        text
+    }
+
+    #[test]
+    fn noscript_content_is_absent_from_layout_when_scripting_is_enabled() {
+        let info = layout_for(
+            "<html><body><p>before</p><noscript><p>fallback</p></noscript><p>after</p></body></html>",
+            "",
+        );
+        let text = text_content(&info);
+        assert!(text.contains("before"));
+        assert!(text.contains("after"));
+        assert!(!text.contains("fallback"));
+    }
+
     #[test]
     fn named_grid_area_css_controls_final_layout() {
         let html = r#"<html><body><div class="grid"><div class="header"></div><div class="sidebar"></div><div class="main"></div><div class="footer"></div></div></body></html>"#;

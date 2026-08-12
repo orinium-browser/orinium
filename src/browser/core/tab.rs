@@ -198,6 +198,18 @@ impl Tab {
         }
     }
 
+    pub fn on_fetch_succeeded_dynamic_script(&mut self, node_id: u64, source: String) {
+        if let Some(webview) = self.webview.as_mut() {
+            webview.on_dynamic_script_fetched(node_id, source);
+        }
+    }
+
+    pub fn on_fetch_failed_dynamic_script(&mut self, node_id: u64) {
+        if let Some(webview) = self.webview.as_mut() {
+            webview.on_dynamic_script_fetch_failed(node_id);
+        }
+    }
+
     /// Delivers a completed JavaScript `fetch()` response.
     pub fn on_fetch_succeeded_js(
         &mut self,

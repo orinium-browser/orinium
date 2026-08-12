@@ -12,7 +12,10 @@ use crate::engine::{
     html::parser::{
         ClassicScriptExecution, ClassicScriptSource, DomTree, Parser as HtmlParser, ScriptingMode,
     },
-    js::{JsFetchRequest, JsFetchResponse, JsProcessor, JsTask, JsTaskResult},
+    js::{
+        JsDynamicScriptRequest, JsDynamicScriptSource, JsFetchRequest, JsFetchResponse,
+        JsProcessor, JsTask, JsTaskResult,
+    },
     layouter::{
         self, InheritedCss, LayoutResult, NodeId,
         dom_snapshot::DomSnapshot,
@@ -42,6 +45,9 @@ pub enum FetchKind {
     Css,
     Script {
         index: usize,
+    },
+    DynamicScript {
+        node_id: u64,
     },
     Image {
         source: String,
@@ -173,6 +179,8 @@ pub struct WebView {
     in_flight_timer_version: Option<u64>,
     /// `fetch()` requests collected from applied JS results.
     pending_js_fetches: Vec<JsFetchRequest>,
+    /// Dynamically inserted scripts collected from applied JS results.
+    pending_dynamic_scripts: Vec<JsDynamicScriptRequest>,
     /// Classic scripts in document order. Execution starts after CSS is applied.
     classic_scripts: Vec<ClassicScript>,
     next_script_index: usize,
@@ -299,6 +307,7 @@ impl WebView {
             js_dom_dirty: false,
             in_flight_timer_version: None,
             pending_js_fetches: Vec::new(),
+            pending_dynamic_scripts: Vec::new(),
             classic_scripts: Vec::new(),
             next_script_index: 0,
             pending_script_fetches: HashMap::new(),
@@ -333,8 +342,16 @@ impl WebView {
         {
             // Re-enabling: install a processor so DOM APIs work again, without
             // replaying scripts that were skipped while disabled.
+            let document_url = self
+                .docment_info
+                .as_ref()
+                .map(|info| info.document_url.to_string())
+                .unwrap_or_default();
             let (snapshot, _) = DomSnapshot::from_tree(&dom.root);
-            self.js_processor = Some(JsProcessor::new(snapshot));
+            let processor = JsProcessor::new(snapshot);
+            processor.send(JsTask::SetDocumentUrl { url: document_url });
+            self.js_processor = Some(processor);
+            self.pending_js_tasks = 1;
         }
     }
 
@@ -351,6 +368,7 @@ impl WebView {
         self.js_dom_dirty = false;
         self.in_flight_timer_version = None;
         self.pending_js_fetches.clear();
+        self.pending_dynamic_scripts.clear();
         self.js_dom_ids.clear();
         self.classic_scripts.clear();
         self.next_script_index = 0;
@@ -444,6 +462,7 @@ impl WebView {
 
         self.try_apply_js_results();
         self.schedule_js_fetches(&mut tasks);
+        self.schedule_dynamic_scripts(&mut tasks);
         self.run_due_js_timers();
         self.try_apply_layout_results();
         self.drain_write_backs();
@@ -467,17 +486,24 @@ impl WebView {
         self.next_deferred_script_index = 0;
         self.css_results_expected = self.pending_css_urls.len();
 
+        let mut initial_js_tasks = 0;
         self.js_processor = if self.js_policy == JsPolicy::Enabled {
             let (snapshot, _) = DomSnapshot::from_tree(&parsed.dom.root);
-            Some(JsProcessor::new(snapshot))
+            let processor = JsProcessor::new(snapshot);
+            processor.send(JsTask::SetDocumentUrl {
+                url: parsed.document_url.to_string(),
+            });
+            initial_js_tasks = 1;
+            Some(processor)
         } else {
             None
         };
-        self.pending_js_tasks = 0;
+        self.pending_js_tasks = initial_js_tasks;
         self.js_dom_ids.clear();
         self.js_dom_dirty = false;
         self.in_flight_timer_version = None;
         self.pending_js_fetches.clear();
+        self.pending_dynamic_scripts.clear();
 
         let docment_info = DocumentInfo {
             document_url: parsed.document_url,
@@ -577,6 +603,17 @@ impl WebView {
             }
             ClassicScriptExecution::Async => {}
         }
+    }
+
+    /// Executes a fetched dynamically inserted script and dispatches `load`.
+    pub fn on_dynamic_script_fetched(&mut self, node_id: u64, source: String) {
+        self.send_script(&source);
+        self.dispatch_js_element_event(node_id, "load");
+    }
+
+    /// Dispatches `error` for a dynamically inserted script that failed to load.
+    pub fn on_dynamic_script_fetch_failed(&mut self, node_id: u64) {
+        self.dispatch_js_element_event(node_id, "error");
     }
 
     /// Resolves a JavaScript `fetch()` request with a network response.
@@ -790,6 +827,16 @@ impl WebView {
         }
     }
 
+    fn dispatch_js_element_event(&mut self, dom_id: u64, event_type: &str) {
+        if let Some(processor) = self.js_processor.as_ref() {
+            processor.send(JsTask::DispatchElementEvent {
+                dom_id,
+                event_type: event_type.to_string(),
+            });
+            self.pending_js_tasks += 1;
+        }
+    }
+
     fn dispatch_dom_content_loaded(&mut self) {
         if let Some(processor) = self.js_processor.as_ref() {
             processor.send(JsTask::DispatchDomContentLoaded);
@@ -835,6 +882,40 @@ impl WebView {
                 }),
                 Err(error) => self
                     .on_js_fetch_failed(request.id, format!("Failed to parse fetch URL: {error}")),
+            }
+        }
+    }
+
+    fn schedule_dynamic_scripts(&mut self, tasks: &mut Vec<WebViewTask>) {
+        let requests = std::mem::take(&mut self.pending_dynamic_scripts);
+        let base_url = self.docment_info.as_ref().map(|info| info.base_url.clone());
+
+        for request in requests {
+            match request.source {
+                JsDynamicScriptSource::Inline(source) => {
+                    self.send_script(&source);
+                    self.dispatch_js_element_event(request.node_id, "load");
+                }
+                JsDynamicScriptSource::External(source) => {
+                    let url = Url::parse(&source).or_else(|_| {
+                        base_url
+                            .as_ref()
+                            .ok_or(url::ParseError::RelativeUrlWithoutBase)?
+                            .join(&source)
+                    });
+                    match url {
+                        Ok(url) => tasks.push(WebViewTask::Fetch {
+                            url,
+                            kind: FetchKind::DynamicScript {
+                                node_id: request.node_id,
+                            },
+                        }),
+                        Err(error) => {
+                            log::warn!("Failed to resolve dynamic script URL: {error}");
+                            self.on_dynamic_script_fetch_failed(request.node_id);
+                        }
+                    }
+                }
             }
         }
     }
@@ -966,6 +1047,8 @@ impl WebView {
         for result in results {
             self.pending_js_tasks = self.pending_js_tasks.saturating_sub(1);
             self.pending_js_fetches.extend(result.fetch_requests);
+            self.pending_dynamic_scripts
+                .extend(result.dynamic_script_requests);
 
             if let Some(in_flight) = self.in_flight_timer_version
                 && result.version >= in_flight
@@ -1082,6 +1165,7 @@ impl WebView {
         self.js_dom_dirty = false;
         self.in_flight_timer_version = None;
         self.pending_js_fetches.clear();
+        self.pending_dynamic_scripts.clear();
         self.classic_scripts.clear();
         self.next_script_index = 0;
         self.pending_script_fetches.clear();

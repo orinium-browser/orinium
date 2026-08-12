@@ -268,6 +268,10 @@ impl BrowserUi {
                         let source = String::from_utf8_lossy(&resp.body).to_string();
                         tab.on_fetch_succeeded_script(index, source);
                     }
+                    FetchKind::DynamicScript { node_id } => {
+                        let source = String::from_utf8_lossy(&resp.body).to_string();
+                        tab.on_fetch_succeeded_dynamic_script(node_id, source);
+                    }
                     FetchKind::Image { source } => {
                         tab.on_fetch_succeeded_image(source, &resp.body);
                     }
@@ -289,6 +293,10 @@ impl BrowserUi {
                     FetchKind::Script { index } => {
                         log::warn!("Classic script fetch failed without aborting page load: {url}");
                         tab.on_fetch_failed_script(index);
+                    }
+                    FetchKind::DynamicScript { node_id } => {
+                        log::warn!("Dynamic script fetch failed without aborting page load: {url}");
+                        tab.on_fetch_failed_dynamic_script(node_id);
                     }
                     FetchKind::JavaScript { request_id, .. } => {
                         tab.on_fetch_failed_js(request_id, err.to_string());
