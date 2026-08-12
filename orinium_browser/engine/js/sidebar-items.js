@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["JsHost","JsRuntime"]};
+window.SIDEBAR_ITEMS = {"mod":["processor"],"struct":["JsFetchRequest","JsFetchResponse","JsHost","JsRuntime"]};
