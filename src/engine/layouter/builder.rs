@@ -2410,107 +2410,132 @@ fn resolve_css_len_auto(
     }
 }
 
-/// Resolve CssValue to Length.
-fn resolve_css_len(
+/// calc() の評価結果。型 (number / length) を保持する。
+#[derive(Debug, Clone, PartialEq)]
+enum CalcValue {
+    Number(f32),
+    Length(Length),
+}
+
+fn resolve_length(
     name: &str,
-    css_len: &CssValue,
+    v: f32,
+    unit: &Unit,
     text_flow_style: &TextFlowStyle,
 ) -> Option<Length> {
-    match &css_len {
-        CssValue::Length(v, Unit::Em) => Some(Length::Px(text_flow_style.font_size * v)),
-        CssValue::Length(v, Unit::Rem) => Some(Length::Px(16.0 * v)), // html sont-size 仮値
-        CssValue::Length(v, u) => match u {
-            Unit::Percent => Some(Length::Percent(*v)),
-            Unit::Px => Some(Length::Px(*v)),
-            Unit::Vw => Some(Length::Vw(*v)),
-            Unit::Vh => Some(Length::Vh(*v)),
-            Unit::Em | Unit::Rem => unreachable!(),
-            Unit::Deg => {
-                log::error!(target: "Layouter", "Unexpected deg unit for `{}` (expected length)", name);
-                None
+    match unit {
+        Unit::Em => Some(Length::Px(text_flow_style.font_size * v)),
+        Unit::Rem => Some(Length::Px(16.0 * v)), // Stub
+        Unit::Percent => Some(Length::Percent(v)),
+        Unit::Px => Some(Length::Px(v)),
+        Unit::Vw => Some(Length::Vw(v)),
+        Unit::Vh => Some(Length::Vh(v)),
+        Unit::Deg => {
+            log::error!(target: "Layouter", "Unexpected deg unit for `{}` (expected length)", name);
+            None
+        }
+        Unit::Fr => {
+            log::error!(target: "Layouter", "Unexpected fr unit for `{}` (expected length)", name);
+            None
+        }
+    }
+}
+
+fn calc_combine(name: &str, op: &CssValue, left: CalcValue, right: CalcValue) -> Option<CalcValue> {
+    match op {
+        CssValue::Keyword(o) if o == "+" => match (left, right) {
+            (CalcValue::Number(x), CalcValue::Number(y)) => Some(CalcValue::Number(x + y)),
+            (CalcValue::Length(x), CalcValue::Length(y)) => {
+                Some(CalcValue::Length(Length::Add(Box::new(x), Box::new(y))))
             }
-            Unit::Fr => {
-                log::error!(target: "Layouter", "Unexpected fr unit for `{}` (expected length)", name);
+            _ => {
+                log::error!(
+                    target: "Layouter",
+                    "Cannot add number and length in calc() for `{}`",
+                    name
+                );
                 None
             }
         },
-        CssValue::Number(0.0) => Some(Length::Px(0.0)),
-        CssValue::Keyword(_) => None,
+        CssValue::Keyword(o) if o == "-" => match (left, right) {
+            (CalcValue::Number(x), CalcValue::Number(y)) => Some(CalcValue::Number(x - y)),
+            (CalcValue::Length(x), CalcValue::Length(y)) => {
+                Some(CalcValue::Length(Length::Sub(Box::new(x), Box::new(y))))
+            }
+            _ => {
+                log::error!(
+                    target: "Layouter",
+                    "Cannot subtract number and length in calc() for `{}`",
+                    name
+                );
+                None
+            }
+        },
+        CssValue::Keyword(o) if o == "*" => match (left, right) {
+            (CalcValue::Number(x), CalcValue::Number(y)) => Some(CalcValue::Number(x * y)),
+            (CalcValue::Number(x), CalcValue::Length(y)) => {
+                Some(CalcValue::Length(Length::Mul(Box::new(y), x)))
+            }
+            (CalcValue::Length(x), CalcValue::Number(y)) => {
+                Some(CalcValue::Length(Length::Mul(Box::new(x), y)))
+            }
+            _ => {
+                log::error!(
+                    target: "Layouter",
+                    "Cannot multiply two lengths in calc() for `{}`",
+                    name
+                );
+                None
+            }
+        },
+        CssValue::Keyword(o) if o == "/" => match (left, right) {
+            (CalcValue::Number(_), CalcValue::Number(0.0))
+            | (CalcValue::Length(_), CalcValue::Number(0.0)) => {
+                log::error!(
+                    target: "Layouter",
+                    "Division by zero in calc() for `{}`",
+                    name
+                );
+                None
+            }
+            (CalcValue::Number(x), CalcValue::Number(y)) => Some(CalcValue::Number(x / y)),
+            (CalcValue::Length(x), CalcValue::Number(y)) => {
+                Some(CalcValue::Length(Length::Div(Box::new(x), y)))
+            }
+            _ => {
+                log::error!(
+                    target: "Layouter",
+                    "Cannot divide by length in calc() for `{}`",
+                    name
+                );
+                None
+            }
+        },
+        _ => {
+            log::error!(target: "Layouter", "Unknown operator in calc() for `{}`: {:?}", name, op);
+            None
+        }
+    }
+}
+
+/// CssValue を number / length の型情報付きで評価する。
+fn resolve_calc_value(
+    name: &str,
+    value: &CssValue,
+    text_flow_style: &TextFlowStyle,
+) -> Option<CalcValue> {
+    match value {
+        CssValue::Length(v, unit) => {
+            resolve_length(name, *v, unit, text_flow_style).map(CalcValue::Length)
+        }
+        CssValue::Number(n) => Some(CalcValue::Number(*n)),
         CssValue::Function(fn_name, args) if fn_name == "calc" && !args.is_empty() => {
             let mut iter = args.iter();
-
-            let mut result = match iter.next().unwrap() {
-                CssValue::Number(factor) => match (iter.next(), iter.next()) {
-                    (Some(CssValue::Keyword(op)), Some(val)) if op == "*" => {
-                        let val_resolved = resolve_css_len(name, val, text_flow_style)?;
-                        Length::Mul(Box::new(val_resolved), *factor)
-                    }
-                    _ => {
-                        log::error!(
-                            target: "Layouter",
-                            "Invalid calc() expression for `{}`",
-                            name
-                        );
-                        return None;
-                    }
-                },
-                value => resolve_css_len(name, value, text_flow_style)?,
-            };
+            let mut result = resolve_calc_value(name, iter.next().unwrap(), text_flow_style)?;
 
             while let (Some(op), Some(val)) = (iter.next(), iter.next()) {
-                match op {
-                    CssValue::Keyword(o) if o == "+" => {
-                        let val_resolved = resolve_css_len(name, val, text_flow_style)?;
-                        result = Length::Add(Box::new(result), Box::new(val_resolved));
-                    }
-                    CssValue::Keyword(o) if o == "-" => {
-                        let val_resolved = resolve_css_len(name, val, text_flow_style)?;
-                        result = Length::Sub(Box::new(result), Box::new(val_resolved));
-                    }
-                    CssValue::Keyword(o) if o == "*" => {
-                        if let CssValue::Number(factor) = val {
-                            result = Length::Mul(Box::new(result), *factor);
-                        } else {
-                            log::error!(
-                                target: "Layouter",
-                                "Invalid operand for multiplication in calc() for `{}`: {:?}",
-                                name,
-                                val
-                            );
-                            return None;
-                        }
-                    }
-                    CssValue::Keyword(o) if o == "/" => {
-                        if let CssValue::Number(factor) = val {
-                            if *factor == 0.0 {
-                                log::error!(
-                                    target: "Layouter",
-                                    "Division by zero in calc() for `{}`",
-                                    name
-                                );
-                                return None;
-                            }
-                            result = Length::Div(Box::new(result), *factor);
-                        } else {
-                            log::error!(
-                                target: "Layouter",
-                                "Invalid operand for division in calc() for `{}`: {:?}",
-                                name,
-                                val
-                            );
-                            return None;
-                        }
-                    }
-                    _ => {
-                        log::error!(
-                            target: "Layouter",
-                            "Unknown operator in calc() for `{}`: {:?}",
-                            name,
-                            op
-                        );
-                        return None;
-                    }
-                }
+                let rhs = resolve_calc_value(name, val, text_flow_style)?;
+                result = calc_combine(name, op, result, rhs)?;
             }
 
             Some(result)
@@ -2520,7 +2545,19 @@ fn resolve_css_len(
         {
             let mut resolved: Vec<Length> = Vec::with_capacity(args.len());
             for arg in args {
-                resolved.push(resolve_css_len(name, arg, text_flow_style)?);
+                resolved.push(match resolve_calc_value(name, arg, text_flow_style)? {
+                    CalcValue::Length(l) => l,
+                    CalcValue::Number(0.0) => Length::Px(0.0),
+                    CalcValue::Number(n) => {
+                        log::error!(
+                            target: "Layouter",
+                            "Invalid operand for {fn_name}() in `{}` (expected length): {}",
+                            name,
+                            n
+                        );
+                        return None;
+                    }
+                });
             }
             let mut result = resolved.remove(resolved.len() - 1);
             for arg in resolved.into_iter().rev() {
@@ -2530,8 +2567,43 @@ fn resolve_css_len(
                     Length::Max(Box::new(arg), Box::new(result))
                 };
             }
-            Some(result)
+            Some(CalcValue::Length(result))
         }
+        _ => {
+            log::error!(
+                target: "Layouter",
+                "Invalid operand in calc() for `{}`: {:?}",
+                name,
+                value
+            );
+            None
+        }
+    }
+}
+
+/// Resolve CssValue to Length.
+fn resolve_css_len(
+    name: &str,
+    css_len: &CssValue,
+    text_flow_style: &TextFlowStyle,
+) -> Option<Length> {
+    match &css_len {
+        CssValue::Length(v, unit) => resolve_length(name, *v, unit, text_flow_style),
+        CssValue::Number(0.0) => Some(Length::Px(0.0)),
+        CssValue::Keyword(_) => None,
+        CssValue::Function(_, _) => match resolve_calc_value(name, css_len, text_flow_style)? {
+            CalcValue::Length(l) => Some(l),
+            CalcValue::Number(0.0) => Some(Length::Px(0.0)),
+            CalcValue::Number(n) => {
+                log::error!(
+                    target: "Layouter",
+                    "calc() resolved to a number ({}) for `{}` (expected length)",
+                    n,
+                    name
+                );
+                None
+            }
+        },
         CssValue::Color(_) => None,
         _ => {
             log::error!(target: "Layouter", "Unknown CSS Length type for `{}`: {:?}", name, css_len);
@@ -3297,6 +3369,58 @@ mod tests {
             };
             assert_eq!(actual, Length::Px(value).into());
         }
+    }
+
+    #[test]
+    fn nested_calc_operands_resolve_with_type_checking() {
+        // calc(calc(1 - 0) * 10px) => Length::Mul(Px(10), 1.0)
+        let style = apply_layout_property(
+            "margin-top",
+            CssValue::Function(
+                "calc".into(),
+                vec![
+                    CssValue::Function(
+                        "calc".into(),
+                        vec![
+                            CssValue::Number(1.0),
+                            CssValue::Keyword("-".into()),
+                            CssValue::Number(0.0),
+                        ],
+                    ),
+                    CssValue::Keyword("*".into()),
+                    CssValue::Length(10.0, Unit::Px),
+                ],
+            ),
+        );
+        assert_eq!(
+            style.spacing.margin_top,
+            LengthOrAuto::Length(Length::Mul(Box::new(Length::Px(10.0)), 1.0))
+        );
+    }
+
+    #[test]
+    fn calc_rejects_mixed_number_length_arithmetic() {
+        let text_flow_style = TextFlowStyle::default();
+        // 10px + 5 is invalid: cannot add a number to a length
+        let add = CssValue::Function(
+            "calc".into(),
+            vec![
+                CssValue::Length(10.0, Unit::Px),
+                CssValue::Keyword("+".into()),
+                CssValue::Number(5.0),
+            ],
+        );
+        assert_eq!(resolve_css_len("margin-top", &add, &text_flow_style), None);
+        // 10px * 5px is invalid: cannot multiply two lengths
+        let mul = CssValue::Function(
+            "calc".into(),
+            vec![
+                CssValue::Length(10.0, Unit::Px),
+                CssValue::Keyword("*".into()),
+                CssValue::Length(5.0, Unit::Px),
+            ],
+        );
+        assert_eq!(resolve_css_len("margin-top", &mul, &text_flow_style), None);
     }
 
     #[test]
