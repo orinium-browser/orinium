@@ -90,6 +90,8 @@ pub struct JsHost {
     objects: HashMap<u64, Rc<RefCell<JSObject>>>,
     /// Stable `CSSStyleDeclaration` wrappers for exposed elements.
     styles: HashMap<u64, Rc<RefCell<JSObject>>>,
+    /// Stable 2D rendering contexts for canvas elements.
+    canvas_contexts: HashMap<u64, Rc<RefCell<JSObject>>>,
     /// Explicit namespaces assigned through `document.createElementNS`.
     namespaces: HashMap<u64, String>,
     element_prototype: Rc<RefCell<JSObject>>,
@@ -146,6 +148,7 @@ impl JsRuntime {
             refs: HashMap::new(),
             objects: HashMap::new(),
             styles: HashMap::new(),
+            canvas_contexts: HashMap::new(),
             namespaces: HashMap::new(),
             element_prototype,
             element_constructor,
@@ -2243,6 +2246,14 @@ fn make_element_interface() -> (Rc<RefCell<JSObject>>, Rc<RefCell<JSObject>>) {
         accessor_property(get_element_cross_origin, set_element_cross_origin),
     );
     prototype.define_property(
+        "width".to_string(),
+        accessor_property(get_element_width, set_element_width),
+    );
+    prototype.define_property(
+        "height".to_string(),
+        accessor_property(get_element_height, set_element_height),
+    );
+    prototype.define_property(
         "checked".to_string(),
         accessor_property(get_element_checked, set_element_checked),
     );
@@ -2265,6 +2276,14 @@ fn make_element_interface() -> (Rc<RefCell<JSObject>>, Rc<RefCell<JSObject>>) {
     prototype.define_property(
         "defer".to_string(),
         accessor_property(get_element_defer, set_element_defer),
+    );
+    prototype.set(
+        "getContext".to_string(),
+        JSValue::NativeFunction(canvas_get_context),
+    );
+    prototype.set(
+        "toDataURL".to_string(),
+        JSValue::NativeFunction(canvas_to_data_url),
     );
     let prototype = Rc::new(RefCell::new(prototype));
     let mut constructor = JSObject::new();
@@ -3589,6 +3608,575 @@ reflected_string_accessors!(
     "crossorigin"
 );
 
+fn canvas_dimension(vm: &mut VM, args: &[JSValue], name: &str, default: f64) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Number(default));
+    };
+    if node.borrow().value.tag_name() != Some("canvas") {
+        return Ok(JSValue::Undefined);
+    }
+    let value = node
+        .borrow()
+        .value
+        .get_attr(name)
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .unwrap_or(default);
+    Ok(JSValue::Number(value))
+}
+
+fn set_canvas_dimension(vm: &mut VM, args: &[JSValue], name: &str) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Undefined);
+    };
+    if node.borrow().value.tag_name() != Some("canvas") {
+        return Ok(JSValue::Undefined);
+    }
+    let value = args.get(1).map(JSValue::to_number).unwrap_or(0.0);
+    let value = if value.is_finite() && value > 0.0 {
+        value.floor().min(u32::MAX as f64) as u32
+    } else {
+        0
+    };
+    node.borrow_mut().value.set_attr(name, value.to_string());
+    mark_dom_dirty(vm);
+    Ok(JSValue::Undefined)
+}
+
+fn get_element_width(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    canvas_dimension(vm, &args, "width", 300.0)
+}
+
+fn set_element_width(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    set_canvas_dimension(vm, &args, "width")
+}
+
+fn get_element_height(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    canvas_dimension(vm, &args, "height", 150.0)
+}
+
+fn set_element_height(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    set_canvas_dimension(vm, &args, "height")
+}
+
+const CANVAS_NODE_ID: &str = "__orinium_canvas_node_id";
+const CANVAS_COMMANDS: &str = "__orinium_canvas_commands";
+const CANVAS_CONTEXT_KIND: &str = "__orinium_canvas_context_kind";
+
+fn canvas_get_context(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let this = args.first().unwrap_or(&JSValue::Undefined);
+    let Some(node_id) = node_dom_id(this) else {
+        return Err(JSError::TypeError(
+            "getContext called on incompatible receiver".to_string(),
+        ));
+    };
+    let Some(node) = dom_node(vm, this) else {
+        return Ok(JSValue::Null);
+    };
+    if node.borrow().value.tag_name() != Some("canvas") {
+        return Err(JSError::TypeError(
+            "getContext called on incompatible receiver".to_string(),
+        ));
+    }
+    let kind = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
+    if !matches!(
+        kind.as_str(),
+        "2d" | "webgl" | "experimental-webgl" | "webgl2"
+    ) {
+        return Ok(JSValue::Null);
+    }
+    if let Some(context) =
+        with_host(vm, |host| host.canvas_contexts.get(&node_id).cloned()).flatten()
+    {
+        let existing = context.borrow().get(CANVAS_CONTEXT_KIND).to_string();
+        let compatible = existing == kind
+            || matches!(
+                (existing.as_str(), kind.as_str()),
+                ("webgl", "experimental-webgl") | ("experimental-webgl", "webgl")
+            );
+        return Ok(if compatible {
+            JSValue::Object(context)
+        } else {
+            JSValue::Null
+        });
+    }
+
+    let context = if kind == "2d" {
+        make_canvas_2d_context(node_id)
+    } else {
+        let width = canvas_dimension(vm, &[this.clone()], "width", 300.0)?.to_number();
+        let height = canvas_dimension(vm, &[this.clone()], "height", 150.0)?.to_number();
+        make_webgl_context(node_id, &kind, width, height)
+    };
+    let _ = with_host_mut(vm, |host| {
+        host.canvas_contexts.insert(node_id, Rc::clone(&context));
+    });
+    Ok(JSValue::Object(context))
+}
+
+fn make_canvas_2d_context(node_id: u64) -> Rc<RefCell<JSObject>> {
+    let mut context = JSObject::new();
+    context.define_property(
+        CANVAS_CONTEXT_KIND.to_string(),
+        Property::read_only(JSValue::String("2d".to_string())),
+    );
+    context.define_property(
+        CANVAS_NODE_ID.to_string(),
+        Property {
+            value: JSValue::Number(node_id as f64),
+            enumerable: false,
+            writable: false,
+            configurable: false,
+            getter: None,
+            setter: None,
+        },
+    );
+    context.set(
+        "fillStyle".to_string(),
+        JSValue::String("#000000".to_string()),
+    );
+    context.set(
+        "strokeStyle".to_string(),
+        JSValue::String("#000000".to_string()),
+    );
+    context.set("globalAlpha".to_string(), JSValue::Number(1.0));
+    context.set("lineWidth".to_string(), JSValue::Number(1.0));
+    context.set(
+        "font".to_string(),
+        JSValue::String("10px sans-serif".to_string()),
+    );
+    context.set("save".to_string(), JSValue::NativeFunction(noop));
+    context.set("restore".to_string(), JSValue::NativeFunction(noop));
+    context.set("beginPath".to_string(), JSValue::NativeFunction(noop));
+    context.set("closePath".to_string(), JSValue::NativeFunction(noop));
+    context.set("moveTo".to_string(), JSValue::NativeFunction(noop));
+    context.set("lineTo".to_string(), JSValue::NativeFunction(noop));
+    context.set("rect".to_string(), JSValue::NativeFunction(noop));
+    context.set("arc".to_string(), JSValue::NativeFunction(noop));
+    context.set("fill".to_string(), JSValue::NativeFunction(noop));
+    context.set("stroke".to_string(), JSValue::NativeFunction(noop));
+    context.set("translate".to_string(), JSValue::NativeFunction(noop));
+    context.set("rotate".to_string(), JSValue::NativeFunction(noop));
+    context.set("scale".to_string(), JSValue::NativeFunction(noop));
+    context.set(
+        "setTransform".to_string(),
+        JSValue::NativeFunction(canvas_set_transform),
+    );
+    context.set(
+        "resetTransform".to_string(),
+        JSValue::NativeFunction(canvas_reset_transform),
+    );
+    context.set(
+        "fillRect".to_string(),
+        JSValue::NativeFunction(canvas_fill_rect),
+    );
+    context.set(
+        "clearRect".to_string(),
+        JSValue::NativeFunction(canvas_clear_rect),
+    );
+    context.set(
+        "strokeRect".to_string(),
+        JSValue::NativeFunction(canvas_stroke_rect),
+    );
+    context.set(
+        "fillText".to_string(),
+        JSValue::NativeFunction(canvas_fill_text),
+    );
+    context.set(
+        "measureText".to_string(),
+        JSValue::NativeFunction(canvas_measure_text),
+    );
+    context.set(
+        "getImageData".to_string(),
+        JSValue::NativeFunction(canvas_get_image_data),
+    );
+    context.set(
+        "putImageData".to_string(),
+        JSValue::NativeFunction(canvas_record_command),
+    );
+    context.set(
+        "drawImage".to_string(),
+        JSValue::NativeFunction(canvas_record_command),
+    );
+    context.set(
+        "createLinearGradient".to_string(),
+        JSValue::NativeFunction(canvas_create_gradient),
+    );
+    context.set(
+        "createRadialGradient".to_string(),
+        JSValue::NativeFunction(canvas_create_gradient),
+    );
+    context.set(CANVAS_COMMANDS.to_string(), JSArray::new().to_object());
+    Rc::new(RefCell::new(context))
+}
+
+fn make_webgl_context(node_id: u64, kind: &str, width: f64, height: f64) -> Rc<RefCell<JSObject>> {
+    let mut context = JSObject::new();
+    for (name, value) in [
+        (CANVAS_CONTEXT_KIND, JSValue::String(kind.to_string())),
+        (CANVAS_NODE_ID, JSValue::Number(node_id as f64)),
+        ("drawingBufferWidth", JSValue::Number(width)),
+        ("drawingBufferHeight", JSValue::Number(height)),
+    ] {
+        context.define_property(name.to_string(), Property::read_only(value));
+    }
+    for (name, value) in [
+        ("DEPTH_BUFFER_BIT", 0x00000100),
+        ("STENCIL_BUFFER_BIT", 0x00000400),
+        ("COLOR_BUFFER_BIT", 0x00004000),
+        ("POINTS", 0x0000),
+        ("LINES", 0x0001),
+        ("TRIANGLES", 0x0004),
+        ("ZERO", 0),
+        ("ONE", 1),
+        ("SRC_ALPHA", 0x0302),
+        ("ONE_MINUS_SRC_ALPHA", 0x0303),
+        ("ARRAY_BUFFER", 0x8892),
+        ("ELEMENT_ARRAY_BUFFER", 0x8893),
+        ("STATIC_DRAW", 0x88E4),
+        ("DYNAMIC_DRAW", 0x88E8),
+        ("FLOAT", 0x1406),
+        ("UNSIGNED_BYTE", 0x1401),
+        ("UNSIGNED_SHORT", 0x1403),
+        ("RGBA", 0x1908),
+        ("RGB", 0x1907),
+        ("TEXTURE_2D", 0x0DE1),
+        ("TEXTURE0", 0x84C0),
+        ("TEXTURE_MIN_FILTER", 0x2801),
+        ("TEXTURE_MAG_FILTER", 0x2800),
+        ("TEXTURE_WRAP_S", 0x2802),
+        ("TEXTURE_WRAP_T", 0x2803),
+        ("NEAREST", 0x2600),
+        ("LINEAR", 0x2601),
+        ("CLAMP_TO_EDGE", 0x812F),
+        ("VERTEX_SHADER", 0x8B31),
+        ("FRAGMENT_SHADER", 0x8B30),
+        ("COMPILE_STATUS", 0x8B81),
+        ("LINK_STATUS", 0x8B82),
+        ("FRAMEBUFFER", 0x8D40),
+        ("RENDERBUFFER", 0x8D41),
+        ("FRAMEBUFFER_COMPLETE", 0x8CD5),
+        ("BLEND", 0x0BE2),
+        ("DEPTH_TEST", 0x0B71),
+        ("SCISSOR_TEST", 0x0C11),
+        ("MAX_TEXTURE_SIZE", 0x0D33),
+        ("MAX_TEXTURE_IMAGE_UNITS", 0x8872),
+        ("VERSION", 0x1F02),
+        ("SHADING_LANGUAGE_VERSION", 0x8B8C),
+        ("VENDOR", 0x1F00),
+        ("RENDERER", 0x1F01),
+    ] {
+        context.define_property(
+            name.to_string(),
+            Property::read_only(JSValue::Number(value as f64)),
+        );
+    }
+    for name in [
+        "createBuffer",
+        "createFramebuffer",
+        "createProgram",
+        "createRenderbuffer",
+        "createShader",
+        "createTexture",
+        "getUniformLocation",
+    ] {
+        context.set(
+            name.to_string(),
+            JSValue::NativeFunction(webgl_create_handle),
+        );
+    }
+    for name in [
+        "activeTexture",
+        "attachShader",
+        "bindAttribLocation",
+        "bindBuffer",
+        "bindFramebuffer",
+        "bindRenderbuffer",
+        "bindTexture",
+        "blendEquation",
+        "blendFunc",
+        "bufferData",
+        "bufferSubData",
+        "clear",
+        "clearColor",
+        "colorMask",
+        "compileShader",
+        "deleteBuffer",
+        "deleteFramebuffer",
+        "deleteProgram",
+        "deleteRenderbuffer",
+        "deleteShader",
+        "deleteTexture",
+        "disable",
+        "disableVertexAttribArray",
+        "drawArrays",
+        "drawElements",
+        "enable",
+        "enableVertexAttribArray",
+        "framebufferRenderbuffer",
+        "framebufferTexture2D",
+        "generateMipmap",
+        "linkProgram",
+        "pixelStorei",
+        "renderbufferStorage",
+        "scissor",
+        "shaderSource",
+        "texImage2D",
+        "texParameteri",
+        "texSubImage2D",
+        "uniform1f",
+        "uniform1fv",
+        "uniform1i",
+        "uniform1iv",
+        "uniform2f",
+        "uniform2fv",
+        "uniform3f",
+        "uniform3fv",
+        "uniform4f",
+        "uniform4fv",
+        "uniformMatrix3fv",
+        "uniformMatrix4fv",
+        "useProgram",
+        "validateProgram",
+        "vertexAttribPointer",
+        "viewport",
+    ] {
+        context.set(name.to_string(), JSValue::NativeFunction(noop));
+    }
+    for name in ["getShaderParameter", "getProgramParameter"] {
+        context.set(name.to_string(), JSValue::NativeFunction(webgl_true));
+    }
+    for name in ["getShaderInfoLog", "getProgramInfoLog"] {
+        context.set(
+            name.to_string(),
+            JSValue::NativeFunction(webgl_empty_string),
+        );
+    }
+    for name in ["getAttribLocation", "getError"] {
+        context.set(name.to_string(), JSValue::NativeFunction(webgl_zero));
+    }
+    context.set(
+        "checkFramebufferStatus".to_string(),
+        JSValue::NativeFunction(webgl_framebuffer_complete),
+    );
+    context.set(
+        "getParameter".to_string(),
+        JSValue::NativeFunction(webgl_get_parameter),
+    );
+    context.set(
+        "getExtension".to_string(),
+        JSValue::NativeFunction(webgl_get_extension),
+    );
+    context.set(
+        "getSupportedExtensions".to_string(),
+        JSValue::NativeFunction(webgl_supported_extensions),
+    );
+    Rc::new(RefCell::new(context))
+}
+
+fn webgl_create_handle(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::Object(Rc::new(RefCell::new(JSObject::new()))))
+}
+
+fn webgl_true(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::Boolean(true))
+}
+
+fn webgl_zero(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::Number(0.0))
+}
+
+fn webgl_empty_string(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::String(String::new()))
+}
+
+fn webgl_framebuffer_complete(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::Number(0x8CD5 as f64))
+}
+
+fn webgl_get_parameter(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let parameter = args.get(1).map(JSValue::to_number).unwrap_or(0.0) as u32;
+    Ok(match parameter {
+        0x1F00 => JSValue::String("Orinium".to_string()),
+        0x1F01 => JSValue::String("Orinium WebGL Compatibility Renderer".to_string()),
+        0x1F02 => JSValue::String("WebGL 1.0 (Orinium)".to_string()),
+        0x8B8C => JSValue::String("WebGL GLSL ES 1.0 (Orinium)".to_string()),
+        0x0D33 => JSValue::Number(4096.0),
+        0x8872 => JSValue::Number(8.0),
+        _ => JSValue::Number(0.0),
+    })
+}
+
+fn webgl_get_extension(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let name = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
+    if matches!(
+        name.as_str(),
+        "OES_texture_float" | "OES_element_index_uint" | "WEBGL_lose_context"
+    ) {
+        Ok(JSValue::Object(Rc::new(RefCell::new(JSObject::new()))))
+    } else {
+        Ok(JSValue::Null)
+    }
+}
+
+fn webgl_supported_extensions(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(vm.array_from_values(
+        [
+            "OES_texture_float",
+            "OES_element_index_uint",
+            "WEBGL_lose_context",
+        ]
+        .into_iter()
+        .map(|name| JSValue::String(name.to_string()))
+        .collect(),
+    ))
+}
+
+fn canvas_command(vm: &mut VM, args: Vec<JSValue>, name: &str) -> JSResult<JSValue> {
+    let Some(JSValue::Object(context)) = args.first() else {
+        return Err(JSError::TypeError(
+            "Canvas method called on incompatible receiver".to_string(),
+        ));
+    };
+    let mut command = JSObject::new();
+    command.set("name".to_string(), JSValue::String(name.to_string()));
+    command.set(
+        "arguments".to_string(),
+        vm.array_from_values(args.iter().skip(1).cloned().collect()),
+    );
+    command.set("fillStyle".to_string(), context.borrow().get("fillStyle"));
+    command.set(
+        "strokeStyle".to_string(),
+        context.borrow().get("strokeStyle"),
+    );
+    let commands = context.borrow().get(CANVAS_COMMANDS);
+    if let JSValue::Object(commands) = commands {
+        let length = commands.borrow().get("length").to_number().max(0.0) as usize;
+        commands.borrow_mut().set(
+            length.to_string(),
+            JSValue::Object(Rc::new(RefCell::new(command))),
+        );
+        commands
+            .borrow_mut()
+            .set("length".to_string(), JSValue::Number((length + 1) as f64));
+    }
+    if matches!(name, "fillRect" | "clearRect" | "strokeRect") {
+        let node_id = context.borrow().get(CANVAS_NODE_ID).to_number() as u64;
+        let style = if name == "strokeRect" {
+            context.borrow().get("strokeStyle").to_string()
+        } else {
+            context.borrow().get("fillStyle").to_string()
+        };
+        let numbers = (1..=4)
+            .map(|index| args.get(index).map(JSValue::to_number).unwrap_or(0.0))
+            .map(|number| if number.is_finite() { number } else { 0.0 })
+            .map(|number| number.to_string())
+            .collect::<Vec<_>>()
+            .join("|");
+        let record = format!("{name}|{}|{numbers}", style.replace('|', ""));
+        let _ = with_host_mut(vm, |host| {
+            if let Some(node) = host.refs.get(&node_id).and_then(|node| node.upgrade()) {
+                let existing = node
+                    .borrow()
+                    .value
+                    .get_attr("data-orinium-canvas-commands")
+                    .unwrap_or("")
+                    .to_string();
+                let value = if existing.is_empty() {
+                    record
+                } else {
+                    format!("{existing}\n{record}")
+                };
+                node.borrow_mut()
+                    .value
+                    .set_attr("data-orinium-canvas-commands", value);
+            }
+        });
+    }
+    mark_dom_dirty(vm);
+    Ok(JSValue::Undefined)
+}
+
+fn canvas_fill_rect(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    canvas_command(vm, args, "fillRect")
+}
+
+fn canvas_clear_rect(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    canvas_command(vm, args, "clearRect")
+}
+
+fn canvas_stroke_rect(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    canvas_command(vm, args, "strokeRect")
+}
+
+fn canvas_fill_text(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    canvas_command(vm, args, "fillText")
+}
+
+fn canvas_record_command(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    canvas_command(vm, args, "drawImage")
+}
+
+fn canvas_set_transform(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::Undefined)
+}
+
+fn canvas_reset_transform(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::Undefined)
+}
+
+fn canvas_measure_text(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let text = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
+    let mut metrics = JSObject::new();
+    metrics.define_property(
+        "width".to_string(),
+        Property::read_only(JSValue::Number(text.chars().count() as f64 * 6.0)),
+    );
+    Ok(JSValue::Object(Rc::new(RefCell::new(metrics))))
+}
+
+fn canvas_get_image_data(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let width = args.get(3).map(JSValue::to_number).unwrap_or(0.0).max(0.0) as usize;
+    let height = args.get(4).map(JSValue::to_number).unwrap_or(0.0).max(0.0) as usize;
+    let mut image_data = JSObject::new();
+    image_data.define_property(
+        "width".to_string(),
+        Property::read_only(JSValue::Number(width as f64)),
+    );
+    image_data.define_property(
+        "height".to_string(),
+        Property::read_only(JSValue::Number(height as f64)),
+    );
+    image_data.define_property(
+        "data".to_string(),
+        Property::read_only(
+            JSArray::from_vec(vec![JSValue::Number(0.0); width * height * 4]).to_object(),
+        ),
+    );
+    Ok(JSValue::Object(Rc::new(RefCell::new(image_data))))
+}
+
+fn canvas_create_gradient(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let mut gradient = JSObject::new();
+    gradient.set("addColorStop".to_string(), JSValue::NativeFunction(noop));
+    Ok(JSValue::Object(Rc::new(RefCell::new(gradient))))
+}
+
+fn canvas_to_data_url(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let this = args.first().unwrap_or(&JSValue::Undefined);
+    let Some(node) = dom_node(vm, this) else {
+        return Err(JSError::TypeError(
+            "toDataURL called on incompatible receiver".to_string(),
+        ));
+    };
+    if node.borrow().value.tag_name() != Some("canvas") {
+        return Err(JSError::TypeError(
+            "toDataURL called on incompatible receiver".to_string(),
+        ));
+    }
+    Ok(JSValue::String("data:image/png;base64,".to_string()))
+}
+
 macro_rules! reflected_boolean_accessors {
     ($getter:ident, $setter:ident, $name:literal) => {
         fn $getter(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -3757,6 +4345,64 @@ mod tests {
             }
             JsDynamicScriptSource::Inline(_) => panic!("expected an external script request"),
         }
+    }
+
+    #[test]
+    fn canvas_2d_context_records_visible_rectangle_commands() {
+        let (mut runtime, dom) = runtime_from_html(r#"<canvas id="stage"></canvas>"#);
+        runtime.run_script(
+            r##"
+            const canvas = document.getElementById("stage");
+            canvas.width = 480;
+            canvas.height = 360;
+            const context = canvas.getContext("2d");
+            context.fillStyle = "#ff8800";
+            context.fillRect(10, 20, 30, 40);
+            context.strokeStyle = "blue";
+            context.strokeRect(0, 0, 480, 360);
+            canvas.setAttribute("data-metrics", context.measureText("Scratch").width);
+            "##,
+        );
+
+        let canvas = dom.get_element_by_id("stage").unwrap();
+        let canvas = canvas.borrow();
+        assert_eq!(canvas.value.get_attr("width"), Some("480"));
+        assert_eq!(canvas.value.get_attr("height"), Some("360"));
+        assert_eq!(canvas.value.get_attr("data-metrics"), Some("42"));
+        assert_eq!(
+            canvas.value.get_attr("data-orinium-canvas-commands"),
+            Some("fillRect|#ff8800|10|20|30|40\nstrokeRect|blue|0|0|480|360")
+        );
+    }
+
+    #[test]
+    fn canvas_exposes_webgl_capability_surface() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<canvas id="stage" width="480" height="360"></canvas>"#);
+        runtime.run_script(
+            r#"
+            const canvas = document.getElementById("stage");
+            const gl = canvas.getContext("webgl");
+            const shader = gl.createShader(gl.VERTEX_SHADER);
+            gl.shaderSource(shader, "void main() {}");
+            gl.compileShader(shader);
+            const program = gl.createProgram();
+            gl.attachShader(program, shader);
+            gl.linkProgram(program);
+            canvas.setAttribute(
+                "data-webgl",
+                gl.getShaderParameter(shader, gl.COMPILE_STATUS) + ":" +
+                    gl.getProgramParameter(program, gl.LINK_STATUS) + ":" +
+                    gl.getParameter(gl.MAX_TEXTURE_SIZE) + ":" + gl.drawingBufferWidth
+            );
+            "#,
+        );
+
+        let canvas = dom.get_element_by_id("stage").unwrap();
+        assert_eq!(
+            canvas.borrow().value.get_attr("data-webgl"),
+            Some("true:true:4096:480")
+        );
     }
 
     #[test]

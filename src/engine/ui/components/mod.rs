@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod button;
+pub mod canvas;
 pub mod custom_node_bridge;
 pub mod image;
 pub mod inline_cache;

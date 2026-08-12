@@ -10,6 +10,7 @@ use crate::engine::layouter::{DomSnapshot, NodeId};
 use crate::engine::renderer_model::Image;
 use crate::engine::ui::audio::AudioComponent;
 use crate::engine::ui::button::ButtonComponent;
+use crate::engine::ui::canvas::CanvasComponent;
 use crate::engine::ui::components::input_hidden::InputHiddenComponent;
 use crate::engine::ui::custom_node::CustomNode;
 use crate::engine::ui::image::ImageComponent;
@@ -73,6 +74,7 @@ impl ComponentRegistry {
         registry.register(Box::new(ButtonFactory));
         registry.register(Box::new(AudioFactory));
         registry.register(Box::new(ImageFactory));
+        registry.register(Box::new(CanvasFactory));
         registry.register(Box::new(InputTextFactory));
         registry.register(Box::new(SelectFactory));
         registry
@@ -144,6 +146,28 @@ impl CustomNodeFactory for ButtonFactory {
 }
 
 struct ImageFactory;
+
+struct CanvasFactory;
+
+impl CustomNodeFactory for CanvasFactory {
+    fn tags(&self) -> &'static [&'static str] {
+        &["canvas"]
+    }
+
+    fn create(&self, _tag: &str, ctx: &CustomNodeContext) -> Option<Arc<dyn CustomNode>> {
+        let dimension = |name: &str, default: f32| {
+            (ctx.get_attr)(name)
+                .and_then(|value| value.parse::<f32>().ok())
+                .filter(|value| value.is_finite() && *value >= 0.0)
+                .unwrap_or(default)
+        };
+        Some(Arc::new(CanvasComponent::new(
+            dimension("width", 300.0),
+            dimension("height", 150.0),
+            &(ctx.get_attr)("data-orinium-canvas-commands").unwrap_or_default(),
+        )))
+    }
+}
 
 impl CustomNodeFactory for ImageFactory {
     fn tags(&self) -> &'static [&'static str] {
