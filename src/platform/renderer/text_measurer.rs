@@ -1,7 +1,7 @@
 use crate::engine::bridge::text::{
     GlyphCluster, MeasuredFragment, TextMeasureError, TextMeasureRequest, TextMeasurer,
 };
-use crate::engine::layouter::types::{FontStyle, LineHeight, TextStyle as EngineTextStyle};
+use crate::engine::layouter::types::{FontStyle, LineHeight};
 use crate::platform::renderer::text::global_font;
 use crate::platform::renderer::text::text::*;
 use crate::platform::renderer::text_cache::TextShapeCache;
@@ -38,33 +38,28 @@ impl PlatformTextMeasurer {
     }
 }
 
-impl TextMeasurer<EngineTextStyle> for PlatformTextMeasurer {
-    fn measure(
-        &self,
-        req: &TextMeasureRequest<EngineTextStyle>,
-    ) -> Result<Vec<MeasuredFragment>, TextMeasureError> {
+impl TextMeasurer for PlatformTextMeasurer {
+    fn measure(&self, req: &TextMeasureRequest) -> Result<Vec<MeasuredFragment>, TextMeasureError> {
         let _t0 = std::time::Instant::now();
 
-        let font_size = quantize_font_size(req.style.font_size.max(1.0));
+        let style = req.attribute.style.clone();
+        let flow_style = req.attribute.flow_style;
 
-        let line_height_ratio = match req.style.line_height {
+        let font_size = quantize_font_size(flow_style.font_size.max(1.0));
+
+        let line_height_ratio = match flow_style.line_height {
             LineHeight::Normal => 1.2,
             LineHeight::Number(n) => n,
             LineHeight::Px(px) => px / font_size,
         };
 
-        let font_families = build_family_list(&req.style.font_families);
+        let font_families = build_family_list(&style.font_families);
 
         let ori_style = OriTextStyle {
             font_size,
-            color: OriColor(
-                req.style.color.0,
-                req.style.color.1,
-                req.style.color.2,
-                req.style.color.3,
-            ),
-            font_weight: OriFontWeight(req.style.font_weight.0),
-            font_style: match req.style.font_style {
+            color: OriColor(style.color.0, style.color.1, style.color.2, style.color.3),
+            font_weight: OriFontWeight(style.font_weight.0),
+            font_style: match style.font_style {
                 FontStyle::Normal => OriFontStyle::Normal,
                 FontStyle::Italic => OriFontStyle::Italic,
                 FontStyle::Oblique => OriFontStyle::Oblique,
@@ -145,30 +140,28 @@ impl TextMeasurer<EngineTextStyle> for PlatformTextMeasurer {
 
     fn measure_shaped(
         &self,
-        req: &TextMeasureRequest<EngineTextStyle>,
+        req: &TextMeasureRequest,
     ) -> Result<Vec<GlyphCluster>, TextMeasureError> {
         let _t0 = std::time::Instant::now();
 
-        let font_size = quantize_font_size(req.style.font_size.max(1.0));
+        let style = req.attribute.style.clone();
+        let flow_style = req.attribute.flow_style;
 
-        let line_height_ratio = match req.style.line_height {
+        let font_size = quantize_font_size(flow_style.font_size.max(1.0));
+
+        let line_height_ratio = match flow_style.line_height {
             LineHeight::Normal => 1.2,
             LineHeight::Number(n) => n,
             LineHeight::Px(px) => px / font_size,
         };
 
-        let font_families = build_family_list(&req.style.font_families);
+        let font_families = build_family_list(&style.font_families);
 
         let ori_style = OriTextStyle {
             font_size,
-            color: OriColor(
-                req.style.color.0,
-                req.style.color.1,
-                req.style.color.2,
-                req.style.color.3,
-            ),
-            font_weight: OriFontWeight(req.style.font_weight.0),
-            font_style: match req.style.font_style {
+            color: OriColor(style.color.0, style.color.1, style.color.2, style.color.3),
+            font_weight: OriFontWeight(style.font_weight.0),
+            font_style: match style.font_style {
                 FontStyle::Normal => OriFontStyle::Normal,
                 FontStyle::Italic => OriFontStyle::Italic,
                 FontStyle::Oblique => OriFontStyle::Oblique,

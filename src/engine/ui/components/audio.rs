@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use ui_layout::Style;
 
-use crate::engine::layouter::types::{Color, TextStyle};
+use crate::engine::layouter::types::{Color, TextFlowStyle, TextStyle};
 use crate::engine::renderer_model::{Brush, DrawCommand, FillRule, Image, Paint, rect_path};
 use crate::engine::ui::custom_node::{ContentSize, CustomNode, PointerEvent};
 use crate::platform::audio::SoundManager;
@@ -133,6 +133,7 @@ impl CustomNode for AudioComponent {
         &self,
         cmd_buf: &mut Vec<DrawCommand>,
         text_style: &TextStyle,
+        text_flow_style: &TextFlowStyle,
         _style: &Style,
         size: ContentSize,
     ) {
@@ -177,7 +178,7 @@ impl CustomNode for AudioComponent {
         let (current, duration) = self.playback_times();
         cmd_buf.push(DrawCommand::DrawText {
             x: BUTTON_WIDTH + 10.0,
-            y: ((size.height - time_style.font_size) * 0.5).max(0.0),
+            y: ((size.height - text_flow_style.font_size) * 0.5).max(0.0),
             text: format!(
                 "{} / {}",
                 format_media_time(current),
@@ -185,6 +186,7 @@ impl CustomNode for AudioComponent {
             )
             .into(),
             style: time_style,
+            flow_style: *text_flow_style,
         });
     }
 
@@ -321,7 +323,11 @@ mod tests {
     fn audio_control_draws_button_icon_and_seconds() {
         let component = AudioComponent::new("resource:///audio/birds.mp3", None);
         let mut commands = Vec::new();
-        component.draw(&mut commands, &TextStyle::default());
+        component.draw(
+            &mut commands,
+            &TextStyle::default(),
+            &TextFlowStyle::default(),
+        );
         assert!(matches!(commands.first(), Some(DrawCommand::Fill { .. })));
         assert!(commands.iter().any(
             |command| matches!(command, DrawCommand::DrawText { text, .. } if text == "0:00 / 0:00")

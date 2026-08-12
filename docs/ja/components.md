@@ -99,7 +99,7 @@ src/engine/ui/
 保持する解決済み `ui_layout::Style` の `display.outer` が整形文脈を選び、
 `layout(ctx)` で `LayoutBox` を返します:
 
-| `style.display.outer` | 返す `LayoutBox`                                            |
+| `style.display.outer`  | 返す `LayoutBox`                                            |
 | ---------------------- | ----------------------------------------------------------- |
 | `OuterDisplay::Block`  | `LayoutBox::BlockBox(BoxModel)`（原点の border-box `Rect`） |
 | `OuterDisplay::Inline` | `LayoutBox::InlineBox(InlineBox)`（spans + box model）      |
@@ -256,7 +256,7 @@ pub struct ButtonComponent {
 pub struct InputTextComponent {
     state: RefCell<InputTextState>,      // value / caret / preedit / focused
     placeholder: SmolStr,
-    measurer: Arc<dyn TextMeasurer<TextStyle>>,
+    measurer: Arc<dyn TextMeasurer>,
     // private: undo / redo 履歴、dirty フラグ、on_value_change コールバック
 }
 ```

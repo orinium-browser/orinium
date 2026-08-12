@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use anyhow::{Context, Result};
 use smol_str::SmolStr;
 
-use crate::engine::layouter::types::{Color, Gradient, TextStyle};
+use crate::engine::layouter::types::{Color, Gradient, TextFlowStyle, TextStyle};
 use crate::engine::renderer_model::geom::{AffineTransform, Rect};
 use crate::engine::renderer_model::path::Path;
 
@@ -123,6 +123,7 @@ pub enum DrawCommand {
         y: f32,
         text: SmolStr,
         style: TextStyle,
+        flow_style: TextFlowStyle,
     },
     /// Push a clip region given by a path.
     ///

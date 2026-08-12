@@ -2,7 +2,7 @@
 
 use ui_layout::Style;
 
-use crate::engine::layouter::types::{Background, TextStyle};
+use crate::engine::layouter::types::{Background, TextFlowStyle, TextStyle};
 use crate::engine::renderer_model::{DrawCommand, Rect};
 
 use super::input_text_types::InputTextEvent;
@@ -84,6 +84,7 @@ pub trait CustomNode: std::fmt::Debug + Send + Sync + 'static {
         &self,
         cmd_buf: &mut Vec<DrawCommand>,
         text_style: &TextStyle,
+        text_flow_style: &TextFlowStyle,
         style: &Style,
         size: ContentSize,
     );
@@ -93,10 +94,16 @@ pub trait CustomNode: std::fmt::Debug + Send + Sync + 'static {
     /// Defaults to [`draw_sized`](Self::draw_sized) with the intrinsic size
     /// and a default style. Components that only draw at their intrinsic size
     /// may override this instead.
-    fn draw(&self, cmd_buf: &mut Vec<DrawCommand>, text_style: &TextStyle) {
+    fn draw(
+        &self,
+        cmd_buf: &mut Vec<DrawCommand>,
+        text_style: &TextStyle,
+        text_flow_style: &TextFlowStyle,
+    ) {
         self.draw_sized(
             cmd_buf,
             text_style,
+            text_flow_style,
             &Style::default(),
             self.intrinsic_size(),
         );
@@ -107,7 +114,7 @@ pub trait CustomNode: std::fmt::Debug + Send + Sync + 'static {
     /// The popup is re-generated every frame; returning `None` closes it.
     /// Commands use the same content-box coordinate space as
     /// [`draw_sized`](Self::draw_sized).
-    fn popup(&self, _text_style: &TextStyle) -> Option<Popup> {
+    fn popup(&self, _text_style: &TextStyle, _text_flow_style: &TextFlowStyle) -> Option<Popup> {
         None
     }
 

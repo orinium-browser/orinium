@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex};
 
 use ui_layout::Style;
 
-use crate::engine::bridge::text::{self, TextMeasureRequest};
-use crate::engine::layouter::types::{Background, Color, FontWeight, TextStyle};
+use crate::engine::bridge::text::{self, TextAttribute, TextMeasureRequest};
+use crate::engine::layouter::types::{Background, Color, FontWeight, TextFlowStyle, TextStyle};
 use crate::engine::renderer_model::{Brush, DrawCommand, FillRule, Paint, Path, Rect, rect_path};
 use crate::engine::ui::custom_node::{ContentSize, CustomNode, PointerEvent, Popup};
 
@@ -70,7 +70,7 @@ pub type OnSelectChange = dyn Fn(&str) + Send + Sync;
 /// An HTML `<select>` rendered by the engine.
 pub struct SelectComponent {
     options: Vec<SelectOption>,
-    measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
+    measurer: Arc<dyn text::TextMeasurer>,
     selected: Mutex<Vec<usize>>,
     open: AtomicBool,
     hovered: AtomicBool,
@@ -104,7 +104,7 @@ impl SelectComponent {
     pub fn new(
         options: Vec<SelectOption>,
         value: &str,
-        measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
+        measurer: Arc<dyn text::TextMeasurer>,
         disabled: bool,
         multiple: bool,
     ) -> Self {
@@ -127,7 +127,7 @@ impl SelectComponent {
     pub fn with_on_change(
         options: Vec<SelectOption>,
         value: &str,
-        measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
+        measurer: Arc<dyn text::TextMeasurer>,
         on_change: Arc<OnSelectChange>,
         disabled: bool,
         multiple: bool,
@@ -252,11 +252,14 @@ impl SelectComponent {
         labels
     }
 
-    fn measure_label(&self, label: &str, style: &TextStyle) -> f32 {
+    fn measure_label(&self, label: &str, style: &TextStyle, flow_style: TextFlowStyle) -> f32 {
         self.measurer
             .measure(&TextMeasureRequest {
                 text: label.to_string(),
-                style: style.clone(),
+                attribute: TextAttribute {
+                    style: style.clone(),
+                    flow_style,
+                },
             })
             .map(|fragments| fragments.iter().map(|f| f.width).sum())
             .unwrap_or(0.0)
@@ -266,7 +269,7 @@ impl SelectComponent {
     fn widest_label(&self, style: &TextStyle) -> f32 {
         self.options
             .iter()
-            .map(|option| self.measure_label(&option.label, style))
+            .map(|option| self.measure_label(&option.label, style, TextFlowStyle::default()))
             .fold(MIN_WIDTH, f32::max)
     }
 
@@ -275,12 +278,16 @@ impl SelectComponent {
         let labels = self
             .options
             .iter()
-            .map(|option| self.measure_label(&option.label, &TextStyle::default()))
-            .chain(
-                self.group_labels()
-                    .iter()
-                    .map(|label| self.measure_label(label, &TextStyle::default())),
-            )
+            .map(|option| {
+                self.measure_label(
+                    &option.label,
+                    &TextStyle::default(),
+                    TextFlowStyle::default(),
+                )
+            })
+            .chain(self.group_labels().iter().map(|label| {
+                self.measure_label(label, &TextStyle::default(), TextFlowStyle::default())
+            }))
             .fold(MIN_WIDTH, f32::max);
         box_width.max(labels + INLINE_PADDING * 2.0 + ARROW_WIDTH)
     }
@@ -329,25 +336,28 @@ impl SelectComponent {
         y_offset: f32,
         width: f32,
         text_style: &TextStyle,
+        text_flow_style: &TextFlowStyle,
     ) {
         let selected = self.selected.lock().unwrap();
         let hover = self.hover_index.load(Ordering::Relaxed);
-        let font_size = text_style.font_size;
+        let font_size = text_flow_style.font_size;
 
         let mut y = y_offset;
         for row in rows {
             match row {
                 PopupRow::Group(label) => {
                     let mut style = text_style.clone();
-                    style.font_size = (font_size * 0.85).max(10.0);
+                    let mut flow_style = *text_flow_style;
+                    flow_style.font_size = (font_size * 0.85).max(10.0);
                     style.font_weight = FontWeight(700);
                     style.color = GROUP_COLOR;
                     push_text(
                         cmd_buf,
                         INLINE_PADDING,
-                        y + ((GROUP_ROW_HEIGHT - style.font_size) * 0.5).max(0.0),
+                        y + ((GROUP_ROW_HEIGHT - flow_style.font_size) * 0.5).max(0.0),
                         label,
                         &style,
+                        flow_style,
                     );
                     y += GROUP_ROW_HEIGHT;
                 }
@@ -378,6 +388,7 @@ impl SelectComponent {
                         y + ((ROW_HEIGHT - font_size) * 0.5).max(0.0),
                         &option.label,
                         &style,
+                        *text_flow_style,
                     );
                     y += ROW_HEIGHT;
                 }
@@ -424,12 +435,20 @@ impl SelectComponent {
     }
 }
 
-fn push_text(cmd_buf: &mut Vec<DrawCommand>, x: f32, y: f32, text: &str, style: &TextStyle) {
+fn push_text(
+    cmd_buf: &mut Vec<DrawCommand>,
+    x: f32,
+    y: f32,
+    text: &str,
+    style: &TextStyle,
+    flow_style: TextFlowStyle,
+) {
     cmd_buf.push(DrawCommand::DrawText {
         x,
         y,
         text: text.into(),
         style: style.clone(),
+        flow_style,
     });
 }
 
@@ -438,6 +457,7 @@ impl CustomNode for SelectComponent {
         &self,
         cmd_buf: &mut Vec<DrawCommand>,
         text_style: &TextStyle,
+        text_flow_style: &TextFlowStyle,
         _style: &Style,
         size: ContentSize,
     ) {
@@ -448,7 +468,7 @@ impl CustomNode for SelectComponent {
         if self.multiple {
             let rows = self.popup_rows();
             Self::push_border(cmd_buf, 0.0, 0.0, size.width, size.height);
-            self.push_rows(cmd_buf, &rows, 0.0, size.width, text_style);
+            self.push_rows(cmd_buf, &rows, 0.0, size.width, text_style, text_flow_style);
             return;
         }
 
@@ -469,12 +489,12 @@ impl CustomNode for SelectComponent {
 
         Self::push_border(cmd_buf, 0.0, 0.0, size.width, size.height);
 
-        let font_size = text_style.font_size;
+        let font_size = text_flow_style.font_size;
         let text_y = ((size.height - font_size) * 0.5).max(0.0);
         let arrow_x = (size.width - INLINE_PADDING - font_size).max(0.0);
 
         // Drop-down arrow on the right.
-        push_text(cmd_buf, arrow_x, text_y, "▾", &box_style);
+        push_text(cmd_buf, arrow_x, text_y, "▾", &box_style, *text_flow_style);
 
         // The label is clipped so it never runs under the arrow.
         let label_width = (arrow_x - INLINE_PADDING).max(0.0);
@@ -484,7 +504,14 @@ impl CustomNode for SelectComponent {
                 rule: FillRule::NonZero,
             });
         }
-        push_text(cmd_buf, INLINE_PADDING, text_y, &label, &box_style);
+        push_text(
+            cmd_buf,
+            INLINE_PADDING,
+            text_y,
+            &label,
+            &box_style,
+            *text_flow_style,
+        );
         if label_width > 0.0 {
             cmd_buf.push(DrawCommand::PopClip);
         }
@@ -607,7 +634,7 @@ impl CustomNode for SelectComponent {
         }
     }
 
-    fn popup(&self, text_style: &TextStyle) -> Option<Popup> {
+    fn popup(&self, text_style: &TextStyle, text_flow_style: &TextFlowStyle) -> Option<Popup> {
         if self.multiple
             || !self.open.load(Ordering::Relaxed)
             || self.options.is_empty()
@@ -631,7 +658,14 @@ impl CustomNode for SelectComponent {
             POPUP_BG,
         );
         Self::push_border(&mut commands, 0.0, box_height, width, height);
-        self.push_rows(&mut commands, &rows, box_height, width, text_style);
+        self.push_rows(
+            &mut commands,
+            &rows,
+            box_height,
+            width,
+            text_style,
+            text_flow_style,
+        );
 
         Some(Popup {
             rect: Rect {
@@ -750,7 +784,7 @@ mod tests {
         ]
     }
 
-    fn measurer() -> Arc<dyn text::TextMeasurer<TextStyle>> {
+    fn measurer() -> Arc<dyn text::TextMeasurer> {
         Arc::new(FallbackTextMeasurer)
     }
 
@@ -777,30 +811,50 @@ mod tests {
     fn box_click_toggles_popup() {
         let select = component();
         select.on_pointer_event(PointerEvent::Down { x: 5.0, y: 5.0 });
-        assert!(select.popup(&TextStyle::default()).is_some());
+        assert!(
+            select
+                .popup(&TextStyle::default(), &TextFlowStyle::default())
+                .is_some()
+        );
         select.on_pointer_event(PointerEvent::Down { x: 5.0, y: 5.0 });
-        assert!(select.popup(&TextStyle::default()).is_none());
+        assert!(
+            select
+                .popup(&TextStyle::default(), &TextFlowStyle::default())
+                .is_none()
+        );
     }
 
     #[test]
     fn popup_row_click_selects_and_closes() {
         let select = component();
         select.on_pointer_event(PointerEvent::Down { x: 5.0, y: 5.0 });
-        assert!(select.popup(&TextStyle::default()).is_some());
+        assert!(
+            select
+                .popup(&TextStyle::default(), &TextFlowStyle::default())
+                .is_some()
+        );
         // Popup events are expressed relative to the popup's own top-left.
         select.on_popup_pointer_event(PointerEvent::Down {
             x: 10.0,
             y: ROW_HEIGHT * 2.0,
         });
         assert_eq!(select.selected_value(), "c");
-        assert!(select.popup(&TextStyle::default()).is_none());
+        assert!(
+            select
+                .popup(&TextStyle::default(), &TextFlowStyle::default())
+                .is_none()
+        );
     }
 
     #[test]
     fn popup_hover_tracks_row_and_clears_outside() {
         let select = component();
         select.on_pointer_event(PointerEvent::Down { x: 5.0, y: 5.0 });
-        assert!(select.popup(&TextStyle::default()).is_some());
+        assert!(
+            select
+                .popup(&TextStyle::default(), &TextFlowStyle::default())
+                .is_some()
+        );
 
         select.on_popup_pointer_event(PointerEvent::Move { x: 10.0, y: 2.0 });
         assert_eq!(select.hover_index.load(Ordering::Relaxed), 0);
@@ -817,10 +871,18 @@ mod tests {
     #[test]
     fn popup_is_empty_when_closed_or_optionless() {
         let select = component();
-        assert!(select.popup(&TextStyle::default()).is_none());
+        assert!(
+            select
+                .popup(&TextStyle::default(), &TextFlowStyle::default())
+                .is_none()
+        );
         let empty = SelectComponent::new(Vec::new(), "", measurer(), false, false);
         empty.on_pointer_event(PointerEvent::Down { x: 5.0, y: 5.0 });
-        assert!(empty.popup(&TextStyle::default()).is_none());
+        assert!(
+            empty
+                .popup(&TextStyle::default(), &TextFlowStyle::default())
+                .is_none()
+        );
     }
 
     #[test]
@@ -837,7 +899,9 @@ mod tests {
     fn popup_draws_background_highlight_and_option_text() {
         let select = component();
         select.on_pointer_event(PointerEvent::Down { x: 5.0, y: 5.0 });
-        let popup = select.popup(&TextStyle::default()).unwrap();
+        let popup = select
+            .popup(&TextStyle::default(), &TextFlowStyle::default())
+            .unwrap();
         assert!(!popup.commands.is_empty());
         assert!(
             popup
@@ -864,7 +928,11 @@ mod tests {
         let select = SelectComponent::with_on_change(options(), "", measurer(), cb, false, false);
 
         select.on_pointer_event(PointerEvent::Down { x: 5.0, y: 5.0 });
-        assert!(select.popup(&TextStyle::default()).is_some());
+        assert!(
+            select
+                .popup(&TextStyle::default(), &TextFlowStyle::default())
+                .is_some()
+        );
         select.on_popup_pointer_event(PointerEvent::Down {
             x: 10.0,
             y: ROW_HEIGHT,
@@ -903,7 +971,11 @@ mod tests {
         select.on_pointer_event(PointerEvent::Move { x: 5.0, y: 5.0 });
         select.on_pointer_event(PointerEvent::Down { x: 5.0, y: 5.0 });
         assert!(!select.open.load(Ordering::Relaxed));
-        assert!(select.popup(&TextStyle::default()).is_none());
+        assert!(
+            select
+                .popup(&TextStyle::default(), &TextFlowStyle::default())
+                .is_none()
+        );
 
         // Disabled events never mark the component dirty.
         assert!(!select.needs_repaint());
@@ -918,7 +990,11 @@ mod tests {
         let select = SelectComponent::new(opts, "", measurer(), false, false);
 
         select.on_pointer_event(PointerEvent::Down { x: 5.0, y: 5.0 });
-        assert!(select.popup(&TextStyle::default()).is_some());
+        assert!(
+            select
+                .popup(&TextStyle::default(), &TextFlowStyle::default())
+                .is_some()
+        );
 
         // Hovering the disabled row must not highlight it.
         select.on_popup_pointer_event(PointerEvent::Move {
@@ -974,7 +1050,9 @@ mod tests {
         assert!(matches!(rows[3], PopupRow::Group("Veggies")));
         assert!(matches!(rows[4], PopupRow::Option(2)));
 
-        let popup = select.popup(&TextStyle::default()).unwrap();
+        let popup = select
+            .popup(&TextStyle::default(), &TextFlowStyle::default())
+            .unwrap();
         let expected_height = 2.0 * GROUP_ROW_HEIGHT + 3.0 * ROW_HEIGHT;
         assert!((popup.rect.height - expected_height).abs() < 1e-3);
         assert!(
@@ -1045,7 +1123,11 @@ mod tests {
         assert_eq!(select.value(), Some("a,c".to_string()));
         assert_eq!(select.label(), Some("Alpha, Charlie".to_string()));
         // No popup: the list is rendered inline.
-        assert!(select.popup(&TextStyle::default()).is_none());
+        assert!(
+            select
+                .popup(&TextStyle::default(), &TextFlowStyle::default())
+                .is_none()
+        );
     }
 
     #[test]
@@ -1072,12 +1154,20 @@ mod tests {
             y: ROW_HEIGHT + 2.0,
         });
         assert_eq!(select.selected_value(), "a,b,c");
-        assert!(select.popup(&TextStyle::default()).is_none());
+        assert!(
+            select
+                .popup(&TextStyle::default(), &TextFlowStyle::default())
+                .is_none()
+        );
 
         // Click Alpha (row 0) to deselect it.
         select.on_pointer_event(PointerEvent::Down { x: 5.0, y: 2.0 });
         assert_eq!(select.selected_value(), "b,c");
-        assert!(select.popup(&TextStyle::default()).is_none());
+        assert!(
+            select
+                .popup(&TextStyle::default(), &TextFlowStyle::default())
+                .is_none()
+        );
     }
 
     #[test]
@@ -1142,6 +1232,7 @@ mod tests {
         select.draw_sized(
             &mut commands,
             &TextStyle::default(),
+            &TextFlowStyle::default(),
             &Style::default(),
             select.intrinsic_size(),
         );
@@ -1170,6 +1261,7 @@ mod tests {
         select.draw_sized(
             &mut commands,
             &TextStyle::default(),
+            &TextFlowStyle::default(),
             &Style::default(),
             select.intrinsic_size(),
         );

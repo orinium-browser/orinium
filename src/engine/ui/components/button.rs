@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use ui_layout::Style;
 
+use crate::engine::layouter::types::TextFlowStyle;
 use crate::engine::{
     bridge::text::{self, TextMeasureRequest},
     layouter::types::{Background, Color, TextStyle},
@@ -18,7 +19,7 @@ pub struct ButtonComponent {
     pub label: String,
     pub button_color: Color,
     pub label_color: Color,
-    measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
+    measurer: Arc<dyn text::TextMeasurer>,
     measured_cache: Mutex<Option<(f32, f32)>>,
     hovered: AtomicBool,
     pressed: AtomicBool,
@@ -43,7 +44,7 @@ impl ButtonComponent {
         label: impl Into<String>,
         button_color: Color,
         label_color: Color,
-        measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
+        measurer: Arc<dyn text::TextMeasurer>,
     ) -> Self {
         Self {
             label: label.into(),
@@ -64,17 +65,19 @@ impl CustomNode for ButtonComponent {
         &self,
         cmd_buf: &mut Vec<DrawCommand>,
         text_style: &TextStyle,
+        text_flow_style: &TextFlowStyle,
         _style: &Style,
         size: ContentSize,
     ) {
         let mut style = text_style.clone();
         style.color = self.label_color;
-        let y = ((size.height - style.font_size) * 0.5).max(0.0);
+        let y = ((size.height - text_flow_style.font_size) * 0.5).max(0.0);
         cmd_buf.push(DrawCommand::DrawText {
-            text: self.label.as_str().into(),
             x: 0.0,
             y,
+            text: self.label.as_str().into(),
             style,
+            flow_style: *text_flow_style,
         });
     }
 
@@ -101,7 +104,10 @@ impl CustomNode for ButtonComponent {
         } else {
             let measured = self.measurer.measure(&TextMeasureRequest {
                 text: self.label.clone(),
-                style: text_style,
+                attribute: text::TextAttribute {
+                    style: text_style,
+                    flow_style: TextFlowStyle::default(),
+                },
             });
             let (label_width, label_height) = measured.map_or_else(
                 |_| DEFAULT_BUTTON_SIZE,

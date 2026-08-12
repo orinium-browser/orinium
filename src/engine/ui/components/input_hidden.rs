@@ -14,6 +14,7 @@ impl CustomNode for InputHiddenComponent {
         &self,
         _cmd_buf: &mut Vec<crate::engine::renderer_model::DrawCommand>,
         _text_style: &crate::engine::layouter::types::TextStyle,
+        _text_flow_style: &crate::engine::layouter::types::TextFlowStyle,
         _style: &ui_layout::Style,
         _size: crate::engine::ui::ContentSize,
     ) {

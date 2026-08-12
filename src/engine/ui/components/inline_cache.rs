@@ -106,7 +106,7 @@ pub(crate) fn resolve_border_box_size(
 mod tests {
     use super::*;
 
-    use crate::engine::layouter::types::TextStyle;
+    use crate::engine::layouter::types::{TextFlowStyle, TextStyle};
     use crate::engine::renderer_model::DrawCommand;
     use ui_layout::{BoxSizing, Length, LengthOrAuto};
 
@@ -122,6 +122,7 @@ mod tests {
             &self,
             _cmd_buf: &mut Vec<DrawCommand>,
             _text_style: &TextStyle,
+            _text_flow_style: &TextFlowStyle,
             _style: &Style,
             _size: ContentSize,
         ) {

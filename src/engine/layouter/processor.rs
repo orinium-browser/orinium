@@ -23,7 +23,7 @@ use ui_layout::LayoutNode;
 use super::builder::{InheritedCss, build_layout_and_info_from_snapshot};
 use super::css_resolver::ResolvedStyles;
 use super::dom_snapshot::{DomSnapshot, NodeId};
-use super::types::{InfoNode, TextStyle};
+use super::types::InfoNode;
 use crate::engine::bridge::text::TextMeasurer;
 use crate::engine::css::matcher::ElementChain;
 use crate::engine::html::ScriptingMode;
@@ -36,7 +36,7 @@ pub struct LayoutTask {
     pub snapshot: Arc<DomSnapshot>,
     pub root: NodeId,
     pub resolved_styles: Arc<ResolvedStyles>,
-    pub measurer: Arc<dyn TextMeasurer<TextStyle>>,
+    pub measurer: Arc<dyn TextMeasurer>,
     pub system_color_scheme: ColorScheme,
     pub scripting_mode: ScriptingMode,
     pub images: HashMap<String, Image>,
@@ -192,10 +192,7 @@ mod tests {
             scripting_mode: ScriptingMode::default(),
             images: HashMap::new(),
             audio: HashMap::new(),
-            parent: InheritedCss {
-                text_style: TextStyle::default(),
-                color_scheme: ColorScheme::Light,
-            },
+            parent: InheritedCss::default(),
             chain: Vec::new(),
             write_back_sender,
             version: 0,

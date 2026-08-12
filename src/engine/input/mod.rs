@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use crate::engine::layouter::types::TextFlowStyle;
+
 use super::layouter::types::{InfoNode, NodeKind, TextStyle};
 use super::ui::PointerEvent;
 use super::ui::custom_node::CustomNode;
@@ -67,7 +69,10 @@ fn local_pointer_coords(path: &HitPath<'_>, target: usize, x: f32, y: f32) -> (f
 pub fn dispatch_pointer(path: &HitPath<'_>, event: PointerEvent) -> bool {
     for (target, hit) in path.iter().enumerate() {
         if let NodeKind::Custom {
-            node, text_style, ..
+            node,
+            text_style,
+            text_flow_style,
+            ..
         } = &hit.info.kind
         {
             let (px, py) = match event {
@@ -86,7 +91,7 @@ pub fn dispatch_pointer(path: &HitPath<'_>, event: PointerEvent) -> bool {
 
             // An open popup intercepts pointer events over it. Its rect is in
             // the same content-box space as the local coordinates.
-            if let Some(popup) = node.popup(text_style) {
+            if let Some(popup) = node.popup(text_style, text_flow_style) {
                 let in_popup = lx >= popup.rect.x
                     && ly >= popup.rect.y
                     && lx <= popup.rect.x + popup.rect.width
@@ -133,7 +138,7 @@ pub fn dismiss_open_popups(info: &InfoNode, path: &HitPath<'_>) -> bool {
 
 fn dismiss_open_popups_inner(info: &InfoNode, path: &HitPath<'_>, dismissed: &mut bool) {
     if let NodeKind::Custom { node, .. } = &info.kind
-        && node.popup(&TextStyle::default()).is_some()
+        && node.popup(&TextStyle::default(), &TextFlowStyle::default()).is_some()
         && !path.iter().any(|hit| {
             matches!(&hit.info.kind, NodeKind::Custom { node: owner, .. } if Arc::ptr_eq(node, owner))
         })
@@ -327,9 +332,12 @@ fn hit_test_popup_inner<'a>(
     });
 
     if let NodeKind::Custom {
-        node, text_style, ..
+        node,
+        text_style,
+        text_flow_style,
+        ..
     } = &info.kind
-        && let Some(popup) = node.popup(text_style)
+        && let Some(popup) = node.popup(text_style, text_flow_style)
         && local_x >= popup.rect.x
         && local_y >= popup.rect.y
         && local_x <= popup.rect.x + popup.rect.width
@@ -582,6 +590,7 @@ mod tests {
                 style: ContainerStyle::default(),
                 layout_style: ui_layout::Style::default(),
                 text_style: TextStyle::default(),
+                text_flow_style: TextFlowStyle::default(),
             },
             children: Vec::new(),
             dom_id: None,
@@ -590,7 +599,7 @@ mod tests {
 
     #[test]
     fn focus_and_dispatch_target_one_input() {
-        let measurer: Arc<dyn TextMeasurer<TextStyle>> = Arc::new(FallbackTextMeasurer);
+        let measurer: Arc<dyn TextMeasurer> = Arc::new(FallbackTextMeasurer);
         let first: Arc<dyn CustomNode> =
             Arc::new(InputTextComponent::new("", "", Arc::clone(&measurer)));
         let second: Arc<dyn CustomNode> = Arc::new(InputTextComponent::new("", "", measurer));
@@ -636,7 +645,7 @@ mod tests {
 
     #[test]
     fn update_hover_switches_target() {
-        let measurer: Arc<dyn TextMeasurer<TextStyle>> = Arc::new(FallbackTextMeasurer);
+        let measurer: Arc<dyn TextMeasurer> = Arc::new(FallbackTextMeasurer);
         let a: Arc<dyn CustomNode> = Arc::new(ButtonComponent::new(
             "A",
             Color(0, 0, 0, 255),
@@ -674,7 +683,7 @@ mod tests {
 
     #[test]
     fn any_custom_node_needs_repaint_tracks_dirty_nodes() {
-        let measurer: Arc<dyn TextMeasurer<TextStyle>> = Arc::new(FallbackTextMeasurer);
+        let measurer: Arc<dyn TextMeasurer> = Arc::new(FallbackTextMeasurer);
         let a: Arc<dyn CustomNode> = Arc::new(ButtonComponent::new(
             "A",
             Color(0, 0, 0, 255),
@@ -1017,6 +1026,7 @@ mod tests {
             &self,
             _cmd_buf: &mut Vec<DrawCommand>,
             _text_style: &TextStyle,
+            _text_flow_style: &TextFlowStyle,
             _style: &Style,
             _size: ContentSize,
         ) {
@@ -1034,7 +1044,11 @@ mod tests {
             true
         }
 
-        fn popup(&self, _text_style: &TextStyle) -> Option<Popup> {
+        fn popup(
+            &self,
+            _text_style: &TextStyle,
+            _text_flow_style: &TextFlowStyle,
+        ) -> Option<Popup> {
             self.popup_open.load(Ordering::Relaxed).then(|| Popup {
                 rect: self.popup_rect,
                 commands: Vec::new(),

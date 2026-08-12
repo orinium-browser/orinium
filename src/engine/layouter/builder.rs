@@ -8,7 +8,7 @@ use crate::engine::css::{
 use crate::engine::html::{HtmlNodeType, ScriptingMode};
 use crate::engine::layouter::css_resolver::resolve_inline_value;
 use crate::engine::layouter::dom_snapshot::{DomSnapshot, NodeId};
-use crate::engine::layouter::types::VerticalAlign;
+use crate::engine::layouter::types::{TextFlowStyle, VerticalAlign, WhiteSpace};
 use crate::engine::tree::NodeRef;
 
 use std::collections::HashMap;
@@ -32,7 +32,7 @@ use crate::engine::renderer_model::Image;
 use crate::engine::ui::custom_node_bridge::CustomNodeBridge;
 use crate::engine::ui::registry::{ComponentRegistry, CustomNodeContext, DomWriteBack};
 
-const DEFAULT_LINE_FACTOR: f32 = 1.2;
+pub(crate) const DEFAULT_LINE_FACTOR: f32 = 1.2;
 
 fn element_info(html_node: &HtmlNodeType) -> Option<ElementInfo> {
     let HtmlNodeType::Element {
@@ -114,9 +114,10 @@ fn element_sibling_infos(snapshot: &DomSnapshot, children: &[NodeId]) -> Vec<Opt
 /// `color_scheme` carries the element's used color scheme (resolved from the
 /// `color-scheme` property and the system preference).
 /// Add new fields here when additional deferred-resolution properties arise.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct InheritedCss {
     pub text_style: TextStyle,
+    pub text_flow_style: TextFlowStyle,
     pub color_scheme: ColorScheme,
 }
 
@@ -180,7 +181,7 @@ enum ChildSlot {
 pub fn build_layout_and_info(
     dom: &NodeRef<HtmlNodeType>,
     resolved_styles: &ResolvedStyles,
-    measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
+    measurer: Arc<dyn text::TextMeasurer>,
     parent: InheritedCss,
     chain: ElementChain,
     system_color_scheme: ColorScheme,
@@ -202,7 +203,7 @@ pub fn build_layout_and_info(
 pub fn build_layout_and_info_with_images(
     dom: &NodeRef<HtmlNodeType>,
     resolved_styles: &ResolvedStyles,
-    measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
+    measurer: Arc<dyn text::TextMeasurer>,
     parent: InheritedCss,
     chain: ElementChain,
     system_color_scheme: ColorScheme,
@@ -238,7 +239,7 @@ pub fn build_layout_and_info_from_snapshot(
     snapshot: &DomSnapshot,
     root: NodeId,
     resolved_styles: &ResolvedStyles,
-    measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
+    measurer: Arc<dyn text::TextMeasurer>,
     parent: InheritedCss,
     mut chain: ElementChain,
     system_color_scheme: ColorScheme,
@@ -261,10 +262,7 @@ pub fn build_layout_and_info_from_snapshot(
     stack.push(StackFrame {
         dom: root,
         chain,
-        child: InheritedCss {
-            text_style: parent.text_style,
-            color_scheme: system_color_scheme,
-        },
+        child: parent,
         kind: None,
         style: None,
         child_slots: Vec::new(),
@@ -293,6 +291,7 @@ pub fn build_layout_and_info_from_snapshot(
 
             let html_node = &snapshot.node(stack[top_idx].dom).kind;
             let mut text_style = child_css.text_style.clone();
+            let mut text_flow_style = child_css.text_flow_style;
             let mut container_style = ContainerStyle::default();
             let mut style = Style::default();
             let mut overflow = Overflow::default();
@@ -334,6 +333,7 @@ pub fn build_layout_and_info_from_snapshot(
                             &mut style,
                             &mut container_style,
                             &mut text_style,
+                            &mut text_flow_style,
                             &mut overflow,
                             used_color_scheme,
                         );
@@ -364,6 +364,7 @@ pub fn build_layout_and_info_from_snapshot(
                         &mut style,
                         &mut container_style,
                         &mut text_style,
+                        &mut text_flow_style,
                         &mut overflow,
                         used_color_scheme,
                     );
@@ -376,6 +377,7 @@ pub fn build_layout_and_info_from_snapshot(
                 &mut style,
                 &mut container_style,
                 &mut text_style,
+                &mut text_flow_style,
                 &mut overflow,
                 used_color_scheme,
             );
@@ -385,14 +387,15 @@ pub fn build_layout_and_info_from_snapshot(
             blockify_out_of_flow_positioned(&mut style);
 
             // Resolve line-height.
-            style.line_height = match text_style.line_height {
-                LineHeight::Number(factor) => Length::Px(text_style.font_size * factor),
-                LineHeight::Normal => Length::Px(text_style.font_size * DEFAULT_LINE_FACTOR),
+            style.line_height = match text_flow_style.line_height {
+                LineHeight::Number(factor) => Length::Px(text_flow_style.font_size * factor),
+                LineHeight::Normal => Length::Px(text_flow_style.font_size * DEFAULT_LINE_FACTOR),
                 LineHeight::Px(px) => Length::Px(px),
             };
 
             let child = InheritedCss {
                 text_style: text_style.clone(),
+                text_flow_style,
                 color_scheme: used_color_scheme,
             };
 
@@ -446,6 +449,7 @@ pub fn build_layout_and_info_from_snapshot(
                     style: container_style,
                     layout_style: style.clone(),
                     text_style: text_style.clone(),
+                    text_flow_style,
                 };
                 let layout = LayoutNode::with_children(style.clone(), [(style, bridge)]);
                 let info = InfoNode {
@@ -525,11 +529,11 @@ pub fn build_layout_and_info_from_snapshot(
                     if let HtmlNodeType::Text(t) = child_node {
                         let t = if tag_name == Some("pre") {
                             let t = t.strip_prefix('\n').unwrap_or(t);
-                            normalize_whitespace(t, false)
+                            normalize_whitespace(t, text_flow_style.white_space)
                         } else if t.trim().is_empty() {
                             continue;
                         } else {
-                            normalize_whitespace(t, true)
+                            normalize_whitespace(t, text_flow_style.white_space)
                         };
 
                         let t = match text_style.text_transform {
@@ -537,11 +541,8 @@ pub fn build_layout_and_info_from_snapshot(
                             TextTransform::Uppercase => t.to_ascii_uppercase(),
                             TextTransform::Lowercase => t.to_ascii_lowercase(),
                         };
-                        let Length::Px(line_height) = style.line_height else {
-                            unreachable!()
-                        };
                         let (layouter, kind) =
-                            create_text_node(t, text_style.clone(), line_height, &*measurer);
+                            create_text_node(t, text_style.clone(), text_flow_style, &*measurer);
                         let mut inline_style = style.clone();
                         inline_style.display = Display {
                             outer: OuterDisplay::Inline,
@@ -695,22 +696,43 @@ pub fn build_layout_and_info_from_snapshot(
         .expect("root must have been processed")
 }
 
-pub fn normalize_whitespace(text: &str, collapse_newlines: bool) -> String {
+pub fn normalize_whitespace(text: &str, white_space: WhiteSpace) -> String {
     let mut result = String::new();
     let mut prev_was_space = false;
 
     for c in text.chars() {
-        if c == '\n' && !collapse_newlines {
-            result.push('\n');
-            prev_was_space = false;
-        } else if c.is_whitespace() {
-            if !prev_was_space {
-                result.push(' ');
+        match white_space {
+            WhiteSpace::Normal | WhiteSpace::Nowrap => {
+                if c.is_whitespace() {
+                    if !prev_was_space {
+                        result.push(' ');
+                    }
+                    prev_was_space = true;
+                } else {
+                    result.push(c);
+                    prev_was_space = false;
+                }
             }
-            prev_was_space = true;
-        } else {
-            result.push(c);
-            prev_was_space = false;
+
+            WhiteSpace::Pre | WhiteSpace::PreWrap | WhiteSpace::BreakSpaces => {
+                result.push(c);
+                prev_was_space = false;
+            }
+
+            WhiteSpace::PreLine => {
+                if c == '\n' {
+                    result.push('\n');
+                    prev_was_space = false;
+                } else if c.is_whitespace() {
+                    if !prev_was_space {
+                        result.push(' ');
+                    }
+                    prev_was_space = true;
+                } else {
+                    result.push(c);
+                    prev_was_space = false;
+                }
+            }
         }
     }
 
@@ -723,13 +745,16 @@ pub fn normalize_whitespace(text: &str, collapse_newlines: bool) -> String {
 fn create_text_node(
     text: String,
     text_style: TextStyle,
-    line_height: f32,
-    measurer: &dyn text::TextMeasurer<TextStyle>,
+    text_flow_style: TextFlowStyle,
+    measurer: &dyn text::TextMeasurer,
 ) -> (TextFlowLayouter, NodeKind) {
     let _t = std::time::Instant::now();
     let request = text::TextMeasureRequest {
         text: text.clone(),
-        style: text_style.clone(),
+        attribute: text::TextAttribute {
+            style: text_style.clone(),
+            flow_style: text_flow_style,
+        },
     };
     let clusters = measurer.measure_shaped(&request).unwrap_or_else(|_| {
         measurer
@@ -768,10 +793,11 @@ fn create_text_node(
         _t.elapsed(),
     );
 
-    let layouter = TextFlowLayouter::new(text.clone(), text_style.clone(), clusters, line_height);
+    let layouter = TextFlowLayouter::new(text.clone(), text_flow_style, clusters);
     let kind = NodeKind::Text {
         text,
         style: text_style,
+        flow_style: text_flow_style,
         text_id: layouter.id,
     };
     (layouter, kind)
@@ -872,6 +898,7 @@ fn apply_attribute_dimensions(
     style: &mut Style,
     container_style: &mut ContainerStyle,
     text_style: &mut TextStyle,
+    text_flow_style: &mut TextFlowStyle,
     overflow: &mut Overflow,
     color_scheme: ColorScheme,
 ) {
@@ -881,6 +908,7 @@ fn apply_attribute_dimensions(
         style: &mut Style,
         container_style: &mut ContainerStyle,
         text_style: &mut TextStyle,
+        text_flow_style: &mut TextFlowStyle,
         overflow: &mut Overflow,
         color_scheme: ColorScheme,
     ) {
@@ -897,6 +925,7 @@ fn apply_attribute_dimensions(
                 style,
                 container_style,
                 text_style,
+                text_flow_style,
                 overflow,
                 color_scheme,
             );
@@ -909,6 +938,7 @@ fn apply_attribute_dimensions(
         style,
         container_style,
         text_style,
+        text_flow_style,
         overflow,
         color_scheme,
     );
@@ -919,6 +949,7 @@ fn apply_attribute_dimensions(
         style,
         container_style,
         text_style,
+        text_flow_style,
         overflow,
         color_scheme,
     );
@@ -932,7 +963,7 @@ fn blockify_out_of_flow_positioned(style: &mut Style) {
 
 fn resolve_flex_shorthand(
     value: &CssValue,
-    text_style: &TextStyle,
+    text_flow_style: &TextFlowStyle,
 ) -> Option<(f32, f32, LengthOrAuto)> {
     let zero_basis = LengthOrAuto::Length(Length::Percent(0.0));
 
@@ -944,25 +975,29 @@ fn resolve_flex_shorthand(
             _ => None,
         },
         CssValue::Number(grow) if *grow >= 0.0 => Some((*grow, 1.0, zero_basis)),
-        CssValue::Length(_, _) => {
-            Some((1.0, 1.0, resolve_css_len_auto("flex", value, text_style)?))
-        }
+        CssValue::Length(_, _) => Some((
+            1.0,
+            1.0,
+            resolve_css_len_auto("flex", value, text_flow_style)?,
+        )),
         CssValue::List(values) => match values.as_slice() {
             [CssValue::Number(grow), CssValue::Number(shrink)]
                 if *grow >= 0.0 && *shrink >= 0.0 =>
             {
                 Some((*grow, *shrink, zero_basis))
             }
-            [CssValue::Number(grow), basis] if *grow >= 0.0 => {
-                Some((*grow, 1.0, resolve_css_len_auto("flex", basis, text_style)?))
-            }
+            [CssValue::Number(grow), basis] if *grow >= 0.0 => Some((
+                *grow,
+                1.0,
+                resolve_css_len_auto("flex", basis, text_flow_style)?,
+            )),
             [CssValue::Number(grow), CssValue::Number(shrink), basis]
                 if *grow >= 0.0 && *shrink >= 0.0 =>
             {
                 Some((
                     *grow,
                     *shrink,
-                    resolve_css_len_auto("flex", basis, text_style)?,
+                    resolve_css_len_auto("flex", basis, text_flow_style)?,
                 ))
             }
             _ => None,
@@ -1030,20 +1065,21 @@ pub fn apply_declaration(
     style: &mut Style,
     container_style: &mut ContainerStyle,
     text_style: &mut TextStyle,
+    text_flow_style: &mut TextFlowStyle,
     overflow: &mut Overflow,
     color_scheme: ColorScheme,
 ) -> Option<()> {
     fn expand_box<T: Clone, F>(
         name: &str,
         value: &CssValue,
-        text_style: &TextStyle,
-        resolve: &impl Fn(&str, &CssValue, &TextStyle) -> Option<T>,
+        text_flow_style: &TextFlowStyle,
+        resolve: &impl Fn(&str, &CssValue, &TextFlowStyle) -> Option<T>,
         mut set: F,
     ) -> Option<()>
     where
         F: FnMut(T, T, T, T),
     {
-        let resolve = |v: &CssValue| -> Option<T> { resolve(name, v, text_style) };
+        let resolve = |v: &CssValue| -> Option<T> { resolve(name, v, text_flow_style) };
 
         match value {
             CssValue::List(values) => {
@@ -1100,11 +1136,11 @@ pub fn apply_declaration(
     fn expand_radius_axis(
         name: &str,
         values: &[&CssValue],
-        text_style: &TextStyle,
+        text_flow_style: &TextFlowStyle,
     ) -> Option<[Length; 4]> {
         let vals: Vec<Length> = values
             .iter()
-            .map(|v| resolve_css_len(name, v, text_style))
+            .map(|v| resolve_css_len(name, v, text_flow_style))
             .collect::<Option<_>>()?;
         match vals.as_slice() {
             [a] => Some([a.clone(), a.clone(), a.clone(), a.clone()]),
@@ -1120,14 +1156,14 @@ pub fn apply_declaration(
     fn parse_border_radius_shorthand(
         name: &str,
         value: &CssValue,
-        text_style: &TextStyle,
+        text_flow_style: &TextFlowStyle,
     ) -> Option<(CornerRadius, CornerRadius, CornerRadius, CornerRadius)> {
         let (horiz, vert) = split_radius_lists(value);
-        let h = expand_radius_axis(name, &horiz, text_style)?;
+        let h = expand_radius_axis(name, &horiz, text_flow_style)?;
         let v = if vert.is_empty() {
             h.clone()
         } else {
-            expand_radius_axis(name, &vert, text_style)?
+            expand_radius_axis(name, &vert, text_flow_style)?
         };
         Some((
             CornerRadius {
@@ -1154,14 +1190,14 @@ pub fn apply_declaration(
     fn parse_corner_radius(
         name: &str,
         value: &CssValue,
-        text_style: &TextStyle,
+        text_flow_style: &TextFlowStyle,
     ) -> Option<CornerRadius> {
         let (horiz, vert) = split_radius_lists(value);
-        let x = expand_radius_axis(name, &horiz, text_style)?;
+        let x = expand_radius_axis(name, &horiz, text_flow_style)?;
         let y = if vert.is_empty() {
             x.clone()
         } else {
-            expand_radius_axis(name, &vert, text_style)?
+            expand_radius_axis(name, &vert, text_flow_style)?
         };
         Some(CornerRadius {
             x: x[0].clone(),
@@ -1201,7 +1237,7 @@ pub fn apply_declaration(
     fn parse_border_shorthand(
         name: &str,
         value: &CssValue,
-        text_style: &TextStyle,
+        text_flow_style: &TextFlowStyle,
         color_scheme: ColorScheme,
     ) -> Option<(Option<Length>, Option<BorderStyle>, Option<Color>)> {
         let mut width: Option<Length> = None;
@@ -1218,7 +1254,7 @@ pub fn apply_declaration(
 
             // try as length (numeric lengths)
             if width.is_none()
-                && let Some(l) = resolve_css_len(name, token, text_style)
+                && let Some(l) = resolve_css_len(name, token, text_flow_style)
             {
                 width = Some(l);
                 continue;
@@ -1317,7 +1353,7 @@ pub fn apply_declaration(
 
         ("background", _) => {
             container_style.background =
-                parse_background_shorthand(name, value, text_style, color_scheme)?;
+                parse_background_shorthand(name, value, text_style, text_flow_style, color_scheme)?;
         }
 
         ("color", _) => {
@@ -1340,27 +1376,28 @@ pub fn apply_declaration(
 
         ("font-size", CssValue::Length(_, _)) => {
             // TODO: Add other size
-            let len = resolve_css_len(name, value, text_style)?;
+            let len = resolve_css_len(name, value, text_flow_style)?;
             let px = match &len {
                 Length::Px(v) => *v,
-                Length::Percent(v) => *v * text_style.font_size / 100.0,
+                Length::Percent(v) => *v * text_flow_style.font_size / 100.0,
                 _ => {
                     log::error!(target: "Layouter", "Unknown size type for `{}`: {:?}", name, len);
                     return None;
                 }
             };
-            text_style.font_size = px;
+            text_flow_style.font_size = px;
         }
 
         ("line-height", CssValue::Number(factor)) => {
-            text_style.line_height = LineHeight::Number(*factor);
+            text_flow_style.line_height = LineHeight::Number(*factor);
         }
         ("line-height", CssValue::Keyword(v)) if v == "normal" => {
-            text_style.line_height = LineHeight::Normal;
+            text_flow_style.line_height = LineHeight::Normal;
         }
         ("line-height", _) => {
-            let len = resolve_css_len(name, value, text_style)?;
-            text_style.line_height = LineHeight::Px(length_to_px(&len, text_style.font_size));
+            let len = resolve_css_len(name, value, text_flow_style)?;
+            text_flow_style.line_height =
+                LineHeight::Px(length_to_px(&len, text_flow_style.font_size));
         }
 
         ("font-weight", CssValue::Keyword(v)) => {
@@ -1422,10 +1459,10 @@ pub fn apply_declaration(
         ("vertical-align", CssValue::Keyword(v)) => {
             match v.as_str() {
                 "sub" => {
-                    text_style.vertical_align = VerticalAlign::Sub;
+                    text_flow_style.vertical_align = VerticalAlign::Sub;
                 }
                 "super" | "sup" => {
-                    text_style.vertical_align = VerticalAlign::Super;
+                    text_flow_style.vertical_align = VerticalAlign::Super;
                 }
                 "top" | "middle" | "bottom" => {
                     // Keep default, ignore for now
@@ -1444,13 +1481,25 @@ pub fn apply_declaration(
         }
 
         ("text-align", CssValue::Keyword(v)) if v == "left" => {
-            text_style.text_align = TextAlign::Left;
+            text_flow_style.text_align = TextAlign::Left;
         }
         ("text-align", CssValue::Keyword(v)) if v == "center" => {
-            text_style.text_align = TextAlign::Center;
+            text_flow_style.text_align = TextAlign::Center;
         }
         ("text-align", CssValue::Keyword(v)) if v == "right" => {
-            text_style.text_align = TextAlign::Right;
+            text_flow_style.text_align = TextAlign::Right;
+        }
+
+        ("white-space", CssValue::Keyword(v)) => {
+            text_flow_style.white_space = match v.as_str() {
+                "normal" => WhiteSpace::Normal,
+                "nowrap" => WhiteSpace::Nowrap,
+                "pre" => WhiteSpace::Pre,
+                "pre-wrap" => WhiteSpace::PreWrap,
+                "pre-line" => WhiteSpace::PreLine,
+                "break-spaces" => WhiteSpace::BreakSpaces,
+                _ => text_flow_style.white_space,
+            };
         }
 
         /* ======================
@@ -1483,10 +1532,10 @@ pub fn apply_declaration(
             expand_box(
                 name,
                 v,
-                text_style,
-                &|_, cv, ts| match cv {
+                text_flow_style,
+                &|_, cv, tfs| match cv {
                     CssValue::Keyword(s) if s == "auto" => Some(ui_layout::LengthOrAuto::Auto),
-                    _ => resolve_css_len(name, cv, ts).map(ui_layout::LengthOrAuto::Length),
+                    _ => resolve_css_len(name, cv, tfs).map(ui_layout::LengthOrAuto::Length),
                 },
                 |t, r, b, l| {
                     style.spacing.margin_top = t;
@@ -1497,16 +1546,16 @@ pub fn apply_declaration(
             )?;
         }
         ("margin-top", _) => {
-            style.spacing.margin_top = resolve_css_len_auto(name, value, text_style)?;
+            style.spacing.margin_top = resolve_css_len_auto(name, value, text_flow_style)?;
         }
         ("margin-right", _) => {
-            style.spacing.margin_right = resolve_css_len_auto(name, value, text_style)?;
+            style.spacing.margin_right = resolve_css_len_auto(name, value, text_flow_style)?;
         }
         ("margin-bottom", _) => {
-            style.spacing.margin_bottom = resolve_css_len_auto(name, value, text_style)?;
+            style.spacing.margin_bottom = resolve_css_len_auto(name, value, text_flow_style)?;
         }
         ("margin-left", _) => {
-            style.spacing.margin_left = resolve_css_len_auto(name, value, text_style)?;
+            style.spacing.margin_left = resolve_css_len_auto(name, value, text_flow_style)?;
         }
 
         ("border", v) => {
@@ -1515,7 +1564,7 @@ pub fn apply_declaration(
             {
                 (Some(Length::Px(0.0)), None, None)
             } else {
-                parse_border_shorthand(name, v, text_style, color_scheme)?
+                parse_border_shorthand(name, v, text_flow_style, color_scheme)?
             };
 
             if let Some(w) = maybe_width {
@@ -1541,7 +1590,7 @@ pub fn apply_declaration(
         }
         ("border-top", _) => {
             let (maybe_width, maybe_style, maybe_color) =
-                parse_border_shorthand(name, value, text_style, color_scheme)?;
+                parse_border_shorthand(name, value, text_flow_style, color_scheme)?;
             if let Some(w) = maybe_width {
                 style.spacing.border_top = w;
             }
@@ -1554,7 +1603,7 @@ pub fn apply_declaration(
         }
         ("border-right", _) => {
             let (maybe_width, maybe_style, maybe_color) =
-                parse_border_shorthand(name, value, text_style, color_scheme)?;
+                parse_border_shorthand(name, value, text_flow_style, color_scheme)?;
             if let Some(w) = maybe_width {
                 style.spacing.border_right = w;
             }
@@ -1567,7 +1616,7 @@ pub fn apply_declaration(
         }
         ("border-bottom", _) => {
             let (maybe_width, maybe_style, maybe_color) =
-                parse_border_shorthand(name, value, text_style, color_scheme)?;
+                parse_border_shorthand(name, value, text_flow_style, color_scheme)?;
             if let Some(w) = maybe_width {
                 style.spacing.border_bottom = w;
             }
@@ -1580,7 +1629,7 @@ pub fn apply_declaration(
         }
         ("border-left", _) => {
             let (maybe_width, maybe_style, maybe_color) =
-                parse_border_shorthand(name, value, text_style, color_scheme)?;
+                parse_border_shorthand(name, value, text_flow_style, color_scheme)?;
             if let Some(w) = maybe_width {
                 style.spacing.border_left = w;
             }
@@ -1593,7 +1642,7 @@ pub fn apply_declaration(
         }
 
         ("border-radius", v) => {
-            let (tl, tr, br, bl) = parse_border_radius_shorthand(name, v, text_style)?;
+            let (tl, tr, br, bl) = parse_border_radius_shorthand(name, v, text_flow_style)?;
             container_style.border_radius = BorderRadius {
                 top_left: tl,
                 top_right: tr,
@@ -1602,23 +1651,26 @@ pub fn apply_declaration(
             };
         }
         ("border-top-left-radius", v) => {
-            container_style.border_radius.top_left = parse_corner_radius(name, v, text_style)?;
+            container_style.border_radius.top_left = parse_corner_radius(name, v, text_flow_style)?;
         }
         ("border-top-right-radius", v) => {
-            container_style.border_radius.top_right = parse_corner_radius(name, v, text_style)?;
+            container_style.border_radius.top_right =
+                parse_corner_radius(name, v, text_flow_style)?;
         }
         ("border-bottom-right-radius", v) => {
-            container_style.border_radius.bottom_right = parse_corner_radius(name, v, text_style)?;
+            container_style.border_radius.bottom_right =
+                parse_corner_radius(name, v, text_flow_style)?;
         }
         ("border-bottom-left-radius", v) => {
-            container_style.border_radius.bottom_left = parse_corner_radius(name, v, text_style)?;
+            container_style.border_radius.bottom_left =
+                parse_corner_radius(name, v, text_flow_style)?;
         }
 
         ("padding", v) => {
             expand_box(
                 name,
                 v,
-                text_style,
+                text_flow_style,
                 &|_, v, ts| resolve_css_len(name, v, ts),
                 |t, r, b, l| {
                     style.spacing.padding_top = t;
@@ -1629,38 +1681,38 @@ pub fn apply_declaration(
             )?;
         }
         ("padding-top", _) => {
-            style.spacing.padding_top = resolve_css_len(name, value, text_style)?;
+            style.spacing.padding_top = resolve_css_len(name, value, text_flow_style)?;
         }
         ("padding-right", _) => {
-            style.spacing.padding_right = resolve_css_len(name, value, text_style)?;
+            style.spacing.padding_right = resolve_css_len(name, value, text_flow_style)?;
         }
         ("padding-bottom", _) => {
-            style.spacing.padding_bottom = resolve_css_len(name, value, text_style)?;
+            style.spacing.padding_bottom = resolve_css_len(name, value, text_flow_style)?;
         }
         ("padding-left", _) => {
-            style.spacing.padding_left = resolve_css_len(name, value, text_style)?;
+            style.spacing.padding_left = resolve_css_len(name, value, text_flow_style)?;
         }
 
         /* ======================
          * Size
          * ====================== */
         ("width", _) => {
-            style.size.width = resolve_css_len_auto(name, value, text_style)?;
+            style.size.width = resolve_css_len_auto(name, value, text_flow_style)?;
         }
         ("height", _) => {
-            style.size.height = resolve_css_len_auto(name, value, text_style)?;
+            style.size.height = resolve_css_len_auto(name, value, text_flow_style)?;
         }
         ("min-width", _) => {
-            style.size.min_width = resolve_css_len_auto(name, value, text_style)?;
+            style.size.min_width = resolve_css_len_auto(name, value, text_flow_style)?;
         }
         ("min-height", _) => {
-            style.size.min_height = resolve_css_len_auto(name, value, text_style)?;
+            style.size.min_height = resolve_css_len_auto(name, value, text_flow_style)?;
         }
         ("max-width", _) => {
-            style.size.max_width = resolve_css_len_auto(name, value, text_style)?;
+            style.size.max_width = resolve_css_len_auto(name, value, text_flow_style)?;
         }
         ("max-height", _) => {
-            style.size.max_height = resolve_css_len_auto(name, value, text_style)?;
+            style.size.max_height = resolve_css_len_auto(name, value, text_flow_style)?;
         }
         ("aspect-ratio", _) => {
             style.size.aspect_ratio = match value {
@@ -1696,22 +1748,22 @@ pub fn apply_declaration(
             };
         }
         ("top", _) => {
-            style.position.top = resolve_css_len_auto(name, value, text_style)?;
+            style.position.top = resolve_css_len_auto(name, value, text_flow_style)?;
         }
         ("right", _) => {
-            style.position.right = resolve_css_len_auto(name, value, text_style)?;
+            style.position.right = resolve_css_len_auto(name, value, text_flow_style)?;
         }
         ("bottom", _) => {
-            style.position.bottom = resolve_css_len_auto(name, value, text_style)?;
+            style.position.bottom = resolve_css_len_auto(name, value, text_flow_style)?;
         }
         ("left", _) => {
-            style.position.left = resolve_css_len_auto(name, value, text_style)?;
+            style.position.left = resolve_css_len_auto(name, value, text_flow_style)?;
         }
         ("inset", v) => {
             expand_box(
                 name,
                 v,
-                text_style,
+                text_flow_style,
                 &|_, cv, ts| match cv {
                     CssValue::Keyword(s) if s.eq_ignore_ascii_case("auto") => {
                         Some(ui_layout::LengthOrAuto::Auto)
@@ -1797,13 +1849,13 @@ pub fn apply_declaration(
         ("gap", _) => match value {
             CssValue::List(l) if l.len() == 2 => {
                 let mut l = l.iter();
-                let gap = resolve_css_len_auto(name, l.next()?, text_style)?;
+                let gap = resolve_css_len_auto(name, l.next()?, text_flow_style)?;
                 style.row_gap = gap;
-                let gap = resolve_css_len_auto(name, l.next()?, text_style)?;
+                let gap = resolve_css_len_auto(name, l.next()?, text_flow_style)?;
                 style.column_gap = gap;
             }
             CssValue::Length(_, _) => {
-                let gap = resolve_css_len_auto(name, value, text_style)?;
+                let gap = resolve_css_len_auto(name, value, text_flow_style)?;
                 style.row_gap = gap.clone();
                 style.column_gap = gap;
             }
@@ -1811,7 +1863,7 @@ pub fn apply_declaration(
         },
 
         ("flex", _) => {
-            let (grow, shrink, basis) = resolve_flex_shorthand(value, text_style)?;
+            let (grow, shrink, basis) = resolve_flex_shorthand(value, text_flow_style)?;
             style.item_style.flex_grow = grow;
             style.item_style.flex_shrink = shrink;
             style.item_style.flex_basis = basis;
@@ -1825,7 +1877,7 @@ pub fn apply_declaration(
         }
 
         ("flex-basis", _) => {
-            style.item_style.flex_basis = resolve_css_len_auto(name, value, text_style)?;
+            style.item_style.flex_basis = resolve_css_len_auto(name, value, text_flow_style)?;
         }
 
         ("flex-shrink", CssValue::Number(v)) => {
@@ -1847,22 +1899,22 @@ pub fn apply_declaration(
         }
 
         ("column-gap", _) => {
-            style.column_gap = resolve_css_len_auto(name, value, text_style)?;
+            style.column_gap = resolve_css_len_auto(name, value, text_flow_style)?;
         }
 
         ("row-gap", _) => {
-            style.row_gap = resolve_css_len_auto(name, value, text_style)?;
+            style.row_gap = resolve_css_len_auto(name, value, text_flow_style)?;
         }
 
         /* ======================
          * Grid
          * ====================== */
         ("grid-template-columns", _) => {
-            style.grid_template_columns = parse_grid_tracks(name, value, text_style)?;
+            style.grid_template_columns = parse_grid_tracks(name, value, text_flow_style)?;
         }
 
         ("grid-template-rows", _) => {
-            style.grid_template_rows = parse_grid_tracks(name, value, text_style)?;
+            style.grid_template_rows = parse_grid_tracks(name, value, text_flow_style)?;
         }
 
         ("grid-template-areas", _) => {
@@ -1889,6 +1941,7 @@ fn parse_background_shorthand(
     name: &str,
     value: &CssValue,
     text_style: &TextStyle,
+    text_flow_style: &TextFlowStyle,
     color_scheme: ColorScheme,
 ) -> Option<Background> {
     let items: Vec<&CssValue> = match value {
@@ -1929,7 +1982,13 @@ fn parse_background_shorthand(
                     | "repeating-conic-gradient"
             )
         {
-            maybe_gradient = Some(parse_gradient(fn_name, args, text_style, color_scheme)?);
+            maybe_gradient = Some(parse_gradient(
+                fn_name,
+                args,
+                text_style,
+                text_flow_style,
+                color_scheme,
+            )?);
             continue;
         }
 
@@ -1958,17 +2017,18 @@ fn parse_gradient(
     fn_name: &str,
     args: &[CssValue],
     text_style: &TextStyle,
+    text_flow_style: &TextFlowStyle,
     color_scheme: ColorScheme,
 ) -> Option<Gradient> {
     match fn_name {
         "linear-gradient" | "repeating-linear-gradient" => {
-            parse_linear_gradient(args, text_style, color_scheme)
+            parse_linear_gradient(args, text_style, text_flow_style, color_scheme)
         }
         "radial-gradient" | "repeating-radial-gradient" => {
-            parse_radial_gradient(args, text_style, color_scheme)
+            parse_radial_gradient(args, text_style, text_flow_style, color_scheme)
         }
         "conic-gradient" | "repeating-conic-gradient" => {
-            parse_conic_gradient(args, text_style, color_scheme)
+            parse_conic_gradient(args, text_style, text_flow_style, color_scheme)
         }
         _ => None,
     }
@@ -1977,6 +2037,7 @@ fn parse_gradient(
 fn parse_linear_gradient(
     args: &[CssValue],
     text_style: &TextStyle,
+    text_flow_style: &TextFlowStyle,
     color_scheme: ColorScheme,
 ) -> Option<Gradient> {
     if args.is_empty() {
@@ -1985,7 +2046,7 @@ fn parse_linear_gradient(
 
     let (skip, angle) = parse_linear_direction(args);
     let angle = angle.unwrap_or(180.0);
-    let stops = parse_color_stops(&args[skip..], text_style, color_scheme)?;
+    let stops = parse_color_stops(&args[skip..], text_style, text_flow_style, color_scheme)?;
 
     Some(Gradient {
         kind: GradientKind::Linear { angle },
@@ -2046,6 +2107,7 @@ fn parse_linear_direction(args: &[CssValue]) -> (usize, Option<f32>) {
 fn parse_radial_gradient(
     args: &[CssValue],
     text_style: &TextStyle,
+    text_flow_style: &TextFlowStyle,
     color_scheme: ColorScheme,
 ) -> Option<Gradient> {
     let mut shape = RadialShape::Ellipse;
@@ -2127,7 +2189,7 @@ fn parse_radial_gradient(
         }
     }
 
-    let stops = parse_color_stops(&args[idx..], text_style, color_scheme)?;
+    let stops = parse_color_stops(&args[idx..], text_style, text_flow_style, color_scheme)?;
     if stops.is_empty() {
         return None;
     }
@@ -2144,6 +2206,7 @@ fn parse_radial_gradient(
 fn parse_color_stops(
     args: &[CssValue],
     text_style: &TextStyle,
+    text_flow_style: &TextFlowStyle,
     color_scheme: ColorScheme,
 ) -> Option<Vec<ColorStop>> {
     let mut stops = Vec::new();
@@ -2165,7 +2228,7 @@ fn parse_color_stops(
                 i += 1;
                 continue;
             }
-            match resolve_gradient_position(&args[i], text_style) {
+            match resolve_gradient_position(&args[i], text_flow_style) {
                 Some(position) => {
                     positions.push(position.clamp(0.0, 1.0));
                     i += 1;
@@ -2195,6 +2258,7 @@ fn parse_color_stops(
 fn parse_conic_gradient(
     args: &[CssValue],
     text_style: &TextStyle,
+    text_flow_style: &TextFlowStyle,
     color_scheme: ColorScheme,
 ) -> Option<Gradient> {
     if args.is_empty() {
@@ -2246,7 +2310,7 @@ fn parse_conic_gradient(
         }
     }
 
-    let stops = parse_color_stops(&args[idx..], text_style, color_scheme)?;
+    let stops = parse_color_stops(&args[idx..], text_style, text_flow_style, color_scheme)?;
     if stops.is_empty() {
         return None;
     }
@@ -2259,14 +2323,14 @@ fn parse_conic_gradient(
 /// Resolve a gradient stop position into a normalized fraction of the
 /// gradient length (100% == 1.0). `None` means the value is not resolvable
 /// at this stage and should be treated as an auto position.
-fn resolve_gradient_position(value: &CssValue, text_style: &TextStyle) -> Option<f32> {
+fn resolve_gradient_position(value: &CssValue, text_flow_style: &TextFlowStyle) -> Option<f32> {
     match value {
         CssValue::Length(v, Unit::Percent) => Some(*v / 100.0),
         CssValue::Length(v, Unit::Deg) => Some(*v / 360.0),
         CssValue::Number(0.0) => Some(0.0),
         CssValue::Function(fn_name, args) if fn_name == "calc" => {
             let value = CssValue::Function(fn_name.clone(), args.clone());
-            let length = resolve_css_len("gradient", &value, text_style)?;
+            let length = resolve_css_len("gradient", &value, text_flow_style)?;
             length_to_fraction(&length)
         }
         _ => None,
@@ -2325,18 +2389,22 @@ fn extract_font_families(value: &CssValue) -> Vec<String> {
 fn resolve_css_len_auto(
     name: &str,
     css_len: &CssValue,
-    text_style: &TextStyle,
+    text_flow_style: &TextFlowStyle,
 ) -> Option<LengthOrAuto> {
     match &css_len {
         CssValue::Keyword(s) if s == "auto" => Some(LengthOrAuto::Auto),
-        _ => resolve_css_len(name, css_len, text_style).map(|l| l.into()),
+        _ => resolve_css_len(name, css_len, text_flow_style).map(|l| l.into()),
     }
 }
 
 /// Resolve CssValue to Length.
-fn resolve_css_len(name: &str, css_len: &CssValue, text_style: &TextStyle) -> Option<Length> {
+fn resolve_css_len(
+    name: &str,
+    css_len: &CssValue,
+    text_flow_style: &TextFlowStyle,
+) -> Option<Length> {
     match &css_len {
-        CssValue::Length(v, Unit::Em) => Some(Length::Px(text_style.font_size * v)),
+        CssValue::Length(v, Unit::Em) => Some(Length::Px(text_flow_style.font_size * v)),
         CssValue::Length(v, Unit::Rem) => Some(Length::Px(16.0 * v)), // html sont-size 仮値
         CssValue::Length(v, u) => match u {
             Unit::Percent => Some(Length::Percent(*v)),
@@ -2361,7 +2429,7 @@ fn resolve_css_len(name: &str, css_len: &CssValue, text_style: &TextStyle) -> Op
             let mut result = match iter.next().unwrap() {
                 CssValue::Number(factor) => match (iter.next(), iter.next()) {
                     (Some(CssValue::Keyword(op)), Some(val)) if op == "*" => {
-                        let val_resolved = resolve_css_len(name, val, text_style)?;
+                        let val_resolved = resolve_css_len(name, val, text_flow_style)?;
                         Length::Mul(Box::new(val_resolved), *factor)
                     }
                     _ => {
@@ -2373,17 +2441,17 @@ fn resolve_css_len(name: &str, css_len: &CssValue, text_style: &TextStyle) -> Op
                         return None;
                     }
                 },
-                value => resolve_css_len(name, value, text_style)?,
+                value => resolve_css_len(name, value, text_flow_style)?,
             };
 
             while let (Some(op), Some(val)) = (iter.next(), iter.next()) {
                 match op {
                     CssValue::Keyword(o) if o == "+" => {
-                        let val_resolved = resolve_css_len(name, val, text_style)?;
+                        let val_resolved = resolve_css_len(name, val, text_flow_style)?;
                         result = Length::Add(Box::new(result), Box::new(val_resolved));
                     }
                     CssValue::Keyword(o) if o == "-" => {
-                        let val_resolved = resolve_css_len(name, val, text_style)?;
+                        let val_resolved = resolve_css_len(name, val, text_flow_style)?;
                         result = Length::Sub(Box::new(result), Box::new(val_resolved));
                     }
                     CssValue::Keyword(o) if o == "*" => {
@@ -2439,7 +2507,7 @@ fn resolve_css_len(name: &str, css_len: &CssValue, text_style: &TextStyle) -> Op
         {
             let mut resolved: Vec<Length> = Vec::with_capacity(args.len());
             for arg in args {
-                resolved.push(resolve_css_len(name, arg, text_style)?);
+                resolved.push(resolve_css_len(name, arg, text_flow_style)?);
             }
             let mut result = resolved.remove(resolved.len() - 1);
             for arg in resolved.into_iter().rev() {
@@ -2462,7 +2530,7 @@ fn resolve_css_len(name: &str, css_len: &CssValue, text_style: &TextStyle) -> Op
 fn parse_grid_tracks(
     name: &str,
     value: &CssValue,
-    text_style: &TextStyle,
+    text_flow_style: &TextFlowStyle,
 ) -> Option<Vec<GridTrack>> {
     if matches!(value, CssValue::Keyword(keyword) if keyword == "none") {
         return Some(Vec::new());
@@ -2473,11 +2541,15 @@ fn parse_grid_tracks(
     };
     values
         .into_iter()
-        .map(|value| parse_grid_track(name, value, text_style))
+        .map(|value| parse_grid_track(name, value, text_flow_style))
         .collect()
 }
 
-fn parse_grid_track(name: &str, value: &CssValue, text_style: &TextStyle) -> Option<GridTrack> {
+fn parse_grid_track(
+    name: &str,
+    value: &CssValue,
+    text_flow_style: &TextFlowStyle,
+) -> Option<GridTrack> {
     match value {
         CssValue::Keyword(keyword) if keyword == "auto" => {
             Some(GridTrack::Breadth(LengthOrAuto::Auto))
@@ -2488,8 +2560,8 @@ fn parse_grid_track(name: &str, value: &CssValue, text_style: &TextStyle) -> Opt
                 return None;
             };
             Some(GridTrack::MinMax(
-                Box::new(parse_grid_track(name, minimum, text_style)?),
-                Box::new(parse_grid_track(name, maximum, text_style)?),
+                Box::new(parse_grid_track(name, minimum, text_flow_style)?),
+                Box::new(parse_grid_track(name, maximum, text_flow_style)?),
             ))
         }
         CssValue::Function(function, args) if function == "repeat" => {
@@ -2504,11 +2576,11 @@ fn parse_grid_track(name: &str, value: &CssValue, text_style: &TextStyle) -> Opt
             };
             let pattern = pattern
                 .iter()
-                .map(|value| parse_grid_track(name, value, text_style))
+                .map(|value| parse_grid_track(name, value, text_flow_style))
                 .collect::<Option<Vec<_>>>()?;
             (!pattern.is_empty()).then_some(GridTrack::Repeat(repeat, pattern))
         }
-        _ => resolve_css_len(name, value, text_style)
+        _ => resolve_css_len(name, value, text_flow_style)
             .map(LengthOrAuto::Length)
             .map(GridTrack::Breadth),
     }
@@ -3132,6 +3204,7 @@ mod tests {
         let mut style = Style::default();
         let mut container_style = ContainerStyle::default();
         let mut text_style = TextStyle::default();
+        let mut text_flow_style = TextFlowStyle::default();
         let mut overflow = Overflow::default();
         let parsed = apply_declaration(
             name,
@@ -3139,6 +3212,7 @@ mod tests {
             &mut style,
             &mut container_style,
             &mut text_style,
+            &mut text_flow_style,
             &mut overflow,
             ColorScheme::Light,
         );
@@ -3150,6 +3224,7 @@ mod tests {
         let mut style = Style::default();
         let mut container_style = ContainerStyle::default();
         let mut text_style = TextStyle::default();
+        let mut text_flow_style = TextFlowStyle::default();
         let mut overflow = Overflow::default();
         let parsed = apply_declaration(
             name,
@@ -3157,6 +3232,7 @@ mod tests {
             &mut style,
             &mut container_style,
             &mut text_style,
+            &mut text_flow_style,
             &mut overflow,
             ColorScheme::Light,
         );
@@ -3406,6 +3482,7 @@ mod tests {
         let mut style = Style::default();
         let mut container_style = ContainerStyle::default();
         let mut text_style = TextStyle::default();
+        let mut text_flow_style = TextFlowStyle::default();
         let mut overflow = Overflow::default();
         let parsed = apply_declaration(
             "overflow",
@@ -3413,6 +3490,7 @@ mod tests {
             &mut style,
             &mut container_style,
             &mut text_style,
+            &mut text_flow_style,
             &mut overflow,
             ColorScheme::Light,
         );
@@ -3463,6 +3541,7 @@ mod tests {
         let mut style = Style::default();
         let mut container_style = ContainerStyle::default();
         let mut text_style = TextStyle::default();
+        let mut text_flow_style = TextFlowStyle::default();
         let mut overflow = Overflow::default();
 
         assert!(
@@ -3472,6 +3551,7 @@ mod tests {
                 &mut style,
                 &mut container_style,
                 &mut text_style,
+                &mut text_flow_style,
                 &mut overflow,
                 ColorScheme::Light,
             )
@@ -3486,6 +3566,7 @@ mod tests {
                 &mut style,
                 &mut container_style,
                 &mut text_style,
+                &mut text_flow_style,
                 &mut overflow,
                 ColorScheme::Light,
             )
@@ -3499,6 +3580,7 @@ mod tests {
         let mut style = Style::default();
         let mut container_style = ContainerStyle::default();
         let mut text_style = TextStyle::default();
+        let mut text_flow_style = TextFlowStyle::default();
         let mut overflow = Overflow::default();
         assert!(
             apply_declaration(
@@ -3507,6 +3589,7 @@ mod tests {
                 &mut style,
                 &mut container_style,
                 &mut text_style,
+                &mut text_flow_style,
                 &mut overflow,
                 ColorScheme::Light,
             )
@@ -3530,10 +3613,7 @@ mod tests {
             &dom.root,
             &resolved,
             Arc::new(FallbackTextMeasurer),
-            InheritedCss {
-                text_style: TextStyle::default(),
-                color_scheme: ColorScheme::Light,
-            },
+            InheritedCss::default(),
             Vec::new(),
             ColorScheme::Light,
             ScriptingMode::default(),
@@ -3660,10 +3740,7 @@ mod tests {
             &dom.root,
             &resolved_styles,
             Arc::new(FallbackTextMeasurer),
-            InheritedCss {
-                text_style: TextStyle::default(),
-                color_scheme: ColorScheme::Light,
-            },
+            InheritedCss::default(),
             Vec::new(),
             ColorScheme::Light,
             ScriptingMode::default(),
@@ -3837,6 +3914,7 @@ mod tests {
             "conic-gradient",
             &args,
             &TextStyle::default(),
+            &TextFlowStyle::default(),
             ColorScheme::Light,
         )
         .expect("conic gradient parses");
@@ -3907,6 +3985,7 @@ mod tests {
             "linear-gradient",
             &args,
             &TextStyle::default(),
+            &TextFlowStyle::default(),
             ColorScheme::Light,
         )
         .expect("gradient parses");
@@ -3934,6 +4013,7 @@ mod tests {
             "linear-gradient",
             &args,
             &TextStyle::default(),
+            &TextFlowStyle::default(),
             ColorScheme::Light,
         )
         .expect("gradient parses");
@@ -3952,6 +4032,7 @@ mod tests {
             "linear-gradient",
             &args,
             &TextStyle::default(),
+            &TextFlowStyle::default(),
             ColorScheme::Light,
         )
         .expect("gradient parses");
@@ -3994,8 +4075,14 @@ mod tests {
         ];
         let mut text_style = TextStyle::default();
         text_style.color = Color(255, 0, 0, 255);
-        let gradient = parse_gradient("linear-gradient", &args, &text_style, ColorScheme::Light)
-            .expect("gradient parses");
+        let gradient = parse_gradient(
+            "linear-gradient",
+            &args,
+            &text_style,
+            &TextFlowStyle::default(),
+            ColorScheme::Light,
+        )
+        .expect("gradient parses");
         assert_eq!(gradient.stops[0].color, Color(255, 0, 0, 255));
     }
 }

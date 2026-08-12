@@ -5,7 +5,7 @@ use std::sync::{Arc, mpsc};
 
 use crate::engine::bridge::text;
 use crate::engine::layouter::normalize_whitespace;
-use crate::engine::layouter::types::{Color, ContainerStyle, TextStyle};
+use crate::engine::layouter::types::{Color, ContainerStyle, TextStyle, WhiteSpace};
 use crate::engine::layouter::{DomSnapshot, NodeId};
 use crate::engine::renderer_model::Image;
 use crate::engine::ui::audio::AudioComponent;
@@ -36,7 +36,7 @@ pub struct CustomNodeContext<'a> {
     /// Inherited text style.
     pub text_style: &'a TextStyle,
     /// Text measurer for text-heavy components.
-    pub measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
+    pub measurer: Arc<dyn text::TextMeasurer>,
     /// Decoded images keyed by `src` URL.
     pub images: &'a HashMap<String, Image>,
     /// Encoded audio bytes keyed by `src` URL.
@@ -230,7 +230,10 @@ impl CustomNodeFactory for SelectFactory {
                                 .get_attr("value")
                                 .unwrap_or_default()
                                 .to_string(),
-                            label: normalize_whitespace(&ctx.dom_snapshot.inner_text(*child), true),
+                            label: normalize_whitespace(
+                                &ctx.dom_snapshot.inner_text(*child),
+                                WhiteSpace::Pre,
+                            ),
                             selected: child_node.kind.has_attr("selected"),
                             disabled: group_disabled || child_node.kind.has_attr("disabled"),
                             group: Some(group.clone()),
@@ -239,7 +242,7 @@ impl CustomNodeFactory for SelectFactory {
                 }
                 Some("option") => options.push(SelectOption {
                     value: node.kind.get_attr("value").unwrap_or_default().to_string(),
-                    label: normalize_whitespace(&ctx.dom_snapshot.inner_text(*id), true),
+                    label: normalize_whitespace(&ctx.dom_snapshot.inner_text(*id), WhiteSpace::Pre),
                     selected: node.kind.has_attr("selected"),
                     disabled: node.kind.has_attr("disabled"),
                     group: None,
@@ -276,6 +279,7 @@ mod tests {
     use crate::engine::html::parser::DomTree;
     use crate::engine::html::parser::Parser as HtmlParser;
     use crate::engine::layouter::DomSnapshot;
+    use crate::engine::layouter::types::TextFlowStyle;
     use crate::engine::ui::custom_node::PointerEvent;
 
     fn tree(html: &str) -> DomTree {
@@ -300,7 +304,7 @@ mod tests {
         let images = HashMap::new();
         let audio = HashMap::new();
         let get_attr = |name: &str| attrs.get(name).cloned();
-        let measurer: Arc<dyn text::TextMeasurer<TextStyle>> = Arc::new(FallbackTextMeasurer);
+        let measurer: Arc<dyn text::TextMeasurer> = Arc::new(FallbackTextMeasurer);
 
         let dom_snapshot = &{
             let dom = tree(
@@ -438,7 +442,11 @@ mod tests {
         // The disabled `<select>` reports disabled and never opens a popup.
         assert!(select.is_disabled());
         select.on_pointer_event(PointerEvent::Down { x: 5.0, y: 5.0 });
-        assert!(select.popup(&TextStyle::default()).is_none());
+        assert!(
+            select
+                .popup(&TextStyle::default(), &TextFlowStyle::default())
+                .is_none()
+        );
 
         // The value resolves to an option nested inside the `<optgroup>`.
         assert_eq!(select.value(), Some("b".to_string()));
@@ -493,7 +501,11 @@ mod tests {
         assert!(!select.is_disabled());
         // The `<optgroup>` option is selectable and opens a popup.
         select.on_pointer_event(PointerEvent::Down { x: 5.0, y: 5.0 });
-        assert!(select.popup(&TextStyle::default()).is_some());
+        assert!(
+            select
+                .popup(&TextStyle::default(), &TextFlowStyle::default())
+                .is_some()
+        );
         assert_eq!(select.value(), Some("a".to_string()));
     }
 
@@ -546,7 +558,11 @@ mod tests {
         // Multiple selects render as a list box: no popup, comma-joined value.
         assert_eq!(select.role(), Some("listbox"));
         assert_eq!(select.value(), Some("a,c".to_string()));
-        assert!(select.popup(&TextStyle::default()).is_none());
+        assert!(
+            select
+                .popup(&TextStyle::default(), &TextFlowStyle::default())
+                .is_none()
+        );
 
         // Clicking a row toggles it without opening a popup.
         select.on_pointer_event(PointerEvent::Down {

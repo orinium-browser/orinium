@@ -2,7 +2,7 @@
 
 use ui_layout::Style;
 
-use crate::engine::layouter::types::{Color, TextStyle};
+use crate::engine::layouter::types::{Color, TextFlowStyle, TextStyle};
 use crate::engine::renderer_model::{Brush, DrawCommand, FillRule, Image, Paint, rect_path};
 use crate::engine::ui::custom_node::{ContentSize, CustomNode};
 
@@ -27,6 +27,7 @@ impl CustomNode for ImageComponent {
         &self,
         cmd_buf: &mut Vec<DrawCommand>,
         text_style: &TextStyle,
+        text_flow_style: &TextFlowStyle,
         _style: &Style,
         size: ContentSize,
     ) {
@@ -39,7 +40,7 @@ impl CustomNode for ImageComponent {
                 },
                 rule: FillRule::NonZero,
             }),
-            None => self.draw_placeholder(cmd_buf, text_style, size),
+            None => self.draw_placeholder(cmd_buf, text_style, text_flow_style, size),
         }
     }
 
@@ -79,6 +80,7 @@ impl ImageComponent {
         &self,
         cmd_buf: &mut Vec<DrawCommand>,
         text_style: &TextStyle,
+        text_flow_style: &TextFlowStyle,
         size: ContentSize,
     ) {
         // Broken-image box (light fill with a thin border drawn as fills).
@@ -117,7 +119,7 @@ impl ImageComponent {
         style.color = Color(90, 90, 90, 255);
         let max_width = size.width - 8.0;
         let x = 4.0;
-        let mut y = 4.0 + style.font_size;
+        let mut y = 4.0 + text_flow_style.font_size;
         let mut line = String::new();
         for ch in self.alt.chars() {
             if ch == '\n' || line.chars().count() * 8 >= max_width as usize {
@@ -126,9 +128,10 @@ impl ImageComponent {
                     x,
                     y,
                     style: style.clone(),
+                    flow_style: *text_flow_style,
                 });
                 line = String::new();
-                y += style.font_size + 2.0;
+                y += text_flow_style.font_size + 2.0;
             }
             if ch != '\n' {
                 line.push(ch);
@@ -140,6 +143,7 @@ impl ImageComponent {
                 x,
                 y,
                 style,
+                flow_style: *text_flow_style,
             });
         }
     }
@@ -165,6 +169,7 @@ mod tests {
         component.draw_sized(
             &mut commands,
             &TextStyle::default(),
+            &TextFlowStyle::default(),
             &Style::default(),
             ContentSize {
                 width: 20.0,
@@ -186,6 +191,7 @@ mod tests {
         component.draw_sized(
             &mut commands,
             &TextStyle::default(),
+            &TextFlowStyle::default(),
             &Style::default(),
             ContentSize {
                 width: 100.0,

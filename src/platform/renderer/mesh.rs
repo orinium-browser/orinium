@@ -11,7 +11,8 @@ use orinium_text::TextLayout;
 use smol_str::SmolStr;
 
 use crate::engine::layouter::types::{
-    Color, ColorStop, Gradient, GradientKind, LineHeight, RadialShape, RadialSizeKind, TextStyle,
+    Color, ColorStop, Gradient, GradientKind, LineHeight, RadialShape, RadialSizeKind,
+    TextFlowStyle, TextStyle,
 };
 use crate::engine::renderer_model::{
     AffineTransform, Brush, DrawCommand, Image, Paint, Path, Rect,
@@ -63,7 +64,12 @@ pub enum DrawItem {
 /// geometry layer stays free of font-system / GPU state.
 pub trait TextLayoutSource {
     /// Lay out `text` with `style` (already in physical pixel units).
-    fn layout_text(&mut self, text: &str, style: &TextStyle) -> Option<Arc<TextLayout>>;
+    fn layout_text(
+        &mut self,
+        text: &str,
+        style: &TextStyle,
+        flow_style: TextFlowStyle,
+    ) -> Option<Arc<TextLayout>>;
 }
 
 /// The result of interpreting a command list: CPU-side vertices and text.
@@ -214,11 +220,12 @@ impl MeshBuilder {
                     y,
                     text: tstr,
                     style,
+                    flow_style,
                 } => {
                     let t = *self.transform_stack.last().unwrap();
                     let clip = *self.clip_stack.last().unwrap();
                     let sections_before = self.mesh.sections.len();
-                    self.emit_text(text, *x, *y, tstr, style, &t, &clip);
+                    self.emit_text(text, *x, *y, tstr, style, flow_style, &t, &clip);
                     for section in sections_before..self.mesh.sections.len() {
                         self.mesh.draw_items.push(DrawItem::Text(section));
                     }
@@ -503,6 +510,7 @@ impl MeshBuilder {
         y: f32,
         text_str: &SmolStr,
         style: &TextStyle,
+        flow_style: &TextFlowStyle,
         t: &AffineTransform,
         clip: &ClipRect,
     ) {
@@ -510,11 +518,11 @@ impl MeshBuilder {
         let (tdx, tdy) = (t.dx, t.dy);
         let tw = clip.w;
         let th = clip.h;
-        let font_size = style.font_size;
+        let font_size = flow_style.font_size;
 
         // Line pitch in logical pixels, matching the text renderer's
         // line-height resolution (`text.rs::create_buffer_for_text_inner`).
-        let line_height_ratio = match style.line_height {
+        let line_height_ratio = match flow_style.line_height {
             LineHeight::Normal => 1.2,
             LineHeight::Number(n) => n.max(0.0),
             LineHeight::Px(px) => px / font_size.max(1e-3),
@@ -552,9 +560,9 @@ impl MeshBuilder {
                 continue;
             }
 
-            let mut scaled = style.clone();
+            let mut scaled = *flow_style;
             scaled.font_size = ((font_size * sf) * 64.0).round() / 64.0;
-            let Some(layout) = tr.layout_text(line, &scaled) else {
+            let Some(layout) = tr.layout_text(line, style, scaled) else {
                 return;
             };
 
@@ -1144,7 +1152,12 @@ mod tests {
     struct NoText;
 
     impl TextLayoutSource for NoText {
-        fn layout_text(&mut self, _text: &str, _style: &TextStyle) -> Option<Arc<TextLayout>> {
+        fn layout_text(
+            &mut self,
+            _text: &str,
+            _style: &TextStyle,
+            _flow_style: TextFlowStyle,
+        ) -> Option<Arc<TextLayout>> {
             None
         }
     }
@@ -1704,9 +1717,10 @@ mod tests {
                 x: 0.0,
                 y: 0.0,
                 text: "hello".into(),
-                style: TextStyle {
+                style: TextStyle::default(),
+                flow_style: TextFlowStyle {
                     font_size: 12.0,
-                    ..TextStyle::default()
+                    ..TextFlowStyle::default()
                 },
             },
         ];

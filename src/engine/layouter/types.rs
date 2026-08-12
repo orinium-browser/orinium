@@ -64,6 +64,7 @@ pub enum NodeKind {
         /// Full text content.
         text: String,
         style: TextStyle,
+        flow_style: TextFlowStyle,
         /// Unique ID linking to [`TextFlowLayouter`] for position data.
         text_id: usize,
     },
@@ -78,6 +79,7 @@ pub enum NodeKind {
         /// Resolved `ui_layout::Style` for CSS sizing at render time.
         layout_style: ui_layout::Style,
         text_style: TextStyle,
+        text_flow_style: TextFlowStyle,
     },
 }
 
@@ -351,31 +353,12 @@ pub struct ContainerStyle {
 // =========================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TextAlign {
-    #[default]
-    Left,
-    Center,
-    Right,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TextDecoration {
     #[default]
     None,
     Underline,
     LineThrough,
     Overline,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum VerticalAlign {
-    #[default]
-    Baseline,
-    Sub,
-    Super,
-    Top,
-    Bottom,
-    Middle,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -410,30 +393,13 @@ impl Default for FontWeight {
     }
 }
 
-/// Line-height representation that preserves raw values for inheritance.
-///
-/// - `Normal` — keyword `normal`, resolved per element's font_size
-/// - `Number(f)` — unitless factor (e.g. 1.5), re-resolved per child's font_size
-/// - `Px(px)` — absolute pixel value (from `<length>`, `<percentage>`, `calc()`)
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
-pub enum LineHeight {
-    #[default]
-    Normal,
-    Number(f32),
-    Px(f32),
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextStyle {
-    pub font_size: f32,
-    pub text_align: TextAlign,
     pub text_decoration: TextDecoration,
     pub text_transform: TextTransform,
     pub font_style: FontStyle,
     pub font_weight: FontWeight,
     pub color: Color,
-    pub line_height: LineHeight,
-    pub vertical_align: VerticalAlign,
     /// Override color for text-decoration lines.
     /// `None` means use `color` (currentColor).
     pub text_decoration_color: Option<Color>,
@@ -447,17 +413,77 @@ pub struct TextStyle {
 impl Default for TextStyle {
     fn default() -> Self {
         Self {
-            font_size: 16.0,
-            text_align: TextAlign::default(),
             text_decoration: TextDecoration::default(),
             text_transform: TextTransform::default(),
             font_style: FontStyle::default(),
             font_weight: FontWeight::default(),
             color: Color::default(),
-            line_height: LineHeight::default(),
-            vertical_align: VerticalAlign::default(),
             text_decoration_color: None,
             font_families: vec!["sans-serif".to_string()],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+/// Line-height representation that preserves raw values for inheritance.
+///
+/// - `Normal` — keyword `normal`, resolved per element's font_size
+/// - `Number(f)` — unitless factor (e.g. 1.5), re-resolved per child's font_size
+/// - `Px(px)` — absolute pixel value (from `<length>`, `<percentage>`, `calc()`)
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub enum LineHeight {
+    #[default]
+    Normal,
+    Number(f32),
+    Px(f32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VerticalAlign {
+    #[default]
+    Baseline,
+    Sub,
+    Super,
+    Top,
+    Bottom,
+    Middle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WhiteSpace {
+    #[default]
+    Normal,
+    Nowrap,
+    Pre,
+    PreWrap,
+    PreLine,
+    BreakSpaces,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct TextFlowStyle {
+    pub font_size: f32,
+    pub text_align: TextAlign,
+    pub line_height: LineHeight,
+    pub vertical_align: VerticalAlign,
+    pub white_space: WhiteSpace,
+}
+
+impl Default for TextFlowStyle {
+    fn default() -> Self {
+        Self {
+            font_size: 16.0,
+            text_align: Default::default(),
+            line_height: Default::default(),
+            vertical_align: Default::default(),
+            white_space: Default::default(),
         }
     }
 }

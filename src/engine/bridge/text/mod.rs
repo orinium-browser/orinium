@@ -30,16 +30,26 @@
 use std::fmt;
 
 /* ============================
+ * Style Type
+ * ============================ */
+
+#[derive(Debug, Clone)]
+pub struct TextAttribute {
+    pub style: TextStyle,
+    pub flow_style: TextFlowStyle,
+}
+
+/* ============================
  * Measure Request
  * ============================ */
 
 #[derive(Debug, Clone)]
-pub struct TextMeasureRequest<S> {
+pub struct TextMeasureRequest {
     /// UTF-8 text content
     pub text: String,
 
     /// Opaque, resolved text attributes provided by the caller
-    pub style: S,
+    pub attribute: TextAttribute,
 }
 
 /* ============================
@@ -117,11 +127,11 @@ impl std::error::Error for TextMeasureError {}
  * Trait
  * ============================ */
 
-pub trait TextMeasurer<S>: Send + Sync {
+pub trait TextMeasurer: Send + Sync {
     /// Measure a single block of text and return its metrics.
     fn measure(
         &self,
-        request: &TextMeasureRequest<S>,
+        request: &TextMeasureRequest,
     ) -> Result<Vec<MeasuredFragment>, TextMeasureError>;
 
     /// Shape text and return cluster-level break-opportunity data.
@@ -130,7 +140,7 @@ pub trait TextMeasurer<S>: Send + Sync {
     /// data suitable for use with [`TextFlowLayouter`].
     fn measure_shaped(
         &self,
-        request: &TextMeasureRequest<S>,
+        request: &TextMeasureRequest,
     ) -> Result<Vec<GlyphCluster>, TextMeasureError>;
 }
 
@@ -140,3 +150,5 @@ pub trait TextMeasurer<S>: Send + Sync {
 
 pub mod fallback;
 pub use fallback::FallbackTextMeasurer;
+
+use crate::engine::layouter::types::{TextFlowStyle, TextStyle};

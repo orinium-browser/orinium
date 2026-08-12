@@ -1,5 +1,5 @@
-use orinium_browser::engine::bridge::text::{TextMeasureRequest, TextMeasurer};
-use orinium_browser::engine::layouter::types::TextStyle;
+use orinium_browser::engine::bridge::text::{TextAttribute, TextMeasureRequest, TextMeasurer};
+use orinium_browser::engine::layouter::types::{TextFlowStyle, TextStyle};
 use orinium_browser::platform::renderer::text_measurer::PlatformTextMeasurer;
 
 #[test]
@@ -30,9 +30,12 @@ fn platform_text_measurer_from_bytes_smoke() {
 
     let req = TextMeasureRequest {
         text: "Hello, world!".to_string(),
-        style: TextStyle {
-            font_size: 16.0,
-            ..Default::default()
+        attribute: TextAttribute {
+            style: TextStyle::default(),
+            flow_style: TextFlowStyle {
+                font_size: 16.0,
+                ..Default::default()
+            },
         },
     };
 

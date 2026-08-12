@@ -8,7 +8,7 @@ use orinium_browser::{
         layouter::{
             InheritedCss, build_layout_and_info,
             css_resolver::{CssResolver, ResolvedStyles},
-            types::{ColorScheme, TextStyle},
+            types::{TextFlowStyle, TextStyle},
         },
         renderer_model::generate_draw_commands,
         tree::NodeRef,
@@ -440,11 +440,12 @@ fn build_layout_info(raw_url: &str) -> Result<LayoutInfo> {
         &resolved_styles,
         measurer,
         InheritedCss {
-            text_style: TextStyle {
+            text_style: TextStyle::default(),
+            text_flow_style: TextFlowStyle {
                 font_size: 16.0,
                 ..Default::default()
             },
-            color_scheme: ColorScheme::default(),
+            ..Default::default()
         },
         Vec::new(),
         dark_light::detect().map(Into::into).unwrap_or_else(|e| {

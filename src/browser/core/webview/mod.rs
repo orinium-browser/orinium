@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 use std::sync::{Arc, mpsc};
 
-use crate::engine::layouter::types::ColorScheme;
+use crate::engine::layouter::types::{ColorScheme, TextFlowStyle};
 use crate::engine::{
     css::{self, parser::Parser as CssParser},
     html::HtmlNodeType,
@@ -16,7 +16,7 @@ use crate::engine::{
     layouter::{
         self, InheritedCss, LayoutResult, NodeId,
         dom_snapshot::DomSnapshot,
-        types::{InfoNode, NodeKind, TextStyle},
+        types::{InfoNode, NodeKind},
     },
     renderer_model::Image,
     tree::TreeNode,
@@ -887,11 +887,11 @@ impl WebView {
             images: self.images.clone(),
             audio: self.audio.clone(),
             parent: InheritedCss {
-                text_style: TextStyle {
+                text_flow_style: TextFlowStyle {
                     font_size: 16.0,
                     ..Default::default()
                 },
-                color_scheme: Default::default(),
+                ..Default::default()
             },
             chain: Vec::new(),
             write_back_sender: Some(self.write_back_tx.clone()),

@@ -6,7 +6,7 @@ use ui_layout::{BoxModel, EdgeOption, LayoutChild, LayoutNode, Position, Rect};
 use crate::engine::layouter::text_layouter::TextFlowLayouter;
 use crate::engine::layouter::types::{
     Background, BorderRadius, Color, ContainerStyle, CornerRadius, InfoNode, NodeKind,
-    TextDecoration, TextStyle,
+    TextDecoration, TextFlowStyle, TextStyle,
 };
 use crate::engine::renderer_model::draw_command::{Brush, DrawCommand, FillRule, Paint};
 use crate::engine::renderer_model::geom::AffineTransform;
@@ -538,6 +538,7 @@ fn pop_box_model(cmd_buf: &mut Vec<DrawCommand>, state: BoxPushState) {
 fn draw_text(
     cmd_buf: &mut Vec<DrawCommand>,
     style: &TextStyle,
+    flow_style: TextFlowStyle,
     text_id: usize,
     content_origin: (f32, f32),
 ) {
@@ -552,9 +553,10 @@ fn draw_text(
                 y,
                 text: line_text.as_str().into(),
                 style: style.clone(),
+                flow_style,
             });
 
-            let font_size = style.font_size;
+            let font_size = flow_style.font_size;
             let line_thickness = (font_size * 0.08).max(1.0);
             let line_y_adj = if line_text.is_empty() {
                 y
@@ -746,6 +748,7 @@ fn generate_draw_commands_inner(
             layout_style,
             node,
             text_style,
+            text_flow_style,
             ..
         } => {
             let effective_style = node.background().map(|background| ContainerStyle {
@@ -772,10 +775,10 @@ fn generate_draw_commands_inner(
                     height: box_model.content_box.height,
                 },
             );
-            node.draw_sized(cmd_buf, text_style, layout_style, size);
+            node.draw_sized(cmd_buf, text_style, text_flow_style, layout_style, size);
             // Collect open popups so they render above every other box,
             // outside all ancestor clips and transforms.
-            if let Some(popup) = node.popup(text_style) {
+            if let Some(popup) = node.popup(text_style, text_flow_style) {
                 let own_scroll = info.kind.scroll_offsets();
                 // Fixed boxes are positioned relative to the viewport, so the
                 // inherited scroll displacement does not move their popup.
@@ -876,8 +879,13 @@ fn generate_draw_commands_inner(
 
     for child_info in &info.children {
         match &child_info.kind {
-            NodeKind::Text { text_id, style, .. } => {
-                draw_text(cmd_buf, style, *text_id, text_origin);
+            NodeKind::Text {
+                text_id,
+                style,
+                flow_style,
+                ..
+            } => {
+                draw_text(cmd_buf, style, *flow_style, *text_id, text_origin);
                 layout_iter.next();
             }
             NodeKind::LineBreak => {
@@ -902,6 +910,7 @@ fn generate_draw_commands_inner(
             NodeKind::Custom {
                 node,
                 text_style,
+                text_flow_style,
                 style,
                 layout_style,
                 ..
@@ -965,6 +974,7 @@ fn generate_draw_commands_inner(
                             node.draw_sized(
                                 cmd_buf,
                                 text_style,
+                                text_flow_style,
                                 layout_style,
                                 ContentSize {
                                     width: rect.content_box.width,
@@ -1446,6 +1456,7 @@ mod tests {
             &self,
             _cmd_buf: &mut Vec<DrawCommand>,
             _text_style: &TextStyle,
+            _text_flow_style: &TextFlowStyle,
             _style: &Style,
             _size: ContentSize,
         ) {
@@ -1458,7 +1469,11 @@ mod tests {
             }
         }
 
-        fn popup(&self, _text_style: &TextStyle) -> Option<Popup> {
+        fn popup(
+            &self,
+            _text_style: &TextStyle,
+            _text_flow_style: &TextFlowStyle,
+        ) -> Option<Popup> {
             self.open.then(|| Popup {
                 rect: crate::engine::renderer_model::Rect {
                     x: 0.0,
@@ -1536,6 +1551,7 @@ mod tests {
                         style: ContainerStyle::default(),
                         layout_style: Style::default(),
                         text_style: TextStyle::default(),
+                        text_flow_style: TextFlowStyle::default(),
                     },
                     Vec::new(),
                 )],
@@ -1607,6 +1623,7 @@ mod tests {
                     style: ContainerStyle::default(),
                     layout_style: Style::default(),
                     text_style: TextStyle::default(),
+                    text_flow_style: TextFlowStyle::default(),
                 },
                 Vec::new(),
             )],

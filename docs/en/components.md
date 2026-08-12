@@ -269,7 +269,7 @@ pub struct ButtonComponent {
 pub struct InputTextComponent {
     state: RefCell<InputTextState>,      // value / caret / preedit / focused
     placeholder: SmolStr,
-    measurer: Arc<dyn TextMeasurer<TextStyle>>,
+    measurer: Arc<dyn TextMeasurer>,
     // private: undo / redo history, dirty flag, on_value_change callback
 }
 ```

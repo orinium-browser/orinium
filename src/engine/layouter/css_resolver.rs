@@ -567,6 +567,7 @@ impl SupportsEvaluator {
             &mut ui_layout::Style::default(),
             &mut super::types::ContainerStyle::default(),
             &mut super::types::TextStyle::default(),
+            &mut super::types::TextFlowStyle::default(),
             &mut super::types::Overflow::default(),
             super::types::ColorScheme::Light,
         )

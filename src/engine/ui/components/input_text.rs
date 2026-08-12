@@ -7,7 +7,7 @@ use smol_str::SmolStr;
 use ui_layout::Style;
 
 use crate::engine::bridge::text::{self, TextMeasureRequest};
-use crate::engine::layouter::types::{Background, Color, TextStyle};
+use crate::engine::layouter::types::{Background, Color, TextFlowStyle, TextStyle};
 use crate::engine::renderer_model::{Brush, DrawCommand, FillRule, Paint, rect_path};
 use crate::engine::ui::components::input_text_types::{
     InputTextEvent, InputTextKey, InputTextState,
@@ -31,7 +31,7 @@ struct EditSnapshot {
 pub struct InputTextComponent {
     state: Mutex<InputTextState>,
     placeholder: SmolStr,
-    measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
+    measurer: Arc<dyn text::TextMeasurer>,
     undo_stack: Mutex<Vec<EditSnapshot>>,
     redo_stack: Mutex<Vec<EditSnapshot>>,
     dirty: AtomicBool,
@@ -53,7 +53,7 @@ impl InputTextComponent {
     pub fn new(
         value: impl Into<String>,
         placeholder: impl Into<SmolStr>,
-        measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
+        measurer: Arc<dyn text::TextMeasurer>,
     ) -> Self {
         let value = value.into();
         let caret = value.len();
@@ -78,7 +78,7 @@ impl InputTextComponent {
     pub fn with_on_change(
         value: impl Into<String>,
         placeholder: impl Into<SmolStr>,
-        measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
+        measurer: Arc<dyn text::TextMeasurer>,
         on_value_change: Arc<OnValueChange>,
     ) -> Self {
         let mut input = Self::new(value, placeholder, measurer);
@@ -90,7 +90,7 @@ impl InputTextComponent {
     pub fn with_on_enter(
         value: impl Into<String>,
         placeholder: impl Into<SmolStr>,
-        measurer: Arc<dyn text::TextMeasurer<TextStyle>>,
+        measurer: Arc<dyn text::TextMeasurer>,
         on_enter: Arc<OnValueChange>,
     ) -> Self {
         let mut input = Self::new(value, placeholder, measurer);
@@ -196,6 +196,7 @@ impl CustomNode for InputTextComponent {
         &self,
         cmd_buf: &mut Vec<DrawCommand>,
         text_style: &TextStyle,
+        text_flow_style: &TextFlowStyle,
         _style: &Style,
         size: ContentSize,
     ) {
@@ -227,8 +228,9 @@ impl CustomNode for InputTextComponent {
             cmd_buf,
             display_text,
             INLINE_PADDING,
-            ((size.height - style.font_size) * 0.5).max(0.0),
+            ((size.height - text_flow_style.font_size) * 0.5).max(0.0),
             &style,
+            text_flow_style,
             caret,
             preedit,
             text_style.color,
@@ -364,7 +366,10 @@ impl CustomNode for InputTextComponent {
         let style = TextStyle::default();
         let Ok(fragments) = self.measurer.measure(&TextMeasureRequest {
             text: display_text,
-            style,
+            attribute: text::TextAttribute {
+                style,
+                flow_style: TextFlowStyle::default(),
+            },
         }) else {
             return None;
         };
@@ -406,12 +411,13 @@ impl CustomNode for InputTextComponent {
 /// Draw text input decorations such as caret and IME preedit underline.
 #[allow(clippy::too_many_arguments)]
 fn draw_text_input(
-    measurer: &dyn text::TextMeasurer<TextStyle>,
+    measurer: &dyn text::TextMeasurer,
     cmd_buf: &mut Vec<DrawCommand>,
     text: String,
     x: f32,
     y: f32,
     style: &TextStyle,
+    flow_style: &TextFlowStyle,
     caret: Option<usize>,
     preedit: Option<(usize, usize)>,
     decoration_color: Color,
@@ -421,7 +427,10 @@ fn draw_text_input(
 ) {
     let Ok(fragments) = measurer.measure(&TextMeasureRequest {
         text: text.clone(),
-        style: style.clone(),
+        attribute: text::TextAttribute {
+            style: style.clone(),
+            flow_style: *flow_style,
+        },
     }) else {
         return;
     };
@@ -498,6 +507,7 @@ fn draw_text_input(
         y,
         text: text.into(),
         style: style.clone(),
+        flow_style: *flow_style,
     });
 }
 

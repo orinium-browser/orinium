@@ -21,7 +21,7 @@ use crate::browser::core::ui::chrome::{Chrome, ChromeAction, ChromeEventResult};
 use crate::browser::core::ui::{logical_key_to_special_event, logical_key_to_text_key};
 use crate::engine::bridge::text::TextMeasurer;
 use crate::engine::html::ScriptingMode;
-use crate::engine::layouter::types::{Background, Color, TextStyle};
+use crate::engine::layouter::types::{Background, Color, TextFlowStyle, TextStyle};
 use crate::engine::renderer_model::{
     AffineTransform, Brush, DrawCommand, FillRule, Paint, Rect, rect_path,
 };
@@ -99,8 +99,7 @@ struct BrowserToolbar {
 impl BrowserToolbar {
     /// Create a new toolbar with placeholder components.
     fn new() -> Self {
-        let measurer: Arc<dyn TextMeasurer<TextStyle>> =
-            Arc::new(PlatformTextMeasurer::new().unwrap());
+        let measurer: Arc<dyn TextMeasurer> = Arc::new(PlatformTextMeasurer::new().unwrap());
         let back_button = ButtonComponent::new(
             "← Back",
             BUTTON_BACKGROUND,
@@ -296,6 +295,7 @@ impl Chrome for BasicChrome {
         });
 
         let text_style = TextStyle::default();
+        let text_flow_style = TextFlowStyle::default();
         let style = Style::default();
 
         let components: [(&dyn CustomNode, Rect); 5] = [
@@ -323,6 +323,7 @@ impl Chrome for BasicChrome {
             node.draw_sized(
                 cmd_buf,
                 &text_style,
+                &text_flow_style,
                 &style,
                 ContentSize {
                     width: rect.width,
@@ -356,6 +357,7 @@ impl Chrome for BasicChrome {
                 y: self.debug_layout_node.2,
                 text: self.debug_layout_node.0.clone().into(),
                 style: text_style,
+                flow_style: text_flow_style,
             });
 
             cmd_buf.push(DrawCommand::PopTransform);

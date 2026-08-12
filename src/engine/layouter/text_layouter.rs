@@ -8,7 +8,8 @@ use ui_layout::{
 };
 
 use crate::engine::bridge::text::GlyphCluster;
-use crate::engine::layouter::types::TextStyle;
+use crate::engine::layouter::builder::DEFAULT_LINE_FACTOR;
+use crate::engine::layouter::types::{LineHeight, TextFlowStyle};
 
 thread_local! {
     static TEXT_RESULTS: RefCell<HashMap<usize, Arc<TextLayoutResult>>> =
@@ -38,24 +39,29 @@ pub struct TextFlowLayouter {
     pub id: usize,
     text: String,
     clusters: Vec<GlyphCluster>,
-    line_height: f32,
+    flow_style: TextFlowStyle,
 }
 
 impl TextFlowLayouter {
-    pub fn new(
-        text: String,
-        _style: TextStyle,
-        mut clusters: Vec<GlyphCluster>,
-        line_height: f32,
-    ) -> Self {
+    pub fn new(text: String, flow_style: TextFlowStyle, mut clusters: Vec<GlyphCluster>) -> Self {
         clusters.sort_by_key(|c| c.byte_offset);
         let id = NEXT_TEXT_ID.fetch_add(1, Ordering::Relaxed);
         Self {
             id,
             text,
+            flow_style,
             clusters,
-            line_height,
         }
+    }
+
+    /// Resolved line height in pixels, derived from the flow style.
+    fn line_height(&self) -> f32 {
+        match self.flow_style.line_height {
+            LineHeight::Number(factor) => self.flow_style.font_size * factor,
+            LineHeight::Normal => self.flow_style.font_size * DEFAULT_LINE_FACTOR,
+            LineHeight::Px(px) => px,
+        }
+        .max(1.0)
     }
 
     /// Retrieve the layout result for `id` from the thread-local cache.
@@ -75,7 +81,7 @@ impl TextFlowLayouter {
         available_space: f32,
         start_pos: (f32, f32),
     ) -> TextLayoutResult {
-        let lh = self.line_height.max(1.0);
+        let lh = self.line_height();
         let text_len = self.text.len();
         let clusters = &self.clusters;
 
@@ -332,7 +338,7 @@ impl CustomLayouter for TextFlowLayouter {
         });
 
         let (start_x, start_y) = ctx.start_pos;
-        let lh = self.line_height.max(1.0);
+        let lh = self.line_height();
         let total_width = spans
             .iter()
             .map(|s| s.line_pos.0 + s.width())
@@ -368,7 +374,7 @@ impl CustomLayouter for TextFlowLayouter {
 
     fn measure(&self, _ctx: &LayoutContext) -> MeasureResult {
         let total_width: f32 = self.clusters.iter().map(|c| c.width).sum();
-        let total_height = self.line_height.max(1.0);
+        let total_height = self.line_height();
         MeasureResult {
             width: total_width,
             height: total_height,
@@ -384,6 +390,8 @@ impl CustomLayouter for TextFlowLayouter {
 mod tests {
     use super::*;
 
+    use crate::engine::layouter::types::TextFlowStyle;
+
     fn cluster(byte_offset: usize, width: f32, break_allowed: bool) -> GlyphCluster {
         GlyphCluster {
             byte_offset,
@@ -393,8 +401,11 @@ mod tests {
     }
 
     fn layout(text: &str, clusters: Vec<GlyphCluster>, line_width: f32) -> TextLayoutResult {
-        TextFlowLayouter::new(text.to_string(), TextStyle::default(), clusters, 16.0)
-            .compute_layout(line_width, line_width, (0.0, 0.0))
+        TextFlowLayouter::new(text.to_string(), TextFlowStyle::default(), clusters).compute_layout(
+            line_width,
+            line_width,
+            (0.0, 0.0),
+        )
     }
 
     #[test]
@@ -477,9 +488,8 @@ mod tests {
         ];
         let result = TextFlowLayouter::new(
             "aa bb cc dd".to_string(),
-            TextStyle::default(),
+            TextFlowStyle::default(),
             clusters,
-            16.0,
         )
         .compute_layout(32.0, 64.0, (0.0, 0.0));
         let texts: Vec<String> = result
@@ -510,9 +520,8 @@ mod tests {
         ];
         let result = TextFlowLayouter::new(
             "Hello world".to_string(),
-            TextStyle::default(),
+            TextFlowStyle::default(),
             clusters,
-            16.0,
         )
         .compute_layout(30.0, 100.0, (0.0, 0.0));
         assert_eq!(result.line_texts, vec!["Hello world"]);
@@ -530,9 +539,8 @@ mod tests {
             cluster(3, 9.0, false),
             cluster(4, 9.0, false),
         ];
-        let result =
-            TextFlowLayouter::new("Hello".to_string(), TextStyle::default(), clusters, 16.0)
-                .compute_layout(30.0, 40.0, (0.0, 0.0));
+        let result = TextFlowLayouter::new("Hello".to_string(), TextFlowStyle::default(), clusters)
+            .compute_layout(30.0, 40.0, (0.0, 0.0));
         assert_eq!(result.line_texts, vec!["Hell", "o"]);
     }
 }

@@ -15,7 +15,7 @@ use wgpu::util::DeviceExt;
 
 use super::atlas::GlyphAtlas;
 use super::global_font;
-use crate::engine::layouter::types::{FontStyle, LineHeight, TextStyle};
+use crate::engine::layouter::types::{FontStyle, LineHeight, TextFlowStyle, TextStyle};
 use crate::platform::renderer::mesh::{self, TextSection};
 
 fn quantize_font_size(px: f32) -> f32 {
@@ -495,17 +495,22 @@ impl TextRenderer {
         })
     }
 
-    pub fn create_buffer_for_text(&mut self, text: &str, mut style: TextStyle) -> Arc<TextLayout> {
-        style.font_size = quantize_font_size(style.font_size);
+    pub fn create_buffer_for_text(
+        &mut self,
+        text: &str,
+        style: TextStyle,
+        mut flow_style: TextFlowStyle,
+    ) -> Arc<TextLayout> {
+        flow_style.font_size = quantize_font_size(flow_style.font_size);
 
-        let font_size_bits = style.font_size.to_bits();
+        let font_size_bits = flow_style.font_size.to_bits();
         let color = ((style.color.0 as u32) << 24)
             | ((style.color.1 as u32) << 16)
             | ((style.color.2 as u32) << 8)
             | (style.color.3 as u32);
         let font_weight = style.font_weight.0;
         let font_style = style.font_style;
-        let line_height = CachedLineHeight::from_line_height(style.line_height);
+        let line_height = CachedLineHeight::from_line_height(flow_style.line_height);
         let font_families = style.font_families.clone();
 
         for i in 0..self.layout_cache.len() {
@@ -526,7 +531,7 @@ impl TextRenderer {
             }
         }
 
-        let layout = Arc::new(self.create_buffer_for_text_inner(text, &style));
+        let layout = Arc::new(self.create_buffer_for_text_inner(text, &style, &flow_style));
 
         self.layout_cache.insert(
             0,
@@ -549,11 +554,16 @@ impl TextRenderer {
         layout
     }
 
-    fn create_buffer_for_text_inner(&mut self, text: &str, style: &TextStyle) -> TextLayout {
+    fn create_buffer_for_text_inner(
+        &mut self,
+        text: &str,
+        style: &TextStyle,
+        flow_style: &TextFlowStyle,
+    ) -> TextLayout {
         let _t0 = std::time::Instant::now();
 
-        let font_size = style.font_size;
-        let line_height_ratio = match style.line_height {
+        let font_size = flow_style.font_size;
+        let line_height_ratio = match flow_style.line_height {
             LineHeight::Normal => 1.2,
             LineHeight::Number(n) => n,
             LineHeight::Px(px) => px / font_size,
@@ -891,8 +901,13 @@ impl TextRenderer {
 }
 
 impl mesh::TextLayoutSource for TextRenderer {
-    fn layout_text(&mut self, text: &str, style: &TextStyle) -> Option<Arc<TextLayout>> {
-        Some(self.create_buffer_for_text(text, style.clone()))
+    fn layout_text(
+        &mut self,
+        text: &str,
+        style: &TextStyle,
+        flow_style: TextFlowStyle,
+    ) -> Option<Arc<TextLayout>> {
+        Some(self.create_buffer_for_text(text, style.clone(), flow_style))
     }
 }
 

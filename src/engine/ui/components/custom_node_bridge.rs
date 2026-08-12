@@ -157,7 +157,7 @@ impl CustomLayouter for CustomNodeBridge {
 mod tests {
     use super::*;
 
-    use crate::engine::layouter::types::TextStyle;
+    use crate::engine::layouter::types::{TextFlowStyle, TextStyle};
     use crate::engine::renderer_model::DrawCommand;
 
     #[derive(Debug)]
@@ -171,6 +171,7 @@ mod tests {
             &self,
             _cmd_buf: &mut Vec<DrawCommand>,
             _text_style: &TextStyle,
+            _text_flow_style: &TextFlowStyle,
             _style: &Style,
             _size: ContentSize,
         ) {
