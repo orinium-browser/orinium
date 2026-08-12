@@ -1385,6 +1385,7 @@ const HEADERS_IMMUTABLE: &str = "__orinium_headers_immutable";
 const REQUEST_MARKER: &str = "__orinium_request";
 const REQUEST_BODY: &str = "__orinium_request_body";
 const RESPONSE_BODY_USED: &str = "__orinium_response_body_used";
+const RESPONSE_BODY_BYTES: &str = "__orinium_response_body_bytes";
 
 fn install_headers(engine: &mut pixi_byte::JSEngine) {
     let mut constructor = JSObject::new();
@@ -1715,6 +1716,7 @@ fn capture_fetch_capability(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue
 }
 
 fn make_fetch_response(response: JsFetchResponse) -> Rc<RefCell<JSObject>> {
+    let body_bytes = response.body.clone();
     let mut object = JSObject::new();
     object.define_property(
         "headers".to_string(),
@@ -1759,11 +1761,25 @@ fn make_fetch_response(response: JsFetchResponse) -> Rc<RefCell<JSObject>> {
         "json".to_string(),
         Property::read_only(JSValue::NativeFunction(fetch_response_json)),
     );
+    object.define_property(
+        "arrayBuffer".to_string(),
+        Property::read_only(JSValue::NativeFunction(fetch_response_array_buffer)),
+    );
     object.set(
         "__orinium_response_body".to_string(),
         JSValue::String(String::from_utf8_lossy(&response.body).into_owned()),
     );
     object.set(RESPONSE_BODY_USED.to_string(), JSValue::Boolean(false));
+    object.set(
+        RESPONSE_BODY_BYTES.to_string(),
+        JSArray::from_vec(
+            body_bytes
+                .into_iter()
+                .map(|byte| JSValue::Number(byte as f64))
+                .collect(),
+        )
+        .to_object(),
+    );
     Rc::new(RefCell::new(object))
 }
 
@@ -1790,6 +1806,16 @@ fn fetch_response_json(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     }
 }
 
+fn fetch_response_array_buffer(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let response = match consume_response_object(vm, &args, "arrayBuffer") {
+        Ok(response) => response,
+        Err(JSError::Thrown(rejection)) => return Ok(rejection),
+        Err(error) => return Err(error),
+    };
+    let bytes = response.borrow().get(RESPONSE_BODY_BYTES);
+    settle_promise(vm, "resolve", make_array_buffer_from_value(&bytes))
+}
+
 fn fetch_response_body_used(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(JSValue::Object(response)) = args.first() else {
         return Err(JSError::TypeError(
@@ -1804,27 +1830,45 @@ fn consume_response_body(
     args: &[JSValue],
     method: &str,
 ) -> JSResult<Result<String, JSValue>> {
-    let Some(JSValue::Object(response)) = args.first() else {
-        return Err(JSError::TypeError(format!(
-            "Response.{method} called on incompatible receiver"
-        )));
+    let response = match consume_response_object(vm, args, method) {
+        Ok(response) => response,
+        Err(JSError::Thrown(value)) => return Ok(Err(value)),
+        Err(error) => return Err(error),
     };
-    let mut response = response.borrow_mut();
-    if matches!(response.get(RESPONSE_BODY_USED), JSValue::Boolean(true)) {
-        let rejection = settle_promise(
-            vm,
-            "reject",
-            JSValue::String("Response body has already been consumed".to_string()),
-        )?;
-        return Ok(Err(rejection));
-    }
-    response.set(RESPONSE_BODY_USED.to_string(), JSValue::Boolean(true));
+    let response = response.borrow();
     match response.get("__orinium_response_body") {
         JSValue::String(body) => Ok(Ok(body)),
         _ => Err(JSError::InternalError(
             "Response body is unavailable".to_string(),
         )),
     }
+}
+
+fn consume_response_object(
+    vm: &mut VM,
+    args: &[JSValue],
+    method: &str,
+) -> JSResult<Rc<RefCell<JSObject>>> {
+    let Some(JSValue::Object(response)) = args.first() else {
+        return Err(JSError::TypeError(format!(
+            "Response.{method} called on incompatible receiver"
+        )));
+    };
+    if matches!(
+        response.borrow().get(RESPONSE_BODY_USED),
+        JSValue::Boolean(true)
+    ) {
+        let rejection = settle_promise(
+            vm,
+            "reject",
+            JSValue::String("Response body has already been consumed".to_string()),
+        )?;
+        return Err(JSError::Thrown(rejection));
+    }
+    response
+        .borrow_mut()
+        .set(RESPONSE_BODY_USED.to_string(), JSValue::Boolean(true));
+    Ok(Rc::clone(response))
 }
 
 fn settle_promise(vm: &mut VM, method: &str, value: JSValue) -> JSResult<JSValue> {
@@ -2096,6 +2140,16 @@ fn install_encoding_apis(engine: &mut pixi_byte::JSEngine) {
         "__construct__".to_string(),
         JSValue::NativeFunction(text_decoder_constructor),
     );
+    let mut array_buffer_constructor_object = JSObject::new();
+    array_buffer_constructor_object.set(
+        "__construct__".to_string(),
+        JSValue::NativeFunction(array_buffer_constructor),
+    );
+    let mut uint8_array_constructor_object = JSObject::new();
+    uint8_array_constructor_object.set(
+        "__construct__".to_string(),
+        JSValue::NativeFunction(uint8_array_constructor),
+    );
     let mut global = engine.global_mut().borrow_mut();
     global.set("atob".to_string(), JSValue::NativeFunction(atob));
     global.set("btoa".to_string(), JSValue::NativeFunction(btoa));
@@ -2107,6 +2161,86 @@ fn install_encoding_apis(engine: &mut pixi_byte::JSEngine) {
         "TextDecoder".to_string(),
         JSValue::Object(Rc::new(RefCell::new(decoder_constructor))),
     );
+    global.set(
+        "ArrayBuffer".to_string(),
+        JSValue::Object(Rc::new(RefCell::new(array_buffer_constructor_object))),
+    );
+    global.set(
+        "Uint8Array".to_string(),
+        JSValue::Object(Rc::new(RefCell::new(uint8_array_constructor_object))),
+    );
+}
+
+fn value_bytes(value: &JSValue) -> Vec<u8> {
+    match value {
+        JSValue::Object(object) => {
+            let object = object.borrow();
+            let length = match object.get("length") {
+                JSValue::Undefined => object.get("byteLength").to_number(),
+                value => value.to_number(),
+            }
+            .max(0.0) as usize;
+            (0..length)
+                .map(|index| object.get(&index.to_string()).to_number() as u8)
+                .collect()
+        }
+        JSValue::String(value) => value.as_bytes().to_vec(),
+        _ => Vec::new(),
+    }
+}
+
+fn make_array_buffer(bytes: Vec<u8>) -> JSValue {
+    let mut object = JSObject::new();
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        object.set(index.to_string(), JSValue::Number(byte as f64));
+    }
+    object.define_property(
+        "byteLength".to_string(),
+        Property::read_only(JSValue::Number(bytes.len() as f64)),
+    );
+    JSValue::Object(Rc::new(RefCell::new(object)))
+}
+
+fn make_array_buffer_from_value(value: &JSValue) -> JSValue {
+    make_array_buffer(value_bytes(value))
+}
+
+fn array_buffer_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let length = args.get(1).map(JSValue::to_number).unwrap_or(0.0);
+    let length = if length.is_finite() && length >= 0.0 {
+        length as usize
+    } else {
+        return Err(JSError::TypeError("Invalid ArrayBuffer length".to_string()));
+    };
+    Ok(make_array_buffer(vec![0; length]))
+}
+
+fn uint8_array_constructor(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let bytes = match args.get(1) {
+        Some(JSValue::Number(length)) if length.is_finite() && *length >= 0.0 => {
+            vec![0; *length as usize]
+        }
+        Some(value) => value_bytes(value),
+        None => Vec::new(),
+    };
+    let array = vm.array_from_values(
+        bytes
+            .iter()
+            .copied()
+            .map(|byte| JSValue::Number(byte as f64))
+            .collect(),
+    );
+    if let JSValue::Object(object) = &array {
+        object.borrow_mut().define_property(
+            "byteLength".to_string(),
+            Property::read_only(JSValue::Number(bytes.len() as f64)),
+        );
+        object.borrow_mut().define_property(
+            "buffer".to_string(),
+            Property::read_only(make_array_buffer(bytes)),
+        );
+    }
+    Ok(array)
 }
 
 fn btoa(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -2183,17 +2317,7 @@ fn text_decode(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(value) = args.get(1) else {
         return Ok(JSValue::String(String::new()));
     };
-    let bytes = match value {
-        JSValue::Object(object) => {
-            let object = object.borrow();
-            let length = object.get("length").to_number().max(0.0) as usize;
-            (0..length)
-                .map(|index| object.get(&index.to_string()).to_number() as u8)
-                .collect()
-        }
-        JSValue::String(value) => value.as_bytes().to_vec(),
-        _ => Vec::new(),
-    };
+    let bytes = value_bytes(value);
     Ok(JSValue::String(
         String::from_utf8_lossy(&bytes).into_owned(),
     ))
@@ -6400,6 +6524,43 @@ mod tests {
             Some("data:text/plain,hello")
         );
         assert_eq!(result.value.get_attr("data-text"), Some("hello"));
+    }
+
+    #[test]
+    fn fetch_array_buffer_preserves_binary_bytes() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            fetch("https://assets.scratch.mit.edu/project.sb3")
+                .then(response => response.arrayBuffer())
+                .then(buffer => {
+                    const bytes = new Uint8Array(buffer);
+                    document.querySelector("#result").setAttribute(
+                        "data-bytes",
+                        buffer.byteLength + ":" + bytes.length + ":" + bytes[0] + ":" + bytes[3]
+                    );
+                });
+            "##,
+        );
+
+        let requests = runtime.take_fetch_requests();
+        runtime.resolve_fetch(
+            requests[0].id,
+            JsFetchResponse {
+                url: requests[0].url.clone(),
+                status: 200,
+                status_text: "OK".to_string(),
+                redirected: false,
+                body: vec![0, 127, 128, 255],
+                headers: Vec::new(),
+            },
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-bytes"),
+            Some("4:4:0:255")
+        );
     }
 
     #[test]
