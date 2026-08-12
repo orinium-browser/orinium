@@ -2,7 +2,7 @@
 
 use ui_layout::Style;
 
-use crate::engine::layouter::types::{Color, TextStyle};
+use crate::engine::layouter::types::{Color, TextFlowStyle, TextStyle};
 use crate::engine::renderer_model::{Brush, DrawCommand, FillRule, Paint, rect_path};
 use crate::engine::ui::custom_node::{ContentSize, CustomNode};
 
@@ -52,6 +52,7 @@ impl CustomNode for CanvasComponent {
         &self,
         cmd_buf: &mut Vec<DrawCommand>,
         _text_style: &TextStyle,
+        _text_flow_style: &TextFlowStyle,
         _style: &Style,
         size: ContentSize,
     ) {

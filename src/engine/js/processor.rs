@@ -12,7 +12,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
 
-use super::{JsDynamicScriptRequest, JsFetchRequest, JsFetchResponse, JsRuntime};
+use super::{
+    JsDynamicScriptRequest, JsDynamicStyleRequest, JsFetchRequest, JsFetchResponse, JsRuntime,
+};
 use crate::engine::layouter::dom_snapshot::DomSnapshot;
 
 /// What the background JS thread should do next.
@@ -55,6 +57,8 @@ pub struct JsTaskResult {
     pub fetch_requests: Vec<JsFetchRequest>,
     /// Dynamically inserted script elements discovered while running this task.
     pub(crate) dynamic_script_requests: Vec<JsDynamicScriptRequest>,
+    /// Dynamically inserted stylesheet links discovered while running this task.
+    pub(crate) dynamic_style_requests: Vec<JsDynamicStyleRequest>,
     /// The sequence number of the task that produced this result.
     pub version: u64,
 }
@@ -102,6 +106,7 @@ impl JsProcessor {
                 let needs_redraw = runtime.take_needs_redraw();
                 let fetch_requests = runtime.take_fetch_requests();
                 let dynamic_script_requests = runtime.take_dynamic_script_requests();
+                let dynamic_style_requests = runtime.take_dynamic_style_requests();
                 let dom = if needs_redraw {
                     Some(runtime.snapshot())
                 } else {
@@ -112,6 +117,7 @@ impl JsProcessor {
                     needs_redraw,
                     fetch_requests,
                     dynamic_script_requests,
+                    dynamic_style_requests,
                     version,
                 });
             }

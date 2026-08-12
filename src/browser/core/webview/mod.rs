@@ -13,8 +13,8 @@ use crate::engine::{
         ClassicScriptExecution, ClassicScriptSource, DomTree, Parser as HtmlParser, ScriptingMode,
     },
     js::{
-        JsDynamicScriptRequest, JsDynamicScriptSource, JsFetchRequest, JsFetchResponse,
-        JsProcessor, JsTask, JsTaskResult,
+        JsDynamicScriptRequest, JsDynamicScriptSource, JsDynamicStyleRequest, JsFetchRequest,
+        JsFetchResponse, JsProcessor, JsTask, JsTaskResult,
     },
     layouter::{
         self, InheritedCss, LayoutResult, NodeId,
@@ -184,6 +184,8 @@ pub struct WebView {
     pending_js_fetches: Vec<JsFetchRequest>,
     /// Dynamically inserted scripts collected from applied JS results.
     pending_dynamic_scripts: Vec<JsDynamicScriptRequest>,
+    /// Dynamically inserted stylesheet links collected from JS results.
+    pending_dynamic_styles: Vec<JsDynamicStyleRequest>,
     /// Classic scripts in document order. Execution starts after CSS is applied.
     classic_scripts: Vec<ClassicScript>,
     next_script_index: usize,
@@ -311,6 +313,7 @@ impl WebView {
             in_flight_timer_version: None,
             pending_js_fetches: Vec::new(),
             pending_dynamic_scripts: Vec::new(),
+            pending_dynamic_styles: Vec::new(),
             classic_scripts: Vec::new(),
             next_script_index: 0,
             pending_script_fetches: HashMap::new(),
@@ -372,6 +375,7 @@ impl WebView {
         self.in_flight_timer_version = None;
         self.pending_js_fetches.clear();
         self.pending_dynamic_scripts.clear();
+        self.pending_dynamic_styles.clear();
         self.js_dom_ids.clear();
         self.classic_scripts.clear();
         self.next_script_index = 0;
@@ -508,6 +512,7 @@ impl WebView {
         self.in_flight_timer_version = None;
         self.pending_js_fetches.clear();
         self.pending_dynamic_scripts.clear();
+        self.pending_dynamic_styles.clear();
 
         let docment_info = DocumentInfo {
             document_url: parsed.document_url,
@@ -624,15 +629,11 @@ impl WebView {
         self.linked_css.push(source);
         self.rebuild_styles_and_layout();
         self.needs_redraw = true;
-        if let Some(runtime) = self.js_runtime.as_mut() {
-            runtime.dispatch_element_event(node_id, "load");
-        }
+        self.dispatch_js_element_event(node_id, "load");
     }
 
     pub fn on_dynamic_style_fetch_failed(&mut self, node_id: u64) {
-        if let Some(runtime) = self.js_runtime.as_mut() {
-            runtime.dispatch_element_event(node_id, "error");
-        }
+        self.dispatch_js_element_event(node_id, "error");
     }
 
     /// Resolves a JavaScript `fetch()` request with a network response.
@@ -940,11 +941,7 @@ impl WebView {
     }
 
     fn schedule_dynamic_styles(&mut self, tasks: &mut Vec<WebViewTask>) {
-        let requests = self
-            .js_runtime
-            .as_mut()
-            .map(JsRuntime::take_dynamic_style_requests)
-            .unwrap_or_default();
+        let requests = std::mem::take(&mut self.pending_dynamic_styles);
         let base_url = self.docment_info.as_ref().map(|info| info.base_url.clone());
         for request in requests {
             let url = Url::parse(&request.url).or_else(|_| {
@@ -1097,6 +1094,8 @@ impl WebView {
             self.pending_js_fetches.extend(result.fetch_requests);
             self.pending_dynamic_scripts
                 .extend(result.dynamic_script_requests);
+            self.pending_dynamic_styles
+                .extend(result.dynamic_style_requests);
 
             if let Some(in_flight) = self.in_flight_timer_version
                 && result.version >= in_flight
@@ -1214,6 +1213,7 @@ impl WebView {
         self.in_flight_timer_version = None;
         self.pending_js_fetches.clear();
         self.pending_dynamic_scripts.clear();
+        self.pending_dynamic_styles.clear();
         self.classic_scripts.clear();
         self.next_script_index = 0;
         self.pending_script_fetches.clear();

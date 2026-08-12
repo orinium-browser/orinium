@@ -22,7 +22,7 @@ use ui_layout::{
     Length, LengthOrAuto, OuterDisplay, Position, Style,
 };
 
-use super::css_resolver::{ResolvedStyles, resolve_inline_style};
+use super::css_resolver::{ResolvedStyles, resolve_inline_style, set_inline_custom_property};
 use super::text_layouter::TextFlowLayouter;
 use super::types::{
     Background, BorderRadius, BorderStyle, Color, ColorScheme, ColorStop, ContainerRole,
@@ -298,7 +298,6 @@ pub fn build_layout_and_info_from_snapshot(
             let mut container_style = ContainerStyle::default();
             let mut style = Style::default();
             let mut overflow = Overflow::default();
-
             // Collect CSS candidates.
             let (candidates, custom_property_candidates) =
                 if let HtmlNodeType::Element { .. } = html_node {
@@ -308,13 +307,10 @@ pub fn build_layout_and_info_from_snapshot(
                 }
                 .unzip();
 
-            let custom_properties = if let Some(own) = custom_property_candidates {
-                let mut inherited = child_css.custom_props.clone();
-                inherited.extend(own.clone());
-                Some(inherited)
-            } else {
-                None
-            };
+            let mut custom_properties = child_css.custom_props.clone();
+            if let Some(own) = custom_property_candidates {
+                custom_properties.extend(own);
+            }
 
             // Resolve the used color scheme for this element. `light-dark()`
             // and system colors resolve against it, and it is inherited by
@@ -323,8 +319,18 @@ pub fn build_layout_and_info_from_snapshot(
                 let declaration = candidates
                     .as_ref()
                     .and_then(|c| c.get("color-scheme"))
-                    .map(|d| &d.value);
-                resolve_used_color_scheme(declaration, child_css.color_scheme, system_color_scheme)
+                    .and_then(|d| {
+                        DeclarationResolver::resolve_var(
+                            &d.value,
+                            &custom_properties,
+                            &mut HashSet::new(),
+                        )
+                    });
+                resolve_used_color_scheme(
+                    declaration.as_ref(),
+                    child_css.color_scheme,
+                    system_color_scheme,
+                )
             };
 
             // Apply CSS declarations.
@@ -338,18 +344,15 @@ pub fn build_layout_and_info_from_snapshot(
                 candidates.sort_by_key(|declaration| declaration.order);
 
                 for declaration in candidates {
-                    let value = match &custom_properties {
-                        Some(custom_properties) => {
-                            let Some(value) = DeclarationResolver::resolve_var(
-                                &declaration.value,
-                                custom_properties,
-                                &mut HashSet::new(),
-                            ) else {
-                                continue;
-                            };
-                            value
-                        }
-                        None => declaration.value.clone(),
+                    if declaration.name.starts_with("--") {
+                        continue;
+                    }
+                    let Some(value) = DeclarationResolver::resolve_var(
+                        &declaration.value,
+                        &custom_properties,
+                        &mut HashSet::new(),
+                    ) else {
+                        continue;
                     };
 
                     apply_declaration(
@@ -371,7 +374,24 @@ pub fn build_layout_and_info_from_snapshot(
             // `!important`, which still wins over a non-`!important` inline
             // declaration.
             if let Some(style_attr) = html_node.get_attr("style") {
-                for (name, value, important) in resolve_inline_style(style_attr) {
+                let inline_declarations = resolve_inline_style(style_attr);
+                for (name, value, important) in &inline_declarations {
+                    if name.starts_with("--") {
+                        let stylesheet_important = candidates
+                            .as_ref()
+                            .and_then(|c| c.get(name))
+                            .is_some_and(|declaration| declaration.important);
+                        if *important || !stylesheet_important {
+                            set_inline_custom_property(
+                                &mut custom_properties,
+                                name.clone(),
+                                value.clone(),
+                                *important,
+                            );
+                        }
+                    }
+                }
+                for (name, value, important) in inline_declarations {
                     if name.starts_with("--") {
                         continue;
                     }
@@ -382,6 +402,13 @@ pub fn build_layout_and_info_from_snapshot(
                     if !important && stylesheet_important {
                         continue;
                     }
+                    let Some(value) = DeclarationResolver::resolve_var(
+                        &value,
+                        &custom_properties,
+                        &mut HashSet::new(),
+                    ) else {
+                        continue;
+                    };
                     apply_declaration(
                         &name,
                         &value,
@@ -418,7 +445,7 @@ pub fn build_layout_and_info_from_snapshot(
             };
 
             let child = InheritedCss {
-                custom_props: custom_properties.unwrap_or(child_css.custom_props),
+                custom_props: custom_properties,
                 text_style: text_style.clone(),
                 text_flow_style,
                 color_scheme: used_color_scheme,
@@ -4284,6 +4311,46 @@ mod tests {
         let info = layout_for(html, "p { color: blue; }");
 
         assert_eq!(text_style_for(&info, "hello").color, Color(255, 0, 0, 255));
+    }
+
+    #[test]
+    fn custom_properties_cascade_across_rules_and_inherit() {
+        let html = r#"
+            <html><body>
+                <section><p>root theme</p></section>
+                <section class="alternate"><p>alternate theme</p></section>
+            </body></html>
+        "#;
+        let css = r#"
+            :root { --scratch-accent: #855cd6; }
+            p { color: var(--scratch-accent); }
+            .alternate { --scratch-accent: #4c97ff; }
+        "#;
+        let info = layout_for(html, css);
+
+        assert_eq!(
+            text_style_for(&info, "root theme").color,
+            Color(133, 92, 214, 255)
+        );
+        assert_eq!(
+            text_style_for(&info, "alternate theme").color,
+            Color(76, 151, 255, 255)
+        );
+    }
+
+    #[test]
+    fn inline_declaration_can_use_inherited_custom_property() {
+        let html = r#"
+            <html><body style="--accent: #ff6680">
+                <p style="color: var(--accent)">inline theme</p>
+            </body></html>
+        "#;
+        let info = layout_for(html, "");
+
+        assert_eq!(
+            text_style_for(&info, "inline theme").color,
+            Color(255, 102, 128, 255)
+        );
     }
 
     #[test]

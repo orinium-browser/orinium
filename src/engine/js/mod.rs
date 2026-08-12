@@ -63,6 +63,7 @@ pub(crate) enum JsDynamicScriptSource {
     External(String),
 }
 
+#[derive(Debug)]
 pub(crate) struct JsDynamicStyleRequest {
     pub(crate) node_id: u64,
     pub(crate) url: String,

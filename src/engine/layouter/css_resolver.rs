@@ -157,6 +157,37 @@ pub fn resolve_inline_value(value: &str) -> Option<CssValue> {
     Some(value)
 }
 
+/// Adds an inline custom property to an element's inherited property map.
+/// Inline author declarations outrank stylesheet declarations unless the
+/// stylesheet winner is `!important` and the inline declaration is not.
+pub(super) fn set_inline_custom_property(
+    properties: &mut Properties,
+    name: String,
+    value: CssValue,
+    important: bool,
+) {
+    if properties
+        .get(&name)
+        .is_some_and(|current| current.important && !important)
+    {
+        return;
+    }
+
+    properties.insert(
+        name.clone(),
+        ResolvedDeclaration {
+            selector: ComplexSelector { parts: Vec::new() },
+            name,
+            value,
+            specificity: (u32::MAX, u32::MAX, u32::MAX),
+            order: usize::MAX,
+            important,
+            origin: StyleOrigin::Author,
+            media_queries: Vec::new(),
+        },
+    );
+}
+
 // ============================================================
 //  CssResolver — tree walk + rule resolution
 // ============================================================
