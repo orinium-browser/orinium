@@ -1,11 +1,14 @@
 //! Minimal JS runtime backed by `pixi_byte`.
 //!
-//! Hosts the JS engine on the UI thread and installs a small set of DOM
-//! bindings (`console`, `document.getElementById`, element properties).
-//! The engine never imports `platform`; DOM access goes through the shared
-//! host slot that `JsRuntime` registers on the VM.
+//! Installs a small set of DOM bindings (`console`, `document.getElementById`,
+//! element properties). The engine never imports `platform`; DOM access goes
+//! through the shared host slot that `JsRuntime` registers on the VM. The
+//! runtime normally lives on a background worker (see [`processor`]), owning a
+//! private mirror of the DOM that is synced with the UI thread via
+//! [`DomSnapshot`] commits. It can also be used directly on any thread.
 
 use crate::engine::html::{DomTree, HtmlNodeType, Parser as HtmlParser};
+use crate::engine::layouter::dom_snapshot::DomSnapshot;
 use crate::engine::tree::{NodeRef, TreeNode};
 use pixi_byte::value::JSArray;
 use pixi_byte::value::jsobject::{JSObject, Property};
@@ -16,6 +19,9 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
+
+pub mod processor;
+pub use processor::{JsProcessor, JsTask, JsTaskResult};
 
 const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
 const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
@@ -35,7 +41,8 @@ struct JsFetchCapability {
 }
 
 /// A fetch request waiting to be dispatched by the browser network layer.
-pub(crate) struct JsFetchRequest {
+#[derive(Debug)]
+pub struct JsFetchRequest {
     pub(crate) id: u64,
     pub(crate) url: String,
     pub(crate) method: String,
@@ -44,7 +51,8 @@ pub(crate) struct JsFetchRequest {
 }
 
 /// The response data exposed to a JavaScript `Response` object.
-pub(crate) struct JsFetchResponse {
+#[derive(Debug)]
+pub struct JsFetchResponse {
     pub(crate) url: String,
     pub(crate) status: u16,
     pub(crate) status_text: String,
@@ -303,6 +311,60 @@ impl JsRuntime {
             log::info!("JS error while rejecting fetch: {}", err);
         }
         self.perform_microtask_checkpoint();
+    }
+
+    /// Serializes the current mirror DOM for the browser side.
+    ///
+    /// Nodes exposed to scripts keep their stable `dom_id` so the UI thread can
+    /// rebuild the tree and re-register references on commit.
+    pub fn snapshot(&self) -> DomSnapshot {
+        let Some((root, dom_ids)) = with_host(self.engine.vm(), |host| {
+            let mut reverse = HashMap::new();
+            for (dom_id, weak) in &host.refs {
+                if let Some(node) = weak.upgrade() {
+                    reverse.insert(Rc::as_ptr(&node) as usize, *dom_id);
+                }
+            }
+            (Rc::clone(&host.dom.root), reverse)
+        }) else {
+            return DomSnapshot::default();
+        };
+        DomSnapshot::from_mirror(&root, &dom_ids)
+    }
+
+    /// Replaces the mirror DOM with a snapshot produced by the browser side.
+    ///
+    /// The mirror is rebuilt from `snapshot` and node references are re-registered
+    /// so existing JS element handles keep resolving. JS-created (detached) nodes
+    /// are preserved; they are not part of the committed DOM but may still be
+    /// referenced from scripts.
+    pub fn apply_dom(&mut self, snapshot: &DomSnapshot) {
+        let (tree, dom_ids) = snapshot.into_tree();
+        with_host_mut(self.engine.vm(), |host| {
+            host.dom = Rc::new(tree);
+            let mut refs = std::mem::take(&mut host.refs);
+            host.dom.traverse(|node| {
+                if let Some(&dom_id) = dom_ids.get(&(Rc::as_ptr(node) as usize)) {
+                    refs.insert(dom_id, Rc::downgrade(node));
+                }
+            });
+            for (&dom_id, node) in &host.detached_nodes {
+                refs.entry(dom_id).or_insert_with(|| Rc::downgrade(node));
+            }
+            host.refs = refs;
+        });
+    }
+
+    /// Dispatches a click to the handlers registered on the element with the
+    /// given JS-facing dom id. Returns whether at least one handler ran.
+    pub fn click_dom_id(&mut self, dom_id: u64) -> bool {
+        let Some(node) = with_host(self.engine.vm(), |host| {
+            host.refs.get(&dom_id).and_then(|w| w.upgrade())
+        })
+        .flatten() else {
+            return false;
+        };
+        self.click(&node)
     }
 
     /// Dispatches a click to the handlers registered on `node`.
