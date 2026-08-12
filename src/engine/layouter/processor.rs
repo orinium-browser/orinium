@@ -1,15 +1,15 @@
 //! A processor that runs the layout builder on a background thread.
 //!
 //! `build_layout_and_info_*` is expensive (CSS cascade, text measurement,
-//! layout-tree construction), so it is offloaded to a worker thread to keep
-//! the UI thread responsive. The builder walks a `Send` [`DomSnapshot`], so
-//! the snapshot is the only input that needs to be handed to the worker.
+//! layout-tree construction), so it is offloaded to a background thread to
+//! keep the UI thread responsive. The builder walks a `Send` [`DomSnapshot`],
+//! so the snapshot is the only input that needs to be handed to the thread.
 //!
 //! Per-frame lightweight layout (`LayoutEngine::layout`) still runs on the UI
 //! thread as before. This processor only handles the heavier tree build.
 //!
 //! Tasks are coalesced: each task carries a monotonic sequence number, and the
-//! worker skips a task as soon as a newer one has been queued. The newest task
+//! thread skips a task as soon as a newer one has been queued. The newest task
 //! always captures the latest DOM/styles/images, so the skipped build's work
 //! would be wasted anyway.
 
@@ -31,7 +31,7 @@ use crate::engine::layouter::types::ColorScheme;
 use crate::engine::renderer_model::Image;
 use crate::engine::ui::registry::DomWriteBack;
 
-/// The complete set of inputs the builder needs to run on the worker thread.
+/// The complete set of inputs the builder needs to run on the background thread.
 pub struct LayoutTask {
     pub snapshot: Arc<DomSnapshot>,
     pub root: NodeId,
@@ -49,7 +49,7 @@ pub struct LayoutTask {
     pub version: u64,
 }
 
-/// The layout the builder finished on the worker thread.
+/// The layout the builder finished on the background thread.
 pub struct LayoutResult {
     pub layout: LayoutNode,
     pub info: InfoNode,
@@ -67,7 +67,7 @@ enum LayoutCommand {
 /// as the single owner.
 ///
 /// Safety is guaranteed by the command/response protocol:
-/// - The `Box` is allocated by the worker and leaked with `into_raw`.
+/// - The `Box` is allocated by the thread and leaked with `into_raw`.
 /// - The raw pointer is transferred through an `mpsc` channel (which
 ///   establishes a happens-before relationship between send and receive).
 /// - The receiving (UI) thread rebuilds the `Box` exactly once, so there is
@@ -79,11 +79,11 @@ struct SendableResult(*mut LayoutResult);
 unsafe impl Send for SendableResult {}
 
 /// A processor that accepts a [`DomSnapshot`] and returns the layout result
-/// produced by the worker.
+/// produced by the thread.
 pub struct LayoutProcessor {
     cmd_tx: mpsc::Sender<LayoutCommand>,
     result_rx: mpsc::Receiver<SendableResult>,
-    /// Latest task sequence number; shared with the worker so it can detect
+    /// Latest task sequence number; shared with the thread so it can detect
     /// and skip superseded tasks.
     latest: Arc<AtomicU64>,
 }
@@ -106,7 +106,7 @@ impl LayoutProcessor {
         let (result_tx, result_rx) = mpsc::channel::<SendableResult>();
 
         let latest = Arc::new(AtomicU64::new(0));
-        let worker_latest = Arc::clone(&latest);
+        let thread_latest = Arc::clone(&latest);
 
         thread::spawn(move || {
             for cmd in cmd_rx {
@@ -115,7 +115,7 @@ impl LayoutProcessor {
                         // A newer task queued after this one supersedes it: the
                         // newest task's snapshot/styles/images include every
                         // change made up to that point, so skip the build.
-                        if task.version < worker_latest.load(Ordering::SeqCst) {
+                        if task.version < thread_latest.load(Ordering::SeqCst) {
                             continue;
                         }
                         let (layout, info) = build_layout_and_info_from_snapshot(
@@ -145,10 +145,10 @@ impl LayoutProcessor {
         }
     }
 
-    /// Sends a layout task to the worker.
+    /// Sends a layout task to the thread.
     ///
     /// The task is stamped with a fresh sequence number; tasks that fall behind
-    /// the newest one are skipped by the worker.
+    /// the newest one are skipped by the thread.
     pub fn send(&self, task: LayoutTask) {
         let mut task = task;
         task.version = self.latest.fetch_add(1, Ordering::SeqCst) + 1;
@@ -158,7 +158,7 @@ impl LayoutProcessor {
     /// Returns a completed layout result, or `None` if none is ready yet.
     pub fn try_receive(&self) -> Option<LayoutResult> {
         self.result_rx.try_recv().ok().map(|SendableResult(ptr)| {
-            // SAFETY: `ptr` was produced by the worker with `Box::into_raw` and
+            // SAFETY: `ptr` was produced by the thread with `Box::into_raw` and
             // has been delivered over the channel. We are the sole owner here.
             let boxed = unsafe { Box::from_raw(ptr) };
             *boxed
@@ -223,7 +223,7 @@ mod tests {
     }
 
     #[test]
-    fn layout_task_round_trips_through_worker() {
+    fn layout_task_round_trips_through_background_thread() {
         let processor = LayoutProcessor::new();
         processor.send(sample_task(None));
 

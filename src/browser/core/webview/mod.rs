@@ -153,20 +153,24 @@ pub struct WebView {
     /// Channel on which text inputs report value write-backs (received here).
     write_back_tx: mpsc::Sender<(u32, String)>,
     write_back_rx: mpsc::Receiver<(u32, String)>,
-    /// JS runtime on a background worker, sharing a mirror of the current
+    /// JS runtime on a background thread, sharing a mirror of the current
     /// document's DOM. Results are applied in [`WebView::try_apply_js_results`].
     js_processor: Option<JsProcessor>,
     /// JS-facing dom id per live node address of the committed tree.
     ///
-    /// Rebuilt whenever a worker result is committed, so hit-tested layout
-    /// nodes and write-back serialization can be translated to worker ids.
+    /// Rebuilt whenever a JS result is committed, so hit-tested layout
+    /// nodes and write-back serialization can be translated to JS dom ids.
     js_dom_ids: HashMap<usize, u64>,
     /// Ordered JS tasks sent but not yet applied. Write-backs are only synced
-    /// to the worker once this reaches zero, so the mirror and the real tree
+    /// to the JS thread once this reaches zero, so the mirror and the real tree
     /// cannot diverge mid-task.
     pending_js_tasks: usize,
-    /// The real DOM diverged from the worker's mirror and needs syncing.
+    /// The real DOM diverged from the JS thread's mirror and needs syncing.
     js_dom_dirty: bool,
+    /// Version of the newest `RunTimers` poke still in flight. Write-backs are
+    /// not synced while one is pending: a timer callback can mutate the mirror,
+    /// and a snapshot produced behind the sync would clobber it.
+    in_flight_timer_version: Option<u64>,
     /// `fetch()` requests collected from applied JS results.
     pending_js_fetches: Vec<JsFetchRequest>,
     /// Classic scripts in document order. Execution starts after CSS is applied.
@@ -293,6 +297,7 @@ impl WebView {
             js_dom_ids: HashMap::new(),
             pending_js_tasks: 0,
             js_dom_dirty: false,
+            in_flight_timer_version: None,
             pending_js_fetches: Vec::new(),
             classic_scripts: Vec::new(),
             next_script_index: 0,
@@ -344,6 +349,7 @@ impl WebView {
         self.js_processor = None;
         self.pending_js_tasks = 0;
         self.js_dom_dirty = false;
+        self.in_flight_timer_version = None;
         self.pending_js_fetches.clear();
         self.js_dom_ids.clear();
         self.classic_scripts.clear();
@@ -470,6 +476,7 @@ impl WebView {
         self.pending_js_tasks = 0;
         self.js_dom_ids.clear();
         self.js_dom_dirty = false;
+        self.in_flight_timer_version = None;
         self.pending_js_fetches.clear();
 
         let docment_info = DocumentInfo {
@@ -622,7 +629,7 @@ impl WebView {
             doc_info.dom.mark_dirty();
         }
         self.update_layout();
-        // The worker's mirror must reflect the external DOM mutation too.
+        // The JS thread's mirror must reflect the external DOM mutation too.
         self.js_dom_dirty = true;
     }
 
@@ -773,7 +780,7 @@ impl WebView {
         }
     }
 
-    /// Sends a script to the JS worker for ordered execution.
+    /// Sends a script to the JS thread for ordered execution.
     fn send_script(&mut self, source: &str) {
         if let Some(processor) = self.js_processor.as_ref() {
             processor.send(JsTask::RunScript {
@@ -791,10 +798,17 @@ impl WebView {
     }
 
     fn run_due_js_timers(&mut self) {
+        if self.js_dom_dirty {
+            // A write-back sync is owed. Pausing pokes keeps a timer snapshot
+            // from racing the pending sync; timers resume once it completes.
+            return;
+        }
         if let Some(processor) = self.js_processor.as_ref() {
-            // Timer pokes are coalescable: the worker skips this one when a
-            // newer task has already been queued.
-            processor.send(JsTask::RunTimers);
+            // Timer pokes are coalescable: the JS thread skips this one when a
+            // newer task has already been queued. Track the newest poke so the
+            // write-back sync waits until its result has been applied.
+            let version = processor.send(JsTask::RunTimers);
+            self.in_flight_timer_version = Some(version);
         }
     }
 
@@ -828,8 +842,8 @@ impl WebView {
     /// Dispatches a click on the given DOM snapshot node id to the page's JS.
     ///
     /// Resolves the live DOM node behind the snapshot id, translates it to the
-    /// JS-facing dom id and hands the click to the JS worker. Returns whether
-    /// a redraw is needed; the worker result triggers the relayout once applied.
+    /// JS-facing dom id and hands the click to the JS thread. Returns whether
+    /// a redraw is needed; the JS result triggers the relayout once applied.
     pub fn on_js_click(&mut self, dom_id: u32) -> bool {
         let Some(processor) = self.js_processor.as_ref() else {
             return false;
@@ -912,7 +926,7 @@ impl WebView {
         self.layout_pending = true;
     }
 
-    /// Takes completed layout results from the worker and makes them drawable.
+    /// Takes completed layout results from the thread and makes them drawable.
     fn try_apply_layout_results(&mut self) {
         while let Some(result) = self.layout_processor.try_receive() {
             let LayoutResult { layout, mut info } = result;
@@ -933,9 +947,9 @@ impl WebView {
         }
     }
 
-    /// Takes completed JS results from the worker and commits them.
+    /// Takes completed JS results from the thread and commits them.
     ///
-    /// A result that mutated the DOM carries a snapshot of the worker's mirror;
+    /// A result that mutated the DOM carries a snapshot of the thread's mirror;
     /// committing it replaces the authoritative tree, re-registers the JS dom
     /// id map and triggers a relayout.
     fn try_apply_js_results(&mut self) {
@@ -953,13 +967,21 @@ impl WebView {
             self.pending_js_tasks = self.pending_js_tasks.saturating_sub(1);
             self.pending_js_fetches.extend(result.fetch_requests);
 
+            if let Some(in_flight) = self.in_flight_timer_version
+                && result.version >= in_flight
+            {
+                // The newest timer poke has been processed (run or superseded),
+                // so its snapshot can no longer race the write-back sync.
+                self.in_flight_timer_version = None;
+            }
+
             let Some(snapshot) = result.dom else {
                 continue;
             };
             let Some(info) = self.docment_info.as_mut() else {
                 continue;
             };
-            // Commit the worker's mirror as the new authoritative tree. The
+            // Commit the thread's mirror as the new authoritative tree. The
             // rebuilt tree starts with a fresh version, so the cached snapshot
             // and live layout references are stale and must be dropped.
             let (tree, dom_ids) = snapshot.into_tree();
@@ -973,13 +995,18 @@ impl WebView {
         }
     }
 
-    /// Syncs UI-side DOM mutations (write-backs, `update_page`) to the worker.
+    /// Syncs UI-side DOM mutations (write-backs, `update_page`) to the JS thread.
     ///
-    /// Only runs when no JS task is in flight: mid-task the worker's mirror
+    /// Only runs when no JS task is in flight: mid-task the thread's mirror
     /// legitimately diverges from the real tree, and committing an in-flight
-    /// snapshot after this sync would clobber the worker's newer mutations.
+    /// snapshot after this sync would clobber the thread's newer mutations.
+    /// An in-flight `RunTimers` poke counts as in flight for the same reason:
+    /// its callback may mutate the mirror and commit a stale snapshot.
     fn sync_dom_to_worker(&mut self) {
-        if !self.js_dom_dirty || self.pending_js_tasks != 0 {
+        if !self.js_dom_dirty
+            || self.pending_js_tasks != 0
+            || self.in_flight_timer_version.is_some()
+        {
             return;
         }
         let Some(processor) = self.js_processor.as_ref() else {
@@ -1012,8 +1039,8 @@ impl WebView {
         if applied && let Some(doc_info) = self.docment_info.as_mut() {
             doc_info.dom.mark_dirty();
         }
-        // The worker's mirror must reflect the new input value; synced once the
-        // in-flight JS tasks have all been applied.
+        // The JS thread's mirror must reflect the new input value; synced once
+        // the in-flight JS tasks have all been applied.
         if applied {
             self.js_dom_dirty = true;
         }
@@ -1053,6 +1080,7 @@ impl WebView {
         self.js_dom_ids.clear();
         self.pending_js_tasks = 0;
         self.js_dom_dirty = false;
+        self.in_flight_timer_version = None;
         self.pending_js_fetches.clear();
         self.classic_scripts.clear();
         self.next_script_index = 0;
@@ -1307,7 +1335,7 @@ mod tests {
 
     /// Drives `tick()` until `done` holds, or panics after a timeout.
     ///
-    /// JS runs on a background worker, so effects (DOM commits, relayouts) are
+    /// JS runs on a background thread, so effects (DOM commits, relayouts) are
     /// observed a few ticks after the task that produced them was sent.
     fn pump_until(webview: &mut WebView, mut done: impl FnMut(&mut WebView) -> bool, why: &str) {
         let deadline = Instant::now() + Duration::from_secs(5);

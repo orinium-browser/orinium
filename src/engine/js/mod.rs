@@ -3,7 +3,7 @@
 //! Installs a small set of DOM bindings (`console`, `document.getElementById`,
 //! element properties). The engine never imports `platform`; DOM access goes
 //! through the shared host slot that `JsRuntime` registers on the VM. The
-//! runtime normally lives on a background worker (see [`processor`]), owning a
+//! runtime normally lives on a background thread (see [`processor`]), owning a
 //! private mirror of the DOM that is synced with the UI thread via
 //! [`DomSnapshot`] commits. It can also be used directly on any thread.
 

@@ -1,21 +1,11 @@
-//! A processor that runs the JS runtime on a background thread.
+//! Runs the page's JavaScript runtime on a dedicated background thread.
 //!
-//! Following `layouter::processor::LayoutProcessor`, script evaluation, timer
-//! callbacks, click handlers and fetch settlement are offloaded to a dedicated
-//! worker thread so the UI thread stays responsive. The worker owns a private
-//! mirror of the DOM — an `Rc<DomTree>` it can mutate freely, exactly like the
-//! UI thread used to — while the UI thread keeps the authoritative tree.
+//! Script evaluation, DOM events, timers, and fetch settlement are processed
+//! off the UI thread. The executor maintains a private DOM mirror and sends
+//! [`DomSnapshot`]s back when the DOM is mutated.
 //!
-//! After each task the worker sends back a [`JsTaskResult`] holding a [`Send`]
-//! [`DomSnapshot`] of the mirror (only when a script mutated the DOM), which the
-//! UI thread commits by rebuilding its tree. `SnapNode::dom_id` carries the
-//! stable ids the runtime assigned to exposed elements, so JS element handles
-//! survive the round trip.
-//!
-//! Ordering: scripts, DOMContentLoaded, clicks and fetch settlement are
-//! processed strictly FIFO so later tasks observe earlier mutations. Timer
-//! pokes are coalescable: a `RunTimers` task is skipped as soon as a newer task
-//! has been queued, since the newer task's work supersedes it.
+//! This is not a Web Worker: scripts have full `window`/`document` access.
+//! Tasks are processed FIFO, with coalescable timer wakeups.
 
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,7 +15,7 @@ use std::thread;
 use super::{JsFetchRequest, JsFetchResponse, JsRuntime};
 use crate::engine::layouter::dom_snapshot::DomSnapshot;
 
-/// What the JS worker should do next.
+/// What the background JS thread should do next.
 #[derive(Debug)]
 pub enum JsTask {
     /// Execute a classic (blocking or deferred) script.
@@ -40,7 +30,7 @@ pub enum JsTask {
     ResolveFetch { id: u64, response: JsFetchResponse },
     /// Reject a pending JavaScript `fetch()` after a network failure.
     RejectFetch { id: u64, reason: String },
-    /// Replace the worker's mirror DOM with the UI's tree (write-backs).
+    /// Replace the JS thread's mirror DOM with the UI's tree (write-backs).
     UpdateDom { snapshot: DomSnapshot },
 }
 
@@ -53,7 +43,7 @@ enum JsCommand {
 /// The outcome of a JS task, ready to be applied on the UI thread.
 #[derive(Debug)]
 pub struct JsTaskResult {
-    /// The worker's mirror DOM, present only when a script mutated it.
+    /// The JS thread's mirror DOM, present only when a script mutated it.
     pub dom: Option<DomSnapshot>,
     /// Whether the DOM changed and the UI needs to relayout and redraw.
     pub needs_redraw: bool,
@@ -64,12 +54,12 @@ pub struct JsTaskResult {
 }
 
 /// A processor that accepts [`JsTask`]s and returns the results produced by the
-/// background JS worker.
+/// background JS thread.
 pub struct JsProcessor {
     cmd_tx: mpsc::Sender<JsCommand>,
     result_rx: mpsc::Receiver<JsTaskResult>,
-    /// Latest task sequence number; shared with the worker so it can detect and
-    /// skip superseded timer pokes.
+    /// Latest task sequence number; shared with the background thread so it can
+    /// detect and skip superseded timer pokes.
     latest: Arc<AtomicU64>,
 }
 
@@ -80,13 +70,14 @@ impl std::fmt::Debug for JsProcessor {
 }
 
 impl JsProcessor {
-    /// Starts a JS worker initialized with a snapshot of the parsed document.
+    /// Starts the background JS thread initialized with a snapshot of the
+    /// parsed document.
     pub fn new(initial: DomSnapshot) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel::<JsCommand>();
         let (result_tx, result_rx) = mpsc::channel::<JsTaskResult>();
 
         let latest = Arc::new(AtomicU64::new(0));
-        let worker_latest = Arc::clone(&latest);
+        let thread_latest = Arc::clone(&latest);
 
         thread::spawn(move || {
             let (tree, _dom_ids) = initial.into_tree();
@@ -96,7 +87,7 @@ impl JsProcessor {
                 let JsCommand::Task { task, version } = cmd;
                 // A newer task queued after this timer poke supersedes it.
                 if matches!(task, JsTask::RunTimers)
-                    && version < worker_latest.load(Ordering::SeqCst)
+                    && version < thread_latest.load(Ordering::SeqCst)
                 {
                     continue;
                 }
@@ -125,10 +116,13 @@ impl JsProcessor {
         }
     }
 
-    /// Sends a task to the worker, stamped with a fresh sequence number.
-    pub fn send(&self, task: JsTask) {
+    /// Sends a task to the background thread, stamped with a fresh sequence
+    /// number, and returns that sequence number so the caller can track when
+    /// the task's result has been applied.
+    pub fn send(&self, task: JsTask) -> u64 {
         let version = self.latest.fetch_add(1, Ordering::SeqCst) + 1;
         let _ = self.cmd_tx.send(JsCommand::Task { task, version });
+        version
     }
 
     /// Returns a completed task result, or `None` if none is ready yet.

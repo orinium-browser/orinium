@@ -3,7 +3,7 @@
 //! The live DOM tree is built with `Rc<RefCell<TreeNode>>`, which is not
 //! [`Send`]. To build layout off the UI thread, we clone the tree into an
 //! arena of owned nodes. Pre-order (document-order) node ids index the arena,
-//! so the snapshot can be moved to a worker thread and the builder walks it
+//! so the snapshot can be moved to a background thread and the builder walks it
 //! exactly as it walked the `Rc` tree.
 
 use std::cell::RefCell;
@@ -43,7 +43,7 @@ impl DomSnapshot {
     ///
     /// `dom_refs[i]` is the live DOM node for snapshot node id `i`. The refs
     /// are kept separate (and are **not** `Send`) so the UI thread can apply
-    /// attribute write-backs after the worker finished building.
+    /// attribute write-backs after the background thread finished building.
     pub fn from_tree(
         root: &NodeRef<HtmlNodeType>,
     ) -> (Self, Vec<Weak<RefCell<TreeNode<HtmlNodeType>>>>) {
@@ -54,7 +54,7 @@ impl DomSnapshot {
         (snapshot, dom_refs)
     }
 
-    /// Builds a snapshot of a JS worker's mirror tree.
+    /// Builds a snapshot of a JS thread's mirror tree.
     ///
     /// `dom_ids` maps `Rc::as_ptr` addresses of mirror nodes to the stable id
     /// assigned by the JS runtime, so node identities survive the snapshot
