@@ -47,6 +47,14 @@ fn parse_color(s: &str) -> Option<(u8, u8, u8, u8)> {
                 let b = u8::from_str_radix(&hex[2..3].repeat(2), 16).ok()?;
                 Some((r, g, b, 255))
             }
+            4 => {
+                // #RGBA
+                let r = u8::from_str_radix(&hex[0..1].repeat(2), 16).ok()?;
+                let g = u8::from_str_radix(&hex[1..2].repeat(2), 16).ok()?;
+                let b = u8::from_str_radix(&hex[2..3].repeat(2), 16).ok()?;
+                let a = u8::from_str_radix(&hex[3..4].repeat(2), 16).ok()?;
+                Some((r, g, b, a))
+            }
             6 => {
                 // #RRGGBB
                 let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
