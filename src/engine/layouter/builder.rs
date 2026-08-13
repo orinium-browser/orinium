@@ -2690,7 +2690,7 @@ fn calc_combine(name: &str, op: &CssValue, left: CalcValue, right: CalcValue) ->
             }
         },
         _ => {
-            log::error!(target: "Layouter", "Unknown operator in calc() for `{}`: {:?}", name, op);
+            log::error!(target: "Layouter", "Unknown operator in calc() for `{}`: {:?}{:?}{:?}", name, left, op, right);
             None
         }
     }
@@ -2750,7 +2750,7 @@ fn resolve_calc_value(
         _ => {
             log::error!(
                 target: "Layouter",
-                "Invalid operand in calc() for `{}`: {:?}",
+                "Invalid lenth value for `{}`: {:?}",
                 name,
                 value
             );
