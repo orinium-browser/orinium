@@ -2690,7 +2690,7 @@
 <a href=#2690 id=2690 data-nosnippet>2690</a>            </span>}
 <a href=#2691 id=2691 data-nosnippet>2691</a>        },
 <a href=#2692 id=2692 data-nosnippet>2692</a>        <span class="kw">_ </span>=&gt; {
-<a href=#2693 id=2693 data-nosnippet>2693</a>            <span class="macro">log::error!</span>(target: <span class="string">"Layouter"</span>, <span class="string">"Unknown operator in calc() for `{}`: {:?}"</span>, name, op);
+<a href=#2693 id=2693 data-nosnippet>2693</a>            <span class="macro">log::error!</span>(target: <span class="string">"Layouter"</span>, <span class="string">"Unknown operator in calc() for `{}`: {:?}{:?}{:?}"</span>, name, left, op, right);
 <a href=#2694 id=2694 data-nosnippet>2694</a>            <span class="prelude-val">None
 <a href=#2695 id=2695 data-nosnippet>2695</a>        </span>}
 <a href=#2696 id=2696 data-nosnippet>2696</a>    }
@@ -2750,7 +2750,7 @@
 <a href=#2750 id=2750 data-nosnippet>2750</a>        <span class="kw">_ </span>=&gt; {
 <a href=#2751 id=2751 data-nosnippet>2751</a>            <span class="macro">log::error!</span>(
 <a href=#2752 id=2752 data-nosnippet>2752</a>                target: <span class="string">"Layouter"</span>,
-<a href=#2753 id=2753 data-nosnippet>2753</a>                <span class="string">"Invalid operand in calc() for `{}`: {:?}"</span>,
+<a href=#2753 id=2753 data-nosnippet>2753</a>                <span class="string">"Invalid lenth value for `{}`: {:?}"</span>,
 <a href=#2754 id=2754 data-nosnippet>2754</a>                name,
 <a href=#2755 id=2755 data-nosnippet>2755</a>                value
 <a href=#2756 id=2756 data-nosnippet>2756</a>            );
