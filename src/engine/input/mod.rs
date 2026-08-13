@@ -10,7 +10,7 @@ use super::ui::custom_node::CustomNode;
 use super::ui::input_text_types::InputTextEvent;
 use ui_layout::{LayoutNode, Position};
 /// ヒットしたノード情報
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct HitItem<'a> {
     pub layout: &'a LayoutNode,
     pub info: &'a InfoNode,
@@ -49,6 +49,12 @@ fn local_pointer_coords(path: &HitPath<'_>, target: usize, x: f32, y: f32) -> (f
     let mut lx = x;
     let mut ly = y;
     for hit in path.iter().rev().take(path.len() - target) {
+        // Inline boxes live in the parent's coordinate space and push no
+        // transform (mirroring `push_box_model`), so they contribute no
+        // offset of their own.
+        if matches!(hit.layout.layout_box, ui_layout::LayoutBox::InlineBox(_)) {
+            continue;
+        }
         let (cx, cy) = hit
             .layout
             .layout_box
@@ -197,6 +203,8 @@ fn hit_test_inner<'a>(
         return Vec::new();
     }
 
+    let is_inline = matches!(layout.layout_box, ui_layout::LayoutBox::InlineBox(_));
+
     let is_fixed = layout.style.position.kind == Position::Fixed;
     if is_fixed {
         x -= accumulated_scroll.0;
@@ -228,12 +236,18 @@ fn hit_test_inner<'a>(
             continue;
         }
 
-        // 2. ローカル座標に変換（スクロールオフセット考慮）
-        let mut local_x = x - box_model.content_box.x;
-        let mut local_y = y - box_model.content_box.y;
-
-        local_x += own_scroll.0;
-        local_y += own_scroll.1;
+        // 2. ローカル座標に変換（スクロールオフセット考慮）。
+        // Inline boxes live in the parent's coordinate space and push no
+        // transform (mirroring `push_box_model`), so their children keep the
+        // incoming coordinates untouched.
+        let (local_x, local_y) = if is_inline {
+            (x, y)
+        } else {
+            (
+                x - box_model.content_box.x + own_scroll.0,
+                y - box_model.content_box.y + own_scroll.1,
+            )
+        };
 
         // 3. 子ノードを前面から探索
         for (child_layout, child_info) in layout.children.iter().zip(&info.children).rev() {
@@ -247,8 +261,11 @@ fn hit_test_inner<'a>(
                 }
             } else if let Some(result) = child_layout.custom_result()
                 && result.spans.iter().any(|span| {
-                    local_x >= span.x_range.start
-                        && local_x <= span.x_range.end
+                    // `line_pos` positions the line in the parent's coordinate
+                    // space (where inline content is laid out); `x_range` is
+                    // only used for its width.
+                    local_x >= span.line_pos.0
+                        && local_x <= span.line_pos.0 + span.width()
                         && local_y >= span.line_pos.1
                         && local_y <= span.line_pos.1 + result.box_model.content_box.height
                 })
@@ -306,6 +323,8 @@ fn hit_test_popup_inner<'a>(
         return;
     }
 
+    let is_inline = matches!(layout.layout_box, ui_layout::LayoutBox::InlineBox(_));
+
     let is_fixed = layout.style.position.kind == Position::Fixed;
     if is_fixed {
         x -= accumulated_scroll.0;
@@ -323,13 +342,19 @@ fn hit_test_popup_inner<'a>(
     };
 
     // The popup rect lives in the node's content-box space, the same space as
-    // `draw_sized`, which is anchored to the first layout box.
-    let (local_x, local_y) = layout.layout_box.iter().next().map_or((x, y), |b| {
-        (
-            x - b.content_box.x + own_scroll.0,
-            y - b.content_box.y + own_scroll.1,
-        )
-    });
+    // `draw_sized`, which is anchored to the first layout box. Inline boxes
+    // push no transform, so their content stays in the parent's coordinate
+    // space.
+    let (local_x, local_y) = if is_inline {
+        (x, y)
+    } else {
+        layout.layout_box.iter().next().map_or((x, y), |b| {
+            (
+                x - b.content_box.x + own_scroll.0,
+                y - b.content_box.y + own_scroll.1,
+            )
+        })
+    };
 
     if let NodeKind::Custom {
         node,
@@ -402,6 +427,8 @@ fn scroll_at_inner(
         return false;
     }
 
+    let is_inline = matches!(layout.layout_box, ui_layout::LayoutBox::InlineBox(_));
+
     let is_fixed = layout.style.position.kind == Position::Fixed;
     if is_fixed {
         x -= accumulated_scroll.0;
@@ -430,10 +457,17 @@ fn scroll_at_inner(
             continue;
         }
 
-        let mut local_x = x - box_model.content_box.x;
-        let mut local_y = y - box_model.content_box.y;
-        local_x += own_scroll.0;
-        local_y += own_scroll.1;
+        // Inline boxes live in the parent's coordinate space and push no
+        // transform (mirroring `push_box_model`), so their children keep the
+        // incoming coordinates untouched.
+        let (local_x, local_y) = if is_inline {
+            (x, y)
+        } else {
+            (
+                x - box_model.content_box.x + own_scroll.0,
+                y - box_model.content_box.y + own_scroll.1,
+            )
+        };
 
         for (child_layout, child_info) in layout.children.iter().zip(&mut info.children).rev() {
             if let Some(child_node) = child_layout.node()
@@ -743,6 +777,47 @@ mod tests {
             children: Vec::new(),
             dom_id: None,
         }
+    }
+
+    fn container_info(scroll_y: bool, dom_id: Option<u32>) -> InfoNode {
+        InfoNode {
+            kind: NodeKind::Container {
+                scroll_x: false,
+                scroll_y,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: ContainerStyle::default(),
+                role: crate::engine::layouter::types::ContainerRole::Normal,
+            },
+            children: Vec::new(),
+            dom_id,
+        }
+    }
+
+    /// An inline container laid out in its parent's content space: its box
+    /// model and line spans use absolute coordinates (mirroring how the flow
+    /// engine positions inline content).
+    fn inline_node(children: Vec<LayoutChild>) -> LayoutNode {
+        let mut node = LayoutNode::with_children(ui_layout::Style::default(), children);
+        node.layout_box = ui_layout::LayoutBox::InlineBox(ui_layout::InlineBox {
+            box_model: box_model(10.0, 10.0, 200.0, 20.0, 200.0, 20.0),
+            line_spans: vec![ui_layout::LineSpan {
+                x_range: 0.0..200.0,
+                line_pos: (10.0, 10.0),
+                line_index: 0,
+            }],
+        });
+        node
+    }
+
+    fn scroll_offset_y_of(info: &InfoNode) -> f32 {
+        let NodeKind::Container {
+            scroll_offset_y, ..
+        } = &info.kind
+        else {
+            panic!("expected container");
+        };
+        *scroll_offset_y
     }
 
     fn set_vertical_scroll(info: &mut InfoNode, offset: f32) {
@@ -1292,5 +1367,135 @@ mod tests {
         let path = hit_test(&root_layout, &root_info, 10.0, 25.0);
         assert!(!dismiss_open_popups(&root_info, &path));
         assert!(!node.dismissed.load(Ordering::Relaxed));
+    }
+
+    /// Tree: block `b` (0,0,300,100) → inline `i` (line box 10,10,200,20) →
+    /// block child `c` (30,10,50,20). Inline content shares the block's
+    /// content space, so `c` sits at absolute (30,10) inside `b`.
+    fn make_inline_tree() -> (LayoutNode, InfoNode) {
+        let mut c = LayoutNode::new(ui_layout::Style::default());
+        c.layout_box =
+            ui_layout::LayoutBox::BlockBox(box_model(30.0, 10.0, 50.0, 20.0, 50.0, 20.0));
+        let mut b =
+            LayoutNode::with_children(ui_layout::Style::default(), [inline_node(vec![c.into()])]);
+        b.layout_box =
+            ui_layout::LayoutBox::BlockBox(box_model(0.0, 0.0, 300.0, 100.0, 300.0, 100.0));
+
+        let c_info = container_info(false, Some(7));
+        let mut i_info = container_info(false, None);
+        i_info.children.push(c_info);
+        let mut b_info = container_info(false, None);
+        b_info.children.push(i_info);
+
+        (b, b_info)
+    }
+
+    #[test]
+    fn hit_test_inside_inline_keeps_parent_coords() {
+        let (b, b_info) = make_inline_tree();
+        // Inline boxes push no transform, so the child's coordinates are
+        // resolved in the block's content space: (40,15) falls inside `c` at
+        // (30,10,50,20) even though `i`'s content origin is (10,10).
+        let path = hit_test(&b, &b_info, 40.0, 15.0);
+        assert_eq!(hit_dom_id(&path), Some(7));
+        assert_eq!(path.len(), 3);
+    }
+
+    #[test]
+    fn hit_test_inside_inline_but_outside_child_hits_inline() {
+        let (b, b_info) = make_inline_tree();
+        // (12,12) is inside `i`'s line box but left of `c`; the inline
+        // container itself is hit instead.
+        let path = hit_test(&b, &b_info, 12.0, 12.0);
+        assert_eq!(path.len(), 2);
+        assert_eq!(hit_dom_id(&path), None);
+    }
+
+    #[test]
+    fn hit_test_outside_inline_line_boxes_falls_back_to_parent() {
+        let (b, b_info) = make_inline_tree();
+        // (40,50) is inside `b` but below `i`'s line box (10..30).
+        let path = hit_test(&b, &b_info, 40.0, 50.0);
+        assert_eq!(path.len(), 1);
+        assert_eq!(hit_dom_id(&path), None);
+    }
+
+    #[test]
+    fn dispatch_pointer_to_inline_custom_keeps_parent_content_coords() {
+        let node: Arc<RecordingNode> = Arc::new(RecordingNode::new(Rect {
+            x: 0.0,
+            y: 28.0,
+            width: 120.0,
+            height: 84.0,
+        }));
+        let custom_info = input_info(Arc::clone(&node) as Arc<dyn CustomNode>);
+
+        let mut inline_layout = LayoutNode::new(ui_layout::Style::default());
+        inline_layout.layout_box = ui_layout::LayoutBox::InlineBox(ui_layout::InlineBox {
+            box_model: box_model(10.0, 20.0, 160.0, 100.0, 160.0, 100.0),
+            line_spans: vec![ui_layout::LineSpan {
+                x_range: 0.0..160.0,
+                line_pos: (10.0, 20.0),
+                line_index: 0,
+            }],
+        });
+        let mut block_layout = LayoutNode::new(ui_layout::Style::default());
+        block_layout.layout_box =
+            ui_layout::LayoutBox::BlockBox(box_model(0.0, 0.0, 200.0, 200.0, 200.0, 200.0));
+
+        let inline_info = container_info(false, None);
+        let root_info = container_info(false, None);
+
+        node.popup_open.store(false, Ordering::Relaxed);
+        let path = vec![
+            HitItem {
+                layout: &inline_layout,
+                info: &custom_info,
+            },
+            HitItem {
+                layout: &inline_layout,
+                info: &inline_info,
+            },
+            HitItem {
+                layout: &block_layout,
+                info: &root_info,
+            },
+        ];
+
+        // Inline boxes contribute no content-origin offset, so the event is
+        // delivered in the block's content space, not shifted by `i`'s (10,20)
+        // content origin.
+        dispatch_pointer(&path, PointerEvent::Down { x: 30.0, y: 35.0 });
+        assert_eq!(node.events(), vec![PointerEvent::Down { x: 30.0, y: 35.0 }]);
+    }
+
+    #[test]
+    fn scroll_at_inside_inline_scrolls_child_in_parent_coords() {
+        let mut c = LayoutNode::new(ui_layout::Style::default());
+        c.layout_box =
+            ui_layout::LayoutBox::BlockBox(box_model(30.0, 10.0, 50.0, 80.0, 50.0, 240.0));
+        let mut b =
+            LayoutNode::with_children(ui_layout::Style::default(), [inline_node(vec![c.into()])]);
+        b.layout_box =
+            ui_layout::LayoutBox::BlockBox(box_model(0.0, 0.0, 200.0, 100.0, 200.0, 300.0));
+
+        let c_info = container_info(true, None);
+        let mut i_info = container_info(false, None);
+        i_info.children.push(c_info);
+        let mut b_info = scrollable_info();
+        b_info.children.push(i_info);
+
+        assert!(scroll_at(
+            &b,
+            &mut b_info,
+            (VIEWPORT_WIDTH, VIEWPORT_HEIGHT),
+            40.0,
+            15.0,
+            0.0,
+            10.0
+        ));
+        // The child under the cursor scrolls; the block parent does not.
+        assert_eq!(scroll_offset_y_of(&b_info.children[0].children[0]), 10.0);
+        assert_eq!(scroll_offset_y_of(&b_info), 0.0);
     }
 }
