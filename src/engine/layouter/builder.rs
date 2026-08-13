@@ -608,11 +608,18 @@ pub fn build_layout_and_info_from_snapshot(
 
             if element_kids.is_empty() {
                 // ── No element children → leaf, build immediately ──
+                let keep = compute_whitespace_keep(&child_slots, &[]);
                 let (layout_children, info_children): (Vec<_>, Vec<_>) = child_slots
                     .into_iter()
-                    .filter_map(|slot| match slot {
-                        ChildSlot::Inline(layout, info) => Some((layout, info)),
-                        ChildSlot::Element(_) => None,
+                    .enumerate()
+                    .filter_map(|(i, slot)| {
+                        if !keep[i] {
+                            return None;
+                        }
+                        match slot {
+                            ChildSlot::Inline(layout, info) => Some((layout, info)),
+                            ChildSlot::Element(_) => None,
+                        }
                     })
                     .unzip();
                 let layout = LayoutNode::with_children(style.clone(), layout_children);
@@ -696,10 +703,20 @@ pub fn build_layout_and_info_from_snapshot(
             }
 
             let mut element_results: Vec<_> = element_results.into_iter().map(Some).collect();
+
+            // Whitespace-only text nodes between two block-level siblings, or adjacent
+            // to a `<br>`, would otherwise create stray inline boxes and spurious line
+            // boxes in block, flex, and grid containers. Drop them now that every
+            // sibling's display is resolved.
+            let keep = compute_whitespace_keep(&frame.child_slots, &element_results);
+
             let mut all_layout: Vec<LayoutChild> = Vec::with_capacity(frame.child_slots.len());
             let mut all_info: Vec<InfoNode> = Vec::with_capacity(frame.child_slots.len());
 
-            for slot in frame.child_slots {
+            for (i, slot) in frame.child_slots.into_iter().enumerate() {
+                if !keep[i] {
+                    continue;
+                }
                 let (lc, ic) = match slot {
                     ChildSlot::Inline(layout, info) => (layout, info),
                     ChildSlot::Element(index) => element_results[index]
@@ -732,6 +749,128 @@ fn is_css_whitespace(c: char) -> bool {
 
 fn is_css_newline(c: char) -> bool {
     matches!(c, '\n' | '\r')
+}
+
+/// True when an inline child is a whitespace-only text node that renders as
+/// nothing more than a collapsible space.
+fn is_collapsible_whitespace_text(info: &InfoNode) -> bool {
+    matches!(
+        &info.kind,
+        NodeKind::Text {
+            text, flow_style, ..
+        } if text.chars().all(is_css_whitespace)
+            && matches!(
+                flow_style.white_space,
+                WhiteSpace::Normal | WhiteSpace::Nowrap
+            )
+    )
+}
+
+/// Classification of the nearest layout-participating sibling of a slot.
+#[derive(PartialEq)]
+enum Neighbour {
+    /// No participating sibling (container edge) or only `display:none` boxes.
+    None,
+    /// A block-level element box.
+    Block,
+    /// A `<br>` line break.
+    LineBreak,
+    /// Any other inline content (text, inline element, replaced, …).
+    Inline,
+}
+
+/// Inspects the nearest layout-participating sibling of `slot_index` in the
+/// given `step` direction (`-1` = previous, `+1` = next).
+///
+/// Collapsible-whitespace-only text siblings are always skipped. `<br>`
+/// siblings are skipped when `skip_line_break` is set, so the caller can tell
+/// "adjacent to a `<br>`" apart from "the nearest block beyond a `<br>`".
+fn neighbour(
+    slots: &[ChildSlot],
+    element_results: &[Option<(LayoutChild, InfoNode)>],
+    slot_index: usize,
+    step: isize,
+    skip_line_break: bool,
+) -> Neighbour {
+    let mut idx = slot_index;
+
+    loop {
+        let Some(next) = (if step < 0 {
+            idx.checked_sub(1)
+        } else {
+            idx.checked_add(1)
+        }) else {
+            return Neighbour::None;
+        };
+        if next >= slots.len() {
+            return Neighbour::None;
+        }
+        idx = next;
+
+        match &slots[idx] {
+            ChildSlot::Element(element_index) => {
+                let Some((child, _)) = element_results[*element_index].as_ref() else {
+                    continue;
+                };
+
+                // display:none elements do not participate in layout.
+                if matches!(
+                    child,
+                    LayoutChild::Node(node)
+                        if node.style.display.outer == OuterDisplay::None
+                ) {
+                    continue;
+                }
+
+                return if matches!(
+                    child,
+                    LayoutChild::Node(node)
+                        if node.style.display.outer == OuterDisplay::Block
+                ) {
+                    Neighbour::Block
+                } else {
+                    Neighbour::Inline
+                };
+            }
+            ChildSlot::Inline(_, info) => {
+                if matches!(info.kind, NodeKind::LineBreak) {
+                    if !skip_line_break {
+                        return Neighbour::LineBreak;
+                    }
+                } else if !is_collapsible_whitespace_text(info) {
+                    return Neighbour::Inline;
+                }
+            }
+        }
+    }
+}
+
+/// Per-child keep decision for whitespace-only text nodes.
+///
+/// A whitespace-only text node is dropped when it is adjacent on *either*
+/// side to a block-level sibling or to a `<br>`; otherwise it would become a
+/// stray inline box that creates a spurious line box in block containers.
+fn compute_whitespace_keep(
+    slots: &[ChildSlot],
+    element_results: &[Option<(LayoutChild, InfoNode)>],
+) -> Vec<bool> {
+    (0..slots.len())
+        .map(|i| match &slots[i] {
+            ChildSlot::Inline(_, info) => {
+                if !is_collapsible_whitespace_text(info) {
+                    return true;
+                }
+                // Drop if either side is a block-level box or a `<br>` (a line
+                // break starts a new line, so adjacent whitespace is spurious).
+                let side_drops = |step: isize| {
+                    neighbour(slots, element_results, i, step, true) == Neighbour::Block
+                        || neighbour(slots, element_results, i, step, false) == Neighbour::LineBreak
+                };
+                !(side_drops(-1) || side_drops(1))
+            }
+            ChildSlot::Element(_) => true,
+        })
+        .collect()
 }
 
 pub fn normalize_whitespace(text: &str, white_space: WhiteSpace) -> String {
@@ -3939,6 +4078,162 @@ mod tests {
         }
 
         assert_eq!(image_layout_size(&layout), Some((460.0, 460.0)));
+    }
+
+    /// Returns the body element's layout children, unwrapping the document
+    /// and `<html>` wrapper nodes.
+    fn body_layout_children<'a>(mut node: &'a LayoutNode) -> &'a [LayoutChild] {
+        while let [LayoutChild::Node(child)] = node.children.as_slice() {
+            node = child;
+        }
+        &node.children
+    }
+
+    /// Recursively counts whitespace-only text nodes in the `InfoNode` tree,
+    /// which mirrors the DOM (whitespace stays a separate node, unlike the
+    /// layout where it may merge into an adjacent run). This is the reliable
+    /// way to assert whether a whitespace node was dropped.
+    fn count_whitespace_text_info(info: &InfoNode) -> usize {
+        let mut n = 0;
+        if let NodeKind::Text { text, .. } = &info.kind {
+            if text.chars().all(is_css_whitespace) {
+                n += 1;
+            }
+        }
+        n + info
+            .children
+            .iter()
+            .map(count_whitespace_text_info)
+            .sum::<usize>()
+    }
+
+    #[test]
+    fn whitespace_text_between_block_siblings_is_dropped() {
+        let html = "<html><body><div>a</div>\n  <div>b</div></body></html>";
+        let (layout, _) = layout_and_info_for(html, "");
+
+        let children = body_layout_children(&layout);
+        assert_eq!(children.len(), 2, "whitespace text must be dropped");
+        assert!(
+            children.iter().all(|child| child.node().is_some()),
+            "only the two block divs remain"
+        );
+    }
+
+    #[test]
+    fn whitespace_text_adjacent_to_inline_siblings_is_kept() {
+        let html = "<html><body><span>a</span> <span>b</span></body></html>";
+        let (layout, _) = layout_and_info_for(html, "span { display: inline; }");
+
+        let children = body_layout_children(&layout);
+        assert_eq!(children.len(), 3);
+        assert!(
+            matches!(&children[1], LayoutChild::Custom(_)),
+            "space between inline spans must be kept"
+        );
+    }
+
+    #[test]
+    fn whitespace_text_next_to_block_is_dropped() {
+        // With the "side" rule, whitespace adjacent to a block on either side
+        // is dropped even when the other sibling is inline.
+        let html = "<html><body><div>a</div> <span>b</span></body></html>";
+        let (_, info) = layout_and_info_for(html, "span { display: inline; }");
+
+        assert_eq!(
+            count_whitespace_text_info(&info),
+            0,
+            "whitespace next to a block must be dropped"
+        );
+    }
+
+    #[test]
+    fn whitespace_text_trailing_after_block_is_dropped() {
+        // Trailing whitespace after a single block is adjacent to that block,
+        // so it must be dropped.
+        let html = "<html><body><div>a</div> \n</body></html>";
+        let (_, info) = layout_and_info_for(html, "");
+
+        assert_eq!(
+            count_whitespace_text_info(&info),
+            0,
+            "trailing whitespace after a single block must be dropped"
+        );
+    }
+
+    #[test]
+    fn whitespace_text_around_br_between_block_siblings_is_dropped() {
+        let html = "<html><body><div>a</div> \n<br>\n <div>b</div></body></html>";
+        let (layout, _) = layout_and_info_for(html, "");
+
+        let children = body_layout_children(&layout);
+        assert_eq!(children.len(), 3, "only the two divs and the <br> remain");
+        assert!(matches!(&children[0], LayoutChild::Node(_)));
+        assert!(
+            matches!(&children[1], LayoutChild::Fragment(_)),
+            "<br> itself must be kept"
+        );
+        assert!(matches!(&children[2], LayoutChild::Node(_)));
+    }
+
+    #[test]
+    fn whitespace_text_after_br_is_dropped() {
+        let html = "<html><body><p>a <br> </p></body></html>";
+        let (layout, _) = layout_and_info_for(html, "");
+
+        let children = body_layout_children(&layout);
+        assert_eq!(children.len(), 2, "whitespace after <br> must be dropped");
+        assert!(matches!(&children[0], LayoutChild::Custom(_)));
+        assert!(matches!(&children[1], LayoutChild::Fragment(_)));
+    }
+
+    #[test]
+    fn whitespace_text_before_br_is_dropped() {
+        let html = "<html><body><p> <br>b</p></body></html>";
+        let (layout, _) = layout_and_info_for(html, "");
+
+        let children = body_layout_children(&layout);
+        assert_eq!(children.len(), 2, "whitespace before <br> must be dropped");
+        assert!(matches!(&children[0], LayoutChild::Fragment(_)));
+        assert!(matches!(&children[1], LayoutChild::Custom(_)));
+    }
+
+    #[test]
+    fn whitespace_crossing_display_none_between_blocks_is_dropped() {
+        // A `display:none` element does not participate in layout, so the
+        // whitespace on either side of it is still adjacent to a block once
+        // the none element is skipped.
+        let html =
+            "<html><body><div>a</div> <span class=\"hidden\">x</span> <div>b</div></body></html>";
+        let (layout, _) = layout_and_info_for(html, ".hidden { display: none; }");
+
+        let children = body_layout_children(&layout);
+        // The none span stays in the tree; only the two whitespace text nodes
+        // are dropped (3 children: div, none span, div).
+        assert_eq!(children.len(), 3, "two whitespace nodes must be dropped");
+        assert!(
+            children.iter().all(|child| child.node().is_some()),
+            "no stray whitespace inline boxes remain"
+        );
+    }
+
+    #[test]
+    fn whitespace_crossing_display_none_between_inlines_is_kept() {
+        // Crossing a `display:none` element reveals inline spans on both
+        // sides, so the whitespace is not adjacent to any block or `<br>` and
+        // must be kept.
+        let html = "<html><body><span>a</span> <span class=\"hidden\">x</span> <span>b</span></body></html>";
+        let (_, info) =
+            layout_and_info_for(html, "span { display: inline; } .hidden { display: none; }");
+
+        // `count_whitespace_text_info` inspects the DOM-shaped info tree, so the
+        // kept whitespace survives as its own node regardless of anonymous-block
+        // wrapping in the layout.
+        assert_eq!(
+            count_whitespace_text_info(&info),
+            2,
+            "whitespace across a none element between inlines must be kept"
+        );
     }
 
     /// Depth-first search for the first [`NodeKind::Text`] whose content is
