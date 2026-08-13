@@ -103,7 +103,9 @@ impl TextFlowLayouter {
         // Edge-case: no clusters but non-empty text (e.g. spaces-only).
         if clusters.is_empty() && !self.text.is_empty() {
             if forced_newline && self.text.bytes().all(|b| b == b'\n') {
-                let line_count = self.text.bytes().filter(|b| *b == b'\n').count();
+                // Every preserved newline is a segment break, so N newlines
+                // produce N + 1 lines.
+                let line_count = self.text.bytes().filter(|b| *b == b'\n').count() + 1;
                 return TextLayoutResult {
                     spans: (0..line_count)
                         .map(|i| LineSpan {
@@ -124,7 +126,7 @@ impl TextFlowLayouter {
                 line_texts: vec![self.text.clone()],
             };
         }
-        if clusters.is_empty() {
+        if clusters.is_empty() && !self.text.is_empty() {
             return TextLayoutResult {
                 spans: Vec::new(),
                 line_texts: Vec::new(),
@@ -164,10 +166,11 @@ impl TextFlowLayouter {
         let mut line_texts: Vec<String> = Vec::new();
 
         let mut line_start: usize = 0; // byte offset where current line starts
-        let mut x_pos = start_pos.0;
+        let mut x_pos = start_pos.0; // Actual line cordination
         let mut y_pos = start_pos.1;
+        let mut x_range_start: f32 = 0.0; // Accumulated width; used for x_range. (x_range_start..(x_range_start+line_w))
         let mut line_index: usize = 0;
-        let mut accumulated: f32 = 0.0;
+        let mut accumulated: f32 = 0.0; // Running width placed on the current line; used for wrap/overflow checks.
         let mut last_breakable_cluster: Option<usize> = None; // cluster index (exclusive)
 
         let clusters_between = |from_byte: usize, to_byte: usize| -> f32 {
@@ -181,7 +184,7 @@ impl TextFlowLayouter {
                 let end_byte = $end_byte;
 
                 let line_w = clusters_between(line_start, end_byte);
-                let line_x = aligned_x(line_index, x_pos, line_w);
+                x_pos = aligned_x(line_index, x_pos, line_w);
 
                 let line_str = &self.text[line_start..end_byte];
                 let trimmed = line_str.trim_end_matches('\n');
@@ -192,11 +195,12 @@ impl TextFlowLayouter {
                 };
 
                 spans.push(LineSpan {
-                    x_range: x_pos..(x_pos + line_w),
-                    line_pos: (line_x, y_pos),
+                    x_range: x_range_start..(x_range_start + line_w),
+                    line_pos: (x_pos, y_pos),
                     line_index,
                 });
                 line_texts.push(line_text);
+                x_range_start += line_w;
             }};
         }
 
@@ -216,9 +220,10 @@ impl TextFlowLayouter {
                     emit_line!(nl_byte);
                 } else {
                     // Empty line (e.g. consecutive newlines)
+                    x_pos = aligned_x(line_index, x_pos, 0.0);
                     spans.push(LineSpan {
-                        x_range: x_pos..x_pos,
-                        line_pos: (aligned_x(line_index, x_pos, 0.0), y_pos),
+                        x_range: x_range_start..x_range_start,
+                        line_pos: (x_pos, y_pos),
                         line_index,
                     });
                     line_texts.push(String::new());
@@ -279,8 +284,8 @@ impl TextFlowLayouter {
                     accumulated = clusters_between(line_start, clusters[i].byte_offset);
                     last_breakable_cluster = None;
                 } else if split_unbreakable {
-                    // Unbreakable run that is wider than the next line as
-                    // well: split at the current cluster boundary.
+                    // Unbreakable run that is wider than the next line as well:
+                    // split at the current cluster boundary.
                     let break_byte = clusters[i].byte_offset;
                     if break_byte > line_start || spans.is_empty() {
                         emit_line!(break_byte);
@@ -305,21 +310,62 @@ impl TextFlowLayouter {
             i += 1;
         }
 
-        // Emit any remaining text as the last line
-        if line_start < text_len {
+        // Emit the final line(s). For preserved newlines we split the remaining
+        // text exactly on '\n', so every newline yields a line and a trailing
+        // newline adds one final empty line — identical to `str::split('\n')`.
+        // The main loop above already emitted a line for each *internal*
+        // newline; this pass emits the current line plus any lines opened by
+        // trailing newlines, so newline tail handling lives in a single place.
+        if forced_newline {
+            let rest = &self.text[line_start..text_len];
+            if rest.is_empty() {
+                // The text ended on a newline (e.g. "abc\n"): split('\n') still
+                // yields one trailing empty line. This line follows a break, so
+                // its coordinate origin is the box left edge (x_pos = 0).
+                x_pos = aligned_x(line_index, 0.0, 0.0);
+                spans.push(LineSpan {
+                    x_range: x_range_start..x_range_start,
+                    line_pos: (x_pos, y_pos),
+                    line_index,
+                });
+                line_texts.push(String::new());
+            } else {
+                for seg in rest.split('\n') {
+                    let seg_end = line_start + seg.len();
+                    let line_w = clusters_between(line_start, seg_end);
+                    // The first segment uses the incoming `x_pos` (the box
+                    // origin for the first line, or 0 after a prior break); every
+                    // later segment is an empty line following a break, so its
+                    // origin is the box left edge. Resetting `x_pos` here keeps
+                    // the carry-over value from accumulating across segments.
+                    x_pos = aligned_x(line_index, x_pos, line_w);
+                    spans.push(LineSpan {
+                        x_range: x_range_start..(x_range_start + line_w),
+                        line_pos: (x_pos, y_pos),
+                        line_index,
+                    });
+                    line_texts.push(seg.to_string());
+                    line_index += 1;
+                    y_pos += lh;
+                    x_range_start += line_w;
+                    line_start = seg_end + 1; // step over the '\n'
+                    x_pos = 0.0;
+                }
+            }
+        } else if line_start < text_len {
             let line_w = clusters_between(line_start, text_len);
-            let line_x = aligned_x(line_index, x_pos, line_w);
-
-            let line_str = &self.text[line_start..];
-            let trimmed = line_str.trim_end_matches('\n');
+            let trimmed = &self.text[line_start..text_len];
+            x_pos = aligned_x(line_index, x_pos, line_w);
 
             spans.push(LineSpan {
-                x_range: x_pos..(x_pos + line_w),
-                line_pos: (line_x, y_pos),
+                x_range: x_range_start..(x_range_start + line_w),
+                line_pos: (x_pos, y_pos),
                 line_index,
             });
-            line_texts.push(trimmed.to_string());
-        } else if spans.is_empty() {
+            line_texts.push(trimmed.trim_end_matches('\n').to_string());
+        }
+
+        if spans.is_empty() {
             // Empty text: produce one empty line so the node contributes height
             spans.push(LineSpan {
                 x_range: start_pos.0..start_pos.0,
@@ -683,6 +729,125 @@ mod tests {
     }
 
     #[test]
+    fn trailing_newline_emits_empty_last_line() {
+        let clusters = vec![
+            cluster(0, 10.0, false),
+            cluster(1, 10.0, false),
+            cluster(2, 10.0, false),
+        ];
+        let result = layout_with("abc\n", clusters, 100.0, WhiteSpace::PreWrap);
+        // "abc\n" has one preserved segment break → "abc" plus an empty line.
+        assert_eq!(result.line_texts, vec!["abc", ""]);
+        assert_eq!(result.spans.len(), 2);
+        assert_eq!(result.spans[1].width(), 0.0);
+    }
+
+    #[test]
+    fn leading_and_trailing_newline_emit_empty_lines() {
+        let clusters = vec![
+            cluster(1, 10.0, false),
+            cluster(2, 10.0, false),
+            cluster(3, 10.0, false),
+        ];
+        let result = layout_with("\nabc\n", clusters, 100.0, WhiteSpace::PreWrap);
+        assert_eq!(result.line_texts, vec!["", "abc", ""]);
+        assert_eq!(result.spans.len(), 3);
+    }
+
+    #[test]
+    fn multiple_trailing_newlines_emit_empty_lines() {
+        let clusters = vec![
+            cluster(0, 10.0, false),
+            cluster(1, 10.0, false),
+            cluster(2, 10.0, false),
+        ];
+        let result = layout_with("abc\n\n", clusters, 100.0, WhiteSpace::PreWrap);
+        assert_eq!(result.line_texts, vec!["abc", "", ""]);
+        assert_eq!(result.spans.len(), 3);
+    }
+
+    #[test]
+    fn all_newlines_emit_n_plus_one_lines() {
+        // No glyph clusters: every preserved newline is a segment break, so
+        // N newlines produce N + 1 lines.
+        let result = layout_with("\n\n", vec![], 100.0, WhiteSpace::PreWrap);
+        assert_eq!(result.line_texts, vec!["", "", ""]);
+        assert_eq!(result.spans.len(), 3);
+    }
+
+    #[test]
+    fn trailing_newline_ignored_for_normal_whitespace() {
+        let clusters = vec![
+            cluster(0, 10.0, false),
+            cluster(1, 10.0, false),
+            cluster(2, 10.0, false),
+        ];
+        // For Normal whitespace a trailing newline is collapsed, not a forced
+        // break, so no extra empty line is emitted.
+        let result = layout_with("abc\n", clusters, 100.0, WhiteSpace::Normal);
+        assert_eq!(result.line_texts, vec!["abc"]);
+        assert_eq!(result.spans.len(), 1);
+    }
+
+    #[test]
+    fn line_after_newline_starts_at_left_edge() {
+        // Every visual line of a text node must start at the box's left edge
+        // (start_pos.x). With a zero origin this is x:0.
+        let clusters = vec![
+            cluster(0, 10.0, false),
+            cluster(1, 10.0, false),
+            cluster(2, 10.0, false),
+            cluster(4, 10.0, false),
+            cluster(5, 10.0, false),
+            cluster(6, 10.0, false),
+        ];
+        let result =
+            TextFlowLayouter::new("abc\ndef".to_string(), TextFlowStyle::default(), clusters)
+                .compute_layout(100.0, 100.0, (0.0, 0.0));
+        assert_eq!(result.spans.len(), 2);
+        assert_eq!(result.spans[0].line_pos.0, 0.0, "first line x");
+        assert_eq!(result.spans[1].line_pos.0, 0.0, "line after newline x");
+    }
+
+    #[test]
+    fn line_after_newline_keeps_block_left_when_indented() {
+        // When the text node is positioned away from the origin (e.g. an
+        // indented/positioned block), every visual line must start at the box
+        // left edge (start_pos.x), not at the absolute origin.
+        let clusters = vec![
+            cluster(0, 10.0, false),
+            cluster(1, 10.0, false),
+            cluster(2, 10.0, false),
+            cluster(4, 10.0, false),
+            cluster(5, 10.0, false),
+            cluster(6, 10.0, false),
+        ];
+        let result =
+            TextFlowLayouter::new("abc\ndef".to_string(), TextFlowStyle::default(), clusters)
+                .compute_layout(100.0, 100.0, (50.0, 0.0));
+        assert_eq!(result.spans.len(), 2);
+        assert_eq!(result.spans[0].line_pos.0, 50.0, "first line x");
+        assert_eq!(result.spans[1].line_pos.0, 50.0, "line after newline x");
+    }
+
+    #[test]
+    fn wrapped_line_starts_at_left_edge() {
+        // A width-triggered wrap (no newline) must also resume at the box left
+        // edge.
+        let clusters = vec![
+            cluster(0, 30.0, false),
+            cluster(3, 5.0, true),
+            cluster(4, 30.0, false),
+        ];
+        let result =
+            TextFlowLayouter::new("aaa bbb".to_string(), TextFlowStyle::default(), clusters)
+                .compute_layout(40.0, 40.0, (50.0, 0.0));
+        assert_eq!(result.spans.len(), 2);
+        assert_eq!(result.spans[0].line_pos.0, 50.0, "first line x");
+        assert_eq!(result.spans[1].line_pos.0, 50.0, "wrapped line x");
+    }
+
+    #[test]
     fn consecutive_newlines_emit_empty_lines() {
         let clusters = vec![
             cluster(0, 10.0, false),
@@ -754,5 +919,59 @@ mod tests {
             .map(|s| s.trim_end().to_string())
             .collect();
         assert_eq!(texts, vec!["abcd", "ef"]);
+    }
+
+    #[test]
+    fn empty_text_emits_one_empty_line() {
+        let result = layout("", vec![], 100.0);
+        assert_eq!(result.line_texts, vec![""]);
+        assert_eq!(result.spans.len(), 1);
+    }
+
+    #[test]
+    fn trailing_newlines_match_split_semantics() {
+        // The whole tail is owned by a single split('\n') pass, so the line
+        // count matches `str::split('\n')` exactly.
+        let cases: &[(&str, &[&str])] = &[
+            ("foo", &["foo"]),
+            ("foo\n", &["foo", ""]),
+            ("foo\n\n", &["foo", "", ""]),
+            ("\n", &["", ""]),
+            ("\n\n", &["", "", ""]),
+        ];
+        for (text, expected) in cases {
+            let clusters: Vec<GlyphCluster> = text
+                .chars()
+                .enumerate()
+                .filter(|(_, c)| !c.is_whitespace())
+                .map(|(i, _)| cluster(i, 10.0, false))
+                .collect();
+            let result = layout_with(text, clusters, 100.0, WhiteSpace::Pre);
+            assert_eq!(&result.line_texts[..], *expected, "text = {:?}", text);
+        }
+    }
+
+    #[test]
+    fn trailing_newlines_do_not_accumulate_x_pos() {
+        // Multiple trailing newlines under center alignment must place every
+        // empty line at the same centered x. The carry-over `x_pos` must reset
+        // to 0 between segments so it does not accumulate across them.
+        let clusters = vec![cluster(0, 10.0, false), cluster(1, 10.0, false)];
+        let mut flow = TextFlowStyle::default();
+        flow.white_space = WhiteSpace::Pre;
+        flow.text_align = TextAlign::Center;
+        let result = TextFlowLayouter::new("ab\n\n".to_string(), flow, clusters).compute_layout(
+            100.0,
+            100.0,
+            (0.0, 0.0),
+        );
+
+        assert_eq!(result.line_texts, vec!["ab", "", ""]);
+        // First line "ab" is centered: (100 - 20) / 2 == 40.
+        assert_eq!(result.spans[0].line_pos.0, 40.0);
+        // Both trailing empty lines sit at the centered x for zero width (50),
+        // and crucially they share the same x — no accumulation.
+        assert_eq!(result.spans[1].line_pos.0, 50.0);
+        assert_eq!(result.spans[2].line_pos.0, 50.0);
     }
 }
