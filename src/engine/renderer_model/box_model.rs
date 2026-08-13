@@ -476,12 +476,11 @@ fn push_box_model(
     let dx = content_box.x - border_box.x;
     let dy = content_box.y - border_box.y;
 
-    let state = BoxPushState {
-        border: push_transform(cmd_buf, border_box.x, border_box.y),
-        clip: false,
-        content: false,
-        scroll: false,
-    };
+    // Inline containers lay their text out in the parent's coordinate space,
+    // and every line span yields its own box model, so no transform may be
+    // pushed here: otherwise the accumulated border/content offsets of all
+    // line boxes would displace the inline content.
+    let border = !is_inline && push_transform(cmd_buf, border_box.x, border_box.y);
 
     draw_border(cmd_buf, &border_box, &padding_box, style);
 
@@ -500,14 +499,14 @@ fn push_box_model(
         });
     }
 
-    let content = push_transform(cmd_buf, dx, dy);
-    let scroll = push_transform(cmd_buf, -scroll_offset_x, -scroll_offset_y);
+    let content = !is_inline && push_transform(cmd_buf, dx, dy);
+    let scroll = !is_inline && push_transform(cmd_buf, -scroll_offset_x, -scroll_offset_y);
 
     BoxPushState {
+        border,
         clip,
         content,
         scroll,
-        ..state
     }
 }
 
@@ -529,12 +528,10 @@ fn pop_box_model(cmd_buf: &mut Vec<DrawCommand>, state: BoxPushState) {
 
 /// Draw text spans for a single text node.
 ///
-/// `content_origin` is the content-box origin of the enclosing box.
-/// For block containers this is `(0, 0)` (the flow cursor already starts at
-/// the content area), but for inline containers the flow layouter positions
-/// text in the parent's coordinate space while `push_box_model` also pushes
-/// the border-box offset, so we must subtract the content-box origin to
-/// avoid double-counting.
+/// `content_origin` is subtracted from each span position. For block
+/// containers this is `(0, 0)` (the flow cursor already starts at the content
+/// area), and for inline containers `push_box_model` pushes no transform so
+/// the flow layouter's coordinates are already absolute, also `(0, 0)`.
 fn draw_text(
     cmd_buf: &mut Vec<DrawCommand>,
     style: &TextStyle,
@@ -808,18 +805,9 @@ fn generate_draw_commands_inner(
     }
 
     // For inline containers the text flow layouter positions text in the
-    // parent's coordinate space, but push_box_model already pushes the
-    // border-box offset.  Subtract the content-box origin so text
-    // coordinates become relative to the pushed coordinate system.
-    let text_origin = if is_inline {
-        layout
-            .layout_box
-            .iter()
-            .next()
-            .map_or((0.0, 0.0), |bm| (bm.content_box.x, bm.content_box.y))
-    } else {
-        (0.0, 0.0)
-    };
+    // parent's coordinate space and push_box_model pushes no transform, so
+    // text coordinates are already absolute and no offset is subtracted.
+    let text_origin = (0.0, 0.0);
 
     // Scroll offsets of this node itself; they scroll the node's own content.
     let own_scroll = info.kind.scroll_offsets();
