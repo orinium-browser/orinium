@@ -79,7 +79,7 @@ fn main() -> Result<()> {
                     }
 
                     println!("\n{}", "Note:".bold());
-                    println!("  - URLs must include the scheme (http:// or https://).");
+                    println!("  - URLs must include the scheme (e.g. http://, https://, data:).");
 
                     println!("\nTo see more details about a specific command, run:");
                     println!("  cargo run --example tests help [COMMAND]");
