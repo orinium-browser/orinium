@@ -3580,6 +3580,12 @@ fn make_element_interface() -> (Rc<RefCell<JSObject>>, Rc<RefCell<JSObject>>) {
             read_only_accessor_property(get_element_layout_height),
         );
     }
+    for name in ["offsetLeft", "offsetTop"] {
+        prototype.define_property(
+            name.to_string(),
+            read_only_accessor_property(get_element_layout_offset),
+        );
+    }
     prototype.define_property(
         "checked".to_string(),
         accessor_property(get_element_checked, set_element_checked),
@@ -5209,6 +5215,13 @@ fn get_element_layout_height(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValu
     ))
 }
 
+fn get_element_layout_offset(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    // Until live layout boxes are bridged into the DOM runtime, zero is the
+    // correct non-NaN origin fallback for in-flow content. Returning
+    // `undefined` poisons carousel transforms such as `-slide.offsetLeft`.
+    Ok(JSValue::Number(0.0))
+}
+
 fn make_dom_rect(width: f64, height: f64) -> JSValue {
     let mut rect = JSObject::new();
     for (name, value) in [
@@ -6017,6 +6030,33 @@ mod tests {
             Some("480:360:480:360")
         );
         assert_eq!(result.value.get_attr("data-resize"), Some("480:360"));
+    }
+
+    #[test]
+    fn layout_offsets_have_a_numeric_fallback() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<div id="list" class="carousel slick-list"></div><div id="plain"></div><div id="result"></div>"#,
+        );
+        runtime.run_script(
+            r#"
+            document.getElementById("result").setAttribute(
+                "data-widths",
+                document.getElementById("list").offsetWidth + ":" +
+                    document.getElementById("plain").offsetWidth + ":" +
+                    document.getElementById("list").offsetLeft + ":" +
+                    document.getElementById("list").offsetTop
+            );
+            "#,
+        );
+
+        assert_eq!(
+            dom.get_element_by_id("result")
+                .unwrap()
+                .borrow()
+                .value
+                .get_attr("data-widths"),
+            Some("0:0:0:0")
+        );
     }
 
     #[test]
