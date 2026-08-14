@@ -298,6 +298,14 @@ pub struct BackgroundPosition {
     pub y: BackgroundPositionAxis,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CssFloat {
+    #[default]
+    None,
+    Left,
+    Right,
+}
+
 /// CSS gradient definition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Gradient {
@@ -424,6 +432,7 @@ pub struct ContainerStyle {
     pub background_position: BackgroundPosition,
     /// Integer stacking level. `None` represents CSS `auto`.
     pub z_index: Option<i32>,
+    pub css_float: CssFloat,
     pub border_color: BorderColor,
     pub border_style: BorderStyles,
     pub border_radius: BorderRadius,

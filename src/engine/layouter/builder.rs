@@ -27,8 +27,8 @@ use super::text_layouter::TextFlowLayouter;
 use super::types::{
     Background, BackgroundDimension, BackgroundOffset, BackgroundPosition, BackgroundPositionAxis,
     BackgroundRepeat, BackgroundSize, BorderRadius, BorderStyle, Color, ColorScheme, ColorStop,
-    ContainerRole, ContainerStyle, CornerRadius, FontStyle, FontWeight, Gradient, GradientKind,
-    InfoNode, LineHeight, NodeKind, Overflow, RadialShape, RadialSizeKind, TextAlign,
+    ContainerRole, ContainerStyle, CornerRadius, CssFloat, FontStyle, FontWeight, Gradient,
+    GradientKind, InfoNode, LineHeight, NodeKind, Overflow, RadialShape, RadialSizeKind, TextAlign,
     TextDecoration, TextStyle, TextTransform,
 };
 use crate::engine::renderer_model::Image;
@@ -702,6 +702,15 @@ pub fn build_layout_and_info_from_snapshot(
 
             if let Background::Image { source, image, .. } = &mut container_style.background {
                 *image = images.get(source).cloned();
+            }
+
+            if container_style.css_float != CssFloat::None && !style.position.kind.is_out_of_flow()
+            {
+                style.display = Display {
+                    outer: OuterDisplay::Inline,
+                    inner: InnerDisplay::FlowRoot,
+                };
+                style.size.auto_behavior = AutoSizeBehavior::ShrinkToFit;
             }
 
             // Absolutely positioned boxes are blockified before layout. The
@@ -1835,6 +1844,15 @@ pub fn apply_declaration(
             ) =>
         {
             container_style.z_index = None;
+        }
+
+        ("float", CssValue::Keyword(value)) => {
+            container_style.css_float = match value.to_ascii_lowercase().as_str() {
+                "left" => CssFloat::Left,
+                "right" => CssFloat::Right,
+                "none" | "initial" | "unset" => CssFloat::None,
+                _ => return None,
+            };
         }
 
         /* ======================
@@ -3967,6 +3985,22 @@ mod tests {
         assert_eq!(
             apply_container_property("z-index", CssValue::Keyword("auto".into())).z_index,
             None
+        );
+    }
+
+    #[test]
+    fn float_keywords_are_preserved_for_layout_blockification() {
+        assert_eq!(
+            apply_container_property("float", CssValue::Keyword("left".into())).css_float,
+            CssFloat::Left
+        );
+        assert_eq!(
+            apply_container_property("float", CssValue::Keyword("right".into())).css_float,
+            CssFloat::Right
+        );
+        assert_eq!(
+            apply_container_property("float", CssValue::Keyword("none".into())).css_float,
+            CssFloat::None
         );
     }
 
