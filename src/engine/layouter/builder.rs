@@ -1822,6 +1822,21 @@ pub fn apply_declaration(
             style.display = Display::from_css_name(v.as_str())?;
         }
 
+        ("z-index", CssValue::Number(value))
+            if value.is_finite() && value.fract().abs() < f32::EPSILON =>
+        {
+            container_style.z_index = Some(*value as i32);
+        }
+
+        ("z-index", CssValue::Keyword(value))
+            if matches!(
+                value.to_ascii_lowercase().as_str(),
+                "auto" | "initial" | "unset"
+            ) =>
+        {
+            container_style.z_index = None;
+        }
+
         /* ======================
          * Color / Text
          * ====================== */
@@ -3941,6 +3956,18 @@ mod tests {
             let style = apply_layout_property("position", CssValue::Keyword(keyword.into()));
             assert_eq!(style.position.kind, expected);
         }
+    }
+
+    #[test]
+    fn z_index_accepts_integers_and_auto() {
+        assert_eq!(
+            apply_container_property("z-index", CssValue::Number(999999.0)).z_index,
+            Some(999999)
+        );
+        assert_eq!(
+            apply_container_property("z-index", CssValue::Keyword("auto".into())).z_index,
+            None
+        );
     }
 
     #[test]

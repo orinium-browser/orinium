@@ -85,6 +85,15 @@ pub enum NodeKind {
 }
 
 impl NodeKind {
+    pub fn z_index(&self) -> i32 {
+        match self {
+            NodeKind::Container { style, .. } | NodeKind::Custom { style, .. } => {
+                style.z_index.unwrap_or(0)
+            }
+            _ => 0,
+        }
+    }
+
     pub fn is_container_with_transparent_bg(&self) -> bool {
         matches!(self, NodeKind::Container { style, .. }
             if style.background == Background::Color(Color(0, 0, 0, 0)))
@@ -413,6 +422,8 @@ pub struct ContainerStyle {
     pub background_repeat: BackgroundRepeat,
     pub background_size: BackgroundSize,
     pub background_position: BackgroundPosition,
+    /// Integer stacking level. `None` represents CSS `auto`.
+    pub z_index: Option<i32>,
     pub border_color: BorderColor,
     pub border_style: BorderStyles,
     pub border_radius: BorderRadius,

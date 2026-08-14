@@ -1014,8 +1014,9 @@ fn generate_draw_commands_inner(
         .map_or(containing, |b| (b.content_box.width, b.content_box.height));
 
     let mut layout_iter = layout.children.iter();
+    let mut positive_stacking_children: Vec<(i32, usize, Vec<DrawCommand>)> = Vec::new();
 
-    for child_info in &info.children {
+    for (child_order, child_info) in info.children.iter().enumerate() {
         match &child_info.kind {
             NodeKind::Text {
                 text_id,
@@ -1032,17 +1033,34 @@ fn generate_draw_commands_inner(
             NodeKind::Container { .. } => {
                 if let Some(LayoutChild::Node(node)) = layout_iter.next() {
                     let child_origin = child_origin(node, origin);
-                    generate_draw_commands_inner(
-                        cmd_buf,
-                        node,
-                        child_info,
-                        child_scroll,
-                        child_viewport,
-                        child_containing,
-                        child_origin,
-                        popups,
-                        false,
-                    );
+                    let z_index = child_info.kind.z_index();
+                    if z_index > 0 {
+                        let mut child_commands = Vec::new();
+                        generate_draw_commands_inner(
+                            &mut child_commands,
+                            node,
+                            child_info,
+                            child_scroll,
+                            child_viewport,
+                            child_containing,
+                            child_origin,
+                            popups,
+                            false,
+                        );
+                        positive_stacking_children.push((z_index, child_order, child_commands));
+                    } else {
+                        generate_draw_commands_inner(
+                            cmd_buf,
+                            node,
+                            child_info,
+                            child_scroll,
+                            child_viewport,
+                            child_containing,
+                            child_origin,
+                            popups,
+                            false,
+                        );
+                    }
                 }
             }
             NodeKind::Custom {
@@ -1134,6 +1152,11 @@ fn generate_draw_commands_inner(
                 }
             }
         }
+    }
+
+    positive_stacking_children.sort_by_key(|(z_index, child_order, _)| (*z_index, *child_order));
+    for (_, _, commands) in positive_stacking_children {
+        cmd_buf.extend(commands);
     }
 
     if matches!(
@@ -1398,6 +1421,78 @@ mod tests {
             translates.contains(&(0.0, 50.0)),
             "expected a scroll-cancelling transform, got {translates:?}"
         );
+    }
+
+    #[test]
+    fn positive_z_index_child_paints_after_later_normal_sibling() {
+        let box_model = |x: f32| ui_layout::BoxModel {
+            sticky_edges: None,
+            border_box: ui_rect(x, 0.0, 50.0, 50.0),
+            padding_box: ui_rect(x, 0.0, 50.0, 50.0),
+            content_box: ui_rect(x, 0.0, 50.0, 50.0),
+            children_box: ui_rect(x, 0.0, 50.0, 50.0),
+        };
+        let mut root = LayoutNode::new(Style::default());
+        root.layout_box = ui_layout::LayoutBox::BlockBox(box_model(0.0));
+        let mut front = LayoutNode::new(Style::default());
+        front.layout_box = ui_layout::LayoutBox::BlockBox(box_model(0.0));
+        let mut normal = LayoutNode::new(Style::default());
+        normal.layout_box = ui_layout::LayoutBox::BlockBox(box_model(0.0));
+        root.children = vec![
+            LayoutChild::Node(Box::new(front)),
+            LayoutChild::Node(Box::new(normal)),
+        ];
+
+        let child_info = |color, z_index| {
+            mk_info_node(
+                NodeKind::Container {
+                    scroll_x: false,
+                    scroll_y: false,
+                    scroll_offset_x: 0.0,
+                    scroll_offset_y: 0.0,
+                    style: ContainerStyle {
+                        background: Background::Color(color),
+                        z_index,
+                        ..ContainerStyle::default()
+                    },
+                    role: ContainerRole::Normal,
+                },
+                Vec::new(),
+            )
+        };
+        let root_info = mk_info_node(
+            NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: ContainerStyle::default(),
+                role: ContainerRole::Normal,
+            },
+            vec![
+                child_info(Color(255, 0, 0, 255), Some(10)),
+                child_info(Color(0, 0, 255, 255), None),
+            ],
+        );
+
+        let mut commands = Vec::new();
+        generate_draw_commands(&mut commands, &root, &root_info, (100.0, 100.0));
+        let colors: Vec<_> = commands
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Fill {
+                    paint:
+                        Paint {
+                            brush: Brush::Solid(color),
+                            ..
+                        },
+                    ..
+                } => Some(*color),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(colors, vec![Color(0, 0, 255, 255), Color(255, 0, 0, 255)]);
+        assert!(count_balanced(&commands));
     }
 
     fn sticky_viewport(scroll: (f32, f32)) -> StickyViewport {
