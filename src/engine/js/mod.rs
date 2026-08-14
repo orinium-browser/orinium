@@ -71,6 +71,7 @@ pub(crate) struct JsDynamicStyleRequest {
 }
 
 /// An image element created or populated after the initial HTML parse.
+#[derive(Debug)]
 pub(crate) struct JsDynamicImageRequest {
     pub(crate) source: String,
 }

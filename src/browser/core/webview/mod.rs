@@ -17,8 +17,8 @@ use crate::engine::{
         ClassicScriptExecution, ClassicScriptSource, DomTree, Parser as HtmlParser, ScriptingMode,
     },
     js::{
-        JsDynamicScriptRequest, JsDynamicScriptSource, JsDynamicStyleRequest, JsFetchRequest,
-        JsFetchResponse, JsProcessor, JsTask, JsTaskResult,
+        JsDynamicImageRequest, JsDynamicScriptRequest, JsDynamicScriptSource,
+        JsDynamicStyleRequest, JsFetchRequest, JsFetchResponse, JsProcessor, JsTask, JsTaskResult,
     },
     layouter::{
         self, InheritedCss, LayoutResult, NodeId,
@@ -190,6 +190,8 @@ pub struct WebView {
     pending_dynamic_scripts: Vec<JsDynamicScriptRequest>,
     /// Dynamically inserted stylesheet links collected from JS results.
     pending_dynamic_styles: Vec<JsDynamicStyleRequest>,
+    /// Images created or populated by scripts, awaiting network scheduling.
+    pending_dynamic_images: Vec<JsDynamicImageRequest>,
     /// Classic scripts in document order. Execution starts after CSS is applied.
     classic_scripts: Vec<ClassicScript>,
     next_script_index: usize,
@@ -318,6 +320,7 @@ impl WebView {
             pending_js_fetches: Vec::new(),
             pending_dynamic_scripts: Vec::new(),
             pending_dynamic_styles: Vec::new(),
+            pending_dynamic_images: Vec::new(),
             classic_scripts: Vec::new(),
             next_script_index: 0,
             pending_script_fetches: HashMap::new(),
@@ -380,6 +383,7 @@ impl WebView {
         self.pending_js_fetches.clear();
         self.pending_dynamic_scripts.clear();
         self.pending_dynamic_styles.clear();
+        self.pending_dynamic_images.clear();
         self.js_dom_ids.clear();
         self.classic_scripts.clear();
         self.next_script_index = 0;
@@ -519,6 +523,7 @@ impl WebView {
         self.pending_js_fetches.clear();
         self.pending_dynamic_scripts.clear();
         self.pending_dynamic_styles.clear();
+        self.pending_dynamic_images.clear();
 
         let css_base_url = parsed.base_url.clone();
         let docment_info = DocumentInfo {
@@ -984,11 +989,7 @@ impl WebView {
     }
 
     fn schedule_dynamic_images(&mut self, tasks: &mut Vec<WebViewTask>) {
-        let requests = self
-            .js_runtime
-            .as_mut()
-            .map(JsRuntime::take_dynamic_image_requests)
-            .unwrap_or_default();
+        let requests = std::mem::take(&mut self.pending_dynamic_images);
         let base_url = self.docment_info.as_ref().map(|info| info.base_url.clone());
         for request in requests {
             let url = Url::parse(&request.source).or_else(|_| {
@@ -1164,6 +1165,8 @@ impl WebView {
                 .extend(result.dynamic_script_requests);
             self.pending_dynamic_styles
                 .extend(result.dynamic_style_requests);
+            self.pending_dynamic_images
+                .extend(result.dynamic_image_requests);
 
             if let Some(in_flight) = self.in_flight_timer_version
                 && result.version >= in_flight
@@ -1282,6 +1285,7 @@ impl WebView {
         self.pending_js_fetches.clear();
         self.pending_dynamic_scripts.clear();
         self.pending_dynamic_styles.clear();
+        self.pending_dynamic_images.clear();
         self.classic_scripts.clear();
         self.next_script_index = 0;
         self.pending_script_fetches.clear();

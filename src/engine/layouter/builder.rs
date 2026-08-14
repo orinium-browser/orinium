@@ -25,16 +25,283 @@ use ui_layout::{
 use super::css_resolver::{ResolvedStyles, resolve_inline_style, set_inline_custom_property};
 use super::text_layouter::TextFlowLayouter;
 use super::types::{
-    Background, BorderRadius, BorderStyle, Color, ColorScheme, ColorStop, ContainerRole,
-    ContainerStyle, CornerRadius, FontStyle, FontWeight, Gradient, GradientKind, InfoNode,
-    LineHeight, NodeKind, Overflow, RadialShape, RadialSizeKind, TextAlign, TextDecoration,
-    TextStyle, TextTransform,
+    Background, BackgroundDimension, BackgroundOffset, BackgroundPosition, BackgroundPositionAxis,
+    BackgroundRepeat, BackgroundSize, BorderRadius, BorderStyle, Color, ColorScheme, ColorStop,
+    ContainerRole, ContainerStyle, CornerRadius, FontStyle, FontWeight, Gradient, GradientKind,
+    InfoNode, LineHeight, NodeKind, Overflow, RadialShape, RadialSizeKind, TextAlign,
+    TextDecoration, TextStyle, TextTransform,
 };
 use crate::engine::renderer_model::Image;
 use crate::engine::ui::custom_node_bridge::CustomNodeBridge;
 use crate::engine::ui::registry::{ComponentRegistry, CustomNodeContext, DomWriteBack};
 
 pub(crate) const DEFAULT_LINE_FACTOR: f32 = 1.2;
+
+fn background_dimension(value: &CssValue, font_size: f32) -> Option<BackgroundDimension> {
+    match value {
+        CssValue::Keyword(keyword) if keyword.eq_ignore_ascii_case("auto") => {
+            Some(BackgroundDimension::Auto)
+        }
+        CssValue::Number(value) if *value == 0.0 => Some(BackgroundDimension::Length(0.0)),
+        CssValue::Length(value, Unit::Px) => Some(BackgroundDimension::Length(*value)),
+        CssValue::Length(value, Unit::Em) => Some(BackgroundDimension::Length(*value * font_size)),
+        CssValue::Length(value, Unit::Rem) => Some(BackgroundDimension::Length(*value * 16.0)),
+        CssValue::Length(value, Unit::Percent) => {
+            Some(BackgroundDimension::Percent(*value / 100.0))
+        }
+        _ => None,
+    }
+}
+
+fn parse_background_size(value: &CssValue, font_size: f32) -> Option<BackgroundSize> {
+    match value {
+        CssValue::Keyword(keyword) if keyword.eq_ignore_ascii_case("contain") => {
+            Some(BackgroundSize::Contain)
+        }
+        CssValue::Keyword(keyword) if keyword.eq_ignore_ascii_case("cover") => {
+            Some(BackgroundSize::Cover)
+        }
+        CssValue::Keyword(keyword) if keyword.eq_ignore_ascii_case("auto") => {
+            Some(BackgroundSize::Auto)
+        }
+        CssValue::List(values) => match values.as_slice() {
+            [width] => Some(BackgroundSize::Explicit {
+                width: background_dimension(width, font_size)?,
+                height: BackgroundDimension::Auto,
+            }),
+            [width, height] => Some(BackgroundSize::Explicit {
+                width: background_dimension(width, font_size)?,
+                height: background_dimension(height, font_size)?,
+            }),
+            _ => None,
+        },
+        _ => Some(BackgroundSize::Explicit {
+            width: background_dimension(value, font_size)?,
+            height: BackgroundDimension::Auto,
+        }),
+    }
+}
+
+fn background_offset(value: &CssValue, font_size: f32) -> Option<BackgroundOffset> {
+    match background_dimension(value, font_size)? {
+        BackgroundDimension::Length(value) => Some(BackgroundOffset::Length(value)),
+        BackgroundDimension::Percent(value) => Some(BackgroundOffset::Percent(value)),
+        BackgroundDimension::Auto => None,
+    }
+}
+
+fn parse_background_position(value: &CssValue, font_size: f32) -> Option<BackgroundPosition> {
+    let values: Vec<&CssValue> = match value {
+        CssValue::List(values) => values.iter().collect(),
+        _ => vec![value],
+    };
+    if values.is_empty() || values.len() > 4 {
+        return None;
+    }
+
+    // The 3/4-value syntax consists of edge-and-offset pairs and may put the
+    // vertical pair first (Scratch uses `bottom 32px right 50%`).
+    if values.len() >= 3 {
+        let mut position = BackgroundPosition::default();
+        let mut has_x = false;
+        let mut has_y = false;
+        let mut index = 0;
+        while index < values.len() {
+            let CssValue::Keyword(edge) = values[index] else {
+                return None;
+            };
+            let offset = values
+                .get(index + 1)
+                .and_then(|value| background_offset(value, font_size));
+            let consumed_offset = offset.is_some();
+            let offset = offset.unwrap_or_default();
+            match edge.to_ascii_lowercase().as_str() {
+                "left" if !has_x => {
+                    position.x = BackgroundPositionAxis::Start(offset);
+                    has_x = true;
+                }
+                "right" if !has_x => {
+                    position.x = BackgroundPositionAxis::End(offset);
+                    has_x = true;
+                }
+                "top" if !has_y => {
+                    position.y = BackgroundPositionAxis::Start(offset);
+                    has_y = true;
+                }
+                "bottom" if !has_y => {
+                    position.y = BackgroundPositionAxis::End(offset);
+                    has_y = true;
+                }
+                "center" if !has_x => {
+                    position.x = BackgroundPositionAxis::Center(offset);
+                    has_x = true;
+                }
+                "center" if !has_y => {
+                    position.y = BackgroundPositionAxis::Center(offset);
+                    has_y = true;
+                }
+                _ => return None,
+            }
+            index += if consumed_offset { 2 } else { 1 };
+        }
+        if !has_x {
+            position.x = BackgroundPositionAxis::Center(BackgroundOffset::Zero);
+        }
+        if !has_y {
+            position.y = BackgroundPositionAxis::Center(BackgroundOffset::Zero);
+        }
+        return Some(position);
+    }
+
+    fn keyword_axis(keyword: &str, horizontal: bool) -> Option<BackgroundPositionAxis> {
+        let zero = BackgroundOffset::Zero;
+        match (keyword, horizontal) {
+            ("left", true) | ("top", false) => Some(BackgroundPositionAxis::Start(zero)),
+            ("right", true) | ("bottom", false) => Some(BackgroundPositionAxis::End(zero)),
+            ("center", _) => Some(BackgroundPositionAxis::Center(zero)),
+            _ => None,
+        }
+    }
+
+    if values.len() == 1 {
+        return match values[0] {
+            CssValue::Keyword(keyword) => {
+                let keyword = keyword.to_ascii_lowercase();
+                if matches!(keyword.as_str(), "top" | "bottom") {
+                    Some(BackgroundPosition {
+                        x: BackgroundPositionAxis::Center(BackgroundOffset::Zero),
+                        y: keyword_axis(&keyword, false)?,
+                    })
+                } else {
+                    Some(BackgroundPosition {
+                        x: keyword_axis(&keyword, true)?,
+                        y: BackgroundPositionAxis::Center(BackgroundOffset::Zero),
+                    })
+                }
+            }
+            value => Some(BackgroundPosition {
+                x: BackgroundPositionAxis::Start(background_offset(value, font_size)?),
+                y: BackgroundPositionAxis::Center(BackgroundOffset::Zero),
+            }),
+        };
+    }
+
+    let first_keyword = match values[0] {
+        CssValue::Keyword(keyword) => Some(keyword.to_ascii_lowercase()),
+        _ => None,
+    };
+    let second_keyword = match values[1] {
+        CssValue::Keyword(keyword) => Some(keyword.to_ascii_lowercase()),
+        _ => None,
+    };
+    let reversed = first_keyword
+        .as_deref()
+        .is_some_and(|keyword| matches!(keyword, "top" | "bottom"))
+        && second_keyword
+            .as_deref()
+            .is_some_and(|keyword| matches!(keyword, "left" | "right" | "center"));
+    let axis = |value: &CssValue, horizontal: bool| match value {
+        CssValue::Keyword(keyword) => keyword_axis(&keyword.to_ascii_lowercase(), horizontal),
+        value => Some(BackgroundPositionAxis::Start(background_offset(
+            value, font_size,
+        )?)),
+    };
+    if reversed {
+        Some(BackgroundPosition {
+            x: axis(values[1], true)?,
+            y: axis(values[0], false)?,
+        })
+    } else {
+        Some(BackgroundPosition {
+            x: axis(values[0], true)?,
+            y: axis(values[1], false)?,
+        })
+    }
+}
+
+fn parse_background_repeat(value: &CssValue) -> Option<BackgroundRepeat> {
+    let keyword = match value {
+        CssValue::Keyword(keyword) => keyword.as_str(),
+        _ => return None,
+    };
+    match keyword.to_ascii_lowercase().as_str() {
+        "repeat" => Some(BackgroundRepeat::Repeat),
+        "repeat-x" => Some(BackgroundRepeat::RepeatX),
+        "repeat-y" => Some(BackgroundRepeat::RepeatY),
+        "no-repeat" => Some(BackgroundRepeat::NoRepeat),
+        _ => None,
+    }
+}
+
+fn apply_background_shorthand_geometry(
+    value: &CssValue,
+    font_size: f32,
+    container_style: &mut ContainerStyle,
+) {
+    container_style.background_repeat = BackgroundRepeat::default();
+    container_style.background_size = BackgroundSize::default();
+    container_style.background_position = BackgroundPosition::default();
+
+    let values: Vec<&CssValue> = match value {
+        CssValue::List(values) => values.iter().collect(),
+        _ => vec![value],
+    };
+    if let Some(repeat) = values
+        .iter()
+        .find_map(|value| parse_background_repeat(value))
+    {
+        container_style.background_repeat = repeat;
+    }
+
+    let slash = values
+        .iter()
+        .position(|value| matches!(value, CssValue::Keyword(keyword) if keyword.as_str() == "/"));
+    if let Some(slash) = slash {
+        let size_values: Vec<CssValue> = values[slash + 1..]
+            .iter()
+            .take_while(|value| {
+                background_dimension(value, font_size).is_some()
+                    || matches!(value, CssValue::Keyword(keyword) if matches!(keyword.to_ascii_lowercase().as_str(), "contain" | "cover" | "auto"))
+            })
+            .map(|value| (*value).clone())
+            .collect();
+        let size_value = match size_values.as_slice() {
+            [value] => Some(value.clone()),
+            [] => None,
+            _ => Some(CssValue::List(size_values)),
+        };
+        if let Some(size) = size_value
+            .as_ref()
+            .and_then(|value| parse_background_size(value, font_size))
+        {
+            container_style.background_size = size;
+        }
+    }
+
+    let position_values: Vec<CssValue> = values[..slash.unwrap_or(values.len())]
+        .iter()
+        .filter(|value| {
+            background_offset(value, font_size).is_some()
+                || matches!(
+                    value,
+                    CssValue::Keyword(keyword)
+                        if matches!(keyword.to_ascii_lowercase().as_str(), "left" | "right" | "top" | "bottom" | "center")
+                )
+        })
+        .map(|value| (*value).clone())
+        .collect();
+    let position_value = match position_values.as_slice() {
+        [value] => Some(value.clone()),
+        [] => None,
+        _ => Some(CssValue::List(position_values)),
+    };
+    if let Some(position) = position_value
+        .as_ref()
+        .and_then(|value| parse_background_position(value, font_size))
+    {
+        container_style.background_position = position;
+    }
+}
 
 fn element_info(html_node: &HtmlNodeType) -> Option<ElementInfo> {
     let HtmlNodeType::Element {
@@ -1582,6 +1849,7 @@ pub fn apply_declaration(
         ("background", _) => {
             container_style.background =
                 parse_background_shorthand(name, value, text_style, text_flow_style, color_scheme)?;
+            apply_background_shorthand_geometry(value, text_flow_style.font_size, container_style);
         }
 
         ("background-image", _) => {
@@ -1589,7 +1857,8 @@ pub fn apply_declaration(
                 Background::Color(color) | Background::Image { color, .. } => *color,
                 Background::Gradient(_) => Color(0, 0, 0, 0),
             };
-            let parsed = parse_background_shorthand(name, value, text_style, color_scheme)?;
+            let parsed =
+                parse_background_shorthand(name, value, text_style, text_flow_style, color_scheme)?;
             container_style.background = match parsed {
                 Background::Image { source, image, .. } => Background::Image {
                     source,
@@ -1599,6 +1868,20 @@ pub fn apply_declaration(
                 Background::Color(Color(_, _, _, 0)) => Background::Color(existing_color),
                 other => other,
             };
+        }
+
+        ("background-repeat", _) => {
+            container_style.background_repeat = parse_background_repeat(value)?;
+        }
+
+        ("background-size", _) => {
+            container_style.background_size =
+                parse_background_size(value, text_flow_style.font_size)?;
+        }
+
+        ("background-position", _) => {
+            container_style.background_position =
+                parse_background_position(value, text_flow_style.font_size)?;
         }
 
         ("color", _) => {
@@ -4651,6 +4934,7 @@ mod tests {
         let mut style = Style::default();
         let mut container = ContainerStyle::default();
         let mut text = TextStyle::default();
+        let mut text_flow = TextFlowStyle::default();
         let mut overflow = Overflow::default();
         for (name, value) in [
             (
@@ -4671,6 +4955,7 @@ mod tests {
                 &mut style,
                 &mut container,
                 &mut text,
+                &mut text_flow,
                 &mut overflow,
                 ColorScheme::Light,
             )
@@ -4684,6 +4969,83 @@ mod tests {
                 ..
             } if source == "/images/hero.svg"
         ));
+    }
+
+    #[test]
+    fn scratch_background_geometry_longhands_are_parsed() {
+        let mut style = Style::default();
+        let mut container = ContainerStyle::default();
+        let mut text = TextStyle::default();
+        let mut text_flow = TextFlowStyle::default();
+        let mut overflow = Overflow::default();
+        for (name, value) in [
+            ("background-repeat", CssValue::Keyword("no-repeat".into())),
+            (
+                "background-size",
+                CssValue::List(vec![
+                    CssValue::Length(624.0, Unit::Px),
+                    CssValue::Length(325.0, Unit::Px),
+                ]),
+            ),
+            ("background-position", CssValue::Keyword("right".into())),
+        ] {
+            apply_declaration(
+                name,
+                &value,
+                &mut style,
+                &mut container,
+                &mut text,
+                &mut text_flow,
+                &mut overflow,
+                ColorScheme::Light,
+            )
+            .expect("Scratch background declaration is accepted");
+        }
+        assert_eq!(container.background_repeat, BackgroundRepeat::NoRepeat);
+        assert_eq!(
+            container.background_size,
+            BackgroundSize::Explicit {
+                width: BackgroundDimension::Length(624.0),
+                height: BackgroundDimension::Length(325.0),
+            }
+        );
+        assert_eq!(
+            container.background_position,
+            BackgroundPosition {
+                x: BackgroundPositionAxis::End(BackgroundOffset::Zero),
+                y: BackgroundPositionAxis::Center(BackgroundOffset::Zero),
+            }
+        );
+    }
+
+    #[test]
+    fn scratch_responsive_background_position_is_parsed() {
+        let container = apply_container_property(
+            "background-position",
+            CssValue::List(vec![
+                CssValue::Keyword("bottom".into()),
+                CssValue::Length(32.0, Unit::Px),
+                CssValue::Keyword("right".into()),
+                CssValue::Length(50.0, Unit::Percent),
+            ]),
+        );
+        assert_eq!(
+            container.background_position,
+            BackgroundPosition {
+                x: BackgroundPositionAxis::End(BackgroundOffset::Percent(0.5)),
+                y: BackgroundPositionAxis::End(BackgroundOffset::Length(32.0)),
+            }
+        );
+
+        let container =
+            apply_container_property("background-size", CssValue::Length(40.0, Unit::Rem));
+        assert_eq!(
+            container.background_size,
+            BackgroundSize::Explicit {
+                width: BackgroundDimension::Length(640.0),
+                height: BackgroundDimension::Auto,
+            }
+        );
     }
 
     #[test]

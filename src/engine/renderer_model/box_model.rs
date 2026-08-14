@@ -5,7 +5,8 @@ use ui_layout::{BoxModel, EdgeOption, LayoutChild, LayoutNode, Position, Rect};
 
 use crate::engine::layouter::text_layouter::TextFlowLayouter;
 use crate::engine::layouter::types::{
-    Background, BorderRadius, Color, ContainerStyle, CornerRadius, InfoNode, NodeKind,
+    Background, BackgroundDimension, BackgroundOffset, BackgroundPositionAxis, BackgroundRepeat,
+    BackgroundSize, BorderRadius, Color, ContainerStyle, CornerRadius, InfoNode, NodeKind,
     TextDecoration, TextFlowStyle, TextStyle,
 };
 use crate::engine::renderer_model::draw_command::{Brush, DrawCommand, FillRule, Paint};
@@ -468,18 +469,145 @@ fn draw_background(
                 });
             }
             if let Some(image) = image {
-                cmd_buf.push(DrawCommand::Fill {
-                    path,
-                    rule: FillRule::NonZero,
-                    paint: Paint {
-                        brush: Brush::Image(image.clone()),
-                        opacity: 1.0,
-                    },
-                });
+                let (image_width, image_height) = resolve_background_image_size(
+                    image.width() as f32,
+                    image.height() as f32,
+                    padding_box.width,
+                    padding_box.height,
+                    style.background_size,
+                );
+                if image_width > 0.0 && image_height > 0.0 {
+                    let image_x = resolve_background_axis(
+                        padding_box.width,
+                        image_width,
+                        style.background_position.x,
+                    );
+                    let image_y = resolve_background_axis(
+                        padding_box.height,
+                        image_height,
+                        style.background_position.y,
+                    );
+                    let repeat_x = matches!(
+                        style.background_repeat,
+                        BackgroundRepeat::Repeat | BackgroundRepeat::RepeatX
+                    );
+                    let repeat_y = matches!(
+                        style.background_repeat,
+                        BackgroundRepeat::Repeat | BackgroundRepeat::RepeatY
+                    );
+                    let xs = background_tile_positions(
+                        image_x,
+                        image_width,
+                        padding_box.width,
+                        repeat_x,
+                    );
+                    let ys = background_tile_positions(
+                        image_y,
+                        image_height,
+                        padding_box.height,
+                        repeat_y,
+                    );
+                    cmd_buf.push(DrawCommand::PushClip {
+                        path,
+                        rule: FillRule::NonZero,
+                    });
+                    for tile_y in ys {
+                        for tile_x in &xs {
+                            cmd_buf.push(DrawCommand::Fill {
+                                path: rect_path(x + *tile_x, y + tile_y, image_width, image_height),
+                                rule: FillRule::NonZero,
+                                paint: Paint {
+                                    brush: Brush::Image(image.clone()),
+                                    opacity: 1.0,
+                                },
+                            });
+                        }
+                    }
+                    cmd_buf.push(DrawCommand::PopClip);
+                }
             }
         }
         _ => {}
     }
+}
+
+fn resolve_background_dimension(dimension: BackgroundDimension, area: f32) -> Option<f32> {
+    match dimension {
+        BackgroundDimension::Auto => None,
+        BackgroundDimension::Length(value) => Some(value.max(0.0)),
+        BackgroundDimension::Percent(value) => Some((area * value).max(0.0)),
+    }
+}
+
+fn resolve_background_image_size(
+    intrinsic_width: f32,
+    intrinsic_height: f32,
+    area_width: f32,
+    area_height: f32,
+    size: BackgroundSize,
+) -> (f32, f32) {
+    if intrinsic_width <= 0.0 || intrinsic_height <= 0.0 {
+        return (0.0, 0.0);
+    }
+    let ratio = intrinsic_width / intrinsic_height;
+    match size {
+        BackgroundSize::Auto => (intrinsic_width, intrinsic_height),
+        BackgroundSize::Contain | BackgroundSize::Cover => {
+            let width_scale = area_width / intrinsic_width;
+            let height_scale = area_height / intrinsic_height;
+            let scale = if matches!(size, BackgroundSize::Contain) {
+                width_scale.min(height_scale)
+            } else {
+                width_scale.max(height_scale)
+            };
+            (intrinsic_width * scale, intrinsic_height * scale)
+        }
+        BackgroundSize::Explicit { width, height } => {
+            let width = resolve_background_dimension(width, area_width);
+            let height = resolve_background_dimension(height, area_height);
+            match (width, height) {
+                (Some(width), Some(height)) => (width, height),
+                (Some(width), None) => (width, width / ratio),
+                (None, Some(height)) => (height * ratio, height),
+                (None, None) => (intrinsic_width, intrinsic_height),
+            }
+        }
+    }
+}
+
+fn resolve_background_axis(area: f32, image: f32, position: BackgroundPositionAxis) -> f32 {
+    let available = area - image;
+    let length_offset = |offset| match offset {
+        BackgroundOffset::Zero => 0.0,
+        BackgroundOffset::Length(value) => value,
+        BackgroundOffset::Percent(value) => area * value,
+    };
+    match position {
+        BackgroundPositionAxis::Start(BackgroundOffset::Percent(value)) => available * value,
+        BackgroundPositionAxis::Start(offset) => length_offset(offset),
+        BackgroundPositionAxis::Center(offset) => available * 0.5 + length_offset(offset),
+        BackgroundPositionAxis::End(offset) => available - length_offset(offset),
+    }
+}
+
+fn background_tile_positions(base: f32, tile: f32, area: f32, repeat: bool) -> Vec<f32> {
+    if !repeat || tile <= 0.0 {
+        return vec![base];
+    }
+    let mut start = base;
+    while start > 0.0 {
+        start -= tile;
+    }
+    while start + tile <= 0.0 {
+        start += tile;
+    }
+    let mut positions = Vec::new();
+    let mut position = start;
+    while position < area && positions.len() < 512 {
+        positions.push(position);
+        position += tile;
+    }
+    positions
 }
 
 /// Push all draw commands for a single box model, returning the pop state.
@@ -1062,6 +1190,49 @@ mod tests {
     fn test_radii_resolution_and_clamp() {
         let outer = resolve_outer_radii(&BorderRadius::default(), 100.0, 50.0);
         assert_eq!(outer, [(0.0, 0.0); 4]);
+    }
+
+    #[test]
+    fn scratch_background_image_geometry_is_resolved() {
+        let (width, height) = resolve_background_image_size(
+            1200.0,
+            600.0,
+            800.0,
+            400.0,
+            BackgroundSize::Explicit {
+                width: BackgroundDimension::Length(624.0),
+                height: BackgroundDimension::Length(325.0),
+            },
+        );
+        assert_eq!((width, height), (624.0, 325.0));
+        assert_eq!(
+            resolve_background_axis(
+                800.0,
+                width,
+                BackgroundPositionAxis::End(BackgroundOffset::Zero),
+            ),
+            176.0
+        );
+        assert_eq!(
+            resolve_background_axis(
+                400.0,
+                height,
+                BackgroundPositionAxis::Center(BackgroundOffset::Zero),
+            ),
+            37.5
+        );
+    }
+
+    #[test]
+    fn background_contain_and_cover_preserve_aspect_ratio() {
+        assert_eq!(
+            resolve_background_image_size(200.0, 100.0, 300.0, 300.0, BackgroundSize::Contain,),
+            (300.0, 150.0)
+        );
+        assert_eq!(
+            resolve_background_image_size(200.0, 100.0, 300.0, 300.0, BackgroundSize::Cover),
+            (600.0, 300.0)
+        );
     }
 
     fn ui_rect(x: f32, y: f32, w: f32, h: f32) -> ui_layout::Rect {

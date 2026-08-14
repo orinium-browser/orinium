@@ -228,6 +228,67 @@ impl Default for Background {
     }
 }
 
+/// How a CSS background image is repeated inside its painting area.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BackgroundRepeat {
+    #[default]
+    Repeat,
+    RepeatX,
+    RepeatY,
+    NoRepeat,
+}
+
+/// A component of `background-size`.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum BackgroundDimension {
+    #[default]
+    Auto,
+    Length(f32),
+    Percent(f32),
+}
+
+/// The resolved syntax of `background-size`.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum BackgroundSize {
+    #[default]
+    Auto,
+    Contain,
+    Cover,
+    Explicit {
+        width: BackgroundDimension,
+        height: BackgroundDimension,
+    },
+}
+
+/// An offset following an edge keyword in `background-position`.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum BackgroundOffset {
+    #[default]
+    Zero,
+    Length(f32),
+    Percent(f32),
+}
+
+/// One horizontal or vertical component of `background-position`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BackgroundPositionAxis {
+    Start(BackgroundOffset),
+    Center(BackgroundOffset),
+    End(BackgroundOffset),
+}
+
+impl Default for BackgroundPositionAxis {
+    fn default() -> Self {
+        Self::Start(BackgroundOffset::Zero)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct BackgroundPosition {
+    pub x: BackgroundPositionAxis,
+    pub y: BackgroundPositionAxis,
+}
+
 /// CSS gradient definition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Gradient {
@@ -349,6 +410,9 @@ pub struct BorderRadius {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ContainerStyle {
     pub background: Background,
+    pub background_repeat: BackgroundRepeat,
+    pub background_size: BackgroundSize,
+    pub background_position: BackgroundPosition,
     pub border_color: BorderColor,
     pub border_style: BorderStyles,
     pub border_radius: BorderRadius,

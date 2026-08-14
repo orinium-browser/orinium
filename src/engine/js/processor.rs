@@ -13,7 +13,8 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 
 use super::{
-    JsDynamicScriptRequest, JsDynamicStyleRequest, JsFetchRequest, JsFetchResponse, JsRuntime,
+    JsDynamicImageRequest, JsDynamicScriptRequest, JsDynamicStyleRequest, JsFetchRequest,
+    JsFetchResponse, JsRuntime,
 };
 use crate::engine::layouter::dom_snapshot::DomSnapshot;
 
@@ -59,6 +60,8 @@ pub struct JsTaskResult {
     pub(crate) dynamic_script_requests: Vec<JsDynamicScriptRequest>,
     /// Dynamically inserted stylesheet links discovered while running this task.
     pub(crate) dynamic_style_requests: Vec<JsDynamicStyleRequest>,
+    /// Images created or populated while running this task.
+    pub(crate) dynamic_image_requests: Vec<JsDynamicImageRequest>,
     /// The sequence number of the task that produced this result.
     pub version: u64,
 }
@@ -107,6 +110,7 @@ impl JsProcessor {
                 let fetch_requests = runtime.take_fetch_requests();
                 let dynamic_script_requests = runtime.take_dynamic_script_requests();
                 let dynamic_style_requests = runtime.take_dynamic_style_requests();
+                let dynamic_image_requests = runtime.take_dynamic_image_requests();
                 let dom = if needs_redraw {
                     Some(runtime.snapshot())
                 } else {
@@ -118,6 +122,7 @@ impl JsProcessor {
                     fetch_requests,
                     dynamic_script_requests,
                     dynamic_style_requests,
+                    dynamic_image_requests,
                     version,
                 });
             }
