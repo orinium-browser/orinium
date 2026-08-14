@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::engine::renderer_model::Image;
 use crate::engine::ui::custom_node::CustomNode;
 
 use super::dom_snapshot::NodeId;
@@ -214,6 +215,11 @@ impl TryFrom<(u8, u8, u8, f32)> for Color {
 pub enum Background {
     Color(Color),
     Gradient(Gradient),
+    Image {
+        source: String,
+        image: Option<Image>,
+        color: Color,
+    },
 }
 
 impl Default for Background {

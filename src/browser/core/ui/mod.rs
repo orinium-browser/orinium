@@ -262,7 +262,7 @@ impl BrowserUi {
                     }
                     FetchKind::Css => {
                         let css = String::from_utf8_lossy(&resp.body).to_string();
-                        tab.on_fetch_succeeded_css(css);
+                        tab.on_fetch_succeeded_css_from(css, &url);
                     }
                     FetchKind::Script { index } => {
                         let source = String::from_utf8_lossy(&resp.body).to_string();

@@ -456,6 +456,28 @@ fn draw_background(
                 },
             });
         }
+        Background::Image { image, color, .. } => {
+            if color.3 > 0 {
+                cmd_buf.push(DrawCommand::Fill {
+                    path: path.clone(),
+                    rule: FillRule::NonZero,
+                    paint: Paint {
+                        brush: Brush::Solid(*color),
+                        opacity: 1.0,
+                    },
+                });
+            }
+            if let Some(image) = image {
+                cmd_buf.push(DrawCommand::Fill {
+                    path,
+                    rule: FillRule::NonZero,
+                    paint: Paint {
+                        brush: Brush::Image(image.clone()),
+                        opacity: 1.0,
+                    },
+                });
+            }
+        }
         _ => {}
     }
 }

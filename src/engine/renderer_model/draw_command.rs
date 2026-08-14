@@ -35,7 +35,7 @@ pub enum Brush {
 }
 
 /// Decoded image pixels shared between the engine and platform renderer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Image {
     id: u64,
     width: u32,

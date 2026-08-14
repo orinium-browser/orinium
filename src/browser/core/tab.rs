@@ -167,6 +167,13 @@ impl Tab {
         wv.on_css_fetched(css);
     }
 
+    pub fn on_fetch_succeeded_css_from(&mut self, css: String, stylesheet_url: &Url) {
+        let Some(wv) = self.webview.as_mut() else {
+            return;
+        };
+        wv.on_css_fetched_from(css, stylesheet_url);
+    }
+
     /// Delivers encoded image bytes to the page that requested them.
     pub fn on_fetch_succeeded_image(&mut self, source: String, bytes: &[u8]) {
         let Some(wv) = self.webview.as_mut() else {

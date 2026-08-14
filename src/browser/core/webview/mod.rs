@@ -7,7 +7,11 @@ use std::sync::{Arc, mpsc};
 
 use crate::engine::layouter::types::{ColorScheme, TextFlowStyle};
 use crate::engine::{
-    css::{self, parser::Parser as CssParser},
+    css::{
+        self,
+        parser::{CssNode, CssNodeType, Parser as CssParser},
+        values::CssValue,
+    },
     html::HtmlNodeType,
     html::parser::{
         ClassicScriptExecution, ClassicScriptSource, DomTree, Parser as HtmlParser, ScriptingMode,
@@ -472,6 +476,7 @@ impl WebView {
         self.schedule_dynamic_scripts(&mut tasks);
         self.schedule_dynamic_styles(&mut tasks);
         self.schedule_dynamic_images(&mut tasks);
+        self.schedule_pending_images(&mut tasks);
         self.run_due_js_timers();
         self.try_apply_layout_results();
         self.drain_write_backs();
@@ -515,6 +520,7 @@ impl WebView {
         self.pending_dynamic_scripts.clear();
         self.pending_dynamic_styles.clear();
 
+        let css_base_url = parsed.base_url.clone();
         let docment_info = DocumentInfo {
             document_url: parsed.document_url,
             base_url: parsed.base_url,
@@ -525,6 +531,7 @@ impl WebView {
         self.snapshot_cache = None;
 
         for inline_css in &parsed.inline_styles {
+            self.queue_css_images(inline_css, &css_base_url);
             let sheet = CssParser::new(inline_css).parse_lossy();
             layouter::css_resolver::append_resolved_styles(
                 Arc::make_mut(&mut self.resolved_styles),
@@ -535,6 +542,16 @@ impl WebView {
     }
 
     pub fn on_css_fetched(&mut self, css: String) {
+        let base_url = self
+            .docment_info
+            .as_ref()
+            .map(|info| info.base_url.clone())
+            .unwrap_or_else(|| Url::parse("about:blank").expect("valid fallback URL"));
+        self.on_css_fetched_from(css, &base_url);
+    }
+
+    pub fn on_css_fetched_from(&mut self, css: String, stylesheet_url: &Url) {
+        self.queue_css_images(&css, stylesheet_url);
         self.linked_css.push(css.clone());
         match self.css_strategy {
             CssApplicationStrategy::Batch => {
@@ -992,6 +1009,31 @@ impl WebView {
         }
     }
 
+    fn queue_css_images(&mut self, css: &str, base_url: &Url) {
+        for source in collect_css_image_sources(css) {
+            if self.images.contains_key(&source)
+                || self
+                    .pending_images
+                    .iter()
+                    .any(|(pending, _)| pending == &source)
+            {
+                continue;
+            }
+            if let Ok(url) = resolve_url(base_url, &source) {
+                self.pending_images.push((source, url));
+            }
+        }
+    }
+
+    fn schedule_pending_images(&mut self, tasks: &mut Vec<WebViewTask>) {
+        for (source, url) in std::mem::take(&mut self.pending_images) {
+            tasks.push(WebViewTask::Fetch {
+                url,
+                kind: FetchKind::Image { source },
+            });
+        }
+    }
+
     /// Dispatches a click on the given DOM snapshot node id to the page's JS.
     ///
     /// Resolves the live DOM node behind the snapshot id, translates it to the
@@ -1362,6 +1404,49 @@ fn apply_scroll_offsets(info: &mut InfoNode, offsets: &HashMap<NodeId, (f32, f32
     }
 }
 
+fn collect_css_image_sources(css: &str) -> Vec<String> {
+    fn collect_value(value: &CssValue, sources: &mut Vec<String>) {
+        match value {
+            CssValue::Function(name, arguments) if name.eq_ignore_ascii_case("url") => {
+                if let Some(source) = arguments.iter().find_map(|argument| match argument {
+                    CssValue::String(source) => Some(source.clone()),
+                    CssValue::Keyword(source) => Some(source.to_string()),
+                    _ => None,
+                }) && !source.is_empty()
+                    && !sources.contains(&source)
+                {
+                    sources.push(source);
+                }
+            }
+            CssValue::Function(_, arguments) | CssValue::List(arguments) => {
+                for argument in arguments {
+                    collect_value(argument, sources);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn visit(node: &CssNode, sources: &mut Vec<String>) {
+        if let CssNodeType::Declaration { name, value } = node.node()
+            && matches!(
+                name.to_ascii_lowercase().as_str(),
+                "background" | "background-image"
+            )
+        {
+            collect_value(value, sources);
+        }
+        for child in node.children() {
+            visit(child, sources);
+        }
+    }
+
+    let stylesheet = CssParser::new(css).parse_lossy();
+    let mut sources = Vec::new();
+    visit(&stylesheet, &mut sources);
+    sources
+}
+
 fn parse_html(html: &str, document_url: Url, scripting_mode: ScriptingMode) -> ParsedDocument {
     // --- DOM パース ---
     let mut parser = HtmlParser::new(html).with_scripting_mode(scripting_mode);
@@ -1519,6 +1604,24 @@ mod tests {
             assert!(Instant::now() < deadline, "timed out waiting for {why}");
             std::thread::sleep(Duration::from_millis(1));
         }
+    }
+
+    #[test]
+    fn collects_background_images_without_treating_fonts_as_page_images() {
+        let sources = collect_css_image_sources(
+            r#"
+            @font-face { src: url("/fonts/scratch.woff2"); }
+            .logo { background: white url('/images/logo.svg') no-repeat center; }
+            .hero { background-image: url("../images/hero.png"); }
+            "#,
+        );
+        assert_eq!(
+            sources,
+            vec![
+                "/images/logo.svg".to_string(),
+                "../images/hero.png".to_string()
+            ]
+        );
     }
 
     fn scrollable_info(dom_id: Option<NodeId>, scroll_y: bool, offset_y: f32) -> InfoNode {

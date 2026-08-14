@@ -433,6 +433,10 @@ pub fn build_layout_and_info_from_snapshot(
                 used_color_scheme,
             );
 
+            if let Background::Image { source, image, .. } = &mut container_style.background {
+                *image = images.get(source).cloned();
+            }
+
             // Absolutely positioned boxes are blockified before layout. The
             // inner display type remains unchanged.
             blockify_out_of_flow_positioned(&mut style);
@@ -1555,25 +1559,46 @@ pub fn apply_declaration(
          * Color / Text
          * ====================== */
         ("background-color", _) => {
-            container_style.background = match value {
-                CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("inherit") => {
-                    Background::Color(text_style.color)
-                }
+            let color = match value {
+                CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("inherit") => text_style.color,
                 CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentColor") => {
-                    Background::Color(text_style.color)
+                    text_style.color
                 }
                 CssValue::Keyword(kw)
                     if kw.eq_ignore_ascii_case("initial") || kw.eq_ignore_ascii_case("unset") =>
                 {
-                    Background::Color(Color(0, 0, 0, 0))
+                    Color(0, 0, 0, 0)
                 }
-                _ => Background::Color(resolve_css_color(name, value, color_scheme)?),
+                _ => resolve_css_color(name, value, color_scheme)?,
+            };
+            match &mut container_style.background {
+                Background::Image {
+                    color: image_color, ..
+                } => *image_color = color,
+                _ => container_style.background = Background::Color(color),
             };
         }
 
         ("background", _) => {
             container_style.background =
                 parse_background_shorthand(name, value, text_style, text_flow_style, color_scheme)?;
+        }
+
+        ("background-image", _) => {
+            let existing_color = match &container_style.background {
+                Background::Color(color) | Background::Image { color, .. } => *color,
+                Background::Gradient(_) => Color(0, 0, 0, 0),
+            };
+            let parsed = parse_background_shorthand(name, value, text_style, color_scheme)?;
+            container_style.background = match parsed {
+                Background::Image { source, image, .. } => Background::Image {
+                    source,
+                    image,
+                    color: existing_color,
+                },
+                Background::Color(Color(_, _, _, 0)) => Background::Color(existing_color),
+                other => other,
+            };
         }
 
         ("color", _) => {
@@ -2169,6 +2194,7 @@ fn parse_background_shorthand(
 
     let mut maybe_color: Option<Color> = None;
     let mut maybe_gradient: Option<Gradient> = None;
+    let mut maybe_image: Option<String> = None;
 
     for v in items {
         // inherit
@@ -2214,6 +2240,17 @@ fn parse_background_shorthand(
                 text_flow_style,
                 color_scheme,
             )?);
+            continue;
+        }
+
+        if let CssValue::Function(fn_name, args) = v
+            && fn_name.eq_ignore_ascii_case("url")
+        {
+            maybe_image = args.iter().find_map(|value| match value {
+                CssValue::String(source) => Some(source.clone()),
+                CssValue::Keyword(source) => Some(source.to_string()),
+                _ => None,
+            });
             continue;
         }
 
@@ -2265,6 +2302,13 @@ fn parse_background_shorthand(
 
     if let Some(g) = maybe_gradient {
         return Some(Background::Gradient(g));
+    }
+    if let Some(source) = maybe_image {
+        return Some(Background::Image {
+            source,
+            image: None,
+            color: maybe_color.unwrap_or(Color(0, 0, 0, 0)),
+        });
     }
     if let Some(c) = maybe_color {
         return Some(Background::Color(c));
@@ -4586,16 +4630,60 @@ mod tests {
                 CssValue::Keyword("white".into()),
             ]),
         );
-        assert_eq!(
+        assert!(matches!(
             container.background,
-            Background::Color(Color(255, 255, 255, 255))
-        );
+            Background::Image {
+                source,
+                image: None,
+                color: Color(255, 255, 255, 255)
+            } if source == "/images/caret.svg"
+        ));
     }
 
     #[test]
     fn background_none_resolves_to_transparent() {
         let container = apply_container_property("background", CssValue::Keyword("none".into()));
         assert_eq!(container.background, Background::default());
+    }
+
+    #[test]
+    fn background_image_longhand_preserves_background_color() {
+        let mut style = Style::default();
+        let mut container = ContainerStyle::default();
+        let mut text = TextStyle::default();
+        let mut overflow = Overflow::default();
+        for (name, value) in [
+            (
+                "background-color",
+                CssValue::Keyword("rebeccapurple".into()),
+            ),
+            (
+                "background-image",
+                CssValue::Function(
+                    "url".into(),
+                    vec![CssValue::String("/images/hero.svg".into())],
+                ),
+            ),
+        ] {
+            apply_declaration(
+                name,
+                &value,
+                &mut style,
+                &mut container,
+                &mut text,
+                &mut overflow,
+                ColorScheme::Light,
+            )
+            .expect("background declaration is accepted");
+        }
+        assert!(matches!(
+            container.background,
+            Background::Image {
+                source,
+                color: Color(102, 51, 153, 255),
+                ..
+            } if source == "/images/hero.svg"
+        ));
     }
 
     #[test]
