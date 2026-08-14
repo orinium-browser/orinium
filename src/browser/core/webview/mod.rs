@@ -1056,7 +1056,6 @@ impl WebView {
     fn try_apply_layout_results(&mut self) {
         while let Some(result) = self.layout_processor.try_receive() {
             let LayoutResult { layout, mut info } = result;
-
             // The builder initializes every node's scroll offset to 0, so a
             // rebuilt tree would otherwise drop the scroll position (e.g. the
             // viewport change on a window resize). Re-apply the offsets of the

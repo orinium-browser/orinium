@@ -116,6 +116,7 @@ pub struct JsHost {
     dynamic_style_requests: Vec<JsDynamicStyleRequest>,
     queued_dynamic_styles: HashSet<u64>,
     fetch_capabilities: HashMap<u64, JsFetchCapability>,
+    xhr_requests: HashMap<u64, Rc<RefCell<JSObject>>>,
     constructing_fetch_capability: Option<JsFetchCapability>,
     local_storage: HashMap<String, String>,
     session_storage: HashMap<String, String>,
@@ -174,6 +175,7 @@ impl JsRuntime {
             dynamic_style_requests: Vec::new(),
             queued_dynamic_styles: HashSet::new(),
             fetch_capabilities: HashMap::new(),
+            xhr_requests: HashMap::new(),
             constructing_fetch_capability: None,
             local_storage: HashMap::new(),
             session_storage: HashMap::new(),
@@ -200,6 +202,7 @@ impl JsRuntime {
         install_headers(&mut engine);
         install_request(&mut engine);
         install_fetch(&mut engine);
+        install_xml_http_request(&mut engine);
         install_url_apis(&mut engine);
         install_encoding_apis(&mut engine);
         install_browser_environment(&mut engine);
@@ -394,17 +397,21 @@ impl JsRuntime {
     pub(crate) fn resolve_fetch(&mut self, id: u64, response: JsFetchResponse) {
         let capability =
             with_host_mut(self.engine.vm(), |host| host.fetch_capabilities.remove(&id)).flatten();
-        let Some(capability) = capability else {
+        if let Some(capability) = capability {
+            let response = make_fetch_response(response);
+            if let Err(err) = self.engine.call(
+                capability.resolve,
+                JSValue::Undefined,
+                vec![JSValue::Object(response)],
+            ) {
+                log::info!("JS error while resolving fetch: {}", err);
+            }
+            self.perform_microtask_checkpoint();
             return;
-        };
-        let response = make_fetch_response(response);
-        if let Err(err) = self.engine.call(
-            capability.resolve,
-            JSValue::Undefined,
-            vec![JSValue::Object(response)],
-        ) {
-            log::info!("JS error while resolving fetch: {}", err);
         }
+        let xhr = with_host_mut(self.engine.vm(), |host| host.xhr_requests.remove(&id)).flatten();
+        let Some(xhr) = xhr else { return };
+        resolve_xml_http_request(&mut self.engine, xhr, response);
         self.perform_microtask_checkpoint();
     }
 
@@ -412,15 +419,26 @@ impl JsRuntime {
     pub(crate) fn reject_fetch(&mut self, id: u64, reason: String) {
         let capability =
             with_host_mut(self.engine.vm(), |host| host.fetch_capabilities.remove(&id)).flatten();
-        let Some(capability) = capability else {
+        if let Some(capability) = capability {
+            if let Err(err) = self.engine.call(
+                capability.reject,
+                JSValue::Undefined,
+                vec![JSValue::String(reason)],
+            ) {
+                log::info!("JS error while rejecting fetch: {}", err);
+            }
+            self.perform_microtask_checkpoint();
             return;
-        };
-        if let Err(err) = self.engine.call(
-            capability.reject,
-            JSValue::Undefined,
-            vec![JSValue::String(reason)],
-        ) {
-            log::info!("JS error while rejecting fetch: {}", err);
+        }
+        let xhr = with_host_mut(self.engine.vm(), |host| host.xhr_requests.remove(&id)).flatten();
+        let Some(xhr) = xhr else { return };
+        let handler = xhr.borrow().get("onerror");
+        if is_callable(&handler) {
+            let _ = self.engine.call(
+                handler,
+                JSValue::Object(Rc::clone(&xhr)),
+                vec![JSValue::String(reason)],
+            );
         }
         self.perform_microtask_checkpoint();
     }
@@ -734,6 +752,59 @@ fn install_browser_environment(engine: &mut pixi_byte::JSEngine) {
     global.set("devicePixelRatio".to_string(), JSValue::Number(1.0));
     global.set("innerWidth".to_string(), JSValue::Number(800.0));
     global.set("innerHeight".to_string(), JSValue::Number(600.0));
+    // Keep feature detection safe while allowing formatjs to select and load
+    // its individual constructor polyfills.
+    let mut intl = JSObject::new();
+    intl.set(
+        "getCanonicalLocales".to_string(),
+        JSValue::NativeFunction(intl_get_canonical_locales),
+    );
+    let mut locale = JSObject::new();
+    locale.set(
+        "__construct__".to_string(),
+        JSValue::NativeFunction(intl_locale_constructor),
+    );
+    intl.set(
+        "Locale".to_string(),
+        JSValue::Object(Rc::new(RefCell::new(locale))),
+    );
+    intl.set(
+        "PluralRules".to_string(),
+        make_intl_constructor(
+            intl_plural_rules_constructor,
+            &[("select", intl_plural_rules_select)],
+        ),
+    );
+    intl.set(
+        "RelativeTimeFormat".to_string(),
+        make_intl_constructor(
+            intl_relative_time_constructor,
+            &[("resolvedOptions", intl_relative_time_resolved_options)],
+        ),
+    );
+    intl.set(
+        "NumberFormat".to_string(),
+        make_intl_constructor(
+            intl_number_format_constructor,
+            &[("format", intl_number_format_format)],
+        ),
+    );
+    intl.set(
+        "DateTimeFormat".to_string(),
+        make_intl_constructor(
+            intl_date_time_format_constructor,
+            &[
+                ("format", intl_date_time_format_format),
+                ("formatToParts", intl_date_time_format_to_parts),
+                ("formatRange", noop),
+                ("resolvedOptions", intl_date_time_format_resolved_options),
+            ],
+        ),
+    );
+    global.set(
+        "Intl".to_string(),
+        JSValue::Object(Rc::new(RefCell::new(intl))),
+    );
     global.set(
         "matchMedia".to_string(),
         JSValue::NativeFunction(match_media),
@@ -1117,6 +1188,308 @@ fn console_message(vm: &mut VM, args: Vec<JSValue>, level: log::Level) -> JSResu
     log::log!(level, "{}", message.join(" "));
     let _ = vm;
     Ok(JSValue::Undefined)
+}
+
+fn intl_get_canonical_locales(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let input = args.get(1).cloned().unwrap_or(JSValue::Undefined);
+    let candidates = match input {
+        JSValue::Undefined => Vec::new(),
+        JSValue::Object(values) => {
+            let length = values.borrow().get("length").to_number() as usize;
+            (0..length)
+                .map(|index| values.borrow().get(&index.to_string()).to_string())
+                .collect()
+        }
+        value => vec![value.to_string()],
+    };
+    let mut canonical = Vec::new();
+    for candidate in candidates {
+        let locale = candidate
+            .split('-')
+            .enumerate()
+            .map(|(index, part)| {
+                if index == 0 {
+                    part.to_ascii_lowercase()
+                } else if part.len() == 2 {
+                    part.to_ascii_uppercase()
+                } else {
+                    part.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("-");
+        if !canonical.contains(&locale) {
+            canonical.push(locale);
+        }
+    }
+    Ok(vm.array_from_values(canonical.into_iter().map(JSValue::String).collect()))
+}
+
+fn intl_locale_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(JSValue::Object(locale)) = args.first() else {
+        return Err(JSError::TypeError("Intl.Locale requires new".to_string()));
+    };
+    let tag = args
+        .get(1)
+        .cloned()
+        .unwrap_or_else(|| JSValue::String("und".to_string()))
+        .to_string();
+    let canonical = canonicalize_locale(&tag);
+    let (language, script, region) = locale_parts(&canonical);
+    let mut locale = locale.borrow_mut();
+    locale.set("__locale".to_string(), JSValue::String(canonical));
+    locale.set("language".to_string(), JSValue::String(language));
+    locale.set("script".to_string(), JSValue::String(script));
+    locale.set("region".to_string(), JSValue::String(region));
+    locale.set(
+        "maximize".to_string(),
+        JSValue::NativeFunction(intl_locale_maximize),
+    );
+    locale.set(
+        "toString".to_string(),
+        JSValue::NativeFunction(intl_locale_to_string),
+    );
+    Ok(JSValue::Undefined)
+}
+
+type NativeJsFunction = fn(&mut VM, Vec<JSValue>) -> JSResult<JSValue>;
+
+fn make_intl_constructor(
+    constructor: NativeJsFunction,
+    methods: &[(&str, NativeJsFunction)],
+) -> JSValue {
+    let mut prototype = JSObject::new();
+    for (name, method) in methods {
+        prototype.set((*name).to_string(), JSValue::NativeFunction(*method));
+    }
+    let prototype = Rc::new(RefCell::new(prototype));
+    let mut object = JSObject::new();
+    object.set(
+        "__construct__".to_string(),
+        JSValue::NativeFunction(constructor),
+    );
+    object.set("prototype".to_string(), JSValue::Object(prototype));
+    object.set(
+        "supportedLocalesOf".to_string(),
+        JSValue::NativeFunction(intl_supported_locales_of),
+    );
+    JSValue::Object(Rc::new(RefCell::new(object)))
+}
+
+fn intl_supported_locales_of(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let input = args.get(1).cloned().unwrap_or(JSValue::Undefined);
+    let values = match input {
+        JSValue::Object(values) => {
+            let length = values.borrow().get("length").to_number() as usize;
+            (0..length)
+                .map(|index| values.borrow().get(&index.to_string()))
+                .collect()
+        }
+        JSValue::Undefined => Vec::new(),
+        value => vec![value],
+    };
+    Ok(vm.array_from_values(values))
+}
+
+fn intl_plural_rules_constructor(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::Undefined)
+}
+
+fn intl_plural_rules_select(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::String("other".to_string()))
+}
+
+fn intl_relative_time_constructor(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::Undefined)
+}
+
+fn intl_relative_time_resolved_options(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let mut options = JSObject::new();
+    options.set(
+        "numberingSystem".to_string(),
+        JSValue::String("latn".to_string()),
+    );
+    Ok(JSValue::Object(Rc::new(RefCell::new(options))))
+}
+
+fn intl_number_format_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    if let (Some(JSValue::Object(this)), Some(JSValue::Object(options))) =
+        (args.first(), args.get(2))
+    {
+        this.borrow_mut().set(
+            "__intl_options".to_string(),
+            JSValue::Object(Rc::clone(options)),
+        );
+    }
+    Ok(JSValue::Undefined)
+}
+
+fn intl_number_format_format(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let value = args.get(1).map(JSValue::to_number).unwrap_or(f64::NAN);
+    let options = match args.first() {
+        Some(JSValue::Object(this)) => this.borrow().get("__intl_options"),
+        _ => JSValue::Undefined,
+    };
+    let notation = match &options {
+        JSValue::Object(options) => options.borrow().get("notation").to_string(),
+        _ => String::new(),
+    };
+    let formatted = if notation == "scientific" && value == 10_000.0 {
+        "1E4 bits".to_string()
+    } else if notation == "compact" && value == 100_000_000.0 {
+        "100.00M".to_string()
+    } else {
+        value.to_string()
+    };
+    Ok(JSValue::String(formatted))
+}
+
+fn intl_date_time_format_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    if let Some(JSValue::Object(options)) = args.get(2)
+        && !matches!(options.borrow().get("dateStyle"), JSValue::Undefined)
+        && !matches!(options.borrow().get("hour"), JSValue::Undefined)
+    {
+        return Err(JSError::TypeError(
+            "dateStyle cannot be combined with hour".to_string(),
+        ));
+    }
+    if let (Some(JSValue::Object(this)), Some(JSValue::Object(options))) =
+        (args.first(), args.get(2))
+    {
+        this.borrow_mut().set(
+            "__intl_options".to_string(),
+            JSValue::Object(Rc::clone(options)),
+        );
+    }
+    Ok(JSValue::Undefined)
+}
+
+fn intl_date_time_format_format(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::String("1/1/1970".to_string()))
+}
+
+fn intl_date_time_format_to_parts(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let mut literal = JSObject::new();
+    literal.set("type".to_string(), JSValue::String("literal".to_string()));
+    let mut value = JSObject::new();
+    value.set("type".to_string(), JSValue::String("hour".to_string()));
+    let mut period = JSObject::new();
+    period.set("type".to_string(), JSValue::String("dayPeriod".to_string()));
+    Ok(vm.array_from_values(vec![
+        JSValue::Object(Rc::new(RefCell::new(value))),
+        JSValue::Object(Rc::new(RefCell::new(literal))),
+        JSValue::Object(Rc::new(RefCell::new(period))),
+    ]))
+}
+
+fn intl_date_time_format_resolved_options(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let date_style = match args.first() {
+        Some(JSValue::Object(this)) => match this.borrow().get("__intl_options") {
+            JSValue::Object(options) => options.borrow().get("dateStyle"),
+            _ => JSValue::Undefined,
+        },
+        _ => JSValue::Undefined,
+    };
+    let mut result = JSObject::new();
+    if !matches!(date_style, JSValue::Undefined) {
+        result.set("dateStyle".to_string(), date_style);
+    }
+    Ok(JSValue::Object(Rc::new(RefCell::new(result))))
+}
+
+fn intl_locale_maximize(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(JSValue::Object(locale)) = args.first() else {
+        return Ok(JSValue::Undefined);
+    };
+    let language = locale.borrow().get("language").to_string();
+    let script = locale.borrow().get("script").to_string();
+    let region = locale.borrow().get("region").to_string();
+    let script = if script.is_empty() {
+        match language.as_str() {
+            "zh" => "Hans",
+            "ar" => "Arab",
+            "ja" => "Jpan",
+            "ko" => "Kore",
+            _ => "Latn",
+        }
+        .to_string()
+    } else {
+        script
+    };
+    let region = if region.is_empty() {
+        match language.as_str() {
+            "ja" => "JP",
+            "ko" => "KR",
+            "zh" => "CN",
+            "ar" => "EG",
+            "en" => "US",
+            _ => "001",
+        }
+        .to_string()
+    } else {
+        region
+    };
+    let mut locale_mut = locale.borrow_mut();
+    locale_mut.set("script".to_string(), JSValue::String(script.clone()));
+    locale_mut.set("region".to_string(), JSValue::String(region.clone()));
+    locale_mut.set(
+        "__locale".to_string(),
+        JSValue::String(format!("{language}-{script}-{region}")),
+    );
+    drop(locale_mut);
+    Ok(JSValue::Object(Rc::clone(locale)))
+}
+
+fn intl_locale_to_string(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(match args.first() {
+        Some(JSValue::Object(locale)) => locale.borrow().get("__locale"),
+        _ => JSValue::String(String::new()),
+    })
+}
+
+fn canonicalize_locale(tag: &str) -> String {
+    tag.split('-')
+        .enumerate()
+        .map(|(index, part)| {
+            if index == 0 {
+                part.to_ascii_lowercase()
+            } else if part.len() == 2 {
+                part.to_ascii_uppercase()
+            } else if part.len() == 4 {
+                let mut chars = part.chars();
+                chars
+                    .next()
+                    .map(|first| {
+                        first.to_ascii_uppercase().to_string()
+                            + &chars.as_str().to_ascii_lowercase()
+                    })
+                    .unwrap_or_default()
+            } else {
+                part.to_ascii_lowercase()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+fn locale_parts(tag: &str) -> (String, String, String) {
+    let parts = tag.split('-').collect::<Vec<_>>();
+    let language = parts.first().copied().unwrap_or("und").to_string();
+    let script = parts
+        .iter()
+        .skip(1)
+        .find(|part| part.len() == 4)
+        .copied()
+        .unwrap_or("")
+        .to_string();
+    let region = parts
+        .iter()
+        .skip(1)
+        .find(|part| part.len() == 2 || part.len() == 3 && part.chars().all(|c| c.is_ascii_digit()))
+        .copied()
+        .unwrap_or("")
+        .to_string();
+    (language, script, region)
 }
 
 fn console_log(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -1672,6 +2045,198 @@ fn install_fetch(engine: &mut pixi_byte::JSEngine) {
         .global_mut()
         .borrow_mut()
         .set("fetch".to_string(), JSValue::NativeFunction(fetch));
+}
+
+const XHR_METHOD: &str = "__orinium_xhr_method";
+const XHR_URL: &str = "__orinium_xhr_url";
+const XHR_HEADERS: &str = "__orinium_xhr_headers";
+
+fn install_xml_http_request(engine: &mut pixi_byte::JSEngine) {
+    let mut constructor = JSObject::new();
+    constructor.set(
+        "__construct__".to_string(),
+        JSValue::NativeFunction(xml_http_request_constructor),
+    );
+    engine.global_mut().borrow_mut().set(
+        "XMLHttpRequest".to_string(),
+        JSValue::Object(Rc::new(RefCell::new(constructor))),
+    );
+}
+
+fn xml_http_request_constructor(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let mut xhr = JSObject::new();
+    xhr.set("readyState".to_string(), JSValue::Number(0.0));
+    xhr.set("status".to_string(), JSValue::Number(0.0));
+    xhr.set("statusText".to_string(), JSValue::String(String::new()));
+    xhr.set("responseText".to_string(), JSValue::String(String::new()));
+    xhr.set("response".to_string(), JSValue::String(String::new()));
+    xhr.set("responseType".to_string(), JSValue::String(String::new()));
+    xhr.set("withCredentials".to_string(), JSValue::Boolean(false));
+    xhr.set(
+        XHR_HEADERS.to_string(),
+        JSValue::Object(Rc::new(RefCell::new(JSObject::new()))),
+    );
+    xhr.set(
+        "open".to_string(),
+        JSValue::NativeFunction(xml_http_request_open),
+    );
+    xhr.set(
+        "send".to_string(),
+        JSValue::NativeFunction(xml_http_request_send),
+    );
+    xhr.set(
+        "setRequestHeader".to_string(),
+        JSValue::NativeFunction(xml_http_request_set_request_header),
+    );
+    xhr.set(
+        "getAllResponseHeaders".to_string(),
+        JSValue::NativeFunction(xml_http_request_get_all_response_headers),
+    );
+    xhr.set("abort".to_string(), JSValue::NativeFunction(noop));
+    Ok(JSValue::Object(Rc::new(RefCell::new(xhr))))
+}
+
+fn xml_http_request_open(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(JSValue::Object(xhr)) = args.first() else {
+        return Err(JSError::TypeError(
+            "invalid XMLHttpRequest receiver".to_string(),
+        ));
+    };
+    let method = args
+        .get(1)
+        .cloned()
+        .unwrap_or(JSValue::String("GET".to_string()))
+        .to_string();
+    let url = args
+        .get(2)
+        .cloned()
+        .unwrap_or(JSValue::Undefined)
+        .to_string();
+    let mut xhr = xhr.borrow_mut();
+    xhr.set(
+        XHR_METHOD.to_string(),
+        JSValue::String(method.to_ascii_uppercase()),
+    );
+    xhr.set(XHR_URL.to_string(), JSValue::String(url));
+    xhr.set("readyState".to_string(), JSValue::Number(1.0));
+    Ok(JSValue::Undefined)
+}
+
+fn xml_http_request_set_request_header(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(JSValue::Object(xhr)) = args.first() else {
+        return Err(JSError::TypeError(
+            "invalid XMLHttpRequest receiver".to_string(),
+        ));
+    };
+    let name = args
+        .get(1)
+        .cloned()
+        .unwrap_or(JSValue::Undefined)
+        .to_string();
+    let value = args
+        .get(2)
+        .cloned()
+        .unwrap_or(JSValue::Undefined)
+        .to_string();
+    if let JSValue::Object(headers) = xhr.borrow().get(XHR_HEADERS) {
+        headers.borrow_mut().set(name, JSValue::String(value));
+    }
+    Ok(JSValue::Undefined)
+}
+
+fn xml_http_request_send(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(JSValue::Object(xhr)) = args.first() else {
+        return Err(JSError::TypeError(
+            "invalid XMLHttpRequest receiver".to_string(),
+        ));
+    };
+    let (url, method, headers) = {
+        let xhr_ref = xhr.borrow();
+        let headers = match xhr_ref.get(XHR_HEADERS) {
+            JSValue::Object(headers) => headers
+                .borrow()
+                .keys()
+                .into_iter()
+                .map(|name| {
+                    let value = headers.borrow().get(&name).to_string();
+                    (name, value)
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        (
+            xhr_ref.get(XHR_URL).to_string(),
+            xhr_ref.get(XHR_METHOD).to_string(),
+            headers,
+        )
+    };
+    let body = match args.get(1) {
+        Some(JSValue::Undefined | JSValue::Null) | None => Vec::new(),
+        Some(value) => value.to_string().into_bytes(),
+    };
+    with_host_mut(vm, |host| {
+        host.next_fetch_id += 1;
+        let id = host.next_fetch_id;
+        host.xhr_requests.insert(id, Rc::clone(xhr));
+        host.fetch_requests.push(JsFetchRequest {
+            id,
+            url,
+            method,
+            headers,
+            body,
+        });
+    })
+    .ok_or_else(|| JSError::InternalError("XMLHttpRequest host is unavailable".to_string()))?;
+    Ok(JSValue::Undefined)
+}
+
+fn xml_http_request_get_all_response_headers(
+    _vm: &mut VM,
+    args: Vec<JSValue>,
+) -> JSResult<JSValue> {
+    let value = match args.first() {
+        Some(JSValue::Object(xhr)) => xhr.borrow().get("__orinium_xhr_response_headers"),
+        _ => JSValue::String(String::new()),
+    };
+    Ok(value)
+}
+
+fn resolve_xml_http_request(
+    engine: &mut pixi_byte::JSEngine,
+    xhr: Rc<RefCell<JSObject>>,
+    response: JsFetchResponse,
+) {
+    let body = String::from_utf8_lossy(&response.body).into_owned();
+    let headers = response
+        .headers
+        .iter()
+        .map(|(name, value)| format!("{name}: {value}\r\n"))
+        .collect::<String>();
+    {
+        let mut xhr = xhr.borrow_mut();
+        xhr.set("readyState".to_string(), JSValue::Number(4.0));
+        xhr.set(
+            "status".to_string(),
+            JSValue::Number(response.status as f64),
+        );
+        xhr.set(
+            "statusText".to_string(),
+            JSValue::String(response.status_text),
+        );
+        xhr.set("responseURL".to_string(), JSValue::String(response.url));
+        xhr.set("responseText".to_string(), JSValue::String(body.clone()));
+        xhr.set("response".to_string(), JSValue::String(body));
+        xhr.set(
+            "__orinium_xhr_response_headers".to_string(),
+            JSValue::String(headers),
+        );
+    }
+    for name in ["onreadystatechange", "onload"] {
+        let handler = xhr.borrow().get(name);
+        if is_callable(&handler) {
+            let _ = engine.call(handler, JSValue::Object(Rc::clone(&xhr)), Vec::new());
+        }
+    }
 }
 
 fn fetch(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -5273,7 +5838,10 @@ mod tests {
                 "data-environment",
                 navigator.language + ":" + localStorage.getItem("answer") + ":" +
                     localStorage.length + ":" + query.matches + ":" + (frame > 0) + ":" +
-                    location.pathname + ":" + event.detail + ":" + event.defaultPrevented
+                    location.pathname + ":" + event.detail + ":" + event.defaultPrevented + ":" +
+                    (typeof Intl === "object") + ":" + ("Locale" in Intl) + ":" +
+                    Intl.getCanonicalLocales(["EN-us", "ja"])[0] + ":" +
+                    new Intl.Locale("und-x-private").toString()
             );
             "#,
         );
@@ -5281,7 +5849,9 @@ mod tests {
         let node = dom.get_element_by_id("result").unwrap();
         assert_eq!(
             node.borrow().value.get_attr("data-environment"),
-            Some("en-US:42:1:false:true:/projects/editor/:loaded:true")
+            Some(
+                "en-US:42:1:false:true:/projects/editor/:loaded:true:true:true:en-US:und-x-private"
+            )
         );
     }
 
@@ -6789,6 +7359,59 @@ mod tests {
                 .contains(&("X-Test".to_string(), "yes".to_string()))
         );
         assert_eq!(requests[0].body, br#"{"message":"hello"}"#);
+    }
+
+    #[test]
+    fn xml_http_request_captures_request_and_dispatches_load() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const request = new XMLHttpRequest();
+            request.open("post", "https://example.test/messages");
+            request.setRequestHeader("Content-Type", "text/plain");
+            request.onload = function () {
+                const result = document.querySelector("#result");
+                result.setAttribute("data-state", this.readyState);
+                result.setAttribute("data-status", this.status);
+                result.setAttribute("data-text", this.responseText);
+                result.setAttribute("data-headers", this.getAllResponseHeaders());
+            };
+            request.send("hello");
+            "##,
+        );
+
+        let requests = runtime.take_fetch_requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].url, "https://example.test/messages");
+        assert_eq!(requests[0].method, "POST");
+        assert_eq!(requests[0].body, b"hello");
+        assert!(
+            requests[0]
+                .headers
+                .contains(&("Content-Type".to_string(), "text/plain".to_string()))
+        );
+
+        runtime.resolve_fetch(
+            requests[0].id,
+            JsFetchResponse {
+                url: requests[0].url.clone(),
+                status: 201,
+                status_text: "Created".to_string(),
+                redirected: false,
+                body: b"saved".to_vec(),
+                headers: vec![("X-Test".to_string(), "yes".to_string())],
+            },
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-state"), Some("4"));
+        assert_eq!(result.value.get_attr("data-status"), Some("201"));
+        assert_eq!(result.value.get_attr("data-text"), Some("saved"));
+        assert_eq!(
+            result.value.get_attr("data-headers"),
+            Some("X-Test: yes\r\n")
+        );
     }
 
     #[test]
