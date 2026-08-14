@@ -3796,8 +3796,7 @@ fn resolve_css_color(name: &str, css_color: &CssValue, color_scheme: ColorScheme
 
         // hsl() / hsla() unified
         CssValue::Function(func, args) if func == "hsl" || func == "hsla" => {
-            // Collect h, s, l and optional alpha
-            let mut numbers = Vec::new();
+            let mut channels = Vec::new();
             let mut alpha: Option<f32> = None;
             let mut after_slash = false;
 
@@ -3810,19 +3809,47 @@ fn resolve_css_color(name: &str, css_color: &CssValue, color_scheme: ColorScheme
                         if after_slash {
                             alpha = Some(*n);
                         } else {
-                            numbers.push(*n);
+                            channels.push(arg);
                         }
+                    }
+                    CssValue::Length(percent, Unit::Percent) if after_slash => {
+                        alpha = Some(*percent / 100.0);
+                    }
+                    CssValue::Length(_, Unit::Percent | Unit::Deg) if !after_slash => {
+                        channels.push(arg);
                     }
                     _ => return None,
                 }
             }
 
-            if numbers.len() != 3 {
-                return None;
+            // Legacy hsla(h, s, l, a) puts alpha in the fourth comma-separated
+            // channel instead of after a slash.
+            if channels.len() == 4 && alpha.is_none() {
+                alpha = match channels.pop()? {
+                    CssValue::Number(value) => Some(*value),
+                    CssValue::Length(value, Unit::Percent) => Some(*value / 100.0),
+                    _ => return None,
+                };
             }
+            let [hue, saturation, lightness] = channels.as_slice() else {
+                return None;
+            };
+            let hue = match hue {
+                CssValue::Number(value) | CssValue::Length(value, Unit::Deg) => {
+                    value.rem_euclid(360.0)
+                }
+                _ => return None,
+            };
+            let percentage = |value: &CssValue| match value {
+                CssValue::Length(value, Unit::Percent) => Some(*value / 100.0),
+                CssValue::Number(value) if (0.0..=1.0).contains(value) => Some(*value),
+                _ => None,
+            };
+            let saturation = percentage(saturation)?.clamp(0.0, 1.0);
+            let lightness = percentage(lightness)?.clamp(0.0, 1.0);
 
-            let a = alpha.unwrap_or(1.0);
-            let (r, g, b, a) = hsla_to_rgba(numbers[0], numbers[1], numbers[2], a);
+            let alpha = alpha.unwrap_or(1.0).clamp(0.0, 1.0);
+            let (r, g, b, a) = hsla_to_rgba(hue, saturation, lightness, alpha);
 
             Some(Color(r, g, b, a))
         }
@@ -4761,8 +4788,44 @@ mod tests {
         assert_eq!(style.background, Background::Color(Color(0, 128, 0, 255)));
     }
 
+    #[test]
+    fn hsl_percentage_background_is_resolved() {
+        let info = layout_for(
+            r#"<html><body><div id="view">x</div></body></html>"#,
+            "#view { background-color: hsl(0, 0%, 99%); }",
+        );
+
+        fn find_background(node: &InfoNode) -> Option<Color> {
+            if let NodeKind::Container { style, .. } = &node.kind
+                && let Background::Color(color) = style.background
+                && color.3 > 0
+            {
+                return Some(color);
+            }
+            node.children.iter().find_map(find_background)
+        }
+        assert_eq!(find_background(&info), Some(Color(252, 252, 252, 255)));
+    }
+
     fn resolve_color(value: CssValue) -> Color {
         resolve_css_color("test", &value, ColorScheme::Light).expect("color resolves")
+    }
+
+    #[test]
+    fn hsla_accepts_percentage_channels_and_alpha() {
+        assert_eq!(
+            resolve_color(CssValue::Function(
+                "hsla".into(),
+                vec![
+                    CssValue::Length(120.0, Unit::Deg),
+                    CssValue::Length(100.0, Unit::Percent),
+                    CssValue::Length(25.0, Unit::Percent),
+                    CssValue::Keyword("/".into()),
+                    CssValue::Length(50.0, Unit::Percent),
+                ],
+            )),
+            Color(0, 128, 0, 128)
+        );
     }
 
     #[test]
