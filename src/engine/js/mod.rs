@@ -70,6 +70,11 @@ pub(crate) struct JsDynamicStyleRequest {
     pub(crate) url: String,
 }
 
+/// An image element created or populated after the initial HTML parse.
+pub(crate) struct JsDynamicImageRequest {
+    pub(crate) source: String,
+}
+
 /// The response data exposed to a JavaScript `Response` object.
 #[derive(Debug)]
 pub struct JsFetchResponse {
@@ -115,6 +120,8 @@ pub struct JsHost {
     queued_dynamic_scripts: HashSet<u64>,
     dynamic_style_requests: Vec<JsDynamicStyleRequest>,
     queued_dynamic_styles: HashSet<u64>,
+    dynamic_image_requests: Vec<JsDynamicImageRequest>,
+    queued_dynamic_images: HashSet<u64>,
     fetch_capabilities: HashMap<u64, JsFetchCapability>,
     xhr_requests: HashMap<u64, Rc<RefCell<JSObject>>>,
     constructing_fetch_capability: Option<JsFetchCapability>,
@@ -174,6 +181,8 @@ impl JsRuntime {
             queued_dynamic_scripts: HashSet::new(),
             dynamic_style_requests: Vec::new(),
             queued_dynamic_styles: HashSet::new(),
+            dynamic_image_requests: Vec::new(),
+            queued_dynamic_images: HashSet::new(),
             fetch_capabilities: HashMap::new(),
             xhr_requests: HashMap::new(),
             constructing_fetch_capability: None,
@@ -351,6 +360,13 @@ impl JsRuntime {
     pub(crate) fn take_dynamic_style_requests(&mut self) -> Vec<JsDynamicStyleRequest> {
         with_host_mut(self.engine.vm(), |host| {
             std::mem::take(&mut host.dynamic_style_requests)
+        })
+        .unwrap_or_default()
+    }
+
+    pub(crate) fn take_dynamic_image_requests(&mut self) -> Vec<JsDynamicImageRequest> {
+        with_host_mut(self.engine.vm(), |host| {
+            std::mem::take(&mut host.dynamic_image_requests)
         })
         .unwrap_or_default()
     }
@@ -3882,6 +3898,7 @@ fn append_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     }
     queue_dynamic_script(vm, &child_value);
     queue_dynamic_stylesheet(vm, &child_value);
+    queue_dynamic_image(vm, &child_value);
     mark_dom_dirty(vm);
     Ok(child_value)
 }
@@ -3931,6 +3948,7 @@ fn insert_before(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     }
     queue_dynamic_script(vm, &child_value);
     queue_dynamic_stylesheet(vm, &child_value);
+    queue_dynamic_image(vm, &child_value);
     mark_dom_dirty(vm);
     Ok(child_value)
 }
@@ -4003,6 +4021,34 @@ fn queue_dynamic_stylesheet(vm: &mut VM, value: &JSValue) {
         if host.queued_dynamic_styles.insert(node_id) {
             host.dynamic_style_requests
                 .push(JsDynamicStyleRequest { node_id, url });
+        }
+    });
+}
+
+fn queue_dynamic_image(vm: &mut VM, value: &JSValue) {
+    let Some(node_id) = node_dom_id(value) else {
+        return;
+    };
+    let Some(node) = dom_node(vm, value) else {
+        return;
+    };
+    let source = {
+        let node = node.borrow();
+        if node.value.tag_name() != Some("img") {
+            return;
+        }
+        let Some(source) = node.value.get_attr("src").map(str::trim) else {
+            return;
+        };
+        if source.is_empty() {
+            return;
+        }
+        source.to_string()
+    };
+    let _ = with_host_mut(vm, |host| {
+        if host.queued_dynamic_images.insert(node_id) {
+            host.dynamic_image_requests
+                .push(JsDynamicImageRequest { source });
         }
     });
 }
@@ -4991,6 +5037,11 @@ fn set_reflected_string_property(vm: &mut VM, args: &[JSValue], name: &str) -> J
         .map(JSValue::to_console_string)
         .unwrap_or_default();
     node.borrow_mut().value.set_attr(name, value);
+    if name == "src"
+        && let Some(element) = args.first()
+    {
+        queue_dynamic_image(vm, element);
+    }
     mark_dom_dirty(vm);
     Ok(JSValue::Undefined)
 }
@@ -5759,6 +5810,11 @@ fn set_attribute(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         .map(|v| v.to_console_string())
         .unwrap_or_default();
     node.borrow_mut().value.set_attr(name, value);
+    if name.eq_ignore_ascii_case("src")
+        && let Some(element) = args.first()
+    {
+        queue_dynamic_image(vm, element);
+    }
     mark_dom_dirty(vm);
     Ok(JSValue::Undefined)
 }
@@ -6001,6 +6057,22 @@ mod tests {
         assert_eq!(requests.len(), 1);
         assert!(requests[0].node_id > 0);
         assert_eq!(requests[0].url, "/static/css/editor.css");
+    }
+
+    #[test]
+    fn inserting_image_queues_dynamic_resource_load_once() {
+        let (mut runtime, _dom) = runtime_from_html(r#"<html><body></body></html>"#);
+        runtime.run_script(
+            r#"
+            const image = document.createElement("img");
+            image.src = "/images/scratch-logo.svg";
+            document.body.appendChild(image);
+            "#,
+        );
+
+        let requests = runtime.take_dynamic_image_requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].source, "/images/scratch-logo.svg");
     }
 
     #[test]

@@ -471,6 +471,7 @@ impl WebView {
         self.schedule_js_fetches(&mut tasks);
         self.schedule_dynamic_scripts(&mut tasks);
         self.schedule_dynamic_styles(&mut tasks);
+        self.schedule_dynamic_images(&mut tasks);
         self.run_due_js_timers();
         self.try_apply_layout_results();
         self.drain_write_backs();
@@ -555,7 +556,7 @@ impl WebView {
 
     /// Decodes a fetched image and rebuilds layout using its intrinsic size.
     pub fn on_image_fetched(&mut self, source: String, bytes: &[u8]) -> anyhow::Result<()> {
-        let image = Image::decode(bytes)?;
+        let image = Image::decode(bytes).map_err(|error| anyhow::anyhow!("{source}: {error:#}"))?;
         self.images.insert(source, image);
         self.update_layout();
         Ok(())
@@ -961,6 +962,32 @@ impl WebView {
                     log::warn!("Failed to resolve dynamic stylesheet URL: {error}");
                     self.on_dynamic_style_fetch_failed(request.node_id);
                 }
+            }
+        }
+    }
+
+    fn schedule_dynamic_images(&mut self, tasks: &mut Vec<WebViewTask>) {
+        let requests = self
+            .js_runtime
+            .as_mut()
+            .map(JsRuntime::take_dynamic_image_requests)
+            .unwrap_or_default();
+        let base_url = self.docment_info.as_ref().map(|info| info.base_url.clone());
+        for request in requests {
+            let url = Url::parse(&request.source).or_else(|_| {
+                base_url
+                    .as_ref()
+                    .ok_or(url::ParseError::RelativeUrlWithoutBase)?
+                    .join(&request.source)
+            });
+            match url {
+                Ok(url) => tasks.push(WebViewTask::Fetch {
+                    url,
+                    kind: FetchKind::Image {
+                        source: request.source,
+                    },
+                }),
+                Err(error) => log::warn!("Failed to resolve dynamic image URL: {error}"),
             }
         }
     }

@@ -2181,6 +2181,13 @@ fn parse_background_shorthand(
                 maybe_color = Some(text_style.color);
                 continue;
             }
+            if kw.eq_ignore_ascii_case("none")
+                || kw.eq_ignore_ascii_case("initial")
+                || kw.eq_ignore_ascii_case("unset")
+            {
+                maybe_color = Some(Color(0, 0, 0, 0));
+                continue;
+            }
         }
 
         if let CssValue::Number(0.0) = v {
@@ -2210,10 +2217,49 @@ fn parse_background_shorthand(
             continue;
         }
 
-        // color
-        if let Some(c) = resolve_css_color(name, v, color_scheme) {
+        // Only color-shaped values should reach the color resolver. A
+        // background shorthand also contains image, repeat, attachment,
+        // position, size and box tokens, none of which are color errors.
+        let is_color_value = matches!(v, CssValue::Color(_))
+            || matches!(
+                v,
+                CssValue::Function(function, _)
+                    if matches!(
+                        function.as_str(),
+                        "rgb" | "rgba" | "hsl" | "hsla" | "light-dark" | "color-mix"
+                    )
+            )
+            || matches!(
+                v,
+                CssValue::Keyword(keyword)
+                    if !matches!(
+                        keyword.to_ascii_lowercase().as_str(),
+                        "none"
+                            | "repeat"
+                            | "repeat-x"
+                            | "repeat-y"
+                            | "no-repeat"
+                            | "space"
+                            | "round"
+                            | "scroll"
+                            | "fixed"
+                            | "local"
+                            | "left"
+                            | "right"
+                            | "top"
+                            | "bottom"
+                            | "center"
+                            | "cover"
+                            | "contain"
+                            | "auto"
+                            | "border-box"
+                            | "padding-box"
+                            | "content-box"
+                            | "/"
+                    )
+            );
+        if is_color_value && let Some(c) = resolve_css_color(name, v, color_scheme) {
             maybe_color = Some(c);
-            continue;
         }
     }
 
@@ -4523,6 +4569,33 @@ mod tests {
             }
         ));
         assert_eq!(gradient.stops.len(), 2);
+    }
+
+    #[test]
+    fn background_image_shorthand_keeps_its_fallback_color() {
+        let container = apply_container_property(
+            "background",
+            CssValue::List(vec![
+                CssValue::Function(
+                    "url".into(),
+                    vec![CssValue::String("/images/caret.svg".into())],
+                ),
+                CssValue::Keyword("no-repeat".into()),
+                CssValue::Keyword("right".into()),
+                CssValue::Keyword("center".into()),
+                CssValue::Keyword("white".into()),
+            ]),
+        );
+        assert_eq!(
+            container.background,
+            Background::Color(Color(255, 255, 255, 255))
+        );
+    }
+
+    #[test]
+    fn background_none_resolves_to_transparent() {
+        let container = apply_container_property("background", CssValue::Keyword("none".into()));
+        assert_eq!(container.background, Background::default());
     }
 
     #[test]

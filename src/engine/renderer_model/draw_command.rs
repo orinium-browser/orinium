@@ -48,10 +48,45 @@ impl Image {
     ///
     /// Returns an error when the bytes are not a supported image format.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        let decoded = image::load_from_memory(bytes).context("failed to decode image")?;
-        let rgba = decoded.to_rgba8();
-        let (width, height) = rgba.dimensions();
-        Self::from_rgba(width, height, rgba.into_raw())
+        if let Ok(decoded) = image::load_from_memory(bytes) {
+            let rgba = decoded.to_rgba8();
+            let (width, height) = rgba.dimensions();
+            return Self::from_rgba(width, height, rgba.into_raw());
+        }
+
+        Self::decode_svg(bytes).context("failed to decode image")
+    }
+
+    fn decode_svg(bytes: &[u8]) -> Result<Self> {
+        let options = resvg::usvg::Options::default();
+        let tree = resvg::usvg::Tree::from_data(bytes, &options).context("invalid SVG image")?;
+        let size = tree.size();
+        let width = size.width().ceil().max(1.0) as u32;
+        let height = size.height().ceil().max(1.0) as u32;
+        let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)
+            .context("failed to allocate SVG image pixels")?;
+        let transform = resvg::tiny_skia::Transform::from_scale(
+            width as f32 / size.width(),
+            height as f32 / size.height(),
+        );
+        resvg::render(&tree, transform, &mut pixmap.as_mut());
+
+        // tiny-skia returns premultiplied RGBA; the renderer samples
+        // straight-alpha pixels.
+        let mut rgba = pixmap.data().to_vec();
+        for pixel in rgba.chunks_exact_mut(4) {
+            let alpha = pixel[3] as u16;
+            if alpha == 0 {
+                pixel[0] = 0;
+                pixel[1] = 0;
+                pixel[2] = 0;
+            } else if alpha < 255 {
+                pixel[0] = ((pixel[0] as u16 * 255 + alpha / 2) / alpha).min(255) as u8;
+                pixel[1] = ((pixel[1] as u16 * 255 + alpha / 2) / alpha).min(255) as u8;
+                pixel[2] = ((pixel[2] as u16 * 255 + alpha / 2) / alpha).min(255) as u8;
+            }
+        }
+        Self::from_rgba(width, height, rgba)
     }
 
     /// Creates an image from decoded RGBA8 pixels.
@@ -96,6 +131,24 @@ impl Image {
     /// Returns the decoded RGBA8 pixel bytes.
     pub fn rgba(&self) -> &[u8] {
         &self.rgba
+    }
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::Image;
+
+    #[test]
+    fn image_decode_rasterizes_svg_assets() {
+        let image = Image::decode(
+            br##"<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8">
+                <rect width="12" height="8" fill="#ff0000"/>
+            </svg>"##,
+        )
+        .expect("SVG decodes");
+        assert_eq!(image.width(), 12);
+        assert_eq!(image.height(), 8);
+        assert_eq!(&image.rgba()[0..4], &[255, 0, 0, 255]);
     }
 }
 
