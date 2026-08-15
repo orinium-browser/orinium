@@ -1383,7 +1383,7 @@ impl WebView {
             ui_layout::LayoutEngine::layout(layout, viewport.0, viewport.1);
         }
         layouter::correct_oversized_auto_horizontal_margins(layout);
-        layouter::correct_atomic_inline_spacing(layout);
+        layouter::correct_atomic_inline_spacing_with_info(layout, info);
         layouter::align_table_columns(layout, info);
         layouter::refresh_missing_text_layout_results(layout, info, viewport);
         if fragment_target

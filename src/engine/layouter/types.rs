@@ -436,6 +436,8 @@ pub struct ContainerStyle {
     pub border_color: BorderColor,
     pub border_style: BorderStyles,
     pub border_radius: BorderRadius,
+    /// Inherited inline content alignment for atomic inline descendants.
+    pub text_align: TextAlign,
 }
 
 // =========================

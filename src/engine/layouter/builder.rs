@@ -723,6 +723,7 @@ pub fn build_layout_and_info_from_snapshot(
                 LineHeight::Normal => Length::Px(text_flow_style.font_size * DEFAULT_LINE_FACTOR),
                 LineHeight::Px(px) => Length::Px(px),
             };
+            container_style.text_align = text_flow_style.text_align;
 
             let child = InheritedCss {
                 custom_props: custom_properties,
@@ -1447,11 +1448,22 @@ pub fn refresh_missing_text_layout_results(
 /// `ui_layout` currently advances past an inline flow-root using its content
 /// width. CSS inline-blocks advance by their margin-box width instead.
 pub fn correct_atomic_inline_spacing(node: &mut LayoutNode) {
-    let containing_width = node
-        .layout_box
-        .iter()
-        .next()
-        .map(|model| model.content_box.width);
+    correct_atomic_inline_spacing_impl(node, None);
+}
+
+pub fn correct_atomic_inline_spacing_with_info(node: &mut LayoutNode, info: &InfoNode) {
+    correct_atomic_inline_spacing_impl(node, Some(info));
+}
+
+fn correct_atomic_inline_spacing_impl(node: &mut LayoutNode, info: Option<&InfoNode>) {
+    let containing_rect = node.layout_box.iter().next().map(|model| model.content_box);
+    let containing_width = containing_rect.map(|rect| rect.width);
+    let text_align = info
+        .and_then(|info| match &info.kind {
+            NodeKind::Container { style, .. } => Some(style.text_align),
+            _ => None,
+        })
+        .unwrap_or_default();
     let wraps_inline_content = matches!(
         node.style.display.inner,
         InnerDisplay::Flow | InnerDisplay::FlowRoot
@@ -1463,12 +1475,13 @@ pub fn correct_atomic_inline_spacing(node: &mut LayoutNode) {
     let mut line_margin_bottom = 0.0;
     let mut preceding_block_bottom: Option<(f32, f32)> = None;
 
-    for child in &mut node.children {
+    for (child_index, child) in node.children.iter_mut().enumerate() {
         let LayoutChild::Node(child) = child else {
             continue;
         };
 
-        correct_atomic_inline_spacing(child);
+        let child_info = info.and_then(|info| info.children.get(child_index));
+        correct_atomic_inline_spacing_impl(child, child_info);
 
         let is_atomic_inline = child.style.display.outer == OuterDisplay::Inline
             && child.style.display.inner != InnerDisplay::Flow;
@@ -1490,7 +1503,19 @@ pub fn correct_atomic_inline_spacing(node: &mut LayoutNode) {
 
             let mut desired_x = match previous {
                 Some((right, previous_margin_right)) => right + previous_margin_right + margin_left,
-                None => rect.x + margin_left,
+                None => {
+                    let margin_width = margin_left + rect.width + margin_right;
+                    let aligned_x = containing_rect.map_or(rect.x, |containing| {
+                        let free_space = (containing.width - margin_width).max(0.0);
+                        containing.x
+                            + match text_align {
+                                TextAlign::Left => 0.0,
+                                TextAlign::Center => free_space / 2.0,
+                                TextAlign::Right => free_space,
+                            }
+                    });
+                    aligned_x + margin_left
+                }
             };
             // ui_layout positions atomic inline boxes at the line origin but
             // does not include their vertical margins in that position. The
@@ -5665,14 +5690,15 @@ mod tests {
             </div></body></html>
         "#;
         let css = r#"
+            .copy { width: 600px; text-align: center; }
             .copy .overline { height: 25px; margin: 0 0 18px; }
             .copy h2 { height: 58px; margin: 0 0 24px; }
             .copy .summary { width: 560px; height: 80px; margin: 0 0 28px; }
             .copy a { display: inline-flex; width: 200px; height: 30px; }
         "#;
-        let (mut layout, _) = layout_and_info_for(html, css);
+        let (mut layout, info) = layout_and_info_for(html, css);
         ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
-        correct_atomic_inline_spacing(&mut layout);
+        correct_atomic_inline_spacing_with_info(&mut layout, &info);
 
         fn box_with_width(node: &LayoutNode, width: f32) -> Option<ui_layout::Rect> {
             if node.style.size.width == LengthOrAuto::Length(Length::Px(width)) {
@@ -5687,6 +5713,7 @@ mod tests {
         let summary = box_with_width(&layout, 560.0).expect("summary");
         let action = box_with_width(&layout, 200.0).expect("inline action");
         assert_eq!(action.y, summary.bottom() + 28.0);
+        assert_eq!(action.x, 200.0);
     }
 
     #[test]

@@ -23,7 +23,8 @@ pub mod types;
 pub use builder::{
     InheritedCss, build_layout_and_info, build_layout_and_info_from_snapshot,
     build_layout_and_info_with_images, constrain_auto_grid_track_items,
-    correct_atomic_inline_spacing, correct_oversized_auto_horizontal_margins, normalize_whitespace,
+    correct_atomic_inline_spacing, correct_atomic_inline_spacing_with_info,
+    correct_oversized_auto_horizontal_margins, normalize_whitespace,
     refresh_missing_text_layout_results,
 };
 pub use dom_snapshot::{DomSnapshot, NodeId, SnapNode};
