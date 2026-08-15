@@ -18,8 +18,8 @@ use std::sync::Arc;
 
 use ui_layout::{
     AlignContent, AlignItems, AutoSizeBehavior, BoxSizing, Display, FlexDirection, FlexWrap,
-    GridRepeat, GridTrack, InnerDisplay, ItemFragment, JustifyContent, LayoutChild, LayoutNode,
-    Length, LengthOrAuto, OuterDisplay, Position, Style,
+    GridPlacement, GridRepeat, GridTrack, InnerDisplay, ItemFragment, JustifyContent, LayoutChild,
+    LayoutNode, Length, LengthOrAuto, OuterDisplay, Position, Style,
 };
 
 use super::css_resolver::{ResolvedStyles, resolve_inline_style, set_inline_custom_property};
@@ -1083,6 +1083,16 @@ pub fn build_layout_and_info_from_snapshot(
             // the parent's inline space, so item placement cannot move the
             // text with its box.
             if matches!(style.display.inner, InnerDisplay::Grid | InnerDisplay::Flex) {
+                if style.display.inner == InnerDisplay::Grid {
+                    let columns = explicit_grid_track_count(&style.grid_template_columns);
+                    let rows = explicit_grid_track_count(&style.grid_template_rows);
+                    for child in &mut all_layout {
+                        if let LayoutChild::Node(child) = child {
+                            resolve_grid_end_span(&mut child.style.grid_column, columns);
+                            resolve_grid_end_span(&mut child.style.grid_row, rows);
+                        }
+                    }
+                }
                 for child in &mut all_layout {
                     if let LayoutChild::Node(child) = child
                         && child.style.display.outer == OuterDisplay::Inline
@@ -1237,6 +1247,27 @@ fn compute_whitespace_keep(
             ChildSlot::Element(_) => true,
         })
         .collect()
+}
+
+fn explicit_grid_track_count(tracks: &[GridTrack]) -> usize {
+    tracks
+        .iter()
+        .map(|track| match track {
+            GridTrack::Repeat(GridRepeat::Count(count), pattern) => {
+                count.saturating_mul(explicit_grid_track_count(pattern))
+            }
+            GridTrack::Repeat(GridRepeat::AutoFit | GridRepeat::AutoFill, _) => 0,
+            _ => 1,
+        })
+        .sum()
+}
+
+fn resolve_grid_end_span(placement: &mut GridPlacement, track_count: usize) {
+    if placement.span != GRID_SPAN_TO_END || track_count == 0 {
+        return;
+    }
+    let start = placement.start.unwrap_or(1);
+    placement.span = track_count.saturating_add(1).saturating_sub(start).max(1);
 }
 
 fn maximum_fixed_descendant_width(children: &[LayoutChild]) -> Option<f32> {
@@ -3276,6 +3307,14 @@ pub fn apply_declaration(
             style.grid_area = Some(area.to_string());
         }
 
+        ("grid-column", _) => {
+            style.grid_column = parse_grid_placement(value)?;
+        }
+
+        ("grid-row", _) => {
+            style.grid_row = parse_grid_placement(value)?;
+        }
+
         _ => {
             // log::error!("{name}, {value:?}");
             return None;
@@ -4081,6 +4120,50 @@ fn parse_grid_tracks(
         .into_iter()
         .map(|value| parse_grid_track(name, value, text_flow_style))
         .collect()
+}
+
+const GRID_SPAN_TO_END: usize = usize::MAX;
+
+fn parse_grid_placement(value: &CssValue) -> Option<GridPlacement> {
+    let values: Vec<&CssValue> = match value {
+        CssValue::List(values) => values.iter().collect(),
+        value => vec![value],
+    };
+    if matches!(values.as_slice(), [CssValue::Keyword(keyword)] if keyword == "auto") {
+        return Some(GridPlacement::default());
+    }
+
+    let slash = values
+        .iter()
+        .position(|value| matches!(value, CssValue::Keyword(keyword) if keyword == "/"));
+    let (start_values, end_values) = slash.map_or((values.as_slice(), &[][..]), |slash| {
+        (&values[..slash], &values[slash + 1..])
+    });
+    let start = parse_positive_grid_line(start_values)?;
+    if end_values.is_empty() {
+        return Some(GridPlacement {
+            start: Some(start),
+            span: 1,
+        });
+    }
+    if matches!(end_values, [CssValue::Number(end)] if *end == -1.0) {
+        return Some(GridPlacement {
+            start: Some(start),
+            span: GRID_SPAN_TO_END,
+        });
+    }
+    let end = parse_positive_grid_line(end_values)?;
+    (end > start).then_some(GridPlacement {
+        start: Some(start),
+        span: end - start,
+    })
+}
+
+fn parse_positive_grid_line(values: &[&CssValue]) -> Option<usize> {
+    let [CssValue::Number(line)] = values else {
+        return None;
+    };
+    (*line >= 1.0 && line.fract().abs() < f32::EPSILON).then_some(*line as usize)
 }
 
 fn parse_grid_track(
@@ -5670,6 +5753,39 @@ mod tests {
         assert!((middle.content_box.width - 210.0).abs() < 0.5);
         assert!(items[0].layout_box.width_box() > 400.0);
         assert!(items[2].layout_box.width_box() > 400.0);
+    }
+
+    #[test]
+    fn negative_grid_end_line_spans_to_the_last_explicit_track() {
+        let html = "<html><body><div class='grid'><article class='large'></article><article></article></div></body></html>";
+        let css = r#"
+            .grid { display: grid; width: 600px; grid-template-columns: repeat(2, 1fr); }
+            .large { grid-column: 1 / -1; height: 20px; }
+        "#;
+        let (mut layout, _) = layout_and_info_for(html, css);
+        ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+
+        fn grid(layout: &LayoutNode) -> Option<&LayoutNode> {
+            if layout.style.display.inner == InnerDisplay::Grid {
+                return Some(layout);
+            }
+            layout
+                .children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .find_map(grid)
+        }
+
+        let grid = grid(&layout).expect("grid");
+        let large = grid
+            .children
+            .iter()
+            .filter_map(LayoutChild::node)
+            .next()
+            .expect("large grid item");
+        assert_eq!(large.style.grid_column.start, Some(1));
+        assert_eq!(large.style.grid_column.span, 2);
+        assert!((large.layout_box.width_box() - 600.0).abs() < 0.5);
     }
 
     #[test]
