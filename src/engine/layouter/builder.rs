@@ -2322,17 +2322,9 @@ pub fn apply_declaration(
         // `color-scheme` is resolved separately above.
         ("color-scheme", _) => {}
 
-        ("font-size", CssValue::Length(_, _)) => {
-            // TODO: Add other size
+        ("font-size", _) => {
             let len = resolve_css_len(name, value, text_flow_style)?;
-            let px = match &len {
-                Length::Px(v) => *v,
-                Length::Percent(v) => *v * text_flow_style.font_size / 100.0,
-                _ => {
-                    log::error!(target: "Layouter", "Unknown size type for `{}`: {:?}", name, len);
-                    return None;
-                }
-            };
+            let px = resolve_font_size_px(&len, text_flow_style.font_size)?;
             text_flow_style.font_size = px;
         }
 
@@ -2505,6 +2497,17 @@ pub fn apply_declaration(
         ("margin-left", _) => {
             style.spacing.margin_left = resolve_css_len_auto(name, value, text_flow_style)?;
         }
+        ("margin-inline", _) => {
+            let values = one_or_two_values(value)?;
+            style.spacing.margin_left = resolve_css_len_auto(name, values.0, text_flow_style)?;
+            style.spacing.margin_right = resolve_css_len_auto(name, values.1, text_flow_style)?;
+        }
+        ("margin-inline-start", _) => {
+            style.spacing.margin_left = resolve_css_len_auto(name, value, text_flow_style)?;
+        }
+        ("margin-inline-end", _) => {
+            style.spacing.margin_right = resolve_css_len_auto(name, value, text_flow_style)?;
+        }
 
         ("border", v) => {
             let (maybe_width, maybe_style, maybe_color) = if let CssValue::Keyword(k) = v
@@ -2639,6 +2642,17 @@ pub fn apply_declaration(
         }
         ("padding-left", _) => {
             style.spacing.padding_left = resolve_css_len(name, value, text_flow_style)?;
+        }
+        ("padding-inline", _) => {
+            let values = one_or_two_values(value)?;
+            style.spacing.padding_left = resolve_css_len(name, values.0, text_flow_style)?;
+            style.spacing.padding_right = resolve_css_len(name, values.1, text_flow_style)?;
+        }
+        ("padding-inline-start", _) => {
+            style.spacing.padding_left = resolve_css_len(name, value, text_flow_style)?;
+        }
+        ("padding-inline-end", _) => {
+            style.spacing.padding_right = resolve_css_len(name, value, text_flow_style)?;
         }
 
         /* ======================
@@ -3410,6 +3424,49 @@ fn resolve_css_len_auto(
     }
 }
 
+fn one_or_two_values(value: &CssValue) -> Option<(&CssValue, &CssValue)> {
+    match value {
+        CssValue::List(values) if values.len() == 2 => Some((&values[0], &values[1])),
+        CssValue::List(values) if values.len() == 1 => Some((&values[0], &values[0])),
+        CssValue::List(_) => None,
+        value => Some((value, value)),
+    }
+}
+
+fn resolve_font_size_px(length: &Length, inherited_size: f32) -> Option<f32> {
+    match length {
+        Length::Px(value) => Some(*value),
+        Length::Percent(value) => Some(*value * inherited_size / 100.0),
+        Length::Clamp { min, val, max } => {
+            let minimum = resolve_font_size_px(min, inherited_size)?;
+            let maximum = resolve_font_size_px(max, inherited_size)?;
+            let preferred = resolve_font_size_px(val, inherited_size).unwrap_or(maximum);
+            Some(preferred.clamp(minimum, maximum))
+        }
+        Length::Min(left, right) => Some(
+            resolve_font_size_px(left, inherited_size)?
+                .min(resolve_font_size_px(right, inherited_size)?),
+        ),
+        Length::Max(left, right) => Some(
+            resolve_font_size_px(left, inherited_size)?
+                .max(resolve_font_size_px(right, inherited_size)?),
+        ),
+        Length::Add(left, right) => Some(
+            resolve_font_size_px(left, inherited_size)?
+                + resolve_font_size_px(right, inherited_size)?,
+        ),
+        Length::Sub(left, right) => Some(
+            resolve_font_size_px(left, inherited_size)?
+                - resolve_font_size_px(right, inherited_size)?,
+        ),
+        Length::Mul(value, factor) => Some(resolve_font_size_px(value, inherited_size)? * factor),
+        Length::Div(value, factor) if *factor != 0.0 => {
+            Some(resolve_font_size_px(value, inherited_size)? / factor)
+        }
+        Length::Vw(_) | Length::Vh(_) | Length::Div(_, _) => None,
+    }
+}
+
 /// calc() の評価結果。型 (number / length) を保持する。
 #[derive(Debug, Clone, PartialEq)]
 enum CalcValue {
@@ -3568,6 +3625,13 @@ fn resolve_calc_value(
                 };
             }
             Some(CalcValue::Length(result))
+        }
+        CssValue::Function(fn_name, args) if fn_name == "clamp" && args.len() == 3 => {
+            Some(CalcValue::Length(Length::Clamp {
+                min: Box::new(resolve_css_len(name, &args[0], text_flow_style)?),
+                val: Box::new(resolve_css_len(name, &args[1], text_flow_style)?),
+                max: Box::new(resolve_css_len(name, &args[2], text_flow_style)?),
+            }))
         }
         _ => {
             log::error!(
@@ -4765,6 +4829,63 @@ mod tests {
             .is_some()
         );
         assert_eq!(overflow, Overflow { x: true, y: true });
+    }
+
+    #[test]
+    fn logical_inline_margins_apply_to_both_physical_sides() {
+        let mut style = Style::default();
+        let mut container_style = ContainerStyle::default();
+        let mut text_style = TextStyle::default();
+        let mut text_flow_style = TextFlowStyle::default();
+        let mut overflow = Overflow::default();
+
+        assert!(
+            apply_declaration(
+                "margin-inline",
+                &CssValue::Keyword("auto".into()),
+                &mut style,
+                &mut container_style,
+                &mut text_style,
+                &mut text_flow_style,
+                &mut overflow,
+                ColorScheme::Light,
+            )
+            .is_some()
+        );
+        assert_eq!(style.spacing.margin_left, LengthOrAuto::Auto);
+        assert_eq!(style.spacing.margin_right, LengthOrAuto::Auto);
+    }
+
+    #[test]
+    fn clamp_font_size_uses_pixel_bound_for_viewport_preference() {
+        let mut style = Style::default();
+        let mut container_style = ContainerStyle::default();
+        let mut text_style = TextStyle::default();
+        let mut text_flow_style = TextFlowStyle::default();
+        let mut overflow = Overflow::default();
+        let clamp = CssValue::Function(
+            "clamp".into(),
+            vec![
+                CssValue::Length(60.0, Unit::Px),
+                CssValue::Length(8.4, Unit::Vw),
+                CssValue::Length(100.0, Unit::Px),
+            ],
+        );
+
+        assert!(
+            apply_declaration(
+                "font-size",
+                &clamp,
+                &mut style,
+                &mut container_style,
+                &mut text_style,
+                &mut text_flow_style,
+                &mut overflow,
+                ColorScheme::Light,
+            )
+            .is_some()
+        );
+        assert_eq!(text_flow_style.font_size, 100.0);
     }
 
     #[test]
