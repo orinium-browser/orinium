@@ -22,6 +22,10 @@ fn quantize_font_size(px: f32) -> f32 {
     (px * 64.0).round() / 64.0
 }
 
+fn rasterizable_font_size(px: f32) -> bool {
+    px.is_finite() && px > 0.0
+}
+
 const SUBPIXEL_PHASES_X: i32 = 4;
 const BEARING_CACHE_CAPACITY: usize = 32_768;
 
@@ -683,6 +687,13 @@ impl TextRenderer {
 
                 for line in &layout.lines {
                     for glyph in &line.glyphs {
+                        // Authors commonly use `font-size: 0` to remove the
+                        // whitespace between inline-blocks. Swash does not
+                        // define useful raster output for a zero-sized scaler
+                        // and some fonts return enormous bogus masks.
+                        if !rasterizable_font_size(glyph.font_size) {
+                            continue;
+                        }
                         if glyph_fully_outside_clip(
                             section,
                             glyph.x,
@@ -917,7 +928,9 @@ mod tests {
 
     use orinium_text::TextLayout;
 
-    use super::{TextSection, glyph_fully_outside_clip, quantize_subpixel_x};
+    use super::{
+        TextSection, glyph_fully_outside_clip, quantize_subpixel_x, rasterizable_font_size,
+    };
 
     fn section(
         screen_position: (f32, f32),
@@ -959,6 +972,15 @@ mod tests {
         assert!(!glyph_fully_outside_clip(&s, 10.0, 20.0, 8.0, 12.0));
         // Glyph straddling the clip boundary is kept (post-clip handles the split).
         assert!(!glyph_fully_outside_clip(&s, 98.0, 20.0, 8.0, 12.0));
+    }
+
+    #[test]
+    fn zero_and_non_finite_font_sizes_are_not_rasterized() {
+        assert!(rasterizable_font_size(0.01));
+        assert!(!rasterizable_font_size(0.0));
+        assert!(!rasterizable_font_size(-1.0));
+        assert!(!rasterizable_font_size(f32::NAN));
+        assert!(!rasterizable_font_size(f32::INFINITY));
     }
 
     #[test]

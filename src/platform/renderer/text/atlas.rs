@@ -57,6 +57,10 @@ const GLYPH_GUTTER: i32 = 1;
 /// 8192 is a safe upper bound that prevents unbounded growth.
 const LRU_CAPACITY: usize = 8192;
 
+fn allocation_fits_layer(atlas_size: u32, width: i32, height: i32) -> bool {
+    width > 0 && height > 0 && width <= atlas_size as i32 && height <= atlas_size as i32
+}
+
 impl GlyphAtlas {
     pub fn new(device: &wgpu::Device) -> Self {
         let size = INITIAL_SIZE;
@@ -163,6 +167,33 @@ impl GlyphAtlas {
 
         let item_w = mask_width.max(1) as i32 + GLYPH_GUTTER * 2;
         let item_h = mask_height.max(1) as i32 + GLYPH_GUTTER * 2;
+
+        // An oversized raster can never fit any layer. Do not enter the LRU
+        // retry loop in that case: evicting cached glyphs cannot make a
+        // too-large allocation fit and would corrupt all text already queued
+        // for this frame.
+        if !allocation_fits_layer(self.size, item_w, item_h) {
+            log::warn!(
+                target: "GlyphAtlas",
+                "skipping oversized glyph raster {}x{} (atlas layer {}x{}, font size {})",
+                mask_width,
+                mask_height,
+                self.size,
+                self.size,
+                font_size,
+            );
+            return GlyphAtlasEntry {
+                layer: 0,
+                u: 0.0,
+                v: 0.0,
+                uv_width: 0.0,
+                uv_height: 0.0,
+                pixel_width: 0,
+                pixel_height: 0,
+                left,
+                top,
+            };
+        }
 
         // Try allocating (with eviction retries).
         let allocation = 'search: loop {
@@ -351,5 +382,17 @@ impl GlyphAtlas {
         }
 
         self.dirty_layers.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::allocation_fits_layer;
+
+    #[test]
+    fn oversized_glyph_allocations_are_rejected_before_eviction() {
+        assert!(allocation_fits_layer(1024, 1024, 32));
+        assert!(!allocation_fits_layer(1024, 1025, 32));
+        assert!(!allocation_fits_layer(1024, 32, 1025));
     }
 }
