@@ -618,6 +618,7 @@ fn push_box_model(
     scroll_offset_x: f32,
     scroll_offset_y: f32,
     is_inline: bool,
+    clips_overflow: bool,
 ) -> BoxPushState {
     let border_box = box_model.border_box;
     let padding_box = box_model.padding_box;
@@ -636,7 +637,7 @@ fn push_box_model(
 
     draw_background(cmd_buf, &border_box, &padding_box, style);
 
-    let clip = !is_inline && padding_box.width > 0.0 && padding_box.height > 0.0;
+    let clip = !is_inline && clips_overflow && padding_box.width > 0.0 && padding_box.height > 0.0;
     if clip {
         cmd_buf.push(DrawCommand::PushClip {
             path: rect_path(
@@ -871,6 +872,8 @@ fn generate_draw_commands_inner(
         NodeKind::Text { .. } | NodeKind::LineBreak => unreachable!(),
 
         NodeKind::Container {
+            scroll_x,
+            scroll_y,
             scroll_offset_x,
             scroll_offset_y,
             style,
@@ -884,11 +887,14 @@ fn generate_draw_commands_inner(
                     *scroll_offset_x,
                     *scroll_offset_y,
                     is_inline,
+                    *scroll_x || *scroll_y,
                 ));
             }
         }
 
         NodeKind::Custom {
+            scroll_x,
+            scroll_y,
             scroll_offset_x,
             scroll_offset_y,
             style,
@@ -912,6 +918,7 @@ fn generate_draw_commands_inner(
                     *scroll_offset_x,
                     *scroll_offset_y,
                     is_inline,
+                    *scroll_x || *scroll_y,
                 ));
             }
 
@@ -1126,7 +1133,7 @@ fn generate_draw_commands_inner(
                                     height: bm.children_box.height,
                                 },
                             };
-                            push_box_model(cmd_buf, &rect, style_ref, 0.0, 0.0, true);
+                            push_box_model(cmd_buf, &rect, style_ref, 0.0, 0.0, true, false);
                             node.draw_sized(
                                 cmd_buf,
                                 text_style,
@@ -1278,7 +1285,7 @@ mod tests {
         };
         let style = ContainerStyle::default();
         let mut buf = Vec::new();
-        let state = push_box_model(&mut buf, &box_model, &style, 0.0, 0.0, false);
+        let state = push_box_model(&mut buf, &box_model, &style, 0.0, 0.0, false, true);
         // Scroll/content transforms are no-ops here (zero offsets); border
         // transform + clip + content are pushed while the box is open.
         assert!(buf.len() >= 2);
@@ -1286,6 +1293,34 @@ mod tests {
         assert!(!count_balanced(&buf));
         pop_box_model(&mut buf, state);
         assert!(count_balanced(&buf));
+    }
+
+    #[test]
+    fn visible_overflow_does_not_clip_block_contents() {
+        let box_model = ui_layout::BoxModel {
+            sticky_edges: None,
+            border_box: ui_rect(0.0, 0.0, 100.0, 50.0),
+            padding_box: ui_rect(0.0, 0.0, 100.0, 50.0),
+            content_box: ui_rect(0.0, 0.0, 100.0, 50.0),
+            children_box: ui_rect(0.0, 0.0, 120.0, 60.0),
+        };
+        let mut commands = Vec::new();
+        let state = push_box_model(
+            &mut commands,
+            &box_model,
+            &ContainerStyle::default(),
+            0.0,
+            0.0,
+            false,
+            false,
+        );
+        assert!(
+            !commands
+                .iter()
+                .any(|command| matches!(command, DrawCommand::PushClip { .. }))
+        );
+        pop_box_model(&mut commands, state);
+        assert!(count_balanced(&commands));
     }
 
     #[test]
@@ -1306,6 +1341,7 @@ mod tests {
             3.0,
             4.0,
             false,
+            true,
         );
         let inner = push_box_model(
             &mut buf,
@@ -1314,6 +1350,7 @@ mod tests {
             0.0,
             0.0,
             false,
+            true,
         );
         // Sanity: inner push generated commands (border + background + clip).
         assert!(!buf.is_empty());

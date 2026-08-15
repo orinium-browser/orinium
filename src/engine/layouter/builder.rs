@@ -1266,6 +1266,8 @@ pub fn correct_atomic_inline_spacing(node: &mut LayoutNode) {
             continue;
         };
 
+        correct_atomic_inline_spacing(child);
+
         let is_atomic_inline = child.style.display
             == (Display {
                 outer: OuterDisplay::Inline,
@@ -1279,7 +1281,7 @@ pub fn correct_atomic_inline_spacing(node: &mut LayoutNode) {
                 Some((right, previous_margin_right, y)) if (y - model.border_box.y).abs() < 0.5 => {
                     right + previous_margin_right + margin_left
                 }
-                _ => model.border_box.x,
+                _ => model.border_box.x + margin_left,
             };
             if model.border_box.x < desired_x {
                 let shift_x = desired_x - model.border_box.x;
@@ -1296,11 +1298,53 @@ pub fn correct_atomic_inline_spacing(node: &mut LayoutNode) {
         } else if child.style.display.outer == OuterDisplay::Block {
             previous = None;
         }
-
-        correct_atomic_inline_spacing(child);
     }
 
+    expand_auto_inline_width_to_children(node);
+    correct_horizontal_flex_spacing(node);
     expand_auto_flex_width_to_children(node);
+}
+
+fn expand_auto_inline_width_to_children(node: &mut LayoutNode) {
+    if node.style.display.outer != OuterDisplay::Inline
+        || node.style.size.width != LengthOrAuto::Auto
+    {
+        return;
+    }
+    let required_width = required_children_margin_box_width(node);
+    grow_auto_layout_width(node, required_width);
+}
+
+fn correct_horizontal_flex_spacing(node: &mut LayoutNode) {
+    if node.style.display.inner != InnerDisplay::Flex
+        || node.style.flex_direction != FlexDirection::Row
+    {
+        return;
+    }
+    let mut previous_right: Option<f32> = None;
+    for child in &mut node.children {
+        let LayoutChild::Node(child) = child else {
+            continue;
+        };
+        let Some(model) = child.layout_box.iter().next() else {
+            continue;
+        };
+        let margin_left = fixed_nonnegative_px(&child.style.spacing.margin_left);
+        let margin_right = fixed_nonnegative_px(&child.style.spacing.margin_right);
+        let desired_x = previous_right
+            .map(|right| right + margin_left)
+            .unwrap_or(model.border_box.x + margin_left);
+        if model.border_box.x < desired_x {
+            shift_layout_box_x(&mut child.layout_box, desired_x - model.border_box.x);
+        }
+        previous_right = Some(
+            model
+                .border_box
+                .right()
+                .max(desired_x + model.border_box.width)
+                + margin_right,
+        );
+    }
 }
 
 fn expand_auto_flex_width_to_children(node: &mut LayoutNode) {
@@ -1308,12 +1352,12 @@ fn expand_auto_flex_width_to_children(node: &mut LayoutNode) {
     {
         return;
     }
-    let Some(model) = node.layout_box.iter().next() else {
-        return;
-    };
-    let content_left = model.content_box.x;
-    let required_right = node
-        .children
+    let required_width = required_children_margin_box_width(node);
+    grow_auto_layout_width(node, required_width);
+}
+
+fn required_children_margin_box_width(node: &LayoutNode) -> f32 {
+    node.children
         .iter()
         .filter_map(LayoutChild::node)
         .filter_map(|child| {
@@ -1321,8 +1365,13 @@ fn expand_auto_flex_width_to_children(node: &mut LayoutNode) {
                 model.border_box.right() + fixed_nonnegative_px(&child.style.spacing.margin_right)
             })
         })
-        .fold(content_left, f32::max);
-    let required_width = (required_right - content_left).max(0.0);
+        .fold(0.0, f32::max)
+}
+
+fn grow_auto_layout_width(node: &mut LayoutNode, required_width: f32) {
+    let Some(model) = node.layout_box.iter().next() else {
+        return;
+    };
     let extra = required_width - model.content_box.width;
     if extra <= 0.0 {
         return;
@@ -4868,6 +4917,55 @@ mod tests {
         let last_box = last.layout_box.iter().next().unwrap();
         let required_right = last_box.border_box.right() + 12.0;
         assert!(row_box.content_box.right() >= required_right);
+    }
+
+    #[test]
+    fn inline_flex_item_wraps_padded_atomic_child_without_overlap() {
+        let html = r#"
+            <html><body><div class="bar">
+                <a><div class="button">One</div></a><a><div class="button">Two</div></a>
+            </div></body></html>
+        "#;
+        let css = r#"
+            .bar { display: flex; }
+            a { display: inline; }
+            .button { display: inline-block; margin: 0 8px; padding: 8px 24px; }
+        "#;
+        let (mut layout, _) = layout_and_info_for(html, css);
+        ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+        correct_atomic_inline_spacing(&mut layout);
+
+        fn flex_links(node: &LayoutNode) -> Option<Vec<&LayoutNode>> {
+            let links: Vec<_> = node
+                .children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .filter(|child| child.style.display.outer == OuterDisplay::Inline)
+                .collect();
+            if node.style.display.inner == InnerDisplay::Flex && links.len() == 2 {
+                return Some(links);
+            }
+            node.children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .find_map(flex_links)
+        }
+
+        let links = flex_links(&layout).expect("two inline flex items");
+        let first = links[0].layout_box.iter().next().unwrap();
+        let second = links[1].layout_box.iter().next().unwrap();
+        let first_button = links[0]
+            .children
+            .iter()
+            .filter_map(LayoutChild::node)
+            .next()
+            .unwrap()
+            .layout_box
+            .iter()
+            .next()
+            .unwrap();
+        assert!(first.content_box.width >= first_button.border_box.right() + 8.0);
+        assert!(second.border_box.x >= first.border_box.right());
     }
 
     #[test]
