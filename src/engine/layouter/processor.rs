@@ -53,6 +53,8 @@ pub struct LayoutTask {
 pub struct LayoutResult {
     pub layout: LayoutNode,
     pub info: InfoNode,
+    /// Sequence number of the task that produced this result.
+    pub version: u64,
 }
 
 enum LayoutCommand {
@@ -118,6 +120,7 @@ impl LayoutProcessor {
                         if task.version < thread_latest.load(Ordering::SeqCst) {
                             continue;
                         }
+                        let version = task.version;
                         let (layout, info) = build_layout_and_info_from_snapshot(
                             &task.snapshot,
                             task.root,
@@ -131,7 +134,11 @@ impl LayoutProcessor {
                             &task.audio,
                             task.write_back_sender,
                         );
-                        let result = LayoutResult { layout, info };
+                        let result = LayoutResult {
+                            layout,
+                            info,
+                            version,
+                        };
                         let _ = result_tx.send(SendableResult(Box::into_raw(Box::new(result))));
                     }
                 }
@@ -149,10 +156,12 @@ impl LayoutProcessor {
     ///
     /// The task is stamped with a fresh sequence number; tasks that fall behind
     /// the newest one are skipped by the thread.
-    pub fn send(&self, task: LayoutTask) {
+    pub fn send(&self, task: LayoutTask) -> u64 {
         let mut task = task;
         task.version = self.latest.fetch_add(1, Ordering::SeqCst) + 1;
+        let version = task.version;
         let _ = self.cmd_tx.send(LayoutCommand::Build(task));
+        version
     }
 
     /// Returns a completed layout result, or `None` if none is ready yet.
@@ -225,9 +234,10 @@ mod tests {
     #[test]
     fn layout_task_round_trips_through_background_thread() {
         let processor = LayoutProcessor::new();
-        processor.send(sample_task(None));
+        let requested_version = processor.send(sample_task(None));
 
         let result = wait_for_result(&processor);
+        assert_eq!(result.version, requested_version);
         assert!(
             !result.info.children.is_empty(),
             "the built layout must not be empty"

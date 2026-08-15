@@ -571,7 +571,7 @@ impl MeshBuilder {
                 screen_position: (sx1, sy1),
                 clip_origin: (clip.x * sf, clip.y * sf),
                 bounds: (tw * sf, th * sf),
-                font_weight: scaled.font_weight.0,
+                font_weight: style.font_weight.0,
                 layout,
             });
         }

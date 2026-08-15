@@ -5763,7 +5763,7 @@ mod tests {
         assert_eq!(span.style.display.outer, OuterDisplay::Block);
 
         let label_style = text_style_for(&info, "目指すこと");
-        assert_eq!(label_style.font_size, 19.0);
+        assert_eq!(text_flow_style_for(&info, "目指すこと").font_size, 19.0);
         assert_eq!(label_style.color, Color(0, 102, 204, 255));
 
         fn text_id_for(info: &InfoNode, content: &str) -> Option<usize> {
@@ -6239,6 +6239,22 @@ mod tests {
                 && actual == content
             {
                 return Some(style.clone());
+            }
+            node.children.iter().find_map(|child| walk(child, content))
+        }
+        walk(info, content).expect("text node with expected content must exist")
+    }
+
+    fn text_flow_style_for(info: &InfoNode, content: &str) -> TextFlowStyle {
+        fn walk(node: &InfoNode, content: &str) -> Option<TextFlowStyle> {
+            if let NodeKind::Text {
+                flow_style,
+                text: actual,
+                ..
+            } = &node.kind
+                && actual == content
+            {
+                return Some(*flow_style);
             }
             node.children.iter().find_map(|child| walk(child, content))
         }

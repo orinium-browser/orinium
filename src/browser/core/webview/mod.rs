@@ -29,7 +29,7 @@ use crate::engine::{
     tree::TreeNode,
 };
 use crate::platform::{locale, renderer::text_measurer::PlatformTextMeasurer};
-use ui_layout::LayoutNode;
+use ui_layout::{LayoutChild, LayoutNode};
 use url::Url;
 
 const USER_AGENT_CSS: &str = include_str!("../../../../resource/user-agent.css");
@@ -158,6 +158,7 @@ pub struct WebView {
 
     layout_processor: layouter::LayoutProcessor,
     layout_pending: bool,
+    layout_requested_version: u64,
     /// Live DOM references for the latest snapshot, used to apply write-backs.
     layout_dom_refs: Vec<Weak<RefCell<TreeNode<HtmlNodeType>>>>,
     /// Cached DOM snapshot, reused while the tree's mutation version is
@@ -199,6 +200,8 @@ pub struct WebView {
     non_blocking_scripts_scheduled: bool,
     deferred_script_results: HashMap<usize, Option<String>>,
     next_deferred_script_index: usize,
+    /// Fragment to reveal once the document has a completed layout.
+    pending_fragment_scroll: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -308,6 +311,7 @@ impl WebView {
 
             layout_processor: layouter::LayoutProcessor::new(),
             layout_pending: false,
+            layout_requested_version: 0,
             layout_dom_refs: Vec::new(),
             snapshot_cache: None,
             write_back_tx,
@@ -327,6 +331,7 @@ impl WebView {
             non_blocking_scripts_scheduled: false,
             deferred_script_results: HashMap::new(),
             next_deferred_script_index: 0,
+            pending_fragment_scroll: None,
         }
     }
 
@@ -498,6 +503,7 @@ impl WebView {
 
     pub fn on_html_fetched(&mut self, html: String, document_url: Url) {
         log::info!("Fetched HTML: {}", document_url);
+        self.pending_fragment_scroll = document_url.fragment().map(str::to_string);
         let parsed = parse_html(&html, document_url, self.js_policy.into());
 
         self.pending_css_urls = parsed.style_links;
@@ -1132,14 +1138,21 @@ impl WebView {
             version: 0,
         };
         self.layout_dom_refs = dom_refs;
-        self.layout_processor.send(task);
+        self.layout_requested_version = self.layout_processor.send(task);
         self.layout_pending = true;
     }
 
     /// Takes completed layout results from the thread and makes them drawable.
     fn try_apply_layout_results(&mut self) {
         while let Some(result) = self.layout_processor.try_receive() {
-            let LayoutResult { layout, mut info } = result;
+            let LayoutResult {
+                layout,
+                mut info,
+                version,
+            } = result;
+            if version < self.layout_requested_version {
+                continue;
+            }
             // The builder initializes every node's scroll offset to 0, so a
             // rebuilt tree would otherwise drop the scroll position (e.g. the
             // viewport change on a window resize). Re-apply the offsets of the
@@ -1289,6 +1302,7 @@ impl WebView {
 
         self.layout_processor = layouter::LayoutProcessor::new();
         self.layout_pending = false;
+        self.layout_requested_version = 0;
         self.layout_dom_refs.clear();
         self.snapshot_cache = None;
         self.js_processor = None;
@@ -1306,6 +1320,7 @@ impl WebView {
         self.non_blocking_scripts_scheduled = false;
         self.deferred_script_results.clear();
         self.next_deferred_script_index = 0;
+        self.pending_fragment_scroll = None;
         let (write_back_tx, write_back_rx) = mpsc::channel();
         self.write_back_tx = write_back_tx;
         self.write_back_rx = write_back_rx;
@@ -1336,6 +1351,17 @@ impl WebView {
             self.update_layout();
         }
 
+        let fragment_target =
+            if matches!(self.phase, PagePhase::CssApplied | PagePhase::ScriptApplied) {
+                self.pending_fragment_scroll
+                    .as_deref()
+                    .and_then(|fragment| {
+                        find_fragment_target_dom_id(&self.layout_dom_refs, fragment)
+                    })
+            } else {
+                None
+            };
+
         let Some((layout, info)) = self.layout_and_info.as_mut() else {
             return;
         };
@@ -1348,6 +1374,12 @@ impl WebView {
         layouter::correct_atomic_inline_spacing(layout);
         layouter::align_table_columns(layout, info);
         layouter::refresh_missing_text_layout_results(layout, info, viewport);
+        if fragment_target
+            .is_some_and(|target| apply_fragment_scroll(layout, info, target, viewport.1))
+        {
+            self.pending_fragment_scroll = None;
+            self.needs_redraw = true;
+        }
     }
 
     /// 現在描画可能な Layout / Info を返す（なければ None）
@@ -1433,6 +1465,93 @@ fn apply_scroll_offsets(info: &mut InfoNode, offsets: &HashMap<NodeId, (f32, f32
     for child in &mut info.children {
         apply_scroll_offsets(child, offsets);
     }
+}
+
+fn find_fragment_target_dom_id(
+    dom_refs: &[Weak<RefCell<TreeNode<HtmlNodeType>>>],
+    fragment: &str,
+) -> Option<NodeId> {
+    dom_refs.iter().enumerate().find_map(|(index, node)| {
+        let node = node.upgrade()?;
+        (node.borrow().value.get_attr("id") == Some(fragment)).then_some(index as NodeId)
+    })
+}
+
+fn apply_fragment_scroll(
+    layout: &LayoutNode,
+    info: &mut InfoNode,
+    target: NodeId,
+    viewport_height: f32,
+) -> bool {
+    let Some(target_y) = fragment_target_y(layout, info, target, 0.0) else {
+        return false;
+    };
+    set_first_vertical_scroll_offset(layout, info, target_y, viewport_height)
+}
+
+fn fragment_target_y(
+    layout: &LayoutNode,
+    info: &InfoNode,
+    target: NodeId,
+    parent_content_y: f32,
+) -> Option<f32> {
+    let model = layout.layout_box.iter().next();
+    if info.dom_id == Some(target) {
+        return model.map(|model| parent_content_y + model.border_box.y);
+    }
+    let child_content_y =
+        parent_content_y + model.as_ref().map_or(0.0, |model| model.content_box.y);
+    layout
+        .children
+        .iter()
+        .zip(&info.children)
+        .find_map(|(layout_child, info_child)| {
+            let LayoutChild::Node(layout_child) = layout_child else {
+                return None;
+            };
+            fragment_target_y(layout_child, info_child, target, child_content_y)
+        })
+}
+
+fn set_first_vertical_scroll_offset(
+    layout: &LayoutNode,
+    info: &mut InfoNode,
+    target_y: f32,
+    viewport_height: f32,
+) -> bool {
+    if let Some(model) = layout.layout_box.iter().next() {
+        let offset = match &mut info.kind {
+            NodeKind::Container {
+                scroll_y: true,
+                scroll_offset_y,
+                ..
+            }
+            | NodeKind::Custom {
+                scroll_y: true,
+                scroll_offset_y,
+                ..
+            } => Some(scroll_offset_y),
+            _ => None,
+        };
+        if let Some(offset) = offset {
+            let max_scroll = (model.children_box.height
+                - model.content_box.height.min(viewport_height))
+            .max(0.0);
+            *offset = target_y.clamp(0.0, max_scroll);
+            return true;
+        }
+    }
+
+    layout
+        .children
+        .iter()
+        .zip(&mut info.children)
+        .any(|(layout_child, info_child)| {
+            let LayoutChild::Node(layout_child) = layout_child else {
+                return false;
+            };
+            set_first_vertical_scroll_offset(layout_child, info_child, target_y, viewport_height)
+        })
 }
 
 fn collect_css_image_sources(css: &str) -> Vec<String> {
@@ -1723,6 +1842,44 @@ mod tests {
         info.children
             .iter_mut()
             .any(|c| set_first_scrollable_offset(c, offset))
+    }
+
+    fn layout_box(y: f32, height: f32, children_height: f32) -> ui_layout::LayoutBox {
+        let rect = |y, height| ui_layout::Rect {
+            x: 0.0,
+            y,
+            width: 800.0,
+            height,
+        };
+        ui_layout::LayoutBox::BlockBox(ui_layout::BoxModel {
+            sticky_edges: None,
+            border_box: rect(y, height),
+            padding_box: rect(y, height),
+            content_box: rect(y, height),
+            children_box: rect(y, children_height),
+        })
+    }
+
+    #[test]
+    fn fragment_target_scrolls_the_page_to_its_border_box() {
+        let mut target_layout = LayoutNode::new(ui_layout::Style::default());
+        target_layout.layout_box = layout_box(900.0, 100.0, 100.0);
+        let mut root_layout =
+            LayoutNode::with_children(ui_layout::Style::default(), [target_layout]);
+        root_layout.layout_box = layout_box(0.0, 600.0, 2000.0);
+
+        let mut root_info = scrollable_info(Some(1), true, 0.0);
+        root_info
+            .children
+            .push(scrollable_info(Some(7), false, 0.0));
+
+        assert!(apply_fragment_scroll(
+            &root_layout,
+            &mut root_info,
+            7,
+            600.0
+        ));
+        assert_eq!(root_scroll_offset(&root_info), Some(900.0));
     }
 
     #[test]
