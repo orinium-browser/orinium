@@ -1259,7 +1259,20 @@ pub fn correct_oversized_auto_horizontal_margins(node: &mut LayoutNode) {
 /// `ui_layout` currently advances past an inline flow-root using its content
 /// width. CSS inline-blocks advance by their margin-box width instead.
 pub fn correct_atomic_inline_spacing(node: &mut LayoutNode) {
-    let mut previous: Option<(f32, f32, f32)> = None;
+    let containing_width = node
+        .layout_box
+        .iter()
+        .next()
+        .map(|model| model.content_box.width);
+    let wraps_inline_content = matches!(
+        node.style.display.inner,
+        InnerDisplay::Flow | InnerDisplay::FlowRoot
+    );
+    let mut previous: Option<(f32, f32)> = None;
+    let mut line_y: Option<f32> = None;
+    let mut line_start_x = 0.0;
+    let mut line_bottom = 0.0;
+    let mut line_margin_bottom = 0.0;
 
     for child in &mut node.children {
         let LayoutChild::Node(child) = child else {
@@ -1275,28 +1288,55 @@ pub fn correct_atomic_inline_spacing(node: &mut LayoutNode) {
             });
 
         if is_atomic_inline && let Some(model) = child.layout_box.iter().next() {
+            let rect = model.border_box;
             let margin_left = fixed_nonnegative_px(&child.style.spacing.margin_left);
             let margin_right = fixed_nonnegative_px(&child.style.spacing.margin_right);
-            let desired_x = match previous {
-                Some((right, previous_margin_right, y)) if (y - model.border_box.y).abs() < 0.5 => {
+            let margin_top = fixed_nonnegative_px(&child.style.spacing.margin_top);
+            let margin_bottom = fixed_nonnegative_px(&child.style.spacing.margin_bottom);
+
+            if line_y.is_none_or(|y| (y - rect.y).abs() >= 0.5) {
+                previous = None;
+                line_y = Some(rect.y);
+                line_start_x = rect.x;
+                line_bottom = rect.bottom();
+                line_margin_bottom = margin_bottom;
+            }
+
+            let mut desired_x = match previous {
+                Some((right, previous_margin_right)) => {
                     right + previous_margin_right + margin_left
                 }
-                _ => model.border_box.x + margin_left,
+                None => rect.x + margin_left,
             };
-            if model.border_box.x < desired_x {
-                let shift_x = desired_x - model.border_box.x;
+            let mut desired_y = rect.y;
+            let exceeds_line = previous.is_some()
+                && wraps_inline_content
+                && containing_width.is_some_and(|width| {
+                    desired_x + rect.width + margin_right > width + 0.5
+                });
+            if exceeds_line {
+                desired_x = line_start_x + margin_left;
+                desired_y = line_bottom + line_margin_bottom + margin_top;
+                line_y = Some(desired_y);
+                line_bottom = desired_y + rect.height;
+                line_margin_bottom = margin_bottom;
+            }
+
+            let shift_x = desired_x - rect.x;
+            if shift_x.abs() >= 0.01 {
                 shift_layout_box_x(&mut child.layout_box, shift_x);
             }
-            previous = Some((
-                model
-                    .border_box
-                    .right()
-                    .max(desired_x + model.border_box.width),
-                margin_right,
-                model.border_box.y,
-            ));
+            let shift_y = desired_y - rect.y;
+            if shift_y.abs() >= 0.01 {
+                shift_layout_box_y(&mut child.layout_box, shift_y);
+            }
+
+            line_bottom = line_bottom.max(desired_y + rect.height);
+            line_margin_bottom = line_margin_bottom.max(margin_bottom);
+            previous = Some((desired_x + rect.width, margin_right));
         } else if child.style.display.outer == OuterDisplay::Block {
             previous = None;
+            line_y = None;
         }
     }
 
@@ -1412,6 +1452,25 @@ fn shift_layout_box_x(layout_box: &mut ui_layout::LayoutBox, shift_x: f32) {
             shift_model(&mut inline.box_model);
             for span in &mut inline.line_spans {
                 span.line_pos.0 += shift_x;
+            }
+        }
+    }
+}
+
+fn shift_layout_box_y(layout_box: &mut ui_layout::LayoutBox, shift_y: f32) {
+    let shift_model = |model: &mut ui_layout::BoxModel| {
+        model.border_box.y += shift_y;
+        model.padding_box.y += shift_y;
+        model.content_box.y += shift_y;
+        model.children_box.y += shift_y;
+    };
+    match layout_box {
+        ui_layout::LayoutBox::None => {}
+        ui_layout::LayoutBox::BlockBox(model) => shift_model(model),
+        ui_layout::LayoutBox::InlineBox(inline) => {
+            shift_model(&mut inline.box_model);
+            for span in &mut inline.line_spans {
+                span.line_pos.1 += shift_y;
             }
         }
     }
@@ -4874,6 +4933,47 @@ mod tests {
 
         let boxes = inline_blocks(&layout).expect("two inline blocks");
         assert!(boxes[1].x >= boxes[0].right() + 12.0);
+    }
+
+    #[test]
+    fn full_width_inline_blocks_wrap_onto_separate_lines() {
+        let html = r#"
+            <html><body><main><section>First</section><section>Second</section></main></body></html>
+        "#;
+        let css = r#"
+            main { width: 300px; }
+            section { display: inline-block; width: 100%; height: 40px; margin-bottom: 10px; }
+        "#;
+        let (mut layout, _) = layout_and_info_for(html, css);
+        ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+        correct_atomic_inline_spacing(&mut layout);
+
+        fn sections(node: &LayoutNode) -> Option<Vec<ui_layout::Rect>> {
+            let boxes: Vec<_> = node
+                .children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .filter(|child| {
+                    child.style.display
+                        == (Display {
+                            outer: OuterDisplay::Inline,
+                            inner: InnerDisplay::FlowRoot,
+                        })
+                })
+                .filter_map(|child| child.layout_box.iter().next().map(|model| model.border_box))
+                .collect();
+            if boxes.len() == 2 {
+                return Some(boxes);
+            }
+            node.children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .find_map(sections)
+        }
+
+        let boxes = sections(&layout).expect("two inline blocks");
+        assert!((boxes[0].x - boxes[1].x).abs() < 0.5);
+        assert!(boxes[1].y >= boxes[0].bottom() + 10.0);
     }
 
     #[test]
