@@ -4188,6 +4188,7 @@ fn parse_grid_placement(value: &CssValue) -> Option<GridPlacement> {
             span: GRID_SPAN_TO_END,
         });
     }
+    // TODO: Resolve every negative CSS grid line against the explicit grid, not only -1.
     let end = parse_positive_grid_line(end_values)?;
     (end > start).then_some(GridPlacement {
         start: Some(start),

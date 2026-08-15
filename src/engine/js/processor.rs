@@ -7,6 +7,7 @@
 //! This is not a Web Worker: scripts have full `window`/`document` access.
 //! Tasks are processed FIFO, with coalescable timer wakeups.
 
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
@@ -14,7 +15,7 @@ use std::thread;
 
 use super::{
     JsDynamicImageRequest, JsDynamicScriptRequest, JsDynamicStyleRequest, JsFetchRequest,
-    JsFetchResponse, JsRuntime,
+    JsFetchResponse, JsLayoutMetrics, JsRuntime,
 };
 use crate::engine::layouter::dom_snapshot::DomSnapshot;
 
@@ -27,6 +28,10 @@ pub enum JsTask {
     SetViewport { width: f32, height: f32 },
     /// Update the language preferences exposed through `navigator`.
     SetLanguage { language: String },
+    /// Replace DOM geometry exposed by measurement APIs.
+    SetLayoutMetrics {
+        metrics: HashMap<u64, JsLayoutMetrics>,
+    },
     /// Execute a classic (blocking or deferred) script.
     RunScript { source: String },
     /// Dispatch `DOMContentLoaded` to document listeners.
@@ -99,6 +104,7 @@ impl JsProcessor {
         thread::spawn(move || {
             let (tree, _dom_ids) = initial.into_tree();
             let mut runtime = JsRuntime::new(Rc::new(tree));
+            runtime.apply_dom(&initial);
 
             for cmd in cmd_rx {
                 let JsCommand::Task { task, version } = cmd;
@@ -159,6 +165,7 @@ fn run_task(runtime: &mut JsRuntime, task: JsTask) {
         JsTask::SetDocumentUrl { url } => runtime.set_document_url(&url),
         JsTask::SetViewport { width, height } => runtime.set_viewport(width, height),
         JsTask::SetLanguage { language } => runtime.set_language(&language),
+        JsTask::SetLayoutMetrics { metrics } => runtime.set_layout_metrics_by_dom_id(metrics),
         JsTask::RunScript { source } => runtime.run_script(&source),
         JsTask::DispatchDomContentLoaded => {
             runtime.dispatch_dom_content_loaded();

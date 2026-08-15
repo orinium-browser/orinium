@@ -72,8 +72,24 @@ pub(crate) struct JsDynamicStyleRequest {
 
 /// An image element created or populated after the initial HTML parse.
 #[derive(Debug)]
+// TODO: Track the owning image node so src changes can cancel/reload and dispatch load/error.
 pub(crate) struct JsDynamicImageRequest {
     pub(crate) source: String,
+}
+
+/// Geometry produced by the committed layout tree for a live DOM element.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct JsLayoutMetrics {
+    pub offset_left: f64,
+    pub offset_top: f64,
+    pub offset_width: f64,
+    pub offset_height: f64,
+    pub client_width: f64,
+    pub client_height: f64,
+    pub rect_left: f64,
+    pub rect_top: f64,
+    pub rect_width: f64,
+    pub rect_height: f64,
 }
 
 /// The response data exposed to a JavaScript `Response` object.
@@ -126,11 +142,17 @@ pub struct JsHost {
     fetch_capabilities: HashMap<u64, JsFetchCapability>,
     xhr_requests: HashMap<u64, Rc<RefCell<JSObject>>>,
     constructing_fetch_capability: Option<JsFetchCapability>,
+    // TODO: Persist localStorage per origin and sessionStorage per top-level browsing context.
     local_storage: HashMap<String, String>,
     session_storage: HashMap<String, String>,
+    // TODO: Move cookies into a shared origin/path-aware jar with expiry and security attributes.
     document_cookies: HashMap<String, String>,
     document_url: String,
     viewport: (f64, f64),
+    /// Committed layout measurements keyed by the address of a live DOM node.
+    layout_metrics: HashMap<usize, JsLayoutMetrics>,
+    /// Committed layout measurements keyed by stable JS-facing DOM id.
+    layout_metrics_by_dom_id: HashMap<u64, JsLayoutMetrics>,
     next_fetch_id: u64,
     next_timer_id: u64,
     time_origin: Instant,
@@ -193,6 +215,8 @@ impl JsRuntime {
             document_cookies: HashMap::new(),
             document_url: "about:blank".to_string(),
             viewport: (800.0, 600.0),
+            layout_metrics: HashMap::new(),
+            layout_metrics_by_dom_id: HashMap::new(),
             next_fetch_id: 0,
             next_timer_id: 0,
             time_origin: Instant::now(),
@@ -237,6 +261,21 @@ impl JsRuntime {
         global.set("outerHeight".to_string(), JSValue::Number(height));
         drop(global);
         with_host_mut(self.engine.vm(), |host| host.viewport = (width, height));
+    }
+
+    /// Replaces geometry exposed by DOM measurement APIs with the latest
+    /// committed layout result.
+    #[cfg(test)]
+    pub(crate) fn set_layout_metrics(&mut self, metrics: HashMap<usize, JsLayoutMetrics>) {
+        with_host_mut(self.engine.vm(), |host| host.layout_metrics = metrics);
+    }
+
+    /// Replaces geometry using stable DOM ids supplied by the browser UI
+    /// thread, whose live node addresses differ from this runtime's mirror.
+    pub(crate) fn set_layout_metrics_by_dom_id(&mut self, metrics: HashMap<u64, JsLayoutMetrics>) {
+        with_host_mut(self.engine.vm(), |host| {
+            host.layout_metrics_by_dom_id = metrics
+        });
     }
 
     /// Updates the language preferences exposed through `navigator`.
@@ -546,6 +585,9 @@ impl JsRuntime {
                 refs.entry(dom_id).or_insert_with(|| Rc::downgrade(node));
             }
             host.refs = refs;
+            if let Some(max_id) = dom_ids.values().max() {
+                host.next_id = host.next_id.max(*max_id);
+            }
         });
     }
 
@@ -780,6 +822,7 @@ fn install_browser_environment(engine: &mut pixi_byte::JSEngine) {
         "hash".to_string(),
         read_only_accessor_property(location_hash),
     );
+    // TODO: Implement Location navigation methods and connect them to WebView navigation.
     location.set("assign".to_string(), JSValue::NativeFunction(noop));
     location.set("replace".to_string(), JSValue::NativeFunction(noop));
     location.set("reload".to_string(), JSValue::NativeFunction(noop));
@@ -790,6 +833,7 @@ fn install_browser_environment(engine: &mut pixi_byte::JSEngine) {
         Property::read_only(JSValue::Number(1.0)),
     );
     history.define_property("state".to_string(), Property::read_only(JSValue::Null));
+    // TODO: Implement session history traversal and pushState/replaceState state updates.
     history.set("back".to_string(), JSValue::NativeFunction(noop));
     history.set("forward".to_string(), JSValue::NativeFunction(noop));
     history.set("go".to_string(), JSValue::NativeFunction(noop));
@@ -1797,6 +1841,7 @@ fn resize_observer_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSV
         "observe".to_string(),
         JSValue::NativeFunction(resize_observer_observe),
     );
+    // TODO: Track ResizeObserver subscriptions across layout commits and implement teardown.
     observer.set("unobserve".to_string(), JSValue::NativeFunction(noop));
     observer.set("disconnect".to_string(), JSValue::NativeFunction(noop));
     Ok(JSValue::Object(Rc::new(RefCell::new(observer))))
@@ -1822,7 +1867,7 @@ fn resize_observer_observe(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue>
     entry.define_property("target".to_string(), Property::read_only(target));
     entry.define_property(
         "contentRect".to_string(),
-        Property::read_only(make_dom_rect(width, height)),
+        Property::read_only(make_dom_rect(0.0, 0.0, width, height)),
     );
     let callback = observer.borrow().get(RESIZE_OBSERVER_CALLBACK);
     vm.enqueue_job(
@@ -2165,6 +2210,7 @@ fn xml_http_request_constructor(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<J
         "getAllResponseHeaders".to_string(),
         JSValue::NativeFunction(xml_http_request_get_all_response_headers),
     );
+    // TODO: Cancel the in-flight network request and dispatch XMLHttpRequest abort events.
     xhr.set("abort".to_string(), JSValue::NativeFunction(noop));
     Ok(JSValue::Object(Rc::new(RefCell::new(xhr))))
 }
@@ -3624,24 +3670,30 @@ fn make_element_interface() -> (Rc<RefCell<JSObject>>, Rc<RefCell<JSObject>>) {
         "height".to_string(),
         accessor_property(get_element_height, set_element_height),
     );
-    for name in ["clientWidth", "offsetWidth"] {
-        prototype.define_property(
-            name.to_string(),
-            read_only_accessor_property(get_element_layout_width),
-        );
-    }
-    for name in ["clientHeight", "offsetHeight"] {
-        prototype.define_property(
-            name.to_string(),
-            read_only_accessor_property(get_element_layout_height),
-        );
-    }
-    for name in ["offsetLeft", "offsetTop"] {
-        prototype.define_property(
-            name.to_string(),
-            read_only_accessor_property(get_element_layout_offset),
-        );
-    }
+    prototype.define_property(
+        "clientWidth".to_string(),
+        read_only_accessor_property(get_element_client_width),
+    );
+    prototype.define_property(
+        "clientHeight".to_string(),
+        read_only_accessor_property(get_element_client_height),
+    );
+    prototype.define_property(
+        "offsetWidth".to_string(),
+        read_only_accessor_property(get_element_offset_width),
+    );
+    prototype.define_property(
+        "offsetHeight".to_string(),
+        read_only_accessor_property(get_element_offset_height),
+    );
+    prototype.define_property(
+        "offsetLeft".to_string(),
+        read_only_accessor_property(get_element_offset_left),
+    );
+    prototype.define_property(
+        "offsetTop".to_string(),
+        read_only_accessor_property(get_element_offset_top),
+    );
     prototype.define_property(
         "checked".to_string(),
         accessor_property(get_element_checked, set_element_checked),
@@ -5262,40 +5314,99 @@ fn element_layout_size(vm: &VM, value: &JSValue) -> Option<(f64, f64)> {
     Some(size)
 }
 
-fn get_element_layout_width(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+fn element_layout_metrics(vm: &VM, value: &JSValue) -> Option<JsLayoutMetrics> {
+    let node = dom_node(vm, value)?;
+    let node_key = Rc::as_ptr(&node) as usize;
+    let dom_id = node_dom_id(value);
+    with_host(vm, |host| {
+        dom_id
+            .and_then(|id| host.layout_metrics_by_dom_id.get(&id).copied())
+            .or_else(|| host.layout_metrics.get(&node_key).copied())
+    })
+    .flatten()
+}
+
+fn measured_or_fallback(
+    vm: &VM,
+    value: &JSValue,
+    measured: impl FnOnce(JsLayoutMetrics) -> f64,
+    fallback: impl FnOnce((f64, f64)) -> f64,
+) -> f64 {
+    if let Some(metrics) = element_layout_metrics(vm, value) {
+        return measured(metrics);
+    }
+    // TODO: Force a synchronous style/layout flush when geometry is read before
+    // the first committed layout instead of estimating dimensions from attributes.
+    element_layout_size(vm, value).map(fallback).unwrap_or(0.0)
+}
+
+fn measurement_receiver(args: &[JSValue]) -> &JSValue {
+    args.first().unwrap_or(&JSValue::Undefined)
+}
+
+fn get_element_client_width(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::Number(measured_or_fallback(
+        vm,
+        measurement_receiver(&args),
+        |metrics| metrics.client_width,
+        |size| size.0,
+    )))
+}
+
+fn get_element_client_height(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::Number(measured_or_fallback(
+        vm,
+        measurement_receiver(&args),
+        |metrics| metrics.client_height,
+        |size| size.1,
+    )))
+}
+
+fn get_element_offset_width(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::Number(measured_or_fallback(
+        vm,
+        measurement_receiver(&args),
+        |metrics| metrics.offset_width,
+        |size| size.0,
+    )))
+}
+
+fn get_element_offset_height(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::Number(measured_or_fallback(
+        vm,
+        measurement_receiver(&args),
+        |metrics| metrics.offset_height,
+        |size| size.1,
+    )))
+}
+
+fn get_element_offset_left(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(JSValue::Number(
-        element_layout_size(vm, args.first().unwrap_or(&JSValue::Undefined))
-            .map(|size| size.0)
+        element_layout_metrics(vm, measurement_receiver(&args))
+            .map(|metrics| metrics.offset_left)
             .unwrap_or(0.0),
     ))
 }
 
-fn get_element_layout_height(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+fn get_element_offset_top(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(JSValue::Number(
-        element_layout_size(vm, args.first().unwrap_or(&JSValue::Undefined))
-            .map(|size| size.1)
+        element_layout_metrics(vm, measurement_receiver(&args))
+            .map(|metrics| metrics.offset_top)
             .unwrap_or(0.0),
     ))
 }
 
-fn get_element_layout_offset(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
-    // Until live layout boxes are bridged into the DOM runtime, zero is the
-    // correct non-NaN origin fallback for in-flow content. Returning
-    // `undefined` poisons carousel transforms such as `-slide.offsetLeft`.
-    Ok(JSValue::Number(0.0))
-}
-
-fn make_dom_rect(width: f64, height: f64) -> JSValue {
+fn make_dom_rect(left: f64, top: f64, width: f64, height: f64) -> JSValue {
     let mut rect = JSObject::new();
     for (name, value) in [
-        ("x", 0.0),
-        ("y", 0.0),
-        ("left", 0.0),
-        ("top", 0.0),
+        ("x", left),
+        ("y", top),
+        ("left", left),
+        ("top", top),
         ("width", width),
         ("height", height),
-        ("right", width),
-        ("bottom", height),
+        ("right", left + width),
+        ("bottom", top + height),
     ] {
         rect.define_property(
             name.to_string(),
@@ -5306,11 +5417,27 @@ fn make_dom_rect(width: f64, height: f64) -> JSValue {
 }
 
 fn get_bounding_client_rect(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let (width, height) = element_layout_size(vm, args.first().unwrap_or(&JSValue::Undefined))
-        .ok_or_else(|| {
-            JSError::TypeError("getBoundingClientRect called on incompatible receiver".to_string())
-        })?;
-    Ok(make_dom_rect(width, height))
+    let receiver = measurement_receiver(&args);
+    if dom_node(vm, receiver).is_none() {
+        return Err(JSError::TypeError(
+            "getBoundingClientRect called on incompatible receiver".to_string(),
+        ));
+    }
+    let (left, top, width, height) = element_layout_metrics(vm, receiver).map_or_else(
+        || {
+            let (width, height) = element_layout_size(vm, receiver).unwrap_or_default();
+            (0.0, 0.0, width, height)
+        },
+        |metrics| {
+            (
+                metrics.rect_left,
+                metrics.rect_top,
+                metrics.rect_width,
+                metrics.rect_height,
+            )
+        },
+    );
+    Ok(make_dom_rect(left, top, width, height))
 }
 
 const CANVAS_NODE_ID: &str = "__orinium_canvas_node_id";
@@ -5399,6 +5526,7 @@ fn make_canvas_2d_context(node_id: u64) -> Rc<RefCell<JSObject>> {
         "font".to_string(),
         JSValue::String("10px sans-serif".to_string()),
     );
+    // TODO: Implement the Canvas 2D state stack, paths, transforms, fill, and stroke commands.
     context.set("save".to_string(), JSValue::NativeFunction(noop));
     context.set("restore".to_string(), JSValue::NativeFunction(noop));
     context.set("beginPath".to_string(), JSValue::NativeFunction(noop));
@@ -5525,6 +5653,7 @@ fn make_webgl_context(node_id: u64, kind: &str, width: f64, height: f64) -> Rc<R
             Property::read_only(JSValue::Number(value as f64)),
         );
     }
+    // TODO: Implement a real WebGL command pipeline and render target; Scratch cannot render while these calls are no-ops.
     for name in [
         "createBuffer",
         "createFramebuffer",
@@ -5812,6 +5941,7 @@ fn canvas_get_image_data(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> 
 
 fn canvas_create_gradient(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     let mut gradient = JSObject::new();
+    // TODO: Store gradient color stops and resolve them when Canvas 2D paint styles are rendered.
     gradient.set("addColorStop".to_string(), JSValue::NativeFunction(noop));
     Ok(JSValue::Object(Rc::new(RefCell::new(gradient))))
 }
@@ -6171,6 +6301,51 @@ mod tests {
                 .value
                 .get_attr("data-widths"),
             Some("800:0:0:0")
+        );
+    }
+
+    #[test]
+    fn dom_measurements_prefer_committed_layout_geometry() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<div id="target" style="width: 1px; height: 2px"></div><div id="result"></div>"#,
+        );
+        let target = dom.get_element_by_id("target").unwrap();
+        runtime.set_layout_metrics(HashMap::from([(
+            Rc::as_ptr(&target) as usize,
+            JsLayoutMetrics {
+                offset_left: 12.0,
+                offset_top: 34.0,
+                offset_width: 222.0,
+                offset_height: 111.0,
+                client_width: 218.0,
+                client_height: 107.0,
+                rect_left: 42.5,
+                rect_top: 64.25,
+                rect_width: 222.0,
+                rect_height: 111.0,
+            },
+        )]));
+        runtime.run_script(
+            r#"
+            const target = document.getElementById("target");
+            const rect = target.getBoundingClientRect();
+            document.getElementById("result").setAttribute(
+                "data-layout",
+                target.offsetLeft + ":" + target.offsetTop + ":" +
+                    target.offsetWidth + ":" + target.offsetHeight + ":" +
+                    target.clientWidth + ":" + target.clientHeight + ":" +
+                    rect.left + ":" + rect.top + ":" + rect.right + ":" + rect.bottom
+            );
+            "#,
+        );
+
+        assert_eq!(
+            dom.get_element_by_id("result")
+                .unwrap()
+                .borrow()
+                .value
+                .get_attr("data-layout"),
+            Some("12:34:222:111:218:107:42.5:64.25:264.5:175.25")
         );
     }
 

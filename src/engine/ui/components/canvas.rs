@@ -76,8 +76,8 @@ impl CustomNode for CanvasComponent {
                     height,
                 } => draw_rect(cmd_buf, color, x, y, width, height, scale_x, scale_y),
                 CanvasCommand::ClearRect { .. } => {
-                    // Transparent erasure requires a retained pixel surface. The command is
-                    // preserved so a raster backing store can implement it next.
+                    // TODO: Add a retained transparent pixel surface so clearRect can erase
+                    // previously drawn canvas content.
                 }
                 CanvasCommand::StrokeRect {
                     color,

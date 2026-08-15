@@ -18,7 +18,8 @@ use crate::engine::{
     },
     js::{
         JsDynamicImageRequest, JsDynamicScriptRequest, JsDynamicScriptSource,
-        JsDynamicStyleRequest, JsFetchRequest, JsFetchResponse, JsProcessor, JsTask, JsTaskResult,
+        JsDynamicStyleRequest, JsFetchRequest, JsFetchResponse, JsLayoutMetrics, JsProcessor,
+        JsTask, JsTaskResult,
     },
     layouter::{
         self, InheritedCss, LayoutResult, NodeId,
@@ -227,6 +228,16 @@ struct SnapshotCache {
     dom_refs: Vec<Weak<RefCell<TreeNode<HtmlNodeType>>>>,
 }
 
+fn js_snapshot_from_tree(dom: &DomTree) -> (DomSnapshot, HashMap<usize, u64>) {
+    let mut dom_ids = HashMap::new();
+    let mut next_id = 1u64;
+    dom.traverse(|node| {
+        dom_ids.insert(Rc::as_ptr(node) as usize, next_id);
+        next_id += 1;
+    });
+    (DomSnapshot::from_mirror(&dom.root, &dom_ids), dom_ids)
+}
+
 impl std::fmt::Debug for SnapshotCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SnapshotCache")
@@ -370,7 +381,7 @@ impl WebView {
                 .as_ref()
                 .map(|info| info.document_url.to_string())
                 .unwrap_or_default();
-            let (snapshot, _) = DomSnapshot::from_tree(&dom.root);
+            let (snapshot, dom_ids) = js_snapshot_from_tree(&dom);
             let processor = JsProcessor::new(snapshot);
             processor.send(JsTask::SetDocumentUrl { url: document_url });
             processor.send(JsTask::SetViewport {
@@ -381,6 +392,7 @@ impl WebView {
                 language: locale::preferred_language(),
             });
             self.js_processor = Some(processor);
+            self.js_dom_ids = dom_ids;
             self.pending_js_tasks = 3;
         }
     }
@@ -525,8 +537,10 @@ impl WebView {
         self.css_results_expected = self.pending_css_urls.len();
 
         let mut initial_js_tasks = 0;
+        let mut initial_js_dom_ids = HashMap::new();
         self.js_processor = if self.js_policy == JsPolicy::Enabled {
-            let (snapshot, _) = DomSnapshot::from_tree(&parsed.dom.root);
+            let (snapshot, dom_ids) = js_snapshot_from_tree(&parsed.dom);
+            initial_js_dom_ids = dom_ids;
             let processor = JsProcessor::new(snapshot);
             processor.send(JsTask::SetDocumentUrl {
                 url: parsed.document_url.to_string(),
@@ -544,7 +558,7 @@ impl WebView {
             None
         };
         self.pending_js_tasks = initial_js_tasks;
-        self.js_dom_ids.clear();
+        self.js_dom_ids = initial_js_dom_ids;
         self.js_dom_dirty = false;
         self.in_flight_timer_version = None;
         self.pending_js_fetches.clear();
@@ -676,6 +690,7 @@ impl WebView {
     }
 
     pub fn on_dynamic_style_fetched(&mut self, node_id: u64, source: String) {
+        // TODO: Preserve the final stylesheet URL so relative url() and @import resolve correctly.
         self.linked_css.push(source);
         self.rebuild_styles_and_layout();
         self.needs_redraw = true;
@@ -1392,6 +1407,15 @@ impl WebView {
             self.pending_fragment_scroll = None;
             self.needs_redraw = true;
         }
+
+        let layout_metrics =
+            collect_js_layout_metrics(layout, info, &self.layout_dom_refs, &self.js_dom_ids);
+        if let Some(processor) = self.js_processor.as_ref() {
+            processor.send(JsTask::SetLayoutMetrics {
+                metrics: layout_metrics,
+            });
+            self.pending_js_tasks += 1;
+        }
     }
 
     /// 現在描画可能な Layout / Info を返す（なければ None）
@@ -1426,6 +1450,113 @@ impl WebView {
 
     pub fn clear_redraw_flag(&mut self) {
         self.needs_redraw = false;
+    }
+}
+
+/// Builds the geometry snapshot used by DOM measurement APIs from the same
+/// layout boxes and scroll offsets consumed by painting and hit testing.
+fn collect_js_layout_metrics(
+    layout: &LayoutNode,
+    info: &InfoNode,
+    dom_refs: &[Weak<RefCell<TreeNode<HtmlNodeType>>>],
+    js_dom_ids: &HashMap<usize, u64>,
+) -> HashMap<u64, JsLayoutMetrics> {
+    let mut metrics = HashMap::new();
+    collect_js_layout_metrics_inner(
+        layout,
+        info,
+        dom_refs,
+        js_dom_ids,
+        (0.0, 0.0),
+        (0.0, 0.0),
+        &mut metrics,
+    );
+    metrics
+}
+
+fn collect_js_layout_metrics_inner(
+    layout: &LayoutNode,
+    info: &InfoNode,
+    dom_refs: &[Weak<RefCell<TreeNode<HtmlNodeType>>>],
+    js_dom_ids: &HashMap<usize, u64>,
+    parent_content_origin: (f32, f32),
+    inherited_scroll: (f32, f32),
+    metrics: &mut HashMap<u64, JsLayoutMetrics>,
+) {
+    let is_fixed = layout.style.position.kind == ui_layout::Position::Fixed;
+    let effective_scroll = if is_fixed {
+        (0.0, 0.0)
+    } else {
+        inherited_scroll
+    };
+    let own_scroll = info.kind.scroll_offsets();
+    let child_scroll = if is_fixed {
+        own_scroll
+    } else {
+        (
+            inherited_scroll.0 + own_scroll.0,
+            inherited_scroll.1 + own_scroll.1,
+        )
+    };
+
+    let boxes: Vec<_> = layout.layout_box.iter().collect();
+    if let Some(first) = boxes.first() {
+        let mut page_left = parent_content_origin.0 + first.border_box.x;
+        let mut page_top = parent_content_origin.1 + first.border_box.y;
+        let mut page_right = page_left + first.border_box.width;
+        let mut page_bottom = page_top + first.border_box.height;
+        for model in boxes.iter().skip(1) {
+            let left = parent_content_origin.0 + model.border_box.x;
+            let top = parent_content_origin.1 + model.border_box.y;
+            page_left = page_left.min(left);
+            page_top = page_top.min(top);
+            page_right = page_right.max(left + model.border_box.width);
+            page_bottom = page_bottom.max(top + model.border_box.height);
+        }
+
+        if let Some(node) = info
+            .dom_id
+            .and_then(|id| dom_refs.get(id as usize))
+            .and_then(Weak::upgrade)
+        {
+            let node_key = Rc::as_ptr(&node) as usize;
+            if let Some(dom_id) = js_dom_ids.get(&node_key).copied() {
+                metrics.insert(
+                    dom_id,
+                    JsLayoutMetrics {
+                        offset_left: first.border_box.x as f64,
+                        offset_top: first.border_box.y as f64,
+                        offset_width: (page_right - page_left) as f64,
+                        offset_height: (page_bottom - page_top) as f64,
+                        client_width: first.padding_box.width as f64,
+                        client_height: first.padding_box.height as f64,
+                        rect_left: (page_left - effective_scroll.0) as f64,
+                        rect_top: (page_top - effective_scroll.1) as f64,
+                        rect_width: (page_right - page_left) as f64,
+                        rect_height: (page_bottom - page_top) as f64,
+                    },
+                );
+            }
+        }
+
+        // TODO: Apply CSS transforms and sticky-position paint offsets to DOMRect geometry.
+        let child_origin = (
+            parent_content_origin.0 + first.content_box.x,
+            parent_content_origin.1 + first.content_box.y,
+        );
+        for (child_layout, child_info) in layout.children.iter().zip(&info.children) {
+            if let Some(child_layout) = child_layout.node() {
+                collect_js_layout_metrics_inner(
+                    child_layout,
+                    child_info,
+                    dom_refs,
+                    js_dom_ids,
+                    child_origin,
+                    child_scroll,
+                    metrics,
+                );
+            }
+        }
     }
 }
 
@@ -1874,6 +2005,88 @@ mod tests {
             content_box: rect(y, height),
             children_box: rect(y, children_height),
         })
+    }
+
+    #[test]
+    fn dom_layout_metrics_follow_box_geometry_and_scroll_offsets() {
+        let mut parser = HtmlParser::new(r#"<div id="target"></div>"#);
+        let dom = Rc::new(parser.parse());
+        let target = dom.get_element_by_id("target").unwrap();
+        let dom_refs = vec![Rc::downgrade(&target)];
+
+        let mut child = LayoutNode::new(ui_layout::Style::default());
+        child.layout_box = ui_layout::LayoutBox::BlockBox(ui_layout::BoxModel {
+            sticky_edges: None,
+            border_box: ui_layout::Rect {
+                x: 30.0,
+                y: 40.0,
+                width: 120.0,
+                height: 80.0,
+            },
+            padding_box: ui_layout::Rect {
+                x: 32.0,
+                y: 42.0,
+                width: 116.0,
+                height: 76.0,
+            },
+            content_box: ui_layout::Rect {
+                x: 36.0,
+                y: 46.0,
+                width: 108.0,
+                height: 68.0,
+            },
+            children_box: ui_layout::Rect::default(),
+        });
+        let mut root = LayoutNode::with_children(ui_layout::Style::default(), [child]);
+        root.layout_box = ui_layout::LayoutBox::BlockBox(ui_layout::BoxModel {
+            sticky_edges: None,
+            border_box: ui_layout::Rect {
+                width: 800.0,
+                height: 600.0,
+                ..Default::default()
+            },
+            padding_box: ui_layout::Rect {
+                width: 800.0,
+                height: 600.0,
+                ..Default::default()
+            },
+            content_box: ui_layout::Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 780.0,
+                height: 580.0,
+            },
+            children_box: ui_layout::Rect::default(),
+        });
+
+        let mut root_info = scrollable_info(None, true, 7.0);
+        if let NodeKind::Container {
+            scroll_offset_x, ..
+        } = &mut root_info.kind
+        {
+            *scroll_offset_x = 5.0;
+        }
+        root_info
+            .children
+            .push(scrollable_info(Some(0), false, 0.0));
+
+        let js_dom_ids = HashMap::from([(Rc::as_ptr(&target) as usize, 42)]);
+        let measurements = collect_js_layout_metrics(&root, &root_info, &dom_refs, &js_dom_ids);
+        assert_eq!(
+            measurements.get(&42),
+            Some(&JsLayoutMetrics {
+                offset_left: 30.0,
+                offset_top: 40.0,
+                offset_width: 120.0,
+                offset_height: 80.0,
+                client_width: 116.0,
+                client_height: 76.0,
+                rect_left: 35.0,
+                rect_top: 53.0,
+                rect_width: 120.0,
+                rect_height: 80.0,
+            })
+        );
     }
 
     #[test]
