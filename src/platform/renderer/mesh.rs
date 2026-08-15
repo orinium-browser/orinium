@@ -32,6 +32,7 @@ pub struct TextSection {
     pub screen_position: (f32, f32),
     pub clip_origin: (f32, f32),
     pub bounds: (f32, f32),
+    pub font_weight: u16,
     pub layout: Arc<TextLayout>,
 }
 
@@ -570,6 +571,7 @@ impl MeshBuilder {
                 screen_position: (sx1, sy1),
                 clip_origin: (clip.x * sf, clip.y * sf),
                 bounds: (tw * sf, th * sf),
+                font_weight: scaled.font_weight.0,
                 layout,
             });
         }

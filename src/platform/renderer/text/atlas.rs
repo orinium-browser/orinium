@@ -4,8 +4,8 @@ use etagere::{BucketedAtlasAllocator, size2};
 use lru::LruCache;
 use orinium_text::{FontKey, fontdb};
 
-/// (fontdb ID, glyph_id, font_size_bits, horizontal subpixel phase)
-type GlyphKey = (fontdb::ID, u32, u32, u8);
+/// (fontdb ID, glyph_id, font_size_bits, CSS weight, horizontal subpixel phase)
+type GlyphKey = (fontdb::ID, u32, u32, u16, u8);
 
 /// (layer, allocation, rectangle, bitmap width/height, placement left/top)
 type GlyphCacheValue = (
@@ -110,9 +110,16 @@ impl GlyphAtlas {
         font_key: FontKey,
         glyph_id: u32,
         font_size: f32,
+        font_weight: u16,
         phase_x: u8,
     ) -> Option<GlyphAtlasEntry> {
-        let key = (font_key.0, glyph_id, font_size.to_bits(), phase_x);
+        let key = (
+            font_key.0,
+            glyph_id,
+            font_size.to_bits(),
+            font_weight,
+            phase_x,
+        );
         let (layer, _alloc_id, rect, width, height, left, top) = self.glyph_map.get(&key)?;
         Some(Self::entry(
             self.size, *layer, *rect, *width, *height, *left, *top,
@@ -137,6 +144,7 @@ impl GlyphAtlas {
         font_key: FontKey,
         glyph_id: u32,
         font_size: f32,
+        font_weight: u16,
         phase_x: u8,
         alpha_mask: &[u8],
         mask_width: u32,
@@ -158,7 +166,13 @@ impl GlyphAtlas {
             };
         }
 
-        let key = (font_key.0, glyph_id, font_size.to_bits(), phase_x);
+        let key = (
+            font_key.0,
+            glyph_id,
+            font_size.to_bits(),
+            font_weight,
+            phase_x,
+        );
 
         // Check if already present (updates LRU position).
         if let Some((layer, _alloc_id, rect, width, height, left, top)) = self.glyph_map.get(&key) {

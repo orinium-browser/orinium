@@ -77,6 +77,7 @@ fn rasterize_glyph(
     font_key: FontKey,
     glyph_id: u32,
     font_size: f32,
+    font_weight: u16,
     phase_x: u8,
 ) -> Option<RasterizedMask> {
     let face_index = font_system.db.face(font_key.0)?.index as usize;
@@ -85,6 +86,7 @@ fn rasterize_glyph(
     let mut scaler = scale_context
         .builder(font)
         .size(font_size)
+        .variations([("wght", font_weight as f32)])
         .hint(true)
         .build();
     let mut render = Render::new(&[Source::Outline]);
@@ -250,6 +252,7 @@ fn sections_hash(sections: &[TextSection]) -> u64 {
         h ^= s.clip_origin.1.to_bits() as u64;
         h ^= s.bounds.0.to_bits() as u64;
         h ^= s.bounds.1.to_bits() as u64;
+        h ^= s.font_weight as u64;
         h ^= Arc::as_ptr(&s.layout) as u64;
     }
     h
@@ -286,7 +289,7 @@ pub struct TextRenderer {
     section_ranges: Vec<(u32, u32)>,
 
     layout_cache: Vec<CachedLayout>,
-    bearing_cache: LruCache<(fontdb::ID, u32, u32), (f32, f32)>,
+    bearing_cache: LruCache<(fontdb::ID, u32, u32, u16), (f32, f32)>,
 }
 
 impl TextRenderer {
@@ -709,7 +712,12 @@ impl TextRenderer {
                             continue;
                         };
 
-                        let bearing_key = (font_key.0, glyph.glyph_id, glyph.font_size.to_bits());
+                        let bearing_key = (
+                            font_key.0,
+                            glyph.glyph_id,
+                            glyph.font_size.to_bits(),
+                            section.font_weight,
+                        );
                         let (bearing_x, bearing_y) = if let Some(bearings) =
                             self.bearing_cache.get(&bearing_key)
                         {
@@ -731,6 +739,7 @@ impl TextRenderer {
                             font_key,
                             glyph.glyph_id,
                             glyph.font_size,
+                            section.font_weight,
                             phase_x,
                         ) {
                             Some(entry) => {
@@ -746,6 +755,7 @@ impl TextRenderer {
                                     font_key,
                                     glyph.glyph_id,
                                     glyph.font_size,
+                                    section.font_weight,
                                     phase_x,
                                 ) {
                                     atlas_rasterize_time += _t_raster.elapsed();
@@ -760,6 +770,7 @@ impl TextRenderer {
                                         font_key,
                                         glyph.glyph_id,
                                         glyph.font_size,
+                                        section.font_weight,
                                         phase_x,
                                         &mask.data,
                                         mask.width,
@@ -930,6 +941,7 @@ mod tests {
 
     use super::{
         TextSection, glyph_fully_outside_clip, quantize_subpixel_x, rasterizable_font_size,
+        sections_hash,
     };
 
     fn section(
@@ -941,6 +953,7 @@ mod tests {
             screen_position,
             clip_origin,
             bounds,
+            font_weight: 400,
             layout: Arc::new(TextLayout {
                 lines: Vec::new(),
                 width: 0.0,
@@ -972,6 +985,14 @@ mod tests {
         assert!(!glyph_fully_outside_clip(&s, 10.0, 20.0, 8.0, 12.0));
         // Glyph straddling the clip boundary is kept (post-clip handles the split).
         assert!(!glyph_fully_outside_clip(&s, 98.0, 20.0, 8.0, 12.0));
+    }
+
+    #[test]
+    fn section_hash_distinguishes_font_weights() {
+        let regular = section((0.0, 0.0), (0.0, 0.0), (100.0, 20.0));
+        let mut bold = regular.clone();
+        bold.font_weight = 700;
+        assert_ne!(sections_hash(&[regular]), sections_hash(&[bold]));
     }
 
     #[test]
