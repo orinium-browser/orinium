@@ -1034,6 +1034,33 @@ pub fn build_layout_and_info_from_snapshot(
                 all_info.push(ic);
             }
 
+            // Collapsible whitespace at a block boundary does not create an
+            // anonymous line box. Keeping indentation-only DOM text here made
+            // a block such as Scratch's `.page` start one default line-height
+            // below the viewport.
+            let keep: Vec<bool> = (0..all_layout.len())
+                .map(|index| {
+                    let collapsible = is_collapsible_whitespace_info(&all_info[index]);
+                    let next_to_block = index == 0
+                        || index + 1 == all_layout.len()
+                        || index
+                            .checked_sub(1)
+                            .is_some_and(|previous| is_block_layout_child(&all_layout[previous]))
+                        || all_layout.get(index + 1).is_some_and(is_block_layout_child);
+                    !(collapsible && next_to_block)
+                })
+                .collect();
+            all_layout = all_layout
+                .into_iter()
+                .zip(&keep)
+                .filter_map(|(layout, keep)| keep.then_some(layout))
+                .collect();
+            all_info = all_info
+                .into_iter()
+                .zip(keep)
+                .filter_map(|(info, keep)| keep.then_some(info))
+                .collect();
+
             // ui_layout currently resolves an auto-width inline flow-root
             // against all available inline space. Floats are shrink-to-fit
             // boxes instead. When their contents expose a fixed CSS width,
@@ -1219,6 +1246,16 @@ fn maximum_fixed_descendant_width(children: &[LayoutChild]) -> Option<f32> {
         .max_by(f32::total_cmp)
 }
 
+fn is_collapsible_whitespace_info(info: &InfoNode) -> bool {
+    matches!(&info.kind, NodeKind::Text { text, .. } if text.trim().is_empty())
+}
+
+fn is_block_layout_child(child: &LayoutChild) -> bool {
+    child
+        .node()
+        .is_some_and(|node| node.style.display.outer == OuterDisplay::Block)
+}
+
 /// Correct the used horizontal margins of oversized block-level boxes.
 ///
 /// CSS 2.1 treats auto horizontal margins as zero when a block's used width
@@ -1306,7 +1343,12 @@ pub fn correct_atomic_inline_spacing(node: &mut LayoutNode) {
                 Some((right, previous_margin_right)) => right + previous_margin_right + margin_left,
                 None => rect.x + margin_left,
             };
-            let mut desired_y = rect.y;
+            // ui_layout positions atomic inline boxes at the line origin but
+            // does not include their vertical margins in that position. The
+            // margin box, rather than the border box, is what participates in
+            // inline formatting (notably a full-width inline-block <main>
+            // placed below a fixed header).
+            let mut desired_y = rect.y + margin_top;
             let exceeds_line = previous.is_some()
                 && wraps_inline_content
                 && containing_width
@@ -1340,6 +1382,7 @@ pub fn correct_atomic_inline_spacing(node: &mut LayoutNode) {
     expand_auto_inline_width_to_children(node);
     correct_horizontal_flex_spacing(node);
     expand_auto_flex_width_to_children(node);
+    expand_auto_flex_height_to_children(node);
 }
 
 fn expand_auto_inline_width_to_children(node: &mut LayoutNode) {
@@ -1393,6 +1436,25 @@ fn expand_auto_flex_width_to_children(node: &mut LayoutNode) {
     grow_auto_layout_width(node, required_width);
 }
 
+fn expand_auto_flex_height_to_children(node: &mut LayoutNode) {
+    if node.style.display.inner != InnerDisplay::Flex
+        || node.style.size.height != LengthOrAuto::Auto
+    {
+        return;
+    }
+    let required_height = node
+        .children
+        .iter()
+        .filter_map(LayoutChild::node)
+        .filter_map(|child| {
+            child.layout_box.iter().next().map(|model| {
+                model.border_box.bottom() + fixed_nonnegative_px(&child.style.spacing.margin_bottom)
+            })
+        })
+        .fold(0.0, f32::max);
+    grow_auto_layout_height(node, required_height);
+}
+
 fn required_children_margin_box_width(node: &LayoutNode) -> f32 {
     node.children
         .iter()
@@ -1430,6 +1492,33 @@ fn grow_auto_layout_width(node: &mut LayoutNode, required_width: f32) {
             if let Some(last) = inline.line_spans.last_mut() {
                 last.x_range.end += extra;
             }
+        }
+        ui_layout::LayoutBox::None => {}
+    }
+}
+
+fn grow_auto_layout_height(node: &mut LayoutNode, required_height: f32) {
+    let Some(model) = node.layout_box.iter().next() else {
+        return;
+    };
+    let extra = required_height - model.content_box.height;
+    if extra <= 0.0 {
+        return;
+    }
+
+    match &mut node.layout_box {
+        ui_layout::LayoutBox::BlockBox(model) => {
+            model.content_box.height += extra;
+            model.padding_box.height += extra;
+            model.border_box.height += extra;
+            model.children_box.height = model.children_box.height.max(required_height);
+        }
+        ui_layout::LayoutBox::InlineBox(inline) => {
+            inline.box_model.content_box.height += extra;
+            inline.box_model.padding_box.height += extra;
+            inline.box_model.border_box.height += extra;
+            inline.box_model.children_box.height =
+                inline.box_model.children_box.height.max(required_height);
         }
         ui_layout::LayoutBox::None => {}
     }
@@ -4930,6 +5019,82 @@ mod tests {
 
         let boxes = inline_blocks(&layout).expect("two inline blocks");
         assert!(boxes[1].x >= boxes[0].right() + 12.0);
+    }
+
+    #[test]
+    fn atomic_inline_block_starts_below_its_top_margin() {
+        let html = r#"
+            <html><body><main><div>Content</div></main></body></html>
+        "#;
+        let css = r#"
+            main { display: inline-block; width: 100%; margin-top: 50px; }
+        "#;
+        let (mut layout, _) = layout_and_info_for(html, css);
+        ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+        correct_atomic_inline_spacing(&mut layout);
+
+        fn main_box(node: &LayoutNode) -> Option<ui_layout::Rect> {
+            if node.style.display
+                == (Display {
+                    outer: OuterDisplay::Inline,
+                    inner: InnerDisplay::FlowRoot,
+                })
+                && node.style.spacing.margin_top == LengthOrAuto::Length(Length::Px(50.0))
+            {
+                return node.layout_box.iter().next().map(|model| model.border_box);
+            }
+            node.children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .find_map(main_box)
+        }
+
+        let main = main_box(&layout).expect("main inline block");
+        assert_eq!(main.y, 50.0);
+    }
+
+    #[test]
+    fn indentation_before_block_does_not_create_anonymous_line() {
+        let html = "<html><body><div>\n    <section></section>\n</div></body></html>";
+        let css = "section { display: block; width: 100px; height: 20px; }";
+        let (mut layout, _) = layout_and_info_for(html, css);
+        ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+
+        fn section_box(node: &LayoutNode) -> Option<ui_layout::Rect> {
+            if node.style.size.width == LengthOrAuto::Length(Length::Px(100.0)) {
+                return node.layout_box.iter().next().map(|model| model.border_box);
+            }
+            node.children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .find_map(section_box)
+        }
+
+        assert_eq!(section_box(&layout).expect("section").y, 0.0);
+    }
+
+    #[test]
+    fn auto_flex_height_includes_child_vertical_margins() {
+        let html = "<html><body><div class='row'><span></span></div></body></html>";
+        let css = r#"
+            .row { display: flex; }
+            span { display: inline-block; width: 20px; height: 30px; margin: 10px 0; }
+        "#;
+        let (mut layout, _) = layout_and_info_for(html, css);
+        ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+        correct_atomic_inline_spacing(&mut layout);
+
+        fn flex_box(node: &LayoutNode) -> Option<ui_layout::Rect> {
+            if node.style.display.inner == InnerDisplay::Flex {
+                return node.layout_box.iter().next().map(|model| model.border_box);
+            }
+            node.children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .find_map(flex_box)
+        }
+
+        assert!(flex_box(&layout).expect("flex row").height >= 50.0);
     }
 
     #[test]
