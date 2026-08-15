@@ -1078,16 +1078,11 @@ pub fn build_layout_and_info_from_snapshot(
                 style.size.width = LengthOrAuto::Length(Length::Px(width));
             }
 
-            // Grid items and direct children of inline-flex containers need
-            // block-level item coordinates. Keeping such a child inline makes
-            // its text-flow coordinates remain in the parent's inline space,
-            // so item placement cannot move the text with its box. Preserve
-            // inline children of block-level flex containers for the atomic
-            // inline width correction below.
-            if style.display.inner == InnerDisplay::Grid
-                || (style.display.inner == InnerDisplay::Flex
-                    && style.display.outer == OuterDisplay::Inline)
-            {
+            // Grid and flex items are blockified by CSS Display. Keeping an
+            // inline direct child makes its text-flow coordinates remain in
+            // the parent's inline space, so item placement cannot move the
+            // text with its box.
+            if matches!(style.display.inner, InnerDisplay::Grid | InnerDisplay::Flex) {
                 for child in &mut all_layout {
                     if let LayoutChild::Node(child) = child
                         && child.style.display.outer == OuterDisplay::Inline
@@ -1505,6 +1500,7 @@ pub fn correct_atomic_inline_spacing(node: &mut LayoutNode) {
     }
 
     expand_auto_inline_width_to_children(node);
+    expand_auto_flex_item_widths(node);
     correct_horizontal_flex_spacing(node);
     expand_auto_flex_width_to_children(node);
     expand_auto_flex_height_to_children(node);
@@ -1531,6 +1527,7 @@ fn correct_horizontal_flex_spacing(node: &mut LayoutNode) {
     {
         return;
     }
+    let column_gap = fixed_nonnegative_px(&node.style.column_gap);
     let mut previous_right: Option<f32> = None;
     for child in &mut node.children {
         let LayoutChild::Node(child) = child else {
@@ -1542,7 +1539,7 @@ fn correct_horizontal_flex_spacing(node: &mut LayoutNode) {
         let margin_left = fixed_nonnegative_px(&child.style.spacing.margin_left);
         let margin_right = fixed_nonnegative_px(&child.style.spacing.margin_right);
         let desired_x = previous_right
-            .map(|right| right + margin_left)
+            .map(|right| right + column_gap + margin_left)
             .unwrap_or(model.border_box.x + margin_left);
         if model.border_box.x < desired_x {
             shift_layout_box_x(&mut child.layout_box, desired_x - model.border_box.x);
@@ -1554,6 +1551,24 @@ fn correct_horizontal_flex_spacing(node: &mut LayoutNode) {
                 .max(desired_x + model.border_box.width)
                 + margin_right,
         );
+    }
+}
+
+fn expand_auto_flex_item_widths(node: &mut LayoutNode) {
+    if node.style.display.inner != InnerDisplay::Flex
+        || node.style.flex_direction != FlexDirection::Row
+    {
+        return;
+    }
+    for child in &mut node.children {
+        let LayoutChild::Node(child) = child else {
+            continue;
+        };
+        if child.style.size.width != LengthOrAuto::Auto {
+            continue;
+        }
+        let required_width = required_children_margin_box_width(child);
+        grow_auto_layout_width(child, required_width);
     }
 }
 
@@ -5769,6 +5784,43 @@ mod tests {
     }
 
     #[test]
+    fn flex_navigation_blockifies_and_spaces_inline_links() {
+        let html = "<html><body><nav><a>目指す</a><a>違い</a><a>開発</a></nav></body></html>";
+        let css = "nav { display: flex; gap: 30px; } a { display: inline; }";
+        let (mut layout, _) = layout_and_info_for(html, css);
+        ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+        correct_atomic_inline_spacing(&mut layout);
+
+        fn navigation(layout: &LayoutNode) -> Option<&LayoutNode> {
+            let links: Vec<_> = layout
+                .children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .filter(|child| child.style.display.outer == OuterDisplay::Block)
+                .collect();
+            if layout.style.display.inner == InnerDisplay::Flex && links.len() == 3 {
+                return Some(layout);
+            }
+            layout
+                .children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .find_map(navigation)
+        }
+
+        let nav = navigation(&layout).expect("flex navigation");
+        let links: Vec<_> = nav
+            .children
+            .iter()
+            .filter_map(LayoutChild::node)
+            .filter_map(|child| child.layout_box.iter().next())
+            .collect();
+        assert_eq!(links.len(), 3);
+        assert!(links[1].border_box.x >= links[0].border_box.right() + 29.5);
+        assert!(links[2].border_box.x >= links[1].border_box.right() + 29.5);
+    }
+
+    #[test]
     fn bottom_anchored_grid_repositions_after_min_height_growth() {
         let html = "<html><body><div class='parent'><div class='dialog'></div></div></body></html>";
         let css = r#"
@@ -5922,7 +5974,7 @@ mod tests {
                 .children
                 .iter()
                 .filter_map(LayoutChild::node)
-                .filter(|child| child.style.display.outer == OuterDisplay::Inline)
+                .filter(|child| child.style.display.outer == OuterDisplay::Block)
                 .collect();
             if node.style.display.inner == InnerDisplay::Flex && links.len() == 2 {
                 return Some(links);
