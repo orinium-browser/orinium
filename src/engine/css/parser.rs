@@ -447,12 +447,19 @@ impl<'a> Parser<'a> {
 
     fn recover_top_level_item(&mut self) {
         let mut depth = 0_usize;
+        let mut consumed_any = false;
         loop {
             match self.peek_token().clone() {
                 Token::EOF => break,
+                // An at-rule starts a new top-level item. Preserve it when an
+                // invalid selector prefix (for example a concatenated BOM)
+                // was the item that failed, instead of swallowing the whole
+                // following @media block during recovery.
+                Token::AtKeyword(_) if depth == 0 && consumed_any => break,
                 Token::Delim('{') => {
                     depth += 1;
                     self.consume_token();
+                    consumed_any = true;
                 }
                 Token::Delim('}') => {
                     self.consume_token();
@@ -460,6 +467,7 @@ impl<'a> Parser<'a> {
                         break;
                     }
                     depth -= 1;
+                    consumed_any = true;
                 }
                 Token::Delim(';') if depth == 0 => {
                     self.consume_token();
@@ -467,6 +475,7 @@ impl<'a> Parser<'a> {
                 }
                 _ => {
                     self.consume_token();
+                    consumed_any = true;
                 }
             }
         }
@@ -652,8 +661,15 @@ impl<'a> Parser<'a> {
         };
         *cursor += 1;
 
-        if matches!(tokens.get(*cursor), Some(Token::Delim(':'))) {
-            *cursor += 1;
+        let mut colon = *cursor;
+        while matches!(
+            tokens.get(colon),
+            Some(Token::Whitespace | Token::Comment(_))
+        ) {
+            colon += 1;
+        }
+        if matches!(tokens.get(colon), Some(Token::Delim(':'))) {
+            *cursor = colon + 1;
             let value = Self::parse_at_query_value(tokens, cursor)?;
             Ok(AtQuery::Condition { name, value })
         } else {
@@ -1024,6 +1040,11 @@ impl<'a> Parser<'a> {
                     }
                     break;
                 }
+
+                // At-keywords cannot occur inside a qualified-rule prelude.
+                // Leave the token untouched so parse_rule reports the invalid
+                // prefix and lossy top-level recovery can resume at the at-rule.
+                Token::AtKeyword(_) => break,
 
                 _ => {
                     self.consume_token();

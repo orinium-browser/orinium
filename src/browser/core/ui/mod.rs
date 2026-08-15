@@ -44,7 +44,7 @@ impl Default for RenderState {
     fn default() -> Self {
         Self {
             draw_commands: Vec::new(),
-            window_size: (800, 600),
+            window_size: (1280, 800),
             scale_factor: 1.0,
             window_title: String::new(),
         }

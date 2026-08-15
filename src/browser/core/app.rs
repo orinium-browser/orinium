@@ -140,7 +140,7 @@ pub struct BrowserApp {
 
 impl Default for BrowserApp {
     fn default() -> Self {
-        Self::new((800, 600), "Orinium Browser".to_string()).unwrap()
+        Self::new((1280, 800), "Orinium Browser".to_string()).unwrap()
     }
 }
 

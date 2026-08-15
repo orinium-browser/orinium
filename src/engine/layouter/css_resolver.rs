@@ -507,6 +507,24 @@ mod tests {
     }
 
     #[test]
+    fn scratch_style_adjacent_media_conditions_follow_desktop_viewport() {
+        let stylesheet = Parser::new(
+            "ï»¿@media only screen and (max-width : 479px){#view{text-align:center}.inner{margin:0 auto;width:100%}}@media only screen and (min-width : 480px)and (max-width : 767px){#view{text-align:center}.inner{margin:0 auto;width:480px}}@media only screen and (min-width : 768px)and (max-width : 941px){#view{text-align:center}.inner{margin:0 auto;width:768px}}@media only screen and (min-width : 942px){.inner{margin:0 auto;width:942px}}html,body{display:block}",
+        )
+        .parse_lossy();
+        let styles = CssResolver::resolve_with_origin(&stylesheet, StyleOrigin::Author);
+        let desktop = MediaEnvironment::new((1280.0, 800.0), ColorScheme::Light);
+        let declarations = filter_media(&styles, &desktop)
+            .into_iter()
+            .filter(|declaration| declaration.name == "width")
+            .collect::<Vec<_>>();
+
+        assert_eq!(declarations.len(), 1);
+        assert_eq!(declarations[0].name, "width");
+        assert_eq!(declarations[0].value, CssValue::Length(942.0, Unit::Px));
+    }
+
+    #[test]
     fn media_query_lists_use_or_semantics() {
         let styles = resolve(
             "@media print, (orientation: landscape) { div { color: red; } }",

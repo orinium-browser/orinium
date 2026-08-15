@@ -130,6 +130,7 @@ pub struct JsHost {
     session_storage: HashMap<String, String>,
     document_cookies: HashMap<String, String>,
     document_url: String,
+    viewport: (f64, f64),
     next_fetch_id: u64,
     next_timer_id: u64,
     time_origin: Instant,
@@ -191,6 +192,7 @@ impl JsRuntime {
             session_storage: HashMap::new(),
             document_cookies: HashMap::new(),
             document_url: "about:blank".to_string(),
+            viewport: (800.0, 600.0),
             next_fetch_id: 0,
             next_timer_id: 0,
             time_origin: Instant::now(),
@@ -226,15 +228,15 @@ impl JsRuntime {
 
     /// Updates the CSS-pixel viewport exposed through the Window API.
     pub fn set_viewport(&mut self, width: f32, height: f32) {
+        let width = width.max(0.0) as f64;
+        let height = height.max(0.0) as f64;
         let mut global = self.engine.global_mut().borrow_mut();
-        global.set(
-            "innerWidth".to_string(),
-            JSValue::Number(width.max(0.0) as f64),
-        );
-        global.set(
-            "innerHeight".to_string(),
-            JSValue::Number(height.max(0.0) as f64),
-        );
+        global.set("innerWidth".to_string(), JSValue::Number(width));
+        global.set("innerHeight".to_string(), JSValue::Number(height));
+        global.set("outerWidth".to_string(), JSValue::Number(width));
+        global.set("outerHeight".to_string(), JSValue::Number(height));
+        drop(global);
+        with_host_mut(self.engine.vm(), |host| host.viewport = (width, height));
     }
 
     /// Evaluates a script, logging JS errors instead of crashing the page.
@@ -782,6 +784,8 @@ fn install_browser_environment(engine: &mut pixi_byte::JSEngine) {
     global.set("devicePixelRatio".to_string(), JSValue::Number(1.0));
     global.set("innerWidth".to_string(), JSValue::Number(800.0));
     global.set("innerHeight".to_string(), JSValue::Number(600.0));
+    global.set("outerWidth".to_string(), JSValue::Number(800.0));
+    global.set("outerHeight".to_string(), JSValue::Number(600.0));
     // Keep feature detection safe while allowing formatjs to select and load
     // its individual constructor polyfills.
     let mut intl = JSObject::new();
@@ -5180,9 +5184,10 @@ fn element_layout_size(vm: &VM, value: &JSValue) -> Option<(f64, f64)> {
             .split_whitespace()
             .any(|class| class == "slick-list")
     });
+    let viewport = with_host(vm, |host| host.viewport).unwrap_or((800.0, 600.0));
     let default = match tag {
         "canvas" => (300.0, 150.0),
-        "html" | "body" => (800.0, 600.0),
+        "html" | "body" => viewport,
         _ if is_slick_list => (800.0, 0.0),
         _ => (0.0, 0.0),
     };
@@ -5912,6 +5917,17 @@ mod tests {
                 .value
                 .get_attr("data-size"),
             Some("1280:720")
+        );
+        runtime.run_script(
+            r#"document.getElementById("result").setAttribute("data-root", document.body.clientWidth + ":" + document.body.clientHeight + ":" + outerWidth + ":" + outerHeight);"#,
+        );
+        assert_eq!(
+            dom.get_element_by_id("result")
+                .unwrap()
+                .borrow()
+                .value
+                .get_attr("data-root"),
+            Some("1280:720:1280:720")
         );
     }
 
