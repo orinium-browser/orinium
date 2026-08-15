@@ -1461,6 +1461,7 @@ pub fn correct_atomic_inline_spacing(node: &mut LayoutNode) {
     let mut line_start_x = 0.0;
     let mut line_bottom = 0.0;
     let mut line_margin_bottom = 0.0;
+    let mut preceding_block_bottom: Option<(f32, f32)> = None;
 
     for child in &mut node.children {
         let LayoutChild::Node(child) = child else {
@@ -1469,11 +1470,8 @@ pub fn correct_atomic_inline_spacing(node: &mut LayoutNode) {
 
         correct_atomic_inline_spacing(child);
 
-        let is_atomic_inline = child.style.display
-            == (Display {
-                outer: OuterDisplay::Inline,
-                inner: InnerDisplay::FlowRoot,
-            });
+        let is_atomic_inline = child.style.display.outer == OuterDisplay::Inline
+            && child.style.display.inner != InnerDisplay::Flow;
 
         if is_atomic_inline && let Some(model) = child.layout_box.iter().next() {
             let rect = model.border_box;
@@ -1500,6 +1498,11 @@ pub fn correct_atomic_inline_spacing(node: &mut LayoutNode) {
             // inline formatting (notably a full-width inline-block <main>
             // placed below a fixed header).
             let mut desired_y = rect.y + margin_top;
+            if previous.is_none()
+                && let Some((block_bottom, block_margin_bottom)) = preceding_block_bottom
+            {
+                desired_y = desired_y.max(block_bottom + block_margin_bottom + margin_top);
+            }
             let exceeds_line = previous.is_some()
                 && wraps_inline_content
                 && containing_width
@@ -1524,9 +1527,17 @@ pub fn correct_atomic_inline_spacing(node: &mut LayoutNode) {
             line_bottom = line_bottom.max(desired_y + rect.height);
             line_margin_bottom = line_margin_bottom.max(margin_bottom);
             previous = Some((desired_x + rect.width, margin_right));
-        } else if child.style.display.outer == OuterDisplay::Block {
+        } else if matches!(child.layout_box, ui_layout::LayoutBox::BlockBox(_)) {
             previous = None;
             line_y = None;
+            if !child.style.position.kind.is_out_of_flow()
+                && let Some(model) = child.layout_box.iter().next()
+            {
+                preceding_block_bottom = Some((
+                    model.border_box.bottom(),
+                    fixed_nonnegative_px(&child.style.spacing.margin_bottom),
+                ));
+            }
         }
     }
 
@@ -5644,6 +5655,38 @@ mod tests {
 
         let main = main_box(&layout).expect("main inline block");
         assert_eq!(main.y, 50.0);
+    }
+
+    #[test]
+    fn atomic_inline_after_block_starts_below_the_block_margin() {
+        let html = r#"
+            <html><body><div class="copy">
+                <p class="overline">Status</p><h2>Heading</h2><p class="summary">Summary</p><a>Continue</a>
+            </div></body></html>
+        "#;
+        let css = r#"
+            .copy .overline { height: 25px; margin: 0 0 18px; }
+            .copy h2 { height: 58px; margin: 0 0 24px; }
+            .copy .summary { width: 560px; height: 80px; margin: 0 0 28px; }
+            .copy a { display: inline-flex; width: 200px; height: 30px; }
+        "#;
+        let (mut layout, _) = layout_and_info_for(html, css);
+        ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+        correct_atomic_inline_spacing(&mut layout);
+
+        fn box_with_width(node: &LayoutNode, width: f32) -> Option<ui_layout::Rect> {
+            if node.style.size.width == LengthOrAuto::Length(Length::Px(width)) {
+                return node.layout_box.iter().next().map(|model| model.border_box);
+            }
+            node.children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .find_map(|child| box_with_width(child, width))
+        }
+
+        let summary = box_with_width(&layout, 560.0).expect("summary");
+        let action = box_with_width(&layout, 200.0).expect("inline action");
+        assert_eq!(action.y, summary.bottom() + 28.0);
     }
 
     #[test]
