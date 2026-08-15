@@ -1344,7 +1344,9 @@ pub fn constrain_auto_grid_track_items(node: &mut LayoutNode) -> bool {
             .get(item_index)
             .is_some_and(|track| matches!(track, GridTrack::Breadth(LengthOrAuto::Auto)));
         item_index += 1;
-        if !auto_track || child.style.size.width != LengthOrAuto::Auto {
+        let self_aligned = child.style.spacing.margin_left == LengthOrAuto::Auto
+            || child.style.spacing.margin_right == LengthOrAuto::Auto;
+        if (!auto_track && !self_aligned) || child.style.size.width != LengthOrAuto::Auto {
             continue;
         }
 
@@ -1456,6 +1458,7 @@ pub fn correct_atomic_inline_spacing(node: &mut LayoutNode) {
     expand_auto_flex_height_to_children(node);
     enforce_fixed_layout_height(node);
     correct_single_row_grid_alignment(node);
+    correct_single_row_grid_inline_alignment(node);
     correct_vertical_block_spacing(node);
     expand_auto_flow_height_to_children(node);
 }
@@ -1696,9 +1699,60 @@ fn correct_single_row_grid_alignment(node: &mut LayoutNode) {
             AlignItems::End => free_space,
             AlignItems::Start | AlignItems::Stretch => 0.0,
         };
-        let desired_y = content_box.y + margin_top + offset;
+        let desired_y = margin_top + offset;
         let shift_y = desired_y - model.border_box.y;
         shift_layout_box_y(&mut child.layout_box, shift_y);
+    }
+}
+
+fn correct_single_row_grid_inline_alignment(node: &mut LayoutNode) {
+    if node.style.display.inner != InnerDisplay::Grid {
+        return;
+    }
+    let Some(content_box) = node.layout_box.iter().next().map(|model| model.content_box) else {
+        return;
+    };
+    let column_gap = fixed_nonnegative_px(&node.style.column_gap);
+    let item_indices: Vec<usize> = node
+        .children
+        .iter()
+        .enumerate()
+        .filter_map(|(index, child)| {
+            child.node().and_then(|child| {
+                (child.style.display.outer != OuterDisplay::None
+                    && !child.style.position.kind.is_out_of_flow())
+                .then_some(index)
+            })
+        })
+        .collect();
+    if item_indices.len() > node.style.grid_template_columns.len() {
+        return;
+    }
+
+    for (position, index) in item_indices.iter().copied().enumerate() {
+        let next_x = item_indices
+            .get(position + 1)
+            .and_then(|next| node.children[*next].node())
+            .and_then(|next| next.layout_box.iter().next())
+            .map(|model| model.border_box.x - column_gap)
+            .unwrap_or(content_box.width);
+        let child = node.children[index].node_mut().expect("grid item");
+        let left_auto = child.style.spacing.margin_left == LengthOrAuto::Auto;
+        let right_auto = child.style.spacing.margin_right == LengthOrAuto::Auto;
+        if !left_auto && !right_auto {
+            continue;
+        }
+        let Some(model) = child.layout_box.iter().next() else {
+            continue;
+        };
+        let track_start = model.border_box.x;
+        let free_space = (next_x - track_start - model.border_box.width).max(0.0);
+        let offset = match (left_auto, right_auto) {
+            (true, true) => free_space / 2.0,
+            (true, false) => free_space,
+            _ => 0.0,
+        };
+        shift_layout_box_x(&mut child.layout_box, offset);
     }
 }
 
@@ -3110,6 +3164,23 @@ pub fn apply_declaration(
                 _ => return None,
             });
         }
+
+        ("justify-self", CssValue::Keyword(v)) => match v.as_str() {
+            "center" => {
+                style.spacing.margin_left = LengthOrAuto::Auto;
+                style.spacing.margin_right = LengthOrAuto::Auto;
+            }
+            "flex-end" | "end" => {
+                style.spacing.margin_left = LengthOrAuto::Auto;
+                style.spacing.margin_right = LengthOrAuto::Length(Length::Px(0.0));
+            }
+            "flex-start" | "start" => {
+                style.spacing.margin_left = LengthOrAuto::Length(Length::Px(0.0));
+                style.spacing.margin_right = LengthOrAuto::Auto;
+            }
+            "auto" | "normal" | "stretch" => {}
+            _ => return None,
+        },
 
         ("column-gap", _) => {
             style.column_gap = resolve_css_len_auto(name, value, text_flow_style)?;
@@ -5563,6 +5634,35 @@ mod tests {
 
         let item = grid_item(&layout).expect("grid item");
         assert!((item.y - 19.0).abs() < 0.5, "item={item:?}");
+    }
+
+    #[test]
+    fn grid_justify_self_end_uses_the_end_of_its_track() {
+        let html = "<html><body><div class='grid'><a>A</a><nav><span></span></nav><a class='end'>B</a></div></body></html>";
+        let css = r#"
+            .grid { display: grid; width: 300px; margin-left: 50px; grid-template-columns: 1fr auto 1fr; }
+            nav { display: flex; }
+            nav span { display: block; width: 100px; height: 10px; }
+            .end { justify-self: end; }
+        "#;
+        let (mut layout, _) = layout_and_info_for(html, css);
+        ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+        assert!(constrain_auto_grid_track_items(&mut layout));
+        ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+        correct_atomic_inline_spacing(&mut layout);
+
+        fn end_item(node: &LayoutNode) -> Option<ui_layout::Rect> {
+            if node.style.spacing.margin_left == LengthOrAuto::Auto {
+                return node.layout_box.iter().next().map(|model| model.border_box);
+            }
+            node.children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .find_map(end_item)
+        }
+
+        let item = end_item(&layout).expect("end-aligned item");
+        assert!((item.right() - 300.0).abs() < 0.5, "item={item:?}");
     }
 
     #[test]
