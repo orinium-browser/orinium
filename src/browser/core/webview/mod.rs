@@ -1320,6 +1320,7 @@ impl WebView {
         };
 
         ui_layout::LayoutEngine::layout(layout, viewport.0, viewport.1);
+        layouter::correct_oversized_auto_horizontal_margins(layout);
         layouter::align_table_columns(layout, info);
     }
 

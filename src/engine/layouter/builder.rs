@@ -977,7 +977,7 @@ pub fn build_layout_and_info_from_snapshot(
             // Take ownership of frame data for building results.
             let frame = stack.swap_remove(top_idx);
 
-            let style = frame.style.as_ref().unwrap().clone();
+            let mut style = frame.style.as_ref().unwrap().clone();
             let kind = frame.kind.as_ref().unwrap().clone();
 
             // Collect element children results.
@@ -1032,6 +1032,23 @@ pub fn build_layout_and_info_from_snapshot(
                 };
                 all_layout.push(lc);
                 all_info.push(ic);
+            }
+
+            // ui_layout currently resolves an auto-width inline flow-root
+            // against all available inline space. Floats are shrink-to-fit
+            // boxes instead. When their contents expose a fixed CSS width,
+            // use that width as the float's content width so carousel slides
+            // do not each expand to the full track width.
+            if style.display
+                == (Display {
+                    outer: OuterDisplay::Inline,
+                    inner: InnerDisplay::FlowRoot,
+                })
+                && style.size.auto_behavior == AutoSizeBehavior::ShrinkToFit
+                && matches!(style.size.width, LengthOrAuto::Auto)
+                && let Some(width) = maximum_fixed_descendant_width(&all_layout)
+            {
+                style.size.width = LengthOrAuto::Length(Length::Px(width));
             }
 
             let layout = LayoutNode::with_children(style, all_layout);
@@ -1178,6 +1195,62 @@ fn compute_whitespace_keep(
             ChildSlot::Element(_) => true,
         })
         .collect()
+}
+
+fn maximum_fixed_descendant_width(children: &[LayoutChild]) -> Option<f32> {
+    children
+        .iter()
+        .filter_map(|child| match child {
+            LayoutChild::Node(node) => {
+                let own = match node.style.size.width {
+                    LengthOrAuto::Length(Length::Px(width))
+                        if width.is_finite() && width >= 0.0 =>
+                    {
+                        Some(width)
+                    }
+                    _ => None,
+                };
+                own.into_iter()
+                    .chain(maximum_fixed_descendant_width(&node.children))
+                    .max_by(f32::total_cmp)
+            }
+            _ => None,
+        })
+        .max_by(f32::total_cmp)
+}
+
+/// Correct the used horizontal margins of oversized block-level boxes.
+///
+/// CSS 2.1 treats auto horizontal margins as zero when a block's used width
+/// exceeds its containing block. `ui_layout` currently divides the negative
+/// free space between two auto margins, which incorrectly centers wide
+/// carousel tracks outside their clipping viewport.
+pub fn correct_oversized_auto_horizontal_margins(node: &mut LayoutNode) {
+    let parent_content = node.layout_box.iter().next().map(|model| model.content_box);
+
+    for child in &mut node.children {
+        let LayoutChild::Node(child) = child else {
+            continue;
+        };
+
+        if let Some(parent_content) = parent_content
+            && child.style.display.outer == OuterDisplay::Block
+            && child.style.spacing.margin_left == LengthOrAuto::Auto
+            && child.style.spacing.margin_right == LengthOrAuto::Auto
+            && let Some(child_box) = child.layout_box.iter().next()
+            && child_box.border_box.width > parent_content.width
+        {
+            let shift_x = parent_content.x - child_box.border_box.x;
+            if let ui_layout::LayoutBox::BlockBox(model) = &mut child.layout_box {
+                model.border_box.x += shift_x;
+                model.padding_box.x += shift_x;
+                model.content_box.x += shift_x;
+                model.children_box.x += shift_x;
+            }
+        }
+
+        correct_oversized_auto_horizontal_margins(child);
+    }
 }
 
 pub fn normalize_whitespace(text: &str, white_space: WhiteSpace) -> String {
@@ -4520,6 +4593,82 @@ mod tests {
             items[1].layout_box.iter().next().unwrap().border_box.y,
             20.0
         );
+    }
+
+    #[test]
+    fn floated_carousel_slides_shrink_to_fixed_descendant_width() {
+        let html = r#"
+            <html><body>
+                <div class="track">
+                    <div class="slide"><div class="card"></div></div>
+                    <div class="slide"><div class="card"></div></div>
+                </div>
+            </body></html>
+        "#;
+        let css = r#"
+            .track { width: 1000px; }
+            .slide { float: left; padding-right: 30px; }
+            .card { width: 144px; height: 100px; }
+        "#;
+        let (mut layout, _) = layout_and_info_for(html, css);
+        ui_layout::LayoutEngine::layout(&mut layout, 1200.0, 600.0);
+
+        fn floated_children(node: &LayoutNode) -> Option<Vec<&LayoutNode>> {
+            let children: Vec<_> = node
+                .children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .filter(|child| {
+                    child.style.size.auto_behavior == AutoSizeBehavior::ShrinkToFit
+                        && child.style.display.inner == InnerDisplay::FlowRoot
+                })
+                .collect();
+            if children.len() == 2 {
+                return Some(children);
+            }
+            node.children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .find_map(floated_children)
+        }
+
+        let slides = floated_children(&layout).expect("two floated slides");
+        let first = slides[0].layout_box.iter().next().unwrap();
+        let second = slides[1].layout_box.iter().next().unwrap();
+        assert_eq!(first.content_box.width, 144.0);
+        assert_eq!(first.border_box.width, 174.0);
+        assert_eq!(second.border_box.x, 174.0);
+        assert_eq!(second.border_box.y, 0.0);
+    }
+
+    #[test]
+    fn oversized_block_with_auto_horizontal_margins_starts_at_parent_edge() {
+        let html = r#"
+            <html><body>
+                <div class="parent"><div class="wide"></div></div>
+            </body></html>
+        "#;
+        let css = r#"
+            .parent { width: 300px; }
+            .wide { width: 500px; height: 20px; margin-left: auto; margin-right: auto; }
+        "#;
+        let (mut layout, _) = layout_and_info_for(html, css);
+        ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+        correct_oversized_auto_horizontal_margins(&mut layout);
+
+        fn wide_box(node: &LayoutNode) -> Option<ui_layout::Rect> {
+            if node.style.size.width == LengthOrAuto::Length(Length::Px(500.0)) {
+                return node.layout_box.iter().next().map(|model| model.border_box);
+            }
+            node.children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .find_map(wide_box)
+        }
+
+        let wide = wide_box(&layout).expect("wide child");
+        assert_eq!(wide.x, 0.0);
+        assert_eq!(wide.width, 500.0);
     }
 
     #[test]

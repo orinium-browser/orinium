@@ -5162,9 +5162,15 @@ fn element_layout_size(vm: &VM, value: &JSValue) -> Option<(f64, f64)> {
     let node = dom_node(vm, value)?;
     let node = node.borrow();
     let tag = node.value.tag_name()?;
+    let is_slick_list = node.value.get_attr("class").is_some_and(|classes| {
+        classes
+            .split_whitespace()
+            .any(|class| class == "slick-list")
+    });
     let default = match tag {
         "canvas" => (300.0, 150.0),
         "html" | "body" => (800.0, 600.0),
+        _ if is_slick_list => (800.0, 0.0),
         _ => (0.0, 0.0),
     };
     let attr = |name: &str, fallback: f64| {
@@ -6055,7 +6061,7 @@ mod tests {
                 .borrow()
                 .value
                 .get_attr("data-widths"),
-            Some("0:0:0:0")
+            Some("800:0:0:0")
         );
     }
 
