@@ -1078,6 +1078,21 @@ pub fn build_layout_and_info_from_snapshot(
                 style.size.width = LengthOrAuto::Length(Length::Px(width));
             }
 
+            // Grid items are blockified by CSS Display. Keeping an inline
+            // direct child (notably an anchor in a navigation grid) makes its
+            // text-flow coordinates remain in the parent's inline space, so
+            // later grid alignment cannot move the text with its item box.
+            if style.display.inner == InnerDisplay::Grid {
+                for child in &mut all_layout {
+                    if let LayoutChild::Node(child) = child
+                        && child.style.display.outer == OuterDisplay::Inline
+                        && !child.style.position.kind.is_out_of_flow()
+                    {
+                        child.style.display.outer = OuterDisplay::Block;
+                    }
+                }
+            }
+
             let layout = LayoutNode::with_children(style, all_layout);
             let info = InfoNode {
                 kind: final_kind,
@@ -1440,6 +1455,7 @@ pub fn correct_atomic_inline_spacing(node: &mut LayoutNode) {
     expand_auto_flex_width_to_children(node);
     expand_auto_flex_height_to_children(node);
     enforce_fixed_layout_height(node);
+    correct_single_row_grid_alignment(node);
     correct_vertical_block_spacing(node);
     expand_auto_flow_height_to_children(node);
 }
@@ -1614,6 +1630,75 @@ fn enforce_fixed_layout_height(node: &mut LayoutNode) {
         && node.style.position.bottom != LengthOrAuto::Auto
     {
         shift_layout_box_y(&mut node.layout_box, -extra);
+    }
+}
+
+fn correct_single_row_grid_alignment(node: &mut LayoutNode) {
+    if node.style.display.inner != InnerDisplay::Grid {
+        return;
+    }
+    let Some(content_box) = node.layout_box.iter().next().map(|model| model.content_box) else {
+        return;
+    };
+
+    let row_origins: Vec<f32> = node
+        .children
+        .iter()
+        .filter_map(LayoutChild::node)
+        .filter(|child| {
+            child.style.display.outer != OuterDisplay::None
+                && !child.style.position.kind.is_out_of_flow()
+        })
+        .filter_map(|child| {
+            child
+                .layout_box
+                .iter()
+                .next()
+                .map(|model| model.border_box.y)
+        })
+        .collect();
+    let Some(first_row) = row_origins.first().copied() else {
+        return;
+    };
+    if row_origins
+        .iter()
+        .any(|origin| (origin - first_row).abs() > 0.5)
+    {
+        return;
+    }
+
+    for child in &mut node.children {
+        let LayoutChild::Node(child) = child else {
+            continue;
+        };
+        if child.style.display.outer == OuterDisplay::None
+            || child.style.position.kind.is_out_of_flow()
+        {
+            continue;
+        }
+        let alignment = child
+            .style
+            .item_style
+            .align_self
+            .unwrap_or(node.style.align_items);
+        if matches!(alignment, AlignItems::Start | AlignItems::Stretch) {
+            continue;
+        }
+        let Some(model) = child.layout_box.iter().next() else {
+            continue;
+        };
+        let margin_top = fixed_nonnegative_px(&child.style.spacing.margin_top);
+        let margin_bottom = fixed_nonnegative_px(&child.style.spacing.margin_bottom);
+        let free_space =
+            (content_box.height - model.border_box.height - margin_top - margin_bottom).max(0.0);
+        let offset = match alignment {
+            AlignItems::Center => free_space / 2.0,
+            AlignItems::End => free_space,
+            AlignItems::Start | AlignItems::Stretch => 0.0,
+        };
+        let desired_y = content_box.y + margin_top + offset;
+        let shift_y = desired_y - model.border_box.y;
+        shift_layout_box_y(&mut child.layout_box, shift_y);
     }
 }
 
@@ -5441,10 +5526,43 @@ mod tests {
         }
         let grid = grid(&layout).expect("grid");
         let items: Vec<_> = grid.children.iter().filter_map(LayoutChild::node).collect();
+        assert_eq!(items[0].style.display.outer, OuterDisplay::Block);
+        assert_eq!(items[2].style.display.outer, OuterDisplay::Block);
         let middle = items[1].layout_box.iter().next().expect("middle");
         assert!((middle.content_box.width - 210.0).abs() < 0.5);
         assert!(items[0].layout_box.width_box() > 400.0);
         assert!(items[2].layout_box.width_box() > 400.0);
+    }
+
+    #[test]
+    fn single_row_grid_centers_items_after_min_height_growth() {
+        let html = "<html><body><div class='grid'><span></span></div></body></html>";
+        let css = r#"
+            .grid { display: grid; min-height: 48px; align-items: center; }
+            span { display: block; width: 20px; height: 10px; }
+        "#;
+        let (mut layout, _) = layout_and_info_for(html, css);
+        ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+        correct_atomic_inline_spacing(&mut layout);
+
+        fn grid_item(node: &LayoutNode) -> Option<ui_layout::Rect> {
+            if node.style.display.inner == InnerDisplay::Grid {
+                return node
+                    .children
+                    .iter()
+                    .filter_map(LayoutChild::node)
+                    .find_map(|child| {
+                        child.layout_box.iter().next().map(|model| model.border_box)
+                    });
+            }
+            node.children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .find_map(grid_item)
+        }
+
+        let item = grid_item(&layout).expect("grid item");
+        assert!((item.y - 19.0).abs() < 0.5, "item={item:?}");
     }
 
     #[test]
