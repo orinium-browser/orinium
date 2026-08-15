@@ -28,7 +28,7 @@ use crate::engine::{
     renderer_model::Image,
     tree::TreeNode,
 };
-use crate::platform::renderer::text_measurer::PlatformTextMeasurer;
+use crate::platform::{locale, renderer::text_measurer::PlatformTextMeasurer};
 use ui_layout::LayoutNode;
 use url::Url;
 
@@ -367,8 +367,11 @@ impl WebView {
                 width: self.viewport.0,
                 height: self.viewport.1,
             });
+            processor.send(JsTask::SetLanguage {
+                language: locale::preferred_language(),
+            });
             self.js_processor = Some(processor);
-            self.pending_js_tasks = 2;
+            self.pending_js_tasks = 3;
         }
     }
 
@@ -519,7 +522,10 @@ impl WebView {
                 width: self.viewport.0,
                 height: self.viewport.1,
             });
-            initial_js_tasks = 2;
+            processor.send(JsTask::SetLanguage {
+                language: locale::preferred_language(),
+            });
+            initial_js_tasks = 3;
             Some(processor)
         } else {
             None

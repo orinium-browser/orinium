@@ -212,6 +212,15 @@ impl NetworkInner {
             .uri(uri.path_and_query().map_or("/", |p| p.as_str()))
             .header("Host", host)
             .header("User-Agent", self.network_config.user_agent.as_str());
+        if !headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("accept-language"))
+        {
+            request = request.header(
+                "Accept-Language",
+                crate::platform::locale::accept_language_header(),
+            );
+        }
         for (name, value) in headers {
             request = request.header(name, value);
         }
@@ -421,6 +430,7 @@ mod tests {
         let request = String::from_utf8(server.join().unwrap()).unwrap();
         assert!(request.starts_with("POST /submit HTTP/1.1\r\n"));
         assert!(request.to_ascii_lowercase().contains("x-orinium-test: yes"));
+        assert!(request.to_ascii_lowercase().contains("accept-language: "));
         assert!(request.ends_with("\r\n\r\nhello"));
     }
 }

@@ -4933,6 +4933,29 @@ mod tests {
     }
 
     #[test]
+    fn border_box_button_keeps_declared_size_with_padding() {
+        let html = "<html><body><button>Search</button></body></html>";
+        let css = "button { display: inline-block; box-sizing: border-box; width: 40px; height: 40px; padding: 12px 16px; }";
+        let (mut layout, _) = layout_and_info_for(html, css);
+        ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+
+        fn button_box(node: &LayoutNode) -> Option<ui_layout::Rect> {
+            if node.style.box_sizing == BoxSizing::BorderBox
+                && node.style.size.width == LengthOrAuto::Length(Length::Px(40.0))
+            {
+                return node.layout_box.iter().next().map(|model| model.border_box);
+            }
+            node.children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .find_map(button_box)
+        }
+
+        let button = button_box(&layout).expect("border-box button");
+        assert_eq!((button.width, button.height), (40.0, 40.0));
+    }
+
+    #[test]
     fn full_width_inline_blocks_wrap_onto_separate_lines() {
         let html = r#"
             <html><body><main><section>First</section><section>Second</section></main></body></html>

@@ -258,6 +258,11 @@ button {
     background-color: #f0f0f0;
 }
 
+button,
+select {
+    box-sizing: border-box;
+}
+
 input[type="hidden"] {
     display: none;
 }

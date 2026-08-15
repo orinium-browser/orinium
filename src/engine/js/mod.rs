@@ -239,6 +239,38 @@ impl JsRuntime {
         with_host_mut(self.engine.vm(), |host| host.viewport = (width, height));
     }
 
+    /// Updates the language preferences exposed through `navigator`.
+    pub fn set_language(&mut self, language: &str) {
+        let language = language.trim();
+        if language.is_empty() {
+            return;
+        }
+        let mut languages = vec![JSValue::String(language.to_string())];
+        if let Some(base) = language.split('-').next()
+            && !base.eq_ignore_ascii_case(language)
+        {
+            languages.push(JSValue::String(base.to_string()));
+        }
+        if !language.eq_ignore_ascii_case("en-US") {
+            languages.push(JSValue::String("en-US".to_string()));
+        }
+
+        let global = self.engine.global_mut().borrow_mut();
+        let JSValue::Object(navigator) = global.get("navigator") else {
+            return;
+        };
+        drop(global);
+        let mut navigator = navigator.borrow_mut();
+        navigator.define_property(
+            "language".to_string(),
+            host_read_only_property(JSValue::String(language.to_string())),
+        );
+        navigator.define_property(
+            "languages".to_string(),
+            host_read_only_property(JSArray::from_vec(languages).to_object()),
+        );
+    }
+
     /// Evaluates a script, logging JS errors instead of crashing the page.
     pub fn run_script(&mut self, source: &str) {
         match self.engine.eval(source) {
@@ -673,6 +705,13 @@ fn dom_node(vm: &VM, this: &JSValue) -> Option<NodeRef<HtmlNodeType>> {
 
 const STORAGE_KIND: &str = "__orinium_storage_kind";
 
+fn host_read_only_property(value: JSValue) -> Property {
+    let mut property = Property::read_only(value);
+    // The host may refresh this state, while page assignments remain blocked.
+    property.configurable = true;
+    property
+}
+
 fn install_browser_environment(engine: &mut pixi_byte::JSEngine) {
     let mut navigator = JSObject::new();
     navigator.define_property(
@@ -683,11 +722,11 @@ fn install_browser_environment(engine: &mut pixi_byte::JSEngine) {
     );
     navigator.define_property(
         "language".to_string(),
-        Property::read_only(JSValue::String("en-US".to_string())),
+        host_read_only_property(JSValue::String("en-US".to_string())),
     );
     navigator.define_property(
         "languages".to_string(),
-        Property::read_only(
+        host_read_only_property(
             JSArray::from_vec(vec![JSValue::String("en-US".to_string())]).to_object(),
         ),
     );
@@ -5974,6 +6013,30 @@ mod tests {
             Some(
                 "en-US:42:1:false:true:/projects/editor/:loaded:true:true:true:en-US:und-x-private"
             )
+        );
+    }
+
+    #[test]
+    fn browser_language_preferences_follow_the_host() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.set_language("ja-JP");
+        runtime.run_script(
+            r#"
+            document.getElementById("result").setAttribute(
+                "data-languages",
+                navigator.language + ":" + navigator.languages[0] + ":" +
+                    navigator.languages[1] + ":" + navigator.languages[2]
+            );
+            "#,
+        );
+
+        assert_eq!(
+            dom.get_element_by_id("result")
+                .unwrap()
+                .borrow()
+                .value
+                .get_attr("data-languages"),
+            Some("ja-JP:ja-JP:ja:en-US")
         );
     }
 
