@@ -1383,6 +1383,9 @@ pub fn correct_atomic_inline_spacing(node: &mut LayoutNode) {
     correct_horizontal_flex_spacing(node);
     expand_auto_flex_width_to_children(node);
     expand_auto_flex_height_to_children(node);
+    enforce_fixed_layout_height(node);
+    correct_vertical_block_spacing(node);
+    expand_auto_flow_height_to_children(node);
 }
 
 fn expand_auto_inline_width_to_children(node: &mut LayoutNode) {
@@ -1519,6 +1522,113 @@ fn grow_auto_layout_height(node: &mut LayoutNode, required_height: f32) {
             inline.box_model.border_box.height += extra;
             inline.box_model.children_box.height =
                 inline.box_model.children_box.height.max(required_height);
+        }
+        ui_layout::LayoutBox::None => {}
+    }
+}
+
+fn enforce_fixed_layout_height(node: &mut LayoutNode) {
+    let declared = match (&node.style.size.height, &node.style.size.min_height) {
+        (LengthOrAuto::Length(Length::Px(height)), LengthOrAuto::Length(Length::Px(minimum))) => {
+            Some(height.max(*minimum))
+        }
+        (LengthOrAuto::Length(Length::Px(height)), _) => Some(*height),
+        (_, LengthOrAuto::Length(Length::Px(minimum))) => Some(*minimum),
+        _ => None,
+    };
+    let Some(declared) = declared else {
+        return;
+    };
+    let Some(model) = node.layout_box.iter().next() else {
+        return;
+    };
+    let current = if node.style.box_sizing == BoxSizing::BorderBox {
+        model.border_box.height
+    } else {
+        model.content_box.height
+    };
+    let extra = declared - current;
+    if extra <= 0.0 {
+        return;
+    }
+
+    grow_layout_height(&mut node.layout_box, extra);
+    if node.style.position.kind.is_out_of_flow()
+        && node.style.position.top == LengthOrAuto::Auto
+        && node.style.position.bottom != LengthOrAuto::Auto
+    {
+        shift_layout_box_y(&mut node.layout_box, -extra);
+    }
+}
+
+fn correct_vertical_block_spacing(node: &mut LayoutNode) {
+    if node.style.display.inner != InnerDisplay::Flow {
+        return;
+    }
+    let mut previous_bottom: Option<f32> = None;
+    for child in &mut node.children {
+        let LayoutChild::Node(child) = child else {
+            continue;
+        };
+        if child.style.position.kind.is_out_of_flow()
+            || child.style.display.outer != OuterDisplay::Block
+        {
+            continue;
+        }
+        let Some(model) = child.layout_box.iter().next() else {
+            continue;
+        };
+        let margin_top = fixed_nonnegative_px(&child.style.spacing.margin_top);
+        let margin_bottom = fixed_nonnegative_px(&child.style.spacing.margin_bottom);
+        let desired_y = previous_bottom
+            .map(|bottom| bottom + margin_top)
+            .unwrap_or(model.border_box.y);
+        if model.border_box.y < desired_y {
+            shift_layout_box_y(&mut child.layout_box, desired_y - model.border_box.y);
+        }
+        previous_bottom = Some(
+            model
+                .border_box
+                .bottom()
+                .max(desired_y + model.border_box.height)
+                + margin_bottom,
+        );
+    }
+}
+
+fn expand_auto_flow_height_to_children(node: &mut LayoutNode) {
+    if node.style.display.inner != InnerDisplay::Flow
+        || node.style.size.height != LengthOrAuto::Auto
+    {
+        return;
+    }
+    let required_height = node
+        .children
+        .iter()
+        .filter_map(LayoutChild::node)
+        .filter(|child| !child.style.position.kind.is_out_of_flow())
+        .filter_map(|child| {
+            child.layout_box.iter().next().map(|model| {
+                model.border_box.bottom() + fixed_nonnegative_px(&child.style.spacing.margin_bottom)
+            })
+        })
+        .fold(0.0, f32::max);
+    grow_auto_layout_height(node, required_height);
+}
+
+fn grow_layout_height(layout_box: &mut ui_layout::LayoutBox, extra: f32) {
+    match layout_box {
+        ui_layout::LayoutBox::BlockBox(model) => {
+            model.content_box.height += extra;
+            model.padding_box.height += extra;
+            model.border_box.height += extra;
+            model.children_box.height += extra;
+        }
+        ui_layout::LayoutBox::InlineBox(inline) => {
+            inline.box_model.content_box.height += extra;
+            inline.box_model.padding_box.height += extra;
+            inline.box_model.border_box.height += extra;
+            inline.box_model.children_box.height += extra;
         }
         ui_layout::LayoutBox::None => {}
     }
@@ -5216,6 +5326,65 @@ mod tests {
         }
 
         assert!(flex_box(&layout).expect("flex row").height >= 50.0);
+    }
+
+    #[test]
+    fn grid_min_height_pushes_later_block_flow_content() {
+        let html = "<html><body><header></header><main></main></body></html>";
+        let css = r#"
+            header { display: grid; min-height: 48px; }
+            main { display: block; height: 20px; }
+        "#;
+        let (mut layout, _) = layout_and_info_for(html, css);
+        ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+        correct_atomic_inline_spacing(&mut layout);
+
+        fn children(node: &LayoutNode) -> Option<Vec<ui_layout::Rect>> {
+            let boxes: Vec<_> = node
+                .children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .filter(|child| child.style.display.outer == OuterDisplay::Block)
+                .filter_map(|child| child.layout_box.iter().next().map(|model| model.border_box))
+                .collect();
+            if boxes.len() == 2 {
+                return Some(boxes);
+            }
+            node.children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .find_map(children)
+        }
+
+        let boxes = children(&layout).expect("header and main");
+        assert!(boxes[0].height >= 48.0);
+        assert!(boxes[1].y >= boxes[0].bottom());
+    }
+
+    #[test]
+    fn bottom_anchored_grid_repositions_after_min_height_growth() {
+        let html = "<html><body><div class='parent'><div class='dialog'></div></div></body></html>";
+        let css = r#"
+            .parent { position: relative; width: 300px; height: 200px; }
+            .dialog { position: absolute; right: 20px; bottom: -10px; display: grid; width: 80px; min-height: 100px; }
+        "#;
+        let (mut layout, _) = layout_and_info_for(html, css);
+        ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+        correct_atomic_inline_spacing(&mut layout);
+
+        fn dialog(node: &LayoutNode) -> Option<ui_layout::Rect> {
+            if node.style.position.kind == Position::Absolute {
+                return node.layout_box.iter().next().map(|model| model.border_box);
+            }
+            node.children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .find_map(dialog)
+        }
+
+        let dialog = dialog(&layout).expect("dialog");
+        assert!(dialog.height >= 100.0);
+        assert!((dialog.y - 110.0).abs() < 0.5, "dialog={dialog:?}");
     }
 
     #[test]
