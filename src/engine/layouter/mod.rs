@@ -22,8 +22,8 @@ pub mod types;
 
 pub use builder::{
     InheritedCss, build_layout_and_info, build_layout_and_info_from_snapshot,
-    build_layout_and_info_with_images, correct_oversized_auto_horizontal_margins,
-    normalize_whitespace,
+    build_layout_and_info_with_images, correct_atomic_inline_spacing,
+    correct_oversized_auto_horizontal_margins, normalize_whitespace,
 };
 pub use dom_snapshot::{DomSnapshot, NodeId, SnapNode};
 pub use processor::{LayoutProcessor, LayoutResult, LayoutTask};
