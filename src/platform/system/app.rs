@@ -44,6 +44,7 @@ impl App {
                 .unwrap(),
         );
         let window_id = window.id();
+        let initial_size = window.inner_size();
         let scale_factor = window.scale_factor();
         let gpu_renderer = pollster::block_on(GpuRenderer::new(Arc::clone(&window), None)).unwrap();
 
@@ -51,7 +52,7 @@ impl App {
 
         self.browser_app.open_window(
             window_id,
-            (default_size.0 as u32, default_size.1 as u32),
+            (initial_size.width, initial_size.height),
             default_title,
             scale_factor,
             root_ui,
@@ -87,6 +88,7 @@ impl ApplicationHandler for App {
                 .unwrap(),
         );
         let window_id = window.id();
+        let initial_size = window.inner_size();
         let scale_factor = window.scale_factor();
         let gpu_renderer = pollster::block_on(GpuRenderer::new(Arc::clone(&window), None)).unwrap();
 
@@ -97,7 +99,7 @@ impl ApplicationHandler for App {
 
         self.browser_app.open_window(
             window_id,
-            (default_size.0 as u32, default_size.1 as u32),
+            (initial_size.width, initial_size.height),
             default_title,
             scale_factor,
             root_ui,

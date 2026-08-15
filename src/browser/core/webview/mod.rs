@@ -363,8 +363,12 @@ impl WebView {
             let (snapshot, _) = DomSnapshot::from_tree(&dom.root);
             let processor = JsProcessor::new(snapshot);
             processor.send(JsTask::SetDocumentUrl { url: document_url });
+            processor.send(JsTask::SetViewport {
+                width: self.viewport.0,
+                height: self.viewport.1,
+            });
             self.js_processor = Some(processor);
-            self.pending_js_tasks = 1;
+            self.pending_js_tasks = 2;
         }
     }
 
@@ -511,7 +515,11 @@ impl WebView {
             processor.send(JsTask::SetDocumentUrl {
                 url: parsed.document_url.to_string(),
             });
-            initial_js_tasks = 1;
+            processor.send(JsTask::SetViewport {
+                width: self.viewport.0,
+                height: self.viewport.1,
+            });
+            initial_js_tasks = 2;
             Some(processor)
         } else {
             None
@@ -1312,6 +1320,13 @@ impl WebView {
     pub fn relayout(&mut self, viewport: (f32, f32)) {
         if self.viewport != viewport {
             self.viewport = viewport;
+            if let Some(processor) = self.js_processor.as_ref() {
+                processor.send(JsTask::SetViewport {
+                    width: viewport.0,
+                    height: viewport.1,
+                });
+                self.pending_js_tasks += 1;
+            }
             self.update_layout();
         }
 

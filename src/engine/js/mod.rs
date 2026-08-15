@@ -224,6 +224,19 @@ impl JsRuntime {
         }
     }
 
+    /// Updates the CSS-pixel viewport exposed through the Window API.
+    pub fn set_viewport(&mut self, width: f32, height: f32) {
+        let mut global = self.engine.global_mut().borrow_mut();
+        global.set(
+            "innerWidth".to_string(),
+            JSValue::Number(width.max(0.0) as f64),
+        );
+        global.set(
+            "innerHeight".to_string(),
+            JSValue::Number(height.max(0.0) as f64),
+        );
+    }
+
     /// Evaluates a script, logging JS errors instead of crashing the page.
     pub fn run_script(&mut self, source: &str) {
         match self.engine.eval(source) {
@@ -5883,6 +5896,23 @@ mod tests {
 
         let node = dom.get_element_by_id("hello").unwrap();
         assert_eq!(DomTree::inner_text(&node), "hello from js");
+    }
+
+    #[test]
+    fn viewport_dimensions_follow_browser_resizes() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.set_viewport(1280.0, 720.0);
+        runtime.run_script(
+            r#"document.getElementById("result").setAttribute("data-size", innerWidth + ":" + innerHeight);"#,
+        );
+        assert_eq!(
+            dom.get_element_by_id("result")
+                .unwrap()
+                .borrow()
+                .value
+                .get_attr("data-size"),
+            Some("1280:720")
+        );
     }
 
     #[test]

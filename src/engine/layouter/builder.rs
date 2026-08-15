@@ -1303,17 +1303,14 @@ pub fn correct_atomic_inline_spacing(node: &mut LayoutNode) {
             }
 
             let mut desired_x = match previous {
-                Some((right, previous_margin_right)) => {
-                    right + previous_margin_right + margin_left
-                }
+                Some((right, previous_margin_right)) => right + previous_margin_right + margin_left,
                 None => rect.x + margin_left,
             };
             let mut desired_y = rect.y;
             let exceeds_line = previous.is_some()
                 && wraps_inline_content
-                && containing_width.is_some_and(|width| {
-                    desired_x + rect.width + margin_right > width + 0.5
-                });
+                && containing_width
+                    .is_some_and(|width| desired_x + rect.width + margin_right > width + 0.5);
             if exceeds_line {
                 desired_x = line_start_x + margin_left;
                 desired_y = line_bottom + line_margin_bottom + margin_top;

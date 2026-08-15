@@ -23,6 +23,8 @@ use crate::engine::layouter::dom_snapshot::DomSnapshot;
 pub enum JsTask {
     /// Set the URL exposed through `document` and related browser APIs.
     SetDocumentUrl { url: String },
+    /// Update CSS-pixel dimensions exposed through the Window API.
+    SetViewport { width: f32, height: f32 },
     /// Execute a classic (blocking or deferred) script.
     RunScript { source: String },
     /// Dispatch `DOMContentLoaded` to document listeners.
@@ -153,6 +155,7 @@ impl JsProcessor {
 fn run_task(runtime: &mut JsRuntime, task: JsTask) {
     match task {
         JsTask::SetDocumentUrl { url } => runtime.set_document_url(&url),
+        JsTask::SetViewport { width, height } => runtime.set_viewport(width, height),
         JsTask::RunScript { source } => runtime.run_script(&source),
         JsTask::DispatchDomContentLoaded => {
             runtime.dispatch_dom_content_loaded();
