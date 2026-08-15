@@ -159,6 +159,7 @@ pub struct WebView {
     layout_processor: layouter::LayoutProcessor,
     layout_pending: bool,
     layout_requested_version: u64,
+    layout_applied_version: u64,
     /// Live DOM references for the latest snapshot, used to apply write-backs.
     layout_dom_refs: Vec<Weak<RefCell<TreeNode<HtmlNodeType>>>>,
     /// Cached DOM snapshot, reused while the tree's mutation version is
@@ -202,6 +203,8 @@ pub struct WebView {
     next_deferred_script_index: usize,
     /// Fragment to reveal once the document has a completed layout.
     pending_fragment_scroll: Option<String>,
+    /// Layout generation that contains every initially linked stylesheet.
+    fragment_ready_version: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -312,6 +315,7 @@ impl WebView {
             layout_processor: layouter::LayoutProcessor::new(),
             layout_pending: false,
             layout_requested_version: 0,
+            layout_applied_version: 0,
             layout_dom_refs: Vec::new(),
             snapshot_cache: None,
             write_back_tx,
@@ -332,6 +336,7 @@ impl WebView {
             deferred_script_results: HashMap::new(),
             next_deferred_script_index: 0,
             pending_fragment_scroll: None,
+            fragment_ready_version: None,
         }
     }
 
@@ -454,6 +459,7 @@ impl WebView {
 
                 // CSS fetch を要求
                 if self.pending_css_urls.is_empty() {
+                    self.fragment_ready_version = Some(self.layout_requested_version);
                     self.phase = PagePhase::CssApplied;
                 } else {
                     for url in &self.pending_css_urls {
@@ -504,6 +510,7 @@ impl WebView {
     pub fn on_html_fetched(&mut self, html: String, document_url: Url) {
         log::info!("Fetched HTML: {}", document_url);
         self.pending_fragment_scroll = document_url.fragment().map(str::to_string);
+        self.fragment_ready_version = None;
         let parsed = parse_html(&html, document_url, self.js_policy.into());
 
         self.pending_css_urls = parsed.style_links;
@@ -778,6 +785,7 @@ impl WebView {
             self.needs_redraw = true;
 
             if self.css_results_received >= self.css_results_expected {
+                self.fragment_ready_version = Some(self.layout_requested_version);
                 self.phase = PagePhase::CssApplied;
             }
         }
@@ -788,6 +796,7 @@ impl WebView {
             self.css_results_received += 1;
             self.apply_resolved_styles_and_relayout(resolved);
             self.needs_redraw = true;
+            self.fragment_ready_version = Some(self.layout_requested_version);
             self.phase = PagePhase::CssApplied;
         }
     }
@@ -1164,6 +1173,7 @@ impl WebView {
             }
 
             self.layout_and_info = Some((layout, info));
+            self.layout_applied_version = version;
             self.layout_pending = false;
             self.needs_redraw = true;
         }
@@ -1303,6 +1313,7 @@ impl WebView {
         self.layout_processor = layouter::LayoutProcessor::new();
         self.layout_pending = false;
         self.layout_requested_version = 0;
+        self.layout_applied_version = 0;
         self.layout_dom_refs.clear();
         self.snapshot_cache = None;
         self.js_processor = None;
@@ -1321,6 +1332,7 @@ impl WebView {
         self.deferred_script_results.clear();
         self.next_deferred_script_index = 0;
         self.pending_fragment_scroll = None;
+        self.fragment_ready_version = None;
         let (write_back_tx, write_back_rx) = mpsc::channel();
         self.write_back_tx = write_back_tx;
         self.write_back_rx = write_back_rx;
@@ -1352,7 +1364,7 @@ impl WebView {
         }
 
         let fragment_target =
-            if matches!(self.phase, PagePhase::CssApplied | PagePhase::ScriptApplied) {
+            if fragment_layout_is_ready(self.fragment_ready_version, self.layout_applied_version) {
                 self.pending_fragment_scroll
                     .as_deref()
                     .and_then(|fragment| {
@@ -1465,6 +1477,10 @@ fn apply_scroll_offsets(info: &mut InfoNode, offsets: &HashMap<NodeId, (f32, f32
     for child in &mut info.children {
         apply_scroll_offsets(child, offsets);
     }
+}
+
+fn fragment_layout_is_ready(ready_version: Option<u64>, applied_version: u64) -> bool {
+    ready_version.is_some_and(|ready_version| applied_version >= ready_version)
 }
 
 fn find_fragment_target_dom_id(
@@ -1858,6 +1874,14 @@ mod tests {
             content_box: rect(y, height),
             children_box: rect(y, children_height),
         })
+    }
+
+    #[test]
+    fn fragment_waits_for_the_styled_layout_generation() {
+        assert!(!fragment_layout_is_ready(None, 5));
+        assert!(!fragment_layout_is_ready(Some(5), 4));
+        assert!(fragment_layout_is_ready(Some(5), 5));
+        assert!(fragment_layout_is_ready(Some(5), 6));
     }
 
     #[test]
