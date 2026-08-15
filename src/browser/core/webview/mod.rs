@@ -1347,6 +1347,7 @@ impl WebView {
         layouter::correct_oversized_auto_horizontal_margins(layout);
         layouter::correct_atomic_inline_spacing(layout);
         layouter::align_table_columns(layout, info);
+        layouter::refresh_missing_text_layout_results(layout, info, viewport);
     }
 
     /// 現在描画可能な Layout / Info を返す（なければ None）

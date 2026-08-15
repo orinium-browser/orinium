@@ -1078,11 +1078,16 @@ pub fn build_layout_and_info_from_snapshot(
                 style.size.width = LengthOrAuto::Length(Length::Px(width));
             }
 
-            // Grid items are blockified by CSS Display. Keeping an inline
-            // direct child (notably an anchor in a navigation grid) makes its
-            // text-flow coordinates remain in the parent's inline space, so
-            // later grid alignment cannot move the text with its item box.
-            if style.display.inner == InnerDisplay::Grid {
+            // Grid items and direct children of inline-flex containers need
+            // block-level item coordinates. Keeping such a child inline makes
+            // its text-flow coordinates remain in the parent's inline space,
+            // so item placement cannot move the text with its box. Preserve
+            // inline children of block-level flex containers for the atomic
+            // inline width correction below.
+            if style.display.inner == InnerDisplay::Grid
+                || (style.display.inner == InnerDisplay::Flex
+                    && style.display.outer == OuterDisplay::Inline)
+            {
                 for child in &mut all_layout {
                     if let LayoutChild::Node(child) = child
                         && child.style.display.outer == OuterDisplay::Inline
@@ -1361,6 +1366,53 @@ pub fn constrain_auto_grid_track_items(node: &mut LayoutNode) -> bool {
     }
 
     changed
+}
+
+/// Ensure text custom objects positioned as flex items produce their text-flow
+/// cache entry. `ui_layout` measures and positions direct custom flex items,
+/// but does not call their `layout` method, so render-time lookup otherwise
+/// finds no spans for text directly inside an `inline-flex` element.
+pub fn refresh_missing_text_layout_results(
+    layout: &mut LayoutNode,
+    info: &InfoNode,
+    viewport: (f32, f32),
+) {
+    let containing = layout
+        .layout_box
+        .iter()
+        .next()
+        .map(|model| (model.content_box.width, model.content_box.height))
+        .unwrap_or(viewport);
+
+    for (layout_child, info_child) in layout.children.iter_mut().zip(&info.children) {
+        match (layout_child, &info_child.kind) {
+            (LayoutChild::Node(child), _) => {
+                refresh_missing_text_layout_results(child, info_child, viewport);
+            }
+            (LayoutChild::Custom(custom), NodeKind::Text { text_id, .. })
+                if TextFlowLayouter::get_result(*text_id).is_none() =>
+            {
+                let Some(box_model) = custom.result().map(|result| result.box_model.clone()) else {
+                    continue;
+                };
+                let line_height = custom
+                    .style()
+                    .line_height
+                    .resolve_with(Some(containing.0), viewport.0, viewport.1)
+                    .unwrap_or(box_model.border_box.height);
+                let _ = custom.layouter_mut().layout(&ui_layout::LayoutContext {
+                    containing_block_width: Some(containing.0),
+                    containing_block_height: Some(containing.1),
+                    start_pos: (box_model.border_box.x, box_model.border_box.y),
+                    available_inline_size: box_model.border_box.width.max(1.0),
+                    line_height,
+                    viewport_width: viewport.0,
+                    viewport_height: viewport.1,
+                });
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Keep adjacent atomic inline boxes from overlapping their padding or
@@ -5663,6 +5715,57 @@ mod tests {
 
         let item = end_item(&layout).expect("end-aligned item");
         assert!((item.right() - 300.0).abs() < 0.5, "item={item:?}");
+    }
+
+    #[test]
+    fn inline_flex_lays_out_direct_text_with_inherited_style() {
+        let html = "<html><body><a class='action'>目指すこと<span>›</span></a></body></html>";
+        let css = r#"
+            .action { display: inline-flex; gap: 5px; color: #0066cc; font-size: 19px; }
+            .action span { font-size: 22px; }
+        "#;
+        let (mut layout, info) = layout_and_info_for(html, css);
+        ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+        refresh_missing_text_layout_results(&mut layout, &info, (800.0, 600.0));
+
+        fn inline_flex(layout: &LayoutNode) -> Option<&LayoutNode> {
+            if layout.style.display.inner == InnerDisplay::Flex {
+                return Some(layout);
+            }
+            layout
+                .children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .find_map(inline_flex)
+        }
+        let flex = inline_flex(&layout).expect("inline flex");
+        let span = flex
+            .children
+            .iter()
+            .filter_map(LayoutChild::node)
+            .next()
+            .expect("span flex item");
+        assert_eq!(span.style.display.outer, OuterDisplay::Block);
+
+        let label_style = text_style_for(&info, "目指すこと");
+        assert_eq!(label_style.font_size, 19.0);
+        assert_eq!(label_style.color, Color(0, 102, 204, 255));
+
+        fn text_id_for(info: &InfoNode, content: &str) -> Option<usize> {
+            if let NodeKind::Text { text, text_id, .. } = &info.kind
+                && text == content
+            {
+                return Some(*text_id);
+            }
+            info.children
+                .iter()
+                .find_map(|child| text_id_for(child, content))
+        }
+
+        let label_id = text_id_for(&info, "目指すこと").expect("label text id");
+        let result = TextFlowLayouter::get_result(label_id).expect("label layout result");
+        assert_eq!(result.line_texts, vec!["目指すこと"]);
+        assert!(result.spans[0].line_pos.0 >= 0.0);
     }
 
     #[test]
