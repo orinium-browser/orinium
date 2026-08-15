@@ -168,7 +168,6 @@ impl TextFlowLayouter {
         let mut line_start: usize = 0; // byte offset where current line starts
         let mut x_pos = start_pos.0; // Actual line cordination
         let mut y_pos = start_pos.1;
-        let mut x_range_start: f32 = 0.0; // Accumulated width; used for x_range. (x_range_start..(x_range_start+line_w))
         let mut line_index: usize = 0;
         let mut accumulated: f32 = 0.0; // Running width placed on the current line; used for wrap/overflow checks.
         let mut last_breakable_cluster: Option<usize> = None; // cluster index (exclusive)
@@ -195,12 +194,11 @@ impl TextFlowLayouter {
                 };
 
                 spans.push(LineSpan {
-                    x_range: x_range_start..(x_range_start + line_w),
+                    x_range: x_pos..(x_pos + line_w),
                     line_pos: (x_pos, y_pos),
                     line_index,
                 });
                 line_texts.push(line_text);
-                x_range_start += line_w;
             }};
         }
 
@@ -222,7 +220,7 @@ impl TextFlowLayouter {
                     // Empty line (e.g. consecutive newlines)
                     x_pos = aligned_x(line_index, x_pos, 0.0);
                     spans.push(LineSpan {
-                        x_range: x_range_start..x_range_start,
+                        x_range: x_pos..x_pos,
                         line_pos: (x_pos, y_pos),
                         line_index,
                     });
@@ -324,7 +322,7 @@ impl TextFlowLayouter {
                 // its coordinate origin is the box left edge (x_pos = 0).
                 x_pos = aligned_x(line_index, 0.0, 0.0);
                 spans.push(LineSpan {
-                    x_range: x_range_start..x_range_start,
+                    x_range: x_pos..x_pos,
                     line_pos: (x_pos, y_pos),
                     line_index,
                 });
@@ -340,14 +338,13 @@ impl TextFlowLayouter {
                     // the carry-over value from accumulating across segments.
                     x_pos = aligned_x(line_index, x_pos, line_w);
                     spans.push(LineSpan {
-                        x_range: x_range_start..(x_range_start + line_w),
+                        x_range: x_pos..(x_pos + line_w),
                         line_pos: (x_pos, y_pos),
                         line_index,
                     });
                     line_texts.push(seg.to_string());
                     line_index += 1;
                     y_pos += lh;
-                    x_range_start += line_w;
                     line_start = seg_end + 1; // step over the '\n'
                     x_pos = 0.0;
                 }
@@ -358,7 +355,7 @@ impl TextFlowLayouter {
             x_pos = aligned_x(line_index, x_pos, line_w);
 
             spans.push(LineSpan {
-                x_range: x_range_start..(x_range_start + line_w),
+                x_range: x_pos..(x_pos + line_w),
                 line_pos: (x_pos, y_pos),
                 line_index,
             });
@@ -504,6 +501,31 @@ mod tests {
         assert_eq!(result.spans[1].width(), 30.0);
         assert_eq!(result.spans[0].line_index, 0);
         assert_eq!(result.spans[1].line_index, 1);
+    }
+
+    #[test]
+    fn aligns_each_line_within_the_available_inline_space() {
+        let clusters = vec![
+            cluster(0, 20.0, false),
+            cluster(2, 10.0, true),
+            cluster(3, 20.0, false),
+        ];
+        let mut centered = TextFlowStyle::default();
+        centered.text_align = TextAlign::Center;
+        let result = TextFlowLayouter::new("aa bb".to_string(), centered, clusters.clone())
+            .compute_layout(40.0, 40.0, (0.0, 0.0));
+        assert_eq!(result.line_texts, vec!["aa ", "bb"]);
+        assert_eq!(result.spans[0].line_pos.0, 5.0);
+        assert_eq!(result.spans[1].line_pos.0, 10.0);
+        assert_eq!(result.spans[0].x_range, 5.0..35.0);
+        assert_eq!(result.spans[1].x_range, 10.0..30.0);
+
+        let mut right = TextFlowStyle::default();
+        right.text_align = TextAlign::Right;
+        let result = TextFlowLayouter::new("aa".to_string(), right, clusters[..1].to_vec())
+            .compute_layout(40.0, 40.0, (0.0, 0.0));
+        assert_eq!(result.spans[0].line_pos.0, 20.0);
+        assert_eq!(result.spans[0].x_range, 20.0..40.0);
     }
 
     #[test]
