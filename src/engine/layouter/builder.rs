@@ -1290,6 +1290,62 @@ pub fn correct_oversized_auto_horizontal_margins(node: &mut LayoutNode) {
     }
 }
 
+/// Resolve an auto grid track from the measured contents of an auto-sized
+/// block item instead of letting that item consume all available width.
+///
+/// During the intrinsic grid pass `ui_layout` currently measures block flex
+/// containers with their containing width. In a template such as
+/// `1fr auto 1fr`, that makes the auto track take the entire grid and leaves
+/// both fraction tracks at zero. The first layout still records the flex
+/// contents' actual extent in `children_box`, so use that intrinsic width and
+/// let a second layout resolve the tracks correctly.
+pub fn constrain_auto_grid_track_items(node: &mut LayoutNode) -> bool {
+    let mut changed = false;
+    for child in &mut node.children {
+        if let LayoutChild::Node(child) = child {
+            changed |= constrain_auto_grid_track_items(child);
+        }
+    }
+
+    if node.style.display.inner != InnerDisplay::Grid || node.style.grid_template_columns.is_empty()
+    {
+        return changed;
+    }
+
+    let mut item_index = 0usize;
+    for child in &mut node.children {
+        let LayoutChild::Node(child) = child else {
+            continue;
+        };
+        if child.style.display.outer == OuterDisplay::None
+            || child.style.position.kind.is_out_of_flow()
+        {
+            continue;
+        }
+
+        let auto_track = node
+            .style
+            .grid_template_columns
+            .get(item_index)
+            .is_some_and(|track| matches!(track, GridTrack::Breadth(LengthOrAuto::Auto)));
+        item_index += 1;
+        if !auto_track || child.style.size.width != LengthOrAuto::Auto {
+            continue;
+        }
+
+        let Some(model) = child.layout_box.iter().next() else {
+            continue;
+        };
+        let intrinsic_width = model.children_box.width.max(0.0);
+        if intrinsic_width > 0.0 && intrinsic_width + 0.5 < model.content_box.width {
+            child.style.size.width = LengthOrAuto::Length(Length::Px(intrinsic_width));
+            changed = true;
+        }
+    }
+
+    changed
+}
+
 /// Keep adjacent atomic inline boxes from overlapping their padding or
 /// horizontal margins.
 ///
@@ -5359,6 +5415,36 @@ mod tests {
         let boxes = children(&layout).expect("header and main");
         assert!(boxes[0].height >= 48.0);
         assert!(boxes[1].y >= boxes[0].bottom());
+    }
+
+    #[test]
+    fn grid_auto_track_can_measure_flex_contents() {
+        let html = "<html><body><div class='grid'><a>A</a><nav><span></span><span></span></nav><a>B</a></div></body></html>";
+        let css = r#"
+            .grid { display: grid; width: 1024px; grid-template-columns: 1fr auto 1fr; }
+            nav { display: flex; gap: 10px; }
+            nav span { display: block; width: 100px; height: 10px; }
+        "#;
+        let (mut layout, _) = layout_and_info_for(html, css);
+        ui_layout::LayoutEngine::layout(&mut layout, 1280.0, 600.0);
+        assert!(constrain_auto_grid_track_items(&mut layout));
+        ui_layout::LayoutEngine::layout(&mut layout, 1280.0, 600.0);
+
+        fn grid(node: &LayoutNode) -> Option<&LayoutNode> {
+            if node.style.display.inner == InnerDisplay::Grid {
+                return Some(node);
+            }
+            node.children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .find_map(grid)
+        }
+        let grid = grid(&layout).expect("grid");
+        let items: Vec<_> = grid.children.iter().filter_map(LayoutChild::node).collect();
+        let middle = items[1].layout_box.iter().next().expect("middle");
+        assert!((middle.content_box.width - 210.0).abs() < 0.5);
+        assert!(items[0].layout_box.width_box() > 400.0);
+        assert!(items[2].layout_box.width_box() > 400.0);
     }
 
     #[test]
