@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["audio","io","network","renderer","system"]};
+window.SIDEBAR_ITEMS = {"mod":["audio","io","locale","network","renderer","system"]};
