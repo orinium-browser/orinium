@@ -131,9 +131,34 @@ pub fn resolve_inline_style(style_attr: &str) -> Vec<(String, CssValue, bool)> {
         return Vec::new();
     };
 
-    DeclarationResolver::collect(&nodes)
+    let declarations = DeclarationResolver::collect(&nodes);
+    let mut custom_properties = Properties::new();
+    for declaration in &declarations {
+        if declaration.name.starts_with("--") {
+            set_inline_custom_property(
+                &mut custom_properties,
+                declaration.name.clone(),
+                declaration.value.clone(),
+                declaration.important,
+            );
+        }
+    }
+
+    declarations
         .into_iter()
-        .map(|declaration| (declaration.name, declaration.value, declaration.important))
+        .map(|declaration| {
+            let value = if declaration.name.starts_with("--") {
+                declaration.value
+            } else {
+                DeclarationResolver::resolve_var(
+                    &declaration.value,
+                    &custom_properties,
+                    &mut HashSet::new(),
+                )
+                .unwrap_or(declaration.value)
+            };
+            (declaration.name, value, declaration.important)
+        })
         .collect()
 }
 

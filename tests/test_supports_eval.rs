@@ -172,7 +172,7 @@ fn test_var_resolution_in_same_rule() {
 }
 
 #[test]
-fn test_var_cycle_detection() {
+fn test_var_cycle_is_deferred_to_the_element_cascade() {
     let s = resolve(
         r#"
         div {
@@ -183,8 +183,8 @@ fn test_var_cycle_detection() {
         "#,
     );
     assert!(
-        !has_prop_in_rule(&s, "color"),
-        "circular var() should produce no declaration"
+        has_prop_in_rule(&s, "color"),
+        "var() validity is determined after inherited and selector custom properties cascade"
     );
 }
 
@@ -204,7 +204,7 @@ fn test_var_fallback() {
 }
 
 #[test]
-fn test_var_no_fallback_missing() {
+fn test_var_no_fallback_is_deferred_to_the_element_cascade() {
     let s = resolve(
         r#"
         div {
@@ -213,8 +213,8 @@ fn test_var_no_fallback_missing() {
         "#,
     );
     assert!(
-        !has_prop_in_rule(&s, "color"),
-        "missing var without fallback drops declaration"
+        has_prop_in_rule(&s, "color"),
+        "a custom property missing from this rule may be supplied by the element cascade"
     );
 }
 

@@ -2994,7 +2994,7 @@ dependencies = [
 [[package]]
 name = "orinium_text"
 version = "0.1.0"
-source = "git+https://github.com/orinium-browser/orinium_text#e647a94996f72caacaaa06322ddb75cde06077f5"
+source = "git+https://github.com/orinium-browser/orinium_text?rev=e647a94996f72caacaaa06322ddb75cde06077f5#e647a94996f72caacaaa06322ddb75cde06077f5"
 dependencies = [
  "dwrote",
  "fontconfig",

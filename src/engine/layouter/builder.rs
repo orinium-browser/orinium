@@ -1089,6 +1089,7 @@ pub fn build_layout_and_info_from_snapshot(
                     let rows = explicit_grid_track_count(&style.grid_template_rows);
                     for child in &mut all_layout {
                         if let LayoutChild::Node(child) = child {
+                            resolve_named_grid_area(child, &style.grid_template_areas);
                             resolve_grid_end_span(&mut child.style.grid_column, columns);
                             resolve_grid_end_span(&mut child.style.grid_row, rows);
                         }
@@ -1271,6 +1272,38 @@ fn resolve_grid_end_span(placement: &mut GridPlacement, track_count: usize) {
     placement.span = track_count.saturating_add(1).saturating_sub(start).max(1);
 }
 
+fn resolve_named_grid_area(node: &mut LayoutNode, areas: &[Vec<String>]) {
+    let Some(name) = node.style.grid_area.as_deref() else {
+        return;
+    };
+    let mut min_column = usize::MAX;
+    let mut max_column = 0;
+    let mut min_row = usize::MAX;
+    let mut max_row = 0;
+    for (row, names) in areas.iter().enumerate() {
+        for (column, area) in names.iter().enumerate() {
+            if area == name {
+                min_column = min_column.min(column);
+                max_column = max_column.max(column);
+                min_row = min_row.min(row);
+                max_row = max_row.max(row);
+            }
+        }
+    }
+    if min_column == usize::MAX {
+        return;
+    }
+    node.style.grid_column = GridPlacement {
+        start: Some(min_column + 1),
+        span: max_column - min_column + 1,
+    };
+    node.style.grid_row = GridPlacement {
+        start: Some(min_row + 1),
+        span: max_row - min_row + 1,
+    };
+    node.style.grid_area = None;
+}
+
 fn maximum_fixed_descendant_width(children: &[LayoutChild]) -> Option<f32> {
     children
         .iter()
@@ -1298,9 +1331,11 @@ fn is_collapsible_whitespace_info(info: &InfoNode) -> bool {
 }
 
 fn is_block_layout_child(child: &LayoutChild) -> bool {
-    child
-        .node()
-        .is_some_and(|node| node.style.display.outer == OuterDisplay::Block)
+    child.node().is_some_and(|node| {
+        node.style.display.outer == OuterDisplay::Block
+            || (node.style.display.inner == InnerDisplay::FlowRoot
+                && node.style.size.auto_behavior == AutoSizeBehavior::ShrinkToFit)
+    })
 }
 
 /// Correct the used horizontal margins of oversized block-level boxes.

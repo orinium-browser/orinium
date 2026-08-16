@@ -228,7 +228,7 @@ impl TextFlowLayouter {
                 }
 
                 line_start = nl_byte + 1;
-                x_pos = 0.0;
+                x_pos = start_pos.0;
                 y_pos += lh;
                 line_index += 1;
                 accumulated = 0.0;
@@ -257,7 +257,7 @@ impl TextFlowLayouter {
                         emit_line!(break_byte);
 
                         line_start = break_byte;
-                        x_pos = 0.0;
+                        x_pos = start_pos.0;
                         y_pos += lh;
                         line_index += 1;
                         last_breakable_cluster = None;
@@ -278,7 +278,7 @@ impl TextFlowLayouter {
                     // the following ones.
                     y_pos += lh;
                     line_index += 1;
-                    x_pos = 0.0;
+                    x_pos = start_pos.0;
                     accumulated = clusters_between(line_start, clusters[i].byte_offset);
                     last_breakable_cluster = None;
                 } else if split_unbreakable {
@@ -289,7 +289,7 @@ impl TextFlowLayouter {
                         emit_line!(break_byte);
 
                         line_start = break_byte;
-                        x_pos = 0.0;
+                        x_pos = start_pos.0;
                         y_pos += lh;
                         line_index += 1;
                         last_breakable_cluster = None;
@@ -346,7 +346,7 @@ impl TextFlowLayouter {
                     line_index += 1;
                     y_pos += lh;
                     line_start = seg_end + 1; // step over the '\n'
-                    x_pos = 0.0;
+                    x_pos = start_pos.0;
                 }
             }
         } else if line_start < text_len {
@@ -823,9 +823,13 @@ mod tests {
             cluster(5, 10.0, false),
             cluster(6, 10.0, false),
         ];
-        let result =
-            TextFlowLayouter::new("abc\ndef".to_string(), TextFlowStyle::default(), clusters)
-                .compute_layout(100.0, 100.0, (0.0, 0.0));
+        let mut flow = TextFlowStyle::default();
+        flow.white_space = WhiteSpace::PreWrap;
+        let result = TextFlowLayouter::new("abc\ndef".to_string(), flow, clusters).compute_layout(
+            100.0,
+            100.0,
+            (0.0, 0.0),
+        );
         assert_eq!(result.spans.len(), 2);
         assert_eq!(result.spans[0].line_pos.0, 0.0, "first line x");
         assert_eq!(result.spans[1].line_pos.0, 0.0, "line after newline x");
@@ -844,9 +848,13 @@ mod tests {
             cluster(5, 10.0, false),
             cluster(6, 10.0, false),
         ];
-        let result =
-            TextFlowLayouter::new("abc\ndef".to_string(), TextFlowStyle::default(), clusters)
-                .compute_layout(100.0, 100.0, (50.0, 0.0));
+        let mut flow = TextFlowStyle::default();
+        flow.white_space = WhiteSpace::PreWrap;
+        let result = TextFlowLayouter::new("abc\ndef".to_string(), flow, clusters).compute_layout(
+            100.0,
+            100.0,
+            (50.0, 0.0),
+        );
         assert_eq!(result.spans.len(), 2);
         assert_eq!(result.spans[0].line_pos.0, 50.0, "first line x");
         assert_eq!(result.spans[1].line_pos.0, 50.0, "line after newline x");
