@@ -233,7 +233,7 @@ impl TextFlowLayouter {
                 }
 
                 line_start = nl_byte + 1;
-                x_pos = start_pos.0;
+                x_pos = 0.0;
                 y_pos += lh;
                 line_index += 1;
                 accumulated = 0.0;
@@ -262,7 +262,7 @@ impl TextFlowLayouter {
                         emit_line!(break_byte);
 
                         line_start = break_byte;
-                        x_pos = start_pos.0;
+                        x_pos = 0.0;
                         y_pos += lh;
                         line_index += 1;
                         last_breakable_cluster = None;
@@ -283,7 +283,7 @@ impl TextFlowLayouter {
                     // the following ones.
                     y_pos += lh;
                     line_index += 1;
-                    x_pos = start_pos.0;
+                    x_pos = 0.0;
                     accumulated = clusters_between(line_start, clusters[i].byte_offset);
                     last_breakable_cluster = None;
                 } else if split_unbreakable {
@@ -294,7 +294,7 @@ impl TextFlowLayouter {
                         emit_line!(break_byte);
 
                         line_start = break_byte;
-                        x_pos = start_pos.0;
+                        x_pos = 0.0;
                         y_pos += lh;
                         line_index += 1;
                         last_breakable_cluster = None;
@@ -351,7 +351,7 @@ impl TextFlowLayouter {
                     line_index += 1;
                     y_pos += lh;
                     line_start = seg_end + 1; // step over the '\n'
-                    x_pos = start_pos.0;
+                    x_pos = 0.0;
                 }
             }
         } else if line_start < text_len {
@@ -818,8 +818,8 @@ mod tests {
 
     #[test]
     fn line_after_newline_starts_at_left_edge() {
-        // Every visual line of a text node must start at the box's left edge
-        // (start_pos.x). With a zero origin this is x:0.
+        // After a line break, the new line must start at absolute x = 0,
+        // regardless of the text node's position.
         let clusters = vec![
             cluster(0, 10.0, false),
             cluster(1, 10.0, false),
@@ -841,10 +841,9 @@ mod tests {
     }
 
     #[test]
-    fn line_after_newline_keeps_block_left_when_indented() {
-        // When the text node is positioned away from the origin (e.g. an
-        // indented/positioned block), every visual line must start at the box
-        // left edge (start_pos.x), not at the absolute origin.
+    fn line_after_newline_resets_to_absolute_zero() {
+        // After a line break, the new line starts at absolute x = 0,
+        // not at the text node's start_pos.x.
         let clusters = vec![
             cluster(0, 10.0, false),
             cluster(1, 10.0, false),
@@ -862,13 +861,13 @@ mod tests {
         );
         assert_eq!(result.spans.len(), 2);
         assert_eq!(result.spans[0].line_pos.0, 50.0, "first line x");
-        assert_eq!(result.spans[1].line_pos.0, 50.0, "line after newline x");
+        assert_eq!(result.spans[1].line_pos.0, 0.0, "line after newline x");
     }
 
     #[test]
-    fn wrapped_line_starts_at_left_edge() {
-        // A width-triggered wrap (no newline) must also resume at the box left
-        // edge.
+    fn wrapped_line_starts_at_absolute_zero() {
+        // A width-triggered wrap (no newline) must also resume at absolute
+        // x = 0, not at the text node's start_pos.x.
         let clusters = vec![
             cluster(0, 30.0, false),
             cluster(3, 5.0, true),
@@ -879,7 +878,7 @@ mod tests {
                 .compute_layout(40.0, 40.0, (50.0, 0.0));
         assert_eq!(result.spans.len(), 2);
         assert_eq!(result.spans[0].line_pos.0, 50.0, "first line x");
-        assert_eq!(result.spans[1].line_pos.0, 50.0, "wrapped line x");
+        assert_eq!(result.spans[1].line_pos.0, 0.0, "wrapped line x");
     }
 
     #[test]
@@ -1004,8 +1003,8 @@ mod tests {
         assert_eq!(result.line_texts, vec!["ab", "", ""]);
         // First line "ab" is centered: (100 - 20) / 2 == 40.
         assert_eq!(result.spans[0].line_pos.0, 40.0);
-        // Both trailing empty lines sit at the centered x for zero width (50),
-        // and crucially they share the same x — no accumulation.
+        // Both trailing empty lines are centered at x = 50
+        // (aligned_x(0.0, 0.0) = (100 - 0) / 2 = 50) — no accumulation.
         assert_eq!(result.spans[1].line_pos.0, 50.0);
         assert_eq!(result.spans[2].line_pos.0, 50.0);
     }
