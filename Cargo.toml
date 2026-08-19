@@ -43,7 +43,7 @@ symphonia = { version = "0.6.0", features = ["aac", "flac", "mp3", "vorbis", "wa
 tokio = { version = "1.52", features = ["fs", "io-std", "net", "rt", "time"] }
 tokio-rustls = "0.26.4"
 ttf-parser = "0.25.1"
-ui_layout = { git = "https://github.com/098orin/ui_layout-rs", rev = "6aa8dc88a11824b6c4f21abd0c56c1818cbd35da" }
+ui_layout = { git = "https://github.com/098orin/ui_layout-rs", rev = "757d4c5d01c97d4c2a39c26aa87ad6e6c6a47df5" }
 url = "2.5"
 wgpu = "30.0.0"
 wgpu-types = "30.0.0"
