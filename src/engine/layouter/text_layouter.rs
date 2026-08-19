@@ -81,6 +81,11 @@ impl TextFlowLayouter {
         available_space: f32,
         start_pos: (f32, f32),
     ) -> TextLayoutResult {
+        /*
+         * `start_pos` is position of the FIRST LINE.
+         * Don't wrap to the start_pos.0 (which is x).
+         * Wrap to `0.0`.
+         */
         let lh = self.line_height();
         let text_len = self.text.len();
         let clusters = &self.clusters;
