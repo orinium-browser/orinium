@@ -938,7 +938,7 @@ fn generate_draw_commands_inner(
                     style,
                     *scroll_offset_x,
                     *scroll_offset_y,
-                    is_inline,
+                    false,
                     *scroll_x || *scroll_y,
                     false,
                 ));
@@ -1123,7 +1123,9 @@ fn generate_draw_commands_inner(
                                 content_box: bm.content_box.clone(),
                                 children_box: bm.children_box.clone(),
                             };
-                            push_box_model(cmd_buf, &rect, style, 0.0, 0.0, true, false, false);
+                            let state = push_box_model(
+                                cmd_buf, &rect, style, 0.0, 0.0, false, false, false,
+                            );
                             node.draw_sized(
                                 cmd_buf,
                                 text_style,
@@ -1134,15 +1136,7 @@ fn generate_draw_commands_inner(
                                     height: rect.content_box.height,
                                 },
                             );
-                            pop_box_model(
-                                cmd_buf,
-                                BoxPushState {
-                                    border: true,
-                                    clip: false,
-                                    content: false,
-                                    scroll: false,
-                                },
-                            );
+                            pop_box_model(cmd_buf, state);
                         }
                     }
                     _ => {}
