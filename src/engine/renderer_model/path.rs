@@ -360,6 +360,30 @@ pub fn polygon_path(points: &[(f32, f32)]) -> Path {
     path
 }
 
+/// Translate every coordinate in `path` by `(ox, oy)`.
+pub fn offset_path(path: &Path, ox: f32, oy: f32) -> Path {
+    let mut out = Path::new();
+    for cmd in path.commands() {
+        match *cmd {
+            PathCommand::MoveTo { x, y } => out.move_to(x + ox, y + oy),
+            PathCommand::LineTo { x, y } => out.line_to(x + ox, y + oy),
+            PathCommand::QuadTo { cx, cy, x, y } => {
+                out.quad_to((cx + ox, cy + oy), (x + ox, y + oy))
+            }
+            PathCommand::CubicTo {
+                c1x,
+                c1y,
+                c2x,
+                c2y,
+                x,
+                y,
+            } => out.cubic_to((c1x + ox, c1y + oy), (c2x + ox, c2y + oy), (x + ox, y + oy)),
+            PathCommand::Close => out.close(),
+        }
+    }
+    out
+}
+
 /// Scale a set of corner radii `(rx, ry)` (CSS order TL, TR, BR, BL) down
 /// proportionally so no opposing pair exceeds the box dimensions, following
 /// the CSS `border-radius` clamping rule.

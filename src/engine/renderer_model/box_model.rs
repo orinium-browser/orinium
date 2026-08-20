@@ -12,7 +12,7 @@ use crate::engine::layouter::types::{
 use crate::engine::renderer_model::draw_command::{Brush, DrawCommand, FillRule, Paint};
 use crate::engine::renderer_model::geom::AffineTransform;
 use crate::engine::renderer_model::path::{
-    Path, append_quarter_ellipse, clamp_radii, rect_path, rounded_rect_path,
+    Path, append_quarter_ellipse, clamp_radii, offset_path, rect_path, rounded_rect_path,
 };
 use crate::engine::ui::ContentSize;
 
@@ -300,12 +300,16 @@ fn bottom_border_strip(
 }
 
 /// Draw the four border edges inside the current coordinate system.
-/// Coordinates are relative to the border-box origin.
+/// Coordinates are relative to the border-box origin when `ox`/`oy` are zero
+/// (the transform case); otherwise they are added to place the border in
+/// absolute space (the inline case, where no transform is pushed).
 fn draw_border(
     cmd_buf: &mut Vec<DrawCommand>,
     border_box: &ui_layout::Rect,
     padding_box: &ui_layout::Rect,
     style: &ContainerStyle,
+    ox: f32,
+    oy: f32,
 ) {
     let bw_top = (padding_box.y - border_box.y).max(0.0);
     let bw_bottom =
@@ -339,26 +343,31 @@ fn draw_border(
     let has_radius = outer.iter().any(|(rx, ry)| *rx > 0.0 || *ry > 0.0);
     if !has_radius {
         if bw_top > 0.0 {
-            push_fill(cmd_buf, rect_path(0.0, 0.0, w, bw_top), bc.top);
+            push_fill(cmd_buf, rect_path(ox, oy, w, bw_top), bc.top);
         }
         if bw_bottom > 0.0 {
             push_fill(
                 cmd_buf,
-                rect_path(0.0, h - bw_bottom, w, bw_bottom),
+                rect_path(ox, oy + h - bw_bottom, w, bw_bottom),
                 bc.bottom,
             );
         }
         if bw_left > 0.0 {
             push_fill(
                 cmd_buf,
-                rect_path(0.0, bw_top, bw_left, h - bw_top - bw_bottom),
+                rect_path(ox, oy + bw_top, bw_left, h - bw_top - bw_bottom),
                 bc.left,
             );
         }
         if bw_right > 0.0 {
             push_fill(
                 cmd_buf,
-                rect_path(w - bw_right, bw_top, bw_right, h - bw_top - bw_bottom),
+                rect_path(
+                    ox + w - bw_right,
+                    oy + bw_top,
+                    bw_right,
+                    h - bw_top - bw_bottom,
+                ),
                 bc.right,
             );
         }
@@ -368,21 +377,29 @@ fn draw_border(
     if bw_top > 0.0 {
         push_fill(
             cmd_buf,
-            top_border_strip(w, bw_left, bw_top, bw_right, outer, inner),
+            offset_path(
+                &top_border_strip(w, bw_left, bw_top, bw_right, outer, inner),
+                ox,
+                oy,
+            ),
             bc.top,
         );
     }
     if bw_bottom > 0.0 {
         push_fill(
             cmd_buf,
-            bottom_border_strip(w, h, bw_left, bw_bottom, bw_right, outer, inner),
+            offset_path(
+                &bottom_border_strip(w, h, bw_left, bw_bottom, bw_right, outer, inner),
+                ox,
+                oy,
+            ),
             bc.bottom,
         );
     }
     if bw_left > 0.0 {
         push_fill(
             cmd_buf,
-            rect_path(0.0, outer[0].1, bw_left, h - outer[0].1 - outer[3].1),
+            rect_path(ox, oy + outer[0].1, bw_left, h - outer[0].1 - outer[3].1),
             bc.left,
         );
     }
@@ -390,8 +407,8 @@ fn draw_border(
         push_fill(
             cmd_buf,
             rect_path(
-                w - bw_right,
-                outer[1].1,
+                ox + w - bw_right,
+                oy + outer[1].1,
                 bw_right,
                 h - outer[1].1 - outer[2].1,
             ),
@@ -402,15 +419,18 @@ fn draw_border(
 
 /// Draw the background inside the padding box (rounded when a border radius
 /// is present).
-/// Coordinates are relative to the border-box origin.
+/// Coordinates are relative to the border-box origin when `ox`/`oy` are zero;
+/// otherwise they are added to place the background in absolute space.
 fn draw_background(
     cmd_buf: &mut Vec<DrawCommand>,
     border_box: &ui_layout::Rect,
     padding_box: &ui_layout::Rect,
     style: &ContainerStyle,
+    ox: f32,
+    oy: f32,
 ) {
-    let x = padding_box.x - border_box.x;
-    let y = padding_box.y - border_box.y;
+    let x = padding_box.x - border_box.x + ox;
+    let y = padding_box.y - border_box.y + oy;
     let bw_top = (padding_box.y - border_box.y).max(0.0);
     let bw_bottom =
         (border_box.y + border_box.height - (padding_box.y + padding_box.height)).max(0.0);
@@ -633,9 +653,18 @@ fn push_box_model(
     // line boxes would displace the inline content.
     let border = !is_inline && push_transform(cmd_buf, border_box.x, border_box.y);
 
-    draw_border(cmd_buf, &border_box, &padding_box, style);
+    // When no transform is pushed (inline), draw commands must use absolute
+    // coordinates; otherwise they are already relative to the border-box
+    // origin thanks to the transform above.
+    let (ox, oy) = if is_inline {
+        (border_box.x, border_box.y)
+    } else {
+        (0.0, 0.0)
+    };
 
-    draw_background(cmd_buf, &border_box, &padding_box, style);
+    draw_border(cmd_buf, &border_box, &padding_box, style, ox, oy);
+
+    draw_background(cmd_buf, &border_box, &padding_box, style, ox, oy);
 
     let clip = !is_inline && clips_overflow && padding_box.width > 0.0 && padding_box.height > 0.0;
     if clip {
