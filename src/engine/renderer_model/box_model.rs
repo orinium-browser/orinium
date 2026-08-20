@@ -678,23 +678,17 @@ fn pop_box_model(cmd_buf: &mut Vec<DrawCommand>, state: BoxPushState) {
 }
 
 /// Draw text spans for a single text node.
-///
-/// `content_origin` is subtracted from each span position. For block
-/// containers this is `(0, 0)` (the flow cursor already starts at the content
-/// area), and for inline containers `push_box_model` pushes no transform so
-/// the flow layouter's coordinates are already absolute, also `(0, 0)`.
 fn draw_text(
     cmd_buf: &mut Vec<DrawCommand>,
     style: &TextStyle,
     flow_style: TextFlowStyle,
     text_id: usize,
-    content_origin: (f32, f32),
 ) {
     if let Some(result) = TextFlowLayouter::get_result(text_id) {
         for (i, line_text) in result.line_texts.iter().enumerate() {
             let span = &result.spans[i];
-            let x = span.line_pos.0 - content_origin.0;
-            let y = span.line_pos.1 - content_origin.1;
+            let x = span.line_pos.0;
+            let y = span.line_pos.1;
 
             cmd_buf.push(DrawCommand::DrawText {
                 x,
@@ -961,11 +955,6 @@ fn generate_draw_commands_inner(
         }
     }
 
-    // For inline containers the text flow layouter positions text in the
-    // parent's coordinate space and push_box_model pushes no transform, so
-    // text coordinates are already absolute and no offset is subtracted.
-    let text_origin = (0.0, 0.0);
-
     // Scroll offsets of this node itself; they scroll the node's own content.
     let own_scroll = info.kind.scroll_offsets();
     // A fixed box resets the inherited displacement (already cancelled above),
@@ -1031,7 +1020,7 @@ fn generate_draw_commands_inner(
                 flow_style,
                 ..
             } => {
-                draw_text(cmd_buf, style, *flow_style, *text_id, text_origin);
+                draw_text(cmd_buf, style, *flow_style, *text_id);
                 layout_iter.next();
             }
             NodeKind::LineBreak => {
@@ -1108,30 +1097,10 @@ fn generate_draw_commands_inner(
                             let bm = &result.box_model;
                             let rect = BoxModel {
                                 sticky_edges: bm.sticky_edges,
-                                border_box: Rect {
-                                    x: bm.border_box.x - text_origin.0,
-                                    y: bm.border_box.y - text_origin.1,
-                                    width: bm.border_box.width,
-                                    height: bm.border_box.height,
-                                },
-                                padding_box: Rect {
-                                    x: bm.padding_box.x - text_origin.0,
-                                    y: bm.padding_box.y - text_origin.1,
-                                    width: bm.padding_box.width,
-                                    height: bm.padding_box.height,
-                                },
-                                content_box: Rect {
-                                    x: bm.content_box.x - text_origin.0,
-                                    y: bm.content_box.y - text_origin.1,
-                                    width: bm.content_box.width,
-                                    height: bm.content_box.height,
-                                },
-                                children_box: Rect {
-                                    x: bm.children_box.x - text_origin.0,
-                                    y: bm.children_box.y - text_origin.1,
-                                    width: bm.children_box.width,
-                                    height: bm.children_box.height,
-                                },
+                                border_box: bm.border_box.clone(),
+                                padding_box: bm.padding_box.clone(),
+                                content_box: bm.content_box.clone(),
+                                children_box: bm.children_box.clone(),
                             };
                             push_box_model(cmd_buf, &rect, style_ref, 0.0, 0.0, true, false);
                             node.draw_sized(
