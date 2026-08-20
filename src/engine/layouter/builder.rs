@@ -22,7 +22,9 @@ use ui_layout::{
     LayoutNode, Length, LengthOrAuto, OuterDisplay, Position, Style,
 };
 
-use super::css_resolver::{ResolvedStyles, resolve_inline_style, set_inline_custom_property};
+use super::css_resolver::{
+    MediaEnvironment, ResolvedStyles, resolve_inline_style, set_inline_custom_property,
+};
 use super::text_layouter::TextFlowLayouter;
 use super::types::{
     Background, BackgroundDimension, BackgroundOffset, BackgroundPosition, BackgroundPositionAxis,
@@ -481,6 +483,7 @@ pub fn build_layout_and_info_with_images(
     images: &HashMap<String, Image>,
 ) -> (LayoutNode, InfoNode) {
     let (snapshot, _dom_refs) = DomSnapshot::from_tree(dom);
+    let media_environment = MediaEnvironment::new((0.0, 0.0), system_color_scheme);
     build_layout_and_info_from_snapshot(
         &snapshot,
         snapshot.roots()[0],
@@ -489,6 +492,7 @@ pub fn build_layout_and_info_with_images(
         parent,
         chain,
         system_color_scheme,
+        media_environment,
         scripting_mode,
         images,
         &HashMap::new(),
@@ -513,6 +517,7 @@ pub fn build_layout_and_info_from_snapshot(
     parent: InheritedCss,
     mut chain: ElementChain,
     system_color_scheme: ColorScheme,
+    media_environment: MediaEnvironment,
     scripting_mode: ScriptingMode,
     images: &HashMap<String, Image>,
     audio: &HashMap<String, Arc<[u8]>>,
@@ -568,7 +573,11 @@ pub fn build_layout_and_info_from_snapshot(
             // Collect CSS candidates.
             let (candidates, custom_property_candidates) =
                 if let HtmlNodeType::Element { .. } = html_node {
-                    Some(collect_candidates(resolved_styles, &chain_for_css))
+                    Some(collect_candidates(
+                        resolved_styles,
+                        &chain_for_css,
+                        &media_environment,
+                    ))
                 } else {
                     None
                 }
@@ -2228,11 +2237,16 @@ fn resolve_used_color_scheme(
 fn collect_candidates(
     resolved_styles: &ResolvedStyles,
     chain: &ElementChain,
+    media_env: &MediaEnvironment,
 ) -> (Properties, Properties) {
     let mut properties = HashMap::new();
     let mut custom_properties = HashMap::new();
 
     for decl in resolved_styles {
+        if !decl.matches_media(media_env) {
+            continue;
+        }
+
         if !decl.selector.matches(chain) {
             continue;
         }

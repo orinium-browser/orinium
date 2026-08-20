@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use ui_layout::LayoutNode;
 
 use super::builder::{InheritedCss, build_layout_and_info_from_snapshot};
-use super::css_resolver::ResolvedStyles;
+use super::css_resolver::{MediaEnvironment, ResolvedStyles};
 use super::dom_snapshot::{DomSnapshot, NodeId};
 use super::types::InfoNode;
 use crate::engine::background_worker::BackgroundWorker;
@@ -36,6 +36,7 @@ pub struct LayoutTask {
     pub snapshot: Arc<DomSnapshot>,
     pub root: NodeId,
     pub resolved_styles: Arc<ResolvedStyles>,
+    pub media_environment: MediaEnvironment,
     pub measurer: Arc<dyn TextMeasurer>,
     pub system_color_scheme: ColorScheme,
     pub scripting_mode: ScriptingMode,
@@ -124,6 +125,7 @@ impl LayoutProcessor {
                         task.parent,
                         task.chain,
                         task.system_color_scheme,
+                        task.media_environment,
                         task.scripting_mode,
                         &task.images,
                         &task.audio,
@@ -186,6 +188,7 @@ mod tests {
             snapshot: Arc::new(snapshot),
             root,
             resolved_styles: Arc::new(ResolvedStyles::default()),
+            media_environment: MediaEnvironment::new((0.0, 0.0), ColorScheme::Light),
             measurer: Arc::new(FallbackTextMeasurer),
             system_color_scheme: ColorScheme::Light,
             scripting_mode: ScriptingMode::default(),

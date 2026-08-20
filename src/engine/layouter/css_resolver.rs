@@ -98,12 +98,13 @@ impl MediaEnvironment {
 }
 
 /// Keeps only declarations whose enclosing media queries currently match.
-pub fn filter_media(styles: &ResolvedStyles, environment: &MediaEnvironment) -> ResolvedStyles {
+pub fn filter_media<'a>(
+    styles: &'a ResolvedStyles,
+    environment: &'a MediaEnvironment,
+) -> impl Iterator<Item = &'a ResolvedDeclaration> {
     styles
         .iter()
-        .filter(|declaration| declaration.matches_media(environment))
-        .cloned()
-        .collect()
+        .filter(move |declaration| declaration.matches_media(environment))
 }
 
 /// Appends resolved declarations while preserving source order across stylesheets.
@@ -527,8 +528,8 @@ mod tests {
         let narrow = MediaEnvironment::new((600.0, 800.0), ColorScheme::Light);
         let wide = MediaEnvironment::new((601.0, 800.0), ColorScheme::Light);
 
-        assert_eq!(filter_media(&styles, &narrow).len(), 1);
-        assert!(filter_media(&styles, &wide).is_empty());
+        assert_eq!(filter_media(&styles, &narrow).count(), 1);
+        assert_eq!(filter_media(&styles, &wide).count(), 0);
     }
 
     #[test]
@@ -540,7 +541,6 @@ mod tests {
         let styles = CssResolver::resolve_with_origin(&stylesheet, StyleOrigin::Author);
         let desktop = MediaEnvironment::new((1280.0, 800.0), ColorScheme::Light);
         let declarations = filter_media(&styles, &desktop)
-            .into_iter()
             .filter(|declaration| declaration.name == "width")
             .collect::<Vec<_>>();
 
@@ -558,8 +558,8 @@ mod tests {
         let landscape = MediaEnvironment::new((800.0, 600.0), ColorScheme::Light);
         let portrait = MediaEnvironment::new((600.0, 800.0), ColorScheme::Light);
 
-        assert_eq!(filter_media(&styles, &landscape).len(), 1);
-        assert!(filter_media(&styles, &portrait).is_empty());
+        assert_eq!(filter_media(&styles, &landscape).count(), 1);
+        assert_eq!(filter_media(&styles, &portrait).count(), 0);
     }
 
     #[test]
@@ -571,8 +571,8 @@ mod tests {
         let light = MediaEnvironment::new((800.0, 600.0), ColorScheme::Light);
         let dark = MediaEnvironment::new((800.0, 600.0), ColorScheme::Dark);
 
-        assert!(filter_media(&styles, &light).is_empty());
-        assert_eq!(filter_media(&styles, &dark).len(), 1);
+        assert_eq!(filter_media(&styles, &light).count(), 0);
+        assert_eq!(filter_media(&styles, &dark).count(), 1);
     }
 
     #[test]
@@ -580,7 +580,7 @@ mod tests {
         let styles = resolve("@media { div { color: red; } }", StyleOrigin::Author);
         let environment = MediaEnvironment::new((800.0, 600.0), ColorScheme::Light);
 
-        assert!(filter_media(&styles, &environment).is_empty());
+        assert_eq!(filter_media(&styles, &environment).count(), 0);
     }
 }
 

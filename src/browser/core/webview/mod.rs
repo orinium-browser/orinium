@@ -1113,12 +1113,11 @@ impl WebView {
 
         let media_environment =
             layouter::css_resolver::MediaEnvironment::new(self.viewport, self.system_color_scheme);
-        let resolved_styles =
-            layouter::css_resolver::filter_media(&self.resolved_styles, &media_environment);
         let task = layouter::LayoutTask {
             snapshot,
             root,
-            resolved_styles: Arc::new(resolved_styles),
+            resolved_styles: Arc::clone(&self.resolved_styles),
+            media_environment,
             measurer: self.text_measurer.clone().unwrap(),
             system_color_scheme: self.system_color_scheme,
             scripting_mode: self.js_policy.into(),
