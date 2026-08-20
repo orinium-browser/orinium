@@ -20,7 +20,7 @@ use crate::browser::core::ui::chrome::{Chrome, ChromeAction, ChromeEventResult};
 use crate::browser::core::ui::{logical_key_to_special_event, logical_key_to_text_key};
 use crate::engine::bridge::text::TextMeasurer;
 use crate::engine::html::ScriptingMode;
-use crate::engine::layouter::types::{Background, Color, TextFlowStyle, TextStyle};
+use crate::engine::layouter::types::{Color, TextFlowStyle, TextStyle};
 use crate::engine::renderer_model::{
     AffineTransform, Brush, DrawCommand, FillRule, Paint, Rect, rect_path,
 };
@@ -306,16 +306,6 @@ impl Chrome for BasicChrome {
         ];
 
         for (node, rect) in components {
-            if let Some(Background::Color(color)) = node.background() {
-                cmd_buf.push(DrawCommand::Fill {
-                    path: rect_path(rect.x, rect.y, rect.width, rect.height),
-                    rule: FillRule::NonZero,
-                    paint: Paint {
-                        brush: Brush::Solid(color),
-                        opacity: 1.0,
-                    },
-                });
-            }
             cmd_buf.push(DrawCommand::PushTransform {
                 transform: AffineTransform::translate(rect.x, rect.y),
             });

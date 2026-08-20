@@ -7,7 +7,7 @@ use smol_str::SmolStr;
 use ui_layout::Style;
 
 use crate::engine::bridge::text::{self, TextMeasureRequest};
-use crate::engine::layouter::types::{Background, Color, TextFlowStyle, TextStyle};
+use crate::engine::layouter::types::{Color, TextFlowStyle, TextStyle};
 use crate::engine::renderer_model::{Brush, DrawCommand, FillRule, Paint, rect_path};
 use crate::engine::ui::components::input_text_types::{
     InputTextEvent, InputTextKey, InputTextState,
@@ -200,6 +200,15 @@ impl CustomNode for InputTextComponent {
         _style: &Style,
         size: ContentSize,
     ) {
+        cmd_buf.push(DrawCommand::Fill {
+            path: rect_path(0.0, 0.0, size.width, size.height),
+            rule: FillRule::NonZero,
+            paint: Paint {
+                brush: Brush::Solid(Color(255, 255, 255, 255)),
+                opacity: 1.0,
+            },
+        });
+
         let state = self.state.lock().unwrap();
         let mut style = text_style.clone();
         let (display_text, placeholder) = if state.value.is_empty() && state.preedit.is_empty() {
@@ -238,10 +247,6 @@ impl CustomNode for InputTextComponent {
             (size.height - INLINE_PADDING * 2.0).max(0.0),
             (size.height - 3.0).max(0.0),
         );
-    }
-
-    fn background(&self) -> Option<Background> {
-        Some(Background::Color(Color(255, 255, 255, 255)))
     }
 
     fn intrinsic_size(&self) -> ContentSize {
@@ -570,15 +575,6 @@ mod tests {
         let state = input.state();
         assert_eq!(state.value, "abc");
         assert!(state.preedit.is_empty());
-    }
-
-    #[test]
-    fn background_is_white() {
-        let input = make_component("", "");
-        assert_eq!(
-            input.background(),
-            Some(Background::Color(Color(255, 255, 255, 255)))
-        );
     }
 
     #[test]

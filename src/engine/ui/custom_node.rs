@@ -2,7 +2,7 @@
 
 use ui_layout::Style;
 
-use crate::engine::layouter::types::{Background, TextFlowStyle, TextStyle};
+use crate::engine::layouter::types::{TextFlowStyle, TextStyle};
 use crate::engine::renderer_model::{DrawCommand, Rect};
 
 use super::input_text_types::InputTextEvent;
@@ -115,14 +115,6 @@ pub trait CustomNode: std::fmt::Debug + Send + Sync + 'static {
     /// Commands use the same content-box coordinate space as
     /// [`draw_sized`](Self::draw_sized).
     fn popup(&self, _text_style: &TextStyle, _text_flow_style: &TextFlowStyle) -> Option<Popup> {
-        None
-    }
-
-    /// Optional background override.
-    ///
-    /// When `Some`, the returned background replaces the CSS background for
-    /// this element's box-model background.
-    fn background(&self) -> Option<Background> {
         None
     }
 

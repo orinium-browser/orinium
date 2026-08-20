@@ -639,6 +639,7 @@ fn push_box_model(
     scroll_offset_y: f32,
     is_inline: bool,
     clips_overflow: bool,
+    draw_bg: bool,
 ) -> BoxPushState {
     let border_box = box_model.border_box;
     let padding_box = box_model.padding_box;
@@ -664,7 +665,9 @@ fn push_box_model(
 
     draw_border(cmd_buf, &border_box, &padding_box, style, ox, oy);
 
-    draw_background(cmd_buf, &border_box, &padding_box, style, ox, oy);
+    if draw_bg {
+        draw_background(cmd_buf, &border_box, &padding_box, style, ox, oy);
+    }
 
     let clip = !is_inline && clips_overflow && padding_box.width > 0.0 && padding_box.height > 0.0;
     if clip {
@@ -911,6 +914,7 @@ fn generate_draw_commands_inner(
                     *scroll_offset_y,
                     is_inline,
                     *scroll_x || *scroll_y,
+                    true,
                 ));
             }
         }
@@ -927,21 +931,16 @@ fn generate_draw_commands_inner(
             text_flow_style,
             ..
         } => {
-            let effective_style = node.background().map(|background| ContainerStyle {
-                background,
-                ..style.clone()
-            });
-            let style_ref = effective_style.as_ref().unwrap_or(style);
-
             for box_model in &layout.layout_box {
                 box_states.push(push_box_model(
                     cmd_buf,
                     &box_model,
-                    style_ref,
+                    style,
                     *scroll_offset_x,
                     *scroll_offset_y,
                     is_inline,
                     *scroll_x || *scroll_y,
+                    false,
                 ));
             }
 
@@ -1116,13 +1115,6 @@ fn generate_draw_commands_inner(
                     // from the layout result stored on the tree child.
                     Some(LayoutChild::Custom(custom_child)) => {
                         if let Some(result) = custom_child.result() {
-                            let effective_style =
-                                node.background().map(|background| ContainerStyle {
-                                    background,
-                                    ..style.clone()
-                                });
-                            let style_ref = effective_style.as_ref().unwrap_or(style);
-
                             let bm = &result.box_model;
                             let rect = BoxModel {
                                 sticky_edges: bm.sticky_edges,
@@ -1131,7 +1123,7 @@ fn generate_draw_commands_inner(
                                 content_box: bm.content_box.clone(),
                                 children_box: bm.children_box.clone(),
                             };
-                            push_box_model(cmd_buf, &rect, style_ref, 0.0, 0.0, true, false);
+                            push_box_model(cmd_buf, &rect, style, 0.0, 0.0, true, false, false);
                             node.draw_sized(
                                 cmd_buf,
                                 text_style,
@@ -1283,7 +1275,7 @@ mod tests {
         };
         let style = ContainerStyle::default();
         let mut buf = Vec::new();
-        let state = push_box_model(&mut buf, &box_model, &style, 0.0, 0.0, false, true);
+        let state = push_box_model(&mut buf, &box_model, &style, 0.0, 0.0, false, true, true);
         // Scroll/content transforms are no-ops here (zero offsets); border
         // transform + clip + content are pushed while the box is open.
         assert!(buf.len() >= 2);
@@ -1311,6 +1303,7 @@ mod tests {
             0.0,
             false,
             false,
+            true,
         );
         assert!(
             !commands
@@ -1340,6 +1333,7 @@ mod tests {
             4.0,
             false,
             true,
+            true,
         );
         let inner = push_box_model(
             &mut buf,
@@ -1348,6 +1342,7 @@ mod tests {
             0.0,
             0.0,
             false,
+            true,
             true,
         );
         // Sanity: inner push generated commands (border + background + clip).

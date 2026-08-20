@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use ui_layout::Style;
 
 use crate::engine::bridge::text::{self, TextAttribute, TextMeasureRequest};
-use crate::engine::layouter::types::{Background, Color, FontWeight, TextFlowStyle, TextStyle};
+use crate::engine::layouter::types::{Color, FontWeight, TextFlowStyle, TextStyle};
 use crate::engine::renderer_model::{Brush, DrawCommand, FillRule, Paint, Path, Rect, rect_path};
 use crate::engine::ui::custom_node::{ContentSize, CustomNode, PointerEvent, Popup};
 
@@ -465,6 +465,28 @@ impl CustomNode for SelectComponent {
             *self.last_size.lock().unwrap() = size;
         }
 
+        let bg = if self.disabled {
+            Color(230, 230, 230, 255)
+        } else if self.multiple {
+            POPUP_BG
+        } else if self.open.load(Ordering::Relaxed) {
+            Color(220, 220, 220, 255)
+        } else if self.hovered.load(Ordering::Relaxed) {
+            Color(240, 240, 240, 255)
+        } else {
+            Color(250, 250, 250, 255)
+        };
+        if bg.3 > 0 {
+            cmd_buf.push(DrawCommand::Fill {
+                path: rect_path(0.0, 0.0, size.width, size.height),
+                rule: FillRule::NonZero,
+                paint: Paint {
+                    brush: Brush::Solid(bg),
+                    opacity: 1.0,
+                },
+            });
+        }
+
         if self.multiple {
             let rows = self.popup_rows();
             Self::push_border(cmd_buf, 0.0, 0.0, size.width, size.height);
@@ -515,23 +537,6 @@ impl CustomNode for SelectComponent {
         if label_width > 0.0 {
             cmd_buf.push(DrawCommand::PopClip);
         }
-    }
-
-    fn background(&self) -> Option<Background> {
-        if self.disabled {
-            return Some(Background::Color(Color(230, 230, 230, 255)));
-        }
-        if self.multiple {
-            return Some(Background::Color(POPUP_BG));
-        }
-        let color = if self.open.load(Ordering::Relaxed) {
-            Color(220, 220, 220, 255)
-        } else if self.hovered.load(Ordering::Relaxed) {
-            Color(240, 240, 240, 255)
-        } else {
-            Color(250, 250, 250, 255)
-        };
-        Some(Background::Color(color))
     }
 
     fn intrinsic_size(&self) -> ContentSize {
@@ -960,10 +965,6 @@ mod tests {
     fn disabled_select_ignores_input_and_never_opens() {
         let select = SelectComponent::new(options(), "", measurer(), true, false);
         assert!(select.is_disabled());
-        assert_eq!(
-            select.background(),
-            Some(Background::Color(Color(230, 230, 230, 255)))
-        );
 
         // Consume the initial dirty flag from construction.
         assert!(select.needs_repaint());

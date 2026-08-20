@@ -6,8 +6,8 @@ use ui_layout::Style;
 use crate::engine::layouter::types::TextFlowStyle;
 use crate::engine::{
     bridge::text::{self, TextMeasureRequest},
-    layouter::types::{Background, Color, TextStyle},
-    renderer_model::DrawCommand,
+    layouter::types::{Color, TextStyle},
+    renderer_model::{Brush, DrawCommand, FillRule, Paint, rect_path},
     ui::custom_node::{ContentSize, CustomNode, PointerEvent},
 };
 
@@ -69,6 +69,25 @@ impl CustomNode for ButtonComponent {
         _style: &Style,
         size: ContentSize,
     ) {
+        let base = self.button_color;
+        let bg = if self.pressed.load(Ordering::Relaxed) {
+            shade(base, -30)
+        } else if self.hovered.load(Ordering::Relaxed) {
+            shade(base, 20)
+        } else {
+            base
+        };
+        if bg.3 > 0 {
+            cmd_buf.push(DrawCommand::Fill {
+                path: rect_path(0.0, 0.0, size.width, size.height),
+                rule: FillRule::NonZero,
+                paint: Paint {
+                    brush: Brush::Solid(bg),
+                    opacity: 1.0,
+                },
+            });
+        }
+
         let mut style = text_style.clone();
         style.color = self.label_color;
         let y = ((size.height - text_flow_style.font_size) * 0.5).max(0.0);
@@ -79,18 +98,6 @@ impl CustomNode for ButtonComponent {
             style,
             flow_style: *text_flow_style,
         });
-    }
-
-    fn background(&self) -> Option<Background> {
-        let base = self.button_color;
-        let color = if self.pressed.load(Ordering::Relaxed) {
-            shade(base, -30)
-        } else if self.hovered.load(Ordering::Relaxed) {
-            shade(base, 20)
-        } else {
-            base
-        };
-        Some(Background::Color(color))
     }
 
     fn intrinsic_size(&self) -> ContentSize {
@@ -258,10 +265,58 @@ mod tests {
 
     #[test]
     fn background_changes_with_state() {
+        use crate::engine::layouter::types::TextFlowStyle;
         let button = component();
-        let normal = button.background();
+        let text_style = TextStyle::default();
+        let flow_style = TextFlowStyle::default();
+
+        let mut cmds = Vec::new();
+        button.draw_sized(
+            &mut cmds,
+            &text_style,
+            &flow_style,
+            &Style::default(),
+            ContentSize {
+                width: 80.0,
+                height: 30.0,
+            },
+        );
+        let normal = match &cmds[0] {
+            DrawCommand::Fill {
+                paint:
+                    Paint {
+                        brush: Brush::Solid(c),
+                        ..
+                    },
+                ..
+            } => *c,
+            other => panic!("expected Fill, got {other:?}"),
+        };
+
         button.on_pointer_event(PointerEvent::Down { x: 0.0, y: 0.0 });
-        let pressed = button.background();
+        let mut cmds = Vec::new();
+        button.draw_sized(
+            &mut cmds,
+            &text_style,
+            &flow_style,
+            &Style::default(),
+            ContentSize {
+                width: 80.0,
+                height: 30.0,
+            },
+        );
+        let pressed = match &cmds[0] {
+            DrawCommand::Fill {
+                paint:
+                    Paint {
+                        brush: Brush::Solid(c),
+                        ..
+                    },
+                ..
+            } => *c,
+            other => panic!("expected Fill, got {other:?}"),
+        };
+
         assert_ne!(normal, pressed);
     }
 
