@@ -1011,9 +1011,10 @@ impl WebView {
 
     fn schedule_dynamic_styles(&mut self, tasks: &mut Vec<WebViewTask>) {
         let requests = std::mem::take(&mut self.pending_dynamic_styles);
-        let base_url = self.docment_info.as_ref().map(|info| info.base_url.clone());
         for request in requests {
             let url = Url::parse(&request.url).or_else(|_| {
+                let base_url = self.docment_info.as_ref().map(|info| &info.base_url);
+
                 base_url
                     .as_ref()
                     .ok_or(url::ParseError::RelativeUrlWithoutBase)?
