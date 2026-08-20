@@ -1,7 +1,5 @@
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::thread;
-
 use super::parser::Parser as CssParser;
+use crate::engine::background_worker::BackgroundWorker;
 use crate::engine::layouter::css_resolver::{CssResolver, ResolvedStyles, append_resolved_styles};
 
 enum CssCommand {
@@ -10,8 +8,7 @@ enum CssCommand {
 
 #[derive(Debug)]
 pub struct CssProcessor {
-    cmd_tx: Sender<CssCommand>,
-    result_rx: Receiver<ResolvedStyles>,
+    worker: BackgroundWorker<CssCommand, ResolvedStyles>,
 }
 
 impl Default for CssProcessor {
@@ -22,32 +19,22 @@ impl Default for CssProcessor {
 
 impl CssProcessor {
     pub fn new() -> Self {
-        let (cmd_tx, cmd_rx) = mpsc::channel::<CssCommand>();
-        let (result_tx, result_rx) = mpsc::channel::<ResolvedStyles>();
-
-        thread::spawn(move || {
-            for cmd in cmd_rx {
-                match cmd {
-                    CssCommand::Process { css_sources } => {
-                        let resolved = Self::process_all(&css_sources);
-                        let _ = result_tx.send(resolved);
-                    }
-                }
-            }
-        });
-
-        Self { cmd_tx, result_rx }
+        Self {
+            worker: BackgroundWorker::new(1, |cmd| match cmd {
+                CssCommand::Process { css_sources } => Self::process_all(&css_sources),
+            }),
+        }
     }
 
     /// Send CSS source strings to the background thread for parsing and resolution.
     /// The thread will process all sources in order and return a single combined result.
     pub fn process(&self, css_sources: Vec<String>) {
-        let _ = self.cmd_tx.send(CssCommand::Process { css_sources });
+        self.worker.send(CssCommand::Process { css_sources });
     }
 
     /// Poll for a completed result. Returns `None` if no result is ready yet.
     pub fn try_receive(&self) -> Option<ResolvedStyles> {
-        self.result_rx.try_recv().ok()
+        self.worker.try_receive()
     }
 
     fn process_all(css_sources: &[String]) -> ResolvedStyles {

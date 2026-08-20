@@ -14,9 +14,8 @@
 //! would be wasted anyway.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, mpsc};
-use std::thread;
 
 use ui_layout::LayoutNode;
 
@@ -24,6 +23,7 @@ use super::builder::{InheritedCss, build_layout_and_info_from_snapshot};
 use super::css_resolver::ResolvedStyles;
 use super::dom_snapshot::{DomSnapshot, NodeId};
 use super::types::InfoNode;
+use crate::engine::background_worker::BackgroundWorker;
 use crate::engine::bridge::text::TextMeasurer;
 use crate::engine::css::matcher::ElementChain;
 use crate::engine::html::ScriptingMode;
@@ -83,8 +83,7 @@ unsafe impl Send for SendableResult {}
 /// A processor that accepts a [`DomSnapshot`] and returns the layout result
 /// produced by the thread.
 pub struct LayoutProcessor {
-    cmd_tx: mpsc::Sender<LayoutCommand>,
-    result_rx: mpsc::Receiver<SendableResult>,
+    worker: BackgroundWorker<LayoutCommand, Option<SendableResult>>,
     /// Latest task sequence number; shared with the thread so it can detect
     /// and skip superseded tasks.
     latest: Arc<AtomicU64>,
@@ -104,52 +103,43 @@ impl Default for LayoutProcessor {
 
 impl LayoutProcessor {
     pub fn new() -> Self {
-        let (cmd_tx, cmd_rx) = mpsc::channel::<LayoutCommand>();
-        let (result_tx, result_rx) = mpsc::channel::<SendableResult>();
-
         let latest = Arc::new(AtomicU64::new(0));
-        let thread_latest = Arc::clone(&latest);
+        let latest_clone = Arc::clone(&latest);
 
-        thread::spawn(move || {
-            for cmd in cmd_rx {
-                match cmd {
-                    LayoutCommand::Build(task) => {
-                        // A newer task queued after this one supersedes it: the
-                        // newest task's snapshot/styles/images include every
-                        // change made up to that point, so skip the build.
-                        if task.version < thread_latest.load(Ordering::SeqCst) {
-                            continue;
-                        }
-                        let version = task.version;
-                        let (layout, info) = build_layout_and_info_from_snapshot(
-                            &task.snapshot,
-                            task.root,
-                            &task.resolved_styles,
-                            task.measurer,
-                            task.parent,
-                            task.chain,
-                            task.system_color_scheme,
-                            task.scripting_mode,
-                            &task.images,
-                            &task.audio,
-                            task.write_back_sender,
-                        );
-                        let result = LayoutResult {
-                            layout,
-                            info,
-                            version,
-                        };
-                        let _ = result_tx.send(SendableResult(Box::into_raw(Box::new(result))));
+        let worker = BackgroundWorker::new(1, move |cmd: LayoutCommand| {
+            match cmd {
+                LayoutCommand::Build(task) => {
+                    // A newer task queued after this one supersedes it: the
+                    // newest task's snapshot/styles/images include every
+                    // change made up to that point, so skip the build.
+                    if task.version < latest_clone.load(Ordering::SeqCst) {
+                        return None;
                     }
+                    let version = task.version;
+                    let (layout, info) = build_layout_and_info_from_snapshot(
+                        &task.snapshot,
+                        task.root,
+                        &task.resolved_styles,
+                        task.measurer,
+                        task.parent,
+                        task.chain,
+                        task.system_color_scheme,
+                        task.scripting_mode,
+                        &task.images,
+                        &task.audio,
+                        task.write_back_sender,
+                    );
+                    let result = LayoutResult {
+                        layout,
+                        info,
+                        version,
+                    };
+                    Some(SendableResult(Box::into_raw(Box::new(result))))
                 }
             }
         });
 
-        Self {
-            cmd_tx,
-            result_rx,
-            latest,
-        }
+        Self { worker, latest }
     }
 
     /// Sends a layout task to the thread.
@@ -160,18 +150,18 @@ impl LayoutProcessor {
         let mut task = task;
         task.version = self.latest.fetch_add(1, Ordering::SeqCst) + 1;
         let version = task.version;
-        let _ = self.cmd_tx.send(LayoutCommand::Build(task));
+        self.worker.send(LayoutCommand::Build(task));
         version
     }
 
     /// Returns a completed layout result, or `None` if none is ready yet.
     pub fn try_receive(&self) -> Option<LayoutResult> {
-        self.result_rx.try_recv().ok().map(|SendableResult(ptr)| {
-            // SAFETY: `ptr` was produced by the thread with `Box::into_raw` and
-            // has been delivered over the channel. We are the sole owner here.
-            let boxed = unsafe { Box::from_raw(ptr) };
-            *boxed
-        })
+        let inner = self.worker.try_receive()?;
+        let SendableResult(ptr) = inner?;
+        // SAFETY: `ptr` was produced by the thread with `Box::into_raw` and
+        // has been delivered over the channel. We are the sole owner here.
+        let boxed = unsafe { Box::from_raw(ptr) };
+        Some(*boxed)
     }
 }
 
