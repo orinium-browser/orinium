@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 use std::sync::{Arc, mpsc};
 
+use crate::engine::image_decoder::ImageDecoder;
 use crate::engine::layouter::types::{ColorScheme, TextFlowStyle};
 use crate::engine::{
     css::{
@@ -136,6 +137,7 @@ pub struct WebView {
     loaded_css: Vec<String>,
     linked_css: Vec<String>,
     images: HashMap<String, Image>,
+    image_decoder: ImageDecoder,
     audio: HashMap<String, Arc<[u8]>>,
 
     resolved_styles: Arc<layouter::css_resolver::ResolvedStyles>,
@@ -304,6 +306,7 @@ impl WebView {
             loaded_css: Vec::new(),
             linked_css: Vec::new(),
             images: HashMap::new(),
+            image_decoder: ImageDecoder::new(),
             audio: HashMap::new(),
 
             resolved_styles: Arc::new(layouter::css_resolver::ResolvedStyles::default()),
@@ -511,6 +514,7 @@ impl WebView {
         self.schedule_dynamic_styles(&mut tasks);
         self.schedule_dynamic_images(&mut tasks);
         self.schedule_pending_images(&mut tasks);
+        self.try_apply_decoded_images();
         self.run_due_js_timers();
         self.try_apply_layout_results();
         self.drain_write_backs();
@@ -619,9 +623,7 @@ impl WebView {
 
     /// Decodes a fetched image and rebuilds layout using its intrinsic size.
     pub fn on_image_fetched(&mut self, source: String, bytes: &[u8]) -> anyhow::Result<()> {
-        let image = Image::decode(bytes).map_err(|error| anyhow::anyhow!("{source}: {error:#}"))?;
-        self.images.insert(source, image);
-        self.update_layout();
+        self.image_decoder.decode(source, bytes.to_vec());
         Ok(())
     }
 
@@ -1164,6 +1166,21 @@ impl WebView {
         self.layout_dom_refs = dom_refs;
         self.layout_requested_version = self.layout_processor.send(task);
         self.layout_pending = true;
+    }
+
+    /// Takes decoded images from the background thread and triggers a relayout.
+    fn try_apply_decoded_images(&mut self) {
+        while let Some((source, result)) = self.image_decoder.try_receive() {
+            match result {
+                Ok(image) => {
+                    self.images.insert(source, image);
+                    self.update_layout();
+                }
+                Err(error) => {
+                    log::warn!("Image decode failed: {error:#}");
+                }
+            }
+        }
     }
 
     /// Takes completed layout results from the thread and makes them drawable.

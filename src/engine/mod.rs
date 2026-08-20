@@ -5,6 +5,7 @@
 pub mod bridge;
 pub mod css;
 pub mod html;
+pub mod image_decoder;
 pub mod input;
 pub mod js;
 pub mod layouter;
