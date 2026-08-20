@@ -1,4 +1,3 @@
-// src/browser/core/ui/basic_chrome.rs
 //! Default browser chrome: a toolbar with a back button, a reload button, and a
 //! URL bar, laid out above the page content area.
 //!
