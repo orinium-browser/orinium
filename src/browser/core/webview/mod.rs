@@ -950,16 +950,9 @@ impl WebView {
 
     fn schedule_js_fetches(&mut self, tasks: &mut Vec<WebViewTask>) {
         let requests = std::mem::take(&mut self.pending_js_fetches);
-        let base_url = self.docment_info.as_ref().map(|info| info.base_url.clone());
 
         for request in requests {
-            let url = Url::parse(&request.url).or_else(|_| {
-                base_url
-                    .as_ref()
-                    .ok_or(url::ParseError::RelativeUrlWithoutBase)?
-                    .join(&request.url)
-            });
-            match url {
+            match self.resolve_url(&request.url) {
                 Ok(url) => tasks.push(WebViewTask::Fetch {
                     url,
                     kind: FetchKind::JavaScript {
@@ -977,7 +970,6 @@ impl WebView {
 
     fn schedule_dynamic_scripts(&mut self, tasks: &mut Vec<WebViewTask>) {
         let requests = std::mem::take(&mut self.pending_dynamic_scripts);
-        let base_url = self.docment_info.as_ref().map(|info| info.base_url.clone());
 
         for request in requests {
             match request.source {
@@ -985,42 +977,27 @@ impl WebView {
                     self.send_script(&source);
                     self.dispatch_js_element_event(request.node_id, "load");
                 }
-                JsDynamicScriptSource::External(source) => {
-                    let url = Url::parse(&source).or_else(|_| {
-                        base_url
-                            .as_ref()
-                            .ok_or(url::ParseError::RelativeUrlWithoutBase)?
-                            .join(&source)
-                    });
-                    match url {
-                        Ok(url) => tasks.push(WebViewTask::Fetch {
-                            url,
-                            kind: FetchKind::DynamicScript {
-                                node_id: request.node_id,
-                            },
-                        }),
-                        Err(error) => {
-                            log::warn!("Failed to resolve dynamic script URL: {error}");
-                            self.on_dynamic_script_fetch_failed(request.node_id);
-                        }
+                JsDynamicScriptSource::External(source) => match self.resolve_url(&source) {
+                    Ok(url) => tasks.push(WebViewTask::Fetch {
+                        url,
+                        kind: FetchKind::DynamicScript {
+                            node_id: request.node_id,
+                        },
+                    }),
+                    Err(error) => {
+                        log::warn!("Failed to resolve dynamic script URL: {error}");
+                        self.on_dynamic_script_fetch_failed(request.node_id);
                     }
-                }
+                },
             }
         }
     }
 
     fn schedule_dynamic_styles(&mut self, tasks: &mut Vec<WebViewTask>) {
         let requests = std::mem::take(&mut self.pending_dynamic_styles);
-        for request in requests {
-            let url = Url::parse(&request.url).or_else(|_| {
-                let base_url = self.docment_info.as_ref().map(|info| &info.base_url);
 
-                base_url
-                    .as_ref()
-                    .ok_or(url::ParseError::RelativeUrlWithoutBase)?
-                    .join(&request.url)
-            });
-            match url {
+        for request in requests {
+            match self.resolve_url(&request.url) {
                 Ok(url) => tasks.push(WebViewTask::Fetch {
                     url,
                     kind: FetchKind::DynamicCss {
@@ -1037,15 +1014,9 @@ impl WebView {
 
     fn schedule_dynamic_images(&mut self, tasks: &mut Vec<WebViewTask>) {
         let requests = std::mem::take(&mut self.pending_dynamic_images);
-        let base_url = self.docment_info.as_ref().map(|info| info.base_url.clone());
+
         for request in requests {
-            let url = Url::parse(&request.source).or_else(|_| {
-                base_url
-                    .as_ref()
-                    .ok_or(url::ParseError::RelativeUrlWithoutBase)?
-                    .join(&request.source)
-            });
-            match url {
+            match self.resolve_url(&request.source) {
                 Ok(url) => tasks.push(WebViewTask::Fetch {
                     url,
                     kind: FetchKind::Image {
@@ -1468,6 +1439,16 @@ impl WebView {
 
     pub fn clear_redraw_flag(&mut self) {
         self.needs_redraw = false;
+    }
+
+    fn resolve_url(&self, url: &str) -> Result<Url, url::ParseError> {
+        let base = self
+            .docment_info
+            .as_ref()
+            .map(|info| &info.base_url)
+            .ok_or(url::ParseError::RelativeUrlWithoutBase)?;
+
+        Url::parse(url).or_else(|_| base.join(url))
     }
 }
 
