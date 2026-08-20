@@ -49,10 +49,14 @@ fn local_pointer_coords(path: &HitPath<'_>, target: usize, x: f32, y: f32) -> (f
     let mut lx = x;
     let mut ly = y;
     for hit in path.iter().rev().take(path.len() - target) {
-        // Inline boxes live in the parent's coordinate space and push no
-        // transform (mirroring `push_box_model`), so they contribute no
-        // offset of their own.
-        if matches!(hit.layout.layout_box, ui_layout::LayoutBox::InlineBox(_)) {
+        // Inline Container boxes live in the parent's coordinate space and
+        // push no transform (mirroring `push_box_model`), so they contribute
+        // no offset of their own. Inline Custom nodes always push a transform,
+        // so they must apply the offset.
+        let is_inline_container =
+            matches!(hit.layout.layout_box, ui_layout::LayoutBox::InlineBox(_))
+                && matches!(&hit.info.kind, NodeKind::Container { .. });
+        if is_inline_container {
             continue;
         }
         let (cx, cy) = hit
@@ -237,10 +241,12 @@ fn hit_test_inner<'a>(
         }
 
         // 2. ローカル座標に変換（スクロールオフセット考慮）。
-        // Inline boxes live in the parent's coordinate space and push no
-        // transform (mirroring `push_box_model`), so their children keep the
-        // incoming coordinates untouched.
-        let (local_x, local_y) = if is_inline {
+        // Inline Container boxes live in the parent's coordinate space and
+        // push no transform (mirroring `push_box_model`), so their children
+        // keep the incoming coordinates untouched. Inline Custom nodes always
+        // push a transform, so they apply the content-box offset.
+        let is_inline_container = is_inline && matches!(&info.kind, NodeKind::Container { .. });
+        let (local_x, local_y) = if is_inline_container {
             (x, y)
         } else {
             (
@@ -342,10 +348,11 @@ fn hit_test_popup_inner<'a>(
     };
 
     // The popup rect lives in the node's content-box space, the same space as
-    // `draw_sized`, which is anchored to the first layout box. Inline boxes
-    // push no transform, so their content stays in the parent's coordinate
-    // space.
-    let (local_x, local_y) = if is_inline {
+    // `draw_sized`, which is anchored to the first layout box. Inline
+    // Container boxes push no transform, so their content stays in the
+    // parent's coordinate space. Inline Custom nodes always push a transform.
+    let is_inline_container = is_inline && matches!(&info.kind, NodeKind::Container { .. });
+    let (local_x, local_y) = if is_inline_container {
         (x, y)
     } else {
         layout.layout_box.iter().next().map_or((x, y), |b| {
@@ -457,10 +464,12 @@ fn scroll_at_inner(
             continue;
         }
 
-        // Inline boxes live in the parent's coordinate space and push no
-        // transform (mirroring `push_box_model`), so their children keep the
-        // incoming coordinates untouched.
-        let (local_x, local_y) = if is_inline {
+        // Inline Container boxes live in the parent's coordinate space and push
+        // no transform (mirroring `push_box_model`), so their children keep
+        // the incoming coordinates untouched. Inline Custom nodes always push
+        // a transform, so they apply the content-box offset.
+        let is_inline_container = is_inline && matches!(&info.kind, NodeKind::Container { .. });
+        let (local_x, local_y) = if is_inline_container {
             (x, y)
         } else {
             (
