@@ -438,7 +438,7 @@ fn length_to_px(len: &Length, font_size: f32) -> f32 {
 struct StackFrame {
     dom: NodeId,
     chain: ElementChain,
-    child: InheritedCss,
+    child: Arc<InheritedCss>,
     kind: Option<NodeKind>,
     style: Option<Style>,
     child_slots: Vec<ChildSlot>,
@@ -536,7 +536,7 @@ pub fn build_layout_and_info_from_snapshot(
     stack.push(StackFrame {
         dom: root,
         chain,
-        child: parent,
+        child: Arc::new(parent),
         kind: None,
         style: None,
         child_slots: Vec::new(),
@@ -561,18 +561,22 @@ pub fn build_layout_and_info_from_snapshot(
             // ── ENTER phase ──────────────────────────────────────────────
             // Read frame state we need before taking any mutable action.
             let chain_for_css = stack[top_idx].chain.clone();
-            let child_css = stack[top_idx].child.clone();
+            let child_css = Arc::clone(&stack[top_idx].child);
 
             let html_node = &snapshot.node(stack[top_idx].dom).kind;
             let mut text_style = child_css.text_style.clone();
-            let mut text_flow_style = child_css.text_flow_style;
+            let mut text_flow_style = child_css.text_flow_style.clone();
             let mut container_style = ContainerStyle::default();
             let mut style = Style::default();
             let mut overflow = Overflow::default();
             // Collect CSS candidates.
             let (candidates, custom_property_candidates) =
                 if let HtmlNodeType::Element { .. } = html_node {
-                    Some(collect_candidates(&rule_set, &chain_for_css))
+                    Some(collect_candidates(
+                        &rule_set,
+                        &chain_for_css,
+                        &mut cand_stats,
+                    ))
                 } else {
                     None
                 }
@@ -729,12 +733,12 @@ pub fn build_layout_and_info_from_snapshot(
             };
             container_style.text_align = text_flow_style.text_align;
 
-            let child = InheritedCss {
+            let child = Arc::new(InheritedCss {
                 custom_props: custom_properties,
                 text_style: text_style.clone(),
                 text_flow_style,
                 color_scheme: used_color_scheme,
-            };
+            });
 
             if let HtmlNodeType::Text(_) = html_node {
                 unreachable!();
@@ -959,13 +963,13 @@ pub fn build_layout_and_info_from_snapshot(
                     let f = &stack[top_idx];
                     f.element_children.clone()
                 };
-                let child_css = stack[top_idx].child.clone();
+                let child_css = Arc::clone(&stack[top_idx].child);
                 let kid_infos = element_sibling_infos(snapshot, &kids_for_push);
                 for (&kid, info) in kids_for_push.iter().zip(kid_infos).rev() {
                     stack.push(StackFrame {
                         dom: kid,
                         chain: parent_chain.prepend(info),
-                        child: child_css.clone(),
+                        child: Arc::clone(&child_css),
                         kind: None,
                         style: None,
                         child_slots: Vec::new(),
