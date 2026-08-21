@@ -18,8 +18,10 @@ pub struct ElementInfo {
     pub type_index: usize,
     /// Number of siblings with the same tag name.
     pub type_count: usize,
-    /// Element siblings preceding this element in document order.
-    pub previous_siblings: Arc<[ElementInfo]>,
+    /// Element siblings preceding this element in document order, nearest
+    /// first. Links are shared through `Arc`, so building it per sibling is
+    /// O(1).
+    pub previous_siblings: ElementChain,
 }
 
 /// One link of an [`ElementChain`].
@@ -60,14 +62,21 @@ impl ElementChain {
         self.head.as_deref().map(|link| &link.info)
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.head.is_none()
-    }
-
     /// Builds a chain from elements ordered innermost-first.
     pub fn from_vec(elements: Vec<ElementInfo>) -> Self {
         let mut chain = Self::default();
         for info in elements.into_iter().rev() {
+            chain = chain.prepend(Some(info));
+        }
+        chain
+    }
+
+    /// Builds a chain by prepending `elements` in iteration order, so the
+    /// last element becomes the nearest link. Feeding siblings in document
+    /// order therefore yields a nearest-first chain.
+    pub fn from_document_order(elements: impl IntoIterator<Item = ElementInfo>) -> Self {
+        let mut chain = Self::default();
+        for info in elements {
             chain = chain.prepend(Some(info));
         }
         chain
@@ -77,7 +86,9 @@ impl ElementChain {
 #[derive(Clone, Copy)]
 struct MatchCursor<'a> {
     link: &'a ChainLink,
-    sibling_index: Option<usize>,
+    /// Link of the sibling being matched when a sibling combinator walks the
+    /// preceding siblings; `None` while matching the element itself.
+    sibling_link: Option<&'a ChainLink>,
 }
 
 fn matches_an_plus_b(index: usize, a: i32, b: i32) -> bool {
@@ -211,7 +222,7 @@ impl Selector {
 
     fn matches_at(&self, cursor: MatchCursor<'_>) -> bool {
         let element = ComplexSelector::element_at(cursor);
-        let is_root = cursor.sibling_index.is_none() && cursor.link.next.is_none();
+        let is_root = cursor.sibling_link.is_none() && cursor.link.next.is_none();
         if !self.matches_base(element) || !self.matches_pseudo_classes(cursor, is_root) {
             return false;
         }
@@ -235,26 +246,27 @@ impl ComplexSelector {
         self.matches_from(
             MatchCursor {
                 link,
-                sibling_index: None,
+                sibling_link: None,
             },
             0,
         )
     }
 
     fn element_at(cursor: MatchCursor<'_>) -> &ElementInfo {
-        match cursor.sibling_index {
-            Some(index) => &cursor.link.info.previous_siblings[index],
+        match cursor.sibling_link {
+            Some(link) => &link.info,
             None => &cursor.link.info,
         }
     }
 
     fn previous_sibling_cursor(cursor: MatchCursor<'_>) -> Option<MatchCursor<'_>> {
-        let position = cursor
-            .sibling_index
-            .unwrap_or(cursor.link.info.previous_siblings.len());
-        position.checked_sub(1).map(|sibling_index| MatchCursor {
+        let farther = match cursor.sibling_link {
+            Some(link) => link.next.as_deref(),
+            None => cursor.link.info.previous_siblings.head.as_deref(),
+        };
+        farther.map(|link| MatchCursor {
             link: cursor.link,
-            sibling_index: Some(sibling_index),
+            sibling_link: Some(link),
         })
     }
 
@@ -277,7 +289,7 @@ impl ComplexSelector {
                     if self.matches_from(
                         MatchCursor {
                             link,
-                            sibling_index: None,
+                            sibling_link: None,
                         },
                         selector_index + 1,
                     ) {
@@ -291,7 +303,7 @@ impl ComplexSelector {
                 self.matches_from(
                     MatchCursor {
                         link: parent,
-                        sibling_index: None,
+                        sibling_link: None,
                     },
                     selector_index + 1,
                 )
@@ -517,7 +529,7 @@ mod tests {
         let heading = element("h2", &[], 1, 3, 1, 1);
         let aside = element("aside", &[], 2, 3, 1, 1);
         let mut paragraph = element("p", &[], 3, 3, 1, 1);
-        paragraph.previous_siblings = vec![heading, aside].into();
+        paragraph.previous_siblings = ElementChain::from_document_order([heading, aside]);
 
         assert!(parse_selector("aside + p").matches(&chain([paragraph.clone()])));
         assert!(!parse_selector("h2 + p").matches(&chain([paragraph.clone()])));

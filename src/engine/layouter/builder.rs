@@ -339,7 +339,7 @@ fn element_info(html_node: &HtmlNodeType) -> Option<ElementInfo> {
         element_count: 1,
         type_index: 1,
         type_count: 1,
-        previous_siblings: Arc::default(),
+        previous_siblings: ElementChain::default(),
     })
 }
 
@@ -353,7 +353,7 @@ fn element_sibling_infos(snapshot: &DomSnapshot, children: &[NodeId]) -> Vec<Opt
     let element_count = type_counts.values().sum();
 
     let mut seen_types = HashMap::<String, usize>::new();
-    let mut previous_siblings = Vec::new();
+    let mut previous_siblings = ElementChain::default();
     let mut element_index = 0;
     children
         .iter()
@@ -369,11 +369,11 @@ fn element_sibling_infos(snapshot: &DomSnapshot, children: &[NodeId]) -> Vec<Opt
             info.element_count = element_count;
             info.type_index = *seen;
             info.type_count = type_counts[&info.tag_name];
-            info.previous_siblings = Arc::from(previous_siblings.clone());
+            info.previous_siblings = previous_siblings.clone();
 
             let mut sibling = info.clone();
-            sibling.previous_siblings = Arc::default();
-            previous_siblings.push(sibling);
+            sibling.previous_siblings = ElementChain::default();
+            previous_siblings = previous_siblings.prepend(Some(sibling));
             Some(info)
         })
         .collect()
@@ -575,7 +575,6 @@ pub fn build_layout_and_info_from_snapshot(
                     Some(collect_candidates(
                         &rule_set,
                         &chain_for_css,
-                        &mut cand_stats,
                     ))
                 } else {
                     None

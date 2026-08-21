@@ -12,8 +12,6 @@ use crate::engine::{
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::Arc;
-
 #[derive(Debug, Clone)]
 pub enum HtmlNodeType {
     Document,
@@ -409,11 +407,11 @@ fn element_info(node: &NodeRef<HtmlNodeType>) -> Option<ElementInfo> {
         .iter()
         .filter(|(_, sibling)| sibling.tag_name == tag_name)
         .count();
-    let previous_siblings = sibling_elements[..position]
-        .iter()
-        .map(|(_, sibling)| sibling.clone())
-        .collect::<Vec<_>>()
-        .into();
+    let previous_siblings = ElementChain::from_document_order(
+        sibling_elements[..position]
+            .iter()
+            .map(|(_, sibling)| sibling.clone()),
+    );
 
     Some(ElementInfo {
         tag_name: tag_name.clone(),
@@ -478,7 +476,7 @@ fn basic_element_info(node: &NodeRef<HtmlNodeType>) -> Option<ElementInfo> {
         element_count: 1,
         type_index: 1,
         type_count: 1,
-        previous_siblings: Arc::default(),
+        previous_siblings: ElementChain::default(),
     })
 }
 
