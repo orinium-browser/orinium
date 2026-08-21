@@ -2,6 +2,7 @@ use orinium_browser::{
     ProcessHandler,
     browser::{BrowserApp, BrowserUi, Tab, core::resource_loader::BrowserResourceLoader},
     engine::{
+        css::matcher::ElementChain,
         css::parser::Parser as CssParser,
         html::{HtmlNodeType, parser::Parser as HtmlParser},
         js::JsRuntime,
@@ -447,7 +448,7 @@ fn build_layout_info(raw_url: &str) -> Result<LayoutInfo> {
             },
             ..Default::default()
         },
-        Vec::new(),
+        ElementChain::default(),
         dark_light::detect().map(Into::into).unwrap_or_else(|e| {
             log::error!("Failed to detect system color scheme, using default: {e}");
             Default::default()

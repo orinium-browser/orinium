@@ -372,7 +372,7 @@ fn element_chain(node: &NodeRef<HtmlNodeType>) -> ElementChain {
         }
         current = node.borrow().parent();
     }
-    chain
+    ElementChain::from_vec(chain)
 }
 
 fn element_info(node: &NodeRef<HtmlNodeType>) -> Option<ElementInfo> {

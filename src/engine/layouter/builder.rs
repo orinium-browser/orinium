@@ -527,7 +527,7 @@ pub fn build_layout_and_info_from_snapshot(
      * Build the initial element chain for the root node.
      */
     if let Some(info) = element_info(&snapshot.node(root).kind) {
-        chain.insert(0, info);
+        chain = chain.prepend(Some(info));
     }
 
     // ── Explicit post-order stack (index-based to avoid borrow conflicts) ──
@@ -962,13 +962,9 @@ pub fn build_layout_and_info_from_snapshot(
                 let child_css = stack[top_idx].child.clone();
                 let kid_infos = element_sibling_infos(snapshot, &kids_for_push);
                 for (&kid, info) in kids_for_push.iter().zip(kid_infos).rev() {
-                    let mut kid_chain = parent_chain.clone();
-                    if let Some(info) = info {
-                        kid_chain.insert(0, info);
-                    }
                     stack.push(StackFrame {
                         dom: kid,
-                        chain: kid_chain,
+                        chain: parent_chain.prepend(info),
                         child: child_css.clone(),
                         kind: None,
                         style: None,
@@ -5483,7 +5479,7 @@ mod tests {
             &resolved,
             Arc::new(FallbackTextMeasurer),
             InheritedCss::default(),
-            Vec::new(),
+            ElementChain::default(),
             ColorScheme::Light,
             ScriptingMode::default(),
         )
@@ -6281,7 +6277,7 @@ mod tests {
             &resolved_styles,
             Arc::new(FallbackTextMeasurer),
             InheritedCss::default(),
-            Vec::new(),
+            ElementChain::default(),
             ColorScheme::Light,
             ScriptingMode::default(),
             &images,

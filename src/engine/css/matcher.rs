@@ -22,12 +22,61 @@ pub struct ElementInfo {
     pub previous_siblings: Arc<[ElementInfo]>,
 }
 
+/// One link of an [`ElementChain`].
+#[derive(Debug)]
+struct ChainLink {
+    info: ElementInfo,
+    /// Ancestors (parent, grandparent, …), shared with the parent's chain.
+    next: Option<Arc<ChainLink>>,
+}
+
 /// 右（自分）→ 左（祖先）
-pub type ElementChain = Vec<ElementInfo>;
+///
+/// Cloning is O(1) and prepending an element is O(1): descendant chains share
+/// their ancestor links through `Arc`.
+#[derive(Debug, Clone, Default)]
+pub struct ElementChain {
+    head: Option<Arc<ChainLink>>,
+}
+
+impl ElementChain {
+    /// Returns this chain extended with `info` as the innermost element.
+    ///
+    /// Passing `None` yields an equivalent chain without allocating.
+    pub fn prepend(&self, info: Option<ElementInfo>) -> Self {
+        match info {
+            Some(info) => Self {
+                head: Some(Arc::new(ChainLink {
+                    info,
+                    next: self.head.clone(),
+                })),
+            },
+            None => self.clone(),
+        }
+    }
+
+    /// The innermost (current) element.
+    pub fn first(&self) -> Option<&ElementInfo> {
+        self.head.as_deref().map(|link| &link.info)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.head.is_none()
+    }
+
+    /// Builds a chain from elements ordered innermost-first.
+    pub fn from_vec(elements: Vec<ElementInfo>) -> Self {
+        let mut chain = Self::default();
+        for info in elements.into_iter().rev() {
+            chain = chain.prepend(Some(info));
+        }
+        chain
+    }
+}
 
 #[derive(Clone, Copy)]
-struct MatchCursor {
-    chain_index: usize,
+struct MatchCursor<'a> {
+    link: &'a ChainLink,
     sibling_index: Option<usize>,
 }
 
@@ -81,13 +130,8 @@ impl Selector {
         true
     }
 
-    fn matches_pseudo_classes(
-        &self,
-        chain: &[ElementInfo],
-        cursor: MatchCursor,
-        is_root: bool,
-    ) -> bool {
-        let element = ComplexSelector::element_at(chain, cursor);
+    fn matches_pseudo_classes(&self, cursor: MatchCursor<'_>, is_root: bool) -> bool {
+        let element = ComplexSelector::element_at(cursor);
         self.pseudo_classes.iter().all(|pseudo| match pseudo {
             PseudoClass::Simple(pseudo) => {
                 let has_attribute = |name: &str| {
@@ -100,30 +144,37 @@ impl Selector {
                     element.tag_name.as_str(),
                     "button" | "fieldset" | "input" | "optgroup" | "option" | "select" | "textarea"
                 );
-                match pseudo.to_ascii_lowercase().as_str() {
-                    "root" => is_root,
-                    "link" | "any-link" => {
-                        matches!(element.tag_name.as_str(), "a" | "area") && has_attribute("href")
-                    }
-                    "disabled" => is_form_control && has_attribute("disabled"),
-                    "enabled" => is_form_control && !has_attribute("disabled"),
-                    "checked" => {
-                        (element.tag_name == "input" && has_attribute("checked"))
-                            || (element.tag_name == "option" && has_attribute("selected"))
-                    }
-                    "required" => is_form_control && has_attribute("required"),
-                    "optional" => is_form_control && !has_attribute("required"),
-                    "first-child" => element.element_index == 1,
-                    "last-child" => element.element_index == element.element_count,
-                    "only-child" => element.element_count == 1,
-                    "first-of-type" => element.type_index == 1,
-                    "last-of-type" => element.type_index == element.type_count,
-                    "only-of-type" => element.type_count == 1,
-                    // These require browsing history or live interaction state.
-                    "visited" | "active" | "focus" | "focus-visible" | "focus-within" | "hover" => {
-                        false
-                    }
-                    _ => false,
+                if pseudo.eq_ignore_ascii_case("root") {
+                    is_root
+                } else if pseudo.eq_ignore_ascii_case("link")
+                    || pseudo.eq_ignore_ascii_case("any-link")
+                {
+                    matches!(element.tag_name.as_str(), "a" | "area") && has_attribute("href")
+                } else if pseudo.eq_ignore_ascii_case("disabled") {
+                    is_form_control && has_attribute("disabled")
+                } else if pseudo.eq_ignore_ascii_case("enabled") {
+                    is_form_control && !has_attribute("disabled")
+                } else if pseudo.eq_ignore_ascii_case("checked") {
+                    (element.tag_name == "input" && has_attribute("checked"))
+                        || (element.tag_name == "option" && has_attribute("selected"))
+                } else if pseudo.eq_ignore_ascii_case("required") {
+                    is_form_control && has_attribute("required")
+                } else if pseudo.eq_ignore_ascii_case("optional") {
+                    is_form_control && !has_attribute("required")
+                } else if pseudo.eq_ignore_ascii_case("first-child") {
+                    element.element_index == 1
+                } else if pseudo.eq_ignore_ascii_case("last-child") {
+                    element.element_index == element.element_count
+                } else if pseudo.eq_ignore_ascii_case("only-child") {
+                    element.element_count == 1
+                } else if pseudo.eq_ignore_ascii_case("first-of-type") {
+                    element.type_index == 1
+                } else if pseudo.eq_ignore_ascii_case("last-of-type") {
+                    element.type_index == element.type_count
+                } else if pseudo.eq_ignore_ascii_case("only-of-type") {
+                    element.type_count == 1
+                } else {
+                    false
                 }
             }
             PseudoClass::SelectorList { name, selectors } => {
@@ -132,7 +183,7 @@ impl Selector {
                 }
                 let any_matches = selectors
                     .iter()
-                    .any(|selector| selector.matches_from(chain, cursor, 0));
+                    .any(|selector| selector.matches_from(cursor, 0));
                 match name.as_str() {
                     "is" | "where" => any_matches,
                     "not" => !any_matches,
@@ -158,10 +209,10 @@ impl Selector {
         })
     }
 
-    fn matches_at(&self, chain: &[ElementInfo], cursor: MatchCursor) -> bool {
-        let element = ComplexSelector::element_at(chain, cursor);
-        let is_root = cursor.sibling_index.is_none() && cursor.chain_index + 1 == chain.len();
-        if !self.matches_base(element) || !self.matches_pseudo_classes(chain, cursor, is_root) {
+    fn matches_at(&self, cursor: MatchCursor<'_>) -> bool {
+        let element = ComplexSelector::element_at(cursor);
+        let is_root = cursor.sibling_index.is_none() && cursor.link.next.is_none();
+        if !self.matches_base(element) || !self.matches_pseudo_classes(cursor, is_root) {
             return false;
         }
         if let Some(_pseudo) = &self.pseudo_element {
@@ -174,46 +225,43 @@ impl Selector {
 }
 
 impl ComplexSelector {
-    pub fn matches(&self, chain: &[ElementInfo]) -> bool {
-        if chain.is_empty() || self.parts.is_empty() {
+    pub fn matches(&self, chain: &ElementChain) -> bool {
+        if self.parts.is_empty() {
             return false;
         }
+        let Some(link) = chain.head.as_deref() else {
+            return false;
+        };
         self.matches_from(
-            chain,
             MatchCursor {
-                chain_index: 0,
+                link,
                 sibling_index: None,
             },
             0,
         )
     }
 
-    fn element_at(chain: &[ElementInfo], cursor: MatchCursor) -> &ElementInfo {
+    fn element_at(cursor: MatchCursor<'_>) -> &ElementInfo {
         match cursor.sibling_index {
-            Some(index) => &chain[cursor.chain_index].previous_siblings[index],
-            None => &chain[cursor.chain_index],
+            Some(index) => &cursor.link.info.previous_siblings[index],
+            None => &cursor.link.info,
         }
     }
 
-    fn previous_sibling_cursor(chain: &[ElementInfo], cursor: MatchCursor) -> Option<MatchCursor> {
+    fn previous_sibling_cursor(cursor: MatchCursor<'_>) -> Option<MatchCursor<'_>> {
         let position = cursor
             .sibling_index
-            .unwrap_or(chain[cursor.chain_index].previous_siblings.len());
+            .unwrap_or(cursor.link.info.previous_siblings.len());
         position.checked_sub(1).map(|sibling_index| MatchCursor {
-            chain_index: cursor.chain_index,
+            link: cursor.link,
             sibling_index: Some(sibling_index),
         })
     }
 
-    fn matches_from(
-        &self,
-        chain: &[ElementInfo],
-        cursor: MatchCursor,
-        selector_index: usize,
-    ) -> bool {
+    fn matches_from(&self, cursor: MatchCursor<'_>, selector_index: usize) -> bool {
         let part = &self.parts[selector_index];
 
-        if !part.selector.matches_at(chain, cursor) {
+        if !part.selector.matches_at(cursor) {
             return false;
         }
 
@@ -224,40 +272,39 @@ impl ComplexSelector {
 
         match part.combinator {
             Some(Combinator::Descendant) => {
-                for next in (cursor.chain_index + 1)..chain.len() {
+                let mut ancestor = cursor.link.next.as_deref();
+                while let Some(link) = ancestor {
                     if self.matches_from(
-                        chain,
                         MatchCursor {
-                            chain_index: next,
+                            link,
                             sibling_index: None,
                         },
                         selector_index + 1,
                     ) {
                         return true;
                     }
+                    ancestor = link.next.as_deref();
                 }
                 false
             }
-            Some(Combinator::Child) => {
-                cursor.chain_index + 1 < chain.len()
-                    && self.matches_from(
-                        chain,
-                        MatchCursor {
-                            chain_index: cursor.chain_index + 1,
-                            sibling_index: None,
-                        },
-                        selector_index + 1,
-                    )
-            }
-            Some(Combinator::NextSibling) => Self::previous_sibling_cursor(chain, cursor)
-                .is_some_and(|previous| self.matches_from(chain, previous, selector_index + 1)),
+            Some(Combinator::Child) => cursor.link.next.as_deref().is_some_and(|parent| {
+                self.matches_from(
+                    MatchCursor {
+                        link: parent,
+                        sibling_index: None,
+                    },
+                    selector_index + 1,
+                )
+            }),
+            Some(Combinator::NextSibling) => Self::previous_sibling_cursor(cursor)
+                .is_some_and(|previous| self.matches_from(previous, selector_index + 1)),
             Some(Combinator::SubsequentSibling) => {
-                let mut previous = Self::previous_sibling_cursor(chain, cursor);
+                let mut previous = Self::previous_sibling_cursor(cursor);
                 while let Some(candidate) = previous {
-                    if self.matches_from(chain, candidate, selector_index + 1) {
+                    if self.matches_from(candidate, selector_index + 1) {
                         return true;
                     }
-                    previous = Self::previous_sibling_cursor(chain, candidate);
+                    previous = Self::previous_sibling_cursor(candidate);
                 }
                 false
             }
@@ -340,21 +387,25 @@ mod tests {
         }
     }
 
+    fn chain(elements: impl IntoIterator<Item = ElementInfo>) -> ElementChain {
+        ElementChain::from_vec(elements.into_iter().collect())
+    }
+
     #[test]
     fn exact_attribute_selector_requires_matching_value() {
         let selector = input_selector(Some("hidden"));
 
-        assert!(selector.matches(&[input(&[("type", "hidden")])]));
-        assert!(!selector.matches(&[input(&[])]));
-        assert!(!selector.matches(&[input(&[("type", "text")])]));
+        assert!(selector.matches(&chain([input(&[("type", "hidden")])])));
+        assert!(!selector.matches(&chain([input(&[])])));
+        assert!(!selector.matches(&chain([input(&[("type", "text")])])));
     }
 
     #[test]
     fn presence_attribute_selector_requires_attribute() {
         let selector = input_selector(None);
 
-        assert!(selector.matches(&[input(&[("type", "text")])]));
-        assert!(!selector.matches(&[input(&[])]));
+        assert!(selector.matches(&chain([input(&[("type", "text")])])));
+        assert!(!selector.matches(&chain([input(&[])])));
     }
 
     #[test]
@@ -386,8 +437,8 @@ mod tests {
             ..ElementInfo::default()
         };
 
-        assert!(selector.matches(&[paragraph.clone(), main.clone()]));
-        assert!(!selector.matches(&[paragraph, section, main]));
+        assert!(selector.matches(&chain([paragraph.clone(), main.clone()])));
+        assert!(!selector.matches(&chain([paragraph, section, main])));
     }
 
     fn parse_selector(source: &str) -> ComplexSelector {
@@ -418,28 +469,28 @@ mod tests {
             ..ElementInfo::default()
         };
 
-        assert!(selector.matches(std::slice::from_ref(&html)));
-        assert!(!selector.matches(&[body, html]));
+        assert!(selector.matches(&chain([html.clone()])));
+        assert!(!selector.matches(&chain([body, html])));
     }
 
     #[test]
     fn link_pseudo_class_requires_an_href() {
         let selector = parse_selector("a:link");
 
-        assert!(selector.matches(&[ElementInfo {
+        assert!(selector.matches(&chain([ElementInfo {
             tag_name: "a".into(),
             id: None,
             classes: Vec::new(),
             attributes: vec![("href".into(), "/next".into())],
             ..ElementInfo::default()
-        }]));
-        assert!(!selector.matches(&[ElementInfo {
+        }])));
+        assert!(!selector.matches(&chain([ElementInfo {
             tag_name: "a".into(),
             id: None,
             classes: Vec::new(),
             attributes: Vec::new(),
             ..ElementInfo::default()
-        }]));
+        }])));
     }
 
     fn element(
@@ -468,34 +519,25 @@ mod tests {
         let mut paragraph = element("p", &[], 3, 3, 1, 1);
         paragraph.previous_siblings = vec![heading, aside].into();
 
-        assert!(parse_selector("aside + p").matches(std::slice::from_ref(&paragraph)));
-        assert!(!parse_selector("h2 + p").matches(std::slice::from_ref(&paragraph)));
-        assert!(parse_selector("h2 ~ p").matches(std::slice::from_ref(&paragraph)));
-        assert!(!parse_selector("nav ~ p").matches(std::slice::from_ref(&paragraph)));
+        assert!(parse_selector("aside + p").matches(&chain([paragraph.clone()])));
+        assert!(!parse_selector("h2 + p").matches(&chain([paragraph.clone()])));
+        assert!(parse_selector("h2 ~ p").matches(&chain([paragraph.clone()])));
+        assert!(!parse_selector("nav ~ p").matches(&chain([paragraph])));
     }
 
     #[test]
     fn structural_pseudo_classes_use_element_and_type_positions() {
         let second_paragraph = element("p", &[], 3, 5, 2, 3);
 
+        assert!(parse_selector("p:nth-child(2n+1)").matches(&chain([second_paragraph.clone()])));
+        assert!(parse_selector("p:nth-of-type(even)").matches(&chain([second_paragraph.clone()])));
+        assert!(parse_selector("p:nth-last-child(3)").matches(&chain([second_paragraph.clone()])));
         assert!(
-            parse_selector("p:nth-child(2n+1)").matches(std::slice::from_ref(&second_paragraph))
+            parse_selector("p:nth-last-of-type(2)").matches(&chain([second_paragraph.clone()]))
         );
-        assert!(
-            parse_selector("p:nth-of-type(even)").matches(std::slice::from_ref(&second_paragraph))
-        );
-        assert!(
-            parse_selector("p:nth-last-child(3)").matches(std::slice::from_ref(&second_paragraph))
-        );
-        assert!(
-            parse_selector("p:nth-last-of-type(2)")
-                .matches(std::slice::from_ref(&second_paragraph))
-        );
-        assert!(
-            parse_selector("p:nth-child(-n+3)").matches(std::slice::from_ref(&second_paragraph))
-        );
-        assert!(!parse_selector("p:first-child").matches(std::slice::from_ref(&second_paragraph)));
-        assert!(!parse_selector("p:last-of-type").matches(std::slice::from_ref(&second_paragraph)));
+        assert!(parse_selector("p:nth-child(-n+3)").matches(&chain([second_paragraph.clone()])));
+        assert!(!parse_selector("p:first-child").matches(&chain([second_paragraph.clone()])));
+        assert!(!parse_selector("p:last-of-type").matches(&chain([second_paragraph])));
     }
 
     #[test]
@@ -504,14 +546,10 @@ mod tests {
         let hidden_first = element("li", &["item", "hidden"], 1, 3, 1, 3);
         let selector = parse_selector("li.item:first-child:not(.hidden)");
 
-        assert!(selector.matches(std::slice::from_ref(&visible_first)));
-        assert!(!selector.matches(std::slice::from_ref(&hidden_first)));
-        assert!(
-            parse_selector(":is(article, li.item)").matches(std::slice::from_ref(&visible_first))
-        );
-        assert!(
-            parse_selector(":where(.item, .card)").matches(std::slice::from_ref(&visible_first))
-        );
+        assert!(selector.matches(&chain([visible_first.clone()])));
+        assert!(!selector.matches(&chain([hidden_first])));
+        assert!(parse_selector(":is(article, li.item)").matches(&chain([visible_first.clone()])));
+        assert!(parse_selector(":where(.item, .card)").matches(&chain([visible_first])));
     }
 
     #[test]

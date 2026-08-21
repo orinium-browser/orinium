@@ -10,6 +10,7 @@ use crate::engine::layouter::types::{ColorScheme, TextFlowStyle};
 use crate::engine::{
     css::{
         self,
+        matcher::ElementChain,
         parser::{CssNode, CssNodeType, Parser as CssParser},
         values::CssValue,
     },
@@ -1130,7 +1131,7 @@ impl WebView {
                 },
                 ..Default::default()
             },
-            chain: Vec::new(),
+            chain: ElementChain::default(),
             write_back_sender: Some(self.write_back_tx.clone()),
             version: 0,
         };

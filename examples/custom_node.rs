@@ -10,6 +10,7 @@
 //! ```
 
 use orinium_browser::engine::{
+    css::matcher::ElementChain,
     css::parser::Parser as CssParser,
     html::parser::Parser as HtmlParser,
     layouter::{
@@ -80,7 +81,7 @@ fn main() {
             },
             ..Default::default()
         },
-        Vec::new(),
+        ElementChain::default(),
         dark_light::detect().map(Into::into).unwrap_or_else(|e| {
             log::error!("Failed to detect system color scheme, using default: {e}");
             Default::default()

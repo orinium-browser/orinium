@@ -197,7 +197,7 @@ mod tests {
             images: HashMap::new(),
             audio: HashMap::new(),
             parent: InheritedCss::default(),
-            chain: Vec::new(),
+            chain: ElementChain::default(),
             write_back_sender,
             version: 0,
         }
