@@ -1,6 +1,7 @@
 //! CSSセレクターマッチング処理。DOM要素とセレクターの照合を行う。
 
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, OnceLock};
 
 use super::parser::{Combinator, ComplexSelector, PseudoClass, Selector};
 
@@ -30,6 +31,75 @@ struct ChainLink {
     info: ElementInfo,
     /// Ancestors (parent, grandparent, …), shared with the parent's chain.
     next: Option<Arc<ChainLink>>,
+    /// Lazily built [`ChainSummary`] covering this link and every link after
+    /// it. Shared links compute it once per layout run.
+    summary: OnceLock<Box<ChainSummary>>,
+}
+
+/// Tag/id/class strings appearing anywhere along a chain, used to reject
+/// descendant and sibling walks without traversing them.
+#[derive(Debug, Default, Clone)]
+struct ChainSummary {
+    tags: HashSet<Box<str>>,
+    ids: HashSet<Box<str>>,
+    classes: HashSet<Box<str>>,
+}
+
+impl ChainSummary {
+    fn collect(start: &ChainLink) -> Box<Self> {
+        // Reuse an already-built summary further down the chain when present.
+        let mut summary = match start.next.as_deref().and_then(|next| next.summary.get()) {
+            Some(cached) => (**cached).clone(),
+            None => {
+                let mut summary = Self::default();
+                let mut link = start.next.as_deref();
+                while let Some(current) = link {
+                    summary.add(&current.info);
+                    link = current.next.as_deref();
+                }
+                summary
+            }
+        };
+        summary.add(&start.info);
+        Box::new(summary)
+    }
+
+    fn add(&mut self, info: &ElementInfo) {
+        self.tags.insert(info.tag_name.as_str().into());
+        if let Some(id) = &info.id {
+            self.ids.insert(id.as_str().into());
+        }
+        for class in &info.classes {
+            self.classes.insert(class.as_str().into());
+        }
+    }
+
+    /// Returns `false` only when no element in the chain can satisfy the
+    /// non-structural parts of `selector`: a required tag, id or class that
+    /// appears nowhere rules every candidate out at once.
+    fn could_match(&self, selector: &Selector) -> bool {
+        if let Some(tag) = &selector.tag
+            && !self.tags.contains(tag.as_str())
+        {
+            return false;
+        }
+        if let Some(id) = &selector.id
+            && !self.ids.contains(id.as_str())
+        {
+            return false;
+        }
+        selector
+            .classes
+            .iter()
+            .all(|class| self.classes.contains(class.as_str()))
+    }
+}
+
+impl ChainLink {
+    /// Summary of this link and every link after it, built on first use.
+    fn summary(&self) -> &ChainSummary {
+        self.summary.get_or_init(|| ChainSummary::collect(self))
+    }
 }
 
 /// 右（自分）→ 左（祖先）
@@ -51,6 +121,7 @@ impl ElementChain {
                 head: Some(Arc::new(ChainLink {
                     info,
                     next: self.head.clone(),
+                    summary: OnceLock::new(),
                 })),
             },
             None => self.clone(),
@@ -284,7 +355,15 @@ impl ComplexSelector {
 
         match part.combinator {
             Some(Combinator::Descendant) => {
-                let mut ancestor = cursor.link.next.as_deref();
+                let next_selector = &self.parts[selector_index + 1].selector;
+                let Some(ancestors) = cursor.link.next.as_deref() else {
+                    return false;
+                };
+                // Fast-fail: no ancestor carries a required tag/id/class.
+                if !ancestors.summary().could_match(next_selector) {
+                    return false;
+                }
+                let mut ancestor = Some(ancestors);
                 while let Some(link) = ancestor {
                     if self.matches_from(
                         MatchCursor {
@@ -311,6 +390,16 @@ impl ComplexSelector {
             Some(Combinator::NextSibling) => Self::previous_sibling_cursor(cursor)
                 .is_some_and(|previous| self.matches_from(previous, selector_index + 1)),
             Some(Combinator::SubsequentSibling) => {
+                let next_selector = &self.parts[selector_index + 1].selector;
+                let remaining = match cursor.sibling_link {
+                    Some(link) => link.next.as_deref(),
+                    None => cursor.link.info.previous_siblings.head.as_deref(),
+                };
+                // Fast-fail: no preceding sibling carries a required tag/id/class.
+                if !remaining.is_some_and(|siblings| siblings.summary().could_match(next_selector))
+                {
+                    return false;
+                }
                 let mut previous = Self::previous_sibling_cursor(cursor);
                 while let Some(candidate) = previous {
                     if self.matches_from(candidate, selector_index + 1) {
@@ -535,6 +624,69 @@ mod tests {
         assert!(!parse_selector("h2 + p").matches(&chain([paragraph.clone()])));
         assert!(parse_selector("h2 ~ p").matches(&chain([paragraph.clone()])));
         assert!(!parse_selector("nav ~ p").matches(&chain([paragraph])));
+    }
+
+    #[test]
+    fn descendant_combinator_matches_deep_ancestors() {
+        let span = element("span", &[], 1, 1, 1, 1);
+        let section = element("section", &[], 1, 1, 1, 1);
+        let card_body = element("body", &["card"], 1, 1, 1, 1);
+        let html = element("html", &[], 1, 1, 1, 1);
+
+        assert!(
+            parse_selector(".card span")
+                .matches(&chain([span.clone(), section.clone(), card_body.clone(), html.clone()]))
+        );
+        assert!(parse_selector("html span").matches(&chain([span, section, card_body, html])));
+    }
+
+    #[test]
+    fn descendant_combinator_rejects_when_no_ancestor_qualifies() {
+        let span = element("span", &[], 1, 1, 1, 1);
+        let div = element("div", &[], 1, 1, 1, 1);
+        let main = ElementInfo {
+            tag_name: "main".into(),
+            id: Some("app".into()),
+            classes: vec!["root".into()],
+            attributes: Vec::new(),
+            ..ElementInfo::default()
+        };
+
+        // Tag, class and id requirements that appear nowhere up the chain.
+        assert!(
+            !parse_selector(".card span")
+                .matches(&chain([span.clone(), div.clone(), main.clone()]))
+        );
+        assert!(
+            !parse_selector("#missing span")
+                .matches(&chain([span.clone(), div.clone(), main.clone()]))
+        );
+        assert!(
+            !parse_selector("nav span").matches(&chain([span.clone(), div.clone(), main.clone()]))
+        );
+
+        // Attribute-only and universal compounds cannot be ruled out by the
+        // summary and must still walk the chain.
+        let mut hidden_main = main.clone();
+        hidden_main.attributes = vec![("hidden".into(), "true".into())];
+        assert!(parse_selector("[hidden] span").matches(&chain([span.clone(), div.clone(), hidden_main])));
+        assert!(parse_selector("* span").matches(&chain([span, div, main])));
+    }
+
+    #[test]
+    fn subsequent_sibling_rejects_when_no_preceding_element_qualifies() {
+        let heading = element("h2", &[], 1, 2, 1, 1);
+        let mut paragraph = element("p", &[], 2, 2, 1, 1);
+        paragraph.previous_siblings = ElementChain::from_document_order([heading]);
+
+        assert!(!parse_selector(".x ~ p").matches(&chain([paragraph.clone()])));
+        assert!(!parse_selector("aside ~ p").matches(&chain([paragraph])));
+
+        let aside = element("aside", &["x"], 1, 2, 1, 1);
+        let heading = element("h2", &[], 2, 2, 1, 1);
+        let mut paragraph = element("p", &[], 3, 3, 1, 1);
+        paragraph.previous_siblings = ElementChain::from_document_order([aside, heading]);
+        assert!(parse_selector(".x ~ p").matches(&chain([paragraph])));
     }
 
     #[test]
