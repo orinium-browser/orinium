@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["ElementInfo"],"type":["ElementChain"]};
+window.SIDEBAR_ITEMS = {"struct":["ElementChain","ElementInfo"]};
