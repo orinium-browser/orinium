@@ -10,7 +10,12 @@ fn resolve(css: &str) -> ResolvedStyles {
     CssResolver::resolve(&stylesheet)
 }
 
-fn has_prop_in_rule<'a>(styles: impl IntoIterator<Item = &'a orinium_browser::engine::layouter::css_resolver::ResolvedDeclaration>, prop: &str) -> bool {
+fn has_prop_in_rule<'a>(
+    styles: impl IntoIterator<
+        Item = &'a orinium_browser::engine::layouter::css_resolver::ResolvedDeclaration,
+    >,
+    prop: &str,
+) -> bool {
     // Check if any declaration with this property was resolved (from any rule).
     // We don't check selector matching here — just whether the resolver produced it.
     styles.into_iter().any(|d| d.name == prop)
