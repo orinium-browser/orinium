@@ -10,7 +10,7 @@ use crate::engine::layouter::css_resolver::{
     DeclarationResolver, Properties, resolve_inline_value,
 };
 use crate::engine::layouter::dom_snapshot::{DomSnapshot, NodeId};
-use crate::engine::layouter::types::{TextFlowStyle, VerticalAlign, WhiteSpace};
+use crate::engine::layouter::types::{TextFlowStyle, VerticalAlign, Visibility, WhiteSpace};
 use crate::engine::tree::NodeRef;
 
 use std::collections::{HashMap, HashSet};
