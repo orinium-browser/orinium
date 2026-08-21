@@ -7,7 +7,7 @@ use crate::engine::layouter::text_layouter::TextFlowLayouter;
 use crate::engine::layouter::types::{
     Background, BackgroundDimension, BackgroundOffset, BackgroundPositionAxis, BackgroundRepeat,
     BackgroundSize, BorderRadius, Color, ContainerStyle, CornerRadius, InfoNode, NodeKind,
-    TextDecoration, TextFlowStyle, TextStyle,
+    TextDecoration, TextFlowStyle, TextStyle, Visibility,
 };
 use crate::engine::renderer_model::draw_command::{Brush, DrawCommand, FillRule, Paint};
 use crate::engine::renderer_model::geom::AffineTransform;
@@ -905,6 +905,9 @@ fn generate_draw_commands_inner(
             style,
             ..
         } => {
+            if matches!(style.visibility, Visibility::Hidden | Visibility::Collapse) {
+                return;
+            }
             for box_model in &layout.layout_box {
                 box_states.push(push_box_model(
                     cmd_buf,
@@ -931,6 +934,9 @@ fn generate_draw_commands_inner(
             text_flow_style,
             ..
         } => {
+            if matches!(style.visibility, Visibility::Hidden | Visibility::Collapse) {
+                return;
+            }
             for box_model in &layout.layout_box {
                 box_states.push(push_box_model(
                     cmd_buf,

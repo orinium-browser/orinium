@@ -2720,6 +2720,15 @@ pub fn apply_declaration(
             container_style.z_index = None;
         }
 
+        ("visibility", CssValue::Keyword(value)) => {
+            container_style.visibility = match value.to_ascii_lowercase().as_str() {
+                "visible" => Visibility::Visible,
+                "hidden" => Visibility::Hidden,
+                "collapse" => Visibility::Collapse,
+                _ => return None,
+            };
+        }
+
         ("float", CssValue::Keyword(value)) => {
             container_style.css_float = match value.to_ascii_lowercase().as_str() {
                 "left" => CssFloat::Left,
