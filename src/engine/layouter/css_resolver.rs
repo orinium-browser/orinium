@@ -56,6 +56,107 @@ pub struct ResolvedDeclaration {
 
 pub type ResolvedStyles = Vec<ResolvedDeclaration>;
 
+/// Indexed collection of resolved CSS declarations partitioned by selector subject.
+///
+/// Instead of matching every declaration against every DOM element ($O(N_{DOM} \times M_{CSS})$),
+/// declarations are indexed by their subject selector (rightmost part):
+/// - ID selector (`#id`)
+/// - Class selectors (`.class`)
+/// - Tag name selector (`div`, `p`, etc.)
+/// - Universal / attribute-only / complex selectors
+#[derive(Debug, Clone, Default)]
+pub struct RuleSet<'a> {
+    declarations: &'a [ResolvedDeclaration],
+    id_rules: HashMap<String, Vec<usize>>,
+    class_rules: HashMap<String, Vec<usize>>,
+    tag_rules: HashMap<String, Vec<usize>>,
+    universal_rules: Vec<usize>,
+}
+
+impl<'a> RuleSet<'a> {
+    /// Builds a `RuleSet` referencing a list of `ResolvedDeclaration`s, pre-filtering by `MediaEnvironment`.
+    pub fn from_declarations(
+        declarations: &'a [ResolvedDeclaration],
+        media_env: &MediaEnvironment,
+    ) -> Self {
+        let mut id_rules: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut class_rules: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut tag_rules: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut universal_rules = Vec::new();
+
+        for (idx, decl) in declarations.iter().enumerate() {
+            // Media query evaluation done ONCE per declaration during RuleSet construction!
+            if !decl.matches_media(media_env) {
+                continue;
+            }
+
+            // ComplexSelector parts are stored right-to-left: parts[0] is the subject selector.
+            if let Some(subject_part) = decl.selector.parts.first() {
+                let sel = &subject_part.selector;
+                if let Some(id) = &sel.id {
+                    id_rules.entry(id.clone()).or_default().push(idx);
+                } else if let Some(first_class) = sel.classes.first() {
+                    // Index by the first class to prevent duplicate indexing
+                    class_rules
+                        .entry(first_class.clone())
+                        .or_default()
+                        .push(idx);
+                } else if let Some(tag) = &sel.tag {
+                    tag_rules.entry(tag.clone()).or_default().push(idx);
+                } else {
+                    universal_rules.push(idx);
+                }
+            } else {
+                universal_rules.push(idx);
+            }
+        }
+
+        Self {
+            declarations,
+            id_rules,
+            class_rules,
+            tag_rules,
+            universal_rules,
+        }
+    }
+
+    /// Returns an iterator over declaration candidates that might match the given element.
+    pub fn query_candidates(
+        &self,
+        element: &crate::engine::css::matcher::ElementInfo,
+    ) -> impl Iterator<Item = &'a ResolvedDeclaration> {
+        let universal = self
+            .universal_rules
+            .iter()
+            .map(|&idx| &self.declarations[idx]);
+
+        let id = element
+            .id
+            .as_ref()
+            .and_then(|id_str| self.id_rules.get(id_str))
+            .into_iter()
+            .flat_map(|indices| indices.iter().map(|&idx| &self.declarations[idx]));
+
+        let tag = self
+            .tag_rules
+            .get(&element.tag_name)
+            .into_iter()
+            .flat_map(|indices| indices.iter().map(|&idx| &self.declarations[idx]));
+
+        let classes = element
+            .classes
+            .iter()
+            .filter_map(|class_str| self.class_rules.get(class_str))
+            .flat_map(|indices| indices.iter().map(|&idx| &self.declarations[idx]));
+
+        universal.chain(id).chain(tag).chain(classes)
+    }
+
+    pub fn declarations(&self) -> &'a [ResolvedDeclaration] {
+        self.declarations
+    }
+}
+
 impl ResolvedDeclaration {
     /// Returns whether this declaration wins over another matching declaration.
     pub fn outranks(&self, other: &Self) -> bool {
@@ -581,6 +682,52 @@ mod tests {
         let environment = MediaEnvironment::new((800.0, 600.0), ColorScheme::Light);
 
         assert_eq!(filter_media(&styles, &environment).count(), 0);
+    }
+
+    #[test]
+    fn test_rule_set_partitioning_and_querying() {
+        let styles = resolve(
+            r#"
+            * { margin: 0; }
+            #header { color: red; }
+            .btn { display: inline-block; }
+            span { font-size: 12px; }
+            div.container { padding: 10px; }
+            "#,
+            StyleOrigin::Author,
+        );
+        let env = MediaEnvironment::new((800.0, 600.0), ColorScheme::Light);
+        let rule_set = RuleSet::from_declarations(&styles, &env);
+
+        // Test element 1: <div id="header" class="btn">
+        let el1 = crate::engine::css::matcher::ElementInfo {
+            tag_name: "div".to_string(),
+            id: Some("header".to_string()),
+            classes: vec!["btn".to_string()],
+            ..Default::default()
+        };
+        let candidates1: Vec<_> = rule_set.query_candidates(&el1).collect();
+        // Should match universal (*), id (#header), and class (.btn)
+        assert!(candidates1.iter().any(|d| d.name == "margin"));
+        assert!(candidates1.iter().any(|d| d.name == "color"));
+        assert!(candidates1.iter().any(|d| d.name == "display"));
+        // Should NOT include span rule
+        assert!(!candidates1.iter().any(|d| d.name == "font-size"));
+
+        // Test element 2: <span class="other">
+        let el2 = crate::engine::css::matcher::ElementInfo {
+            tag_name: "span".to_string(),
+            id: None,
+            classes: vec!["other".to_string()],
+            ..Default::default()
+        };
+        let candidates2: Vec<_> = rule_set.query_candidates(&el2).collect();
+        // Should match universal (*) and tag (span)
+        assert!(candidates2.iter().any(|d| d.name == "margin"));
+        assert!(candidates2.iter().any(|d| d.name == "font-size"));
+        // Should NOT include id (#header) or class (.btn)
+        assert!(!candidates2.iter().any(|d| d.name == "color"));
+        assert!(!candidates2.iter().any(|d| d.name == "display"));
     }
 }
 

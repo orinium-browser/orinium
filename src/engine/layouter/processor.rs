@@ -27,6 +27,7 @@ use crate::engine::background_worker::BackgroundWorker;
 use crate::engine::bridge::text::TextMeasurer;
 use crate::engine::css::matcher::ElementChain;
 use crate::engine::html::ScriptingMode;
+use crate::engine::layouter::css_resolver::RuleSet;
 use crate::engine::layouter::types::ColorScheme;
 use crate::engine::renderer_model::Image;
 use crate::engine::ui::registry::DomWriteBack;
@@ -117,15 +118,16 @@ impl LayoutProcessor {
                         return None;
                     }
                     let version = task.version;
+                    let rule_set =
+                        RuleSet::from_declarations(&task.resolved_styles, &task.media_environment);
                     let (layout, info) = build_layout_and_info_from_snapshot(
                         &task.snapshot,
                         task.root,
-                        &task.resolved_styles,
+                        &rule_set,
                         task.measurer,
                         task.parent,
                         task.chain,
                         task.system_color_scheme,
-                        task.media_environment,
                         task.scripting_mode,
                         &task.images,
                         &task.audio,

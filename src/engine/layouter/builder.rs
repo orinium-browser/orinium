@@ -23,7 +23,7 @@ use ui_layout::{
 };
 
 use super::css_resolver::{
-    MediaEnvironment, ResolvedStyles, resolve_inline_style, set_inline_custom_property,
+    MediaEnvironment, ResolvedStyles, RuleSet, resolve_inline_style, set_inline_custom_property,
 };
 use super::text_layouter::TextFlowLayouter;
 use super::types::{
@@ -484,15 +484,15 @@ pub fn build_layout_and_info_with_images(
 ) -> (LayoutNode, InfoNode) {
     let (snapshot, _dom_refs) = DomSnapshot::from_tree(dom);
     let media_environment = MediaEnvironment::new((0.0, 0.0), system_color_scheme);
+    let rule_set = RuleSet::from_declarations(resolved_styles, &media_environment);
     build_layout_and_info_from_snapshot(
         &snapshot,
         snapshot.roots()[0],
-        resolved_styles,
+        &rule_set,
         measurer,
         parent,
         chain,
         system_color_scheme,
-        media_environment,
         scripting_mode,
         images,
         &HashMap::new(),
@@ -512,12 +512,11 @@ pub fn build_layout_and_info_with_images(
 pub fn build_layout_and_info_from_snapshot(
     snapshot: &DomSnapshot,
     root: NodeId,
-    resolved_styles: &ResolvedStyles,
+    rule_set: &RuleSet,
     measurer: Arc<dyn text::TextMeasurer>,
     parent: InheritedCss,
     mut chain: ElementChain,
     system_color_scheme: ColorScheme,
-    media_environment: MediaEnvironment,
     scripting_mode: ScriptingMode,
     images: &HashMap<String, Image>,
     audio: &HashMap<String, Arc<[u8]>>,
@@ -573,11 +572,7 @@ pub fn build_layout_and_info_from_snapshot(
             // Collect CSS candidates.
             let (candidates, custom_property_candidates) =
                 if let HtmlNodeType::Element { .. } = html_node {
-                    Some(collect_candidates(
-                        resolved_styles,
-                        &chain_for_css,
-                        &media_environment,
-                    ))
+                    Some(collect_candidates(&rule_set, &chain_for_css))
                 } else {
                     None
                 }
@@ -2235,19 +2230,22 @@ fn resolve_used_color_scheme(
 }
 
 fn collect_candidates(
-    resolved_styles: &ResolvedStyles,
+    rule_set: &RuleSet,
     chain: &ElementChain,
-    media_env: &MediaEnvironment,
 ) -> (Properties, Properties) {
     let mut properties = HashMap::new();
     let mut custom_properties = HashMap::new();
 
-    for decl in resolved_styles {
-        if !decl.matches_media(media_env) {
-            continue;
-        }
+    let element = match chain.first() {
+        Some(el) => el,
+        None => return (properties, custom_properties),
+    };
 
-        if !decl.selector.matches(chain) {
+    let candidates_iter = rule_set.query_candidates(element);
+
+    for decl in candidates_iter {
+        let matches_sel = decl.selector.matches(chain);
+        if !matches_sel {
             continue;
         }
 
