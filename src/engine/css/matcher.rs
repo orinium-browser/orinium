@@ -633,10 +633,12 @@ mod tests {
         let card_body = element("body", &["card"], 1, 1, 1, 1);
         let html = element("html", &[], 1, 1, 1, 1);
 
-        assert!(
-            parse_selector(".card span")
-                .matches(&chain([span.clone(), section.clone(), card_body.clone(), html.clone()]))
-        );
+        assert!(parse_selector(".card span").matches(&chain([
+            span.clone(),
+            section.clone(),
+            card_body.clone(),
+            html.clone()
+        ])));
         assert!(parse_selector("html span").matches(&chain([span, section, card_body, html])));
     }
 
@@ -653,23 +655,31 @@ mod tests {
         };
 
         // Tag, class and id requirements that appear nowhere up the chain.
-        assert!(
-            !parse_selector(".card span")
-                .matches(&chain([span.clone(), div.clone(), main.clone()]))
-        );
-        assert!(
-            !parse_selector("#missing span")
-                .matches(&chain([span.clone(), div.clone(), main.clone()]))
-        );
-        assert!(
-            !parse_selector("nav span").matches(&chain([span.clone(), div.clone(), main.clone()]))
-        );
+        assert!(!parse_selector(".card span").matches(&chain([
+            span.clone(),
+            div.clone(),
+            main.clone()
+        ])));
+        assert!(!parse_selector("#missing span").matches(&chain([
+            span.clone(),
+            div.clone(),
+            main.clone()
+        ])));
+        assert!(!parse_selector("nav span").matches(&chain([
+            span.clone(),
+            div.clone(),
+            main.clone()
+        ])));
 
         // Attribute-only and universal compounds cannot be ruled out by the
         // summary and must still walk the chain.
         let mut hidden_main = main.clone();
         hidden_main.attributes = vec![("hidden".into(), "true".into())];
-        assert!(parse_selector("[hidden] span").matches(&chain([span.clone(), div.clone(), hidden_main])));
+        assert!(parse_selector("[hidden] span").matches(&chain([
+            span.clone(),
+            div.clone(),
+            hidden_main
+        ])));
         assert!(parse_selector("* span").matches(&chain([span, div, main])));
     }
 
