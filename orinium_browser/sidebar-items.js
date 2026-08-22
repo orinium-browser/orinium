@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["ProcessType"],"mod":["browser","engine","platform"],"struct":["ChildChannels","ParentChannels","ProcessHandler"]};
+window.SIDEBAR_ITEMS = {"enum":["ProcessType"],"macro":[["perf_scope",1],["profile_log",1]],"mod":["browser","engine","platform"],"struct":["ChildChannels","ParentChannels","ProcessHandler"]};
