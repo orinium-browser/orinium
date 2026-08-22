@@ -31,6 +31,7 @@ use crate::engine::layouter::css_resolver::RuleSet;
 use crate::engine::layouter::types::ColorScheme;
 use crate::engine::renderer_model::Image;
 use crate::engine::ui::registry::DomWriteBack;
+use crate::profile_log;
 
 /// The complete set of inputs the builder needs to run on the background thread.
 pub struct LayoutTask {
@@ -138,6 +139,12 @@ impl LayoutProcessor {
                         info,
                         version,
                     };
+
+                    profile_log!(
+                        target: "LayoutRun",
+                        log::Level::Info,
+                        "build_layout_and_info done."
+                    );
                     Some(SendableResult(Box::into_raw(Box::new(result))))
                 }
             }

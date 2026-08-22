@@ -1,5 +1,7 @@
 //! Layout builder, which transforms a DOM tree into a UI layout.
 
+use crate::{perf_scope, profile_log};
+
 use crate::engine::bridge::text::{self, GlyphCluster};
 use crate::engine::css::{
     matcher::{ElementChain, ElementInfo},
@@ -522,6 +524,24 @@ pub fn build_layout_and_info_from_snapshot(
     audio: &HashMap<String, Arc<[u8]>>,
     write_back_sender: Option<DomWriteBack>,
 ) -> (LayoutNode, InfoNode) {
+    perf_scope!(total);
+
+    #[cfg(feature = "profile")]
+    let mut css_match_time = std::time::Duration::ZERO;
+    #[cfg(feature = "profile")]
+    let mut apply_decl_time = std::time::Duration::ZERO;
+    #[cfg(feature = "profile")]
+    let mut custom_node_time = std::time::Duration::ZERO;
+    #[cfg(feature = "profile")]
+    let mut text_layout_time = std::time::Duration::ZERO;
+    #[cfg(feature = "profile")]
+    let mut exit_phase_time = std::time::Duration::ZERO;
+    #[cfg(feature = "profile")]
+    let mut node_count = 0u64;
+
+    #[cfg(feature = "profile")]
+    let mut cand_stats = CandidateMetrics::default();
+
     let registry = ComponentRegistry::new();
     /*
      * Build the initial element chain for the root node.
@@ -565,21 +585,28 @@ pub fn build_layout_and_info_from_snapshot(
 
             let html_node = &snapshot.node(stack[top_idx].dom).kind;
             let mut text_style = child_css.text_style.clone();
-            let mut text_flow_style = child_css.text_flow_style.clone();
+            let mut text_flow_style = child_css.text_flow_style;
             let mut container_style = ContainerStyle::default();
             let mut style = Style::default();
             let mut overflow = Overflow::default();
             // Collect CSS candidates.
+            perf_scope!(css_match);
             let (candidates, custom_property_candidates) =
                 if let HtmlNodeType::Element { .. } = html_node {
                     Some(collect_candidates(
                         &rule_set,
                         &chain_for_css,
+                        #[cfg(feature = "profile")]
+                        &mut cand_stats,
                     ))
                 } else {
                     None
                 }
                 .unzip();
+            #[cfg(feature = "profile")]
+            {
+                css_match_time += css_match.elapsed();
+            }
 
             let mut custom_properties = child_css.custom_props.clone();
             if let Some(own) = custom_property_candidates {
@@ -608,6 +635,7 @@ pub fn build_layout_and_info_from_snapshot(
             };
 
             // Apply CSS declarations.
+            perf_scope!(apply_decl);
             if let Some(candidates) = &candidates {
                 // The candidates map dedupes per property name (cascade winner),
                 // but a shorthand and its longhand (e.g. `padding` and
@@ -706,6 +734,10 @@ pub fn build_layout_and_info_from_snapshot(
                 &mut overflow,
                 used_color_scheme,
             );
+            #[cfg(feature = "profile")]
+            {
+                apply_decl_time += apply_decl.elapsed();
+            }
 
             if let Background::Image { source, image, .. } = &mut container_style.background {
                 *image = images.get(source).cloned();
@@ -747,6 +779,7 @@ pub fn build_layout_and_info_from_snapshot(
             if let Some(tag) = html_node.tag_name()
                 && registry.tags().contains(&tag)
             {
+                perf_scope!(custom_node);
                 // Replaced elements (button/img/input) size by their intrinsic
                 // content when auto-sized, not by filling the containing block.
                 style.size.auto_behavior = AutoSizeBehavior::ShrinkToFit;
@@ -799,6 +832,11 @@ pub fn build_layout_and_info_from_snapshot(
                 };
                 let ptr = stack[top_idx].dom;
                 results.insert(ptr, (layout, info));
+                #[cfg(feature = "profile")]
+                {
+                    custom_node_time += custom_node.elapsed();
+                    node_count += 1;
+                }
                 stack.pop();
                 continue;
             }
@@ -886,8 +924,14 @@ pub fn build_layout_and_info_from_snapshot(
                             TextTransform::Uppercase => t.to_ascii_uppercase(),
                             TextTransform::Lowercase => t.to_ascii_lowercase(),
                         };
+                        perf_scope!(text_layout);
                         let (layouter, kind) =
                             create_text_node(t, text_style.clone(), text_flow_style, &*measurer);
+                        #[cfg(feature = "profile")]
+                        {
+                            text_layout_time += text_layout.elapsed();
+                            node_count += 1;
+                        }
                         let mut inline_style = style.clone();
                         inline_style.display = Display {
                             outer: OuterDisplay::Inline,
@@ -945,6 +989,10 @@ pub fn build_layout_and_info_from_snapshot(
                 };
                 let ptr = stack[top_idx].dom;
                 results.insert(ptr, (layout, info));
+                #[cfg(feature = "profile")]
+                {
+                    node_count += 1;
+                }
                 stack.pop();
             } else {
                 // ── Has element children → save state, push children ──
@@ -979,6 +1027,8 @@ pub fn build_layout_and_info_from_snapshot(
         } else {
             // ── EXIT phase ────────────────────────────────────────────────
             // Take ownership of frame data for building results.
+            perf_scope!(exit_phase);
+
             let frame = stack.swap_remove(top_idx);
 
             let mut style = frame.style.as_ref().unwrap().clone();
@@ -1116,8 +1166,52 @@ pub fn build_layout_and_info_from_snapshot(
             };
             let ptr = frame.dom;
             results.insert(ptr, (layout, info));
+            #[cfg(feature = "profile")]
+            {
+                exit_phase_time += exit_phase.elapsed();
+                node_count += 1;
+            }
         }
     }
+
+    profile_log!(
+        target: "LayoutRun",
+        log::Level::Info,
+        "[LayoutMetrics] total: {:?} (nodes: {})",
+        total.elapsed(),
+        node_count,
+    );
+    profile_log!(
+        target: "LayoutRun",
+        log::Level::Info,
+        "[LayoutMetrics] css_match: {:?} | apply_decl: {:?}",
+        css_match_time,
+        apply_decl_time,
+    );
+    profile_log!(
+        target: "LayoutRun",
+        log::Level::Info,
+        "[LayoutCandidates] elements: {} | examined: {} | matched: {}",
+        cand_stats.elements_checked,
+        cand_stats.candidates_examined,
+        cand_stats.selectors_matched,
+    );
+    profile_log!(
+        target: "LayoutRun",
+        log::Level::Info,
+        "[LayoutCandidates] query_time: {:?} | sel_match_time: {:?} | insert_time: {:?}",
+        cand_stats.query_candidates_time,
+        cand_stats.selector_match_time,
+        cand_stats.cascade_insert_time,
+    );
+    profile_log!(
+        target: "LayoutRun",
+        log::Level::Info,
+        "[LayoutMetrics] custom_node: {:?} | text_layout: {:?} | exit_phase: {:?}",
+        custom_node_time,
+        text_layout_time,
+        exit_phase_time,
+    );
 
     results
         .remove(&root)
@@ -2107,7 +2201,7 @@ fn create_text_node(
     text_flow_style: TextFlowStyle,
     measurer: &dyn text::TextMeasurer,
 ) -> (TextFlowLayouter, NodeKind) {
-    let _t = std::time::Instant::now();
+    perf_scope!(measure);
     let request = text::TextMeasureRequest {
         text: text.clone(),
         attribute: text::TextAttribute {
@@ -2138,18 +2232,13 @@ fn create_text_node(
             })
             .unwrap_or_default()
     });
-    let preview = if text.len() > 40 {
-        let cut = text.floor_char_boundary(40);
-        format!("{}...", &text[..cut])
-    } else {
-        text.clone()
-    };
-    log::info!(
+    profile_log!(
         target: "Layouter",
+        log::Level::Info,
         "measure_shaped: text={:?} len={} took={:?}",
-        preview,
+        crate::profile::text_preview(&text),
         text.len(),
-        _t.elapsed(),
+        measure.elapsed(),
     );
 
     let layouter = TextFlowLayouter::new(text.clone(), text_flow_style, clusters);
@@ -2228,9 +2317,22 @@ fn resolve_used_color_scheme(
     }
 }
 
+/// Aggregated CSS candidate-matching statistics for a single layout build.
+#[cfg(feature = "profile")]
+#[derive(Default)]
+struct CandidateMetrics {
+    elements_checked: u64,
+    candidates_examined: u64,
+    selectors_matched: u64,
+    query_candidates_time: std::time::Duration,
+    selector_match_time: std::time::Duration,
+    cascade_insert_time: std::time::Duration,
+}
+
 fn collect_candidates(
     rule_set: &RuleSet,
     chain: &ElementChain,
+    #[cfg(feature = "profile")] stats: &mut CandidateMetrics,
 ) -> (Properties, Properties) {
     let mut properties = HashMap::new();
     let mut custom_properties = HashMap::new();
@@ -2240,10 +2342,38 @@ fn collect_candidates(
         None => return (properties, custom_properties),
     };
 
+    #[cfg(feature = "profile")]
+    {
+        stats.elements_checked += 1;
+    }
+
+    // The candidate iterator is lazy; under profiling it is materialized so
+    // query time is measured separately from selector matching.
+    perf_scope!(query);
+    #[cfg(feature = "profile")]
+    let candidates_iter: Vec<_> = rule_set.query_candidates(element).collect();
+    #[cfg(not(feature = "profile"))]
     let candidates_iter = rule_set.query_candidates(element);
+    #[cfg(feature = "profile")]
+    {
+        stats.query_candidates_time += query.elapsed();
+    }
 
     for decl in candidates_iter {
+        #[cfg(feature = "profile")]
+        {
+            stats.candidates_examined += 1;
+        }
+
+        perf_scope!(sel_match);
         let matches_sel = decl.selector.matches(chain);
+        #[cfg(feature = "profile")]
+        {
+            stats.selector_match_time += sel_match.elapsed();
+            if matches_sel {
+                stats.selectors_matched += 1;
+            }
+        }
         if !matches_sel {
             continue;
         }
@@ -2254,6 +2384,7 @@ fn collect_candidates(
             &mut properties
         };
 
+        perf_scope!(cascade);
         let should_replace = match target.get(&decl.name) {
             Some(current) => decl.outranks(current),
             None => true,
@@ -2261,6 +2392,11 @@ fn collect_candidates(
 
         if should_replace {
             target.insert(decl.name.clone(), decl.clone());
+        }
+
+        #[cfg(feature = "profile")]
+        {
+            stats.cascade_insert_time += cascade.elapsed();
         }
     }
 

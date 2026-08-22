@@ -17,6 +17,7 @@ use super::atlas::GlyphAtlas;
 use super::global_font;
 use crate::engine::layouter::types::{FontStyle, LineHeight, TextFlowStyle, TextStyle};
 use crate::platform::renderer::mesh::{self, TextSection};
+use crate::{perf_scope, profile_log};
 
 fn quantize_font_size(px: f32) -> f32 {
     (px * 64.0).round() / 64.0
@@ -567,7 +568,7 @@ impl TextRenderer {
         style: &TextStyle,
         flow_style: &TextFlowStyle,
     ) -> TextLayout {
-        let _t0 = std::time::Instant::now();
+        perf_scope!(total);
 
         let font_size = flow_style.font_size;
         let line_height_ratio = match flow_style.line_height {
@@ -594,13 +595,14 @@ impl TextRenderer {
             variant: orinium_text::FontVariant::Normal,
         };
 
-        let _t_shape = std::time::Instant::now();
+        perf_scope!(shape);
         let shaped = global_font::with_global_font_system(|fs| {
             self.layouter.shape_text(fs, text, &ori_style)
         });
-        let t_shape = _t_shape.elapsed();
+        #[cfg(feature = "profile")]
+        let shape_time = shape.elapsed();
 
-        let _t_lines = std::time::Instant::now();
+        perf_scope!(lines);
         let line_ranges: Vec<(usize, usize)> = text
             .split('\n')
             .scan(0usize, |offset, line| {
@@ -615,23 +617,19 @@ impl TextRenderer {
             self.layouter
                 .layout_lines(fs, &shaped, &line_ranges, &ori_style)
         });
-        let t_layout = _t_lines.elapsed();
+        #[cfg(feature = "profile")]
+        let lines_time = lines.elapsed();
 
-        let preview = if text.len() > 40 {
-            let cut = text.floor_char_boundary(40);
-            format!("{}...", &text[..cut])
-        } else {
-            text.to_string()
-        };
-        log::info!(
+        profile_log!(
             target: "TextRenderer",
+            log::Level::Info,
             "  create_buffer: text={:?} len={} font_size={}  shape={:?}  layout={:?}  total={:?}",
-            preview,
+            crate::profile::text_preview(text),
             text.len(),
             font_size,
-            t_shape,
-            t_layout,
-            _t0.elapsed(),
+            shape_time,
+            lines_time,
+            total.elapsed(),
         );
 
         layout
@@ -652,7 +650,7 @@ impl TextRenderer {
         queue: &wgpu::Queue,
         sections: &[TextSection],
     ) -> anyhow::Result<()> {
-        let _t0 = std::time::Instant::now();
+        perf_scope!(total);
 
         let s_hash = sections_hash(sections);
         if !self.atlas_dirty
@@ -669,10 +667,15 @@ impl TextRenderer {
         self.instances.clear();
         self.section_ranges.clear();
 
+        #[cfg(feature = "profile")]
         let mut glyph_count = 0u32;
+        #[cfg(feature = "profile")]
         let mut culled_count = 0u32;
+        #[cfg(feature = "profile")]
         let mut atlas_miss_count = 0u32;
+        #[cfg(feature = "profile")]
         let mut atlas_lookup_time = std::time::Duration::ZERO;
+        #[cfg(feature = "profile")]
         let mut atlas_rasterize_time = std::time::Duration::ZERO;
 
         global_font::with_global_font_system(|fs| {
@@ -704,7 +707,10 @@ impl TextRenderer {
                             glyph.width,
                             glyph.height,
                         ) {
-                            culled_count += 1;
+                            #[cfg(feature = "profile")]
+                            {
+                                culled_count += 1;
+                            }
                             continue;
                         }
 
@@ -734,7 +740,7 @@ impl TextRenderer {
                         let glyph_baseline_y = (base_y + glyph.y + bearing_y).round();
                         let (origin_x, phase_x) = quantize_subpixel_x(glyph_origin_x);
 
-                        let _t_atlas = std::time::Instant::now();
+                        perf_scope!(atlas_lap);
                         let atlas_entry = match self.atlas.lookup(
                             font_key,
                             glyph.glyph_id,
@@ -743,12 +749,18 @@ impl TextRenderer {
                             phase_x,
                         ) {
                             Some(entry) => {
-                                atlas_lookup_time += _t_atlas.elapsed();
+                                #[cfg(feature = "profile")]
+                                {
+                                    atlas_lookup_time += atlas_lap.elapsed();
+                                }
                                 entry
                             }
                             None => {
-                                atlas_miss_count += 1;
-                                let _t_raster = std::time::Instant::now();
+                                #[cfg(feature = "profile")]
+                                {
+                                    atlas_miss_count += 1;
+                                }
+                                perf_scope!(rasterize_lap);
                                 if let Some(mask) = rasterize_glyph(
                                     &mut self.scale_context,
                                     fs,
@@ -758,12 +770,18 @@ impl TextRenderer {
                                     section.font_weight,
                                     phase_x,
                                 ) {
-                                    atlas_rasterize_time += _t_raster.elapsed();
+                                    #[cfg(feature = "profile")]
+                                    {
+                                        atlas_rasterize_time += rasterize_lap.elapsed();
+                                    }
                                     if mask.width == 0 || mask.height == 0 {
                                         continue;
                                     }
                                     self.atlas_dirty = true;
-                                    atlas_lookup_time += _t_atlas.elapsed();
+                                    #[cfg(feature = "profile")]
+                                    {
+                                        atlas_lookup_time += atlas_lap.elapsed();
+                                    }
                                     self.atlas.upload(
                                         device,
                                         queue,
@@ -783,7 +801,10 @@ impl TextRenderer {
                                 }
                             }
                         };
-                        glyph_count += 1;
+                        #[cfg(feature = "profile")]
+                        {
+                            glyph_count += 1;
+                        }
 
                         let gx = origin_x + atlas_entry.left as f32;
                         let gy = glyph_baseline_y - atlas_entry.top as f32;
@@ -820,13 +841,14 @@ impl TextRenderer {
             }
         });
 
-        let _t_flush = std::time::Instant::now();
+        perf_scope!(flush);
         self.atlas.flush_uploads(queue);
-        let t_flush = _t_flush.elapsed();
+        #[cfg(feature = "profile")]
+        let flush_time = flush.elapsed();
 
         self.num_instances = self.instances.len() as u32;
 
-        let _t_buf = std::time::Instant::now();
+        perf_scope!(buf);
         if self.num_instances > 0 {
             let needed = self.instances.len();
             let instance_bytes: &[u8] = bytemuck::cast_slice(&self.instances);
@@ -849,7 +871,8 @@ impl TextRenderer {
             self.instance_buffer = None;
             self.instance_capacity = 0;
         }
-        let t_buf = _t_buf.elapsed();
+        #[cfg(feature = "profile")]
+        let buf_time = buf.elapsed();
 
         if self.atlas_dirty {
             let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -878,9 +901,9 @@ impl TextRenderer {
             self.atlas_dirty = false;
         }
 
-        let t_total = _t0.elapsed();
-        log::info!(
+        profile_log!(
             target: "TextRenderer",
+            log::Level::Info,
             "queue: {} sections, {} glyphs ({} culled, {} atlas misses), lookup={:?} rasterize={:?} flush={:?} buf={:?} total={:?}",
             sections.len(),
             glyph_count,
@@ -888,9 +911,9 @@ impl TextRenderer {
             atlas_miss_count,
             atlas_lookup_time,
             atlas_rasterize_time,
-            t_flush,
-            t_buf,
-            t_total,
+            flush_time,
+            buf_time,
+            total.elapsed(),
         );
 
         Ok(())

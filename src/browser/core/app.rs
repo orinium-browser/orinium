@@ -74,7 +74,7 @@ impl PendingFetches {
         let id = self.generate_id(&url);
 
         self.map.insert(id, (window_id, tab_id, kind, url));
-        dbg!(id)
+        id
     }
 
     fn generate_id(&self, url: &Url) -> usize {

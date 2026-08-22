@@ -7,6 +7,8 @@
 //! This is not a Web Worker: scripts have full `window`/`document` access.
 //! Tasks are processed FIFO, with coalescable timer wakeups.
 
+use crate::{perf_scope, profile_log};
+
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -102,9 +104,18 @@ impl JsProcessor {
         let thread_latest = Arc::clone(&latest);
 
         thread::spawn(move || {
+            perf_scope!(init);
             let (tree, _dom_ids) = initial.into_tree();
             let mut runtime = JsRuntime::new(Rc::new(tree));
+            perf_scope!(apply_dom);
             runtime.apply_dom(&initial);
+            profile_log!(
+                target: "JsProc",
+                log::Level::Info,
+                "[JsMetrics] runtime_init: {:?} | initial_apply_dom: {:?}",
+                init.elapsed(),
+                apply_dom.elapsed(),
+            );
 
             for cmd in cmd_rx {
                 let JsCommand::Task { task, version } = cmd;
@@ -115,7 +126,14 @@ impl JsProcessor {
                     continue;
                 }
 
-                run_task(&mut runtime, task);
+                perf_scope!(total);
+                perf_scope!(run);
+                #[cfg_attr(not(feature = "profile"), allow(unused_variables))]
+                let did_work = run_task(&mut runtime, task);
+                #[cfg(feature = "profile")]
+                let run_time = run.elapsed();
+
+                perf_scope!(collect);
                 let needs_redraw = runtime.take_needs_redraw();
                 let fetch_requests = runtime.take_fetch_requests();
                 let dynamic_script_requests = runtime.take_dynamic_script_requests();
@@ -126,6 +144,9 @@ impl JsProcessor {
                 } else {
                     None
                 };
+                #[cfg(feature = "profile")]
+                let collect_time = collect.elapsed();
+
                 let _ = result_tx.send(JsTaskResult {
                     dom,
                     needs_redraw,
@@ -135,6 +156,18 @@ impl JsProcessor {
                     dynamic_image_requests,
                     version,
                 });
+                profile_log!(
+                    target: "JsProc",
+                    if did_work {
+                        log::Level::Info
+                    } else {
+                        log::Level::Debug
+                    },
+                    "[JsMetrics] total: {:?} | run_task: {:?} | collect: {:?}",
+                    total.elapsed(),
+                    run_time,
+                    collect_time,
+                );
             }
         });
 
@@ -160,28 +193,51 @@ impl JsProcessor {
     }
 }
 
-fn run_task(runtime: &mut JsRuntime, task: JsTask) {
+/// Executes a task on the runtime, reporting whether page JavaScript ran.
+///
+/// Pure state-sync tasks (`SetViewport`, `SetLayoutMetrics`, `UpdateDom`, …)
+/// return `false`; they dominate the task stream even on script-less pages.
+fn run_task(runtime: &mut JsRuntime, task: JsTask) -> bool {
     match task {
-        JsTask::SetDocumentUrl { url } => runtime.set_document_url(&url),
-        JsTask::SetViewport { width, height } => runtime.set_viewport(width, height),
-        JsTask::SetLanguage { language } => runtime.set_language(&language),
-        JsTask::SetLayoutMetrics { metrics } => runtime.set_layout_metrics_by_dom_id(metrics),
-        JsTask::RunScript { source } => runtime.run_script(&source),
-        JsTask::DispatchDomContentLoaded => {
-            runtime.dispatch_dom_content_loaded();
+        JsTask::SetDocumentUrl { url } => {
+            runtime.set_document_url(&url);
+            false
         }
-        JsTask::RunTimers => {
-            runtime.run_due_timers();
+        JsTask::SetViewport { width, height } => {
+            runtime.set_viewport(width, height);
+            false
         }
-        JsTask::Click { dom_id } => {
-            runtime.click_dom_id(dom_id);
+        JsTask::SetLanguage { language } => {
+            runtime.set_language(&language);
+            false
         }
+        JsTask::SetLayoutMetrics { metrics } => {
+            runtime.set_layout_metrics_by_dom_id(metrics);
+            false
+        }
+        JsTask::RunScript { source } => {
+            runtime.run_script(&source);
+            true
+        }
+        JsTask::DispatchDomContentLoaded => runtime.dispatch_dom_content_loaded(),
+        JsTask::RunTimers => runtime.run_due_timers(),
+        JsTask::Click { dom_id } => runtime.click_dom_id(dom_id),
         JsTask::DispatchElementEvent { dom_id, event_type } => {
             runtime.dispatch_element_event(dom_id, &event_type);
+            true
         }
-        JsTask::ResolveFetch { id, response } => runtime.resolve_fetch(id, response),
-        JsTask::RejectFetch { id, reason } => runtime.reject_fetch(id, reason),
-        JsTask::UpdateDom { snapshot } => runtime.apply_dom(&snapshot),
+        JsTask::ResolveFetch { id, response } => {
+            runtime.resolve_fetch(id, response);
+            true
+        }
+        JsTask::RejectFetch { id, reason } => {
+            runtime.reject_fetch(id, reason);
+            true
+        }
+        JsTask::UpdateDom { snapshot } => {
+            runtime.apply_dom(&snapshot);
+            false
+        }
     }
 }
 

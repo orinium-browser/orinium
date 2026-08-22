@@ -55,6 +55,9 @@ strsim = "0.11.1"
 
 [features]
 dhat-heap = []
+# Compiles in timing instrumentation and its log output
+# (`[LayoutMetrics]`, `[JsMetrics]`, `TextMeasurer`, `TextRenderer`, …).
+profile = []
 
 [profile.dev.package.pixi_byte]
 opt-level = 3

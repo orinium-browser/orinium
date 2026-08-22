@@ -5,6 +5,7 @@ use crate::engine::layouter::types::{FontStyle, LineHeight};
 use crate::platform::renderer::text::global_font;
 use crate::platform::renderer::text::text::*;
 use crate::platform::renderer::text_cache::TextShapeCache;
+use crate::{perf_scope, profile_log};
 
 use orinium_text::TextStyle as OriTextStyle;
 use orinium_text::{
@@ -40,7 +41,7 @@ impl PlatformTextMeasurer {
 
 impl TextMeasurer for PlatformTextMeasurer {
     fn measure(&self, req: &TextMeasureRequest) -> Result<Vec<MeasuredFragment>, TextMeasureError> {
-        let _t0 = std::time::Instant::now();
+        perf_scope!(total);
 
         let style = req.attribute.style.clone();
         let flow_style = req.attribute.flow_style;
@@ -73,7 +74,7 @@ impl TextMeasurer for PlatformTextMeasurer {
 
         let mut layouter = TextLayouter::new();
 
-        let t_shape = std::time::Instant::now();
+        perf_scope!(shape);
         let shaped = if let Some(shaped) = self.cache.get(&req.text, &ori_style) {
             shaped
         } else {
@@ -84,7 +85,8 @@ impl TextMeasurer for PlatformTextMeasurer {
             self.cache.insert(&req.text, &ori_style, shaped.clone());
             shaped
         };
-        let t_shape = t_shape.elapsed();
+        #[cfg(feature = "profile")]
+        let shape_time = shape.elapsed();
 
         let line_ranges: Vec<(usize, usize)> = req
             .text
@@ -97,11 +99,12 @@ impl TextMeasurer for PlatformTextMeasurer {
             })
             .collect();
 
-        let t_layout = std::time::Instant::now();
+        perf_scope!(layout_pass);
         let layout = global_font::with_global_font_system(|fs| {
             layouter.layout_lines(fs, &shaped, &line_ranges, &ori_style)
         });
-        let t_layout = t_layout.elapsed();
+        #[cfg(feature = "profile")]
+        let layout_time = layout_pass.elapsed();
 
         let fragments: Vec<MeasuredFragment> = layout
             .lines
@@ -117,22 +120,16 @@ impl TextMeasurer for PlatformTextMeasurer {
             })
             .collect();
 
-        let total = _t0.elapsed();
-        let preview = if req.text.len() > 40 {
-            let cut = req.text.floor_char_boundary(40);
-            format!("{}...", &req.text[..cut])
-        } else {
-            req.text.clone()
-        };
-        log::info!(
+        profile_log!(
             target: "TextMeasurer",
+            log::Level::Info,
             "measure: text={:?} len={} font_size={}  shape={:?}  layout={:?}  total={:?}  fragments={}",
-            preview,
+            crate::profile::text_preview(&req.text),
             req.text.len(),
             font_size,
-            t_shape,
-            t_layout,
-            total,
+            shape_time,
+            layout_time,
+            total.elapsed(),
             fragments.len(),
         );
         Ok(fragments)
@@ -142,7 +139,7 @@ impl TextMeasurer for PlatformTextMeasurer {
         &self,
         req: &TextMeasureRequest,
     ) -> Result<Vec<GlyphCluster>, TextMeasureError> {
-        let _t0 = std::time::Instant::now();
+        perf_scope!(total);
 
         let style = req.attribute.style.clone();
         let flow_style = req.attribute.flow_style;
@@ -196,20 +193,14 @@ impl TextMeasurer for PlatformTextMeasurer {
             })
             .collect();
 
-        let total = _t0.elapsed();
-        let preview = if req.text.len() > 40 {
-            let cut = req.text.floor_char_boundary(40);
-            format!("{}...", &req.text[..cut])
-        } else {
-            req.text.clone()
-        };
-        log::info!(
+        profile_log!(
             target: "TextMeasurer",
+            log::Level::Info,
             "measure_shaped: text={:?} len={} font_size={}  total={:?}  clusters={}",
-            preview,
+            crate::profile::text_preview(&req.text),
             req.text.len(),
             font_size,
-            total,
+            total.elapsed(),
             clusters.len(),
         );
 
