@@ -14,18 +14,31 @@ use hyper_util::rt::TokioIo;
 use rustls::{ClientConfig, RootCertStore};
 use rustls_native_certs::load_native_certs;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokio::{net::TcpStream, runtime::Runtime, task::LocalSet};
 use tokio_rustls::TlsConnector;
 
+/// Per-thread driver for the shared network state.
+///
+/// The tokio runtime and its [`LocalSet`] are `!Send`, so each pool worker
+/// owns one of these; the expensive state they operate on lives in the
+/// [`SharedNetState`] behind an `Arc` and is reused across workers.
+///
+/// The [`SenderPool`] deliberately lives *here*, not in the shared state: a
+/// pooled connection's driver task is spawned onto the creating worker's
+/// local set and is only polled while that worker runs a fetch. Sharing
+/// senders across runtimes would let one worker check out a connection whose
+/// driver is parked on another (idle) worker, leaving the request awaiting
+/// frames nobody ever reads.
 pub(super) struct AsyncNetworkCore {
     local: LocalSet,
     rt: Runtime,
-    inner: NetworkInner,
+    inner: Arc<SharedNetState>,
+    sender_pool: Arc<std::sync::RwLock<SenderPool>>,
 }
 
 impl AsyncNetworkCore {
-    pub fn new() -> Self {
+    pub fn new(inner: Arc<SharedNetState>) -> Self {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -36,25 +49,18 @@ impl AsyncNetworkCore {
         Self {
             rt,
             local,
-            inner: NetworkInner::new(),
+            inner,
+            sender_pool: Arc::new(std::sync::RwLock::new(SenderPool::new())),
         }
     }
 
-    pub fn set_network_config(&mut self, config: NetworkConfig) {
-        self.inner.set_network_config(config)
-    }
-
-    /// Removes all cached responses.
-    pub fn clear_cache(&self) {
-        self.inner.cache.clear();
-    }
+    /// Runs a fetch to completion on this worker's local set.
     pub fn fetch_request_blocking(
         &self,
         request: &NetworkRequest,
     ) -> Result<Response, NetworkError> {
-        // network スレッド内で完結させる
         self.local
-            .block_on(&self.rt, async { self.inner.fetch_request(request).await })
+            .block_on(&self.rt, async { self.fetch_request(request).await })
     }
 }
 
@@ -96,26 +102,36 @@ pub struct Response {
     pub body: Vec<u8>,
 }
 
-pub(super) struct NetworkInner {
-    sender_pool: Arc<std::sync::RwLock<SenderPool>>,
+/// TLS, cache and config shared by every fetch worker.
+///
+/// All fields are thread-safe: the cache is internally synchronized, and the
+/// config is swapped atomically through an `Arc` so workers observe updates
+/// without blocking a fetch in progress. Connection pools are *not* shared:
+/// each [`AsyncNetworkCore`] owns its pool because a connection is only valid
+/// on the runtime that drives it.
+pub(super) struct SharedNetState {
     tls_config: Arc<ClientConfig>,
-    network_config: Arc<NetworkConfig>,
+    network_config: RwLock<Arc<NetworkConfig>>,
     cache: super::Cache,
 }
 
-impl NetworkInner {
+impl SharedNetState {
     pub fn new() -> Self {
         Self {
-            sender_pool: Arc::new(std::sync::RwLock::new(SenderPool::new())),
             tls_config: Arc::new(Self::build_tls_config()),
-            network_config: Arc::new(NetworkConfig::default()),
+            network_config: RwLock::new(Arc::new(NetworkConfig::default())),
             cache: super::Cache::new(),
         }
     }
 
-    pub fn set_network_config(&mut self, config: NetworkConfig) {
+    pub fn set_network_config(&self, config: NetworkConfig) {
         self.cache.set_enabled(config.enable_cache);
-        self.network_config = Arc::new(config)
+        *self.network_config.write().unwrap() = Arc::new(config);
+    }
+
+    /// Removes all cached responses.
+    pub fn clear_cache(&self) {
+        self.cache.clear();
     }
 
     fn build_tls_config() -> ClientConfig {
@@ -130,7 +146,9 @@ impl NetworkInner {
             .with_root_certificates(roots)
             .with_no_client_auth()
     }
+}
 
+impl AsyncNetworkCore {
     pub async fn fetch_request(&self, request: &NetworkRequest) -> Result<Response, NetworkError> {
         let mut current: Uri = request.url.parse().map_err(|_| NetworkError::InvalidUri)?;
         let mut method = Method::from_bytes(request.method.as_bytes())
@@ -140,7 +158,7 @@ impl NetworkInner {
 
         loop {
             if method == Method::GET
-                && let Some(cached) = self.cache.get(&current.to_string())
+                && let Some(cached) = self.inner.cache.get(&current.to_string())
             {
                 log::info!("NetworkCache: hit for url={}", current);
                 return Ok(cached);
@@ -150,7 +168,7 @@ impl NetworkInner {
                 .send_request(&current, &method, &request.headers, &body)
                 .await?;
 
-            if self.network_config.follow_redirects
+            if self.inner.network_config.read().unwrap().follow_redirects
                 && hyper::StatusCode::try_from(resp.status.0)
                     .map_err(|_| NetworkError::InvalidIpcStatusCode)?
                     .is_redirection()
@@ -179,7 +197,7 @@ impl NetworkInner {
             }
 
             if method == Method::GET && resp.status.is_success() {
-                self.cache.set(&current.to_string(), &resp);
+                self.inner.cache.set(&current.to_string(), &resp);
             }
 
             return Ok(resp);
@@ -207,11 +225,18 @@ impl NetworkInner {
 
         let mut sender = self.get_or_create_sender(&key).await?;
 
+        let user_agent = self
+            .inner
+            .network_config
+            .read()
+            .unwrap()
+            .user_agent
+            .clone();
         let mut request = Request::builder()
             .method(method.clone())
             .uri(uri.path_and_query().map_or("/", |p| p.as_str()))
             .header("Host", host)
-            .header("User-Agent", self.network_config.user_agent.as_str());
+            .header("User-Agent", user_agent);
         if !headers
             .iter()
             .any(|(name, _)| name.eq_ignore_ascii_case("accept-language"))
@@ -293,7 +318,7 @@ impl NetworkInner {
             .map_err(|_| NetworkError::ConnectionFailed)?;
 
         if key.scheme == Scheme::HTTPS {
-            let tls = TlsConnector::from(Arc::clone(&self.tls_config));
+            let tls = TlsConnector::from(Arc::clone(&self.inner.tls_config));
             let key = key.clone();
             let domain = rustls::pki_types::ServerName::try_from(key.host.clone())
                 .map_err(|_| NetworkError::InvalidDnsName)?;
@@ -364,16 +389,63 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    /// Keep-alive HTTP/1.1 server answering every request with
+    /// `ok:<request line>`, so pooled connections stay open across sequential
+    /// fetches. Each connection is served until the peer hangs up. Returns
+    /// the bound address.
+    fn spawn_keep_alive_server(listener: TcpListener) -> String {
+        let address = listener.local_addr().unwrap().to_string();
+        thread::spawn(move || {
+            while let Ok((stream, _)) = listener.accept() {
+                thread::spawn(move || serve_keep_alive_connection(stream));
+            }
+        });
+        address
+    }
+
+    fn serve_keep_alive_connection(mut stream: std::net::TcpStream) {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let mut request = Vec::new();
+            loop {
+                let read = match stream.read(&mut buffer) {
+                    Ok(0) | Err(_) => return,
+                    Ok(read) => read,
+                };
+                request.extend_from_slice(&buffer[..read]);
+                if request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let request_line = String::from_utf8_lossy(&request)
+                .lines()
+                .next()
+                .unwrap_or("")
+                .to_string();
+            let body = format!("ok:{request_line}");
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            if stream.write_all(response.as_bytes()).is_err() {
+                return;
+            }
+        }
+    }
+
     #[test]
     fn enable_cache_config_is_applied_to_cache() {
-        let mut inner = NetworkInner::new();
-        assert!(inner.cache.is_enabled());
+        let state = SharedNetState::new();
+        assert!(state.cache.is_enabled());
 
-        inner.set_network_config(NetworkConfig {
+        state.set_network_config(NetworkConfig {
             enable_cache: false,
             ..NetworkConfig::default()
         });
-        assert!(!inner.cache.is_enabled());
+        assert!(!state.cache.is_enabled());
     }
 
     #[test]
@@ -416,7 +488,7 @@ mod tests {
             request
         });
 
-        let core = AsyncNetworkCore::new();
+        let core = AsyncNetworkCore::new(Arc::new(SharedNetState::new()));
         let response = core
             .fetch_request_blocking(&NetworkRequest {
                 url: format!("http://{address}/submit"),
@@ -432,5 +504,40 @@ mod tests {
         assert!(request.to_ascii_lowercase().contains("x-orinium-test: yes"));
         assert!(request.to_ascii_lowercase().contains("accept-language: "));
         assert!(request.ends_with("\r\n\r\nhello"));
+    }
+
+    #[test]
+    fn pooled_connections_are_not_shared_between_worker_runtimes() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = spawn_keep_alive_server(listener);
+
+        let shared = Arc::new(SharedNetState::new());
+        let core_a = AsyncNetworkCore::new(Arc::clone(&shared));
+        let core_b = AsyncNetworkCore::new(shared);
+
+        // Worker A fetches and returns its keep-alive connection to its own
+        // pool; the connection stays open on A's local set.
+        let first = core_a
+            .fetch_request_blocking(&NetworkRequest::get(format!("http://{address}/first")))
+            .unwrap();
+        assert_eq!(first.body, b"ok:GET /first HTTP/1.1");
+
+        // Worker B must open its own connection for the same host instead of
+        // checking out the sender parked on A's idle runtime, where nobody
+        // would ever poll it.
+        assert!(
+            core_b.sender_pool.read().unwrap().is_empty(),
+            "A's pooled connection must not be visible to another worker"
+        );
+        let second = core_b
+            .fetch_request_blocking(&NetworkRequest::get(format!("http://{address}/second")))
+            .unwrap();
+        assert_eq!(second.body, b"ok:GET /second HTTP/1.1");
+
+        // A still reuses its own pooled connection.
+        let third = core_a
+            .fetch_request_blocking(&NetworkRequest::get(format!("http://{address}/third")))
+            .unwrap();
+        assert_eq!(third.body, b"ok:GET /third HTTP/1.1");
     }
 }

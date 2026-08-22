@@ -44,6 +44,11 @@ impl SenderPool {
         self.pool.get_mut(key).and_then(|v| v.pop())
     }
 
+    /// Returns whether no connections are currently pooled.
+    pub fn is_empty(&self) -> bool {
+        self.pool.values().all(Vec::is_empty)
+    }
+
     pub fn add_connection(&mut self, key: HostKey, conn: HttpSender) {
         let entry = self.pool.entry(key).or_default();
         if entry.len() < self.max_connections_per_host {
