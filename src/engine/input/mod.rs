@@ -45,10 +45,18 @@ pub fn hit_dom_id(path: &HitPath<'_>) -> Option<u32> {
 /// is expressed in its *parent's* coordinate space. Mirroring
 /// [`hit_test_inner`], the chain is walked outermost→innermost, subtracting
 /// each level's content-box origin and adding its scroll offsets.
+///
+/// Entries that share their `LayoutNode` with the next outer entry (the
+/// synthetic items `hit_test_inner` emits for an inline custom object) have
+/// no coordinate frame of their own: the object was tested in its parent's
+/// local coordinates, so they contribute no offset.
 fn local_pointer_coords(path: &HitPath<'_>, target: usize, x: f32, y: f32) -> (f32, f32) {
     let mut lx = x;
     let mut ly = y;
-    for hit in path.iter().rev().take(path.len() - target) {
+    for (offset, hit) in path.iter().rev().take(path.len() - target).enumerate() {
+        let index = path.len() - 1 - offset;
+        let shares_parent_layout =
+            index + 1 < path.len() && std::ptr::eq(hit.layout, path[index + 1].layout);
         // Inline Container boxes live in the parent's coordinate space and
         // push no transform (mirroring `push_box_model`), so they contribute
         // no offset of their own. Inline Custom nodes always push a transform,
@@ -56,7 +64,7 @@ fn local_pointer_coords(path: &HitPath<'_>, target: usize, x: f32, y: f32) -> (f
         let is_inline_container =
             matches!(hit.layout.layout_box, ui_layout::LayoutBox::InlineBox(_))
                 && matches!(&hit.info.kind, NodeKind::Container { .. });
-        if is_inline_container {
+        if shares_parent_layout || is_inline_container {
             continue;
         }
         let (cx, cy) = hit
