@@ -862,6 +862,18 @@ fn generate_draw_commands_inner(
     popups: &mut Vec<(Vec<DrawCommand>, (f32, f32))>,
     is_root: bool,
 ) {
+    // Check visibility before pushing position-dependent transforms.
+    // Hidden elements return early, so any transform pushed above this point
+    // would otherwise leak into subsequent siblings.
+    match &info.kind {
+        NodeKind::Container { style, .. } | NodeKind::Custom { style, .. } => {
+            if matches!(style.visibility, Visibility::Hidden | Visibility::Collapse) {
+                return;
+            }
+        }
+        _ => {}
+    }
+
     let mut box_states: Vec<BoxPushState> = Vec::new();
 
     let is_fixed = layout.style.position.kind == Position::Fixed;
@@ -905,9 +917,6 @@ fn generate_draw_commands_inner(
             style,
             ..
         } => {
-            if matches!(style.visibility, Visibility::Hidden | Visibility::Collapse) {
-                return;
-            }
             for box_model in &layout.layout_box {
                 box_states.push(push_box_model(
                     cmd_buf,
@@ -934,9 +943,6 @@ fn generate_draw_commands_inner(
             text_flow_style,
             ..
         } => {
-            if matches!(style.visibility, Visibility::Hidden | Visibility::Collapse) {
-                return;
-            }
             for box_model in &layout.layout_box {
                 box_states.push(push_box_model(
                     cmd_buf,
