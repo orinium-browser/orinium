@@ -54,6 +54,7 @@ impl ProcessHandler {
 }
 
 fn network_process_main(name: String) -> ! {
+    log::info!(target: "network", "network process started (pid={})", std::process::id());
     let (cmd_tx, cmd_rx) = ipc::channel::<NetworkCommand>()
         .inspect_err(|err| {
             log::error!(target: "NetworkProcess", "Failed to create IPC channel: {err}");
