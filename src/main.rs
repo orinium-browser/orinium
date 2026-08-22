@@ -6,11 +6,14 @@ fn main() -> Result<()> {
     #[cfg(feature = "dhat-heap")]
     let _profiler = dhat::Profiler::new_heap();
 
+    // Initialize before dispatching to a child-process handler: child
+    // processes (e.g. --type=network) never return from handle(), and
+    // without this their log macros would all be silent no-ops.
+    env_logger::init();
+
     if let Some(handler) = ProcessHandler::current() {
         handler.handle();
     }
-
-    env_logger::init();
 
     let mut tab = Tab::default();
     tab.navigate("resource:///test/test.html".parse()?);
