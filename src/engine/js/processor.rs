@@ -130,7 +130,7 @@ impl JsProcessor {
                 perf_scope!(run);
                 #[cfg_attr(not(feature = "profile"), allow(unused_variables))]
                 let did_work = run_task(&mut runtime, task);
-                #[cfg(feature = "profile")]
+                #[cfg(any(feature = "profile", debug_assertions))]
                 let run_time = run.elapsed();
 
                 perf_scope!(collect);
@@ -144,7 +144,7 @@ impl JsProcessor {
                 } else {
                     None
                 };
-                #[cfg(feature = "profile")]
+                #[cfg(any(feature = "profile", debug_assertions))]
                 let collect_time = collect.elapsed();
 
                 let _ = result_tx.send(JsTaskResult {

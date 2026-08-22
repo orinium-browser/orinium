@@ -23,11 +23,11 @@
 ///
 /// Expands to nothing when the `profile` feature is disabled, so every use of
 /// the declared binding must live inside a [`macro@profile_log!`] invocation
-/// (or its own `#[cfg(feature = "profile")]` gate).
+/// (or its own `#[cfg(any(feature = "profile", debug_assertions))]` gate).
 #[macro_export]
 macro_rules! perf_scope {
     ($name:ident) => {
-        #[cfg(feature = "profile")]
+        #[cfg(any(feature = "profile", debug_assertions))]
         let $name = std::time::Instant::now();
     };
 }
@@ -39,13 +39,13 @@ macro_rules! perf_scope {
 #[macro_export]
 macro_rules! profile_log {
     (target: $target:expr, $level:expr, $($arg:tt)+) => {{
-        #[cfg(feature = "profile")]
+        #[cfg(any(feature = "profile", debug_assertions))]
         log::log!(target: $target, $level, $($arg)+);
     }};
 }
 
 /// Shortens `text` to a bounded preview for profile log output.
-#[cfg(feature = "profile")]
+#[cfg(any(feature = "profile", debug_assertions))]
 pub(crate) fn text_preview(text: &str) -> String {
     const MAX_LEN: usize = 40;
 

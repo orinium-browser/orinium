@@ -85,7 +85,7 @@ impl TextMeasurer for PlatformTextMeasurer {
             self.cache.insert(&req.text, &ori_style, shaped.clone());
             shaped
         };
-        #[cfg(feature = "profile")]
+        #[cfg(any(feature = "profile", debug_assertions))]
         let shape_time = shape.elapsed();
 
         let line_ranges: Vec<(usize, usize)> = req
@@ -103,7 +103,7 @@ impl TextMeasurer for PlatformTextMeasurer {
         let layout = global_font::with_global_font_system(|fs| {
             layouter.layout_lines(fs, &shaped, &line_ranges, &ori_style)
         });
-        #[cfg(feature = "profile")]
+        #[cfg(any(feature = "profile", debug_assertions))]
         let layout_time = layout_pass.elapsed();
 
         let fragments: Vec<MeasuredFragment> = layout

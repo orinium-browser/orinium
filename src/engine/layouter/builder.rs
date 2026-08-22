@@ -526,20 +526,20 @@ pub fn build_layout_and_info_from_snapshot(
 ) -> (LayoutNode, InfoNode) {
     perf_scope!(total);
 
-    #[cfg(feature = "profile")]
+    #[cfg(any(feature = "profile", debug_assertions))]
     let mut css_match_time = std::time::Duration::ZERO;
-    #[cfg(feature = "profile")]
+    #[cfg(any(feature = "profile", debug_assertions))]
     let mut apply_decl_time = std::time::Duration::ZERO;
-    #[cfg(feature = "profile")]
+    #[cfg(any(feature = "profile", debug_assertions))]
     let mut custom_node_time = std::time::Duration::ZERO;
-    #[cfg(feature = "profile")]
+    #[cfg(any(feature = "profile", debug_assertions))]
     let mut text_layout_time = std::time::Duration::ZERO;
-    #[cfg(feature = "profile")]
+    #[cfg(any(feature = "profile", debug_assertions))]
     let mut exit_phase_time = std::time::Duration::ZERO;
-    #[cfg(feature = "profile")]
+    #[cfg(any(feature = "profile", debug_assertions))]
     let mut node_count = 0u64;
 
-    #[cfg(feature = "profile")]
+    #[cfg(any(feature = "profile", debug_assertions))]
     let mut cand_stats = CandidateMetrics::default();
 
     let registry = ComponentRegistry::new();
@@ -596,14 +596,14 @@ pub fn build_layout_and_info_from_snapshot(
                     Some(collect_candidates(
                         &rule_set,
                         &chain_for_css,
-                        #[cfg(feature = "profile")]
+                        #[cfg(any(feature = "profile", debug_assertions))]
                         &mut cand_stats,
                     ))
                 } else {
                     None
                 }
                 .unzip();
-            #[cfg(feature = "profile")]
+            #[cfg(any(feature = "profile", debug_assertions))]
             {
                 css_match_time += css_match.elapsed();
             }
@@ -734,7 +734,7 @@ pub fn build_layout_and_info_from_snapshot(
                 &mut overflow,
                 used_color_scheme,
             );
-            #[cfg(feature = "profile")]
+            #[cfg(any(feature = "profile", debug_assertions))]
             {
                 apply_decl_time += apply_decl.elapsed();
             }
@@ -832,7 +832,7 @@ pub fn build_layout_and_info_from_snapshot(
                 };
                 let ptr = stack[top_idx].dom;
                 results.insert(ptr, (layout, info));
-                #[cfg(feature = "profile")]
+                #[cfg(any(feature = "profile", debug_assertions))]
                 {
                     custom_node_time += custom_node.elapsed();
                     node_count += 1;
@@ -927,7 +927,7 @@ pub fn build_layout_and_info_from_snapshot(
                         perf_scope!(text_layout);
                         let (layouter, kind) =
                             create_text_node(t, text_style.clone(), text_flow_style, &*measurer);
-                        #[cfg(feature = "profile")]
+                        #[cfg(any(feature = "profile", debug_assertions))]
                         {
                             text_layout_time += text_layout.elapsed();
                             node_count += 1;
@@ -989,7 +989,7 @@ pub fn build_layout_and_info_from_snapshot(
                 };
                 let ptr = stack[top_idx].dom;
                 results.insert(ptr, (layout, info));
-                #[cfg(feature = "profile")]
+                #[cfg(any(feature = "profile", debug_assertions))]
                 {
                     node_count += 1;
                 }
@@ -1166,7 +1166,7 @@ pub fn build_layout_and_info_from_snapshot(
             };
             let ptr = frame.dom;
             results.insert(ptr, (layout, info));
-            #[cfg(feature = "profile")]
+            #[cfg(any(feature = "profile", debug_assertions))]
             {
                 exit_phase_time += exit_phase.elapsed();
                 node_count += 1;
@@ -2318,7 +2318,7 @@ fn resolve_used_color_scheme(
 }
 
 /// Aggregated CSS candidate-matching statistics for a single layout build.
-#[cfg(feature = "profile")]
+#[cfg(any(feature = "profile", debug_assertions))]
 #[derive(Default)]
 struct CandidateMetrics {
     elements_checked: u64,
@@ -2332,7 +2332,7 @@ struct CandidateMetrics {
 fn collect_candidates(
     rule_set: &RuleSet,
     chain: &ElementChain,
-    #[cfg(feature = "profile")] stats: &mut CandidateMetrics,
+    #[cfg(any(feature = "profile", debug_assertions))] stats: &mut CandidateMetrics,
 ) -> (Properties, Properties) {
     let mut properties = HashMap::new();
     let mut custom_properties = HashMap::new();
@@ -2342,7 +2342,7 @@ fn collect_candidates(
         None => return (properties, custom_properties),
     };
 
-    #[cfg(feature = "profile")]
+    #[cfg(any(feature = "profile", debug_assertions))]
     {
         stats.elements_checked += 1;
     }
@@ -2350,24 +2350,24 @@ fn collect_candidates(
     // The candidate iterator is lazy; under profiling it is materialized so
     // query time is measured separately from selector matching.
     perf_scope!(query);
-    #[cfg(feature = "profile")]
+    #[cfg(any(feature = "profile", debug_assertions))]
     let candidates_iter: Vec<_> = rule_set.query_candidates(element).collect();
-    #[cfg(not(feature = "profile"))]
+    #[cfg(not(any(feature = "profile", debug_assertions)))]
     let candidates_iter = rule_set.query_candidates(element);
-    #[cfg(feature = "profile")]
+    #[cfg(any(feature = "profile", debug_assertions))]
     {
         stats.query_candidates_time += query.elapsed();
     }
 
     for decl in candidates_iter {
-        #[cfg(feature = "profile")]
+        #[cfg(any(feature = "profile", debug_assertions))]
         {
             stats.candidates_examined += 1;
         }
 
         perf_scope!(sel_match);
         let matches_sel = decl.selector.matches(chain);
-        #[cfg(feature = "profile")]
+        #[cfg(any(feature = "profile", debug_assertions))]
         {
             stats.selector_match_time += sel_match.elapsed();
             if matches_sel {
@@ -2394,7 +2394,7 @@ fn collect_candidates(
             target.insert(decl.name.clone(), decl.clone());
         }
 
-        #[cfg(feature = "profile")]
+        #[cfg(any(feature = "profile", debug_assertions))]
         {
             stats.cascade_insert_time += cascade.elapsed();
         }

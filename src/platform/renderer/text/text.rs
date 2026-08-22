@@ -599,7 +599,7 @@ impl TextRenderer {
         let shaped = global_font::with_global_font_system(|fs| {
             self.layouter.shape_text(fs, text, &ori_style)
         });
-        #[cfg(feature = "profile")]
+        #[cfg(any(feature = "profile", debug_assertions))]
         let shape_time = shape.elapsed();
 
         perf_scope!(lines);
@@ -617,7 +617,7 @@ impl TextRenderer {
             self.layouter
                 .layout_lines(fs, &shaped, &line_ranges, &ori_style)
         });
-        #[cfg(feature = "profile")]
+        #[cfg(any(feature = "profile", debug_assertions))]
         let lines_time = lines.elapsed();
 
         profile_log!(
@@ -667,15 +667,15 @@ impl TextRenderer {
         self.instances.clear();
         self.section_ranges.clear();
 
-        #[cfg(feature = "profile")]
+        #[cfg(any(feature = "profile", debug_assertions))]
         let mut glyph_count = 0u32;
-        #[cfg(feature = "profile")]
+        #[cfg(any(feature = "profile", debug_assertions))]
         let mut culled_count = 0u32;
-        #[cfg(feature = "profile")]
+        #[cfg(any(feature = "profile", debug_assertions))]
         let mut atlas_miss_count = 0u32;
-        #[cfg(feature = "profile")]
+        #[cfg(any(feature = "profile", debug_assertions))]
         let mut atlas_lookup_time = std::time::Duration::ZERO;
-        #[cfg(feature = "profile")]
+        #[cfg(any(feature = "profile", debug_assertions))]
         let mut atlas_rasterize_time = std::time::Duration::ZERO;
 
         global_font::with_global_font_system(|fs| {
@@ -707,7 +707,7 @@ impl TextRenderer {
                             glyph.width,
                             glyph.height,
                         ) {
-                            #[cfg(feature = "profile")]
+                            #[cfg(any(feature = "profile", debug_assertions))]
                             {
                                 culled_count += 1;
                             }
@@ -749,14 +749,14 @@ impl TextRenderer {
                             phase_x,
                         ) {
                             Some(entry) => {
-                                #[cfg(feature = "profile")]
+                                #[cfg(any(feature = "profile", debug_assertions))]
                                 {
                                     atlas_lookup_time += atlas_lap.elapsed();
                                 }
                                 entry
                             }
                             None => {
-                                #[cfg(feature = "profile")]
+                                #[cfg(any(feature = "profile", debug_assertions))]
                                 {
                                     atlas_miss_count += 1;
                                 }
@@ -770,7 +770,7 @@ impl TextRenderer {
                                     section.font_weight,
                                     phase_x,
                                 ) {
-                                    #[cfg(feature = "profile")]
+                                    #[cfg(any(feature = "profile", debug_assertions))]
                                     {
                                         atlas_rasterize_time += rasterize_lap.elapsed();
                                     }
@@ -778,7 +778,7 @@ impl TextRenderer {
                                         continue;
                                     }
                                     self.atlas_dirty = true;
-                                    #[cfg(feature = "profile")]
+                                    #[cfg(any(feature = "profile", debug_assertions))]
                                     {
                                         atlas_lookup_time += atlas_lap.elapsed();
                                     }
@@ -801,7 +801,7 @@ impl TextRenderer {
                                 }
                             }
                         };
-                        #[cfg(feature = "profile")]
+                        #[cfg(any(feature = "profile", debug_assertions))]
                         {
                             glyph_count += 1;
                         }
@@ -843,7 +843,7 @@ impl TextRenderer {
 
         perf_scope!(flush);
         self.atlas.flush_uploads(queue);
-        #[cfg(feature = "profile")]
+        #[cfg(any(feature = "profile", debug_assertions))]
         let flush_time = flush.elapsed();
 
         self.num_instances = self.instances.len() as u32;
@@ -871,7 +871,7 @@ impl TextRenderer {
             self.instance_buffer = None;
             self.instance_capacity = 0;
         }
-        #[cfg(feature = "profile")]
+        #[cfg(any(feature = "profile", debug_assertions))]
         let buf_time = buf.elapsed();
 
         if self.atlas_dirty {
