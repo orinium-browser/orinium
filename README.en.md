@@ -13,7 +13,7 @@
 <a href="./README.md" align="center">日本語</a>
 
 > [!NOTE]
-> This project is still under development and does not yet function as a browser.
+> This project is currently under development. While it is still far from being a modern browser, it is capable of rendering basic web pages.
 
 > [!TIP]
 > The code documentation is below. We always keep it up-to-date on the dev branch.
