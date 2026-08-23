@@ -3590,6 +3590,22 @@ pub fn apply_declaration(
             style.grid_row = parse_grid_placement(value)?;
         }
 
+        ("grid-column-start", _) => {
+            style.grid_column.start = Some(parse_grid_line(value)?);
+        }
+
+        ("grid-column-end", _) => {
+            style.grid_column.end = parse_grid_line_end(value)?;
+        }
+
+        ("grid-row-start", _) => {
+            style.grid_row.start = Some(parse_grid_line(value)?);
+        }
+
+        ("grid-row-end", _) => {
+            style.grid_row.end = parse_grid_line_end(value)?;
+        }
+
         _ => {
             // log::error!("{name}, {value:?}");
             return None;
@@ -4537,6 +4553,23 @@ fn parse_grid_template_areas(value: &CssValue) -> Option<Vec<Vec<String>>> {
         }
     }
     Some(areas)
+}
+
+fn parse_grid_line(value: &CssValue) -> Option<usize> {
+    match value {
+        CssValue::Number(n) if *n >= 1.0 && n.fract() == 0.0 => Some(*n as usize),
+        _ => None,
+    }
+}
+
+fn parse_grid_line_end(value: &CssValue) -> Option<GridPlacementEnd> {
+    match value {
+        CssValue::Number(n) if *n == -1.0 => Some(GRID_LINE_TO_END),
+        CssValue::Number(n) if *n >= 1.0 && n.fract() == 0.0 => {
+            Some(GridPlacementEnd::Line(*n as usize))
+        }
+        _ => None,
+    }
 }
 
 /// Mix two or more colors according to the `color-mix()` interpolation
