@@ -1130,10 +1130,10 @@ fn generate_draw_commands_inner(
                             let bm = &result.box_model;
                             let rect = BoxModel {
                                 sticky_edges: bm.sticky_edges,
-                                border_box: bm.border_box.clone(),
-                                padding_box: bm.padding_box.clone(),
-                                content_box: bm.content_box.clone(),
-                                children_box: bm.children_box.clone(),
+                                border_box: bm.border_box,
+                                padding_box: bm.padding_box,
+                                content_box: bm.content_box,
+                                children_box: bm.children_box,
                             };
                             let state = push_box_model(
                                 cmd_buf, &rect, style, 0.0, 0.0, false, false, false,

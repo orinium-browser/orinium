@@ -594,7 +594,7 @@ pub fn build_layout_and_info_from_snapshot(
             let (candidates, custom_property_candidates) =
                 if let HtmlNodeType::Element { .. } = html_node {
                     Some(collect_candidates(
-                        &rule_set,
+                        rule_set,
                         &chain_for_css,
                         #[cfg(any(feature = "profile", debug_assertions))]
                         &mut cand_stats,
@@ -807,7 +807,7 @@ pub fn build_layout_and_info_from_snapshot(
                         write_back: write_back_sender
                             .as_ref()
                             .map(|sender| (sender.clone(), stack[top_idx].dom)),
-                        dom_snapshot: &snapshot,
+                        dom_snapshot: snapshot,
                         dom_id: stack[top_idx].dom,
                     })
                     .expect("registry must handle every tag it reports");
@@ -2554,12 +2554,11 @@ fn resolve_flex_flow(value: &CssValue) -> Option<(FlexDirection, FlexWrap)> {
             if direction.replace(parsed).is_some() {
                 return None;
             }
-        } else if let Some(parsed) = flex_wrap_keyword(keyword) {
+        } else {
+            let parsed = flex_wrap_keyword(keyword)?;
             if wrap.replace(parsed).is_some() {
                 return None;
             }
-        } else {
-            return None;
         }
     }
 
@@ -4597,14 +4596,14 @@ fn srgb_to_xyz(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
     let b = Color::srgb_to_linear(b);
     let x = 0.4124564 * r + 0.3575761 * g + 0.1804375 * b;
     let y = 0.2126729 * r + 0.7151522 * g + 0.0721750 * b;
-    let z = 0.0193339 * r + 0.1191920 * g + 0.9503041 * b;
+    let z = 0.0193339 * r + 0.119_192 * g + 0.9503041 * b;
     (x, y, z)
 }
 
 /// Convert CIE XYZ (D65) to sRGB (0..1 channels).
 fn xyz_to_srgb(x: f32, y: f32, z: f32) -> (f32, f32, f32) {
     let r = 3.2404542 * x - 1.5371385 * y - 0.4985314 * z;
-    let g = -0.9692660 * x + 1.8760108 * y + 0.0415560 * z;
+    let g = -0.969_266 * x + 1.8760108 * y + 0.0415560 * z;
     let b = 0.0556434 * x - 0.2040259 * y + 1.0572252 * z;
     (
         Color::linear_to_srgb(r),

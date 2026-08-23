@@ -402,11 +402,7 @@ impl Chrome for BasicChrome {
             ChromeHit::Back if clicked => ChromeAction::Back,
             ChromeHit::Reload if clicked => ChromeAction::Reload,
             ChromeHit::Debug if clicked => {
-                if self.is_debug {
-                    self.is_debug = false
-                } else {
-                    self.is_debug = true
-                }
+                self.is_debug = !self.is_debug;
                 ChromeAction::DumpLayoutNode
             }
             ChromeHit::Scripting if clicked => {

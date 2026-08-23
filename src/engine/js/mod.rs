@@ -643,14 +643,14 @@ impl JsRuntime {
 
             ran_handler = true;
             let event = make_event("click", Rc::clone(&target), Rc::clone(&current_target));
-            if has_onclick {
-                if let Err(err) = self.engine.call(
+            if has_onclick
+                && let Err(err) = self.engine.call(
                     onclick,
                     JSValue::Object(Rc::clone(&current_target)),
                     vec![JSValue::Object(Rc::clone(&event))],
-                ) {
-                    log::info!("JS error in onclick: {}", err);
-                }
+                )
+            {
+                log::info!("JS error in onclick: {}", err);
             }
             if !event_flag(&event, "__orinium_immediate_propagation_stopped") {
                 for listener in listeners {
@@ -2011,7 +2011,7 @@ fn append_header_value(data: &mut JSObject, name: &str, value: &str) {
     let value = normalize_header_value(value);
     let combined = match data.get(&name) {
         JSValue::Undefined => value,
-        current => format!("{}, {}", current.to_string(), value),
+        current => format!("{}, {}", current, value),
     };
     data.set(name, JSValue::String(combined));
 }
@@ -4479,16 +4479,15 @@ fn get_owner_document(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
 
 fn get_namespace_uri(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let this = args.first().unwrap_or(&JSValue::Undefined);
-    if let Some(dom_id) = node_dom_id(this) {
-        if let Some(namespace) =
+    if let Some(dom_id) = node_dom_id(this)
+        && let Some(namespace) =
             with_host(vm, |host| host.namespaces.get(&dom_id).cloned()).flatten()
-        {
-            return if namespace.is_empty() {
-                Ok(JSValue::Null)
-            } else {
-                Ok(JSValue::String(namespace))
-            };
-        }
+    {
+        return if namespace.is_empty() {
+            Ok(JSValue::Null)
+        } else {
+            Ok(JSValue::String(namespace))
+        };
     }
 
     let Some(mut node) = dom_node(vm, this) else {
@@ -5485,8 +5484,8 @@ fn canvas_get_context(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let context = if kind == "2d" {
         make_canvas_2d_context(node_id)
     } else {
-        let width = canvas_dimension(vm, &[this.clone()], "width", 300.0)?.to_number();
-        let height = canvas_dimension(vm, &[this.clone()], "height", 150.0)?.to_number();
+        let width = canvas_dimension(vm, std::slice::from_ref(this), "width", 300.0)?.to_number();
+        let height = canvas_dimension(vm, std::slice::from_ref(this), "height", 150.0)?.to_number();
         make_webgl_context(node_id, &kind, width, height)
     };
     let _ = with_host_mut(vm, |host| {

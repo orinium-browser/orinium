@@ -225,13 +225,7 @@ impl AsyncNetworkCore {
 
         let mut sender = self.get_or_create_sender(&key).await?;
 
-        let user_agent = self
-            .inner
-            .network_config
-            .read()
-            .unwrap()
-            .user_agent
-            .clone();
+        let user_agent = self.inner.network_config.read().unwrap().user_agent.clone();
         let mut request = Request::builder()
             .method(method.clone())
             .uri(uri.path_and_query().map_or("/", |p| p.as_str()))
