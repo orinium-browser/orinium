@@ -20,8 +20,8 @@ use std::sync::Arc;
 
 use ui_layout::{
     AlignContent, AlignItems, AutoSizeBehavior, BoxSizing, Display, FlexDirection, FlexWrap,
-    GridPlacement, GridRepeat, GridTrack, InnerDisplay, ItemFragment, JustifyContent, LayoutChild,
-    LayoutNode, Length, LengthOrAuto, OuterDisplay, Position, Style,
+    GridPlacement, GridRepeat, GridTrack, InnerDisplay, ItemFragment, JustifyContent, JustifyItems,
+    LayoutChild, LayoutNode, Length, LengthOrAuto, OuterDisplay, Position, Style,
 };
 
 use super::css_resolver::{
@@ -2559,6 +2559,26 @@ fn resolve_flex_flow(value: &CssValue) -> Option<(FlexDirection, FlexWrap)> {
     ))
 }
 
+fn resolve_justify_items(keyword: &str) -> Option<JustifyItems> {
+    match keyword {
+        "stretch" => Some(JustifyItems::Stretch),
+        "flex-start" | "start" => Some(JustifyItems::Start),
+        "center" => Some(JustifyItems::Center),
+        "flex-end" | "end" => Some(JustifyItems::End),
+        _ => None,
+    }
+}
+
+fn resolve_align_items(keyword: &str) -> Option<AlignItems> {
+    match keyword {
+        "stretch" => Some(AlignItems::Stretch),
+        "flex-start" | "start" => Some(AlignItems::Start),
+        "center" => Some(AlignItems::Center),
+        "flex-end" | "end" => Some(AlignItems::End),
+        _ => None,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn apply_declaration(
     name: &str,
@@ -3394,6 +3414,31 @@ pub fn apply_declaration(
             style.flex_wrap = wrap;
         }
 
+        ("place-items", value) => {
+            let values = match value {
+                CssValue::Keyword(_) => std::slice::from_ref(value),
+                CssValue::List(values) if (1..=2).contains(&values.len()) => values.as_slice(),
+                _ => return None,
+            };
+
+            let align_items = match &values[0] {
+                CssValue::Keyword(v) => resolve_align_items(v)?,
+                _ => return None,
+            };
+
+            let justify_items = match values.get(1).unwrap_or(&values[0]) {
+                CssValue::Keyword(v) => resolve_justify_items(v)?,
+                _ => return None,
+            };
+
+            style.align_items = align_items;
+            style.justify_items = justify_items;
+        }
+
+        ("justify-items", CssValue::Keyword(v)) => {
+            style.justify_items = resolve_justify_items(v)?;
+        }
+
         ("justify-content", CssValue::Keyword(v)) => {
             style.justify_content = match v.as_str() {
                 "flex-start" | "start" => JustifyContent::Start,
@@ -3407,13 +3452,7 @@ pub fn apply_declaration(
         }
 
         ("align-items", CssValue::Keyword(v)) => {
-            style.align_items = match v.as_str() {
-                "stretch" => AlignItems::Stretch,
-                "flex-start" | "start" => AlignItems::Start,
-                "center" => AlignItems::Center,
-                "flex-end" | "end" => AlignItems::End,
-                _ => return None,
-            };
+            style.align_items = resolve_align_items(v)?;
         }
 
         ("align-content", CssValue::Keyword(v)) => {
@@ -3481,22 +3520,16 @@ pub fn apply_declaration(
             });
         }
 
-        ("justify-self", CssValue::Keyword(v)) => match v.as_str() {
-            "center" => {
-                style.spacing.margin_left = LengthOrAuto::Auto;
-                style.spacing.margin_right = LengthOrAuto::Auto;
-            }
-            "flex-end" | "end" => {
-                style.spacing.margin_left = LengthOrAuto::Auto;
-                style.spacing.margin_right = LengthOrAuto::Length(Length::Px(0.0));
-            }
-            "flex-start" | "start" => {
-                style.spacing.margin_left = LengthOrAuto::Length(Length::Px(0.0));
-                style.spacing.margin_right = LengthOrAuto::Auto;
-            }
-            "auto" | "normal" | "stretch" => {}
-            _ => return None,
-        },
+        ("justify-self", CssValue::Keyword(v)) => {
+            style.item_style.justify_self = Some(match v.as_str() {
+                "stretch" => JustifyItems::Stretch,
+                "flex-start" | "start" => JustifyItems::Start,
+                "center" => JustifyItems::Center,
+                "flex-end" | "end" => JustifyItems::End,
+                "auto" => return Some(()),
+                _ => return None,
+            });
+        }
 
         ("column-gap", _) => {
             style.column_gap = resolve_css_len_auto(name, value, text_flow_style)?;
