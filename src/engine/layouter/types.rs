@@ -218,6 +218,27 @@ impl TryFrom<(u8, u8, u8, f32)> for Color {
 }
 
 // =========================
+//          Cursor
+// =========================
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CursorStyle {
+    #[default]
+    Auto,
+    /// Platform default
+    Default,
+    None,
+    Pointer,
+    Text,
+    Move,
+    NotAllowed,
+    Wait,
+    Crosshair,
+    Grab,
+    Grabbing,
+}
+
+// =========================
 //        Background
 // =========================
 
@@ -435,6 +456,8 @@ pub struct BorderRadius {
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ContainerStyle {
+    pub cursor: CursorStyle,
+
     pub background: Background,
     pub background_repeat: BackgroundRepeat,
     pub background_size: BackgroundSize,

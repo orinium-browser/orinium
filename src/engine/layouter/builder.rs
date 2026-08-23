@@ -12,7 +12,9 @@ use crate::engine::layouter::css_resolver::{
     DeclarationResolver, Properties, resolve_inline_value,
 };
 use crate::engine::layouter::dom_snapshot::{DomSnapshot, NodeId};
-use crate::engine::layouter::types::{TextFlowStyle, VerticalAlign, Visibility, WhiteSpace};
+use crate::engine::layouter::types::{
+    CursorStyle, TextFlowStyle, VerticalAlign, Visibility, WhiteSpace,
+};
 use crate::engine::tree::NodeRef;
 
 use std::collections::{HashMap, HashSet};
@@ -2884,6 +2886,23 @@ pub fn apply_declaration(
                 "left" => CssFloat::Left,
                 "right" => CssFloat::Right,
                 "none" | "initial" | "unset" => CssFloat::None,
+                _ => return None,
+            };
+        }
+
+        ("cursor", CssValue::Keyword(v)) => {
+            container_style.cursor = match v.as_str() {
+                "auto" => CursorStyle::Auto,
+                "default" => CursorStyle::Default,
+                "none" => CursorStyle::None,
+                "pointer" => CursorStyle::Pointer,
+                "text" => CursorStyle::Text,
+                "move" => CursorStyle::Move,
+                "not-allowed" => CursorStyle::NotAllowed,
+                "wait" => CursorStyle::Wait,
+                "crosshair" => CursorStyle::Crosshair,
+                "grab" => CursorStyle::Grab,
+                "grabbing" => CursorStyle::Grabbing,
                 _ => return None,
             };
         }
