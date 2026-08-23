@@ -3292,6 +3292,21 @@ pub fn apply_declaration(
             )?;
         }
 
+        ("border-color", v) => {
+            expand_box(
+                name,
+                v,
+                text_flow_style,
+                &|_, cv, _| resolve_css_color(name, cv, color_scheme),
+                |t, r, b, l| {
+                    container_style.border_color.top = t;
+                    container_style.border_color.right = r;
+                    container_style.border_color.bottom = b;
+                    container_style.border_color.left = l;
+                },
+            )?;
+        }
+
         ("padding", v) => {
             expand_box(
                 name,
