@@ -20,8 +20,9 @@ use std::sync::Arc;
 
 use ui_layout::{
     AlignContent, AlignItems, AutoSizeBehavior, BoxSizing, Display, FlexDirection, FlexWrap,
-    GridPlacement, GridRepeat, GridTrack, InnerDisplay, ItemFragment, JustifyContent, JustifyItems,
-    LayoutChild, LayoutNode, Length, LengthOrAuto, OuterDisplay, Position, Style,
+    GridPlacement, GridPlacementEnd, GridRepeat, GridTrack, InnerDisplay, ItemFragment,
+    JustifyContent, JustifyItems, LayoutChild, LayoutNode, Length, LengthOrAuto, OuterDisplay,
+    Position, Style,
 };
 
 use super::css_resolver::{
@@ -40,6 +41,8 @@ use crate::engine::ui::custom_node_bridge::CustomNodeBridge;
 use crate::engine::ui::registry::{ComponentRegistry, CustomNodeContext, DomWriteBack};
 
 pub(crate) const DEFAULT_LINE_FACTOR: f32 = 1.2;
+
+const GRID_LINE_TO_END: GridPlacementEnd = GridPlacementEnd::Line(usize::MAX);
 
 fn background_dimension(value: &CssValue, font_size: f32) -> Option<BackgroundDimension> {
     match value {
@@ -1133,8 +1136,8 @@ pub fn build_layout_and_info_from_snapshot(
                     for child in &mut all_layout {
                         if let LayoutChild::Node(child) = child {
                             resolve_named_grid_area(child, &style.grid_template_areas);
-                            resolve_grid_end_span(&mut child.style.grid_column, columns);
-                            resolve_grid_end_span(&mut child.style.grid_row, rows);
+                            resolve_grid_end_line(&mut child.style.grid_column, columns);
+                            resolve_grid_end_line(&mut child.style.grid_row, rows);
                         }
                     }
                 }
@@ -1351,12 +1354,12 @@ fn explicit_grid_track_count(tracks: &[GridTrack]) -> usize {
         .sum()
 }
 
-fn resolve_grid_end_span(placement: &mut GridPlacement, track_count: usize) {
-    if placement.span != GRID_SPAN_TO_END || track_count == 0 {
+fn resolve_grid_end_line(placement: &mut GridPlacement, track_count: usize) {
+    if !matches!(placement.end, GRID_LINE_TO_END) || track_count == 0 {
         return;
     }
-    let start = placement.start.unwrap_or(1);
-    placement.span = track_count.saturating_add(1).saturating_sub(start).max(1);
+
+    placement.end = GridPlacementEnd::Line(track_count + 1);
 }
 
 fn resolve_named_grid_area(node: &mut LayoutNode, areas: &[Vec<String>]) {
@@ -1382,11 +1385,11 @@ fn resolve_named_grid_area(node: &mut LayoutNode, areas: &[Vec<String>]) {
     }
     node.style.grid_column = GridPlacement {
         start: Some(min_column + 1),
-        span: max_column - min_column + 1,
+        end: GridPlacementEnd::Line(max_column + 2),
     };
     node.style.grid_row = GridPlacement {
         start: Some(min_row + 1),
-        span: max_row - min_row + 1,
+        end: GridPlacementEnd::Line(max_row + 2),
     };
     node.style.grid_area = None;
 }
@@ -4394,8 +4397,6 @@ fn parse_grid_tracks(
         .collect()
 }
 
-const GRID_SPAN_TO_END: usize = usize::MAX;
-
 fn parse_grid_placement(value: &CssValue) -> Option<GridPlacement> {
     let values: Vec<&CssValue> = match value {
         CssValue::List(values) => values.iter().collect(),
@@ -4415,20 +4416,20 @@ fn parse_grid_placement(value: &CssValue) -> Option<GridPlacement> {
     if end_values.is_empty() {
         return Some(GridPlacement {
             start: Some(start),
-            span: 1,
+            end: GridPlacementEnd::Span(1),
         });
     }
     if matches!(end_values, [CssValue::Number(end)] if *end == -1.0) {
         return Some(GridPlacement {
             start: Some(start),
-            span: GRID_SPAN_TO_END,
+            end: GRID_LINE_TO_END,
         });
     }
     // TODO: Resolve every negative CSS grid line against the explicit grid, not only -1.
     let end = parse_positive_grid_line(end_values)?;
     (end > start).then_some(GridPlacement {
         start: Some(start),
-        span: end - start,
+        end: GridPlacementEnd::Line(end),
     })
 }
 
@@ -6091,7 +6092,7 @@ mod tests {
             .next()
             .expect("large grid item");
         assert_eq!(large.style.grid_column.start, Some(1));
-        assert_eq!(large.style.grid_column.span, 2);
+        assert_eq!(large.style.grid_column.end, GridPlacementEnd::Line(3));
         assert!((large.layout_box.width_box() - 600.0).abs() < 0.5);
     }
 
