@@ -13,7 +13,7 @@ use swash::{
 };
 use wgpu::util::DeviceExt;
 
-use super::atlas::GlyphAtlas;
+use super::atlas::{GlyphAtlas, GlyphKey, RasterizedMask};
 use super::global_font;
 use crate::engine::layouter::types::{FontStyle, LineHeight, TextFlowStyle, TextStyle};
 use crate::platform::renderer::mesh::{self, TextSection};
@@ -62,14 +62,6 @@ fn glyph_fully_outside_clip(
     let ink_r = ink_l + glyph_width + 2.0 * CLIP_SLACK_PX;
     let ink_b = ink_t + glyph_height + 2.0 * CLIP_SLACK_PX;
     ink_r < clip_l || ink_l > clip_r || ink_b < clip_t || ink_t > clip_b
-}
-
-struct RasterizedMask {
-    width: u32,
-    height: u32,
-    left: i32,
-    top: i32,
-    data: Vec<u8>,
 }
 
 fn rasterize_glyph(
@@ -533,7 +525,7 @@ impl TextRenderer {
                 && cached.font_families == font_families
             {
                 let entry = self.layout_cache.remove(i);
-                let layout = entry.layout.clone();
+                let layout = Arc::clone(&entry.layout);
                 self.layout_cache.insert(0, entry);
                 return layout;
             }
@@ -551,7 +543,7 @@ impl TextRenderer {
                 font_style,
                 line_height,
                 font_families,
-                layout: layout.clone(),
+                layout: Arc::clone(&layout),
             },
         );
 
@@ -741,13 +733,14 @@ impl TextRenderer {
                         let (origin_x, phase_x) = quantize_subpixel_x(glyph_origin_x);
 
                         perf_scope!(atlas_lap);
-                        let atlas_entry = match self.atlas.lookup(
-                            font_key,
+                        let glyph_key: GlyphKey = (
+                            font_key.0,
                             glyph.glyph_id,
-                            glyph.font_size,
+                            glyph.font_size.to_bits(),
                             section.font_weight,
                             phase_x,
-                        ) {
+                        );
+                        let atlas_entry = match self.atlas.lookup(glyph_key) {
                             Some(entry) => {
                                 #[cfg(any(feature = "profile", debug_assertions))]
                                 {
@@ -782,20 +775,7 @@ impl TextRenderer {
                                     {
                                         atlas_lookup_time += atlas_lap.elapsed();
                                     }
-                                    self.atlas.upload(
-                                        device,
-                                        queue,
-                                        font_key,
-                                        glyph.glyph_id,
-                                        glyph.font_size,
-                                        section.font_weight,
-                                        phase_x,
-                                        &mask.data,
-                                        mask.width,
-                                        mask.height,
-                                        mask.left,
-                                        mask.top,
-                                    )
+                                    self.atlas.upload(device, queue, glyph_key, &mask)
                                 } else {
                                     continue;
                                 }

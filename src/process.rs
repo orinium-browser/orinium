@@ -83,7 +83,5 @@ fn network_process_main(name: String) -> ! {
         })
         .expect("failed to send IPC channels to parent process");
 
-    loop {
-        crate::platform::network::network_main(cmd_rx, msg_tx);
-    }
+    crate::platform::network::network_main(cmd_rx, msg_tx)
 }

@@ -126,6 +126,7 @@ impl CustomNode for CanvasComponent {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_rect(
     cmd_buf: &mut Vec<DrawCommand>,
     color: Color,

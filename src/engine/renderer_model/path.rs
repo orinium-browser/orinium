@@ -454,6 +454,7 @@ pub(crate) fn append_quarter_ellipse(
 ///
 /// Corner radii are given as `(rx, ry)` pairs in CSS order (TL, TR, BR, BL) and
 /// are clamped so opposing radii fit within the box.
+#[allow(clippy::too_many_arguments)]
 pub fn rounded_rect_path(
     x: f32,
     y: f32,

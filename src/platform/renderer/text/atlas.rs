@@ -2,10 +2,19 @@ use std::num::NonZeroUsize;
 
 use etagere::{BucketedAtlasAllocator, size2};
 use lru::LruCache;
-use orinium_text::{FontKey, fontdb};
+use orinium_text::fontdb;
 
 /// (fontdb ID, glyph_id, font_size_bits, CSS weight, horizontal subpixel phase)
-type GlyphKey = (fontdb::ID, u32, u32, u16, u8);
+pub type GlyphKey = (fontdb::ID, u32, u32, u16, u8);
+
+/// An alpha mask rasterized for a single glyph.
+pub(crate) struct RasterizedMask {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) left: i32,
+    pub(crate) top: i32,
+    pub(crate) data: Vec<u8>,
+}
 
 /// (layer, allocation, rectangle, bitmap width/height, placement left/top)
 type GlyphCacheValue = (
@@ -105,21 +114,7 @@ impl GlyphAtlas {
     }
 
     /// Returns cached (layer, u, v, w, h) if the glyph is already in the atlas.
-    pub fn lookup(
-        &mut self,
-        font_key: FontKey,
-        glyph_id: u32,
-        font_size: f32,
-        font_weight: u16,
-        phase_x: u8,
-    ) -> Option<GlyphAtlasEntry> {
-        let key = (
-            font_key.0,
-            glyph_id,
-            font_size.to_bits(),
-            font_weight,
-            phase_x,
-        );
+    pub fn lookup(&mut self, key: GlyphKey) -> Option<GlyphAtlasEntry> {
         let (layer, _alloc_id, rect, width, height, left, top) = self.glyph_map.get(&key)?;
         Some(Self::entry(
             self.size, *layer, *rect, *width, *height, *left, *top,
@@ -141,17 +136,11 @@ impl GlyphAtlas {
         &mut self,
         _device: &wgpu::Device,
         _queue: &wgpu::Queue,
-        font_key: FontKey,
-        glyph_id: u32,
-        font_size: f32,
-        font_weight: u16,
-        phase_x: u8,
-        alpha_mask: &[u8],
-        mask_width: u32,
-        mask_height: u32,
-        left: i32,
-        top: i32,
+        key: GlyphKey,
+        mask: &RasterizedMask,
     ) -> GlyphAtlasEntry {
+        let (mask_width, mask_height, left, top, alpha_mask) =
+            (mask.width, mask.height, mask.left, mask.top, &mask.data);
         if mask_width == 0 || mask_height == 0 {
             return GlyphAtlasEntry {
                 layer: 0,
@@ -165,14 +154,6 @@ impl GlyphAtlas {
                 top,
             };
         }
-
-        let key = (
-            font_key.0,
-            glyph_id,
-            font_size.to_bits(),
-            font_weight,
-            phase_x,
-        );
 
         // Check if already present (updates LRU position).
         if let Some((layer, _alloc_id, rect, width, height, left, top)) = self.glyph_map.get(&key) {
@@ -194,7 +175,7 @@ impl GlyphAtlas {
                 mask_height,
                 self.size,
                 self.size,
-                font_size,
+                f32::from_bits(key.2),
             );
             return GlyphAtlasEntry {
                 layer: 0,

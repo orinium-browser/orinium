@@ -3,7 +3,7 @@ use crate::engine::bridge::text::{
 };
 use crate::engine::layouter::types::{FontStyle, LineHeight};
 use crate::platform::renderer::text::global_font;
-use crate::platform::renderer::text::text::*;
+use crate::platform::renderer::text::text_renderer::*;
 use crate::platform::renderer::text_cache::TextShapeCache;
 use crate::{perf_scope, profile_log};
 

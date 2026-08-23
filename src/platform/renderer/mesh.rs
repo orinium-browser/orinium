@@ -504,6 +504,7 @@ impl MeshBuilder {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn emit_text(
         &mut self,
         text: &mut Option<&mut dyn TextLayoutSource>,

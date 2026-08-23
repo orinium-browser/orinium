@@ -428,6 +428,7 @@ pub fn scroll_at(
     scroll_at_inner(layout, info, viewport, x, y, dx, dy, (0.0, 0.0))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn scroll_at_inner(
     layout: &LayoutNode,
     info: &mut InfoNode,

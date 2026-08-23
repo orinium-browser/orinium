@@ -705,27 +705,11 @@ impl WebView {
     }
 
     /// Resolves a JavaScript `fetch()` request with a network response.
-    pub fn on_js_fetch_succeeded(
-        &mut self,
-        request_id: u64,
-        url: String,
-        status: u16,
-        status_text: String,
-        redirected: bool,
-        body: Vec<u8>,
-        headers: Vec<(String, String)>,
-    ) {
+    pub fn on_js_fetch_succeeded(&mut self, request_id: u64, response: JsFetchResponse) {
         if let Some(processor) = self.js_processor.as_ref() {
             processor.send(JsTask::ResolveFetch {
                 id: request_id,
-                response: JsFetchResponse {
-                    url,
-                    status,
-                    status_text,
-                    redirected,
-                    body,
-                    headers,
-                },
+                response,
             });
             self.pending_js_tasks += 1;
         }
@@ -2740,12 +2724,14 @@ mod tests {
 
         webview.on_js_fetch_succeeded(
             request_id,
-            "https://example.test/message.txt".to_string(),
-            200,
-            "OK".to_string(),
-            false,
-            b"hello from fetch".to_vec(),
-            Vec::new(),
+            JsFetchResponse {
+                url: "https://example.test/message.txt".to_string(),
+                status: 200,
+                status_text: "OK".to_string(),
+                redirected: false,
+                body: b"hello from fetch".to_vec(),
+                headers: Vec::new(),
+            },
         );
 
         pump_until(

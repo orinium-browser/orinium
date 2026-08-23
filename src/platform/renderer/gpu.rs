@@ -10,7 +10,7 @@ use winit::window::Window;
 use super::image::ImageRenderer;
 use super::mesh::{self, MeshBuilder, Vertex};
 use super::text::global_font;
-use super::text::text::TextRenderer;
+use super::text::text_renderer::TextRenderer;
 
 /// GPU描画コンテキスト
 pub struct GpuRenderer {

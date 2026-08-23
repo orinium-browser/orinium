@@ -448,7 +448,7 @@ struct StackFrame {
 }
 
 enum ChildSlot {
-    Inline(LayoutChild, InfoNode),
+    Inline(LayoutChild, Box<InfoNode>),
     Element(usize),
 }
 
@@ -474,6 +474,7 @@ pub fn build_layout_and_info(
 }
 
 /// Builds layout and render trees with decoded images keyed by their `src` value.
+#[allow(clippy::too_many_arguments)]
 pub fn build_layout_and_info_with_images(
     dom: &NodeRef<HtmlNodeType>,
     resolved_styles: &ResolvedStyles,
@@ -856,24 +857,13 @@ pub fn build_layout_and_info_from_snapshot(
                 _ => ContainerRole::Normal,
             };
 
-            let kind = if is_link {
-                NodeKind::Container {
-                    scroll_x: overflow.x,
-                    scroll_y: overflow.y,
-                    scroll_offset_x: 0.0,
-                    scroll_offset_y: 0.0,
-                    style: container_style,
-                    role,
-                }
-            } else {
-                NodeKind::Container {
-                    scroll_x: overflow.x,
-                    scroll_y: overflow.y,
-                    scroll_offset_x: 0.0,
-                    scroll_offset_y: 0.0,
-                    style: container_style,
-                    role,
-                }
+            let kind = NodeKind::Container {
+                scroll_x: overflow.x,
+                scroll_y: overflow.y,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: container_style,
+                role,
             };
 
             // Table → flex overrides
@@ -939,20 +929,20 @@ pub fn build_layout_and_info_from_snapshot(
                         };
                         child_slots.push(ChildSlot::Inline(
                             (inline_style, layouter).into(),
-                            InfoNode {
+                            Box::new(InfoNode {
                                 kind,
                                 children: Vec::new(),
                                 dom_id: Some(child),
-                            },
+                            }),
                         ));
                     } else if child_node.tag_name() == Some("br") {
                         child_slots.push(ChildSlot::Inline(
                             ItemFragment::LineBreak.into(),
-                            InfoNode {
+                            Box::new(InfoNode {
                                 kind: NodeKind::LineBreak,
                                 children: Vec::new(),
                                 dom_id: Some(child),
-                            },
+                            }),
                         ));
                     } else if child_node.tag_name() == Some("noscript")
                         && scripting_mode == ScriptingMode::Enabled
@@ -976,7 +966,7 @@ pub fn build_layout_and_info_from_snapshot(
                             return None;
                         }
                         match slot {
-                            ChildSlot::Inline(layout, info) => Some((layout, info)),
+                            ChildSlot::Inline(layout, info) => Some((layout, *info)),
                             ChildSlot::Element(_) => None,
                         }
                     })
@@ -1079,7 +1069,7 @@ pub fn build_layout_and_info_from_snapshot(
                     continue;
                 }
                 let (lc, ic) = match slot {
-                    ChildSlot::Inline(layout, info) => (layout, info),
+                    ChildSlot::Inline(layout, info) => (layout, *info),
                     ChildSlot::Element(index) => element_results[index]
                         .take()
                         .expect("element child result must exist"),
@@ -2412,6 +2402,7 @@ fn apply_attribute_dimensions(
     overflow: &mut Overflow,
     color_scheme: ColorScheme,
 ) {
+    #[allow(clippy::too_many_arguments)]
     fn apply_attribute_size(
         attr: &str,
         html_node: &HtmlNodeType,
@@ -2568,6 +2559,7 @@ fn resolve_flex_flow(value: &CssValue) -> Option<(FlexDirection, FlexWrap)> {
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn apply_declaration(
     name: &str,
     value: &CssValue,
@@ -4527,8 +4519,8 @@ fn mix_two_srgb(a: Color, b: Color, wa: f32, wb: f32) -> Color {
     }
     let alpha = al[3] * (1.0 - f) + bl[3] * f;
     if alpha > 0.0 {
-        for i in 0..3 {
-            c[i] /= alpha;
+        for c_i in &mut c[..3] {
+            *c_i /= alpha;
         }
     }
     c[3] = alpha;

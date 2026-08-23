@@ -52,6 +52,7 @@ pub struct Overflow {
 /// - Text: A text node that contains text content and styling information.
 /// - Custom: A custom node that generates its own draw commands via [`CustomNode::draw`].
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum NodeKind {
     Container {
         scroll_x: bool,

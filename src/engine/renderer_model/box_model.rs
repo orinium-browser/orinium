@@ -631,6 +631,7 @@ fn background_tile_positions(base: f32, tile: f32, area: f32, repeat: bool) -> V
 }
 
 /// Push all draw commands for a single box model, returning the pop state.
+#[allow(clippy::too_many_arguments)]
 fn push_box_model(
     cmd_buf: &mut Vec<DrawCommand>,
     box_model: &ui_layout::BoxModel,
@@ -851,6 +852,7 @@ fn child_origin(child: &LayoutNode, parent_origin: (f32, f32)) -> (f32, f32) {
 /// Open popups owned by custom nodes are collected (with the page-space
 /// translation of their content-box origin) instead of being drawn inline, so
 /// the caller can emit them above all page content.
+#[allow(clippy::too_many_arguments)]
 fn generate_draw_commands_inner(
     cmd_buf: &mut Vec<DrawCommand>,
     layout: &LayoutNode,

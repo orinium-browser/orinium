@@ -7,6 +7,7 @@ use crate::{
     },
     engine::{
         html::HtmlNodeType,
+        js::JsFetchResponse,
         layouter::types::{ColorScheme, InfoNode},
         tree::TreeNode,
     },
@@ -239,12 +240,14 @@ impl Tab {
         if let Some(webview) = self.webview.as_mut() {
             webview.on_js_fetch_succeeded(
                 request_id,
-                response.url,
-                response.status.as_u16(),
-                response.status_text,
-                redirected,
-                response.body,
-                response.headers,
+                JsFetchResponse {
+                    url: response.url,
+                    status: response.status.as_u16(),
+                    status_text: response.status_text,
+                    redirected,
+                    body: response.body,
+                    headers: response.headers,
+                },
             );
         }
     }
