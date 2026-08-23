@@ -3064,14 +3064,13 @@ pub fn apply_declaration(
             };
         }
 
-        ("text-align", CssValue::Keyword(v)) if v == "left" => {
-            text_flow_style.text_align = TextAlign::Left;
-        }
-        ("text-align", CssValue::Keyword(v)) if v == "center" => {
-            text_flow_style.text_align = TextAlign::Center;
-        }
-        ("text-align", CssValue::Keyword(v)) if v == "right" => {
-            text_flow_style.text_align = TextAlign::Right;
+        ("text-align", CssValue::Keyword(v)) => {
+            text_flow_style.text_align = match v.as_str() {
+                "left" => TextAlign::Left,
+                "center" => TextAlign::Center,
+                "right" => TextAlign::Right,
+                _ => return None,
+            };
         }
 
         ("white-space", CssValue::Keyword(v)) => {
