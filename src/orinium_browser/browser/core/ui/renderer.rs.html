@@ -6,43 +6,43 @@
 <a href=#6 id=6 data-nosnippet>6</a>};
 <a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span><span class="kw">crate</span>::platform::renderer::gpu::GpuRenderer;
 <a href=#8 id=8 data-nosnippet>8</a>
-<a href=#9 id=9 data-nosnippet>9</a><span class="kw">use super</span>::{BasicChrome, Chrome, RenderState};
+<a href=#9 id=9 data-nosnippet>9</a><span class="kw">use super</span>::{BasicChrome, BasicContextMenu, Chrome, ContextMenu, RenderState};
 <a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span><span class="kw">crate</span>::browser::core::tab::Tab;
 <a href=#11 id=11 data-nosnippet>11</a>
 <a href=#12 id=12 data-nosnippet>12</a><span class="doccomment">/// BrowserRenderer は実際の描画を担当する。
 <a href=#13 id=13 data-nosnippet>13</a>///
 <a href=#14 id=14 data-nosnippet>14</a>/// 責務:
 <a href=#15 id=15 data-nosnippet>15</a>/// - アクティブタブのページとブラウザ chrome から DrawCommand を生成する
-<a href=#16 id=16 data-nosnippet>16</a>/// - DrawCommand をプラットフォームの GPU レンダラへ渡し、描画を実行する
-<a href=#17 id=17 data-nosnippet>17</a>/// - ウィンドウのサイズ・スケール・タイトルなどの描画状態を保持する
-<a href=#18 id=18 data-nosnippet>18</a>///
-<a href=#19 id=19 data-nosnippet>19</a>/// BrowserApp / BrowserUi は直接の描画実装を持たず、このレンダラへ処理を委譲する。
-<a href=#20 id=20 data-nosnippet>20</a></span><span class="attr">#[derive(Debug)]
-<a href=#21 id=21 data-nosnippet>21</a></span><span class="kw">pub struct </span>BrowserRenderer {
-<a href=#22 id=22 data-nosnippet>22</a>    <span class="doccomment">/// ウィンドウの描画状態（DrawCommand、サイズ、スケール、タイトル）。
-<a href=#23 id=23 data-nosnippet>23</a>    </span><span class="kw">pub </span>render_state: RenderState,
-<a href=#24 id=24 data-nosnippet>24</a>    <span class="doccomment">/// ブラウザ chrome（ツールバーなどの UI 描画）。既定は [`BasicChrome`]。
-<a href=#25 id=25 data-nosnippet>25</a>    </span><span class="kw">pub </span>chrome: Box&lt;<span class="kw">dyn </span>Chrome&gt;,
-<a href=#26 id=26 data-nosnippet>26</a>}
-<a href=#27 id=27 data-nosnippet>27</a>
-<a href=#28 id=28 data-nosnippet>28</a><span class="kw">impl </span>Default <span class="kw">for </span>BrowserRenderer {
-<a href=#29 id=29 data-nosnippet>29</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
-<a href=#30 id=30 data-nosnippet>30</a>        <span class="self">Self</span>::new()
-<a href=#31 id=31 data-nosnippet>31</a>    }
-<a href=#32 id=32 data-nosnippet>32</a>}
-<a href=#33 id=33 data-nosnippet>33</a>
-<a href=#34 id=34 data-nosnippet>34</a><span class="kw">impl </span>BrowserRenderer {
-<a href=#35 id=35 data-nosnippet>35</a>    <span class="doccomment">/// 既定の [`BasicChrome`] でレンダラを生成する。
-<a href=#36 id=36 data-nosnippet>36</a>    </span><span class="kw">pub fn </span>new() -&gt; <span class="self">Self </span>{
-<a href=#37 id=37 data-nosnippet>37</a>        <span class="self">Self</span>::with_chrome(Box::new(BasicChrome::new()))
-<a href=#38 id=38 data-nosnippet>38</a>    }
-<a href=#39 id=39 data-nosnippet>39</a>
-<a href=#40 id=40 data-nosnippet>40</a>    <span class="doccomment">/// 任意の chrome 実装でレンダラを生成する。
-<a href=#41 id=41 data-nosnippet>41</a>    </span><span class="kw">pub fn </span>with_chrome(chrome: Box&lt;<span class="kw">dyn </span>Chrome&gt;) -&gt; <span class="self">Self </span>{
-<a href=#42 id=42 data-nosnippet>42</a>        <span class="self">Self </span>{
-<a href=#43 id=43 data-nosnippet>43</a>            render_state: RenderState::default(),
-<a href=#44 id=44 data-nosnippet>44</a>            chrome,
-<a href=#45 id=45 data-nosnippet>45</a>        }
+<a href=#16 id=16 data-nosnippet>16</a>/// - 開いているコンテキストメニューを最前面オーバーレイとして生成する
+<a href=#17 id=17 data-nosnippet>17</a>/// - DrawCommand をプラットフォームの GPU レンダラへ渡し、描画を実行する
+<a href=#18 id=18 data-nosnippet>18</a>/// - ウィンドウのサイズ・スケール・タイトルなどの描画状態を保持する
+<a href=#19 id=19 data-nosnippet>19</a>///
+<a href=#20 id=20 data-nosnippet>20</a>/// BrowserApp / BrowserUi は直接の描画実装を持たず、このレンダラへ処理を委譲する。
+<a href=#21 id=21 data-nosnippet>21</a></span><span class="attr">#[derive(Debug)]
+<a href=#22 id=22 data-nosnippet>22</a></span><span class="kw">pub struct </span>BrowserRenderer {
+<a href=#23 id=23 data-nosnippet>23</a>    <span class="doccomment">/// ウィンドウの描画状態（DrawCommand、サイズ、スケール、タイトル）。
+<a href=#24 id=24 data-nosnippet>24</a>    </span><span class="kw">pub </span>render_state: RenderState,
+<a href=#25 id=25 data-nosnippet>25</a>    <span class="doccomment">/// ブラウザ chrome（ツールバーなどの UI 描画）。既定は [`BasicChrome`]。
+<a href=#26 id=26 data-nosnippet>26</a>    </span><span class="kw">pub </span>chrome: Box&lt;<span class="kw">dyn </span>Chrome&gt;,
+<a href=#27 id=27 data-nosnippet>27</a>    <span class="doccomment">/// WebView 右クリックで開くコンテキストメニュー。既定は [`BasicContextMenu`]。
+<a href=#28 id=28 data-nosnippet>28</a>    </span><span class="kw">pub </span>menu: Box&lt;<span class="kw">dyn </span>ContextMenu&gt;,
+<a href=#29 id=29 data-nosnippet>29</a>}
+<a href=#30 id=30 data-nosnippet>30</a>
+<a href=#31 id=31 data-nosnippet>31</a><span class="kw">impl </span>Default <span class="kw">for </span>BrowserRenderer {
+<a href=#32 id=32 data-nosnippet>32</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
+<a href=#33 id=33 data-nosnippet>33</a>        <span class="self">Self</span>::new()
+<a href=#34 id=34 data-nosnippet>34</a>    }
+<a href=#35 id=35 data-nosnippet>35</a>}
+<a href=#36 id=36 data-nosnippet>36</a>
+<a href=#37 id=37 data-nosnippet>37</a><span class="kw">impl </span>BrowserRenderer {
+<a href=#38 id=38 data-nosnippet>38</a>    <span class="doccomment">/// 既定の [`BasicChrome`] と [`BasicContextMenu`] でレンダラを生成する。
+<a href=#39 id=39 data-nosnippet>39</a>    </span><span class="kw">pub fn </span>new() -&gt; <span class="self">Self </span>{
+<a href=#40 id=40 data-nosnippet>40</a>        <span class="self">Self</span>::with_chrome(Box::new(BasicChrome::new()))
+<a href=#41 id=41 data-nosnippet>41</a>    }
+<a href=#42 id=42 data-nosnippet>42</a>
+<a href=#43 id=43 data-nosnippet>43</a>    <span class="doccomment">/// 任意の chrome 実装と既定の [`BasicContextMenu`] でレンダラを生成する。
+<a href=#44 id=44 data-nosnippet>44</a>    </span><span class="kw">pub fn </span>with_chrome(chrome: Box&lt;<span class="kw">dyn </span>Chrome&gt;) -&gt; <span class="self">Self </span>{
+<a href=#45 id=45 data-nosnippet>45</a>        <span class="self">Self</span>::with_chrome_and_menu(chrome, Box::new(BasicContextMenu::new()))
 <a href=#46 id=46 data-nosnippet>46</a>    }
 <a href=#47 id=47 data-nosnippet>47</a>
 <a href=#48 id=48 data-nosnippet>48</a>    <span class="doccomment">/// ウィンドウの初期サイズ・スケール・タイトルでレンダラを生成する。
@@ -50,92 +50,105 @@
 <a href=#50 id=50 data-nosnippet>50</a>        <span class="self">Self </span>{
 <a href=#51 id=51 data-nosnippet>51</a>            render_state: RenderState::new(window_size, scale_factor, window_title),
 <a href=#52 id=52 data-nosnippet>52</a>            chrome: Box::new(BasicChrome::new()),
-<a href=#53 id=53 data-nosnippet>53</a>        }
-<a href=#54 id=54 data-nosnippet>54</a>    }
-<a href=#55 id=55 data-nosnippet>55</a>
-<a href=#56 id=56 data-nosnippet>56</a>    <span class="doccomment">/// ウィンドウのサイズ・スケール・タイトルを設定する。
-<a href=#57 id=57 data-nosnippet>57</a>    </span><span class="kw">pub fn </span>set_window(<span class="kw-2">&amp;mut </span><span class="self">self</span>, window_size: (u32, u32), scale_factor: f64, window_title: String) {
-<a href=#58 id=58 data-nosnippet>58</a>        <span class="self">self</span>.render_state.window_size = window_size;
-<a href=#59 id=59 data-nosnippet>59</a>        <span class="self">self</span>.render_state.scale_factor = scale_factor;
-<a href=#60 id=60 data-nosnippet>60</a>        <span class="self">self</span>.render_state.window_title = window_title;
-<a href=#61 id=61 data-nosnippet>61</a>    }
-<a href=#62 id=62 data-nosnippet>62</a>
-<a href=#63 id=63 data-nosnippet>63</a>    <span class="doccomment">/// 指定されたアクティブタブのレイアウトを更新し、ページと chrome の
-<a href=#64 id=64 data-nosnippet>64</a>    /// DrawCommand を再生成する。
-<a href=#65 id=65 data-nosnippet>65</a>    </span><span class="kw">pub fn </span>rebuild(<span class="kw-2">&amp;mut </span><span class="self">self</span>, tabs: <span class="kw-2">&amp;mut </span>[Tab], active_tab: usize) {
-<a href=#66 id=66 data-nosnippet>66</a>        <span class="kw">let </span>(width, height) = <span class="self">self</span>.render_state.viewport();
-<a href=#67 id=67 data-nosnippet>67</a>        <span class="kw">let </span>Rect {
-<a href=#68 id=68 data-nosnippet>68</a>            x,
-<a href=#69 id=69 data-nosnippet>69</a>            y,
-<a href=#70 id=70 data-nosnippet>70</a>            width: content_width,
-<a href=#71 id=71 data-nosnippet>71</a>            height: content_height,
-<a href=#72 id=72 data-nosnippet>72</a>        } = <span class="self">self</span>.chrome.content_rect(width, height);
-<a href=#73 id=73 data-nosnippet>73</a>
-<a href=#74 id=74 data-nosnippet>74</a>        <span class="comment">// Reuse allocation
-<a href=#75 id=75 data-nosnippet>75</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>draw_commands = std::mem::take(<span class="kw-2">&amp;mut </span><span class="self">self</span>.render_state.draw_commands);
-<a href=#76 id=76 data-nosnippet>76</a>        draw_commands.clear();
-<a href=#77 id=77 data-nosnippet>77</a>
-<a href=#78 id=78 data-nosnippet>78</a>        <span class="comment">// Page area: below the chrome, clipped so page content never overlaps it.
-<a href=#79 id=79 data-nosnippet>79</a>        </span>draw_commands.push(DrawCommand::PushClip {
-<a href=#80 id=80 data-nosnippet>80</a>            path: rect_path(x, y, content_width, content_height),
-<a href=#81 id=81 data-nosnippet>81</a>            rule: FillRule::NonZero,
-<a href=#82 id=82 data-nosnippet>82</a>        });
-<a href=#83 id=83 data-nosnippet>83</a>        draw_commands.push(DrawCommand::PushTransform {
-<a href=#84 id=84 data-nosnippet>84</a>            transform: AffineTransform::translate(x, y),
-<a href=#85 id=85 data-nosnippet>85</a>        });
-<a href=#86 id=86 data-nosnippet>86</a>
-<a href=#87 id=87 data-nosnippet>87</a>        <span class="kw">let </span>title = <span class="kw">if let </span><span class="prelude-val">Some</span>(tab) = tabs.get_mut(active_tab) {
-<a href=#88 id=88 data-nosnippet>88</a>            tab.relayout((content_width, content_height));
-<a href=#89 id=89 data-nosnippet>89</a>
-<a href=#90 id=90 data-nosnippet>90</a>            <span class="comment">// Keep the chrome in sync with the active tab.
-<a href=#91 id=91 data-nosnippet>91</a>            </span><span class="kw">let </span>url = tab.document_url().map(|url| url.to_string());
-<a href=#92 id=92 data-nosnippet>92</a>            <span class="self">self</span>.chrome.sync_url(url.as_deref());
-<a href=#93 id=93 data-nosnippet>93</a>
-<a href=#94 id=94 data-nosnippet>94</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>((layout, info)) = tab.layout_and_info() {
-<a href=#95 id=95 data-nosnippet>95</a>                <span class="self">self</span>.chrome.debug_set_layout_node(layout);
+<a href=#53 id=53 data-nosnippet>53</a>            menu: Box::new(BasicContextMenu::new()),
+<a href=#54 id=54 data-nosnippet>54</a>        }
+<a href=#55 id=55 data-nosnippet>55</a>    }
+<a href=#56 id=56 data-nosnippet>56</a>
+<a href=#57 id=57 data-nosnippet>57</a>    <span class="doccomment">/// 任意の chrome 実装と任意のコンテキストメニュー実装でレンダラを生成する。
+<a href=#58 id=58 data-nosnippet>58</a>    </span><span class="kw">pub fn </span>with_chrome_and_menu(chrome: Box&lt;<span class="kw">dyn </span>Chrome&gt;, menu: Box&lt;<span class="kw">dyn </span>ContextMenu&gt;) -&gt; <span class="self">Self </span>{
+<a href=#59 id=59 data-nosnippet>59</a>        <span class="self">Self </span>{
+<a href=#60 id=60 data-nosnippet>60</a>            render_state: RenderState::default(),
+<a href=#61 id=61 data-nosnippet>61</a>            chrome,
+<a href=#62 id=62 data-nosnippet>62</a>            menu,
+<a href=#63 id=63 data-nosnippet>63</a>        }
+<a href=#64 id=64 data-nosnippet>64</a>    }
+<a href=#65 id=65 data-nosnippet>65</a>
+<a href=#66 id=66 data-nosnippet>66</a>    <span class="doccomment">/// ウィンドウのサイズ・スケール・タイトルを設定する。
+<a href=#67 id=67 data-nosnippet>67</a>    </span><span class="kw">pub fn </span>set_window(<span class="kw-2">&amp;mut </span><span class="self">self</span>, window_size: (u32, u32), scale_factor: f64, window_title: String) {
+<a href=#68 id=68 data-nosnippet>68</a>        <span class="self">self</span>.render_state.window_size = window_size;
+<a href=#69 id=69 data-nosnippet>69</a>        <span class="self">self</span>.render_state.scale_factor = scale_factor;
+<a href=#70 id=70 data-nosnippet>70</a>        <span class="self">self</span>.render_state.window_title = window_title;
+<a href=#71 id=71 data-nosnippet>71</a>    }
+<a href=#72 id=72 data-nosnippet>72</a>
+<a href=#73 id=73 data-nosnippet>73</a>    <span class="doccomment">/// 指定されたアクティブタブのレイアウトを更新し、ページと chrome の
+<a href=#74 id=74 data-nosnippet>74</a>    /// DrawCommand を再生成する。
+<a href=#75 id=75 data-nosnippet>75</a>    </span><span class="kw">pub fn </span>rebuild(<span class="kw-2">&amp;mut </span><span class="self">self</span>, tabs: <span class="kw-2">&amp;mut </span>[Tab], active_tab: usize) {
+<a href=#76 id=76 data-nosnippet>76</a>        <span class="kw">let </span>(width, height) = <span class="self">self</span>.render_state.viewport();
+<a href=#77 id=77 data-nosnippet>77</a>        <span class="kw">let </span>Rect {
+<a href=#78 id=78 data-nosnippet>78</a>            x,
+<a href=#79 id=79 data-nosnippet>79</a>            y,
+<a href=#80 id=80 data-nosnippet>80</a>            width: content_width,
+<a href=#81 id=81 data-nosnippet>81</a>            height: content_height,
+<a href=#82 id=82 data-nosnippet>82</a>        } = <span class="self">self</span>.chrome.content_rect(width, height);
+<a href=#83 id=83 data-nosnippet>83</a>
+<a href=#84 id=84 data-nosnippet>84</a>        <span class="comment">// Reuse allocation
+<a href=#85 id=85 data-nosnippet>85</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>draw_commands = std::mem::take(<span class="kw-2">&amp;mut </span><span class="self">self</span>.render_state.draw_commands);
+<a href=#86 id=86 data-nosnippet>86</a>        draw_commands.clear();
+<a href=#87 id=87 data-nosnippet>87</a>
+<a href=#88 id=88 data-nosnippet>88</a>        <span class="comment">// Page area: below the chrome, clipped so page content never overlaps it.
+<a href=#89 id=89 data-nosnippet>89</a>        </span>draw_commands.push(DrawCommand::PushClip {
+<a href=#90 id=90 data-nosnippet>90</a>            path: rect_path(x, y, content_width, content_height),
+<a href=#91 id=91 data-nosnippet>91</a>            rule: FillRule::NonZero,
+<a href=#92 id=92 data-nosnippet>92</a>        });
+<a href=#93 id=93 data-nosnippet>93</a>        draw_commands.push(DrawCommand::PushTransform {
+<a href=#94 id=94 data-nosnippet>94</a>            transform: AffineTransform::translate(x, y),
+<a href=#95 id=95 data-nosnippet>95</a>        });
 <a href=#96 id=96 data-nosnippet>96</a>
-<a href=#97 id=97 data-nosnippet>97</a>                renderer_model::generate_draw_commands(
-<a href=#98 id=98 data-nosnippet>98</a>                    <span class="kw-2">&amp;mut </span>draw_commands,
-<a href=#99 id=99 data-nosnippet>99</a>                    layout,
-<a href=#100 id=100 data-nosnippet>100</a>                    info,
-<a href=#101 id=101 data-nosnippet>101</a>                    (content_width, content_height),
-<a href=#102 id=102 data-nosnippet>102</a>                );
-<a href=#103 id=103 data-nosnippet>103</a>                tab.clear_redraw_flag();
-<a href=#104 id=104 data-nosnippet>104</a>                tab.title()
-<a href=#105 id=105 data-nosnippet>105</a>            } <span class="kw">else </span>{
-<a href=#106 id=106 data-nosnippet>106</a>                <span class="macro">log::debug!</span>(<span class="string">"No layout/info available for tab {}"</span>, active_tab);
-<a href=#107 id=107 data-nosnippet>107</a>                <span class="prelude-val">None
-<a href=#108 id=108 data-nosnippet>108</a>            </span>}
-<a href=#109 id=109 data-nosnippet>109</a>        } <span class="kw">else </span>{
-<a href=#110 id=110 data-nosnippet>110</a>            <span class="prelude-val">None
-<a href=#111 id=111 data-nosnippet>111</a>        </span>};
-<a href=#112 id=112 data-nosnippet>112</a>
-<a href=#113 id=113 data-nosnippet>113</a>        draw_commands.push(DrawCommand::PopTransform);
-<a href=#114 id=114 data-nosnippet>114</a>        draw_commands.push(DrawCommand::PopClip);
-<a href=#115 id=115 data-nosnippet>115</a>
-<a href=#116 id=116 data-nosnippet>116</a>        <span class="comment">// Chrome drawn on top of the page area.
-<a href=#117 id=117 data-nosnippet>117</a>        </span><span class="self">self</span>.chrome.draw(<span class="kw-2">&amp;mut </span>draw_commands, width, height);
-<a href=#118 id=118 data-nosnippet>118</a>
-<a href=#119 id=119 data-nosnippet>119</a>        <span class="comment">// Return reused buffer
-<a href=#120 id=120 data-nosnippet>120</a>        </span><span class="self">self</span>.render_state.draw_commands = draw_commands;
-<a href=#121 id=121 data-nosnippet>121</a>
-<a href=#122 id=122 data-nosnippet>122</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(title) = title {
-<a href=#123 id=123 data-nosnippet>123</a>            <span class="self">self</span>.render_state.window_title = title;
-<a href=#124 id=124 data-nosnippet>124</a>        }
-<a href=#125 id=125 data-nosnippet>125</a>    }
-<a href=#126 id=126 data-nosnippet>126</a>
-<a href=#127 id=127 data-nosnippet>127</a>    <span class="doccomment">/// 現在の DrawCommand を GPU レンダラへ送る。
-<a href=#128 id=128 data-nosnippet>128</a>    </span><span class="kw">pub fn </span>apply_draw_commands(<span class="kw-2">&amp;</span><span class="self">self</span>, gpu: <span class="kw-2">&amp;mut </span>GpuRenderer) {
-<a href=#129 id=129 data-nosnippet>129</a>        gpu.parse_draw_commands(<span class="kw-2">&amp;</span><span class="self">self</span>.render_state.draw_commands);
-<a href=#130 id=130 data-nosnippet>130</a>    }
+<a href=#97 id=97 data-nosnippet>97</a>        <span class="kw">let </span>title = <span class="kw">if let </span><span class="prelude-val">Some</span>(tab) = tabs.get_mut(active_tab) {
+<a href=#98 id=98 data-nosnippet>98</a>            tab.relayout((content_width, content_height));
+<a href=#99 id=99 data-nosnippet>99</a>
+<a href=#100 id=100 data-nosnippet>100</a>            <span class="comment">// Keep the chrome in sync with the active tab.
+<a href=#101 id=101 data-nosnippet>101</a>            </span><span class="kw">let </span>url = tab.document_url().map(|url| url.to_string());
+<a href=#102 id=102 data-nosnippet>102</a>            <span class="self">self</span>.chrome.sync_url(url.as_deref());
+<a href=#103 id=103 data-nosnippet>103</a>
+<a href=#104 id=104 data-nosnippet>104</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>((layout, info)) = tab.layout_and_info() {
+<a href=#105 id=105 data-nosnippet>105</a>                <span class="self">self</span>.chrome.debug_set_layout_node(layout);
+<a href=#106 id=106 data-nosnippet>106</a>
+<a href=#107 id=107 data-nosnippet>107</a>                renderer_model::generate_draw_commands(
+<a href=#108 id=108 data-nosnippet>108</a>                    <span class="kw-2">&amp;mut </span>draw_commands,
+<a href=#109 id=109 data-nosnippet>109</a>                    layout,
+<a href=#110 id=110 data-nosnippet>110</a>                    info,
+<a href=#111 id=111 data-nosnippet>111</a>                    (content_width, content_height),
+<a href=#112 id=112 data-nosnippet>112</a>                );
+<a href=#113 id=113 data-nosnippet>113</a>                tab.clear_redraw_flag();
+<a href=#114 id=114 data-nosnippet>114</a>                tab.title()
+<a href=#115 id=115 data-nosnippet>115</a>            } <span class="kw">else </span>{
+<a href=#116 id=116 data-nosnippet>116</a>                <span class="macro">log::debug!</span>(<span class="string">"No layout/info available for tab {}"</span>, active_tab);
+<a href=#117 id=117 data-nosnippet>117</a>                <span class="prelude-val">None
+<a href=#118 id=118 data-nosnippet>118</a>            </span>}
+<a href=#119 id=119 data-nosnippet>119</a>        } <span class="kw">else </span>{
+<a href=#120 id=120 data-nosnippet>120</a>            <span class="prelude-val">None
+<a href=#121 id=121 data-nosnippet>121</a>        </span>};
+<a href=#122 id=122 data-nosnippet>122</a>
+<a href=#123 id=123 data-nosnippet>123</a>        draw_commands.push(DrawCommand::PopTransform);
+<a href=#124 id=124 data-nosnippet>124</a>        draw_commands.push(DrawCommand::PopClip);
+<a href=#125 id=125 data-nosnippet>125</a>
+<a href=#126 id=126 data-nosnippet>126</a>        <span class="comment">// Chrome drawn on top of the page area.
+<a href=#127 id=127 data-nosnippet>127</a>        </span><span class="self">self</span>.chrome.draw(<span class="kw-2">&amp;mut </span>draw_commands, width, height);
+<a href=#128 id=128 data-nosnippet>128</a>
+<a href=#129 id=129 data-nosnippet>129</a>        <span class="comment">// The context menu is drawn last: topmost overlay above the chrome.
+<a href=#130 id=130 data-nosnippet>130</a>        </span><span class="self">self</span>.menu.draw(<span class="kw-2">&amp;mut </span>draw_commands, width, height);
 <a href=#131 id=131 data-nosnippet>131</a>
-<a href=#132 id=132 data-nosnippet>132</a>    <span class="doccomment">/// DrawCommand を再生成して GPU に送り、実際の描画を実行する。
-<a href=#133 id=133 data-nosnippet>133</a>    </span><span class="kw">pub fn </span>redraw(<span class="kw-2">&amp;mut </span><span class="self">self</span>, tabs: <span class="kw-2">&amp;mut </span>[Tab], active_tab: usize, gpu: <span class="kw-2">&amp;mut </span>GpuRenderer) {
-<a href=#134 id=134 data-nosnippet>134</a>        <span class="self">self</span>.rebuild(tabs, active_tab);
-<a href=#135 id=135 data-nosnippet>135</a>        <span class="self">self</span>.apply_draw_commands(gpu);
-<a href=#136 id=136 data-nosnippet>136</a>        <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = gpu.render() {
-<a href=#137 id=137 data-nosnippet>137</a>            <span class="macro">log::error!</span>(target: <span class="string">"BrowserRenderer::redraw"</span>, <span class="string">"Render error occurred: {}"</span>, e);
-<a href=#138 id=138 data-nosnippet>138</a>        }
-<a href=#139 id=139 data-nosnippet>139</a>    }
-<a href=#140 id=140 data-nosnippet>140</a>}
+<a href=#132 id=132 data-nosnippet>132</a>        <span class="comment">// Return reused buffer
+<a href=#133 id=133 data-nosnippet>133</a>        </span><span class="self">self</span>.render_state.draw_commands = draw_commands;
+<a href=#134 id=134 data-nosnippet>134</a>
+<a href=#135 id=135 data-nosnippet>135</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(title) = title {
+<a href=#136 id=136 data-nosnippet>136</a>            <span class="self">self</span>.render_state.window_title = title;
+<a href=#137 id=137 data-nosnippet>137</a>        }
+<a href=#138 id=138 data-nosnippet>138</a>    }
+<a href=#139 id=139 data-nosnippet>139</a>
+<a href=#140 id=140 data-nosnippet>140</a>    <span class="doccomment">/// 現在の DrawCommand を GPU レンダラへ送る。
+<a href=#141 id=141 data-nosnippet>141</a>    </span><span class="kw">pub fn </span>apply_draw_commands(<span class="kw-2">&amp;</span><span class="self">self</span>, gpu: <span class="kw-2">&amp;mut </span>GpuRenderer) {
+<a href=#142 id=142 data-nosnippet>142</a>        gpu.parse_draw_commands(<span class="kw-2">&amp;</span><span class="self">self</span>.render_state.draw_commands);
+<a href=#143 id=143 data-nosnippet>143</a>    }
+<a href=#144 id=144 data-nosnippet>144</a>
+<a href=#145 id=145 data-nosnippet>145</a>    <span class="doccomment">/// DrawCommand を再生成して GPU に送り、実際の描画を実行する。
+<a href=#146 id=146 data-nosnippet>146</a>    </span><span class="kw">pub fn </span>redraw(<span class="kw-2">&amp;mut </span><span class="self">self</span>, tabs: <span class="kw-2">&amp;mut </span>[Tab], active_tab: usize, gpu: <span class="kw-2">&amp;mut </span>GpuRenderer) {
+<a href=#147 id=147 data-nosnippet>147</a>        <span class="self">self</span>.rebuild(tabs, active_tab);
+<a href=#148 id=148 data-nosnippet>148</a>        <span class="self">self</span>.apply_draw_commands(gpu);
+<a href=#149 id=149 data-nosnippet>149</a>        <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = gpu.render() {
+<a href=#150 id=150 data-nosnippet>150</a>            <span class="macro">log::error!</span>(target: <span class="string">"BrowserRenderer::redraw"</span>, <span class="string">"Render error occurred: {}"</span>, e);
+<a href=#151 id=151 data-nosnippet>151</a>        }
+<a href=#152 id=152 data-nosnippet>152</a>    }
+<a href=#153 id=153 data-nosnippet>153</a>}
 </code></pre></div></section></main></body></html>
