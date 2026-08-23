@@ -3115,19 +3115,32 @@ pub fn apply_declaration(
             };
         }
 
-        ("border-style", CssValue::Keyword(v)) => {
-            let s = match v.as_str() {
-                "none" => BorderStyle::None,
-                "solid" => BorderStyle::Solid,
-                "dashed" => BorderStyle::Dashed,
-                "dotted" => BorderStyle::Dotted,
-                _ => BorderStyle::None,
-            };
+        ("border-style", v) => {
+            expand_box(
+                name,
+                v,
+                text_flow_style,
+                &|_, cv, _| {
+                    let style = match cv {
+                        CssValue::Keyword(v) => match v.as_str() {
+                            "none" => BorderStyle::None,
+                            "solid" => BorderStyle::Solid,
+                            "dashed" => BorderStyle::Dashed,
+                            "dotted" => BorderStyle::Dotted,
+                            _ => return None,
+                        },
+                        _ => return None,
+                    };
 
-            container_style.border_style.top = s;
-            container_style.border_style.right = s;
-            container_style.border_style.bottom = s;
-            container_style.border_style.left = s;
+                    Some(style)
+                },
+                |t, r, b, l| {
+                    container_style.border_style.top = t;
+                    container_style.border_style.right = r;
+                    container_style.border_style.bottom = b;
+                    container_style.border_style.left = l;
+                },
+            )?;
         }
 
         ("margin", v) => {
