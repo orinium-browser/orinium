@@ -46,5 +46,6 @@ pub use app::BrowserApp;
 pub use command::BrowserCommand;
 pub use tab::Tab;
 pub use ui::{
-    BasicChrome, BrowserRenderer, BrowserUi, Chrome, ChromeAction, ChromeEventResult, RenderState,
+    BasicChrome, BasicContextMenu, BrowserRenderer, BrowserUi, Chrome, ChromeAction,
+    ChromeEventResult, ClickContext, ContextMenu, MenuEventResult, MenuItem, RenderState,
 };

@@ -31,9 +31,8 @@
 
 pub mod core;
 
-pub use core::BrowserApp;
-pub use core::BrowserCommand;
-pub use core::BrowserUi;
-pub use core::RenderState;
-pub use core::Tab;
-pub use core::{BasicChrome, BrowserRenderer, Chrome, ChromeAction, ChromeEventResult};
+pub use core::{
+    BasicChrome, BasicContextMenu, BrowserApp, BrowserCommand, BrowserRenderer, BrowserUi, Chrome,
+    ChromeAction, ChromeEventResult, ClickContext, ContextMenu, MenuEventResult, MenuItem,
+    RenderState, Tab,
+};

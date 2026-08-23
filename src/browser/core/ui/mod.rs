@@ -2,11 +2,15 @@
 
 // Sub-modules
 mod basic_chrome;
+mod basic_context_menu;
 mod chrome;
+mod context_menu;
 mod renderer;
 
 pub use basic_chrome::BasicChrome;
+pub use basic_context_menu::{BasicContextMenu, MenuItem};
 pub use chrome::{Chrome, ChromeAction, ChromeEventResult};
+pub use context_menu::{ClickContext, ContextMenu, MenuEventResult};
 pub use renderer::BrowserRenderer;
 
 use std::sync::Arc;
@@ -126,7 +130,8 @@ impl Default for BrowserUi {
 }
 
 impl BrowserUi {
-    /// Creates a UI with the default [`BasicChrome`] and no tabs.
+    /// Creates a UI with the default [`BasicChrome`], the default
+    /// [`BasicContextMenu`] and no tabs.
     pub fn new() -> Self {
         Self::with_chrome(Box::new(BasicChrome::new()))
     }
@@ -136,12 +141,24 @@ impl BrowserUi {
         Self::with_tab_and_chrome(tab, Box::new(BasicChrome::new()))
     }
 
-    /// Creates a UI with a custom chrome and no tabs.
+    /// Creates a UI with a custom chrome, the default [`BasicContextMenu`]
+    /// and no tabs.
     pub fn with_chrome(chrome: Box<dyn Chrome>) -> Self {
+        Self::with_chrome_and_menu(chrome, Box::new(BasicContextMenu::new()))
+    }
+
+    /// Creates a UI with one tab, a custom chrome and the default
+    /// [`BasicContextMenu`].
+    pub fn with_tab_and_chrome(tab: Tab, chrome: Box<dyn Chrome>) -> Self {
+        Self::with_tab_and_menu(tab, chrome, Box::new(BasicContextMenu::new()))
+    }
+
+    /// Creates a UI with a custom chrome, a custom context menu and no tabs.
+    pub fn with_chrome_and_menu(chrome: Box<dyn Chrome>, menu: Box<dyn ContextMenu>) -> Self {
         Self {
             tabs: Vec::new(),
             active_tab: 0,
-            renderer: BrowserRenderer::with_chrome(chrome),
+            renderer: BrowserRenderer::with_chrome_and_menu(chrome, menu),
             input: InputState::default(),
             system_color_scheme: dark_light::detect().map(Into::into).unwrap_or_else(|e| {
                 log::error!("Failed to detect system color scheme, using default: {e}");
@@ -150,8 +167,12 @@ impl BrowserUi {
         }
     }
 
-    /// Creates a UI with one tab and a custom chrome.
-    pub fn with_tab_and_chrome(mut tab: Tab, chrome: Box<dyn Chrome>) -> Self {
+    /// Creates a UI with one tab, a custom chrome and a custom context menu.
+    pub fn with_tab_and_menu(
+        mut tab: Tab,
+        chrome: Box<dyn Chrome>,
+        menu: Box<dyn ContextMenu>,
+    ) -> Self {
         let system_color_scheme = dark_light::detect().map(Into::into).unwrap_or_else(|e| {
             log::error!("Failed to detect system color scheme, using default: {e}");
             Default::default()
@@ -162,7 +183,7 @@ impl BrowserUi {
         Self {
             tabs: vec![tab],
             active_tab: 0,
-            renderer: BrowserRenderer::with_chrome(chrome),
+            renderer: BrowserRenderer::with_chrome_and_menu(chrome, menu),
             input: InputState::default(),
             system_color_scheme,
         }
@@ -470,12 +491,11 @@ impl BrowserUi {
         }
     }
 
-    /// Handles mouse input events, mainly left-clicks for the active tab.
+    /// Handles mouse input events for the active tab.
+    ///
+    /// An open context menu intercepts every press and release before the
+    /// chrome and the page; a right-press over the web content opens it.
     fn handle_mouse_input(&mut self, button: MouseButton, state: ElementState) -> BrowserCommand {
-        if button != MouseButton::Left {
-            return BrowserCommand::None;
-        }
-
         let (x, y, sf) = (
             self.input.mouse_position.0,
             self.input.mouse_position.1,
@@ -483,9 +503,36 @@ impl BrowserUi {
         );
         let (px, py) = ((x / sf) as f32, (y / sf) as f32);
 
-        let tab_id = self.active_tab;
         let width = self.renderer.render_state.viewport().0;
         let height = self.renderer.render_state.viewport().1;
+
+        // An open context menu gets every press/release before the chrome
+        // and the page. Events it declines fall through to the normal flow.
+        if self.renderer.menu.is_open() {
+            let window_event = match state {
+                ElementState::Pressed => PointerEvent::Down { x: px, y: py },
+                ElementState::Released => PointerEvent::Up { x: px, y: py },
+            };
+            let result = self
+                .renderer
+                .menu
+                .pointer_event(width, height, window_event);
+            if result.consumed {
+                return self.dispatch_action(result.action, ActionSource::ContextMenu, x, y);
+            }
+        } else if button == MouseButton::Right {
+            // A right-press over the web content opens the context menu.
+            if state == ElementState::Pressed {
+                return self.open_context_menu(px, py);
+            }
+            return BrowserCommand::None;
+        }
+
+        if button != MouseButton::Left {
+            return BrowserCommand::None;
+        }
+
+        let tab_id = self.active_tab;
 
         // Click inside the chrome.
         let window_event = match state {
@@ -497,62 +544,7 @@ impl BrowserUi {
             .chrome
             .pointer_event(width, height, window_event);
         if result.consumed {
-            match result.action {
-                // Pressing the URL bar enables the OS IME so the caret and
-                // input methods work; the platform handler also requests a
-                // redraw.
-                ChromeAction::EnableIme => {
-                    if let Some(tab) = self.tabs.get_mut(tab_id)
-                        && let Some((_, info)) = tab.layout_and_info()
-                    {
-                        crate::engine::input::focus_text_input(info, None);
-                    }
-                    return BrowserCommand::SetImeAllowed {
-                        allowed: true,
-                        position: (x, y),
-                    };
-                }
-                ChromeAction::Back => {
-                    if let Some(tab) = self.tabs.get_mut(tab_id) {
-                        tab.go_back();
-                    }
-                }
-                ChromeAction::Reload => {
-                    if let Some(tab) = self.tabs.get_mut(tab_id) {
-                        tab.reload();
-                    }
-                }
-                ChromeAction::Navigate(url) => {
-                    if let Some(tab) = self.tabs.get_mut(tab_id) {
-                        tab.navigate(url);
-                    }
-                }
-                ChromeAction::DumpLayoutNode => {
-                    let node_opt = self
-                        .tabs
-                        .get(self.active_tab)
-                        .and_then(|t| t.layout_and_info().unzip().0);
-                    if let Some(node) = node_opt {
-                        self.renderer.chrome.debug_set_layout_node(node);
-                    }
-                }
-                ChromeAction::SetJsPolicy(policy) => {
-                    if let Some(tab) = self.tabs.get_mut(tab_id) {
-                        tab.set_js_policy(policy);
-                        tab.reload();
-                    }
-                }
-                ChromeAction::Repaint | ChromeAction::None => {}
-            }
-
-            return if self.renderer.chrome.needs_repaint() {
-                BrowserCommand::RequestRedraw
-            } else {
-                BrowserCommand::SetImeAllowed {
-                    allowed: false,
-                    position: (x, y),
-                }
-            };
+            return self.dispatch_action(result.action, ActionSource::Chrome, x, y);
         }
 
         // Content area: dispatch to the active tab in page coordinates.
@@ -612,6 +604,125 @@ impl BrowserUi {
         }
     }
 
+    /// Applies a [`ChromeAction`] produced by the chrome or the context menu
+    /// to the active tab.
+    ///
+    /// `source` decides whose repaint flag is consumed to close the event
+    /// handling; `(x, y)` are window coordinates for the IME request.
+    fn dispatch_action(
+        &mut self,
+        action: ChromeAction,
+        source: ActionSource,
+        x: f64,
+        y: f64,
+    ) -> BrowserCommand {
+        let tab_id = self.active_tab;
+        match action {
+            // Pressing the URL bar enables the OS IME so the caret and
+            // input methods work; the platform handler also requests a
+            // redraw.
+            ChromeAction::EnableIme => {
+                if let Some(tab) = self.tabs.get_mut(tab_id)
+                    && let Some((_, info)) = tab.layout_and_info()
+                {
+                    crate::engine::input::focus_text_input(info, None);
+                }
+                return BrowserCommand::SetImeAllowed {
+                    allowed: true,
+                    position: (x, y),
+                };
+            }
+            ChromeAction::Back => {
+                if let Some(tab) = self.tabs.get_mut(tab_id) {
+                    tab.go_back();
+                }
+            }
+            ChromeAction::Reload => {
+                if let Some(tab) = self.tabs.get_mut(tab_id) {
+                    tab.reload();
+                }
+            }
+            ChromeAction::Navigate(url) => {
+                if let Some(tab) = self.tabs.get_mut(tab_id) {
+                    tab.navigate(url);
+                }
+            }
+            ChromeAction::DumpLayoutNode => {
+                let node_opt = self
+                    .tabs
+                    .get(self.active_tab)
+                    .and_then(|t| t.layout_and_info().unzip().0);
+                if let Some(node) = node_opt {
+                    self.renderer.chrome.debug_set_layout_node(node);
+                }
+            }
+            ChromeAction::SetJsPolicy(policy) => {
+                if let Some(tab) = self.tabs.get_mut(tab_id) {
+                    tab.set_js_policy(policy);
+                    tab.reload();
+                }
+            }
+            ChromeAction::Repaint | ChromeAction::None => {}
+        }
+
+        let needs_repaint = match source {
+            ActionSource::Chrome => self.renderer.chrome.needs_repaint(),
+            ActionSource::ContextMenu => self.renderer.menu.needs_repaint(),
+        };
+        if needs_repaint {
+            BrowserCommand::RequestRedraw
+        } else {
+            BrowserCommand::SetImeAllowed {
+                allowed: false,
+                position: (x, y),
+            }
+        }
+    }
+
+    /// Opens the context menu for a right-press at window logical `(px, py)`.
+    ///
+    /// Builds a [`ClickContext`] (positions, link under the cursor, document
+    /// URL) and hands it to the menu. The menu only opens over the web
+    /// content area, never over the chrome.
+    fn open_context_menu(&mut self, px: f32, py: f32) -> BrowserCommand {
+        let width = self.renderer.render_state.viewport().0;
+        let height = self.renderer.render_state.viewport().1;
+
+        let Rect {
+            x: dx,
+            y: dy,
+            width: content_width,
+            height: content_height,
+        } = self.renderer.chrome.content_rect(width, height);
+        if px < dx || py < dy || px > dx + content_width || py > dy + content_height {
+            return BrowserCommand::None;
+        }
+
+        let page_pos = (px - dx, py - dy);
+
+        let Some(tab) = self.tabs.get(self.active_tab) else {
+            return BrowserCommand::None;
+        };
+        let document_url = tab.document_url().map(|url| url.to_string());
+        let link_url = tab.layout_and_info().and_then(|(layout, info)| {
+            let path = crate::engine::input::hit_test(layout, info, page_pos.0, page_pos.1);
+            link_href_at(&path)
+        });
+
+        let ctx = ClickContext {
+            window_pos: (px, py),
+            page_pos,
+            link_url,
+            document_url,
+        };
+
+        if self.renderer.menu.open(&ctx) {
+            BrowserCommand::RequestRedraw
+        } else {
+            BrowserCommand::None
+        }
+    }
+
     /// Dispatches a pointer move and updates hover state for the active tab.
     ///
     /// Returns whether the move changed any visual state (and thus requires a
@@ -622,6 +733,17 @@ impl BrowserUi {
         let (px, py) = ((x / sf) as f32, (y / sf) as f32);
         let v_width = self.renderer.render_state.viewport().0;
         let v_height = self.renderer.render_state.viewport().1;
+
+        // An open context menu intercepts every move before chrome/page.
+        if self.renderer.menu.is_open()
+            && self
+                .renderer
+                .menu
+                .pointer_event(v_width, v_height, PointerEvent::Move { x: px, y: py })
+                .consumed
+        {
+            return self.renderer.menu.needs_repaint();
+        }
 
         // The chrome receives every move so it can track its own hover state.
         let result = self.renderer.chrome.pointer_event(
@@ -717,30 +839,38 @@ fn handle_mouse_click(tab: &mut Tab, x: f32, y: f32) -> bool {
         crate::engine::input::focus_text_input(info, input_target.as_ref())
     });
 
-    let href_opt = {
-        if let Some(hit) = hit_path.iter().find(|e| {
-            matches!(
-                e.info.kind,
-                layouter::types::NodeKind::Container { ref role, .. }
-                    if matches!(role, layouter::types::ContainerRole::Link { .. })
-            )
-        }) {
-            if let layouter::types::NodeKind::Container { role, .. } = &hit.info.kind
-                && let layouter::types::ContainerRole::Link { href } = role
-            {
-                Some(href.clone())
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    };
+    let href_opt = link_href_at(&hit_path);
 
     if let Some(href) = href_opt {
         tab.move_to(&href)
     }
     input_focused
+}
+
+/// Returns the href of the innermost link on the hit path, if any.
+///
+/// The hit path is ordered child→parent, so the first match is the deepest
+/// link under the pointer.
+fn link_href_at(hit_path: &crate::engine::input::HitPath<'_>) -> Option<String> {
+    hit_path.iter().find_map(|hit| {
+        if let layouter::types::NodeKind::Container { role, .. } = &hit.info.kind
+            && let layouter::types::ContainerRole::Link { href } = role
+        {
+            Some(href.clone())
+        } else {
+            None
+        }
+    })
+}
+
+/// Where a [`ChromeAction`] came from; decides whose repaint flag closes the
+/// event handling in [`BrowserUi::dispatch_action`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ActionSource {
+    /// The action was produced by the chrome.
+    Chrome,
+    /// The action was produced by the context menu.
+    ContextMenu,
 }
 
 /// Maps a logical key to a text-editing navigation key, if any.

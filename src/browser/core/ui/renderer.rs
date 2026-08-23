@@ -6,13 +6,14 @@ use crate::engine::renderer_model::{
 };
 use crate::platform::renderer::gpu::GpuRenderer;
 
-use super::{BasicChrome, Chrome, RenderState};
+use super::{BasicChrome, BasicContextMenu, Chrome, ContextMenu, RenderState};
 use crate::browser::core::tab::Tab;
 
 /// BrowserRenderer は実際の描画を担当する。
 ///
 /// 責務:
 /// - アクティブタブのページとブラウザ chrome から DrawCommand を生成する
+/// - 開いているコンテキストメニューを最前面オーバーレイとして生成する
 /// - DrawCommand をプラットフォームの GPU レンダラへ渡し、描画を実行する
 /// - ウィンドウのサイズ・スケール・タイトルなどの描画状態を保持する
 ///
@@ -23,6 +24,8 @@ pub struct BrowserRenderer {
     pub render_state: RenderState,
     /// ブラウザ chrome（ツールバーなどの UI 描画）。既定は [`BasicChrome`]。
     pub chrome: Box<dyn Chrome>,
+    /// WebView 右クリックで開くコンテキストメニュー。既定は [`BasicContextMenu`]。
+    pub menu: Box<dyn ContextMenu>,
 }
 
 impl Default for BrowserRenderer {
@@ -32,17 +35,14 @@ impl Default for BrowserRenderer {
 }
 
 impl BrowserRenderer {
-    /// 既定の [`BasicChrome`] でレンダラを生成する。
+    /// 既定の [`BasicChrome`] と [`BasicContextMenu`] でレンダラを生成する。
     pub fn new() -> Self {
         Self::with_chrome(Box::new(BasicChrome::new()))
     }
 
-    /// 任意の chrome 実装でレンダラを生成する。
+    /// 任意の chrome 実装と既定の [`BasicContextMenu`] でレンダラを生成する。
     pub fn with_chrome(chrome: Box<dyn Chrome>) -> Self {
-        Self {
-            render_state: RenderState::default(),
-            chrome,
-        }
+        Self::with_chrome_and_menu(chrome, Box::new(BasicContextMenu::new()))
     }
 
     /// ウィンドウの初期サイズ・スケール・タイトルでレンダラを生成する。
@@ -50,6 +50,16 @@ impl BrowserRenderer {
         Self {
             render_state: RenderState::new(window_size, scale_factor, window_title),
             chrome: Box::new(BasicChrome::new()),
+            menu: Box::new(BasicContextMenu::new()),
+        }
+    }
+
+    /// 任意の chrome 実装と任意のコンテキストメニュー実装でレンダラを生成する。
+    pub fn with_chrome_and_menu(chrome: Box<dyn Chrome>, menu: Box<dyn ContextMenu>) -> Self {
+        Self {
+            render_state: RenderState::default(),
+            chrome,
+            menu,
         }
     }
 
@@ -115,6 +125,9 @@ impl BrowserRenderer {
 
         // Chrome drawn on top of the page area.
         self.chrome.draw(&mut draw_commands, width, height);
+
+        // The context menu is drawn last: topmost overlay above the chrome.
+        self.menu.draw(&mut draw_commands, width, height);
 
         // Return reused buffer
         self.render_state.draw_commands = draw_commands;
