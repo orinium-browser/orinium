@@ -3509,6 +3509,27 @@ pub fn apply_declaration(
             style.item_style.flex_shrink = *v;
         }
 
+        ("place-self", value) => {
+            let values = match value {
+                CssValue::Keyword(_) => std::slice::from_ref(value),
+                CssValue::List(values) if (1..=2).contains(&values.len()) => values.as_slice(),
+                _ => return None,
+            };
+
+            let align_items = match &values[0] {
+                CssValue::Keyword(v) => resolve_align_items(v)?,
+                _ => return None,
+            };
+
+            let justify_items = match values.get(1).unwrap_or(&values[0]) {
+                CssValue::Keyword(v) => resolve_justify_items(v)?,
+                _ => return None,
+            };
+
+            style.item_style.align_self = Some(align_items);
+            style.item_style.justify_self = Some(justify_items);
+        }
+
         ("align-self", CssValue::Keyword(v)) => {
             style.item_style.align_self = Some(match v.as_str() {
                 "stretch" => AlignItems::Stretch,
