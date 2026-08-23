@@ -3115,34 +3115,6 @@ pub fn apply_declaration(
             };
         }
 
-        ("border-style", v) => {
-            expand_box(
-                name,
-                v,
-                text_flow_style,
-                &|_, cv, _| {
-                    let style = match cv {
-                        CssValue::Keyword(v) => match v.as_str() {
-                            "none" => BorderStyle::None,
-                            "solid" => BorderStyle::Solid,
-                            "dashed" => BorderStyle::Dashed,
-                            "dotted" => BorderStyle::Dotted,
-                            _ => return None,
-                        },
-                        _ => return None,
-                    };
-
-                    Some(style)
-                },
-                |t, r, b, l| {
-                    container_style.border_style.top = t;
-                    container_style.border_style.right = r;
-                    container_style.border_style.bottom = b;
-                    container_style.border_style.left = l;
-                },
-            )?;
-        }
-
         ("margin", v) => {
             expand_box(
                 name,
@@ -3290,6 +3262,34 @@ pub fn apply_declaration(
         ("border-bottom-left-radius", v) => {
             container_style.border_radius.bottom_left =
                 parse_corner_radius(name, v, text_flow_style)?;
+        }
+
+        ("border-style", v) => {
+            expand_box(
+                name,
+                v,
+                text_flow_style,
+                &|_, cv, _| {
+                    let style = match cv {
+                        CssValue::Keyword(v) => match v.as_str() {
+                            "none" => BorderStyle::None,
+                            "solid" => BorderStyle::Solid,
+                            "dashed" => BorderStyle::Dashed,
+                            "dotted" => BorderStyle::Dotted,
+                            _ => return None,
+                        },
+                        _ => return None,
+                    };
+
+                    Some(style)
+                },
+                |t, r, b, l| {
+                    container_style.border_style.top = t;
+                    container_style.border_style.right = r;
+                    container_style.border_style.bottom = b;
+                    container_style.border_style.left = l;
+                },
+            )?;
         }
 
         ("padding", v) => {
