@@ -3653,7 +3653,11 @@ pub fn apply_declaration(
         }
 
         _ => {
-            // log::error!("{name}, {value:?}");
+            /*
+            if !name.starts_with('-') {
+                log::error!("{name}, {value:?}");
+            }
+            */
             return None;
         }
     }
