@@ -1275,9 +1275,138 @@ fn fmt_tree_node(
     Ok(())
 }
 
+impl std::fmt::Display for Combinator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Combinator::Descendant => f.write_str(" "),
+            Combinator::Child => f.write_str(" > "),
+            Combinator::NextSibling => f.write_str(" + "),
+            Combinator::SubsequentSibling => f.write_str(" ~ "),
+        }
+    }
+}
+
+/// Formats the `An+B` microsyntax stored by [`PseudoClass::Nth`], e.g.
+/// `2n+1`, `odd`-style `2n`, or a bare `3`.
+fn write_an_plus_b(f: &mut std::fmt::Formatter<'_>, a: i32, b: i32) -> std::fmt::Result {
+    if a == 0 {
+        return write!(f, "{b}");
+    }
+    match a {
+        1 => f.write_str("n")?,
+        -1 => f.write_str("-n")?,
+        _ => write!(f, "{a}n")?,
+    }
+    if b > 0 {
+        write!(f, "+{b}")
+    } else if b < 0 {
+        write!(f, "{b}")
+    } else {
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for PseudoClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PseudoClass::Simple(name) => write!(f, ":{name}"),
+            PseudoClass::SelectorList { name, selectors } => {
+                let arguments = selectors
+                    .iter()
+                    .map(ComplexSelector::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, ":{name}({arguments})")
+            }
+            PseudoClass::Nth { name, a, b } => {
+                write!(f, ":{name}(")?;
+                write_an_plus_b(f, *a, *b)?;
+                f.write_str(")")
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for Selector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(tag) = &self.tag {
+            f.write_str(tag)?;
+        }
+        if let Some(id) = &self.id {
+            write!(f, "#{id}")?;
+        }
+        for class in &self.classes {
+            write!(f, ".{class}")?;
+        }
+        for attribute in &self.attributes {
+            f.write_str("[")?;
+            f.write_str(&attribute.name)?;
+            if let Some(value) = &attribute.value {
+                write!(f, "=\"{value}\"")?;
+            }
+            f.write_str("]")?;
+        }
+        for pseudo_class in &self.pseudo_classes {
+            write!(f, "{pseudo_class}")?;
+        }
+        if let Some(pseudo_element) = &self.pseudo_element {
+            write!(f, "::{pseudo_element}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for ComplexSelector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Parts are stored right-to-left and each part carries the
+        // combinator linking it to the part on its left (`parts[k]` holds the
+        // relationship between `parts[k + 1]` and itself). Emitting left to
+        // right therefore reads the combinator from the *next* part.
+        for index in (0..self.parts.len()).rev() {
+            write!(f, "{}", self.parts[index].selector)?;
+            if index > 0
+                && let Some(combinator) = self.parts[index - 1].combinator
+            {
+                write!(f, "{combinator}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn complex_selector_display_renders_combinators_and_compounds() {
+        let stylesheet = Parser::new("div.a > p#x + span:hover { color: red; }")
+            .parse()
+            .unwrap();
+        let CssNodeType::Rule { selectors } = stylesheet.children()[0].node() else {
+            panic!("expected a rule");
+        };
+        assert_eq!(selectors[0].to_string(), "div.a > p#x + span:hover");
+
+        let stylesheet = Parser::new("ul li ~ a[rel=\"tag\"] { color: red; }")
+            .parse()
+            .unwrap();
+        let CssNodeType::Rule { selectors } = stylesheet.children()[0].node() else {
+            panic!("expected a rule");
+        };
+        assert_eq!(selectors[0].to_string(), "ul li ~ a[rel=\"tag\"]");
+    }
+
+    #[test]
+    fn selector_display_renders_nth_arguments() {
+        let stylesheet = Parser::new("li:nth-child(2n+1) { color: red; }")
+            .parse()
+            .unwrap();
+        let CssNodeType::Rule { selectors } = stylesheet.children()[0].node() else {
+            panic!("expected a rule");
+        };
+        assert_eq!(selectors[0].to_string(), "li:nth-child(2n+1)");
+    }
 
     #[test]
     fn parses_exact_attribute_selector() {
