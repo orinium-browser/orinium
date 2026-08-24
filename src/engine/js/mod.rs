@@ -21,7 +21,10 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+// TODO: Expose this global only when DevTools or tests need it.
+pub mod devtools;
 pub mod processor;
+pub use devtools::JsDevToolsRequest;
 pub use processor::{JsProcessor, JsTask, JsTaskResult};
 
 const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
@@ -142,6 +145,10 @@ pub struct JsHost {
     fetch_capabilities: HashMap<u64, JsFetchCapability>,
     xhr_requests: HashMap<u64, Rc<RefCell<JSObject>>>,
     constructing_fetch_capability: Option<JsFetchCapability>,
+    devtools_requests: Vec<JsDevToolsRequest>,
+    devtools_capabilities: HashMap<u64, devtools::JsDevToolsCapability>,
+    constructing_devtools_capability: Option<devtools::JsDevToolsCapability>,
+    next_devtools_id: u64,
     // TODO: Persist localStorage per origin and sessionStorage per top-level browsing context.
     local_storage: HashMap<String, String>,
     session_storage: HashMap<String, String>,
@@ -210,6 +217,10 @@ impl JsRuntime {
             fetch_capabilities: HashMap::new(),
             xhr_requests: HashMap::new(),
             constructing_fetch_capability: None,
+            devtools_requests: Vec::new(),
+            devtools_capabilities: HashMap::new(),
+            constructing_devtools_capability: None,
+            next_devtools_id: 0,
             local_storage: HashMap::new(),
             session_storage: HashMap::new(),
             document_cookies: HashMap::new(),
@@ -239,6 +250,7 @@ impl JsRuntime {
         install_request(&mut engine);
         install_fetch(&mut engine);
         install_xml_http_request(&mut engine);
+        devtools::install(&mut engine);
         install_url_apis(&mut engine);
         install_encoding_apis(&mut engine);
         install_browser_environment(&mut engine);

@@ -16,8 +16,8 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 
 use super::{
-    JsDynamicImageRequest, JsDynamicScriptRequest, JsDynamicStyleRequest, JsFetchRequest,
-    JsFetchResponse, JsLayoutMetrics, JsRuntime,
+    JsDevToolsRequest, JsDynamicImageRequest, JsDynamicScriptRequest, JsDynamicStyleRequest,
+    JsFetchRequest, JsFetchResponse, JsLayoutMetrics, JsRuntime,
 };
 use crate::engine::layouter::dom_snapshot::DomSnapshot;
 
@@ -48,6 +48,8 @@ pub enum JsTask {
     ResolveFetch { id: u64, response: JsFetchResponse },
     /// Reject a pending JavaScript `fetch()` after a network failure.
     RejectFetch { id: u64, reason: String },
+    /// Settle a pending DevTools inspection request with its JSON envelope.
+    ResolveDevTools { id: u64, result: String },
     /// Replace the JS thread's mirror DOM with the UI's tree (write-backs).
     UpdateDom { snapshot: DomSnapshot },
 }
@@ -67,6 +69,8 @@ pub struct JsTaskResult {
     pub needs_redraw: bool,
     /// `fetch()` requests queued by scripts while running this task.
     pub fetch_requests: Vec<JsFetchRequest>,
+    /// DevTools inspection requests queued by scripts while running this task.
+    pub devtools_requests: Vec<JsDevToolsRequest>,
     /// Dynamically inserted script elements discovered while running this task.
     pub(crate) dynamic_script_requests: Vec<JsDynamicScriptRequest>,
     /// Dynamically inserted stylesheet links discovered while running this task.
@@ -136,6 +140,7 @@ impl JsProcessor {
                 perf_scope!(collect);
                 let needs_redraw = runtime.take_needs_redraw();
                 let fetch_requests = runtime.take_fetch_requests();
+                let devtools_requests = runtime.take_devtools_requests();
                 let dynamic_script_requests = runtime.take_dynamic_script_requests();
                 let dynamic_style_requests = runtime.take_dynamic_style_requests();
                 let dynamic_image_requests = runtime.take_dynamic_image_requests();
@@ -151,6 +156,7 @@ impl JsProcessor {
                     dom,
                     needs_redraw,
                     fetch_requests,
+                    devtools_requests,
                     dynamic_script_requests,
                     dynamic_style_requests,
                     dynamic_image_requests,
@@ -232,6 +238,10 @@ fn run_task(runtime: &mut JsRuntime, task: JsTask) -> bool {
         }
         JsTask::RejectFetch { id, reason } => {
             runtime.reject_fetch(id, reason);
+            true
+        }
+        JsTask::ResolveDevTools { id, result } => {
+            runtime.resolve_devtools(id, result);
             true
         }
         JsTask::UpdateDom { snapshot } => {
