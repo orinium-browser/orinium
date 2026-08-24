@@ -136,8 +136,10 @@ impl CustomNodeFactory for ButtonFactory {
             crate::engine::layouter::types::Background::Color(c) if c.3 > 0 => *c,
             _ => default_bg,
         };
+        let label =
+            normalize_whitespace(&ctx.dom_snapshot.inner_text(ctx.dom_id), WhiteSpace::Normal);
         Some(Arc::new(ButtonComponent::new(
-            ctx.dom_snapshot.inner_text(ctx.dom_id),
+            label,
             bg,
             ctx.text_style.color,
             Arc::clone(&ctx.measurer),
@@ -266,7 +268,10 @@ impl CustomNodeFactory for SelectFactory {
                 }
                 Some("option") => options.push(SelectOption {
                     value: node.kind.get_attr("value").unwrap_or_default().to_string(),
-                    label: normalize_whitespace(&ctx.dom_snapshot.inner_text(*id), WhiteSpace::Pre),
+                    label: normalize_whitespace(
+                        &ctx.dom_snapshot.inner_text(*id),
+                        WhiteSpace::Normal,
+                    ),
                     selected: node.kind.has_attr("selected"),
                     disabled: node.kind.has_attr("disabled"),
                     group: None,
