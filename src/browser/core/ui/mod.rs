@@ -307,6 +307,7 @@ impl BrowserUi {
                     self.handle_devtools_request(id, method, params);
                     needs_redraw = true;
                 }
+                ChromeAction::Repaint => needs_redraw = true,
                 action => log::warn!("Ignoring unsupported action from chrome tick: {action:?}"),
             }
         }

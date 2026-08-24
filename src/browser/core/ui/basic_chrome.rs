@@ -358,23 +358,25 @@ impl Chrome for BasicChrome {
         &mut self,
         fetches_buf: &mut Vec<super::FetchRequest>,
         actions_buf: &mut Vec<ChromeAction>,
-    ) {
+    ) -> bool {
+        let mut redraw = false;
         for task in self.debug_pane.tick() {
             match task {
                 TabTask::Fetch { url, kind } => {
-                    log::info!("Fetch requested in BrowserUi: url={}", url);
+                    log::info!("Fetch requested in BasicChrome: url={}", url);
                     fetches_buf.push(FetchRequest {
                         tab_id: TabId(0),
                         url,
                         kind,
                     });
                 }
-                TabTask::NeedsRedraw => {}
+                TabTask::NeedsRedraw => redraw = true,
                 TabTask::DevToolsRequest { id, method, params } => {
                     actions_buf.push(ChromeAction::DevToolsRequest { id, method, params });
                 }
             }
         }
+        redraw
     }
 
     fn deliver_fetch(

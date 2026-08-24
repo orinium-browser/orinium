@@ -83,7 +83,11 @@ pub trait Chrome: std::fmt::Debug {
     fn draw(&mut self, cmd_buf: &mut Vec<DrawCommand>, width: f32, height: f32);
 
     /// Advances chrome-owned tabs and returns their fetch and browser actions.
-    fn tick(&mut self, fetches_buf: &mut Vec<FetchRequest>, actions_buf: &mut Vec<ChromeAction>);
+    fn tick(
+        &mut self,
+        fetches_buf: &mut Vec<FetchRequest>,
+        actions_buf: &mut Vec<ChromeAction>,
+    ) -> bool;
 
     /// Delivers a resource fetch result requested by the chrome itself.
     fn deliver_fetch(
