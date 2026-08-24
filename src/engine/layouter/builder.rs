@@ -6226,7 +6226,7 @@ mod tests {
         correct_atomic_inline_spacing(&mut layout);
 
         fn end_item(node: &LayoutNode) -> Option<ui_layout::Rect> {
-            if node.style.spacing.margin_left == LengthOrAuto::Auto {
+            if node.style.item_style.justify_self == Some(JustifyItems::End) {
                 return node.layout_box.iter().next().map(|model| model.border_box);
             }
             node.children
