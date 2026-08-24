@@ -14,7 +14,6 @@ pub use context_menu::{ClickContext, ContextMenu, MenuEventResult};
 pub use renderer::BrowserRenderer;
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use url::Url;
 use winit::event::{ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
@@ -26,7 +25,6 @@ use crate::engine::layouter;
 use crate::engine::layouter::types::ColorScheme;
 use crate::engine::renderer_model::{DrawCommand, Rect};
 use crate::engine::ui::PointerEvent;
-use crate::engine::ui::custom_node::CustomNode;
 use crate::engine::ui::input_text_types::{InputTextEvent, InputTextKey};
 use crate::platform::renderer::gpu::GpuRenderer;
 
@@ -84,13 +82,6 @@ struct InputState {
     mouse_position: (f64, f64),
     /// Current keyboard modifier state (Ctrl, Shift, Alt, etc.).
     modifiers: winit::keyboard::ModifiersState,
-    /// The custom node currently under the pointer, if any.
-    hovered: Option<Arc<dyn CustomNode>>,
-    /// The DOM node under the pointer when the left button was pressed.
-    ///
-    /// Used to detect a completed click (press and release on the same node),
-    /// which is forwarded to the page's JS `onclick` handler.
-    pressed_dom_id: Option<u32>,
 }
 
 /// タブから発生したリソース取得リクエスト。
@@ -106,6 +97,7 @@ pub(crate) struct BrowserUiTick {
     pub(crate) needs_redraw: bool,
 }
 
+/// TabId(0) is BrowserChrome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TabId(pub usize);
 
@@ -268,6 +260,7 @@ impl BrowserUi {
     pub(crate) fn tick(&mut self) -> BrowserUiTick {
         let mut fetches = Vec::new();
         let mut needs_redraw = false;
+        let mut chrome_actions = Vec::new();
 
         let tab_ids: Vec<_> = self.tabs.keys().copied().collect();
 
@@ -291,6 +284,7 @@ impl BrowserUi {
                     TabTask::DevToolsRequest { id, .. } => {
                         // The DevTools pane inspects the visible page; any
                         // other tab answers for itself.
+
                         let response = serde_json::json!({
                             "ok": false,
                             "error": "no inspected page",
@@ -302,6 +296,18 @@ impl BrowserUi {
                         }
                     }
                 }
+            }
+        }
+
+        self.renderer.chrome.tick(&mut fetches, &mut chrome_actions);
+
+        for action in chrome_actions {
+            match action {
+                ChromeAction::DevToolsRequest { id, method, params } => {
+                    self.handle_devtools_request(id, method, params);
+                    needs_redraw = true;
+                }
+                action => log::warn!("Ignoring unsupported action from chrome tick: {action:?}"),
             }
         }
 
@@ -319,75 +325,18 @@ impl BrowserUi {
         url: Url,
         response: Result<BrowserResponse, BrowserNetworkError>,
     ) {
+        if tab_id == &TabId(0) {
+            self.renderer.chrome.deliver_fetch(kind, url, response);
+            return;
+        }
+
         let Some(tab) = self.tab_mut(tab_id) else {
             log::warn!("There is no Tab called id={}", tab_id);
             return;
         };
 
-        match response {
-            Ok(resp) => {
-                log::info!("Fetch Done in BrowserUi for tab_id={}", tab_id);
-
-                match kind {
-                    FetchKind::Html => {
-                        let html = String::from_utf8_lossy(&resp.body).to_string();
-                        tab.on_fetch_succeeded_html(html);
-                    }
-                    FetchKind::Css => {
-                        let css = String::from_utf8_lossy(&resp.body).to_string();
-                        tab.on_fetch_succeeded_css_from(css, &url);
-                    }
-                    FetchKind::Script { index } => {
-                        let source = String::from_utf8_lossy(&resp.body).to_string();
-                        tab.on_fetch_succeeded_script(index, source);
-                    }
-                    FetchKind::DynamicScript { node_id } => {
-                        let source = String::from_utf8_lossy(&resp.body).to_string();
-                        tab.on_fetch_succeeded_dynamic_script(node_id, source);
-                    }
-                    FetchKind::DynamicCss { node_id } => {
-                        let source = String::from_utf8_lossy(&resp.body).to_string();
-                        tab.on_fetch_succeeded_dynamic_style(node_id, source);
-                    }
-                    FetchKind::Image { source } => {
-                        tab.on_fetch_succeeded_image(source, &resp.body);
-                    }
-                    FetchKind::Audio { source } => {
-                        tab.on_fetch_succeeded_audio(source, &resp.body);
-                    }
-                    FetchKind::JavaScript { request_id, .. } => {
-                        let redirected = resp.url != url.as_str();
-                        tab.on_fetch_succeeded_js(request_id, resp, redirected);
-                    }
-                }
-            }
-            Err(err) => {
-                log::error!("NetworkError: {}", err);
-                match kind {
-                    FetchKind::Image { .. } | FetchKind::Audio { .. } => {
-                        log::warn!("Media fetch failed without aborting page load: {}", url);
-                    }
-                    FetchKind::Script { index } => {
-                        log::warn!("Classic script fetch failed without aborting page load: {url}");
-                        tab.on_fetch_failed_script(index);
-                    }
-                    FetchKind::DynamicScript { node_id } => {
-                        log::warn!("Dynamic script fetch failed without aborting page load: {url}");
-                        tab.on_fetch_failed_dynamic_script(node_id);
-                    }
-                    FetchKind::DynamicCss { node_id } => {
-                        log::warn!(
-                            "Dynamic stylesheet fetch failed without aborting page load: {url}"
-                        );
-                        tab.on_fetch_failed_dynamic_style(node_id);
-                    }
-                    FetchKind::JavaScript { request_id, .. } => {
-                        tab.on_fetch_failed_js(request_id, err.to_string());
-                    }
-                    FetchKind::Html | FetchKind::Css => tab.on_fetch_failed(err, url),
-                }
-            }
-        }
+        log::info!("Delivering fetch result in BrowserUi for tab_id={}", tab_id);
+        tab.deliver_fetch(kind, url, response);
     }
 
     /// Handles a `winit` window event for this window and returns a `BrowserCommand`.
@@ -583,7 +532,7 @@ impl BrowserUi {
         let result = self
             .renderer
             .chrome
-            .pointer_event(width, height, window_event);
+            .pointer_event(width, height, window_event, state);
         if result.consumed {
             return self.dispatch_action(result.action, ActionSource::Chrome, x, y);
         }
@@ -593,59 +542,16 @@ impl BrowserUi {
 
         let (px, py) = (px - dx, py - dy);
 
-        // Hit-test the content area, dispatch the pointer event to custom
-        // nodes, and remember which DOM element the press/release landed on.
-        let clicked_dom_id = {
-            let Some(tab) = self.active_tab() else {
-                return BrowserCommand::None;
-            };
-
-            let Some((layout, info)) = tab.layout_and_info() else {
-                return BrowserCommand::None;
-            };
-
-            let path = crate::engine::input::hit_test(layout, info, px, py);
-
-            if state == ElementState::Pressed {
-                crate::engine::input::dismiss_open_popups(info, &path);
-            }
-
-            let event = match state {
-                ElementState::Pressed => PointerEvent::Down { x: px, y: py },
-                ElementState::Released => PointerEvent::Up { x: px, y: py },
-            };
-
-            crate::engine::input::dispatch_pointer(&path, event);
-            crate::engine::input::hit_dom_id(&path)
-        };
-
-        // A completed click (press and release on the same element) runs
-        // the element's JS `onclick` handler, if any.
-        let js_redraw = match state {
-            ElementState::Pressed => {
-                self.input.pressed_dom_id = clicked_dom_id;
-                false
-            }
-            ElementState::Released => {
-                let pressed = self.input.pressed_dom_id.take();
-
-                match (pressed, clicked_dom_id) {
-                    (Some(pressed), Some(released)) if pressed == released => self
-                        .active_tab_mut()
-                        .map(|tab| tab.on_js_click(released))
-                        .unwrap_or(false),
-                    _ => false,
-                }
-            }
+        let (tab_redraw, input_focused) = if let Some(tab) = self.active_tab_mut() {
+            tab.handle_mouse_input(px, py, state)
+        } else {
+            (false, false)
         };
 
         // Clicking the page unfocuses the chrome's text input.
         self.renderer.chrome.blur();
 
-        let tab = self.active_tab_mut().unwrap();
-
-        let input_focused = handle_mouse_click(tab, px, py);
-        if js_redraw {
+        if tab_redraw {
             BrowserCommand::RequestRedraw
         } else {
             BrowserCommand::SetImeAllowed {
@@ -719,6 +625,9 @@ impl BrowserUi {
                     tab.set_js_policy(policy);
                     tab.reload();
                 }
+            }
+            ChromeAction::DevToolsRequest { id, method, params } => {
+                self.handle_devtools_request(id, method, params)
             }
             ChromeAction::Repaint | ChromeAction::None => {}
         }
@@ -807,30 +716,14 @@ impl BrowserUi {
             v_width,
             v_height,
             PointerEvent::Move { x: px, y: py },
+            ElementState::Released,
         );
+
         if result.consumed {
             return self.renderer.chrome.needs_repaint();
         }
 
-        // Content area: dispatch to the page in page coordinates.
-        let viewport = self.renderer.chrome.content_rect(v_width, v_height);
-        let Rect { x: px, y: py, .. } = viewport;
-
-        let Some(tab) = self.active_tab() else {
-            return false;
-        };
-        let Some((layout, info)) = tab.layout_and_info() else {
-            return false;
-        };
-        let path = crate::engine::input::hit_test(layout, info, px, py);
-        let mut repaint =
-            crate::engine::input::dispatch_pointer(&path, PointerEvent::Move { x: px, y: py });
-        let previous = self.input.hovered.clone();
-        if crate::engine::input::update_hover(&path, previous.as_ref()) {
-            repaint = true;
-            self.input.hovered = crate::engine::input::hit_custom_node(&path).cloned();
-        }
-        repaint || self.renderer.chrome.needs_repaint()
+        self.renderer.chrome.needs_repaint()
     }
 
     /// Handles scrolling for the pane under the pointer, updating its layout
@@ -884,40 +777,28 @@ impl BrowserUi {
             scroll_y,
         );
     }
-}
-/// Handles a mouse click in the given tab at the specified coordinates.
-fn handle_mouse_click(tab: &mut Tab, x: f32, y: f32) -> bool {
-    let hit_path = match tab.layout_and_info() {
-        Some((layout, info)) => crate::engine::input::hit_test(layout, info, x, y),
-        None => return false,
-    };
 
-    let input_target = hit_path.iter().find_map(|hit| {
-        if let layouter::types::NodeKind::Custom { node, .. } = &hit.info.kind
-            && node.accepts_text_input()
-        {
-            Some(Arc::clone(node))
-        } else {
-            None
-        }
-    });
-    let input_focused = tab.layout_and_info().is_some_and(|(_, info)| {
-        crate::engine::input::focus_text_input(info, input_target.as_ref())
-    });
-
-    let href_opt = link_href_at(&hit_path);
-
-    if let Some(href) = href_opt {
-        tab.move_to(&href)
+    fn handle_devtools_request(&mut self, id: u64, method: String, params: String) {
+        let response = match self.active_tab_mut() {
+            Some(target_tab) => match target_tab.inspect(&method, &params) {
+                Ok(data) => serde_json::json!({ "ok": true, "data": data }).to_string(),
+                Err(error) => serde_json::json!({ "ok": false, "error": error }).to_string(),
+            },
+            None => serde_json::json!({
+                "ok": false,
+                "error": "no inspected page",
+            })
+            .to_string(),
+        };
+        self.renderer.chrome.on_devtools_response(id, response);
     }
-    input_focused
 }
 
 /// Returns the href of the innermost link on the hit path, if any.
 ///
 /// The hit path is ordered child→parent, so the first match is the deepest
 /// link under the pointer.
-fn link_href_at(hit_path: &crate::engine::input::HitPath<'_>) -> Option<String> {
+pub(super) fn link_href_at(hit_path: &crate::engine::input::HitPath<'_>) -> Option<String> {
     hit_path.iter().find_map(|hit| {
         if let layouter::types::NodeKind::Container { role, .. } = &hit.info.kind
             && let layouter::types::ContainerRole::Link { href } = role

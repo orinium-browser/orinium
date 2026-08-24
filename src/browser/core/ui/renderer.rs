@@ -4,9 +4,7 @@
 use std::collections::HashMap;
 
 use crate::browser::core::ui::TabId;
-use crate::engine::renderer_model::{
-    self, AffineTransform, DrawCommand, FillRule, Rect, rect_path,
-};
+use crate::engine::renderer_model::{AffineTransform, DrawCommand, FillRule, Rect, rect_path};
 use crate::platform::renderer::gpu::GpuRenderer;
 
 use super::{BasicChrome, BasicContextMenu, Chrome, ContextMenu, RenderState};
@@ -102,25 +100,13 @@ impl BrowserRenderer {
         let title = if let Some(active_tab) = active_id
             && let Some(tab) = tabs.get_mut(&active_tab)
         {
-            tab.relayout((content_width, content_height));
-
             // Keep the chrome in sync with the active tab.
             let url = tab.document_url().map(|url| url.to_string());
             self.chrome.sync_url(url.as_deref());
 
-            if let Some((layout, info)) = tab.layout_and_info() {
-                renderer_model::generate_draw_commands(
-                    &mut draw_commands,
-                    layout,
-                    info,
-                    (content_width, content_height),
-                );
-                tab.clear_redraw_flag();
-                tab.title()
-            } else {
-                log::debug!("No layout/info available for tab {}", active_tab);
-                None
-            }
+            tab.draw(&mut draw_commands, content_width, content_height);
+
+            tab.title()
         } else {
             None
         };

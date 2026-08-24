@@ -1,5 +1,7 @@
 //! ブラウザのタブ機能。WebView を保持し、ページのタイトルや URL などのメタ情報を管理する。
 
+use std::sync::Arc;
+
 use crate::{
     browser::core::{
         resource_loader::{BrowserNetworkError, BrowserResponse},
@@ -7,13 +9,20 @@ use crate::{
     },
     engine::{
         html::HtmlNodeType,
+        input::HitItem,
         js::JsFetchResponse,
-        layouter::types::{ColorScheme, InfoNode},
+        layouter::{
+            self,
+            types::{ColorScheme, InfoNode},
+        },
+        renderer_model::{self, DrawCommand},
         tree::TreeNode,
+        ui::{CustomNode, PointerEvent},
     },
 };
 use ui_layout::LayoutNode;
 use url::Url;
+use winit::event::ElementState;
 
 pub use super::webview::{CssApplicationStrategy, FetchKind, WebView, WebViewTask};
 
@@ -66,6 +75,14 @@ pub struct Tab {
     state: TabState,
     /// Previously visited URLs, most recent last. Used by the back button.
     history: Vec<Url>,
+
+    /// The custom node currently under the pointer, if any.
+    hovered: Option<Arc<dyn CustomNode>>,
+    /// The DOM node under the pointer when the left button was pressed.
+    ///
+    /// Used to detect a completed click (press and release on the same node),
+    /// which is forwarded to the page's JS `onclick` handler.
+    pressed_dom_id: Option<u32>,
 }
 
 impl std::fmt::Debug for Tab {
@@ -102,6 +119,9 @@ impl Tab {
 
             state: TabState::Loading,
             history: Vec::new(),
+
+            hovered: None,
+            pressed_dom_id: None,
         }
     }
 
@@ -138,6 +158,74 @@ impl Tab {
         }
 
         tasks
+    }
+
+    /// Delivers the result of a resource fetch to this tab.
+    ///
+    /// This is shared by regular browser tabs and the DevTools tab embedded in
+    /// the browser chrome so both follow the same loading and error handling
+    /// path.
+    pub(crate) fn deliver_fetch(
+        &mut self,
+        kind: FetchKind,
+        url: Url,
+        response: Result<BrowserResponse, BrowserNetworkError>,
+    ) {
+        match response {
+            Ok(resp) => match kind {
+                FetchKind::Html => {
+                    let html = String::from_utf8_lossy(&resp.body).to_string();
+                    self.on_fetch_succeeded_html(html);
+                }
+                FetchKind::Css => {
+                    let css = String::from_utf8_lossy(&resp.body).to_string();
+                    self.on_fetch_succeeded_css_from(css, &url);
+                }
+                FetchKind::Script { index } => {
+                    let source = String::from_utf8_lossy(&resp.body).to_string();
+                    self.on_fetch_succeeded_script(index, source);
+                }
+                FetchKind::DynamicScript { node_id } => {
+                    let source = String::from_utf8_lossy(&resp.body).to_string();
+                    self.on_fetch_succeeded_dynamic_script(node_id, source);
+                }
+                FetchKind::DynamicCss { node_id } => {
+                    let source = String::from_utf8_lossy(&resp.body).to_string();
+                    self.on_fetch_succeeded_dynamic_style(node_id, source);
+                }
+                FetchKind::Image { source } => {
+                    self.on_fetch_succeeded_image(source, &resp.body);
+                }
+                FetchKind::Audio { source } => {
+                    self.on_fetch_succeeded_audio(source, &resp.body);
+                }
+                FetchKind::JavaScript { request_id, .. } => {
+                    let redirected = resp.url != url.as_str();
+                    self.on_fetch_succeeded_js(request_id, resp, redirected);
+                }
+            },
+            Err(err) => match kind {
+                FetchKind::Image { .. } | FetchKind::Audio { .. } => {
+                    log::warn!("Media fetch failed without aborting page load: {url}");
+                }
+                FetchKind::Script { index } => {
+                    log::warn!("Classic script fetch failed without aborting page load: {url}");
+                    self.on_fetch_failed_script(index);
+                }
+                FetchKind::DynamicScript { node_id } => {
+                    log::warn!("Dynamic script fetch failed without aborting page load: {url}");
+                    self.on_fetch_failed_dynamic_script(node_id);
+                }
+                FetchKind::DynamicCss { node_id } => {
+                    log::warn!("Dynamic stylesheet fetch failed without aborting page load: {url}");
+                    self.on_fetch_failed_dynamic_style(node_id);
+                }
+                FetchKind::JavaScript { request_id, .. } => {
+                    self.on_fetch_failed_js(request_id, err.to_string());
+                }
+                FetchKind::Html | FetchKind::Css => self.on_fetch_failed(err, url),
+            },
+        }
     }
 
     /// BrowserApp から CSS fetch 完了を通知
@@ -288,6 +376,104 @@ impl Tab {
             Some(webview) => webview.inspect(method, params),
             None => Err("no page".to_string()),
         }
+    }
+
+    pub fn draw(&mut self, cmd_buf: &mut Vec<DrawCommand>, width: f32, height: f32) {
+        self.relayout((width, height));
+
+        if let Some((layout, info)) = self.layout_and_info() {
+            renderer_model::generate_draw_commands(cmd_buf, layout, info, (width, height));
+            self.clear_redraw_flag();
+        } else {
+            log::debug!(target: "Tab", "No layout/info available for tab");
+        }
+    }
+
+    pub fn handle_mouse_input(&mut self, px: f32, py: f32, state: ElementState) -> (bool, bool) {
+        // Hit-test the content area, dispatch the pointer event to custom
+        // nodes, and remember which DOM element the press/release landed on.
+        let Some((_, info)) = self.layout_and_info() else {
+            return (false, false);
+        };
+
+        let path = self.hit_test(px, py);
+        let dom_id = crate::engine::input::hit_dom_id(&path);
+
+        let mut repaint = false;
+
+        match state {
+            ElementState::Pressed => {
+                crate::engine::input::dismiss_open_popups(info, &path);
+
+                let input_target = path.iter().find_map(|hit| {
+                    if let layouter::types::NodeKind::Custom { node, .. } = &hit.info.kind
+                        && node.accepts_text_input()
+                    {
+                        Some(Arc::clone(node))
+                    } else {
+                        None
+                    }
+                });
+
+                let input_focused =
+                    crate::engine::input::focus_text_input(info, input_target.as_ref());
+
+                crate::engine::input::dispatch_pointer(&path, PointerEvent::Down { x: px, y: py });
+
+                if let Some(href) = path.iter().find_map(|hit| {
+                    if let layouter::types::NodeKind::Container { role, .. } = &hit.info.kind
+                        && let layouter::types::ContainerRole::Link { href } = role
+                    {
+                        Some(href.clone())
+                    } else {
+                        None
+                    }
+                }) {
+                    self.move_to(&href);
+                }
+
+                repaint |= input_focused;
+
+                self.pressed_dom_id = dom_id;
+            }
+
+            ElementState::Released => {
+                crate::engine::input::dispatch_pointer(&path, PointerEvent::Up { x: px, y: py });
+
+                let pressed = self.pressed_dom_id.take();
+                if let (Some(pressed), Some(released)) = (pressed, dom_id)
+                    && pressed == released
+                {
+                    repaint |= self.on_js_click(released);
+                }
+            }
+        }
+
+        let move_path = self.hit_test(px, py);
+
+        let input_focused =
+            crate::engine::input::dispatch_pointer(&move_path, PointerEvent::Move { x: px, y: py });
+
+        let hover_changed = {
+            let previous = self.hovered.as_ref();
+            crate::engine::input::update_hover(&move_path, previous)
+        };
+
+        if hover_changed {
+            repaint = true;
+            self.hovered = crate::engine::input::hit_custom_node(&move_path).cloned();
+        }
+
+        (repaint, input_focused)
+    }
+
+    fn hit_test<'a>(&'a self, px: f32, py: f32) -> Vec<HitItem<'a>> {
+        let Some((layout, info)) = self.layout_and_info() else {
+            return vec![];
+        };
+        let path = crate::engine::input::hit_test(layout, info, px, py);
+
+        path
     }
 
     /// Settles a DevTools inspection request with its JSON envelope.

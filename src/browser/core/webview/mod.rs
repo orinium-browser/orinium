@@ -53,6 +53,7 @@ pub enum WebViewTask {
 
 mod inspector;
 
+#[derive(Debug, Clone, PartialEq)]
 pub enum FetchKind {
     Html,
     Css,
