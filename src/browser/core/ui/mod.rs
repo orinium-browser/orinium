@@ -21,6 +21,7 @@ use winit::event::{ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, W
 use crate::browser::Tab;
 use crate::browser::core::resource_loader::{BrowserNetworkError, BrowserResponse};
 use crate::browser::core::tab::{FetchKind, TabTask};
+use crate::browser::core::webview::JsPolicy;
 use crate::engine::layouter;
 use crate::engine::layouter::types::ColorScheme;
 use crate::engine::renderer_model::{DrawCommand, Rect};
@@ -90,7 +91,35 @@ struct InputState {
     /// Used to detect a completed click (press and release on the same node),
     /// which is forwarded to the page's JS `onclick` handler.
     pressed_dom_id: Option<u32>,
+    /// The pane that owns keyboard input.
+    focused: FocusedPane,
 }
+
+/// Which split-view pane receives keyboard and IME input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum FocusedPane {
+    /// The inspected page (left pane).
+    #[default]
+    Page,
+    /// The DevTools frontend (right pane).
+    DevTools,
+}
+
+/// Split-view geometry for one window: the inspected page's rect plus, when
+/// the DevTools pane is open, its hosting tab index and rect.
+///
+/// All rects are window logical coordinates.
+#[derive(Debug, Clone, Copy)]
+pub struct PaneGeometry {
+    pub page: Rect,
+    pub devtools: Option<(usize, Rect)>,
+}
+
+/// Fraction of the content width given to the inspected page while the
+/// DevTools pane is open; the rest goes to the DevTools pane.
+const DEVTOOLS_PAGE_RATIO: f32 = 0.6;
+/// Location of the DevTools frontend served from the bundled resources.
+const DEVTOOLS_URL: &str = "resource:///devtools/index.html";
 
 /// タブから発生したリソース取得リクエスト。
 pub(crate) struct FetchRequest {
@@ -117,6 +146,12 @@ pub struct BrowserUi {
     active_tab: usize,
     renderer: BrowserRenderer,
     input: InputState,
+
+    /// Index of the hidden tab hosting the DevTools frontend, once created.
+    /// The tab stays alive across toggles so frontend state is preserved.
+    devtools_pane_tab: Option<usize>,
+    /// Whether the DevTools split view currently shows the pane tab.
+    devtools_open: bool,
 
     /// ToDo: add set color scheme event
     #[allow(unused)]
@@ -160,6 +195,8 @@ impl BrowserUi {
             active_tab: 0,
             renderer: BrowserRenderer::with_chrome_and_menu(chrome, menu),
             input: InputState::default(),
+            devtools_pane_tab: None,
+            devtools_open: false,
             system_color_scheme: dark_light::detect().map(Into::into).unwrap_or_else(|e| {
                 log::error!("Failed to detect system color scheme, using default: {e}");
                 Default::default()
@@ -185,6 +222,8 @@ impl BrowserUi {
             active_tab: 0,
             renderer: BrowserRenderer::with_chrome_and_menu(chrome, menu),
             input: InputState::default(),
+            devtools_pane_tab: None,
+            devtools_open: false,
             system_color_scheme,
         }
     }
@@ -222,7 +261,112 @@ impl BrowserUi {
 
     /// Rebuilds the render tree and sends draw commands to the GPU for this window.
     pub fn redraw(&mut self, gpu: &mut GpuRenderer) {
-        self.renderer.redraw(&mut self.tabs, self.active_tab, gpu);
+        let panes = self.pane_geometry();
+        self.renderer
+            .redraw(&mut self.tabs, self.active_tab, panes, gpu);
+    }
+
+    /// Computes the split-view geometry from the current viewport and chrome.
+    ///
+    /// With the DevTools pane open, the content area splits at
+    /// [`DEVTOOLS_PAGE_RATIO`]: inspected page on the left, DevTools pane on
+    /// the right.
+    fn pane_geometry(&self) -> PaneGeometry {
+        let (width, height) = self.renderer.render_state.viewport();
+        let content = self.renderer.chrome.content_rect(width, height);
+        match self.devtools_pane_tab.filter(|_| self.devtools_open) {
+            Some(tab_id) => {
+                let page_width = content.width * DEVTOOLS_PAGE_RATIO;
+                PaneGeometry {
+                    page: Rect::new(content.x, content.y, page_width, content.height),
+                    devtools: Some((
+                        tab_id,
+                        Rect::new(
+                            content.x + page_width,
+                            content.y,
+                            content.width - page_width,
+                            content.height,
+                        ),
+                    )),
+                }
+            }
+            None => PaneGeometry {
+                page: content,
+                devtools: None,
+            },
+        }
+    }
+
+    /// Returns the rect of a single pane in window logical coordinates.
+    fn pane_rect(&self, pane: FocusedPane) -> Rect {
+        let geometry = self.pane_geometry();
+        match (pane, geometry.devtools) {
+            (FocusedPane::DevTools, Some((_, rect))) => rect,
+            _ => geometry.page,
+        }
+    }
+
+    /// Returns the pane and its hosting tab under the window logical point
+    /// `(px, py)`, if the point is over web content.
+    fn pane_at(&self, px: f32, py: f32) -> Option<(FocusedPane, usize)> {
+        let geometry = self.pane_geometry();
+        if let Some((tab_id, rect)) = geometry.devtools
+            && rect.contains(px, py)
+        {
+            return Some((FocusedPane::DevTools, tab_id));
+        }
+        geometry
+            .page
+            .contains(px, py)
+            .then_some((FocusedPane::Page, self.active_tab))
+    }
+
+    /// Returns the tab that currently owns keyboard input.
+    fn focused_tab_id(&self) -> usize {
+        match self.input.focused {
+            FocusedPane::Page => self.active_tab,
+            FocusedPane::DevTools => self.devtools_pane_tab.unwrap_or(self.active_tab),
+        }
+    }
+
+    /// Opens or closes the DevTools split view.
+    ///
+    /// The pane's tab is created once and kept alive while hidden so frontend
+    /// state (tree expansion, selection) survives toggling.
+    fn toggle_dev_tools(&mut self) {
+        if self.devtools_open {
+            self.devtools_open = false;
+            self.input.focused = FocusedPane::Page;
+            log::info!("DevTools pane closed");
+            return;
+        }
+        let pane_id = match self.devtools_pane_tab {
+            Some(id) => id,
+            None => {
+                let mut tab = Tab::new(self.system_color_scheme, JsPolicy::Enabled);
+                tab.navigate(Url::parse(DEVTOOLS_URL).expect("static DevTools URL"));
+                self.tabs.push(tab);
+                let id = self.tabs.len() - 1;
+                self.devtools_pane_tab = Some(id);
+                id
+            }
+        };
+        self.devtools_open = true;
+        log::info!("DevTools pane opened from tab {pane_id}");
+    }
+
+    /// Returns the tab whose rendered state answers a DevTools inspection
+    /// request coming from `requester`.
+    ///
+    /// The DevTools pane inspects the visible page tab; any other tab answers
+    /// for itself, so a stray request from an ordinary page can only observe
+    /// that page.
+    fn inspection_target_for(&self, requester: usize) -> Option<usize> {
+        if self.devtools_pane_tab == Some(requester) {
+            (self.active_tab != requester).then_some(self.active_tab)
+        } else {
+            Some(requester)
+        }
     }
 
     /// Applies the current draw commands to the GPU renderer.
@@ -248,6 +392,31 @@ impl BrowserUi {
                     }
                     TabTask::NeedsRedraw => {
                         needs_redraw = true;
+                    }
+                    TabTask::DevToolsRequest { id, method, params } => {
+                        // The DevTools pane inspects the visible page; any
+                        // other tab answers for itself.
+                        let target = self
+                            .inspection_target_for(tab_id)
+                            .and_then(|tid| self.tabs.get_mut(tid));
+                        let response = match target {
+                            Some(target_tab) => match target_tab.inspect(&method, &params) {
+                                Ok(data) => {
+                                    serde_json::json!({ "ok": true, "data": data }).to_string()
+                                }
+                                Err(error) => {
+                                    serde_json::json!({ "ok": false, "error": error }).to_string()
+                                }
+                            },
+                            None => serde_json::json!({
+                                "ok": false,
+                                "error": "no inspected page",
+                            })
+                            .to_string(),
+                        };
+                        if let Some(requester) = self.tabs.get_mut(tab_id) {
+                            requester.on_devtools_response(id, response);
+                        }
                     }
                 }
             }
@@ -413,22 +582,13 @@ impl BrowserUi {
             return BrowserCommand::OpenNewWindow;
         }
 
-        let tab_id = self.active_tab;
+        let tab_id = self.focused_tab_id();
 
         // While the chrome owns text input (e.g. the address bar is focused),
         // keyboard input drives the chrome instead of the page.
         if self.renderer.chrome.accepts_text_input() {
             let action = self.renderer.chrome.key_event(&event, ctrl);
-            return match action {
-                ChromeAction::Navigate(url) => {
-                    if let Some(tab) = self.tabs.get_mut(tab_id) {
-                        tab.navigate(url);
-                    }
-                    BrowserCommand::RequestRedraw
-                }
-                ChromeAction::Repaint => BrowserCommand::RequestRedraw,
-                _ => BrowserCommand::None,
-            };
+            return self.apply_chrome_action(action);
         }
 
         let Some((_, info)) = self.tabs.get(tab_id).and_then(Tab::layout_and_info) else {
@@ -478,7 +638,7 @@ impl BrowserUi {
             Ime::Enabled => return BrowserCommand::None,
         };
 
-        let tab_id = self.active_tab;
+        let tab_id = self.focused_tab_id();
 
         let Some((_, info)) = self.tabs.get(tab_id).and_then(Tab::layout_and_info) else {
             return BrowserCommand::None;
@@ -532,8 +692,6 @@ impl BrowserUi {
             return BrowserCommand::None;
         }
 
-        let tab_id = self.active_tab;
-
         // Click inside the chrome.
         let window_event = match state {
             ElementState::Pressed => PointerEvent::Down { x: px, y: py },
@@ -547,10 +705,16 @@ impl BrowserUi {
             return self.dispatch_action(result.action, ActionSource::Chrome, x, y);
         }
 
-        // Content area: dispatch to the active tab in page coordinates.
-        let Rect { x: dx, y: dy, .. } = self.renderer.chrome.content_rect(width, height);
-
-        let (px, py) = (px - dx, py - dy);
+        // Content area: route to the pane under the pointer, in that pane's
+        // page coordinates.
+        let Some((pane, tab_id)) = self.pane_at(px, py) else {
+            return BrowserCommand::None;
+        };
+        if state == ElementState::Pressed {
+            self.input.focused = pane;
+        }
+        let origin = self.pane_rect(pane);
+        let (px, py) = (px - origin.x, py - origin.y);
 
         if let Some(tab) = self.tabs.get_mut(tab_id) {
             // Hit-test the content area, dispatch the pointer event to custom
@@ -601,6 +765,23 @@ impl BrowserUi {
             }
         } else {
             BrowserCommand::None
+        }
+    }
+
+    /// Applies an action produced by the chrome while it owns text input
+    /// (e.g. Enter in the address bar).
+    ///
+    /// Chrome-originated actions always target the active page tab — never
+    /// the pane that happens to own keyboard focus — so navigating from the
+    /// address bar cannot load into the hidden DevTools pane tab.
+    fn apply_chrome_action(&mut self, action: ChromeAction) -> BrowserCommand {
+        match action {
+            ChromeAction::Repaint => BrowserCommand::RequestRedraw,
+            ChromeAction::None => BrowserCommand::None,
+            action => {
+                let (x, y) = self.input.mouse_position;
+                self.dispatch_action(action, ActionSource::Chrome, x, y)
+            }
         }
     }
 
@@ -662,6 +843,10 @@ impl BrowserUi {
                     tab.reload();
                 }
             }
+            ChromeAction::ToggleDevTools => {
+                self.toggle_dev_tools();
+                return BrowserCommand::RequestRedraw;
+            }
             ChromeAction::Repaint | ChromeAction::None => {}
         }
 
@@ -682,23 +867,15 @@ impl BrowserUi {
     /// Opens the context menu for a right-press at window logical `(px, py)`.
     ///
     /// Builds a [`ClickContext`] (positions, link under the cursor, document
-    /// URL) and hands it to the menu. The menu only opens over the web
-    /// content area, never over the chrome.
+    /// URL) and hands it to the menu. The menu only opens over the inspected
+    /// page pane, never over the chrome or the DevTools pane.
     fn open_context_menu(&mut self, px: f32, py: f32) -> BrowserCommand {
-        let width = self.renderer.render_state.viewport().0;
-        let height = self.renderer.render_state.viewport().1;
-
-        let Rect {
-            x: dx,
-            y: dy,
-            width: content_width,
-            height: content_height,
-        } = self.renderer.chrome.content_rect(width, height);
-        if px < dx || py < dy || px > dx + content_width || py > dy + content_height {
+        let page_rect = self.pane_geometry().page;
+        if !page_rect.contains(px, py) {
             return BrowserCommand::None;
         }
 
-        let page_pos = (px - dx, py - dy);
+        let page_pos = (px - page_rect.x, py - page_rect.y);
 
         let Some(tab) = self.tabs.get(self.active_tab) else {
             return BrowserCommand::None;
@@ -728,7 +905,6 @@ impl BrowserUi {
     /// Returns whether the move changed any visual state (and thus requires a
     /// repaint).
     fn handle_pointer_move(&mut self, x: f64, y: f64) -> bool {
-        let tab_id = self.active_tab;
         let sf = self.renderer.render_state.scale_factor;
         let (px, py) = ((x / sf) as f32, (y / sf) as f32);
         let v_width = self.renderer.render_state.viewport().0;
@@ -755,9 +931,13 @@ impl BrowserUi {
             return self.renderer.chrome.needs_repaint();
         }
 
-        // Content area: dispatch to the page in page coordinates.
-        let viewport = self.renderer.chrome.content_rect(v_width, v_height);
-        let Rect { x: px, y: py, .. } = viewport;
+        // Content area: dispatch to the pane under the pointer, in that
+        // pane's page coordinates.
+        let Some((pane, tab_id)) = self.pane_at(px, py) else {
+            return false;
+        };
+        let origin = self.pane_rect(pane);
+        let (px, py) = (px - origin.x, py - origin.y);
 
         let Some(tab) = self.tabs.get_mut(tab_id) else {
             return false;
@@ -776,46 +956,43 @@ impl BrowserUi {
         repaint || self.renderer.chrome.needs_repaint()
     }
 
-    /// Handles scrolling for the window's assigned tab, updating its layout container offsets.
+    /// Handles scrolling for the pane under the pointer, updating its layout
+    /// container offsets; scrolls outside web content go to the chrome.
     fn handle_scroll(&mut self, delta: MouseScrollDelta) {
         let (scroll_x, scroll_y) = match delta {
             MouseScrollDelta::LineDelta(x, y) => (-x * 60.0, -y * 60.0),
             MouseScrollDelta::PixelDelta(pos) => (-pos.x as f32, -pos.y as f32),
         };
 
-        let (w_width, w_height) = self.renderer.render_state.viewport();
-        let Rect {
-            x: sx,
-            y: sy,
-            width,
-            height,
-        } = self.renderer.chrome.content_rect(w_width, w_height);
         let sf = self.renderer.render_state.scale_factor;
         let (mouse_x, mouse_y) = (
-            (self.input.mouse_position.0 / sf) as f32 - sx,
-            (self.input.mouse_position.1 / sf) as f32 - sy,
+            (self.input.mouse_position.0 / sf) as f32,
+            (self.input.mouse_position.1 / sf) as f32,
         );
 
-        if mouse_x < sx || mouse_y < sy || mouse_x > sx + width || mouse_y > sy + height {
+        let Some((pane, tab_id)) = self.pane_at(mouse_x, mouse_y) else {
+            let (w_width, w_height) = self.renderer.render_state.viewport();
             self.renderer
                 .chrome
                 .handle_scroll(w_width, w_height, mouse_x, mouse_y, scroll_x, scroll_y);
-        } else {
-            let tab_id = self.active_tab;
-            if let Some(tab) = self.tabs.get_mut(tab_id)
-                && let Some((layout, info)) = tab.layout_and_info_mut()
-            {
-                // Prefer the scrollable container under the cursor.
-                crate::engine::input::scroll_at(
-                    layout,
-                    info,
-                    (width, height),
-                    mouse_x,
-                    mouse_y,
-                    scroll_x,
-                    scroll_y,
-                );
-            }
+            return;
+        };
+
+        let origin = self.pane_rect(pane);
+        let (local_x, local_y) = (mouse_x - origin.x, mouse_y - origin.y);
+        if let Some(tab) = self.tabs.get_mut(tab_id)
+            && let Some((layout, info)) = tab.layout_and_info_mut()
+        {
+            // Prefer the scrollable container under the cursor.
+            crate::engine::input::scroll_at(
+                layout,
+                info,
+                (origin.width, origin.height),
+                local_x,
+                local_y,
+                scroll_x,
+                scroll_y,
+            );
         }
     }
 }
@@ -906,5 +1083,163 @@ fn logical_key_to_special_event(key: &winit::keyboard::Key, ctrl: bool) -> Optio
         Some(InputTextEvent::Enter)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::browser::core::webview::JsPolicy;
+    use crate::engine::layouter::types::ColorScheme;
+
+    fn ui_with_one_tab() -> BrowserUi {
+        let tab = Tab::new(ColorScheme::default(), JsPolicy::default());
+        BrowserUi::with_tab(tab)
+    }
+
+    #[test]
+    fn pane_geometry_matches_the_content_rect_while_closed() {
+        let ui = ui_with_one_tab();
+        let (width, height) = ui.renderer.render_state.viewport();
+        let content = ui.renderer.chrome.content_rect(width, height);
+        let geometry = ui.pane_geometry();
+
+        assert!(geometry.devtools.is_none());
+        assert_eq!(geometry.page.x, content.x);
+        assert_eq!(geometry.page.y, content.y);
+        assert_eq!(geometry.page.width, content.width);
+        assert_eq!(geometry.page.height, content.height);
+    }
+
+    #[test]
+    fn pane_geometry_splits_content_while_open() {
+        let mut ui = ui_with_one_tab();
+        ui.toggle_dev_tools();
+
+        let (width, height) = ui.renderer.render_state.viewport();
+        let content = ui.renderer.chrome.content_rect(width, height);
+        let geometry = ui.pane_geometry();
+
+        let (pane_id, tools) = geometry.devtools.expect("devtools pane while open");
+        assert_eq!(pane_id, 1);
+
+        let page_width = content.width * DEVTOOLS_PAGE_RATIO;
+        assert_eq!(geometry.page.x, content.x);
+        assert!((geometry.page.width - page_width).abs() < f32::EPSILON);
+        assert!((tools.x - (content.x + page_width)).abs() < f32::EPSILON);
+        assert!((tools.width - (content.width - page_width)).abs() < f32::EPSILON);
+        assert_eq!(geometry.page.y, tools.y);
+        assert_eq!(geometry.page.height, tools.height);
+
+        // Closing hides the pane but keeps the hosting tab alive for reuse.
+        ui.toggle_dev_tools();
+        assert!(ui.pane_geometry().devtools.is_none());
+        assert_eq!(ui.tabs.len(), 2);
+
+        // Reopening must reuse the existing pane tab.
+        ui.toggle_dev_tools();
+        assert_eq!(ui.devtools_pane_tab, Some(1));
+        assert_eq!(ui.tabs.len(), 2);
+    }
+
+    #[test]
+    fn pane_at_routes_points_to_the_pane_under_them() {
+        let mut ui = ui_with_one_tab();
+        ui.toggle_dev_tools();
+
+        let (width, _) = ui.renderer.render_state.viewport();
+        let content_top = ui.pane_geometry().page.y;
+
+        // Left quarter belongs to the inspected page.
+        assert_eq!(
+            ui.pane_at(width * 0.25, content_top + 10.0),
+            Some((FocusedPane::Page, 0))
+        );
+        // Right quarter belongs to the DevTools pane.
+        assert_eq!(
+            ui.pane_at(width * 0.8, content_top + 10.0),
+            Some((FocusedPane::DevTools, 1))
+        );
+        // The toolbar row above the panes is not web content.
+        assert_eq!(ui.pane_at(width * 0.5, 1.0), None);
+        // Below both panes is not web content either.
+        let (_, height) = ui.renderer.render_state.viewport();
+        assert_eq!(ui.pane_at(width * 0.5, height + 50.0), None);
+    }
+
+    #[test]
+    fn inspection_requests_from_the_pane_target_the_active_tab() {
+        let mut ui = ui_with_one_tab();
+        ui.toggle_dev_tools();
+
+        assert_eq!(ui.inspection_target_for(1), Some(0));
+        assert_eq!(ui.inspection_target_for(0), Some(0));
+
+        // A pane that somehow became the active tab must not inspect itself.
+        ui.active_tab = 1;
+        assert_eq!(ui.inspection_target_for(1), None);
+        assert_eq!(ui.inspection_target_for(0), Some(0));
+    }
+
+    #[test]
+    fn chrome_navigation_reaches_the_active_tab_while_the_pane_is_focused() {
+        let mut ui = ui_with_one_tab();
+        ui.toggle_dev_tools();
+        // The DevTools pane owns keyboard focus (e.g. it was clicked last).
+        ui.input.focused = FocusedPane::DevTools;
+        assert_eq!(ui.focused_tab_id(), 1);
+
+        // Focus the address bar by pressing along the toolbar row (winit
+        // `KeyEvent`s cannot be synthesized, so the Enter keystroke itself is
+        // covered by routing through dispatch_action below).
+        let (width, height) = ui.renderer.render_state.viewport();
+        let toolbar_y = ui.renderer.chrome.content_rect(width, height).y / 2.0;
+        for step in 1..=40 {
+            let x = width * step as f32 / 40.0;
+            ui.renderer
+                .chrome
+                .pointer_event(width, height, PointerEvent::Down { x, y: toolbar_y });
+            if ui.renderer.chrome.accepts_text_input() {
+                break;
+            }
+        }
+        assert!(
+            ui.renderer.chrome.accepts_text_input(),
+            "pressing somewhere on the toolbar row must focus the address bar"
+        );
+
+        let page_url: Url = "https://example.test/page".parse().expect("url");
+        // Same route the Enter keystroke takes from handle_keyboard_input.
+        ui.apply_chrome_action(ChromeAction::Navigate(page_url.clone()));
+
+        assert_eq!(ui.tabs[0].document_url(), Some(page_url));
+        assert_eq!(
+            ui.tabs[1].document_url(),
+            Some(Url::parse(DEVTOOLS_URL).expect("devtools url")),
+            "the hidden DevTools pane tab must keep its own URL"
+        );
+    }
+
+    #[test]
+    fn get_document_serializes_children_under_the_document_root() {
+        let mut ui = ui_with_one_tab();
+        ui.tabs[0].navigate("https://example.test/index.html".parse().expect("url"));
+        ui.tabs[0]
+            .on_fetch_succeeded_html("<html><body><p id=\"a\">hello</p></body></html>".to_string());
+
+        let doc = ui.tabs[0]
+            .inspect("getDocument", "{}")
+            .expect("document payload");
+        assert_eq!(doc["type"], "document");
+
+        // The frontend descends into synthetic roots, so the document node
+        // must expose element children (e.g. <html>).
+        let children = doc["children"].as_array().expect("children array");
+        assert!(
+            children
+                .iter()
+                .any(|child| child["type"] == "element" && child["tag"] == "html"),
+            "document root must expose the <html> element: {doc}"
+        );
     }
 }

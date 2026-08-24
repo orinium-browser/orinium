@@ -1,18 +1,25 @@
 //! ブラウザの描画機能。タブと chrome の描画リクエストを DrawCommand に変換し、
 //! プラットフォームの GPU レンダラへ送る。
 
+use crate::engine::layouter::types::Color;
 use crate::engine::renderer_model::{
-    self, AffineTransform, DrawCommand, FillRule, Rect, rect_path,
+    self, AffineTransform, Brush, DrawCommand, FillRule, Paint, Rect, rect_path,
 };
 use crate::platform::renderer::gpu::GpuRenderer;
 
-use super::{BasicChrome, BasicContextMenu, Chrome, ContextMenu, RenderState};
+use super::{BasicChrome, BasicContextMenu, Chrome, ContextMenu, PaneGeometry, RenderState};
 use crate::browser::core::tab::Tab;
+
+/// Width of the vertical divider drawn between the two panes.
+const DIVIDER_WIDTH: f32 = 1.0;
+/// Color of the pane divider.
+const DIVIDER_COLOR: Color = Color(160, 160, 165, 255);
 
 /// BrowserRenderer は実際の描画を担当する。
 ///
 /// 責務:
 /// - アクティブタブのページとブラウザ chrome から DrawCommand を生成する
+/// - DevTools ペインが開いている場合は分割ビューとして両ペインを生成する
 /// - 開いているコンテキストメニューを最前面オーバーレイとして生成する
 /// - DrawCommand をプラットフォームの GPU レンダラへ渡し、描画を実行する
 /// - ウィンドウのサイズ・スケール・タイトルなどの描画状態を保持する
@@ -72,45 +79,27 @@ impl BrowserRenderer {
 
     /// 指定されたアクティブタブのレイアウトを更新し、ページと chrome の
     /// DrawCommand を再生成する。
-    pub fn rebuild(&mut self, tabs: &mut [Tab], active_tab: usize) {
+    ///
+    /// `panes` は分割ビューの幾何情報。DevTools ペインが開いている場合は
+    /// 左側に検査対象ページ、右側に DevTools フロントエンドを描画し、境界に
+    /// 仕切り線を引く。
+    pub fn rebuild(&mut self, tabs: &mut [Tab], active_tab: usize, panes: PaneGeometry) {
         let (width, height) = self.render_state.viewport();
-        let Rect {
-            x,
-            y,
-            width: content_width,
-            height: content_height,
-        } = self.chrome.content_rect(width, height);
 
         // Reuse allocation
         let mut draw_commands = std::mem::take(&mut self.render_state.draw_commands);
         draw_commands.clear();
 
-        // Page area: below the chrome, clipped so page content never overlaps it.
-        draw_commands.push(DrawCommand::PushClip {
-            path: rect_path(x, y, content_width, content_height),
-            rule: FillRule::NonZero,
-        });
-        draw_commands.push(DrawCommand::PushTransform {
-            transform: AffineTransform::translate(x, y),
-        });
-
+        // Inspected page: always occupies the left pane.
         let title = if let Some(tab) = tabs.get_mut(active_tab) {
-            tab.relayout((content_width, content_height));
+            render_pane(&mut draw_commands, tab, panes.page);
 
             // Keep the chrome in sync with the active tab.
             let url = tab.document_url().map(|url| url.to_string());
             self.chrome.sync_url(url.as_deref());
 
-            if let Some((layout, info)) = tab.layout_and_info() {
+            if let Some((layout, _info)) = tab.layout_and_info() {
                 self.chrome.debug_set_layout_node(layout);
-
-                renderer_model::generate_draw_commands(
-                    &mut draw_commands,
-                    layout,
-                    info,
-                    (content_width, content_height),
-                );
-                tab.clear_redraw_flag();
                 tab.title()
             } else {
                 log::debug!("No layout/info available for tab {}", active_tab);
@@ -120,8 +109,15 @@ impl BrowserRenderer {
             None
         };
 
-        draw_commands.push(DrawCommand::PopTransform);
-        draw_commands.push(DrawCommand::PopClip);
+        // DevTools pane: rendered from its own hosting tab at the right edge.
+        if let Some((pane_id, tools_rect)) = panes.devtools {
+            if pane_id != active_tab
+                && let Some(pane_tab) = tabs.get_mut(pane_id)
+            {
+                render_pane(&mut draw_commands, pane_tab, tools_rect);
+            }
+            draw_divider(&mut draw_commands, tools_rect);
+        }
 
         // Chrome drawn on top of the page area.
         self.chrome.draw(&mut draw_commands, width, height);
@@ -143,11 +139,61 @@ impl BrowserRenderer {
     }
 
     /// DrawCommand を再生成して GPU に送り、実際の描画を実行する。
-    pub fn redraw(&mut self, tabs: &mut [Tab], active_tab: usize, gpu: &mut GpuRenderer) {
-        self.rebuild(tabs, active_tab);
+    pub fn redraw(
+        &mut self,
+        tabs: &mut [Tab],
+        active_tab: usize,
+        panes: PaneGeometry,
+        gpu: &mut GpuRenderer,
+    ) {
+        self.rebuild(tabs, active_tab, panes);
         self.apply_draw_commands(gpu);
         if let Err(e) = gpu.render() {
             log::error!(target: "BrowserRenderer::redraw", "Render error occurred: {}", e);
         }
     }
+}
+
+/// Renders one pane's page content, clipped to and translated into `rect`.
+///
+/// Also drives the pane tab's relayout so its layout matches the pane size.
+fn render_pane(draw_commands: &mut Vec<DrawCommand>, tab: &mut Tab, rect: Rect) {
+    draw_commands.push(DrawCommand::PushClip {
+        path: rect_path(rect.x, rect.y, rect.width, rect.height),
+        rule: FillRule::NonZero,
+    });
+    draw_commands.push(DrawCommand::PushTransform {
+        transform: AffineTransform::translate(rect.x, rect.y),
+    });
+
+    tab.relayout((rect.width, rect.height));
+    if let Some((layout, info)) = tab.layout_and_info() {
+        renderer_model::generate_draw_commands(
+            draw_commands,
+            layout,
+            info,
+            (rect.width, rect.height),
+        );
+        tab.clear_redraw_flag();
+    }
+
+    draw_commands.push(DrawCommand::PopTransform);
+    draw_commands.push(DrawCommand::PopClip);
+}
+
+/// Draws a thin vertical divider at the left edge of the DevTools pane.
+fn draw_divider(draw_commands: &mut Vec<DrawCommand>, tools_rect: Rect) {
+    draw_commands.push(DrawCommand::Fill {
+        path: rect_path(
+            tools_rect.x - DIVIDER_WIDTH * 0.5,
+            tools_rect.y,
+            DIVIDER_WIDTH,
+            tools_rect.height,
+        ),
+        rule: FillRule::NonZero,
+        paint: Paint {
+            brush: Brush::Solid(DIVIDER_COLOR),
+            opacity: 1.0,
+        },
+    });
 }
