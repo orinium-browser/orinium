@@ -23,6 +23,12 @@ pub enum TabTask {
         kind: FetchKind,
     },
     NeedsRedraw,
+    /// A page asked the DevTools bridge to inspect rendered state.
+    DevToolsRequest {
+        id: u64,
+        method: String,
+        params: String,
+    },
 }
 
 #[derive(Debug)]
@@ -109,6 +115,9 @@ impl Tab {
                         url: self.docment_url.as_ref().unwrap().clone(),
                         kind: FetchKind::Html,
                     });
+                }
+                WebViewTask::DevToolsRequest { id, method, params } => {
+                    tasks.push(TabTask::DevToolsRequest { id, method, params });
                 }
             }
         }
@@ -259,6 +268,21 @@ impl Tab {
     pub fn on_fetch_failed_js(&mut self, request_id: u64, reason: String) {
         if let Some(webview) = self.webview.as_mut() {
             webview.on_js_fetch_failed(request_id, reason);
+        }
+    }
+
+    /// Answers a DevTools inspection query against this tab's page.
+    pub fn inspect(&mut self, method: &str, params: &str) -> Result<serde_json::Value, String> {
+        match self.webview.as_mut() {
+            Some(webview) => webview.inspect(method, params),
+            None => Err("no page".to_string()),
+        }
+    }
+
+    /// Settles a DevTools inspection request with its JSON envelope.
+    pub fn on_devtools_response(&mut self, id: u64, result: String) {
+        if let Some(webview) = self.webview.as_mut() {
+            webview.on_devtools_response(id, result);
         }
     }
 

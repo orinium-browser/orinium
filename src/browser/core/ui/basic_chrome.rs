@@ -52,6 +52,8 @@ enum ChromeHit {
     Debug,
     /// Scripting button (toggle the scripting mode).
     Scripting,
+    /// DevTools pane toggle button.
+    DevTools,
     /// URL entry bar.
     UrlBar,
 }
@@ -69,6 +71,8 @@ struct ToolbarRects {
     debug: Rect,
     /// Scrinpting button.
     scripting: Rect,
+    /// DevTools pane toggle button.
+    devtools: Rect,
     /// URL bar.
     url_bar: Rect,
 }
@@ -89,6 +93,8 @@ struct BrowserToolbar {
     reload_button: ButtonComponent,
     /// Show the current LayoutNode
     debug_button: ButtonComponent,
+    /// DevTools pane toggle button.
+    devtools_button: ButtonComponent,
     /// Switch the scripting mode.
     scripting_button: ButtonComponent,
     /// URL entry bar.
@@ -123,12 +129,19 @@ impl BrowserToolbar {
             LABEL_COLOR,
             Arc::clone(&measurer),
         );
+        let devtools_button = ButtonComponent::new(
+            "DevTools",
+            BUTTON_BACKGROUND,
+            LABEL_COLOR,
+            Arc::clone(&measurer),
+        );
         let url_bar = InputTextComponent::new("", "Enter URL", measurer);
         Self {
             back_button,
             reload_button,
             debug_button,
             scripting_button,
+            devtools_button,
             url_bar,
         }
     }
@@ -139,6 +152,7 @@ impl BrowserToolbar {
         let reload_size = self.reload_button.intrinsic_size();
         let debug_size = self.debug_button.intrinsic_size();
         let scripting_size = self.scripting_button.intrinsic_size();
+        let devtools_size = self.devtools_button.intrinsic_size();
         let url_size = self.url_bar.intrinsic_size();
 
         let row_height = [back_size.height, reload_size.height, url_size.height]
@@ -171,7 +185,13 @@ impl BrowserToolbar {
             scripting_size.width,
             scripting_size.height,
         );
-        let url_x = (scripting.x + scripting.width + CHROME_GAP).min(width - CHROME_PADDING);
+        let devtools = Rect::new(
+            scripting.x + scripting.width + CHROME_GAP,
+            center_y(devtools_size.height),
+            devtools_size.width,
+            devtools_size.height,
+        );
+        let url_x = (devtools.x + devtools.width + CHROME_GAP).min(width - CHROME_PADDING);
         let url_width = (width - CHROME_PADDING - url_x).max(0.0);
         let url_bar = Rect::new(url_x, center_y(url_size.height), url_width, url_size.height);
 
@@ -181,6 +201,7 @@ impl BrowserToolbar {
             reload,
             debug,
             scripting,
+            devtools,
             url_bar,
         }
     }
@@ -197,6 +218,8 @@ impl BrowserToolbar {
             Some(ChromeHit::Debug)
         } else if rects.scripting.contains(x, y) {
             Some(ChromeHit::Scripting)
+        } else if rects.devtools.contains(x, y) {
+            Some(ChromeHit::DevTools)
         } else if rects.url_bar.contains(x, y) {
             Some(ChromeHit::UrlBar)
         } else {
@@ -247,6 +270,7 @@ impl BasicChrome {
             ChromeHit::Reload => &self.toolbar.reload_button,
             ChromeHit::Debug => &self.toolbar.debug_button,
             ChromeHit::Scripting => &self.toolbar.scripting_button,
+            ChromeHit::DevTools => &self.toolbar.devtools_button,
             ChromeHit::UrlBar => &self.toolbar.url_bar,
         };
         node.on_pointer_event(event)
@@ -297,11 +321,12 @@ impl Chrome for BasicChrome {
         let text_flow_style = TextFlowStyle::default();
         let style = Style::default();
 
-        let components: [(&dyn CustomNode, Rect); 5] = [
+        let components: [(&dyn CustomNode, Rect); 6] = [
             (&self.toolbar.back_button, rects.back),
             (&self.toolbar.reload_button, rects.reload),
             (&self.toolbar.debug_button, rects.debug),
             (&self.toolbar.scripting_button, rects.scripting),
+            (&self.toolbar.devtools_button, rects.devtools),
             (&self.toolbar.url_bar, rects.url_bar),
         ];
 
@@ -417,6 +442,7 @@ impl Chrome for BasicChrome {
 
                 ChromeAction::SetJsPolicy(self.scripting_mode.into())
             }
+            ChromeHit::DevTools if clicked => ChromeAction::ToggleDevTools,
             _ => ChromeAction::None,
         };
 

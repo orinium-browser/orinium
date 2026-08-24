@@ -35,6 +35,8 @@ pub enum ChromeAction {
     /// Dump the active tab's layout result to the console (like
     /// `dump_layoutnode`).
     DumpLayoutNode,
+    /// Toggle the DevTools split-view pane for the active tab.
+    ToggleDevTools,
     /// The chrome acquired a text field and wants OS-level IME enabled.
     EnableIme,
 }
