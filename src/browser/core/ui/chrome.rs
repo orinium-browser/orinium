@@ -8,7 +8,6 @@
 //!
 //! All coordinates are logical pixels in window space.
 
-use ui_layout::LayoutNode;
 use url::Url;
 use winit::event::{Ime, KeyEvent};
 
@@ -102,8 +101,6 @@ pub trait Chrome: std::fmt::Debug {
 
     /// Dispatches an IME event while the chrome owns text input.
     fn ime_event(&mut self, event: &Ime) -> ChromeAction;
-
-    fn debug_set_layout_node(&mut self, node: &LayoutNode);
 
     /// Drops any text-input focus held by the chrome (e.g. the user clicked the
     /// page).

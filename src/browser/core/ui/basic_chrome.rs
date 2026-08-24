@@ -217,10 +217,6 @@ pub struct BasicChrome {
     is_debug: bool,
 
     scripting_mode: ScriptingMode,
-    /// String content from LayoutNode.
-    ///
-    /// (debug info, scroll x, scroll y)
-    debug_layout_node: (String, f32, f32),
     /// Toolbar element currently under the pointer, if any.
     hovered: Option<ChromeHit>,
 }
@@ -233,7 +229,6 @@ impl BasicChrome {
             last_url: None,
             is_debug: false,
             scripting_mode: ScriptingMode::default(),
-            debug_layout_node: (String::new(), 0.0, 0.0),
             hovered: None,
         }
     }
@@ -276,7 +271,7 @@ impl Chrome for BasicChrome {
         }
     }
 
-    fn draw(&self, cmd_buf: &mut Vec<DrawCommand>, width: f32, height: f32) {
+    fn draw(&self, cmd_buf: &mut Vec<DrawCommand>, width: f32, _height: f32) {
         let rects = self.toolbar.rects(width);
 
         cmd_buf.push(DrawCommand::Fill {
@@ -320,37 +315,6 @@ impl Chrome for BasicChrome {
                 },
             );
             cmd_buf.push(DrawCommand::PopTransform);
-        }
-
-        if self.is_debug {
-            cmd_buf.push(DrawCommand::PushTransform {
-                transform: AffineTransform::translate(width / 2.0, rects.height()),
-            });
-
-            let rect_path = rect_path(0.0, 0.0, width / 2.0, height - rects.height());
-            cmd_buf.push(DrawCommand::Fill {
-                path: rect_path.clone(),
-                rule: FillRule::NonZero,
-                paint: Paint {
-                    brush: Brush::Solid(Color(200, 200, 200, 200)),
-                    opacity: 1.0,
-                },
-            });
-            cmd_buf.push(DrawCommand::PushClip {
-                path: rect_path,
-                rule: FillRule::NonZero,
-            });
-
-            cmd_buf.push(DrawCommand::DrawText {
-                x: self.debug_layout_node.1,
-                y: self.debug_layout_node.2,
-                text: self.debug_layout_node.0.clone().into(),
-                style: text_style,
-                flow_style: text_flow_style,
-            });
-
-            cmd_buf.push(DrawCommand::PopTransform);
-            cmd_buf.push(DrawCommand::PopClip);
         }
     }
 
@@ -425,28 +389,14 @@ impl Chrome for BasicChrome {
 
     fn handle_scroll(
         &mut self,
-        width: f32,
-        height: f32,
-        x: f32,
-        y: f32,
-        scroll_x: f32,
-        scroll_y: f32,
+        _width: f32,
+        _height: f32,
+        _x: f32,
+        _y: f32,
+        _scroll_x: f32,
+        _scroll_y: f32,
     ) {
-        if self.is_debug {
-            let rects = self.toolbar.rects(width);
-
-            let rect = Rect {
-                x: width / 2.0,
-                y: rects.height(),
-                width: width / 2.0,
-                height: height - rects.height(),
-            };
-
-            if rect.contains(x, y) {
-                self.debug_layout_node.1 -= scroll_x;
-                self.debug_layout_node.2 -= scroll_y;
-            }
-        }
+        todo!()
     }
 
     fn accepts_text_input(&self) -> bool {
@@ -505,12 +455,6 @@ impl Chrome for BasicChrome {
             ChromeAction::Repaint
         } else {
             ChromeAction::None
-        }
-    }
-
-    fn debug_set_layout_node(&mut self, node: &ui_layout::LayoutNode) {
-        if self.is_debug {
-            self.debug_layout_node.0 = format!("{:#}", node);
         }
     }
 
