@@ -15,7 +15,7 @@ struct Declaration {
 }
 
 /// Origin of a declaration in the CSS cascade.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum StyleOrigin {
     /// Browser-provided default styling.
     UserAgent,
