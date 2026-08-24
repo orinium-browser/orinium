@@ -54,7 +54,7 @@ enum TabState {
 pub struct Tab {
     title: Option<String>,
     base_url: Option<Url>,
-    docment_url: Option<Url>,
+    document_url: Option<Url>,
     webview: Option<WebView>,
 
     system_color_scheme: ColorScheme,
@@ -79,7 +79,7 @@ impl Tab {
         Self {
             title: None,
             base_url: None,
-            docment_url: None,
+            document_url: None,
             webview: None,
 
             system_color_scheme,
@@ -109,7 +109,7 @@ impl Tab {
                 }
                 WebViewTask::AskTabHtml => {
                     tasks.push(TabTask::Fetch {
-                        url: self.docment_url.as_ref().unwrap().clone(),
+                        url: self.document_url.as_ref().unwrap().clone(),
                         kind: FetchKind::Html,
                     });
                 }
@@ -140,7 +140,7 @@ impl Tab {
             return;
         };
 
-        wv.on_html_fetched(html, self.docment_url.as_ref().unwrap().clone());
+        wv.on_html_fetched(html, self.document_url.as_ref().unwrap().clone());
         self.title = wv.title().cloned();
         let base_url = wv.base_url().unwrap().clone();
         log::info!("HTML fetched, base_url={}", base_url);
@@ -306,7 +306,7 @@ impl Tab {
 
     /// Reloads the current document, if one is loaded.
     pub fn reload(&mut self) {
-        if let Some(url) = self.docment_url.clone() {
+        if let Some(url) = self.document_url.clone() {
             self.navigate_internal(url, false);
         }
     }
@@ -318,12 +318,12 @@ impl Tab {
 
     fn navigate_internal(&mut self, url: Url, record_history: bool) {
         if record_history
-            && self.docment_url.as_ref() != Some(&url)
-            && let Some(previous) = self.docment_url.clone()
+            && self.document_url.as_ref() != Some(&url)
+            && let Some(previous) = self.document_url.clone()
         {
             self.history.push(previous);
         }
-        self.docment_url = Some(url);
+        self.document_url = Some(url);
         let mut webview = WebView::new(self.system_color_scheme, self.js_policy);
         webview.navigate();
         self.webview = Some(webview);
@@ -381,7 +381,7 @@ impl Tab {
 
     /// Returns document url
     pub fn document_url(&self) -> Option<Url> {
-        self.docment_url.clone()
+        self.document_url.clone()
     }
 
     pub fn layout_and_info(&self) -> Option<(&LayoutNode, &InfoNode)> {
