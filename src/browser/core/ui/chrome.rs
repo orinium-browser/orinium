@@ -9,8 +9,11 @@
 //! All coordinates are logical pixels in window space.
 
 use url::Url;
-use winit::event::{Ime, KeyEvent};
+use winit::event::{ElementState, Ime, KeyEvent};
 
+use crate::browser::core::resource_loader::{BrowserNetworkError, BrowserResponse};
+use crate::browser::core::tab::FetchKind;
+use crate::browser::core::ui::FetchRequest;
 use crate::browser::core::webview::JsPolicy;
 use crate::engine::renderer_model::{DrawCommand, Rect};
 use crate::engine::ui::PointerEvent;
@@ -33,6 +36,12 @@ pub enum ChromeAction {
     Reload,
     /// The chrome acquired a text field and wants OS-level IME enabled.
     EnableIme,
+    /// A page asked the DevTools bridge to inspect rendered state.
+    DevToolsRequest {
+        id: u64,
+        method: String,
+        params: String,
+    },
 }
 
 /// The outcome of dispatching a pointer event to the chrome.
@@ -71,7 +80,18 @@ pub trait Chrome: std::fmt::Debug {
     fn content_rect(&self, width: f32, height: f32) -> Rect;
 
     /// Draws the chrome into `cmd_buf` in window coordinates.
-    fn draw(&self, cmd_buf: &mut Vec<DrawCommand>, width: f32, height: f32);
+    fn draw(&mut self, cmd_buf: &mut Vec<DrawCommand>, width: f32, height: f32);
+
+    /// Advances chrome-owned tabs and returns their fetch and browser actions.
+    fn tick(&mut self, fetches_buf: &mut Vec<FetchRequest>, actions_buf: &mut Vec<ChromeAction>);
+
+    /// Delivers a resource fetch result requested by the chrome itself.
+    fn deliver_fetch(
+        &mut self,
+        kind: FetchKind,
+        url: Url,
+        response: Result<BrowserResponse, BrowserNetworkError>,
+    );
 
     /// Reflects the active tab's URL, if the chrome shows one.
     fn sync_url(&mut self, url: Option<&str>);
@@ -80,14 +100,20 @@ pub trait Chrome: std::fmt::Debug {
     ///
     /// The chrome receives every pointer event, including moves over the page
     /// area, so it can track its own hover state.
-    fn pointer_event(&mut self, width: f32, height: f32, event: PointerEvent) -> ChromeEventResult;
+    fn pointer_event(
+        &mut self,
+        width: f32,
+        height: f32,
+        event: PointerEvent,
+        state: ElementState,
+    ) -> ChromeEventResult;
 
     fn handle_scroll(
         &mut self,
         width: f32,
         height: f32,
-        x: f32,
-        y: f32,
+        mouse_x: f32,
+        mouse_y: f32,
         scroll_x: f32,
         scroll_y: f32,
     );
