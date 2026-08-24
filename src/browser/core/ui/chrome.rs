@@ -100,6 +100,8 @@ pub trait Chrome: std::fmt::Debug {
     /// Dispatches an IME event while the chrome owns text input.
     fn ime_event(&mut self, event: &Ime) -> ChromeAction;
 
+    fn on_devtools_response(&mut self, id: u64, result: String);
+
     /// Drops any text-input focus held by the chrome (e.g. the user clicked the
     /// page).
     fn blur(&mut self);
