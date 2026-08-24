@@ -14,12 +14,18 @@ use std::sync::Arc;
 
 use ui_layout::Style;
 use url::Url;
-use winit::event::{Ime, KeyEvent};
+use winit::event::{ElementState, Ime, KeyEvent};
 
-use crate::browser::core::ui::chrome::{Chrome, ChromeAction, ChromeEventResult};
-use crate::browser::core::ui::{logical_key_to_special_event, logical_key_to_text_key};
+use crate::browser::Tab;
+use crate::browser::core::resource_loader::{BrowserNetworkError, BrowserResponse};
+use crate::browser::core::tab::{FetchKind, TabTask};
+use crate::browser::core::ui::chrome::{Chrome, ChromeAction, ChromeEventResult, DEVTOOLS_URL};
+use crate::browser::core::ui::{
+    FetchRequest, TabId, logical_key_to_special_event, logical_key_to_text_key,
+};
 use crate::engine::bridge::text::TextMeasurer;
 use crate::engine::html::ScriptingMode;
+use crate::engine::layouter;
 use crate::engine::layouter::types::{Color, TextFlowStyle, TextStyle};
 use crate::engine::renderer_model::{
     AffineTransform, Brush, DrawCommand, FillRule, Paint, Rect, rect_path,
@@ -213,8 +219,9 @@ pub struct BasicChrome {
     /// URL currently shown in the address bar, used to avoid overwriting text
     /// the user is editing.
     last_url: Option<String>,
-    /// Wheather
-    is_debug: bool,
+
+    is_debug_open: bool,
+    debug_pane: Tab,
 
     scripting_mode: ScriptingMode,
     /// Toolbar element currently under the pointer, if any.
@@ -224,10 +231,14 @@ pub struct BasicChrome {
 impl BasicChrome {
     /// Create a new default chrome with an empty toolbar.
     pub fn new() -> Self {
+        let mut tab = Tab::default();
+        tab.navigate(DEVTOOLS_URL.parse().unwrap());
+
         Self {
             toolbar: BrowserToolbar::new(),
             last_url: None,
-            is_debug: false,
+            is_debug_open: false,
+            debug_pane: tab,
             scripting_mode: ScriptingMode::default(),
             hovered: None,
         }
@@ -264,14 +275,14 @@ impl Default for BasicChrome {
 impl Chrome for BasicChrome {
     fn content_rect(&self, width: f32, height: f32) -> Rect {
         let toolbar_height = self.toolbar.rects(width).height();
-        if self.is_debug {
+        if self.is_debug_open {
             Rect::new(0.0, toolbar_height, width / 2.0, height - toolbar_height)
         } else {
             Rect::new(0.0, toolbar_height, width, height - toolbar_height)
         }
     }
 
-    fn draw(&self, cmd_buf: &mut Vec<DrawCommand>, width: f32, _height: f32) {
+    fn draw(&mut self, cmd_buf: &mut Vec<DrawCommand>, width: f32, height: f32) {
         let rects = self.toolbar.rects(width);
 
         cmd_buf.push(DrawCommand::Fill {
@@ -316,6 +327,64 @@ impl Chrome for BasicChrome {
             );
             cmd_buf.push(DrawCommand::PopTransform);
         }
+
+        if self.is_debug_open {
+            cmd_buf.push(DrawCommand::PushTransform {
+                transform: AffineTransform::translate(width / 2.0, rects.height()),
+            });
+
+            let rect_path = rect_path(0.0, 0.0, width / 2.0, height - rects.height());
+            cmd_buf.push(DrawCommand::Fill {
+                path: rect_path.clone(),
+                rule: FillRule::NonZero,
+                paint: Paint {
+                    brush: Brush::Solid(Color(200, 200, 200, 200)),
+                    opacity: 1.0,
+                },
+            });
+            cmd_buf.push(DrawCommand::PushClip {
+                path: rect_path,
+                rule: FillRule::NonZero,
+            });
+
+            self.debug_pane
+                .draw(cmd_buf, width / 2.0, height - rects.height());
+
+            cmd_buf.push(DrawCommand::PopClip);
+            cmd_buf.push(DrawCommand::PopTransform);
+        }
+    }
+
+    fn tick(
+        &mut self,
+        fetches_buf: &mut Vec<super::FetchRequest>,
+        actions_buf: &mut Vec<ChromeAction>,
+    ) {
+        for task in self.debug_pane.tick() {
+            match task {
+                TabTask::Fetch { url, kind } => {
+                    log::info!("Fetch requested in BrowserUi: url={}", url);
+                    fetches_buf.push(FetchRequest {
+                        tab_id: TabId(0),
+                        url,
+                        kind,
+                    });
+                }
+                TabTask::NeedsRedraw => {}
+                TabTask::DevToolsRequest { id, method, params } => {
+                    actions_buf.push(ChromeAction::DevToolsRequest { id, method, params });
+                }
+            }
+        }
+    }
+
+    fn deliver_fetch(
+        &mut self,
+        kind: FetchKind,
+        url: Url,
+        response: Result<BrowserResponse, BrowserNetworkError>,
+    ) {
+        self.debug_pane.deliver_fetch(kind, url, response);
     }
 
     fn sync_url(&mut self, url: Option<&str>) {
@@ -329,8 +398,9 @@ impl Chrome for BasicChrome {
     fn pointer_event(
         &mut self,
         width: f32,
-        _height: f32,
+        height: f32,
         event: PointerEvent,
+        state: ElementState,
     ) -> ChromeEventResult {
         let (x, y) = match event {
             PointerEvent::Move { x, y }
@@ -345,7 +415,31 @@ impl Chrome for BasicChrome {
         let Some(hit) = self.toolbar.hit_test(x, y, width) else {
             // Pointer over the page: clear any chrome hover.
             self.clear_hover();
-            return ChromeEventResult::none();
+
+            if self.is_debug_open {
+                let rects = self.toolbar.rects(width);
+
+                let rect = Rect {
+                    x: width / 2.0,
+                    y: rects.height(),
+                    width: width / 2.0,
+                    height: height - rects.height(),
+                };
+
+                if rect.contains(x, y) {
+                    let px = x - width / 2.0;
+                    let py = y - rects.height();
+
+                    self.debug_pane.handle_mouse_input(px, py, state);
+                }
+
+                return ChromeEventResult {
+                    consumed: true,
+                    action: ChromeAction::None,
+                };
+            } else {
+                return ChromeEventResult::none();
+            }
         };
 
         let handled = self.dispatch(hit, event);
@@ -377,7 +471,10 @@ impl Chrome for BasicChrome {
 
                 ChromeAction::SetJsPolicy(self.scripting_mode.into())
             }
-            ChromeHit::DevTools if clicked => todo!(),
+            ChromeHit::DevTools if clicked => {
+                self.is_debug_open = !self.is_debug_open;
+                ChromeAction::None
+            }
             _ => ChromeAction::None,
         };
 
@@ -389,14 +486,40 @@ impl Chrome for BasicChrome {
 
     fn handle_scroll(
         &mut self,
-        _width: f32,
-        _height: f32,
-        _x: f32,
-        _y: f32,
-        _scroll_x: f32,
-        _scroll_y: f32,
+        width: f32,
+        height: f32,
+        mouse_x: f32,
+        mouse_y: f32,
+        scroll_x: f32,
+        scroll_y: f32,
     ) {
-        todo!()
+        if self.is_debug_open {
+            let rects = self.toolbar.rects(width);
+
+            let rect = Rect {
+                x: width / 2.0,
+                y: rects.height(),
+                width: width / 2.0,
+                height: height - rects.height(),
+            };
+
+            if rect.contains(mouse_x, mouse_y) {
+                let Some((layout, info)) = self.debug_pane.layout_and_info_mut() else {
+                    return;
+                };
+
+                // Prefer the scrollable container under the cursor.
+                crate::engine::input::scroll_at(
+                    layout,
+                    info,
+                    (width, height),
+                    mouse_x,
+                    mouse_y,
+                    scroll_x,
+                    scroll_y,
+                );
+            }
+        }
     }
 
     fn accepts_text_input(&self) -> bool {
@@ -456,6 +579,10 @@ impl Chrome for BasicChrome {
         } else {
             ChromeAction::None
         }
+    }
+
+    fn on_devtools_response(&mut self, id: u64, result: String) {
+        self.debug_pane.on_devtools_response(id, result);
     }
 
     fn blur(&mut self) {
