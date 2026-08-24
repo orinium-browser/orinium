@@ -121,3 +121,38 @@ fn parse_color(s: &str) -> Option<(u8, u8, u8, u8)> {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_renders_css_source_text() {
+        assert_eq!(CssValue::Length(10.0, Unit::Px).to_string(), "10px");
+        assert_eq!(CssValue::Length(1.5, Unit::Percent).to_string(), "1.5%");
+        assert_eq!(CssValue::Number(0.75).to_string(), "0.75");
+        assert_eq!(CssValue::Keyword("auto".into()).to_string(), "auto");
+        assert_eq!(CssValue::Color("fff".into()).to_string(), "#fff");
+        assert_eq!(CssValue::String("a b".into()).to_string(), "\"a b\"");
+        assert_eq!(
+            CssValue::Function(
+                "rgb".into(),
+                vec![
+                    CssValue::Number(255.0),
+                    CssValue::Number(0.0),
+                    CssValue::Number(0.0)
+                ]
+            )
+            .to_string(),
+            "rgb(255, 0, 0)"
+        );
+        assert_eq!(
+            CssValue::List(vec![
+                CssValue::Length(100.0, Unit::Px),
+                CssValue::Keyword("auto".into())
+            ])
+            .to_string(),
+            "100px auto"
+        );
+    }
+}
