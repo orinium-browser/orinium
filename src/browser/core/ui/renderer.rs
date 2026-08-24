@@ -1,13 +1,16 @@
 //! ブラウザの描画機能。タブと chrome の描画リクエストを DrawCommand に変換し、
 //! プラットフォームの GPU レンダラへ送る。
 
+use std::collections::HashMap;
+
+use crate::browser::core::ui::TabId;
 use crate::engine::layouter::types::Color;
 use crate::engine::renderer_model::{
     self, AffineTransform, Brush, DrawCommand, FillRule, Paint, Rect, rect_path,
 };
 use crate::platform::renderer::gpu::GpuRenderer;
 
-use super::{BasicChrome, BasicContextMenu, Chrome, ContextMenu, PaneGeometry, RenderState};
+use super::{BasicChrome, BasicContextMenu, Chrome, ContextMenu, RenderState};
 use crate::browser::core::tab::Tab;
 
 /// Width of the vertical divider drawn between the two panes.
@@ -79,27 +82,46 @@ impl BrowserRenderer {
 
     /// 指定されたアクティブタブのレイアウトを更新し、ページと chrome の
     /// DrawCommand を再生成する。
-    ///
-    /// `panes` は分割ビューの幾何情報。DevTools ペインが開いている場合は
-    /// 左側に検査対象ページ、右側に DevTools フロントエンドを描画し、境界に
-    /// 仕切り線を引く。
-    pub fn rebuild(&mut self, tabs: &mut [Tab], active_tab: usize, panes: PaneGeometry) {
+    pub fn rebuild(&mut self, tabs: &mut HashMap<TabId, Tab>, active_id: Option<TabId>) {
         let (width, height) = self.render_state.viewport();
+
+        let Rect {
+            x,
+            y,
+            width: content_width,
+            height: content_height,
+        } = self.chrome.content_rect(width, height);
 
         // Reuse allocation
         let mut draw_commands = std::mem::take(&mut self.render_state.draw_commands);
         draw_commands.clear();
 
-        // Inspected page: always occupies the left pane.
-        let title = if let Some(tab) = tabs.get_mut(active_tab) {
-            render_pane(&mut draw_commands, tab, panes.page);
+        // Page area: below the chrome, clipped so page content never overlaps it.
+        draw_commands.push(DrawCommand::PushClip {
+            path: rect_path(x, y, content_width, content_height),
+            rule: FillRule::NonZero,
+        });
+        draw_commands.push(DrawCommand::PushTransform {
+            transform: AffineTransform::translate(x, y),
+        });
+
+        let title = if let Some(active_tab) = active_id
+            && let Some(tab) = tabs.get_mut(&active_tab)
+        {
+            tab.relayout((content_width, content_height));
 
             // Keep the chrome in sync with the active tab.
             let url = tab.document_url().map(|url| url.to_string());
             self.chrome.sync_url(url.as_deref());
 
-            if let Some((layout, _info)) = tab.layout_and_info() {
-                self.chrome.debug_set_layout_node(layout);
+            if let Some((layout, info)) = tab.layout_and_info() {
+                renderer_model::generate_draw_commands(
+                    &mut draw_commands,
+                    layout,
+                    info,
+                    (content_width, content_height),
+                );
+                tab.clear_redraw_flag();
                 tab.title()
             } else {
                 log::debug!("No layout/info available for tab {}", active_tab);
@@ -109,15 +131,8 @@ impl BrowserRenderer {
             None
         };
 
-        // DevTools pane: rendered from its own hosting tab at the right edge.
-        if let Some((pane_id, tools_rect)) = panes.devtools {
-            if pane_id != active_tab
-                && let Some(pane_tab) = tabs.get_mut(pane_id)
-            {
-                render_pane(&mut draw_commands, pane_tab, tools_rect);
-            }
-            draw_divider(&mut draw_commands, tools_rect);
-        }
+        draw_commands.push(DrawCommand::PopTransform);
+        draw_commands.push(DrawCommand::PopClip);
 
         // Chrome drawn on top of the page area.
         self.chrome.draw(&mut draw_commands, width, height);
@@ -141,12 +156,11 @@ impl BrowserRenderer {
     /// DrawCommand を再生成して GPU に送り、実際の描画を実行する。
     pub fn redraw(
         &mut self,
-        tabs: &mut [Tab],
-        active_tab: usize,
-        panes: PaneGeometry,
+        tabs: &mut HashMap<TabId, Tab>,
+        active_id: Option<TabId>,
         gpu: &mut GpuRenderer,
     ) {
-        self.rebuild(tabs, active_tab, panes);
+        self.rebuild(tabs, active_id);
         self.apply_draw_commands(gpu);
         if let Err(e) = gpu.render() {
             log::error!(target: "BrowserRenderer::redraw", "Render error occurred: {}", e);
