@@ -54,6 +54,9 @@ impl ChromeEventResult {
     }
 }
 
+/// Location of the DevTools frontend served from the bundled resources.
+pub(super) const DEVTOOLS_URL: &str = "resource:///devtools/index.html";
+
 /// The window chrome surrounding the web content.
 ///
 /// The core lays out the page area below the chrome, draws the chrome on top of
