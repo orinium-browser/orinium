@@ -68,6 +68,20 @@ pub struct Tab {
     history: Vec<Url>,
 }
 
+impl std::fmt::Debug for Tab {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Tab")
+            .field("title", &self.title)
+            .field("base_url", &self.base_url)
+            .field("document_url", &self.document_url)
+            .field("system_color_scheme", &self.system_color_scheme)
+            .field("js_policy", &self.js_policy)
+            .field("state", &self.state)
+            .field("history", &self.history)
+            .finish()
+    }
+}
+
 impl Default for Tab {
     fn default() -> Self {
         Self::new(ColorScheme::default(), JsPolicy::default())
