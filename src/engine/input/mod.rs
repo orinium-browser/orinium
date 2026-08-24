@@ -192,7 +192,6 @@ pub fn update_hover(path: &HitPath<'_>, previous: Option<&Arc<dyn CustomNode>>) 
     }
 }
 
-/// x, y: グローバル座標
 pub fn hit_test<'a>(layout: &'a LayoutNode, info: &'a InfoNode, x: f32, y: f32) -> HitPath<'a> {
     // Open popups are top-layer overlays: they render above every box and
     // escape all ancestor clips, so they are tested first and shadow the box
