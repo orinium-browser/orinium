@@ -312,7 +312,7 @@ fn apply_background_shorthand_geometry(
     }
 }
 
-fn element_info(html_node: &HtmlNodeType) -> Option<ElementInfo> {
+pub(crate) fn element_info(html_node: &HtmlNodeType) -> Option<ElementInfo> {
     let HtmlNodeType::Element {
         tag_name,
         attributes,
@@ -350,7 +350,10 @@ fn element_info(html_node: &HtmlNodeType) -> Option<ElementInfo> {
     })
 }
 
-fn element_sibling_infos(snapshot: &DomSnapshot, children: &[NodeId]) -> Vec<Option<ElementInfo>> {
+pub(crate) fn element_sibling_infos(
+    snapshot: &DomSnapshot,
+    children: &[NodeId],
+) -> Vec<Option<ElementInfo>> {
     let mut type_counts = HashMap::<String, usize>::new();
     for &child in children {
         if let Some(tag_name) = snapshot.node(child).kind.tag_name() {
