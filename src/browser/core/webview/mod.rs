@@ -1936,6 +1936,202 @@ mod tests {
         }
     }
 
+    fn find_json_by_attribute<'a>(value: &'a Value, name: &str, wanted: &str) -> Option<&'a Value> {
+        if value
+            .get("attributes")
+            .and_then(Value::as_array)
+            .is_some_and(|attrs| {
+                attrs
+                    .iter()
+                    .any(|attr| attr[0] == *name && attr[1] == *wanted)
+            })
+        {
+            return Some(value);
+        }
+        value
+            .get("children")
+            .and_then(Value::as_array)
+            .and_then(|children| {
+                children
+                    .iter()
+                    .find_map(|child| find_json_by_attribute(child, name, wanted))
+            })
+    }
+
+    fn styles_webview() -> WebView {
+        let mut webview = WebView::default();
+        // The Init phase injects the user-agent stylesheet into resolved_styles.
+        webview.tick();
+        webview.on_html_fetched(
+            r#"<html><head><style>
+                    p { color: red; }
+                    .box { color: blue; }
+               </style></head>
+               <body><p id="t" class="box" style="margin-top: 7px">x</p></body></html>"#
+                .to_string(),
+            Url::parse("https://example.test/").unwrap(),
+        );
+        // Resolve the inline <style> block and rebuild snapshot + layout inputs.
+        webview.rebuild_styles_and_layout();
+        webview
+    }
+
+    fn box_model_webview() -> WebView {
+        let mut webview = WebView::default();
+        webview.tick();
+        webview.on_html_fetched(
+            r#"<html><head><style>
+                    #box {
+                        width: 100px;
+                        height: 50px;
+                        padding: 10px;
+                        border: 2px solid red;
+                        margin-top: 7px;
+                    }
+               </style></head>
+               <body><div id="box">x</div></body></html>"#
+                .to_string(),
+            Url::parse("https://example.test/box").unwrap(),
+        );
+        webview.rebuild_styles_and_layout();
+        // The heavy tree build runs on the background thread; wait for it.
+        pump_until(
+            &mut webview,
+            |webview| webview.layout_and_info.is_some(),
+            "the first background layout build",
+        );
+        webview
+    }
+
+    fn dom_id_for_attribute(webview: &mut WebView, name: &str, wanted: &str) -> u64 {
+        let document = webview.inspect("getDocument", "{}").expect("document");
+        find_json_by_attribute(&document, name, wanted).map_or_else(
+            || panic!("no element with {name}={wanted}"),
+            |node| node["id"].as_u64().unwrap(),
+        )
+    }
+
+    #[test]
+    fn box_model_reports_rings_from_laid_out_geometry() {
+        let mut webview = box_model_webview();
+        let dom_id = dom_id_for_attribute(&mut webview, "id", "box");
+        let params = format!(r#"{{"domId":{dom_id}}}"#);
+
+        let model = webview.inspect("getBoxModel", &params).expect("box model")["model"].clone();
+
+        // Declared margins come through as text, auto stays readable.
+        assert_eq!(model["margin"][0], "7");
+        assert_eq!(
+            model["padding"],
+            json!([10.0, 10.0, 10.0, 10.0]),
+            "padding ring derives from padding vs content boxes"
+        );
+        assert_eq!(model["border"], json!([2.0, 2.0, 2.0, 2.0]));
+        // Default box-sizing is content-box: content keeps the declared size.
+        assert_eq!(model["content"], json!([100.0, 50.0]));
+        assert_eq!(model["size"], json!([124.0, 74.0]));
+
+        let info = webview
+            .inspect("getLayoutInfo", &params)
+            .expect("layout info")["info"]
+            .clone();
+        assert_eq!(info["width"], "100");
+        assert_eq!(info["height"], "50");
+        assert_eq!(info["scroll"], json!([0.0, 0.0]));
+    }
+
+    #[test]
+    fn box_model_rejects_ids_outside_the_current_layout() {
+        let mut webview = box_model_webview();
+        let error = webview
+            .inspect("getBoxModel", r#"{"domId":99999}"#)
+            .expect_err("unknown id must fail");
+        assert!(error.contains("unknown domId"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn matched_rules_report_winners_overrides_and_inline_styles() {
+        let mut webview = styles_webview();
+
+        let document = webview.inspect("getDocument", "{}").expect("document");
+        let paragraph = find_json_by_attribute(&document, "id", "t").expect("<p id=t>");
+        let dom_id = paragraph["id"].as_u64().unwrap();
+
+        let rules = webview
+            .inspect("getMatchedRules", &format!(r#"{{"domId":{dom_id}}}"#))
+            .expect("matched rules");
+        let rules = rules["rules"].as_array().unwrap();
+
+        let inline = rules
+            .iter()
+            .find(|rule| rule["inline"] == Value::Bool(true))
+            .expect("inline entry");
+        assert_eq!(inline["selector"], "element.style");
+        assert_eq!(inline["declarations"][0]["name"], "margin-top");
+        assert_eq!(inline["declarations"][0]["value"], "7px");
+        assert_eq!(inline["declarations"][0]["applied"], true);
+
+        let class_rule = rules
+            .iter()
+            .find(|rule| rule["selector"] == ".box")
+            .expect(".box rule");
+        assert_eq!(class_rule["origin"], "author");
+        assert_eq!(class_rule["declarations"][0]["applied"], true);
+
+        // The user-agent sheet also styles `p`; pick the author rule and
+        // check its color declaration specifically.
+        let tag_rule = rules
+            .iter()
+            .find(|rule| rule["selector"] == "p" && rule["origin"] == "author")
+            .expect("author p rule");
+        let color = tag_rule["declarations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|declaration| declaration["name"] == "color")
+            .unwrap();
+        assert_eq!(color["applied"], false, ".box must override the p color");
+
+        // User-agent rules participate in the report too.
+        assert!(
+            rules.iter().any(|rule| rule["origin"] == "user-agent"),
+            "user-agent origin rules must be reported"
+        );
+    }
+
+    #[test]
+    fn computed_style_lists_winning_declarations_sorted_by_name() {
+        let mut webview = styles_webview();
+
+        let document = webview.inspect("getDocument", "{}").expect("document");
+        let paragraph = find_json_by_attribute(&document, "id", "t").expect("<p id=t>");
+        let dom_id = paragraph["id"].as_u64().unwrap();
+
+        let computed = webview
+            .inspect("getComputedStyle", &format!(r#"{{"domId":{dom_id}}}"#))
+            .expect("computed style");
+        let properties = computed["properties"].as_array().unwrap();
+
+        let names: Vec<&str> = properties
+            .iter()
+            .map(|property| property["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, {
+            let mut sorted = names.clone();
+            sorted.sort();
+            sorted
+        });
+
+        let winner = |name: &str| {
+            properties
+                .iter()
+                .find(|property| property["name"] == *name)
+                .map(|property| property["value"].as_str().unwrap().to_string())
+        };
+        assert_eq!(winner("color").as_deref(), Some("blue"));
+        assert_eq!(winner("margin-top").as_deref(), Some("7px"));
+    }
+
     #[test]
     fn collects_background_images_without_treating_fonts_as_page_images() {
         let sources = collect_css_image_sources(
@@ -2910,5 +3106,62 @@ mod tests {
             .unwrap();
         assert_eq!(result.borrow().value.get_attr("data-timer"), Some("ran"));
         assert!(webview.needs_redraw());
+    }
+
+    #[test]
+    fn devtools_request_round_trips_through_inspection_and_back() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r##"
+                <div id="probe"></div>
+                <script>
+                    __orinium_devtools("getVersion").then(function (json) {
+                        const envelope = JSON.parse(json);
+                        document.getElementById("probe")
+                            .setAttribute("data-ok", envelope.ok ? "yes" : "no");
+                    });
+                </script>
+            "##
+            .to_string(),
+            Url::parse("https://example.test/index.html").unwrap(),
+        );
+
+        let task = pump_for_task(
+            &mut webview,
+            |task| matches!(task, WebViewTask::DevToolsRequest { .. }),
+            "the page's DevTools inspection request",
+        );
+        let WebViewTask::DevToolsRequest { id, method, params } = task else {
+            unreachable!("pump_for_task matched this variant");
+        };
+        assert_eq!(method, "getVersion");
+        assert_eq!(params, "{}");
+
+        let data = webview
+            .inspect(&method, &params)
+            .expect("inspection answer");
+        webview.on_devtools_response(
+            id,
+            serde_json::json!({ "ok": true, "data": data }).to_string(),
+        );
+
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.document_info()
+                    .unwrap()
+                    .dom
+                    .get_element_by_id("probe")
+                    .is_some_and(|node| node.borrow().value.get_attr("data-ok").is_some())
+            },
+            "the resolved promise callback to mark the probe element",
+        );
+        let probe = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("probe")
+            .unwrap();
+        assert_eq!(probe.borrow().value.get_attr("data-ok"), Some("yes"));
     }
 }
