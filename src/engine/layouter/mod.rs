@@ -16,6 +16,7 @@ mod builder;
 pub mod css_resolver;
 pub mod dom_snapshot;
 pub mod processor;
+pub mod style_inspect;
 mod table_layout;
 pub mod text_layouter;
 pub mod types;
