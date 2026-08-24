@@ -146,6 +146,11 @@ impl DomSnapshot {
         &self.roots
     }
 
+    /// All snapshot nodes in pre-order (`id == index`).
+    pub fn nodes(&self) -> &[SnapNode] {
+        &self.nodes
+    }
+
     /// The node with the given id.
     pub fn node(&self, id: NodeId) -> &SnapNode {
         &self.nodes[id as usize]
