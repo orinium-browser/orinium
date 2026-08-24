@@ -18,7 +18,10 @@ use url::Url;
 pub use super::webview::{CssApplicationStrategy, FetchKind, WebView, WebViewTask};
 
 pub enum TabTask {
-    Fetch { url: Url, kind: FetchKind },
+    Fetch {
+        url: Url,
+        kind: FetchKind,
+    },
     NeedsRedraw,
 }
 
