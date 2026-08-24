@@ -1,0 +1,71 @@
+<!doctype html>
+<html>
+    <head>
+        <meta charset="utf-8" />
+        <title>Orinium DevTools</title>
+        <link rel="stylesheet" href="main.css" />
+    </head>
+    <body>
+        <header id="toolbar">
+            <span id="status" data-state="connecting">connecting&hellip;</span>
+            <span id="target"></span>
+            <span id="spacer"></span>
+            <button id="refresh" type="button">Refresh</button>
+        </header>
+        <main>
+            <section id="tree-pane">
+                <div class="pane-title">DOM</div>
+                <div id="tree"></div>
+            </section>
+            <section id="detail-pane">
+                <div id="detail-tabs">
+                    <button
+                        class="detail-tab active"
+                        data-tab="attributes"
+                        type="button"
+                    >
+                        Attributes
+                    </button>
+                    <button class="detail-tab" data-tab="styles" type="button">
+                        Styles
+                    </button>
+                    <button
+                        class="detail-tab"
+                        data-tab="computed"
+                        type="button"
+                    >
+                        Computed
+                    </button>
+                    <button class="detail-tab" data-tab="layout" type="button">
+                        Layout
+                    </button>
+                </div>
+                <div class="detail-view active" data-view="attributes">
+                    <table id="attributes"></table>
+                    <p class="view-empty" data-for="attributes">
+                        Select an element to inspect its attributes.
+                    </p>
+                </div>
+                <div class="detail-view" data-view="styles">
+                    <div id="styles"></div>
+                    <p class="view-empty" data-for="styles">
+                        Select an element to inspect its styles.
+                    </p>
+                </div>
+                <div class="detail-view" data-view="computed">
+                    <table id="computed"></table>
+                    <p class="view-empty" data-for="computed">
+                        Select an element to inspect its computed style.
+                    </p>
+                </div>
+                <div class="detail-view" data-view="layout">
+                    <div id="layout"></div>
+                    <p class="view-empty" data-for="layout">
+                        Select an element to inspect its box model.
+                    </p>
+                </div>
+            </section>
+        </main>
+        <script src="main.js"></script>
+    </body>
+</html>

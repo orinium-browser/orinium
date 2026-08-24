@@ -1,0 +1,375 @@
+:root {
+    --bg: #1e1e22;
+    --panel: #25252b;
+    --border: #3a3a42;
+    --text: #d4d4d8;
+    --muted: #8b8b94;
+    --accent: #5b9dd9;
+    --selection: #2c3f55;
+    --tag: #7fb3e8;
+    --attr: #c8a3de;
+    --value: #a8c98a;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html,
+body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", sans-serif;
+    font-size: 13px;
+}
+
+body {
+    display: flex;
+    flex-direction: column;
+}
+
+#toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+}
+
+#status[data-state="connected"] {
+    color: var(--value);
+}
+
+#status[data-state="connecting"],
+#status[data-state="error"] {
+    color: var(--muted);
+}
+
+#status[data-state="error"] {
+    color: #e06c75;
+}
+
+#target {
+    color: var(--muted);
+}
+
+#spacer {
+    flex: 1;
+}
+
+#refresh {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 3px 10px;
+    cursor: pointer;
+}
+
+#refresh:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+main {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+}
+
+#tree-pane,
+#detail-pane {
+    min-width: 0;
+    overflow: auto;
+    background: var(--bg);
+}
+
+#tree-pane {
+    flex: 3;
+    border-right: 1px solid var(--border);
+}
+
+#detail-pane {
+    flex: 2;
+}
+
+.pane-title {
+    position: sticky;
+    top: 0;
+    padding: 4px 10px;
+    font-size: 11px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--muted);
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+}
+
+/* DOM tree */
+
+.row {
+    display: flex;
+    align-items: baseline;
+    white-space: nowrap;
+    padding: 1px 6px;
+    cursor: default;
+}
+
+.row:hover {
+    background: var(--panel);
+}
+
+.row.selected {
+    background: var(--selection);
+}
+
+.caret {
+    width: 14px;
+    flex: none;
+    text-align: center;
+    color: var(--muted);
+    cursor: pointer;
+    user-select: none;
+}
+
+.children {
+    margin-left: 18px;
+}
+
+.tag {
+    color: var(--tag);
+}
+
+.attr-name {
+    color: var(--attr);
+}
+
+.attr-value {
+    color: var(--value);
+}
+
+.text-preview {
+    color: var(--muted);
+    font-style: italic;
+}
+
+.comment-preview,
+.doctype-preview {
+    color: var(--muted);
+}
+
+/* Attributes table */
+
+#attributes {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: Consolas, monospace;
+    font-size: 12px;
+}
+
+#attributes th,
+#attributes td {
+    text-align: left;
+    padding: 3px 10px;
+    border-bottom: 1px solid var(--border);
+}
+
+#attributes th {
+    color: var(--muted);
+    font-weight: normal;
+    background: var(--panel);
+}
+
+/* Detail tabs (Attributes / Styles / Computed) */
+
+#detail-tabs {
+    display: flex;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+}
+
+.detail-tab {
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--muted);
+    padding: 5px 12px;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.detail-tab.active {
+    color: var(--text);
+    border-bottom-color: var(--accent);
+}
+
+.detail-view {
+    display: none;
+}
+
+.detail-view.active {
+    display: block;
+}
+
+.view-empty {
+    padding: 10px;
+    color: var(--muted);
+}
+
+/* Styles panel */
+
+.rule {
+    margin-bottom: 8px;
+    font-family: Consolas, monospace;
+    font-size: 12px;
+}
+
+.rule-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+}
+
+.rule-selector {
+    color: var(--tag);
+}
+
+.inline-rule .rule-selector {
+    color: var(--value);
+    font-style: italic;
+}
+
+.rule-origin {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--muted);
+    font-style: italic;
+}
+
+.decl {
+    display: flex;
+    padding: 1px 10px 1px 18px;
+    white-space: pre-wrap;
+}
+
+.decl-name {
+    color: var(--attr);
+}
+
+.decl-value {
+    color: var(--value);
+}
+
+.decl.overridden .decl-name,
+.decl.overridden .decl-value {
+    text-decoration: line-through;
+    color: var(--muted);
+}
+
+.decl-important {
+    margin-left: 4px;
+    color: #e0a36c;
+}
+
+/* Computed table shares the attributes table styling */
+#computed {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: Consolas, monospace;
+    font-size: 12px;
+}
+
+#computed td {
+    text-align: left;
+    padding: 3px 10px;
+    border-bottom: 1px solid var(--border);
+}
+
+/* Layout panel (box model diagram) */
+
+#layout {
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+}
+
+#detail-empty {
+    padding: 10px;
+    color: var(--muted);
+}
+
+.bm-ring {
+    border: 1px dashed var(--border);
+    padding: 4px;
+    text-align: center;
+}
+
+.bm-margin-ring {
+    background: rgba(246, 178, 107, 0.12);
+}
+
+.bm-border-ring {
+    background: rgba(220, 190, 110, 0.14);
+}
+
+.bm-padding-ring {
+    background: rgba(160, 200, 130, 0.14);
+}
+
+.bm-label-row {
+    font-size: 10px;
+    color: var(--muted);
+    margin-bottom: 2px;
+}
+
+.bm-middle {
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
+    gap: 6px;
+}
+
+.bm-side {
+    align-self: center;
+    font-size: 11px;
+    color: var(--text);
+}
+
+.bm-inner {
+    min-width: 70px;
+    min-height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    color: var(--text);
+}
+
+.bm-content {
+    background: rgba(120, 160, 210, 0.2);
+    border: 1px solid var(--border);
+    color: var(--value);
+}
+
+.layout-info {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: Consolas, monospace;
+    font-size: 12px;
+}
+
+.layout-info td {
+    text-align: left;
+    padding: 3px 10px;
+    border-bottom: 1px solid var(--border);
+}
