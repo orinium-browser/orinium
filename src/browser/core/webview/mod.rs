@@ -53,11 +53,6 @@ pub enum WebViewTask {
 
 mod inspector;
 
-/// TODO:
-/// - Root Document fetch
-/// - Image fetch
-/// - JS fetch
-/// - その他リソース fetch
 pub enum FetchKind {
     Html,
     Css,
