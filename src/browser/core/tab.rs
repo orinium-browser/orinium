@@ -51,9 +51,6 @@ enum TabState {
 ///
 /// WebView が「ページそのもの」の状態を管理するのに対し、
 /// Tab は UI 上のタブとしてのメタ情報（タイトルなど）を管理します。
-///
-/// TODO:
-/// - ページの状態（Error、loading）の管理を追加
 pub struct Tab {
     title: Option<String>,
     base_url: Option<Url>,
