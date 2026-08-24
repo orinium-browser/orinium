@@ -2,7 +2,7 @@
 
 pub type CssIdent = smol_str::SmolStr;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Unit {
     Px,
     Em,
@@ -31,6 +31,51 @@ impl CssValue {
         match self {
             CssValue::Color(s) => parse_color(&format!("#{}", s)),
             _ => None,
+        }
+    }
+}
+
+impl Unit {
+    fn as_str(self) -> &'static str {
+        match self {
+            Unit::Px => "px",
+            Unit::Em => "em",
+            Unit::Rem => "rem",
+            Unit::Percent => "%",
+            Unit::Vw => "vw",
+            Unit::Vh => "vh",
+            Unit::Deg => "deg",
+            Unit::Fr => "fr",
+        }
+    }
+}
+
+/// Renders values back to their CSS source text, e.g. `10px`, `rgb(1, 2, 3)`
+/// or `100px auto`. Used by the DevTools style panels.
+impl std::fmt::Display for CssValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CssValue::Keyword(keyword) => f.write_str(keyword),
+            CssValue::Length(value, unit) => write!(f, "{value}{}", unit.as_str()),
+            CssValue::Number(value) => write!(f, "{value}"),
+            CssValue::String(value) => write!(f, "\"{value}\""),
+            CssValue::Color(value) => write!(f, "#{value}"),
+            CssValue::Function(name, arguments) => {
+                let arguments = arguments
+                    .iter()
+                    .map(CssValue::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "{name}({arguments})")
+            }
+            CssValue::List(values) => {
+                let values = values
+                    .iter()
+                    .map(CssValue::to_string)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                f.write_str(&values)
+            }
         }
     }
 }
