@@ -19,7 +19,7 @@ use crate::engine::{
         ClassicScriptExecution, ClassicScriptSource, DomTree, Parser as HtmlParser, ScriptingMode,
     },
     js::{
-        JsDynamicImageRequest, JsDynamicScriptRequest, JsDynamicScriptSource,
+        JsDevToolsRequest, JsDynamicImageRequest, JsDynamicScriptRequest, JsDynamicScriptSource,
         JsDynamicStyleRequest, JsFetchRequest, JsFetchResponse, JsLayoutMetrics, JsProcessor,
         JsTask, JsTaskResult,
     },
@@ -39,8 +39,19 @@ const USER_AGENT_CSS: &str = include_str!("../../../../resource/user-agent.css")
 
 pub enum WebViewTask {
     AskTabHtml,
-    Fetch { url: Url, kind: FetchKind },
+    Fetch {
+        url: Url,
+        kind: FetchKind,
+    },
+    /// A page asked the DevTools bridge to inspect rendered state.
+    DevToolsRequest {
+        id: u64,
+        method: String,
+        params: String,
+    },
 }
+
+mod inspector;
 
 /// TODO:
 /// - Root Document fetch
@@ -192,6 +203,10 @@ pub struct WebView {
     in_flight_timer_version: Option<u64>,
     /// `fetch()` requests collected from applied JS results.
     pending_js_fetches: Vec<JsFetchRequest>,
+    /// DevTools inspection requests collected from applied JS results.
+    pending_devtools_requests: Vec<JsDevToolsRequest>,
+    /// Stable DOM ids for the inspector, assigned lazily over the live tree.
+    inspector_ids: RefCell<inspector::DomIdRegistry>,
     /// Dynamically inserted scripts collected from applied JS results.
     pending_dynamic_scripts: Vec<JsDynamicScriptRequest>,
     /// Dynamically inserted stylesheet links collected from JS results.
@@ -341,6 +356,8 @@ impl WebView {
             js_dom_dirty: false,
             in_flight_timer_version: None,
             pending_js_fetches: Vec::new(),
+            pending_devtools_requests: Vec::new(),
+            inspector_ids: RefCell::new(inspector::DomIdRegistry::default()),
             pending_dynamic_scripts: Vec::new(),
             pending_dynamic_styles: Vec::new(),
             pending_dynamic_images: Vec::new(),
@@ -414,6 +431,8 @@ impl WebView {
         self.js_dom_dirty = false;
         self.in_flight_timer_version = None;
         self.pending_js_fetches.clear();
+        self.pending_devtools_requests.clear();
+        self.inspector_ids.borrow_mut().clear();
         self.pending_dynamic_scripts.clear();
         self.pending_dynamic_styles.clear();
         self.pending_dynamic_images.clear();
@@ -512,6 +531,13 @@ impl WebView {
         self.try_apply_js_results();
         self.schedule_js_fetches(&mut tasks);
         self.schedule_dynamic_scripts(&mut tasks);
+        for request in std::mem::take(&mut self.pending_devtools_requests) {
+            tasks.push(WebViewTask::DevToolsRequest {
+                id: request.id,
+                method: request.method,
+                params: request.params,
+            });
+        }
         self.schedule_dynamic_styles(&mut tasks);
         self.schedule_dynamic_images(&mut tasks);
         self.schedule_pending_images(&mut tasks);
@@ -567,6 +593,8 @@ impl WebView {
         self.js_dom_dirty = false;
         self.in_flight_timer_version = None;
         self.pending_js_fetches.clear();
+        self.pending_devtools_requests.clear();
+        self.inspector_ids.borrow_mut().clear();
         self.pending_dynamic_scripts.clear();
         self.pending_dynamic_styles.clear();
         self.pending_dynamic_images.clear();
@@ -724,6 +752,23 @@ impl WebView {
             });
             self.pending_js_tasks += 1;
         }
+    }
+
+    /// Settles a DevTools inspection request with its JSON envelope.
+    pub fn on_devtools_response(&mut self, id: u64, result: String) {
+        if let Some(processor) = self.js_processor.as_ref() {
+            processor.send(JsTask::ResolveDevTools { id, result });
+            self.pending_js_tasks += 1;
+        }
+    }
+
+    /// Answers a DevTools inspection query against this page's live state.
+    pub(crate) fn inspect(
+        &mut self,
+        method: &str,
+        params: &str,
+    ) -> Result<serde_json::Value, String> {
+        inspector::handle(self, method, params)
     }
 
     /// Update page (e.g. DOM changed)
@@ -1186,6 +1231,8 @@ impl WebView {
         for result in results {
             self.pending_js_tasks = self.pending_js_tasks.saturating_sub(1);
             self.pending_js_fetches.extend(result.fetch_requests);
+            self.pending_devtools_requests
+                .extend(result.devtools_requests);
             self.pending_dynamic_scripts
                 .extend(result.dynamic_script_requests);
             self.pending_dynamic_styles
@@ -1310,6 +1357,8 @@ impl WebView {
         self.js_dom_dirty = false;
         self.in_flight_timer_version = None;
         self.pending_js_fetches.clear();
+        self.pending_devtools_requests.clear();
+        self.inspector_ids.borrow_mut().clear();
         self.pending_dynamic_scripts.clear();
         self.pending_dynamic_styles.clear();
         self.pending_dynamic_images.clear();
@@ -1854,6 +1903,7 @@ pub fn resolve_url(base_url: &Url, path: &str) -> Result<Url, url::ParseError> {
 mod tests {
     use super::*;
     use crate::engine::layouter::types::{ContainerRole, ContainerStyle};
+    use serde_json::{Value, json};
     use std::time::{Duration, Instant};
 
     /// Drives `tick()` until `done` holds, or panics after a timeout.
