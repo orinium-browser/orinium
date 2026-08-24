@@ -133,7 +133,7 @@ impl CustomNodeFactory for ButtonFactory {
     fn create(&self, _tag: &str, ctx: &CustomNodeContext) -> Option<Arc<dyn CustomNode>> {
         let default_bg = Color(240, 240, 240, 255);
         let bg = match &ctx.container_style.background {
-            crate::engine::layouter::types::Background::Color(c) if c.3 > 0 => *c,
+            crate::engine::layouter::types::Background::Color(c) => *c,
             _ => default_bg,
         };
         let label =
