@@ -48,8 +48,6 @@ enum ChromeHit {
     Back,
     /// Reload current page button.
     Reload,
-    /// Debug tool button (dumps the current layout result).
-    Debug,
     /// Scripting button (toggle the scripting mode).
     Scripting,
     /// DevTools pane toggle button.
@@ -67,8 +65,6 @@ struct ToolbarRects {
     back: Rect,
     /// Reload button.
     reload: Rect,
-    /// Debug tool button.
-    debug: Rect,
     /// Scrinpting button.
     scripting: Rect,
     /// DevTools pane toggle button.
@@ -91,8 +87,6 @@ struct BrowserToolbar {
     back_button: ButtonComponent,
     /// Reload current page button.
     reload_button: ButtonComponent,
-    /// Show the current LayoutNode
-    debug_button: ButtonComponent,
     /// DevTools pane toggle button.
     devtools_button: ButtonComponent,
     /// Switch the scripting mode.
@@ -117,12 +111,6 @@ impl BrowserToolbar {
             LABEL_COLOR,
             Arc::clone(&measurer),
         );
-        let debug_button = ButtonComponent::new(
-            "Debug",
-            BUTTON_BACKGROUND,
-            LABEL_COLOR,
-            Arc::clone(&measurer),
-        );
         let scripting_button = ButtonComponent::new(
             display_scripting(&ScriptingMode::default()),
             BUTTON_BACKGROUND,
@@ -139,7 +127,6 @@ impl BrowserToolbar {
         Self {
             back_button,
             reload_button,
-            debug_button,
             scripting_button,
             devtools_button,
             url_bar,
@@ -150,7 +137,6 @@ impl BrowserToolbar {
     fn rects(&self, width: f32) -> ToolbarRects {
         let back_size = self.back_button.intrinsic_size();
         let reload_size = self.reload_button.intrinsic_size();
-        let debug_size = self.debug_button.intrinsic_size();
         let scripting_size = self.scripting_button.intrinsic_size();
         let devtools_size = self.devtools_button.intrinsic_size();
         let url_size = self.url_bar.intrinsic_size();
@@ -173,14 +159,8 @@ impl BrowserToolbar {
             reload_size.width,
             reload_size.height,
         );
-        let debug = Rect::new(
-            reload.x + reload.width + CHROME_GAP,
-            center_y(debug_size.height),
-            debug_size.width,
-            debug_size.height,
-        );
         let scripting = Rect::new(
-            debug.x + debug.width + CHROME_GAP,
+            reload.x + reload.width + CHROME_GAP,
             center_y(scripting_size.height),
             scripting_size.width,
             scripting_size.height,
@@ -199,7 +179,6 @@ impl BrowserToolbar {
             toolbar: Rect::new(0.0, 0.0, width, row_height + CHROME_PADDING * 2.0),
             back,
             reload,
-            debug,
             scripting,
             devtools,
             url_bar,
@@ -214,8 +193,6 @@ impl BrowserToolbar {
             Some(ChromeHit::Back)
         } else if rects.reload.contains(x, y) {
             Some(ChromeHit::Reload)
-        } else if rects.debug.contains(x, y) {
-            Some(ChromeHit::Debug)
         } else if rects.scripting.contains(x, y) {
             Some(ChromeHit::Scripting)
         } else if rects.devtools.contains(x, y) {
@@ -268,7 +245,6 @@ impl BasicChrome {
         let node: &dyn CustomNode = match hit {
             ChromeHit::Back => &self.toolbar.back_button,
             ChromeHit::Reload => &self.toolbar.reload_button,
-            ChromeHit::Debug => &self.toolbar.debug_button,
             ChromeHit::Scripting => &self.toolbar.scripting_button,
             ChromeHit::DevTools => &self.toolbar.devtools_button,
             ChromeHit::UrlBar => &self.toolbar.url_bar,
@@ -321,10 +297,9 @@ impl Chrome for BasicChrome {
         let text_flow_style = TextFlowStyle::default();
         let style = Style::default();
 
-        let components: [(&dyn CustomNode, Rect); 6] = [
+        let components: [(&dyn CustomNode, Rect); 5] = [
             (&self.toolbar.back_button, rects.back),
             (&self.toolbar.reload_button, rects.reload),
-            (&self.toolbar.debug_button, rects.debug),
             (&self.toolbar.scripting_button, rects.scripting),
             (&self.toolbar.devtools_button, rects.devtools),
             (&self.toolbar.url_bar, rects.url_bar),
@@ -426,10 +401,6 @@ impl Chrome for BasicChrome {
             }
             ChromeHit::Back if clicked => ChromeAction::Back,
             ChromeHit::Reload if clicked => ChromeAction::Reload,
-            ChromeHit::Debug if clicked => {
-                self.is_debug = !self.is_debug;
-                ChromeAction::DumpLayoutNode
-            }
             ChromeHit::Scripting if clicked => {
                 self.scripting_mode = if self.scripting_mode == ScriptingMode::Enabled {
                     ScriptingMode::Disabled
