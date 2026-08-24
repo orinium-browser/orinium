@@ -22,6 +22,9 @@ use crate::engine::renderer_model::{Brush, DrawCommand, FillRule, Paint, Rect, r
 use crate::engine::ui::PointerEvent;
 use crate::platform::renderer::text_measurer::PlatformTextMeasurer;
 
+/// Location of the DevTools frontend served from the bundled resources.
+pub(super) const DEVTOOLS_URL: &str = "resource:///devtools/index.html";
+
 /// Height of each menu row.
 const ROW_HEIGHT: f32 = 28.0;
 /// Minimum menu width when nothing can be measured.

@@ -31,8 +31,6 @@ pub enum ChromeAction {
     Back,
     /// Reload the active tab.
     Reload,
-    /// Toggle the DevTools split-view pane for the active tab.
-    ToggleDevTools,
     /// The chrome acquired a text field and wants OS-level IME enabled.
     EnableIme,
 }

@@ -4,19 +4,13 @@
 use std::collections::HashMap;
 
 use crate::browser::core::ui::TabId;
-use crate::engine::layouter::types::Color;
 use crate::engine::renderer_model::{
-    self, AffineTransform, Brush, DrawCommand, FillRule, Paint, Rect, rect_path,
+    self, AffineTransform, DrawCommand, FillRule, Rect, rect_path,
 };
 use crate::platform::renderer::gpu::GpuRenderer;
 
 use super::{BasicChrome, BasicContextMenu, Chrome, ContextMenu, RenderState};
 use crate::browser::core::tab::Tab;
-
-/// Width of the vertical divider drawn between the two panes.
-const DIVIDER_WIDTH: f32 = 1.0;
-/// Color of the pane divider.
-const DIVIDER_COLOR: Color = Color(160, 160, 165, 255);
 
 /// BrowserRenderer は実際の描画を担当する。
 ///
@@ -166,48 +160,4 @@ impl BrowserRenderer {
             log::error!(target: "BrowserRenderer::redraw", "Render error occurred: {}", e);
         }
     }
-}
-
-/// Renders one pane's page content, clipped to and translated into `rect`.
-///
-/// Also drives the pane tab's relayout so its layout matches the pane size.
-fn render_pane(draw_commands: &mut Vec<DrawCommand>, tab: &mut Tab, rect: Rect) {
-    draw_commands.push(DrawCommand::PushClip {
-        path: rect_path(rect.x, rect.y, rect.width, rect.height),
-        rule: FillRule::NonZero,
-    });
-    draw_commands.push(DrawCommand::PushTransform {
-        transform: AffineTransform::translate(rect.x, rect.y),
-    });
-
-    tab.relayout((rect.width, rect.height));
-    if let Some((layout, info)) = tab.layout_and_info() {
-        renderer_model::generate_draw_commands(
-            draw_commands,
-            layout,
-            info,
-            (rect.width, rect.height),
-        );
-        tab.clear_redraw_flag();
-    }
-
-    draw_commands.push(DrawCommand::PopTransform);
-    draw_commands.push(DrawCommand::PopClip);
-}
-
-/// Draws a thin vertical divider at the left edge of the DevTools pane.
-fn draw_divider(draw_commands: &mut Vec<DrawCommand>, tools_rect: Rect) {
-    draw_commands.push(DrawCommand::Fill {
-        path: rect_path(
-            tools_rect.x - DIVIDER_WIDTH * 0.5,
-            tools_rect.y,
-            DIVIDER_WIDTH,
-            tools_rect.height,
-        ),
-        rule: FillRule::NonZero,
-        paint: Paint {
-            brush: Brush::Solid(DIVIDER_COLOR),
-            opacity: 1.0,
-        },
-    });
 }

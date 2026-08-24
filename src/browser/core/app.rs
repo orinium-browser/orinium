@@ -42,6 +42,7 @@ use winit::window::WindowId;
 use super::tab::FetchKind;
 use super::ui::BrowserUi;
 use super::{BrowserCommand, resource_loader::BrowserResourceLoader};
+use crate::browser::core::ui::TabId;
 use crate::platform::network::{NetworkCore, NetworkRequest};
 use crate::platform::renderer::gpu::GpuRenderer;
 use crate::platform::system::App;
@@ -49,7 +50,7 @@ use crate::platform::system::App;
 pub struct PendingFetches {
     /// Maps (id) to (window_id, tab_id, FetchKind, Url)
     /// Id is used to track pending fetch requests.
-    map: HashMap<usize, (WindowId, usize, FetchKind, Url)>,
+    map: HashMap<usize, (WindowId, TabId, FetchKind, Url)>,
     counter: usize,
 }
 
@@ -65,7 +66,7 @@ impl PendingFetches {
     pub fn insert(
         &mut self,
         window_id: WindowId,
-        tab_id: usize,
+        tab_id: TabId,
         kind: FetchKind,
         url: Url,
     ) -> usize {
@@ -93,7 +94,7 @@ impl PendingFetches {
         now ^ self.counter ^ url_hash
     }
 
-    pub fn remove(&mut self, id: usize) -> Option<(WindowId, usize, FetchKind, Url)> {
+    pub fn remove(&mut self, id: usize) -> Option<(WindowId, TabId, FetchKind, Url)> {
         self.map.remove(&id)
     }
 }
@@ -352,7 +353,7 @@ impl BrowserApp {
                 log::warn!("There is no window called id={:?}", window_id);
                 continue;
             };
-            ui.deliver_fetch(tab_id, kind, url, msg.response);
+            ui.deliver_fetch(&tab_id, kind, url, msg.response);
         }
     }
 }

@@ -377,7 +377,7 @@ impl Chrome for BasicChrome {
 
                 ChromeAction::SetJsPolicy(self.scripting_mode.into())
             }
-            ChromeHit::DevTools if clicked => ChromeAction::ToggleDevTools,
+            ChromeHit::DevTools if clicked => todo!(),
             _ => ChromeAction::None,
         };
 
