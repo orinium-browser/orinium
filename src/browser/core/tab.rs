@@ -449,6 +449,17 @@ impl Tab {
             }
         }
 
+        let (move_repaint, move_focused) = self.handle_pointer_move(px, py);
+        repaint |= move_repaint;
+
+        (repaint, move_focused)
+    }
+
+    /// Dispatches a pointer move and updates hover state without touching
+    /// click bookkeeping. Unlike [`Tab::handle_mouse_input`] it never
+    /// synthesizes press/release events, so it is safe to call on every
+    /// cursor movement.
+    pub fn handle_pointer_move(&mut self, px: f32, py: f32) -> (bool, bool) {
         let move_path = self.hit_test(px, py);
 
         let input_focused =
@@ -459,12 +470,19 @@ impl Tab {
             crate::engine::input::update_hover(&move_path, previous)
         };
 
+        let mut repaint = false;
         if hover_changed {
             repaint = true;
             self.hovered = crate::engine::input::hit_custom_node(&move_path).cloned();
         }
 
         (repaint, input_focused)
+    }
+
+    /// Whether a press is waiting for its release to complete a click.
+    #[cfg(test)]
+    pub(crate) fn has_pending_press(&self) -> bool {
+        self.pressed_dom_id.is_some()
     }
 
     fn hit_test<'a>(&'a self, px: f32, py: f32) -> Vec<HitItem<'a>> {
@@ -661,5 +679,40 @@ mod tests {
             Some("https://example.test/a")
         );
         assert!(!tab.can_go_back());
+    }
+
+    #[test]
+    fn pointer_move_between_press_and_release_keeps_click_pending() {
+        let mut tab = Tab::default();
+        tab.navigate(url("https://example.test/a"));
+        tab.on_fetch_succeeded_html("<html><body><p>click me</p></body></html>".to_string());
+
+        // Force a relayout, wait for the background layout thread, then draw
+        // again so the applied tree gets its boxes positioned.
+        let mut buf = Vec::new();
+        tab.draw(&mut buf, 800.0, 600.0);
+        for _ in 0..500 {
+            for _ in tab.tick() {}
+            if tab.layout_and_info().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        tab.draw(&mut buf, 800.0, 600.0);
+
+        // Press on the page, move before releasing: the move must not
+        // complete or cancel the in-flight press.
+        tab.handle_mouse_input(400.0, 12.0, ElementState::Pressed);
+        assert!(tab.has_pending_press(), "press should land on an element");
+
+        tab.handle_pointer_move(401.0, 13.0);
+        assert!(
+            tab.has_pending_press(),
+            "a pointer move must not cancel an in-flight press"
+        );
+
+        // The release completes the click and clears the pending press.
+        tab.handle_mouse_input(401.0, 13.0, ElementState::Released);
+        assert!(!tab.has_pending_press());
     }
 }

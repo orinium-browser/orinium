@@ -171,6 +171,11 @@ pub struct WebView {
     layout_pending: bool,
     layout_requested_version: u64,
     layout_applied_version: u64,
+    /// The `(layout version, viewport)` the current tree was last positioned
+    /// for. Applied background results start out unpositioned; hit-testing
+    /// must never observe them before [`WebView::position_layout_if_needed`]
+    /// has run, so this memo gate runs the positioning pass eagerly.
+    positioned_layout: Option<(u64, (f32, f32))>,
     /// Live DOM references for the latest snapshot, used to apply write-backs.
     layout_dom_refs: Vec<Weak<RefCell<TreeNode<HtmlNodeType>>>>,
     /// Cached DOM snapshot, reused while the tree's mutation version is
@@ -342,6 +347,7 @@ impl WebView {
             layout_pending: false,
             layout_requested_version: 0,
             layout_applied_version: 0,
+            positioned_layout: None,
             layout_dom_refs: Vec::new(),
             snapshot_cache: None,
             write_back_tx,
@@ -1205,6 +1211,10 @@ impl WebView {
             self.layout_applied_version = version;
             self.layout_pending = false;
             self.needs_redraw = true;
+            // The fresh tree has no geometry yet (positioning normally happens
+            // during draws). Position it right away so input events arriving
+            // before the next redraw still hit-test against real boxes.
+            self.position_layout_if_needed();
         }
     }
 
@@ -1345,6 +1355,7 @@ impl WebView {
         self.layout_pending = false;
         self.layout_requested_version = 0;
         self.layout_applied_version = 0;
+        self.positioned_layout = None;
         self.layout_dom_refs.clear();
         self.snapshot_cache = None;
         self.js_processor = None;
@@ -1383,6 +1394,36 @@ impl WebView {
         self.docment_info.as_ref().map(|d| &d.title)
     }
 
+    /// Runs the box-positioning pass over the current layout tree unless it
+    /// has already been positioned for the current version + viewport.
+    ///
+    /// Background layout results arrive unpositioned (geometry is computed on
+    /// the main thread), so this must run before the tree is used for anything
+    /// geometry-sensitive — drawing, but crucially also hit-testing. Without
+    /// the eager call in [`WebView::try_apply_layout_results`], a click landing
+    /// between a result being applied and the next draw would walk boxes with
+    /// no geometry and find nothing.
+    fn position_layout_if_needed(&mut self) {
+        let viewport = self.viewport;
+        if self.positioned_layout == Some((self.layout_applied_version, viewport)) {
+            return;
+        }
+        let Some((layout, info)) = self.layout_and_info.as_mut() else {
+            return;
+        };
+
+        ui_layout::LayoutEngine::layout(layout, viewport.0, viewport.1);
+        if layouter::constrain_auto_grid_track_items(layout) {
+            ui_layout::LayoutEngine::layout(layout, viewport.0, viewport.1);
+        }
+        layouter::correct_oversized_auto_horizontal_margins(layout);
+        layouter::correct_atomic_inline_spacing_with_info(layout, info);
+        layouter::align_table_columns(layout, info);
+        layouter::refresh_missing_text_layout_results(layout, info, viewport);
+
+        self.positioned_layout = Some((self.layout_applied_version, viewport));
+    }
+
     pub fn relayout(&mut self, viewport: (f32, f32)) {
         if self.viewport != viewport {
             self.viewport = viewport;
@@ -1395,6 +1436,7 @@ impl WebView {
             }
             self.update_layout();
         }
+        self.position_layout_if_needed();
 
         let fragment_target =
             if fragment_layout_is_ready(self.fragment_ready_version, self.layout_applied_version) {
@@ -1411,14 +1453,6 @@ impl WebView {
             return;
         };
 
-        ui_layout::LayoutEngine::layout(layout, viewport.0, viewport.1);
-        if layouter::constrain_auto_grid_track_items(layout) {
-            ui_layout::LayoutEngine::layout(layout, viewport.0, viewport.1);
-        }
-        layouter::correct_oversized_auto_horizontal_margins(layout);
-        layouter::correct_atomic_inline_spacing_with_info(layout, info);
-        layouter::align_table_columns(layout, info);
-        layouter::refresh_missing_text_layout_results(layout, info, viewport);
         if fragment_target
             .is_some_and(|target| apply_fragment_scroll(layout, info, target, viewport.1))
         {
@@ -2043,6 +2077,22 @@ mod tests {
             .inspect("getBoxModel", r#"{"domId":99999}"#)
             .expect_err("unknown id must fail");
         assert!(error.contains("unknown domId"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn applied_layout_results_are_positioned_before_any_draw() {
+        // Regression: background layout results replaced the tree unpositioned
+        // (geometry was only computed during draws), so a click landing between
+        // an application and the next redraw hit-tested against boxes without
+        // geometry and found nothing.
+        let webview = box_model_webview();
+        let (layout, info) = webview.layout_and_info().expect("layout applied");
+
+        let path = crate::engine::input::hit_test(layout, info, 50.0, 25.0);
+        assert!(
+            crate::engine::input::hit_dom_id(&path).is_some(),
+            "boxes must carry geometry as soon as a background result lands"
+        );
     }
 
     #[test]

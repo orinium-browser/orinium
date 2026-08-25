@@ -222,6 +222,11 @@ pub struct BasicChrome {
     is_debug_open: bool,
     debug_pane: Tab,
 
+    /// Whether a press that started inside the debug pane is still held.
+    /// Its release must be routed back to the pane even if the pointer has
+    /// since moved over the toolbar or the page, so the click completes.
+    debug_press_active: bool,
+
     scripting_mode: ScriptingMode,
     /// Toolbar element currently under the pointer, if any.
     hovered: Option<ChromeHit>,
@@ -238,6 +243,7 @@ impl BasicChrome {
             last_url: None,
             is_debug_open: false,
             debug_pane: tab,
+            debug_press_active: false,
             scripting_mode: ScriptingMode::default(),
             hovered: None,
         }
@@ -414,34 +420,68 @@ impl Chrome for BasicChrome {
         };
 
         let Some(hit) = self.toolbar.hit_test(x, y, width) else {
-            // Pointer over the page: clear any chrome hover.
+            // Pointer over the page or the debug pane: clear any chrome hover.
             self.clear_hover();
 
-            if self.is_debug_open {
-                let rects = self.toolbar.rects(width);
-
-                let rect = Rect {
-                    x: width / 2.0,
-                    y: rects.height(),
-                    width: width / 2.0,
-                    height: height - rects.height(),
-                };
-
-                if rect.contains(x, y) {
-                    let px = x - width / 2.0;
-                    let py = y - rects.height();
-
-                    self.debug_pane.handle_mouse_input(px, py, state);
-                }
-
-                return ChromeEventResult {
-                    consumed: true,
-                    action: ChromeAction::None,
-                };
-            } else {
+            if !self.is_debug_open {
                 return ChromeEventResult::none();
             }
+
+            let rects = self.toolbar.rects(width);
+            let pane = Rect {
+                x: width / 2.0,
+                y: rects.height(),
+                width: width / 2.0,
+                height: height - rects.height(),
+            };
+            let inside = pane.contains(x, y);
+
+            // The page area must not be consumed, or clicks would never
+            // reach the browsed tab. Only the debug pane (and a press that
+            // started there) is handled by the chrome.
+            if !inside && !self.debug_press_active {
+                return ChromeEventResult::none();
+            }
+
+            // Debug-pane local coordinates.
+            let px = x - pane.x;
+            let py = y - pane.y;
+
+            match event {
+                // Moves only update hover; routing them through
+                // `handle_mouse_input` would synthesize pointer-ups and
+                // cancel in-flight clicks.
+                PointerEvent::Move { .. } => {
+                    self.debug_pane.handle_pointer_move(px, py);
+                }
+                PointerEvent::Down { .. } => {
+                    self.debug_press_active = inside;
+                    self.debug_pane.handle_mouse_input(px, py, state);
+                }
+                _ => {
+                    self.debug_press_active = false;
+                    self.debug_pane.handle_mouse_input(px, py, state);
+                }
+            }
+
+            return ChromeEventResult {
+                consumed: true,
+                action: ChromeAction::None,
+            };
         };
+
+        // A release that belongs to a press started in the debug pane never
+        // activates chrome buttons the pointer happens to have drifted over.
+        if matches!(event, PointerEvent::Up { .. }) && self.debug_press_active {
+            self.debug_press_active = false;
+            let rects = self.toolbar.rects(width);
+            self.debug_pane
+                .handle_mouse_input(x - width / 2.0, y - rects.height(), state);
+            return ChromeEventResult {
+                consumed: true,
+                action: ChromeAction::None,
+            };
+        }
 
         let handled = self.dispatch(hit, event);
         let clicked = matches!(event, PointerEvent::Up { .. }) && handled;
@@ -504,7 +544,10 @@ impl Chrome for BasicChrome {
                 height: height - rects.height(),
             };
 
-            if rect.contains(mouse_x, mouse_y) {
+            // The core hands us coordinates relative to the content rect
+            // origin; the pane sits at (width / 2, toolbar height) in window
+            // space, so only its horizontal offset needs translating.
+            if rect.contains(mouse_x, mouse_y + rects.height()) {
                 let Some((layout, info)) = self.debug_pane.layout_and_info_mut() else {
                     return;
                 };
@@ -513,8 +556,8 @@ impl Chrome for BasicChrome {
                 crate::engine::input::scroll_at(
                     layout,
                     info,
-                    (width, height),
-                    mouse_x,
+                    (rect.width, rect.height),
+                    mouse_x - rect.x,
                     mouse_y,
                     scroll_x,
                     scroll_y,
@@ -608,6 +651,35 @@ fn display_scripting(scripting_mode: &ScriptingMode) -> &'static str {
 mod tests {
     use super::*;
 
+    /// Completes a press/release cycle at `(x, y)` over the chrome.
+    fn click(chrome: &mut BasicChrome, x: f32, y: f32) -> ChromeAction {
+        let down = chrome.pointer_event(
+            800.0,
+            600.0,
+            PointerEvent::Down { x, y },
+            ElementState::Pressed,
+        );
+        assert!(down.consumed);
+
+        let up = chrome.pointer_event(
+            800.0,
+            600.0,
+            PointerEvent::Up { x, y },
+            ElementState::Released,
+        );
+        assert!(up.consumed);
+        up.action
+    }
+
+    /// Clicks the DevTools button so the debug pane is open afterwards.
+    fn open_debug_pane(chrome: &mut BasicChrome) -> ToolbarRects {
+        let rects = chrome.toolbar.rects(800.0);
+        let action = click(chrome, rects.devtools.x + 1.0, rects.devtools.y + 1.0);
+        assert_eq!(action, ChromeAction::None);
+        assert!(chrome.is_debug_open);
+        rects
+    }
+
     #[test]
     fn toolbar_rects_layout_left_to_right() {
         let toolbar = BrowserToolbar::new();
@@ -648,6 +720,7 @@ mod tests {
                 x: rects.back.x + 1.0,
                 y: rects.back.y + 1.0,
             },
+            ElementState::Pressed,
         );
         assert!(result.consumed);
         assert_eq!(result.action, ChromeAction::None);
@@ -659,6 +732,7 @@ mod tests {
                 x: rects.back.x + 1.0,
                 y: rects.back.y + 1.0,
             },
+            ElementState::Released,
         );
         assert!(result.consumed);
         assert_eq!(result.action, ChromeAction::Back);
@@ -671,6 +745,7 @@ mod tests {
                 x: rects.url_bar.x + 1.0,
                 y: rects.url_bar.y + 1.0,
             },
+            ElementState::Pressed,
         );
         assert!(result.consumed);
         assert_eq!(result.action, ChromeAction::EnableIme);
@@ -684,6 +759,7 @@ mod tests {
                 x: 400.0,
                 y: rects.toolbar.height + 10.0,
             },
+            ElementState::Pressed,
         );
         assert!(!result.consumed);
         assert_eq!(result.action, ChromeAction::None);
@@ -703,6 +779,7 @@ mod tests {
                 x: rects.back.x + 1.0,
                 y: rects.back.y + 1.0,
             },
+            ElementState::Released,
         );
         assert!(result.consumed);
 
@@ -713,6 +790,7 @@ mod tests {
                 x: rects.reload.x + 1.0,
                 y: rects.reload.y + 1.0,
             },
+            ElementState::Released,
         );
         assert!(result.consumed);
 
@@ -724,6 +802,7 @@ mod tests {
                 x: 400.0,
                 y: rects.toolbar.height + 10.0,
             },
+            ElementState::Released,
         );
         assert!(!result.consumed);
         assert!(!chrome.toolbar.back_button.is_hovered());
@@ -745,5 +824,302 @@ mod tests {
             chrome.toolbar.url_bar.state().value,
             "https://example.comzzz"
         );
+    }
+
+    #[test]
+    fn page_clicks_fall_through_while_debug_pane_is_open() {
+        let mut chrome = BasicChrome::new();
+        open_debug_pane(&mut chrome);
+
+        // The left half below the toolbar is still the browsed page; events
+        // there must not be swallowed by the chrome or they would never
+        // reach the active tab.
+        let down = chrome.pointer_event(
+            800.0,
+            600.0,
+            PointerEvent::Down { x: 200.0, y: 300.0 },
+            ElementState::Pressed,
+        );
+        assert!(!down.consumed);
+
+        let up = chrome.pointer_event(
+            800.0,
+            600.0,
+            PointerEvent::Up { x: 200.0, y: 300.0 },
+            ElementState::Released,
+        );
+        assert!(!up.consumed);
+    }
+
+    #[test]
+    fn debug_pane_click_survives_pointer_moves_and_outside_release() {
+        let mut chrome = BasicChrome::new();
+        let rects = open_debug_pane(&mut chrome);
+        let pane_x = 800.0 / 2.0;
+
+        // Press inside the pane, jiggle the pointer around, and release
+        // outside the pane (over the toolbar): the release belongs to the
+        // pane and must not trigger the hovered chrome button.
+        let down = chrome.pointer_event(
+            800.0,
+            600.0,
+            PointerEvent::Down {
+                x: pane_x + 100.0,
+                y: rects.toolbar.height + 50.0,
+            },
+            ElementState::Pressed,
+        );
+        assert!(down.consumed);
+
+        for (dx, dy) in [(1.0, 2.0), (-3.0, 1.0), (2.0, -1.0)] {
+            let mv = chrome.pointer_event(
+                800.0,
+                600.0,
+                PointerEvent::Move {
+                    x: pane_x + 100.0 + dx,
+                    y: rects.toolbar.height + 50.0 + dy,
+                },
+                ElementState::Released,
+            );
+            assert!(mv.consumed);
+        }
+
+        let up = chrome.pointer_event(
+            800.0,
+            600.0,
+            PointerEvent::Up {
+                x: rects.back.x + 1.0,
+                y: rects.back.y + 1.0,
+            },
+            ElementState::Released,
+        );
+        assert!(up.consumed);
+        assert_eq!(up.action, ChromeAction::None);
+        assert!(!chrome.debug_press_active);
+
+        // The chrome is not stuck: a normal click on Back still works.
+        let action = click(&mut chrome, rects.back.x + 1.0, rects.back.y + 1.0);
+        assert_eq!(action, ChromeAction::Back);
+    }
+
+    /// End-to-end fixtures driving [`BrowserUi`] exactly like the platform
+    /// event loop does: pointer position bookkeeping, moves carrying a
+    /// released button state, and press/release pairs through
+    /// [`BrowserUi::handle_mouse_input`].
+    ///
+    /// Lives in this module because setup needs `BasicChrome` internals and
+    /// the dispatch needs `BrowserUi` internals (both are visible to child
+    /// modules of `ui`).
+    mod e2e {
+        use super::*;
+        use crate::browser::BrowserCommand;
+        use crate::browser::core::ui::{BasicContextMenu, BrowserUi};
+        use std::time::Duration;
+
+        const W: f32 = 1280.0;
+        const H: f32 = 800.0;
+
+        struct Rig {
+            ui: BrowserUi,
+            rects: ToolbarRects,
+        }
+
+        fn response(body: &str) -> BrowserResponse {
+            BrowserResponse {
+                url: String::new(),
+                status: hyper::StatusCode::OK.into(),
+                status_text: "OK".to_string(),
+                body: body.as_bytes().to_vec(),
+                headers: vec![],
+            }
+        }
+
+        /// Relayouts `tab` and waits for the background layout thread, then
+        /// draws again so the applied tree gets its boxes positioned.
+        fn spin_layout(tab: &mut Tab, w: f32, h: f32) {
+            let mut buf = Vec::new();
+            tab.draw(&mut buf, w, h);
+            for _ in 0..500 {
+                for _ in tab.tick() {}
+                if tab.layout_and_info().is_some() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            tab.draw(&mut buf, w, h);
+            assert!(tab.layout_and_info().is_some(), "layout must be ready");
+        }
+
+        /// Builds a UI whose page tab and debug pane both have loaded,
+        /// positioned layouts — the state the real browser reaches before a
+        /// user can click anything.
+        fn rig(page_body: &str, pane_body: &str) -> Rig {
+            let rects = BasicChrome::new().toolbar.rects(W);
+            let toolbar_height = rects.toolbar.height;
+
+            let mut tab = Tab::default();
+            tab.navigate("https://page.test/index.html".parse().unwrap());
+            tab.on_fetch_succeeded_html(format!("<html><body>{page_body}</body></html>"));
+            spin_layout(&mut tab, W, H - toolbar_height);
+
+            // Load the pane content through the chrome's own fetch pipeline.
+            let mut chrome = BasicChrome::new();
+            let mut fetches: Vec<FetchRequest> = Vec::new();
+            let mut actions = Vec::new();
+            chrome.tick(&mut fetches, &mut actions);
+            chrome.deliver_fetch(
+                FetchKind::Html,
+                DEVTOOLS_URL.parse().unwrap(),
+                Ok(response(&format!("<html><body>{pane_body}</body></html>"))),
+            );
+
+            let mut pane_buf = Vec::new();
+            for _ in 0..500 {
+                fetches.clear();
+                actions.clear();
+                let _ = chrome.tick(&mut fetches, &mut actions);
+                if chrome.debug_pane.layout_and_info().is_some() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            assert!(
+                chrome.debug_pane.layout_and_info().is_some(),
+                "pane layout must be ready"
+            );
+            // Position the pane boxes like a redraw would.
+            chrome
+                .debug_pane
+                .draw(&mut pane_buf, W / 2.0, H - toolbar_height);
+
+            let ui = BrowserUi::with_tab_and_menu(
+                tab,
+                Box::new(chrome),
+                Box::new(BasicContextMenu::new()),
+            );
+            let mut ui = ui;
+            ui.set_window((W as u32, H as u32), 1.0, "test".into());
+            Rig { ui, rects }
+        }
+
+        fn cursor_to(rig: &mut Rig, x: f32, y: f32) {
+            rig.ui.input.mouse_position = (x as f64, y as f64);
+            rig.ui.handle_pointer_move(x as f64, y as f64);
+        }
+
+        fn press_left(rig: &mut Rig) -> BrowserCommand {
+            rig.ui
+                .handle_mouse_input(winit::event::MouseButton::Left, ElementState::Pressed)
+        }
+
+        fn release_left(rig: &mut Rig) -> BrowserCommand {
+            rig.ui
+                .handle_mouse_input(winit::event::MouseButton::Left, ElementState::Released)
+        }
+
+        fn open_debug_pane(rig: &mut Rig) {
+            cursor_to(rig, rig.rects.devtools.x + 1.0, rig.rects.devtools.y + 1.0);
+            press_left(rig);
+            release_left(rig);
+        }
+
+        #[test]
+        fn page_link_press_reaches_active_tab_while_pane_is_open() {
+            let mut rig = rig(
+                r#"<a href="https://page.test/target" style="font-size: 24px;">click me please</a>"#,
+                "<p>devtools</p>",
+            );
+            let th = rig.rects.toolbar.height;
+            open_debug_pane(&mut rig);
+
+            // Press the link on the browsed page (left half). The press must
+            // navigate the active tab; swallowing it here was bug #2.
+            cursor_to(&mut rig, 30.0, th + 14.0);
+            press_left(&mut rig);
+
+            let url = rig
+                .ui
+                .active_tab()
+                .and_then(|tab| tab.document_url().map(|u| u.to_string()));
+            assert_eq!(url.as_deref(), Some("https://page.test/target"));
+
+            release_left(&mut rig);
+            let url = rig
+                .ui
+                .active_tab()
+                .and_then(|tab| tab.document_url().map(|u| u.to_string()))
+                .unwrap();
+            assert_eq!(url, "https://page.test/target");
+        }
+
+        #[test]
+        fn pane_link_press_routes_to_debug_pane_and_spares_the_page() {
+            let mut rig = rig(
+                "<p>hello</p>",
+                r#"<a href="https://pane.test/target" style="font-size: 24px;">pane link</a>"#,
+            );
+            let th = rig.rects.toolbar.height;
+            open_debug_pane(&mut rig);
+
+            // Press the link inside the pane (right half), jiggle the
+            // pointer like a real hand, then release still inside.
+            cursor_to(&mut rig, W / 2.0 + 30.0, th + 14.0);
+            press_left(&mut rig);
+
+            // The pane navigated: its fetch surfaces with TabId(0).
+            let mut pane_nav = false;
+            for _ in 0..100 {
+                let outcome = rig.ui.tick();
+                pane_nav = outcome.fetches.iter().any(|fetch| {
+                    fetch.tab_id == TabId(0) && fetch.url.as_str() == "https://pane.test/target"
+                });
+                if pane_nav {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            assert!(pane_nav, "pane link press must navigate the pane");
+
+            for (dx, dy) in [(2.0, 3.0), (-4.0, 1.0), (1.0, -2.0)] {
+                cursor_to(&mut rig, W / 2.0 + 30.0 + dx, th + 14.0 + dy);
+            }
+            release_left(&mut rig);
+
+            // None of that may leak into the browsed page.
+            let url = rig
+                .ui
+                .active_tab()
+                .and_then(|tab| tab.document_url().map(|u| u.to_string()))
+                .unwrap();
+            assert_eq!(url, "https://page.test/index.html");
+        }
+
+        #[test]
+        fn back_button_still_works_while_pane_is_open() {
+            let mut rig = rig("<p>history page</p>", "<p>devtools</p>");
+            let th = rig.rects.toolbar.height;
+
+            // Seed one history entry so Back has somewhere to go.
+            if let Some(tab) = rig.ui.active_tab_mut() {
+                tab.navigate("https://page.test/second.html".parse().unwrap());
+                tab.on_fetch_succeeded_html("<html><body><p>second</p></body></html>".into());
+                spin_layout(tab, W, H - th);
+            }
+
+            open_debug_pane(&mut rig);
+
+            // A completed click on Back while the pane is open must navigate
+            // the active tab back to the first URL.
+            let (bx, by) = (rig.rects.back.x + 1.0, rig.rects.back.y + 1.0);
+            cursor_to(&mut rig, bx, by);
+            press_left(&mut rig);
+            release_left(&mut rig);
+
+            let url = rig
+                .ui
+                .active_tab()
+                .and_then(|tab| tab.document_url().map(|u| u.to_string()));
+            assert_eq!(url.as_deref(), Some("https://page.test/index.html"));
+        }
     }
 }

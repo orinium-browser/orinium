@@ -749,8 +749,8 @@ impl BrowserUi {
             (self.input.mouse_position.1 / sf) as f32 - sy,
         );
 
-        let outside_content =
-            mouse_x < sx || mouse_y < sy || mouse_x > sx + width || mouse_y > sy + height;
+        // `mouse_x`/`mouse_y` are already relative to the content rect.
+        let outside_content = mouse_x < 0.0 || mouse_y < 0.0 || mouse_x > width || mouse_y > height;
 
         if outside_content {
             self.renderer
