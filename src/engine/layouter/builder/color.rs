@@ -232,7 +232,11 @@ fn parse_color_mix(args: &[CssValue], name: &str, color_scheme: ColorScheme) -> 
 ///
 /// `color_scheme` is the element's used color scheme, used to resolve
 /// `light-dark()`.
-pub fn resolve_css_color(name: &str, css_color: &CssValue, color_scheme: ColorScheme) -> Option<Color> {
+pub fn resolve_css_color(
+    name: &str,
+    css_color: &CssValue,
+    color_scheme: ColorScheme,
+) -> Option<Color> {
     fn keyword_color_to_color(name: &str, keyword: &str) -> Option<Color> {
         // NOTE:
         // Keyword matching is case-insensitive according to CSS specs.

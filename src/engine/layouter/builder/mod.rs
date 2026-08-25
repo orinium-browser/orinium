@@ -10,10 +10,10 @@ mod tests;
 
 pub use apply::{apply_declaration, blockify_out_of_flow_positioned};
 pub use layout_fix::{
-    correct_oversized_auto_horizontal_margins, constrain_auto_grid_track_items,
-    refresh_missing_text_layout_results, correct_atomic_inline_spacing,
-    correct_atomic_inline_spacing_with_info, is_block_layout_child, is_collapsible_whitespace_info,
-    maximum_fixed_descendant_width,
+    constrain_auto_grid_track_items, correct_atomic_inline_spacing,
+    correct_atomic_inline_spacing_with_info, correct_oversized_auto_horizontal_margins,
+    is_block_layout_child, is_collapsible_whitespace_info, maximum_fixed_descendant_width,
+    refresh_missing_text_layout_results,
 };
 
 #[allow(unused_imports)]
@@ -42,9 +42,9 @@ use crate::engine::layouter::css_resolver::{
 use crate::engine::layouter::dom_snapshot::{DomSnapshot, NodeId};
 use crate::engine::layouter::types::WhiteSpace;
 use crate::engine::renderer_model::Image;
+use crate::engine::tree::NodeRef;
 use crate::engine::ui::custom_node_bridge::CustomNodeBridge;
 use crate::engine::ui::registry::{ComponentRegistry, CustomNodeContext, DomWriteBack};
-use crate::engine::tree::NodeRef;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -67,7 +67,7 @@ use super::types::{
     BackgroundRepeat, BackgroundSize, BorderRadius, BorderStyle, Color, ColorScheme, ColorStop,
     ContainerRole, ContainerStyle, CornerRadius, CssFloat, FontStyle, FontWeight, Gradient,
     GradientKind, InfoNode, LineHeight, NodeKind, Overflow, RadialShape, RadialSizeKind, TextAlign,
-    TextDecoration, TextStyle, TextFlowStyle, TextTransform,
+    TextDecoration, TextFlowStyle, TextStyle, TextTransform,
 };
 
 pub(crate) const DEFAULT_LINE_FACTOR: f32 = 1.2;

@@ -1,8 +1,6 @@
 use crate::engine::css::values::{CssValue, Unit};
 use crate::engine::layouter::types::TextFlowStyle;
-use ui_layout::{
-    GridPlacement, GridPlacementEnd, GridRepeat, GridTrack, Length, LengthOrAuto,
-};
+use ui_layout::{GridPlacement, GridPlacementEnd, GridRepeat, GridTrack, Length, LengthOrAuto};
 
 const GRID_LINE_TO_END: GridPlacementEnd = GridPlacementEnd::Line(usize::MAX);
 

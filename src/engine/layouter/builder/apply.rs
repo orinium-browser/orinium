@@ -12,16 +12,16 @@ use ui_layout::{
 
 use crate::engine::layouter::types::{
     Background, BorderRadius, BorderStyle, Color, ColorScheme, ContainerStyle, CornerRadius,
-    CssFloat, FontStyle, FontWeight, LineHeight, Overflow, TextAlign, TextDecoration, TextStyle,
-    TextFlowStyle, TextTransform, VerticalAlign, Visibility, WhiteSpace,
+    CssFloat, FontStyle, FontWeight, LineHeight, Overflow, TextAlign, TextDecoration,
+    TextFlowStyle, TextStyle, TextTransform, VerticalAlign, Visibility, WhiteSpace,
 };
 
 use super::{
-    apply_background_shorthand_geometry, extract_font_families, length_to_px,
-    one_or_two_values, parse_background_position, parse_background_repeat,
-    parse_background_shorthand, parse_background_size, parse_grid_line, parse_grid_line_end,
-    parse_grid_placement, parse_grid_template_areas, parse_grid_tracks, resolve_css_color,
-    resolve_css_len, resolve_css_len_auto, resolve_font_size_px,
+    apply_background_shorthand_geometry, extract_font_families, length_to_px, one_or_two_values,
+    parse_background_position, parse_background_repeat, parse_background_shorthand,
+    parse_background_size, parse_grid_line, parse_grid_line_end, parse_grid_placement,
+    parse_grid_template_areas, parse_grid_tracks, resolve_css_color, resolve_css_len,
+    resolve_css_len_auto, resolve_font_size_px,
 };
 
 macro_rules! apply_property {

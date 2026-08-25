@@ -1,11 +1,11 @@
 use crate::engine::css::values::{CssValue, Unit};
 
+use super::{resolve_css_color, resolve_css_len};
 use crate::engine::layouter::types::{
     Background, BackgroundDimension, BackgroundOffset, BackgroundPosition, BackgroundPositionAxis,
     BackgroundRepeat, BackgroundSize, Color, ColorScheme, ColorStop, ContainerStyle, Gradient,
-    GradientKind, RadialShape, RadialSizeKind, TextStyle, TextFlowStyle,
+    GradientKind, RadialShape, RadialSizeKind, TextFlowStyle, TextStyle,
 };
-use super::{resolve_css_color, resolve_css_len};
 
 use ui_layout::Length;
 
