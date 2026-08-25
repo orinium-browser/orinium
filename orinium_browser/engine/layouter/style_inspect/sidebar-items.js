@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["collect_matched_rules"],"struct":["InspectedDeclaration","MatchedRule"]};

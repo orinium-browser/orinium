@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["ChromeAction"],"struct":["BasicChrome","BasicContextMenu","BrowserRenderer","BrowserUi","ChromeEventResult","ClickContext","MenuEventResult","MenuItem","RenderState"],"trait":["Chrome","ContextMenu"]};
+window.SIDEBAR_ITEMS = {"enum":["ChromeAction"],"struct":["BasicChrome","BasicContextMenu","BrowserRenderer","BrowserUi","ChromeEventResult","ClickContext","FetchRequest","MenuEventResult","MenuItem","RenderState","TabId"],"trait":["Chrome","ContextMenu"]};
