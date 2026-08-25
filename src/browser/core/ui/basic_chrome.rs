@@ -21,7 +21,7 @@ use crate::browser::core::resource_loader::{BrowserNetworkError, BrowserResponse
 use crate::browser::core::tab::{FetchKind, TabTask};
 use crate::browser::core::ui::chrome::{Chrome, ChromeAction, ChromeEventResult, DEVTOOLS_URL};
 use crate::browser::core::ui::{
-    FetchRequest, TabId, logical_key_to_special_event, logical_key_to_text_key,
+    FetchRequest, logical_key_to_special_event, logical_key_to_text_key,
 };
 use crate::engine::bridge::text::TextMeasurer;
 use crate::engine::html::ScriptingMode;
@@ -360,21 +360,14 @@ impl Chrome for BasicChrome {
         }
     }
 
-    fn tick(
-        &mut self,
-        fetches_buf: &mut Vec<super::FetchRequest>,
-        actions_buf: &mut Vec<ChromeAction>,
-    ) -> bool {
+    fn tick(&mut self, actions_buf: &mut Vec<ChromeAction>) -> (Vec<FetchRequest>, bool) {
+        let mut fetches_buf = Vec::new();
         let mut redraw = false;
         for task in self.debug_pane.tick() {
             match task {
                 TabTask::Fetch { url, kind } => {
                     log::info!("Fetch requested in BasicChrome: url={}", url);
-                    fetches_buf.push(FetchRequest {
-                        tab_id: TabId(0),
-                        url,
-                        kind,
-                    });
+                    fetches_buf.push(FetchRequest { url, kind });
                 }
                 TabTask::NeedsRedraw => redraw = true,
                 TabTask::DevToolsRequest { id, method, params } => {
@@ -382,7 +375,8 @@ impl Chrome for BasicChrome {
                 }
             }
         }
-        redraw
+
+        (fetches_buf, redraw)
     }
 
     fn deliver_fetch(

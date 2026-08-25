@@ -308,24 +308,26 @@ impl BrowserApp {
         let outcome = ui.tick();
 
         for fetch in outcome.fetches {
-            log::info!("Fetch requested in App: url={}", fetch.url);
-            let request = match &fetch.kind {
+            let url = fetch.request.url;
+            let kind = fetch.request.kind;
+            log::info!("Fetch requested in App: url={}", url);
+            let request = match &kind {
                 FetchKind::JavaScript {
                     method,
                     headers,
                     body,
                     ..
                 } => NetworkRequest {
-                    url: fetch.url.to_string(),
+                    url: url.to_string(),
                     method: method.clone(),
                     headers: headers.clone(),
                     body: body.clone(),
                 },
-                _ => NetworkRequest::get(fetch.url.to_string()),
+                _ => NetworkRequest::get(url.to_string()),
             };
-            let id =
-                self.pending_fetches
-                    .insert(window_id, fetch.tab_id, fetch.kind, fetch.url.clone());
+            let id = self
+                .pending_fetches
+                .insert(window_id, fetch.tab_id, kind, url);
             self.network.fetch_request_async(request, id);
         }
 

@@ -84,15 +84,19 @@ struct InputState {
 }
 
 /// タブから発生したリソース取得リクエスト。
-pub(crate) struct FetchRequest {
+pub(crate) struct TabFetchRequest {
     pub(crate) tab_id: TabId,
-    pub(crate) url: Url,
-    pub(crate) kind: FetchKind,
+    pub(crate) request: FetchRequest,
+}
+
+pub struct FetchRequest {
+    pub url: Url,
+    pub kind: FetchKind,
 }
 
 /// [`BrowserUi::tick`] の結果。
 pub(crate) struct BrowserUiTick {
-    pub(crate) fetches: Vec<FetchRequest>,
+    pub(crate) fetches: Vec<TabFetchRequest>,
     pub(crate) needs_redraw: bool,
 }
 
@@ -271,10 +275,9 @@ impl BrowserUi {
                 match task {
                     TabTask::Fetch { url, kind } => {
                         log::info!("Fetch requested in BrowserUi: url={}", url);
-                        fetches.push(FetchRequest {
+                        fetches.push(TabFetchRequest {
                             tab_id: *tab_id,
-                            url,
-                            kind,
+                            request: FetchRequest { url, kind },
                         });
                     }
                     TabTask::NeedsRedraw => {
@@ -298,7 +301,17 @@ impl BrowserUi {
             }
         }
 
-        self.renderer.chrome.tick(&mut fetches, &mut chrome_actions);
+        fetches.extend(
+            self.renderer
+                .chrome
+                .tick(&mut chrome_actions)
+                .0
+                .into_iter()
+                .map(|request| TabFetchRequest {
+                    tab_id: TabId(0),
+                    request,
+                }),
+        );
 
         for action in chrome_actions {
             match action {
