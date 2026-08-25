@@ -20,6 +20,7 @@ use crate::engine::tree::NodeRef;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use smol_str::SmolStr;
 use ui_layout::{
     AlignContent, AlignItems, AutoSizeBehavior, BoxSizing, Display, FlexDirection, FlexWrap,
     GridPlacement, GridPlacementEnd, GridRepeat, GridTrack, InnerDisplay, ItemFragment,
@@ -45,6 +46,45 @@ use crate::engine::ui::registry::{ComponentRegistry, CustomNodeContext, DomWrite
 pub(crate) const DEFAULT_LINE_FACTOR: f32 = 1.2;
 
 const GRID_LINE_TO_END: GridPlacementEnd = GridPlacementEnd::Line(usize::MAX);
+
+use std::sync::LazyLock;
+
+static DEFAULT_STYLE: LazyLock<Style> = LazyLock::new(Style::default);
+static DEFAULT_CONTAINER_STYLE: LazyLock<ContainerStyle> = LazyLock::new(ContainerStyle::default);
+static DEFAULT_TEXT_STYLE: LazyLock<TextStyle> = LazyLock::new(TextStyle::default);
+static DEFAULT_TEXT_FLOW_STYLE: LazyLock<TextFlowStyle> = LazyLock::new(TextFlowStyle::default);
+
+macro_rules! apply_property {
+    ($field:ident, $target:ident, $parent:ident, $default:expr, $value:expr, $parse:expr) => {
+        $target.$field = if let CssValue::Keyword(v) = $value
+            && v == "initial"
+        {
+            $default.$field.clone()
+        } else if let CssValue::Keyword(v) = $value
+            && v == "inherit"
+        {
+            $parent.$field.clone()
+        } else {
+            $parse
+        };
+    };
+
+    ($field:ident, $target:ident, $parent:ident, $default:expr, $value:expr, $pattern:pat, $parse:expr) => {
+        $target.$field = if let CssValue::Keyword(v) = $value
+            && v == "initial"
+        {
+            $default.$field.clone()
+        } else if let CssValue::Keyword(v) = $value
+            && v == "inherit"
+        {
+            $parent.$field.clone()
+        } else if let $pattern = $value {
+            $parse
+        } else {
+            return None;
+        };
+    };
+}
 
 fn background_dimension(value: &CssValue, font_size: f32) -> Option<BackgroundDimension> {
     match value {
@@ -451,6 +491,8 @@ struct StackFrame {
     child: Arc<InheritedCss>,
     kind: Option<NodeKind>,
     style: Option<Style>,
+    parent_style: Style,
+    parent_container_style: ContainerStyle,
     child_slots: Vec<ChildSlot>,
     element_children: Vec<NodeId>,
 }
@@ -568,6 +610,8 @@ pub fn build_layout_and_info_from_snapshot(
         child: Arc::new(parent),
         kind: None,
         style: None,
+        parent_style: Style::default(),
+        parent_container_style: ContainerStyle::default(),
         child_slots: Vec::new(),
         element_children: Vec::new(),
     });
@@ -598,6 +642,10 @@ pub fn build_layout_and_info_from_snapshot(
             let mut container_style = ContainerStyle::default();
             let mut style = Style::default();
             let mut overflow = Overflow::default();
+            let parent_style = stack[top_idx].parent_style.clone();
+            let parent_container_style = stack[top_idx].parent_container_style.clone();
+            let parent_text_style = text_style.clone();
+            let parent_text_flow_style = text_flow_style.clone();
             // Collect CSS candidates.
             perf_scope!(css_match);
             let (candidates, custom_property_candidates) =
@@ -665,7 +713,6 @@ pub fn build_layout_and_info_from_snapshot(
                     ) else {
                         continue;
                     };
-
                     apply_declaration(
                         &declaration.name,
                         &value,
@@ -673,6 +720,10 @@ pub fn build_layout_and_info_from_snapshot(
                         &mut container_style,
                         &mut text_style,
                         &mut text_flow_style,
+                        &parent_style,
+                        &parent_container_style,
+                        &parent_text_style,
+                        &parent_text_flow_style,
                         &mut overflow,
                         used_color_scheme,
                     );
@@ -727,6 +778,10 @@ pub fn build_layout_and_info_from_snapshot(
                         &mut container_style,
                         &mut text_style,
                         &mut text_flow_style,
+                        &parent_style,
+                        &parent_container_style,
+                        &parent_text_style,
+                        &parent_text_flow_style,
                         &mut overflow,
                         used_color_scheme,
                     );
@@ -734,15 +789,29 @@ pub fn build_layout_and_info_from_snapshot(
             }
 
             // Apply attribute sizing
-            apply_attribute_dimensions(
-                html_node,
-                &mut style,
-                &mut container_style,
-                &mut text_style,
-                &mut text_flow_style,
-                &mut overflow,
-                used_color_scheme,
-            );
+            for attr in ["width", "height"] {
+                if let Some(value) = html_node.get_attr(attr)
+                    && let Some(mut value) = resolve_inline_value(value)
+                {
+                    if let CssValue::Number(v) = value {
+                        value = CssValue::Length(v, Unit::Px);
+                    }
+                    apply_declaration(
+                        attr,
+                        &value,
+                        &mut style,
+                        &mut container_style,
+                        &mut text_style,
+                        &mut text_flow_style,
+                        &parent_style,
+                        &parent_container_style,
+                        &parent_text_style,
+                        &parent_text_flow_style,
+                        &mut overflow,
+                        used_color_scheme,
+                    );
+                }
+            }
             #[cfg(any(feature = "profile", debug_assertions))]
             {
                 apply_decl_time += apply_decl.elapsed();
@@ -995,7 +1064,13 @@ pub fn build_layout_and_info_from_snapshot(
             } else {
                 // ── Has element children → save state, push children ──
                 let parent_chain = stack[top_idx].chain.clone();
+                let parent_container = match &kind {
+                    NodeKind::Container { style, .. } => style.clone(),
+                    _ => ContainerStyle::default(),
+                };
                 stack[top_idx].kind = Some(kind);
+                stack[top_idx].parent_style = style.clone();
+                stack[top_idx].parent_container_style = parent_container;
                 stack[top_idx].style = Some(style);
                 stack[top_idx].child = child;
                 stack[top_idx].child_slots = child_slots;
@@ -1010,6 +1085,8 @@ pub fn build_layout_and_info_from_snapshot(
                 };
                 let child_css = Arc::clone(&stack[top_idx].child);
                 let kid_infos = element_sibling_infos(snapshot, &kids_for_push);
+                let parent_style_for_children = stack[top_idx].parent_style.clone();
+                let parent_container_for_children = stack[top_idx].parent_container_style.clone();
                 for (&kid, info) in kids_for_push.iter().zip(kid_infos).rev() {
                     stack.push(StackFrame {
                         dom: kid,
@@ -1017,6 +1094,8 @@ pub fn build_layout_and_info_from_snapshot(
                         child: Arc::clone(&child_css),
                         kind: None,
                         style: None,
+                        parent_style: parent_style_for_children.clone(),
+                        parent_container_style: parent_container_for_children.clone(),
                         child_slots: Vec::new(),
                         element_children: Vec::new(),
                     });
@@ -2401,69 +2480,6 @@ fn collect_candidates(
     (properties, custom_properties)
 }
 
-fn apply_attribute_dimensions(
-    html_node: &HtmlNodeType,
-    style: &mut Style,
-    container_style: &mut ContainerStyle,
-    text_style: &mut TextStyle,
-    text_flow_style: &mut TextFlowStyle,
-    overflow: &mut Overflow,
-    color_scheme: ColorScheme,
-) {
-    #[allow(clippy::too_many_arguments)]
-    fn apply_attribute_size(
-        attr: &str,
-        html_node: &HtmlNodeType,
-        style: &mut Style,
-        container_style: &mut ContainerStyle,
-        text_style: &mut TextStyle,
-        text_flow_style: &mut TextFlowStyle,
-        overflow: &mut Overflow,
-        color_scheme: ColorScheme,
-    ) {
-        if let Some(value) = html_node.get_attr(attr)
-            && let Some(mut value) = resolve_inline_value(value)
-        {
-            if let CssValue::Number(v) = value {
-                value = CssValue::Length(v, Unit::Px);
-            }
-
-            apply_declaration(
-                attr,
-                &value,
-                style,
-                container_style,
-                text_style,
-                text_flow_style,
-                overflow,
-                color_scheme,
-            );
-        }
-    }
-
-    apply_attribute_size(
-        "width",
-        html_node,
-        style,
-        container_style,
-        text_style,
-        text_flow_style,
-        overflow,
-        color_scheme,
-    );
-
-    apply_attribute_size(
-        "height",
-        html_node,
-        style,
-        container_style,
-        text_style,
-        text_flow_style,
-        overflow,
-        color_scheme,
-    );
-}
-
 fn blockify_out_of_flow_positioned(style: &mut Style) {
     if style.position.kind.is_out_of_flow() && style.display.outer == OuterDisplay::Inline {
         style.display.outer = OuterDisplay::Block;
@@ -2595,6 +2611,10 @@ pub fn apply_declaration(
     container_style: &mut ContainerStyle,
     text_style: &mut TextStyle,
     text_flow_style: &mut TextFlowStyle,
+    parent_style: &Style,
+    parent_container_style: &ContainerStyle,
+    parent_text_style: &TextStyle,
+    parent_text_flow_style: &TextFlowStyle,
     overflow: &mut Overflow,
     color_scheme: ColorScheme,
 ) -> Option<()> {
@@ -2856,58 +2876,101 @@ pub fn apply_declaration(
         /* ======================
          * Display
          * ====================== */
-        ("display", CssValue::Keyword(v)) => {
-            style.display = Display::from_css_name(v.as_str())?;
+        ("display", _) => {
+            apply_property!(
+                display,
+                style,
+                parent_style,
+                DEFAULT_STYLE,
+                value,
+                CssValue::Keyword(v),
+                Display::from_css_name(v.as_str())?
+            );
         }
 
-        ("z-index", CssValue::Number(value))
-            if value.is_finite() && value.fract().abs() < f32::EPSILON =>
-        {
-            container_style.z_index = Some(*value as i32);
-        }
-
-        ("z-index", CssValue::Keyword(value))
-            if matches!(
-                value.to_ascii_lowercase().as_str(),
-                "auto" | "initial" | "unset"
-            ) =>
-        {
-            container_style.z_index = None;
-        }
-
-        ("visibility", CssValue::Keyword(value)) => {
-            container_style.visibility = match value.to_ascii_lowercase().as_str() {
-                "visible" => Visibility::Visible,
-                "hidden" => Visibility::Hidden,
-                "collapse" => Visibility::Collapse,
-                _ => return None,
+        ("z-index", _) => {
+            let f = |v: &f32| {
+                if v.is_finite() && v.fract().abs() < f32::EPSILON {
+                    Some(*v as i32)
+                } else {
+                    None
+                }
             };
+
+            apply_property!(
+                z_index,
+                container_style,
+                parent_container_style,
+                DEFAULT_CONTAINER_STYLE,
+                value,
+                CssValue::Number(v),
+                f(v)
+            );
         }
 
-        ("float", CssValue::Keyword(value)) => {
-            container_style.css_float = match value.to_ascii_lowercase().as_str() {
-                "left" => CssFloat::Left,
-                "right" => CssFloat::Right,
-                "none" | "initial" | "unset" => CssFloat::None,
-                _ => return None,
+        ("visibility", _) => {
+            let f = |v: &SmolStr| match v.to_ascii_lowercase().as_str() {
+                "visible" => Some(Visibility::Visible),
+                "hidden" => Some(Visibility::Hidden),
+                "collapse" => Some(Visibility::Collapse),
+                _ => None,
             };
+
+            apply_property!(
+                visibility,
+                container_style,
+                parent_container_style,
+                DEFAULT_CONTAINER_STYLE,
+                value,
+                CssValue::Keyword(v),
+                f(v)?
+            );
         }
 
-        ("cursor", CssValue::Keyword(v)) => {
-            container_style.cursor = match v.as_str() {
-                "auto" => CursorStyle::Auto,
-                "default" => CursorStyle::Default,
-                "none" => CursorStyle::None,
-                "pointer" => CursorStyle::Pointer,
-                "text" => CursorStyle::Text,
-                "move" => CursorStyle::Move,
-                "not-allowed" => CursorStyle::NotAllowed,
-                "wait" => CursorStyle::Wait,
-                "crosshair" => CursorStyle::Crosshair,
-                "grab" => CursorStyle::Grab,
-                "grabbing" => CursorStyle::Grabbing,
-                _ => return None,
+        ("float", _) => {
+            let f = |v: &SmolStr| match v.to_ascii_lowercase().as_str() {
+                "left" => Some(CssFloat::Left),
+                "right" => Some(CssFloat::Right),
+                "none" => Some(CssFloat::None),
+                _ => None,
             };
+
+            apply_property!(
+                css_float,
+                container_style,
+                parent_container_style,
+                DEFAULT_CONTAINER_STYLE,
+                value,
+                CssValue::Keyword(v),
+                f(v)?
+            );
+        }
+
+        ("cursor", _) => {
+            let f = |v: &SmolStr| match v.as_str() {
+                "auto" => Some(CursorStyle::Auto),
+                "default" => Some(CursorStyle::Default),
+                "none" => Some(CursorStyle::None),
+                "pointer" => Some(CursorStyle::Pointer),
+                "text" => Some(CursorStyle::Text),
+                "move" => Some(CursorStyle::Move),
+                "not-allowed" => Some(CursorStyle::NotAllowed),
+                "wait" => Some(CursorStyle::Wait),
+                "crosshair" => Some(CursorStyle::Crosshair),
+                "grab" => Some(CursorStyle::Grab),
+                "grabbing" => Some(CursorStyle::Grabbing),
+                _ => None,
+            };
+
+            apply_property!(
+                cursor,
+                container_style,
+                parent_container_style,
+                DEFAULT_CONTAINER_STYLE,
+                value,
+                CssValue::Keyword(v),
+                f(v)?
+            );
         }
 
         /* ======================
@@ -2959,7 +3022,14 @@ pub fn apply_declaration(
         }
 
         ("background-repeat", _) => {
-            container_style.background_repeat = parse_background_repeat(value)?;
+            apply_property!(
+                background_repeat,
+                container_style,
+                parent_container_style,
+                DEFAULT_CONTAINER_STYLE,
+                value,
+                parse_background_repeat(value)?
+            );
         }
 
         ("background-size", _) => {
@@ -3017,13 +3087,21 @@ pub fn apply_declaration(
             text_style.font_weight = FontWeight(*v as u16);
         }
 
-        ("font-style", CssValue::Keyword(v)) => {
-            text_style.font_style = match v.as_str() {
-                "normal" => FontStyle::Normal,
-                "italic" => FontStyle::Italic,
-                "oblique" => FontStyle::Oblique,
-                _ => text_style.font_style,
-            };
+        ("font-style", _) => {
+            apply_property!(
+                font_style,
+                text_style,
+                parent_text_style,
+                DEFAULT_TEXT_STYLE,
+                value,
+                CssValue::Keyword(v),
+                match v.as_str() {
+                    "normal" => FontStyle::Normal,
+                    "italic" => FontStyle::Italic,
+                    "oblique" => FontStyle::Oblique,
+                    _ => text_style.font_style.clone(),
+                }
+            );
         }
 
         ("font-family", _) => {
@@ -3062,60 +3140,93 @@ pub fn apply_declaration(
             }
         }
 
-        ("vertical-align", CssValue::Keyword(v)) => {
-            match v.as_str() {
-                "sub" => {
-                    text_flow_style.vertical_align = VerticalAlign::Sub;
+        ("vertical-align", _) => {
+            apply_property!(
+                vertical_align,
+                text_flow_style,
+                parent_text_flow_style,
+                DEFAULT_TEXT_FLOW_STYLE,
+                value,
+                CssValue::Keyword(v),
+                match v.as_str() {
+                    "sub" => VerticalAlign::Sub,
+                    "super" | "sup" => VerticalAlign::Super,
+                    _ => text_flow_style.vertical_align.clone(),
                 }
-                "super" | "sup" => {
-                    text_flow_style.vertical_align = VerticalAlign::Super;
-                }
-                "top" | "middle" | "bottom" => {
-                    // Keep default, ignore for now
-                }
-                _ => {}
-            }
+            );
         }
 
-        ("text-transform", CssValue::Keyword(v)) => {
-            text_style.text_transform = match v.as_str() {
-                "none" => TextTransform::None,
-                "uppercase" => TextTransform::Uppercase,
-                "lowercase" => TextTransform::Lowercase,
-                _ => TextTransform::None,
-            };
+        ("text-transform", _) => {
+            apply_property!(
+                text_transform,
+                text_style,
+                parent_text_style,
+                DEFAULT_TEXT_STYLE,
+                value,
+                CssValue::Keyword(v),
+                match v.as_str() {
+                    "none" => TextTransform::None,
+                    "uppercase" => TextTransform::Uppercase,
+                    "lowercase" => TextTransform::Lowercase,
+                    _ => TextTransform::None,
+                }
+            );
         }
 
-        ("text-align", CssValue::Keyword(v)) => {
-            text_flow_style.text_align = match v.as_str() {
-                "left" => TextAlign::Left,
-                "center" => TextAlign::Center,
-                "right" => TextAlign::Right,
-                _ => return None,
-            };
+        ("text-align", _) => {
+            apply_property!(
+                text_align,
+                text_flow_style,
+                parent_text_flow_style,
+                DEFAULT_TEXT_FLOW_STYLE,
+                value,
+                CssValue::Keyword(v),
+                match v.as_str() {
+                    "left" => TextAlign::Left,
+                    "center" => TextAlign::Center,
+                    "right" => TextAlign::Right,
+                    _ => return None,
+                }
+            );
         }
 
-        ("white-space", CssValue::Keyword(v)) => {
-            text_flow_style.white_space = match v.as_str() {
-                "normal" => WhiteSpace::Normal,
-                "nowrap" => WhiteSpace::Nowrap,
-                "pre" => WhiteSpace::Pre,
-                "pre-wrap" => WhiteSpace::PreWrap,
-                "pre-line" => WhiteSpace::PreLine,
-                "break-spaces" => WhiteSpace::BreakSpaces,
-                _ => text_flow_style.white_space,
-            };
+        ("white-space", _) => {
+            apply_property!(
+                white_space,
+                text_flow_style,
+                parent_text_flow_style,
+                DEFAULT_TEXT_FLOW_STYLE,
+                value,
+                CssValue::Keyword(v),
+                match v.as_str() {
+                    "normal" => WhiteSpace::Normal,
+                    "nowrap" => WhiteSpace::Nowrap,
+                    "pre" => WhiteSpace::Pre,
+                    "pre-wrap" => WhiteSpace::PreWrap,
+                    "pre-line" => WhiteSpace::PreLine,
+                    "break-spaces" => WhiteSpace::BreakSpaces,
+                    _ => text_flow_style.white_space.clone(),
+                }
+            );
         }
 
         /* ======================
          * Box Model
          * ====================== */
-        ("box-sizing", CssValue::Keyword(v)) => {
-            style.box_sizing = match v.as_str() {
-                "content-box" => BoxSizing::ContentBox,
-                "border-box" => BoxSizing::BorderBox,
-                _ => BoxSizing::ContentBox,
-            };
+        ("box-sizing", _) => {
+            apply_property!(
+                box_sizing,
+                style,
+                parent_style,
+                DEFAULT_STYLE,
+                value,
+                CssValue::Keyword(v),
+                match v.as_str() {
+                    "content-box" => BoxSizing::ContentBox,
+                    "border-box" => BoxSizing::BorderBox,
+                    _ => BoxSizing::ContentBox,
+                }
+            );
         }
 
         ("margin", v) => {
@@ -3452,12 +3563,28 @@ pub fn apply_declaration(
         /* ======================
          * Flex
          * ====================== */
-        ("flex-direction", CssValue::Keyword(v)) => {
-            style.flex_direction = flex_direction_keyword(v)?;
+        ("flex-direction", _) => {
+            apply_property!(
+                flex_direction,
+                style,
+                parent_style,
+                DEFAULT_STYLE,
+                value,
+                CssValue::Keyword(v),
+                flex_direction_keyword(v)?
+            );
         }
 
-        ("flex-wrap", CssValue::Keyword(v)) => {
-            style.flex_wrap = flex_wrap_keyword(v)?;
+        ("flex-wrap", _) => {
+            apply_property!(
+                flex_wrap,
+                style,
+                parent_style,
+                DEFAULT_STYLE,
+                value,
+                CssValue::Keyword(v),
+                flex_wrap_keyword(v)?
+            );
         }
 
         ("flex-flow", _) => {
@@ -3487,37 +3614,69 @@ pub fn apply_declaration(
             style.justify_items = justify_items;
         }
 
-        ("justify-items", CssValue::Keyword(v)) => {
-            style.justify_items = resolve_justify_items(v)?;
+        ("justify-items", _) => {
+            apply_property!(
+                justify_items,
+                style,
+                parent_style,
+                DEFAULT_STYLE,
+                value,
+                CssValue::Keyword(v),
+                resolve_justify_items(v)?
+            );
         }
 
-        ("justify-content", CssValue::Keyword(v)) => {
-            style.justify_content = match v.as_str() {
-                "flex-start" | "start" => JustifyContent::Start,
-                "center" => JustifyContent::Center,
-                "flex-end" | "end" => JustifyContent::End,
-                "space-between" => JustifyContent::SpaceBetween,
-                "space-around" => JustifyContent::SpaceAround,
-                "space-evenly" => JustifyContent::SpaceEvenly,
-                _ => return None,
-            };
+        ("justify-content", _) => {
+            apply_property!(
+                justify_content,
+                style,
+                parent_style,
+                DEFAULT_STYLE,
+                value,
+                CssValue::Keyword(v),
+                match v.as_str() {
+                    "flex-start" | "start" => JustifyContent::Start,
+                    "center" => JustifyContent::Center,
+                    "flex-end" | "end" => JustifyContent::End,
+                    "space-between" => JustifyContent::SpaceBetween,
+                    "space-around" => JustifyContent::SpaceAround,
+                    "space-evenly" => JustifyContent::SpaceEvenly,
+                    _ => return None,
+                }
+            );
         }
 
-        ("align-items", CssValue::Keyword(v)) => {
-            style.align_items = resolve_align_items(v)?;
+        ("align-items", _) => {
+            apply_property!(
+                align_items,
+                style,
+                parent_style,
+                DEFAULT_STYLE,
+                value,
+                CssValue::Keyword(v),
+                resolve_align_items(v)?
+            );
         }
 
-        ("align-content", CssValue::Keyword(v)) => {
-            style.align_content = match v.as_str() {
-                "normal" | "stretch" => AlignContent::Stretch,
-                "flex-start" | "start" => AlignContent::Start,
-                "center" => AlignContent::Center,
-                "flex-end" | "end" => AlignContent::End,
-                "space-between" => AlignContent::SpaceBetween,
-                "space-around" => AlignContent::SpaceAround,
-                "space-evenly" => AlignContent::SpaceEvenly,
-                _ => return None,
-            };
+        ("align-content", _) => {
+            apply_property!(
+                align_content,
+                style,
+                parent_style,
+                DEFAULT_STYLE,
+                value,
+                CssValue::Keyword(v),
+                match v.as_str() {
+                    "normal" | "stretch" => AlignContent::Stretch,
+                    "flex-start" | "start" => AlignContent::Start,
+                    "center" => AlignContent::Center,
+                    "flex-end" | "end" => AlignContent::End,
+                    "space-between" => AlignContent::SpaceBetween,
+                    "space-around" => AlignContent::SpaceAround,
+                    "space-evenly" => AlignContent::SpaceEvenly,
+                    _ => return None,
+                }
+            );
         }
 
         ("gap", _) => match value {
@@ -5221,6 +5380,10 @@ mod tests {
             &mut container_style,
             &mut text_style,
             &mut text_flow_style,
+            &Style::default(),
+            &ContainerStyle::default(),
+            &TextStyle::default(),
+            &TextFlowStyle::default(),
             &mut overflow,
             ColorScheme::Light,
         );
@@ -5241,6 +5404,10 @@ mod tests {
             &mut container_style,
             &mut text_style,
             &mut text_flow_style,
+            &Style::default(),
+            &ContainerStyle::default(),
+            &TextStyle::default(),
+            &TextFlowStyle::default(),
             &mut overflow,
             ColorScheme::Light,
         );
@@ -5579,6 +5746,10 @@ mod tests {
             &mut container_style,
             &mut text_style,
             &mut text_flow_style,
+            &Style::default(),
+            &ContainerStyle::default(),
+            &TextStyle::default(),
+            &TextFlowStyle::default(),
             &mut overflow,
             ColorScheme::Light,
         );
@@ -5640,6 +5811,10 @@ mod tests {
                 &mut container_style,
                 &mut text_style,
                 &mut text_flow_style,
+                &Style::default(),
+                &ContainerStyle::default(),
+                &TextStyle::default(),
+                &TextFlowStyle::default(),
                 &mut overflow,
                 ColorScheme::Light,
             )
@@ -5655,6 +5830,10 @@ mod tests {
                 &mut container_style,
                 &mut text_style,
                 &mut text_flow_style,
+                &Style::default(),
+                &ContainerStyle::default(),
+                &TextStyle::default(),
+                &TextFlowStyle::default(),
                 &mut overflow,
                 ColorScheme::Light,
             )
@@ -5679,6 +5858,10 @@ mod tests {
                 &mut container_style,
                 &mut text_style,
                 &mut text_flow_style,
+                &Style::default(),
+                &ContainerStyle::default(),
+                &TextStyle::default(),
+                &TextFlowStyle::default(),
                 &mut overflow,
                 ColorScheme::Light,
             )
@@ -5712,6 +5895,10 @@ mod tests {
                 &mut container_style,
                 &mut text_style,
                 &mut text_flow_style,
+                &Style::default(),
+                &ContainerStyle::default(),
+                &TextStyle::default(),
+                &TextFlowStyle::default(),
                 &mut overflow,
                 ColorScheme::Light,
             )
@@ -5735,6 +5922,10 @@ mod tests {
                 &mut container_style,
                 &mut text_style,
                 &mut text_flow_style,
+                &Style::default(),
+                &ContainerStyle::default(),
+                &TextStyle::default(),
+                &TextFlowStyle::default(),
                 &mut overflow,
                 ColorScheme::Light,
             )
@@ -7086,6 +7277,10 @@ mod tests {
                 &mut container,
                 &mut text,
                 &mut text_flow,
+                &Style::default(),
+                &ContainerStyle::default(),
+                &TextStyle::default(),
+                &TextFlowStyle::default(),
                 &mut overflow,
                 ColorScheme::Light,
             )
@@ -7126,6 +7321,10 @@ mod tests {
                 &mut container,
                 &mut text,
                 &mut text_flow,
+                &Style::default(),
+                &ContainerStyle::default(),
+                &TextStyle::default(),
+                &TextFlowStyle::default(),
                 &mut overflow,
                 ColorScheme::Light,
             )
