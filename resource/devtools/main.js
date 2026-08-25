@@ -496,9 +496,16 @@
   function refresh() {
     return call("getDocument").then(function (data) {
       tree = data;
-      if (selectedId !== null && !findById(tree, selectedId)) {
-        selectedId = null;
-        clearDetails();
+      if (selectedId !== null) {
+        if (!findById(tree, selectedId)) {
+          selectedId = null;
+          clearDetails();
+        } else {
+          showAttributes(selectedId);
+          showStyles(selectedId);
+          showComputed(selectedId);
+          showLayout(selectedId);
+        }
       }
       renderTree();
     });
