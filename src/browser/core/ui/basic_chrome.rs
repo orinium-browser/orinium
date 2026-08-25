@@ -900,7 +900,7 @@ mod tests {
     mod e2e {
         use super::*;
         use crate::browser::BrowserCommand;
-        use crate::browser::core::ui::{BasicContextMenu, BrowserUi};
+        use crate::browser::core::ui::{BasicContextMenu, BrowserUi, TabId};
         use std::time::Duration;
 
         const W: f32 = 1280.0;
@@ -951,9 +951,8 @@ mod tests {
 
             // Load the pane content through the chrome's own fetch pipeline.
             let mut chrome = BasicChrome::new();
-            let mut fetches: Vec<FetchRequest> = Vec::new();
             let mut actions = Vec::new();
-            chrome.tick(&mut fetches, &mut actions);
+            chrome.tick(&mut actions);
             chrome.deliver_fetch(
                 FetchKind::Html,
                 DEVTOOLS_URL.parse().unwrap(),
@@ -962,9 +961,8 @@ mod tests {
 
             let mut pane_buf = Vec::new();
             for _ in 0..500 {
-                fetches.clear();
                 actions.clear();
-                let _ = chrome.tick(&mut fetches, &mut actions);
+                let _ = chrome.tick(&mut actions);
                 if chrome.debug_pane.layout_and_info().is_some() {
                     break;
                 }
@@ -1058,7 +1056,8 @@ mod tests {
             for _ in 0..100 {
                 let outcome = rig.ui.tick();
                 pane_nav = outcome.fetches.iter().any(|fetch| {
-                    fetch.tab_id == TabId(0) && fetch.url.as_str() == "https://pane.test/target"
+                    fetch.tab_id == TabId(0)
+                        && fetch.request.url.as_str() == "https://pane.test/target"
                 });
                 if pane_nav {
                     break;
