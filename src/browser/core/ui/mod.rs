@@ -21,7 +21,6 @@ use winit::event::{ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, W
 use crate::browser::Tab;
 use crate::browser::core::resource_loader::{BrowserNetworkError, BrowserResponse};
 use crate::browser::core::tab::{FetchKind, TabTask};
-use crate::engine::layouter;
 use crate::engine::layouter::types::ColorScheme;
 use crate::engine::renderer_model::{DrawCommand, Rect};
 use crate::engine::ui::PointerEvent;
@@ -426,22 +425,19 @@ impl BrowserUi {
             return self.apply_chrome_action(action);
         }
 
-        let Some((_, info)) = self.tab(tab_id).and_then(Tab::layout_and_info) else {
+        let Some(tab) = self.tab(tab_id) else {
             return BrowserCommand::None;
         };
 
         let special = logical_key_to_special_event(&event.logical_key, ctrl);
         let key = logical_key_to_text_key(&event.logical_key);
         let handled = if let Some(special) = special {
-            crate::engine::input::dispatch_text_input(info, special)
+            tab.dispatch_text_input(special)
         } else if let Some(key) = key {
-            crate::engine::input::dispatch_text_input(info, InputTextEvent::Key(key))
-        } else if !ctrl && !crate::engine::input::focused_text_input_is_composing(info) {
+            tab.dispatch_text_input(InputTextEvent::Key(key))
+        } else if !ctrl && !tab.is_text_input_composing() {
             event.text.as_ref().is_some_and(|text| {
-                crate::engine::input::dispatch_text_input(
-                    info,
-                    InputTextEvent::Insert(text.to_string()),
-                )
+                tab.dispatch_text_input(InputTextEvent::Insert(text.to_string()))
             })
         } else {
             false
@@ -473,11 +469,11 @@ impl BrowserUi {
             Ime::Enabled => return BrowserCommand::None,
         };
 
-        let Some((_, info)) = self.active_tab().and_then(Tab::layout_and_info) else {
+        let Some(tab) = self.active_tab() else {
             return BrowserCommand::None;
         };
 
-        if crate::engine::input::dispatch_text_input(info, event) {
+        if tab.dispatch_text_input(event) {
             BrowserCommand::RequestRedraw
         } else {
             BrowserCommand::None
@@ -596,10 +592,8 @@ impl BrowserUi {
             // input methods work; the platform handler also requests a
             // redraw.
             ChromeAction::EnableIme => {
-                if let Some(tab) = self.active_tab()
-                    && let Some((_, info)) = tab.layout_and_info()
-                {
-                    crate::engine::input::focus_text_input(info, None);
+                if let Some(tab) = self.active_tab() {
+                    tab.defocus_text_input();
                 }
                 return BrowserCommand::SetImeAllowed {
                     allowed: true,
@@ -672,10 +666,7 @@ impl BrowserUi {
             return BrowserCommand::None;
         };
         let document_url = tab.document_url().map(|url| url.to_string());
-        let link_url = tab.layout_and_info().and_then(|(layout, info)| {
-            let path = crate::engine::input::hit_test(layout, info, page_pos.0, page_pos.1);
-            link_href_at(&path)
-        });
+        let link_url = tab.link_at(page_pos.0, page_pos.1);
 
         let ctx = ClickContext {
             window_pos: (px, py),
@@ -724,7 +715,14 @@ impl BrowserUi {
             return self.renderer.chrome.needs_repaint();
         }
 
-        self.renderer.chrome.needs_repaint()
+        // Forward to the active tab for page hover tracking.
+        let Rect { x: dx, y: dy, .. } = self.renderer.chrome.content_rect(v_width, v_height);
+        let (px, py) = (px - dx, py - dy);
+        let tab_repaint = self
+            .active_tab_mut()
+            .is_some_and(|tab| tab.handle_pointer_move(px, py).0);
+
+        tab_repaint || self.renderer.chrome.needs_repaint()
     }
 
     /// Handles scrolling for the pane under the pointer, updating its layout
@@ -763,20 +761,8 @@ impl BrowserUi {
             return;
         };
 
-        let Some((layout, info)) = tab.layout_and_info_mut() else {
-            return;
-        };
-
         // Prefer the scrollable container under the cursor.
-        crate::engine::input::scroll_at(
-            layout,
-            info,
-            (width, height),
-            mouse_x,
-            mouse_y,
-            scroll_x,
-            scroll_y,
-        );
+        tab.scroll_at(mouse_x, mouse_y, scroll_x, scroll_y, (width, height));
     }
 
     fn handle_devtools_request(&mut self, id: u64, method: String, params: String) {
@@ -793,22 +779,6 @@ impl BrowserUi {
         };
         self.renderer.chrome.on_devtools_response(id, response);
     }
-}
-
-/// Returns the href of the innermost link on the hit path, if any.
-///
-/// The hit path is ordered child→parent, so the first match is the deepest
-/// link under the pointer.
-pub(super) fn link_href_at(hit_path: &crate::engine::input::HitPath<'_>) -> Option<String> {
-    hit_path.iter().find_map(|hit| {
-        if let layouter::types::NodeKind::Container { role, .. } = &hit.info.kind
-            && let layouter::types::ContainerRole::Link { href } = role
-        {
-            Some(href.clone())
-        } else {
-            None
-        }
-    })
 }
 
 /// Where a [`ChromeAction`] came from; decides whose repaint flag closes the

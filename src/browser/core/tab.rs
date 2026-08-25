@@ -13,11 +13,11 @@ use crate::{
         js::JsFetchResponse,
         layouter::{
             self,
-            types::{ColorScheme, InfoNode},
+            types::{ColorScheme, ContainerRole, InfoNode, NodeKind},
         },
         renderer_model::{self, DrawCommand},
         tree::TreeNode,
-        ui::{CustomNode, PointerEvent},
+        ui::{CustomNode, PointerEvent, input_text_types::InputTextEvent},
     },
 };
 use ui_layout::LayoutNode;
@@ -485,6 +485,62 @@ impl Tab {
         self.pressed_dom_id.is_some()
     }
 
+    /// Sends a text-input event (key, insert, composition) to the focused
+    /// text input, if one exists.
+    pub fn dispatch_text_input(&self, event: InputTextEvent) -> bool {
+        let Some((_, info)) = self.layout_and_info() else {
+            return false;
+        };
+        crate::engine::input::dispatch_text_input(info, event)
+    }
+
+    /// Defocuses any focused text input.
+    pub fn defocus_text_input(&self) -> bool {
+        let Some((_, info)) = self.layout_and_info() else {
+            return false;
+        };
+        crate::engine::input::focus_text_input(info, None)
+    }
+
+    /// Returns the href of the link under the given page coordinates, if any.
+    pub fn link_at(&self, px: f32, py: f32) -> Option<String> {
+        let (layout, info) = self.layout_and_info()?;
+        let path = crate::engine::input::hit_test(layout, info, px, py);
+        path.iter().find_map(|hit| {
+            if let NodeKind::Container {
+                role: ContainerRole::Link { href },
+                ..
+            } = &hit.info.kind
+            {
+                Some(href.clone())
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Scrolls the scrollable container under the cursor.
+    pub fn scroll_at(&mut self, px: f32, py: f32, dx: f32, dy: f32, viewport: (f32, f32)) {
+        let Some((layout, info)) = self.layout_and_info_mut() else {
+            return;
+        };
+        crate::engine::input::scroll_at(layout, info, viewport, px, py, dx, dy);
+    }
+
+    /// Whether this tab has a layout tree ready for drawing or hit-testing.
+    pub fn has_layout(&self) -> bool {
+        self.layout_and_info().is_some()
+    }
+
+    /// Whether the currently focused text input is in the middle of a
+    /// composition (e.g. IME preedit).
+    pub fn is_text_input_composing(&self) -> bool {
+        let Some((_, info)) = self.layout_and_info() else {
+            return false;
+        };
+        crate::engine::input::focused_text_input_is_composing(info)
+    }
+
     fn hit_test<'a>(&'a self, px: f32, py: f32) -> Vec<HitItem<'a>> {
         let Some((layout, info)) = self.layout_and_info() else {
             return vec![];
@@ -570,7 +626,7 @@ impl Tab {
 
     /// Returns layout_and_info
     /// Only InfoNode will be mutable.
-    pub fn layout_and_info_mut(&mut self) -> Option<(&LayoutNode, &mut InfoNode)> {
+    pub(crate) fn layout_and_info_mut(&mut self) -> Option<(&LayoutNode, &mut InfoNode)> {
         self.webview
             .as_mut()
             .and_then(|wv| wv.layout_and_info_mut())
@@ -602,7 +658,7 @@ impl Tab {
         self.document_url.clone()
     }
 
-    pub fn layout_and_info(&self) -> Option<(&LayoutNode, &InfoNode)> {
+    pub(crate) fn layout_and_info(&self) -> Option<(&LayoutNode, &InfoNode)> {
         self.webview.as_ref().and_then(|wv| wv.layout_and_info())
     }
 

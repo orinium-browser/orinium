@@ -548,19 +548,12 @@ impl Chrome for BasicChrome {
             // origin; the pane sits at (width / 2, toolbar height) in window
             // space, so only its horizontal offset needs translating.
             if rect.contains(mouse_x, mouse_y + rects.height()) {
-                let Some((layout, info)) = self.debug_pane.layout_and_info_mut() else {
-                    return;
-                };
-
-                // Prefer the scrollable container under the cursor.
-                crate::engine::input::scroll_at(
-                    layout,
-                    info,
-                    (rect.width, rect.height),
+                self.debug_pane.scroll_at(
                     mouse_x - rect.x,
                     mouse_y,
                     scroll_x,
                     scroll_y,
+                    (rect.width, rect.height),
                 );
             }
         }
