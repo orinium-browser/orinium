@@ -15,8 +15,13 @@ fn main() -> Result<()> {
         handler.handle();
     }
 
+    let url = std::env::args()
+        .nth(1)
+        .filter(|arg| !arg.starts_with('-'))
+        .unwrap_or_else(|| "resource:///test/test.html".to_string());
+
     let mut tab = Tab::default();
-    tab.navigate("resource:///test/test.html".parse()?);
+    tab.navigate(url.parse()?);
 
     let mut browser = BrowserApp::default();
     browser.set_default_ui(BrowserUi::with_tab(tab));
