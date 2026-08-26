@@ -1,5 +1,5 @@
-use crate::engine::js::common::{with_host_mut, is_callable};
 use crate::engine::js::JsTimer;
+use crate::engine::js::common::{is_callable, with_host_mut};
 use pixi_byte::vm::VM;
 use pixi_byte::{JSResult, JSValue};
 use std::time::{Duration, Instant};

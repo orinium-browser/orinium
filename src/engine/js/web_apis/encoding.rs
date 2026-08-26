@@ -1,9 +1,9 @@
+use base64::Engine as _;
 use pixi_byte::value::jsobject::{JSObject, Property};
 use pixi_byte::vm::VM;
 use pixi_byte::{JSError, JSResult, JSValue};
 use std::cell::RefCell;
 use std::rc::Rc;
-use base64::Engine as _;
 
 pub(crate) fn install_encoding_apis(engine: &mut pixi_byte::JSEngine) {
     let mut encoder_constructor = JSObject::new();

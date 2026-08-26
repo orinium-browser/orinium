@@ -1,6 +1,6 @@
-use crate::engine::js::web_apis::encoding::make_array_buffer_from_value;
 use crate::engine::js::common::{is_callable, noop, with_host_mut};
-use crate::engine::js::{JsFetchRequest, JsFetchCapability, JsFetchResponse};
+use crate::engine::js::web_apis::encoding::make_array_buffer_from_value;
+use crate::engine::js::{JsFetchCapability, JsFetchRequest, JsFetchResponse};
 use pixi_byte::value::JSArray;
 use pixi_byte::value::jsobject::{JSObject, Property};
 use pixi_byte::vm::VM;
@@ -34,7 +34,10 @@ fn headers_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(JSValue::Object(make_headers(entries, false)))
 }
 
-pub(crate) fn make_headers(entries: Vec<(String, String)>, immutable: bool) -> Rc<RefCell<JSObject>> {
+pub(crate) fn make_headers(
+    entries: Vec<(String, String)>,
+    immutable: bool,
+) -> Rc<RefCell<JSObject>> {
     let data = Rc::new(RefCell::new(JSObject::new()));
     for (name, value) in entries {
         append_header_value(&mut data.borrow_mut(), &name, &value);

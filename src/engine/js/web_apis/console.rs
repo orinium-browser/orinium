@@ -126,7 +126,10 @@ pub(crate) fn intl_supported_locales_of(vm: &mut VM, args: Vec<JSValue>) -> JSRe
     Ok(vm.array_from_values(values))
 }
 
-pub(crate) fn intl_plural_rules_constructor(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn intl_plural_rules_constructor(
+    _vm: &mut VM,
+    _args: Vec<JSValue>,
+) -> JSResult<JSValue> {
     Ok(JSValue::Undefined)
 }
 
@@ -134,11 +137,17 @@ pub(crate) fn intl_plural_rules_select(_vm: &mut VM, _args: Vec<JSValue>) -> JSR
     Ok(JSValue::String("other".to_string()))
 }
 
-pub(crate) fn intl_relative_time_constructor(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn intl_relative_time_constructor(
+    _vm: &mut VM,
+    _args: Vec<JSValue>,
+) -> JSResult<JSValue> {
     Ok(JSValue::Undefined)
 }
 
-pub(crate) fn intl_relative_time_resolved_options(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn intl_relative_time_resolved_options(
+    _vm: &mut VM,
+    _args: Vec<JSValue>,
+) -> JSResult<JSValue> {
     let mut options = JSObject::new();
     options.set(
         "numberingSystem".to_string(),
@@ -147,7 +156,10 @@ pub(crate) fn intl_relative_time_resolved_options(_vm: &mut VM, _args: Vec<JSVal
     Ok(JSValue::Object(Rc::new(RefCell::new(options))))
 }
 
-pub(crate) fn intl_number_format_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn intl_number_format_constructor(
+    _vm: &mut VM,
+    args: Vec<JSValue>,
+) -> JSResult<JSValue> {
     if let (Some(JSValue::Object(this)), Some(JSValue::Object(options))) =
         (args.first(), args.get(2))
     {
@@ -179,7 +191,10 @@ pub(crate) fn intl_number_format_format(_vm: &mut VM, args: Vec<JSValue>) -> JSR
     Ok(JSValue::String(formatted))
 }
 
-pub(crate) fn intl_date_time_format_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn intl_date_time_format_constructor(
+    _vm: &mut VM,
+    args: Vec<JSValue>,
+) -> JSResult<JSValue> {
     if let Some(JSValue::Object(options)) = args.get(2)
         && !matches!(options.borrow().get("dateStyle"), JSValue::Undefined)
         && !matches!(options.borrow().get("hour"), JSValue::Undefined)
@@ -203,7 +218,10 @@ pub(crate) fn intl_date_time_format_format(_vm: &mut VM, _args: Vec<JSValue>) ->
     Ok(JSValue::String("1/1/1970".to_string()))
 }
 
-pub(crate) fn intl_date_time_format_to_parts(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn intl_date_time_format_to_parts(
+    vm: &mut VM,
+    _args: Vec<JSValue>,
+) -> JSResult<JSValue> {
     let mut literal = JSObject::new();
     literal.set("type".to_string(), JSValue::String("literal".to_string()));
     let mut value = JSObject::new();
@@ -217,7 +235,10 @@ pub(crate) fn intl_date_time_format_to_parts(vm: &mut VM, _args: Vec<JSValue>) -
     ]))
 }
 
-pub(crate) fn intl_date_time_format_resolved_options(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn intl_date_time_format_resolved_options(
+    _vm: &mut VM,
+    args: Vec<JSValue>,
+) -> JSResult<JSValue> {
     let date_style = match args.first() {
         Some(JSValue::Object(this)) => match this.borrow().get("__intl_options") {
             JSValue::Object(options) => options.borrow().get("dateStyle"),

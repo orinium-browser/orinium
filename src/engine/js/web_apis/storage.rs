@@ -1,4 +1,4 @@
-use crate::engine::js::common::{with_host, with_host_mut, read_only_accessor_property};
+use crate::engine::js::common::{read_only_accessor_property, with_host, with_host_mut};
 use pixi_byte::value::jsobject::JSObject;
 use pixi_byte::vm::VM;
 use pixi_byte::{JSError, JSResult, JSValue};

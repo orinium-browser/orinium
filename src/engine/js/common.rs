@@ -3,7 +3,7 @@ use crate::engine::js::JsHost;
 use crate::engine::tree::NodeRef;
 use pixi_byte::value::jsobject::Property;
 use pixi_byte::vm::VM;
-use pixi_byte::{JSValue, JSResult};
+use pixi_byte::{JSResult, JSValue};
 use std::any::Any;
 
 /// Runs `f` with an immutable borrow of the host data, if set and downcastable.
