@@ -353,7 +353,7 @@ impl<'a> Parser<'a> {
         &self.lookahead[cursor_size]
     }
 
-    /// Consume and return the next token.
+    /// Peek at the next token without consuming it.
     fn peek_token(&mut self) -> &Token {
         self.peek_next_token(0)
     }
