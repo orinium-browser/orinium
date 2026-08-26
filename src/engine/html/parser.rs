@@ -254,6 +254,39 @@ impl DomTree {
         query_selector_all_from(scope, selector, false)
     }
 
+    /// Returns `true` if the element itself matches the given CSS selector.
+    pub fn element_matches_selector(node: &NodeRef<HtmlNodeType>, selector: &str) -> bool {
+        let selectors = parse_query_selectors(selector);
+        if selectors.is_empty() {
+            return false;
+        }
+        let chain = element_chain(node);
+        selectors.iter().any(|s| s.matches(&chain))
+    }
+
+    /// Walks ancestors starting from `node` and returns the first ancestor
+    /// (including the node itself) that matches the given CSS selector.
+    pub fn element_closest(
+        node: &NodeRef<HtmlNodeType>,
+        selector: &str,
+    ) -> Option<NodeRef<HtmlNodeType>> {
+        let selectors = parse_query_selectors(selector);
+        if selectors.is_empty() {
+            return None;
+        }
+
+        let mut current = Some(Rc::clone(node));
+        while let Some(n) = current.clone() {
+            let chain = element_chain(&n);
+            if selectors.iter().any(|s| s.matches(&chain)) {
+                return Some(Rc::clone(&n));
+            }
+            current = n.borrow().parent();
+        }
+
+        None
+    }
+
     /// Collects classic scripts and their scheduling attributes in document order.
     pub fn collect_classic_script_descriptors(&self) -> Vec<ClassicScriptDescriptor> {
         self.get_elements_by_tag_name("script")
