@@ -281,7 +281,6 @@ fn correct_atomic_inline_spacing_impl(node: &mut LayoutNode, info: Option<&InfoN
     expand_auto_flex_height_to_children(node);
     enforce_fixed_layout_height(node);
     correct_single_row_grid_inline_alignment(node);
-    correct_vertical_block_spacing(node);
     expand_auto_flow_height_to_children(node);
 }
 
@@ -419,46 +418,6 @@ fn enforce_fixed_layout_height(node: &mut LayoutNode) {
         && node.style.position.bottom != LengthOrAuto::Auto
     {
         shift_layout_box_y(&mut node.layout_box, -extra);
-    }
-}
-
-/// **Bug fix:** `margin-top`, `margin-bottom`
-///
-/// `ui_layout` has margin collapsing for `display: flow` containers but edge
-/// cases cause block children to overlap. Re-stack children vertically
-/// respecting declared vertical margins.
-fn correct_vertical_block_spacing(node: &mut LayoutNode) {
-    if node.style.display.inner != InnerDisplay::Flow {
-        return;
-    }
-    let mut previous_bottom: Option<f32> = None;
-    for child in &mut node.children {
-        let LayoutChild::Node(child) = child else {
-            continue;
-        };
-        if child.style.position.kind.is_out_of_flow()
-            || child.style.display.outer != OuterDisplay::Block
-        {
-            continue;
-        }
-        let Some(model) = child.layout_box.iter().next() else {
-            continue;
-        };
-        let margin_top = fixed_nonnegative_px(&child.style.spacing.margin_top);
-        let margin_bottom = fixed_nonnegative_px(&child.style.spacing.margin_bottom);
-        let desired_y = previous_bottom
-            .map(|bottom| bottom + margin_top)
-            .unwrap_or(model.border_box.y);
-        if model.border_box.y < desired_y {
-            shift_layout_box_y(&mut child.layout_box, desired_y - model.border_box.y);
-        }
-        previous_bottom = Some(
-            model
-                .border_box
-                .bottom()
-                .max(desired_y + model.border_box.height)
-                + margin_bottom,
-        );
     }
 }
 
