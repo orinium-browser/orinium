@@ -25,6 +25,8 @@ use std::time::{Duration, Instant};
 
 use crate::engine::js::JsTimer;
 
+/// TODO: Replace the temporary hard-coded browser environment with values
+/// provided by the actual browser and platform state.
 pub(crate) fn install_browser_environment(engine: &mut pixi_byte::JSEngine) {
     let mut navigator = JSObject::new();
     navigator.define_property(
