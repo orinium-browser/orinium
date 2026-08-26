@@ -159,10 +159,7 @@ pub(crate) fn add_document_event_listener(vm: &mut VM, args: Vec<JSValue>) -> JS
     Ok(JSValue::Undefined)
 }
 
-pub(crate) fn remove_document_event_listener(
-    vm: &mut VM,
-    args: Vec<JSValue>,
-) -> JSResult<JSValue> {
+pub(crate) fn remove_document_event_listener(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(JSValue::String(event_type)) = args.get(1) else {
         return Ok(JSValue::Undefined);
     };
@@ -393,10 +390,7 @@ fn document_has_focus(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(JSValue::Boolean(true))
 }
 
-pub(crate) fn expose_detached_node(
-    vm: &mut VM,
-    node: NodeRef<HtmlNodeType>,
-) -> Option<JSValue> {
+pub(crate) fn expose_detached_node(vm: &mut VM, node: NodeRef<HtmlNodeType>) -> Option<JSValue> {
     let value = expose_node(vm, Rc::clone(&node))?;
     let dom_id = node_dom_id(&value)?;
     with_host_mut(vm, |host| {
