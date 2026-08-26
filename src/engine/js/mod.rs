@@ -18,13 +18,6 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-#[cfg(test)]
-use crate::engine::html::Parser as HtmlParser;
-#[cfg(test)]
-use pixi_byte::JSResult;
-#[cfg(test)]
-use pixi_byte::vm::VM;
-
 pub mod devtools;
 pub mod processor;
 pub use devtools::JsDevToolsRequest;
@@ -41,25 +34,6 @@ pub(crate) use common::{
 pub(crate) use web_apis::dom::document::expose_node;
 pub(crate) use web_apis::dom::events::{event_flag, make_event};
 pub(crate) use web_apis::network::{make_fetch_response, resolve_xml_http_request};
-
-// Re-export items used only by tests.
-#[cfg(test)]
-pub(crate) use common::{dom_node, mark_dom_dirty, noop, read_only_accessor_property};
-#[cfg(test)]
-pub(crate) use web_apis::dom::document::expose_node_list;
-#[cfg(test)]
-pub(crate) use web_apis::dom::element::{HTML_NAMESPACE, MATHML_NAMESPACE, SVG_NAMESPACE};
-#[cfg(test)]
-pub(crate) use web_apis::dom::element::{
-    accessor_property, element_layout_size, get_style, make_dom_rect, make_element,
-    make_element_interface, make_text_node, style_property_name,
-};
-#[cfg(test)]
-pub(crate) use web_apis::dom::events::make_event_constructor;
-#[cfg(test)]
-pub(crate) use web_apis::network::{
-    RequestParts, extract_header_entries, make_headers, request_parts,
-};
 
 // ---------------------------------------------------------------------------
 // Core types
@@ -751,6 +725,8 @@ impl JsRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::html::Parser as HtmlParser;
+    use web_apis::dom::element::{HTML_NAMESPACE, SVG_NAMESPACE, style_property_name};
 
     fn runtime_from_html(html: &str) -> (JsRuntime, Rc<DomTree>) {
         let mut parser = HtmlParser::new(html);
