@@ -3,7 +3,7 @@ use crate::engine::js::common::{
     dom_node, is_callable, mark_dom_dirty, node_dom_id, noop, with_host, with_host_mut,
 };
 use crate::engine::js::web_apis::dom::document::{
-    class_selector, create_text_node, expose_node, expose_node_list,
+    class_selector, create_text_node, expose_detached_node, expose_node, expose_node_list,
 };
 use crate::engine::js::web_apis::dom::events::event_flag;
 use crate::engine::js::{
@@ -299,6 +299,19 @@ pub(crate) fn make_element(
         JSValue::NativeFunction(remove_child),
     );
     obj.set("remove".to_string(), JSValue::NativeFunction(remove_node));
+    obj.set(
+        "replaceChild".to_string(),
+        JSValue::NativeFunction(replace_child),
+    );
+    obj.set("cloneNode".to_string(), JSValue::NativeFunction(clone_node));
+    obj.set(
+        "closest".to_string(),
+        JSValue::NativeFunction(element_closest),
+    );
+    obj.set(
+        "matches".to_string(),
+        JSValue::NativeFunction(element_matches),
+    );
     Rc::new(RefCell::new(obj))
 }
 
@@ -594,6 +607,108 @@ fn remove_node(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         mark_dom_dirty(vm);
     }
     Ok(JSValue::Undefined)
+}
+
+fn replace_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(parent) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Null);
+    };
+    let Some(new_child_value) = args.get(1).cloned() else {
+        return Ok(JSValue::Null);
+    };
+    let Some(new_child) = dom_node(vm, &new_child_value) else {
+        return Ok(JSValue::Null);
+    };
+    let Some(old_child_value) = args.get(2).cloned() else {
+        return Ok(JSValue::Null);
+    };
+    let Some(old_child) = dom_node(vm, &old_child_value) else {
+        return Ok(JSValue::Null);
+    };
+    let inserted = TreeNode::insert_before(&parent, new_child, &old_child);
+    if !inserted {
+        return Ok(JSValue::Null);
+    }
+    let Some(detached) = TreeNode::remove_child(&parent, &old_child) else {
+        return Ok(JSValue::Null);
+    };
+    if let Some(dom_id) = node_dom_id(&old_child_value) {
+        let _ = with_host_mut(vm, |host| {
+            host.detached_nodes.insert(dom_id, detached);
+        });
+    }
+    if let Some(dom_id) = node_dom_id(&new_child_value) {
+        let _ = with_host_mut(vm, |host| {
+            host.detached_nodes.remove(&dom_id);
+        });
+    }
+    queue_dynamic_script(vm, &new_child_value);
+    queue_dynamic_stylesheet(vm, &new_child_value);
+    queue_dynamic_image(vm, &new_child_value);
+    mark_dom_dirty(vm);
+    Ok(old_child_value)
+}
+
+fn clone_node(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let this = args.first().unwrap_or(&JSValue::Undefined);
+    let Some(node) = dom_node(vm, this) else {
+        return Ok(JSValue::Null);
+    };
+
+    let deep = args.get(1).is_some_and(JSValue::to_boolean);
+    let cloned = if deep {
+        deep_clone_tree(&node)
+    } else {
+        shallow_clone_node(&node)
+    };
+
+    Ok(expose_detached_node(vm, cloned).unwrap_or(JSValue::Null))
+}
+
+fn shallow_clone_node(node: &NodeRef<HtmlNodeType>) -> NodeRef<HtmlNodeType> {
+    let value = match &node.borrow().value {
+        HtmlNodeType::Document => HtmlNodeType::Element {
+            tag_name: "__document__".to_string(),
+            attributes: Vec::new(),
+        },
+        value => value.clone(),
+    };
+
+    TreeNode::new(value)
+}
+
+fn deep_clone_tree(node: &NodeRef<HtmlNodeType>) -> NodeRef<HtmlNodeType> {
+    let cloned = shallow_clone_node(node);
+    for child in node.borrow().children() {
+        let cloned_child = deep_clone_tree(&child);
+        TreeNode::append_child(&cloned, cloned_child);
+    }
+    cloned
+}
+
+fn element_closest(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Null);
+    };
+    let Some(JSValue::String(selector)) = args.get(1) else {
+        return Ok(JSValue::Null);
+    };
+    let Some(closest) = DomTree::element_closest(&node, selector) else {
+        return Ok(JSValue::Null);
+    };
+    Ok(expose_node(vm, closest).unwrap_or(JSValue::Null))
+}
+
+fn element_matches(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
+        return Ok(JSValue::Boolean(false));
+    };
+    let Some(JSValue::String(selector)) = args.get(1) else {
+        return Ok(JSValue::Boolean(false));
+    };
+    Ok(JSValue::Boolean(DomTree::element_matches_selector(
+        &node, selector,
+    )))
 }
 
 fn element_query_selector(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
