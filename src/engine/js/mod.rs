@@ -65,7 +65,7 @@ pub(crate) use web_apis::network::{
 // Core types
 // ---------------------------------------------------------------------------
 
-struct JsTimer {
+pub(crate) struct JsTimer {
     id: u64,
     callback: JSValue,
     arguments: Vec<JSValue>,
@@ -73,7 +73,7 @@ struct JsTimer {
     interval: Option<Duration>,
 }
 
-struct JsFetchCapability {
+pub(crate) struct JsFetchCapability {
     resolve: JSValue,
     reject: JSValue,
 }

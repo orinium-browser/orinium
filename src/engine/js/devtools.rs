@@ -20,7 +20,7 @@ pub struct JsDevToolsRequest {
 }
 
 /// A pending DevTools promise waiting for the browser UI's answer.
-pub(super) struct JsDevToolsCapability {
+pub(crate) struct JsDevToolsCapability {
     resolve: JSValue,
 }
 
