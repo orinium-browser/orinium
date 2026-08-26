@@ -54,40 +54,6 @@ pub fn is_block_layout_child(child: &LayoutChild) -> bool {
 // ui_layout bug fixes
 // ---------------------------------------------------------------------------
 
-/// **Bug fix:** `width`, `margin-left`, `margin-right`
-///
-/// CSS 2.1 treats auto horizontal margins as zero when a block's used width
-/// exceeds its containing block. `ui_layout` incorrectly divides the negative
-/// free space between two auto margins, which centers wide carousel tracks
-/// outside their clipping viewport.
-pub fn correct_oversized_auto_horizontal_margins(node: &mut LayoutNode) {
-    let parent_content = node.layout_box.iter().next().map(|model| model.content_box);
-
-    for child in &mut node.children {
-        let LayoutChild::Node(child) = child else {
-            continue;
-        };
-
-        if let Some(parent_content) = parent_content
-            && child.style.display.outer == OuterDisplay::Block
-            && child.style.spacing.margin_left == LengthOrAuto::Auto
-            && child.style.spacing.margin_right == LengthOrAuto::Auto
-            && let Some(child_box) = child.layout_box.iter().next()
-            && child_box.border_box.width > parent_content.width
-        {
-            let shift_x = parent_content.x - child_box.border_box.x;
-            if let ui_layout::LayoutBox::BlockBox(model) = &mut child.layout_box {
-                model.border_box.x += shift_x;
-                model.padding_box.x += shift_x;
-                model.content_box.x += shift_x;
-                model.children_box.x += shift_x;
-            }
-        }
-
-        correct_oversized_auto_horizontal_margins(child);
-    }
-}
-
 /// **Bug fix:** `grid-template-columns`, `width`
 ///
 /// During the intrinsic grid pass `ui_layout` measures block flex containers

@@ -739,36 +739,6 @@ fn floated_carousel_slides_shrink_to_fixed_descendant_width() {
 }
 
 #[test]
-fn oversized_block_with_auto_horizontal_margins_starts_at_parent_edge() {
-    let html = r#"
-            <html><body>
-                <div class="parent"><div class="wide"></div></div>
-            </body></html>
-        "#;
-    let css = r#"
-            .parent { width: 300px; }
-            .wide { width: 500px; height: 20px; margin-left: auto; margin-right: auto; }
-        "#;
-    let (mut layout, _) = layout_and_info_for(html, css);
-    ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
-    correct_oversized_auto_horizontal_margins(&mut layout);
-
-    fn wide_box(node: &LayoutNode) -> Option<ui_layout::Rect> {
-        if node.style.size.width == LengthOrAuto::Length(Length::Px(500.0)) {
-            return node.layout_box.iter().next().map(|model| model.border_box);
-        }
-        node.children
-            .iter()
-            .filter_map(LayoutChild::node)
-            .find_map(wide_box)
-    }
-
-    let wide = wide_box(&layout).expect("wide child");
-    assert_eq!(wide.x, 0.0);
-    assert_eq!(wide.width, 500.0);
-}
-
-#[test]
 fn adjacent_inline_blocks_advance_past_padding_and_margins() {
     let html = r#"
             <html><body><div class="row"><a>First</a><a>Second</a></div></body></html>

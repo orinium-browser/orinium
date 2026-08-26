@@ -11,9 +11,8 @@ mod tests;
 pub use apply::{apply_declaration, blockify_out_of_flow_positioned};
 pub use layout_fix::{
     constrain_auto_grid_track_items, correct_atomic_inline_spacing,
-    correct_atomic_inline_spacing_with_info, correct_oversized_auto_horizontal_margins,
-    is_block_layout_child, is_collapsible_whitespace_info, maximum_fixed_descendant_width,
-    refresh_missing_text_layout_results,
+    correct_atomic_inline_spacing_with_info, is_block_layout_child, is_collapsible_whitespace_info,
+    maximum_fixed_descendant_width, refresh_missing_text_layout_results,
 };
 
 #[allow(unused_imports)]
