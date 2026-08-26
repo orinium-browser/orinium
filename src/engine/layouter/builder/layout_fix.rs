@@ -1,8 +1,8 @@
 use crate::engine::layouter::text_layouter::TextFlowLayouter;
 use crate::engine::layouter::types::{InfoNode, NodeKind, TextAlign};
 use ui_layout::{
-    AlignItems, AutoSizeBehavior, BoxSizing, FlexDirection, GridTrack, InnerDisplay, LayoutChild,
-    LayoutNode, Length, LengthOrAuto, OuterDisplay,
+    AutoSizeBehavior, BoxSizing, FlexDirection, GridTrack, InnerDisplay, LayoutChild, LayoutNode,
+    Length, LengthOrAuto, OuterDisplay,
 };
 
 // ---------------------------------------------------------------------------
