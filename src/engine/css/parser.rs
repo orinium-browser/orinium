@@ -190,6 +190,29 @@ pub struct ComplexSelector {
     pub parts: Vec<SelectorPart>,
 }
 
+impl ComplexSelector {
+    pub fn nest(&self, child: &Self) -> Self {
+        if self.parts.is_empty() {
+            return child.clone();
+        }
+        if child.parts.is_empty() {
+            return self.clone();
+        }
+
+        let mut parts = child.parts.clone();
+
+        // Connect the nested selector to its parent with a descendant combinator.
+        parts
+            .last_mut()
+            .expect("child selector is known to be non-empty")
+            .combinator = Some(Combinator::Descendant);
+
+        parts.extend(self.parts.iter().cloned());
+
+        Self { parts }
+    }
+}
+
 /// Parse the integer `An+B` grammar used by structural pseudo-classes.
 fn parse_an_plus_b(tokens: &[Token]) -> Option<(i32, i32)> {
     let mut expression = String::new();
