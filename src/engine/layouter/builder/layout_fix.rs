@@ -5,6 +5,10 @@ use ui_layout::{
     LayoutNode, Length, LengthOrAuto, OuterDisplay,
 };
 
+// ---------------------------------------------------------------------------
+// orinium internal helpers
+// ---------------------------------------------------------------------------
+
 /// Return the largest fixed-width (`Length::Px`) used by any descendant, or
 /// `None` if no descendant has a fixed width.
 pub fn maximum_fixed_descendant_width(children: &[LayoutChild]) -> Option<f32> {
@@ -46,12 +50,16 @@ pub fn is_block_layout_child(child: &LayoutChild) -> bool {
     })
 }
 
-/// Correct the used horizontal margins of oversized block-level boxes.
+// ---------------------------------------------------------------------------
+// ui_layout bug fixes
+// ---------------------------------------------------------------------------
+
+/// **Bug fix:** `width`, `margin-left`, `margin-right`
 ///
 /// CSS 2.1 treats auto horizontal margins as zero when a block's used width
-/// exceeds its containing block. `ui_layout` currently divides the negative
-/// free space between two auto margins, which incorrectly centers wide
-/// carousel tracks outside their clipping viewport.
+/// exceeds its containing block. `ui_layout` incorrectly divides the negative
+/// free space between two auto margins, which centers wide carousel tracks
+/// outside their clipping viewport.
 pub fn correct_oversized_auto_horizontal_margins(node: &mut LayoutNode) {
     let parent_content = node.layout_box.iter().next().map(|model| model.content_box);
 
@@ -80,15 +88,14 @@ pub fn correct_oversized_auto_horizontal_margins(node: &mut LayoutNode) {
     }
 }
 
-/// Resolve an auto grid track from the measured contents of an auto-sized
-/// block item instead of letting that item consume all available width.
+/// **Bug fix:** `grid-template-columns`, `width`
 ///
-/// During the intrinsic grid pass `ui_layout` currently measures block flex
-/// containers with their containing width. In a template such as
-/// `1fr auto 1fr`, that makes the auto track take the entire grid and leaves
-/// both fraction tracks at zero. The first layout still records the flex
-/// contents' actual extent in `children_box`, so use that intrinsic width and
-/// let a second layout resolve the tracks correctly.
+/// During the intrinsic grid pass `ui_layout` measures block flex containers
+/// with their containing width. In a template such as `1fr auto 1fr`, that
+/// makes the auto track take the entire grid and leaves both fraction tracks
+/// at zero. The first layout still records the flex contents' actual extent in
+/// `children_box`, so use that intrinsic width and let a second layout resolve
+/// the tracks correctly.
 pub fn constrain_auto_grid_track_items(node: &mut LayoutNode) -> bool {
     let mut changed = false;
     for child in &mut node.children {
@@ -138,70 +145,23 @@ pub fn constrain_auto_grid_track_items(node: &mut LayoutNode) -> bool {
     changed
 }
 
-/// Ensure text custom objects positioned as flex items produce their text-flow
-/// cache entry. `ui_layout` measures and positions direct custom flex items,
-/// but does not call their `layout` method, so render-time lookup otherwise
-/// finds no spans for text directly inside an `inline-flex` element.
-pub fn refresh_missing_text_layout_results(
-    layout: &mut LayoutNode,
-    info: &InfoNode,
-    viewport: (f32, f32),
-) {
-    let containing = layout
-        .layout_box
-        .iter()
-        .next()
-        .map(|model| (model.content_box.width, model.content_box.height))
-        .unwrap_or(viewport);
-
-    for (layout_child, info_child) in layout.children.iter_mut().zip(&info.children) {
-        match (layout_child, &info_child.kind) {
-            (LayoutChild::Node(child), _) => {
-                refresh_missing_text_layout_results(child, info_child, viewport);
-            }
-            (LayoutChild::Custom(custom), NodeKind::Text { text_id, .. })
-                if TextFlowLayouter::get_result(*text_id).is_none() =>
-            {
-                let Some(box_model) = custom.result().map(|result| result.box_model.clone()) else {
-                    continue;
-                };
-                let line_height = custom
-                    .style()
-                    .line_height
-                    .resolve_with(Some(containing.0), viewport.0, viewport.1)
-                    .unwrap_or(box_model.border_box.height);
-                let _ = custom.layouter_mut().layout(&ui_layout::LayoutContext {
-                    containing_block_width: Some(containing.0),
-                    containing_block_height: Some(containing.1),
-                    start_pos: (box_model.border_box.x, box_model.border_box.y),
-                    available_inline_size: box_model.border_box.width.max(1.0),
-                    line_height,
-                    viewport_width: viewport.0,
-                    viewport_height: viewport.1,
-                });
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Keep adjacent atomic inline boxes from overlapping their padding or
-/// horizontal margins.
+/// **Bug fix:** `display`, `margin-left`, `margin-right`
 ///
-/// `ui_layout` currently advances past an inline flow-root using its content
-/// width. CSS inline-blocks advance by their margin-box width instead.
+/// `ui_layout` advances past an inline flow-root using its content width.
+/// CSS inline-blocks advance by their margin-box width instead. Adjacent
+/// atomic inline boxes end up overlapping their padding or horizontal margins.
 pub fn correct_atomic_inline_spacing(node: &mut LayoutNode) {
     correct_atomic_inline_spacing_impl(node, None);
 }
 
 /// Like [`correct_atomic_inline_spacing`], but accepts an [`InfoNode`] so that
-/// per-child text-align information is available during correction.
+/// per-child `text-align` information is available during correction.
 pub fn correct_atomic_inline_spacing_with_info(node: &mut LayoutNode, info: &InfoNode) {
     correct_atomic_inline_spacing_impl(node, Some(info));
 }
 
 /// Core implementation of atomic-inline spacing correction. When `info` is
-/// supplied, text-align from the container is respected for the first item on
+/// supplied, `text-align` from the container is respected for the first item on
 /// each line.
 fn correct_atomic_inline_spacing_impl(node: &mut LayoutNode, info: Option<&InfoNode>) {
     let containing_rect = node.layout_box.iter().next().map(|model| model.content_box);
@@ -325,20 +285,10 @@ fn correct_atomic_inline_spacing_impl(node: &mut LayoutNode, info: Option<&InfoN
     expand_auto_flow_height_to_children(node);
 }
 
-/// When an `inline` container with `width: auto` wraps block children, grow
-/// its width to accommodate the widest child's margin box.
-fn expand_auto_inline_width_to_children(node: &mut LayoutNode) {
-    if node.style.display.outer != OuterDisplay::Inline
-        || node.style.size.width != LengthOrAuto::Auto
-    {
-        return;
-    }
-    let required_width = required_children_margin_box_width(node);
-    grow_auto_layout_width(node, required_width);
-}
-
-/// In a `flex-direction: row` container, ensure adjacent flex items respect the
-/// declared `column-gap` by shifting overlapping items rightward.
+/// **Bug fix:** `column-gap`, `margin-left`, `margin-right`
+///
+/// `ui_layout` computes `column-gap` for flex containers but applies it
+/// imprecisely, causing adjacent flex items in a row to overlap their margins.
 fn correct_horizontal_flex_spacing(node: &mut LayoutNode) {
     if node.style.display.inner != InnerDisplay::Flex
         || node.style.flex_direction != FlexDirection::Row
@@ -372,8 +322,10 @@ fn correct_horizontal_flex_spacing(node: &mut LayoutNode) {
     }
 }
 
-/// For each auto-width flex item in a row container, grow the item to fit its
-/// children's margin-box width.
+/// **Bug fix:** `width`
+///
+/// `ui_layout` partially handles auto-width flex items but they do not
+/// correctly shrink-wrap to their children's margin-box width.
 fn expand_auto_flex_item_widths(node: &mut LayoutNode) {
     if node.style.display.inner != InnerDisplay::Flex
         || node.style.flex_direction != FlexDirection::Row
@@ -392,8 +344,11 @@ fn expand_auto_flex_item_widths(node: &mut LayoutNode) {
     }
 }
 
-/// When a flex container itself has `width: auto`, grow it to fit the widest
-/// child's margin box.
+/// **Bug fix:** `width`
+///
+/// `ui_layout` partially handles auto-width flex containers but uses the
+/// total main-axis extent of flex items (`children_width`) rather than the
+/// widest child's margin-box width.
 fn expand_auto_flex_width_to_children(node: &mut LayoutNode) {
     if node.style.display.inner != InnerDisplay::Flex || node.style.size.width != LengthOrAuto::Auto
     {
@@ -403,8 +358,11 @@ fn expand_auto_flex_width_to_children(node: &mut LayoutNode) {
     grow_auto_layout_width(node, required_width);
 }
 
-/// When a flex container has `height: auto`, grow it to fit the tallest
-/// child's bottom edge (including its bottom margin).
+/// **Bug fix:** `height`
+///
+/// `ui_layout` partially handles auto-height flex containers but does not
+/// account for child bottom margins, leaving the container shorter than it
+/// should be.
 fn expand_auto_flex_height_to_children(node: &mut LayoutNode) {
     if node.style.display.inner != InnerDisplay::Flex
         || node.style.size.height != LengthOrAuto::Auto
@@ -423,6 +381,239 @@ fn expand_auto_flex_height_to_children(node: &mut LayoutNode) {
         .fold(0.0, f32::max);
     grow_auto_layout_height(node, required_height);
 }
+
+/// **Bug fix:** `height`, `min-height`
+///
+/// `ui_layout` has constraint infrastructure for `min-height` but does not
+/// fully enforce it in all scenarios, particularly for bottom-anchored
+/// out-of-flow elements. Grow the layout box to at least the declared size and
+/// shift upward so the bottom edge stays in place.
+fn enforce_fixed_layout_height(node: &mut LayoutNode) {
+    let declared = match (&node.style.size.height, &node.style.size.min_height) {
+        (LengthOrAuto::Length(Length::Px(height)), LengthOrAuto::Length(Length::Px(minimum))) => {
+            Some(height.max(*minimum))
+        }
+        (LengthOrAuto::Length(Length::Px(height)), _) => Some(*height),
+        (_, LengthOrAuto::Length(Length::Px(minimum))) => Some(*minimum),
+        _ => None,
+    };
+    let Some(declared) = declared else {
+        return;
+    };
+    let Some(model) = node.layout_box.iter().next() else {
+        return;
+    };
+    let current = if node.style.box_sizing == BoxSizing::BorderBox {
+        model.border_box.height
+    } else {
+        model.content_box.height
+    };
+    let extra = declared - current;
+    if extra <= 0.0 {
+        return;
+    }
+
+    grow_layout_height(&mut node.layout_box, extra);
+    if node.style.position.kind.is_out_of_flow()
+        && node.style.position.top == LengthOrAuto::Auto
+        && node.style.position.bottom != LengthOrAuto::Auto
+    {
+        shift_layout_box_y(&mut node.layout_box, -extra);
+    }
+}
+
+/// **Bug fix:** `margin-top`, `margin-bottom`
+///
+/// `ui_layout` has margin collapsing for `display: flow` containers but edge
+/// cases cause block children to overlap. Re-stack children vertically
+/// respecting declared vertical margins.
+fn correct_vertical_block_spacing(node: &mut LayoutNode) {
+    if node.style.display.inner != InnerDisplay::Flow {
+        return;
+    }
+    let mut previous_bottom: Option<f32> = None;
+    for child in &mut node.children {
+        let LayoutChild::Node(child) = child else {
+            continue;
+        };
+        if child.style.position.kind.is_out_of_flow()
+            || child.style.display.outer != OuterDisplay::Block
+        {
+            continue;
+        }
+        let Some(model) = child.layout_box.iter().next() else {
+            continue;
+        };
+        let margin_top = fixed_nonnegative_px(&child.style.spacing.margin_top);
+        let margin_bottom = fixed_nonnegative_px(&child.style.spacing.margin_bottom);
+        let desired_y = previous_bottom
+            .map(|bottom| bottom + margin_top)
+            .unwrap_or(model.border_box.y);
+        if model.border_box.y < desired_y {
+            shift_layout_box_y(&mut child.layout_box, desired_y - model.border_box.y);
+        }
+        previous_bottom = Some(
+            model
+                .border_box
+                .bottom()
+                .max(desired_y + model.border_box.height)
+                + margin_bottom,
+        );
+    }
+}
+
+/// **Bug fix:** `height`
+///
+/// `ui_layout` partially handles auto-height flow containers but does not
+/// account for child bottom margins. Grow the container to fit the tallest
+/// in-flow child's bottom edge (including its bottom margin).
+fn expand_auto_flow_height_to_children(node: &mut LayoutNode) {
+    if node.style.display.inner != InnerDisplay::Flow
+        || node.style.size.height != LengthOrAuto::Auto
+    {
+        return;
+    }
+    let required_height = node
+        .children
+        .iter()
+        .filter_map(LayoutChild::node)
+        .filter(|child| !child.style.position.kind.is_out_of_flow())
+        .filter_map(|child| {
+            child.layout_box.iter().next().map(|model| {
+                model.border_box.bottom() + fixed_nonnegative_px(&child.style.spacing.margin_bottom)
+            })
+        })
+        .fold(0.0, f32::max);
+    grow_auto_layout_height(node, required_height);
+}
+
+// ---------------------------------------------------------------------------
+// ui_layout feature supplements
+// ---------------------------------------------------------------------------
+
+/// **Supplement:** custom flex item `layout` method
+///
+/// `ui_layout` measures and positions direct custom flex items but does not
+/// call their `layout` method. Render-time text-flow lookup therefore finds no
+/// spans for text directly inside an `inline-flex` element. Walk the tree and
+/// invoke `layout` for any custom flex item whose result is missing.
+pub fn refresh_missing_text_layout_results(
+    layout: &mut LayoutNode,
+    info: &InfoNode,
+    viewport: (f32, f32),
+) {
+    let containing = layout
+        .layout_box
+        .iter()
+        .next()
+        .map(|model| (model.content_box.width, model.content_box.height))
+        .unwrap_or(viewport);
+
+    for (layout_child, info_child) in layout.children.iter_mut().zip(&info.children) {
+        match (layout_child, &info_child.kind) {
+            (LayoutChild::Node(child), _) => {
+                refresh_missing_text_layout_results(child, info_child, viewport);
+            }
+            (LayoutChild::Custom(custom), NodeKind::Text { text_id, .. })
+                if TextFlowLayouter::get_result(*text_id).is_none() =>
+            {
+                let Some(box_model) = custom.result().map(|result| result.box_model.clone()) else {
+                    continue;
+                };
+                let line_height = custom
+                    .style()
+                    .line_height
+                    .resolve_with(Some(containing.0), viewport.0, viewport.1)
+                    .unwrap_or(box_model.border_box.height);
+                let _ = custom.layouter_mut().layout(&ui_layout::LayoutContext {
+                    containing_block_width: Some(containing.0),
+                    containing_block_height: Some(containing.1),
+                    start_pos: (box_model.border_box.x, box_model.border_box.y),
+                    available_inline_size: box_model.border_box.width.max(1.0),
+                    line_height,
+                    viewport_width: viewport.0,
+                    viewport_height: viewport.1,
+                });
+            }
+            _ => {}
+        }
+    }
+}
+
+/// **Supplement:** `width`
+///
+/// `ui_layout` does not handle `width: auto` for inline containers wrapping
+/// block children. Grow the inline container's width to accommodate the
+/// widest child's margin box.
+fn expand_auto_inline_width_to_children(node: &mut LayoutNode) {
+    if node.style.display.outer != OuterDisplay::Inline
+        || node.style.size.width != LengthOrAuto::Auto
+    {
+        return;
+    }
+    let required_width = required_children_margin_box_width(node);
+    grow_auto_layout_width(node, required_width);
+}
+
+/// **Supplement:** `margin-left`, `margin-right`, `column-gap`
+///
+/// `ui_layout` does not implement `margin-inline: auto` for grid items. When
+/// all grid items land in a single row, resolve auto left/right margins within
+/// each track so that items are horizontally centered or right-aligned.
+fn correct_single_row_grid_inline_alignment(node: &mut LayoutNode) {
+    if node.style.display.inner != InnerDisplay::Grid {
+        return;
+    }
+    let Some(content_box) = node.layout_box.iter().next().map(|model| model.content_box) else {
+        return;
+    };
+    let column_gap = fixed_nonnegative_px(&node.style.column_gap);
+    let item_indices: Vec<usize> = node
+        .children
+        .iter()
+        .enumerate()
+        .filter_map(|(index, child)| {
+            child.node().and_then(|child| {
+                (child.style.display.outer != OuterDisplay::None
+                    && !child.style.position.kind.is_out_of_flow())
+                .then_some(index)
+            })
+        })
+        .collect();
+    if item_indices.len() > node.style.grid_template_columns.len() {
+        return;
+    }
+
+    for (position, index) in item_indices.iter().copied().enumerate() {
+        let next_x = item_indices
+            .get(position + 1)
+            .and_then(|next| node.children[*next].node())
+            .and_then(|next| next.layout_box.iter().next())
+            .map(|model| model.border_box.x - column_gap)
+            .unwrap_or(content_box.width);
+        let child = node.children[index].node_mut().expect("grid item");
+        let left_auto = child.style.spacing.margin_left == LengthOrAuto::Auto;
+        let right_auto = child.style.spacing.margin_right == LengthOrAuto::Auto;
+        if !left_auto && !right_auto {
+            continue;
+        }
+        let Some(model) = child.layout_box.iter().next() else {
+            continue;
+        };
+        let track_start = model.border_box.x;
+        let free_space = (next_x - track_start - model.border_box.width).max(0.0);
+        let offset = match (left_auto, right_auto) {
+            (true, true) => free_space / 2.0,
+            (true, false) => free_space,
+            _ => 0.0,
+        };
+        shift_layout_box_x(&mut child.layout_box, offset);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// utilities
+// ---------------------------------------------------------------------------
 
 /// Compute the right-most edge (border-box right + right margin) among all
 /// in-flow children.
@@ -497,156 +688,6 @@ fn grow_auto_layout_height(node: &mut LayoutNode, required_height: f32) {
         }
         ui_layout::LayoutBox::None => {}
     }
-}
-
-/// When a node has an explicit pixel `height` or `min-height`, grow the
-/// layout box to at least that size. For bottom-anchored out-of-flow elements
-/// the box is shifted upward so the bottom edge stays in place.
-fn enforce_fixed_layout_height(node: &mut LayoutNode) {
-    let declared = match (&node.style.size.height, &node.style.size.min_height) {
-        (LengthOrAuto::Length(Length::Px(height)), LengthOrAuto::Length(Length::Px(minimum))) => {
-            Some(height.max(*minimum))
-        }
-        (LengthOrAuto::Length(Length::Px(height)), _) => Some(*height),
-        (_, LengthOrAuto::Length(Length::Px(minimum))) => Some(*minimum),
-        _ => None,
-    };
-    let Some(declared) = declared else {
-        return;
-    };
-    let Some(model) = node.layout_box.iter().next() else {
-        return;
-    };
-    let current = if node.style.box_sizing == BoxSizing::BorderBox {
-        model.border_box.height
-    } else {
-        model.content_box.height
-    };
-    let extra = declared - current;
-    if extra <= 0.0 {
-        return;
-    }
-
-    grow_layout_height(&mut node.layout_box, extra);
-    if node.style.position.kind.is_out_of_flow()
-        && node.style.position.top == LengthOrAuto::Auto
-        && node.style.position.bottom != LengthOrAuto::Auto
-    {
-        shift_layout_box_y(&mut node.layout_box, -extra);
-    }
-}
-
-/// When all grid items land in a single row, resolve auto left/right margins
-/// within each track so that items are horizontally centered or right-aligned
-/// per `margin-inline: auto`.
-fn correct_single_row_grid_inline_alignment(node: &mut LayoutNode) {
-    if node.style.display.inner != InnerDisplay::Grid {
-        return;
-    }
-    let Some(content_box) = node.layout_box.iter().next().map(|model| model.content_box) else {
-        return;
-    };
-    let column_gap = fixed_nonnegative_px(&node.style.column_gap);
-    let item_indices: Vec<usize> = node
-        .children
-        .iter()
-        .enumerate()
-        .filter_map(|(index, child)| {
-            child.node().and_then(|child| {
-                (child.style.display.outer != OuterDisplay::None
-                    && !child.style.position.kind.is_out_of_flow())
-                .then_some(index)
-            })
-        })
-        .collect();
-    if item_indices.len() > node.style.grid_template_columns.len() {
-        return;
-    }
-
-    for (position, index) in item_indices.iter().copied().enumerate() {
-        let next_x = item_indices
-            .get(position + 1)
-            .and_then(|next| node.children[*next].node())
-            .and_then(|next| next.layout_box.iter().next())
-            .map(|model| model.border_box.x - column_gap)
-            .unwrap_or(content_box.width);
-        let child = node.children[index].node_mut().expect("grid item");
-        let left_auto = child.style.spacing.margin_left == LengthOrAuto::Auto;
-        let right_auto = child.style.spacing.margin_right == LengthOrAuto::Auto;
-        if !left_auto && !right_auto {
-            continue;
-        }
-        let Some(model) = child.layout_box.iter().next() else {
-            continue;
-        };
-        let track_start = model.border_box.x;
-        let free_space = (next_x - track_start - model.border_box.width).max(0.0);
-        let offset = match (left_auto, right_auto) {
-            (true, true) => free_space / 2.0,
-            (true, false) => free_space,
-            _ => 0.0,
-        };
-        shift_layout_box_x(&mut child.layout_box, offset);
-    }
-}
-
-/// In a `display: flow` container, ensure block children are stacked
-/// vertically without overlapping by respecting declared vertical margins.
-fn correct_vertical_block_spacing(node: &mut LayoutNode) {
-    if node.style.display.inner != InnerDisplay::Flow {
-        return;
-    }
-    let mut previous_bottom: Option<f32> = None;
-    for child in &mut node.children {
-        let LayoutChild::Node(child) = child else {
-            continue;
-        };
-        if child.style.position.kind.is_out_of_flow()
-            || child.style.display.outer != OuterDisplay::Block
-        {
-            continue;
-        }
-        let Some(model) = child.layout_box.iter().next() else {
-            continue;
-        };
-        let margin_top = fixed_nonnegative_px(&child.style.spacing.margin_top);
-        let margin_bottom = fixed_nonnegative_px(&child.style.spacing.margin_bottom);
-        let desired_y = previous_bottom
-            .map(|bottom| bottom + margin_top)
-            .unwrap_or(model.border_box.y);
-        if model.border_box.y < desired_y {
-            shift_layout_box_y(&mut child.layout_box, desired_y - model.border_box.y);
-        }
-        previous_bottom = Some(
-            model
-                .border_box
-                .bottom()
-                .max(desired_y + model.border_box.height)
-                + margin_bottom,
-        );
-    }
-}
-
-/// When a flow container has `height: auto`, grow it to fit the tallest
-/// in-flow child's bottom edge (including its bottom margin).
-fn expand_auto_flow_height_to_children(node: &mut LayoutNode) {
-    if node.style.display.inner != InnerDisplay::Flow
-        || node.style.size.height != LengthOrAuto::Auto
-    {
-        return;
-    }
-    let required_height = node
-        .children
-        .iter()
-        .filter_map(LayoutChild::node)
-        .filter(|child| !child.style.position.kind.is_out_of_flow())
-        .filter_map(|child| {
-            child.layout_box.iter().next().map(|model| {
-                model.border_box.bottom() + fixed_nonnegative_px(&child.style.spacing.margin_bottom)
-            })
-        })
-        .fold(0.0, f32::max);
-    grow_auto_layout_height(node, required_height);
 }
 
 /// Add `extra` pixels to every layer (content, padding, border, children) of a
