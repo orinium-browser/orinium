@@ -22,7 +22,7 @@ pub(crate) fn install_console(engine: &mut pixi_byte::JSEngine) {
 
 fn console_message(vm: &mut VM, args: Vec<JSValue>, level: log::Level) -> JSResult<JSValue> {
     let message: Vec<String> = args.iter().skip(1).map(|v| v.to_console_string()).collect();
-    log::log!(level, "{}", message.join(" "));
+    log::log!(target: "Console", level, "{}", message.join(" "));
     let _ = vm;
     Ok(JSValue::Undefined)
 }
