@@ -399,6 +399,7 @@ pub(crate) fn expose_detached_node(vm: &mut VM, node: NodeRef<HtmlNodeType>) -> 
     Some(value)
 }
 
+// Expose a DOM node as a JavaScript object.
 pub(crate) fn expose_node(vm: &VM, node: NodeRef<HtmlNodeType>) -> Option<JSValue> {
     let node_kind = {
         let node = node.borrow();
