@@ -102,6 +102,11 @@ impl DomIdRegistry {
                 "id": id,
                 "type": "invalid",
             }),
+            HtmlNodeType::DocumentFragment => json!({
+                "id": id,
+                "type": "document-fragment",
+                "children": Self::serialize_children(self, &borrowed),
+            }),
         }
     }
 
