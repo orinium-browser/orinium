@@ -470,12 +470,16 @@ pub fn apply_declaration(
         }
 
         ("z-index", _) => {
-            let f = |v: &f32| {
-                if v.is_finite() && v.fract().abs() < f32::EPSILON {
-                    Some(*v as i32)
-                } else {
-                    None
+            let f = |v: &CssValue| match v {
+                CssValue::Number(v) => {
+                    if v.is_finite() && v.fract().abs() < f32::EPSILON {
+                        Some(Some(*v as i32))
+                    } else {
+                        None
+                    }
                 }
+                CssValue::Keyword(v) if v.eq_ignore_ascii_case("auto") => Some(None),
+                _ => None,
             };
 
             apply_property!(
@@ -484,8 +488,7 @@ pub fn apply_declaration(
                 parent_container_style,
                 DEFAULT_CONTAINER_STYLE,
                 value,
-                CssValue::Number(v),
-                f(v)
+                f(value)?
             );
         }
 
