@@ -89,6 +89,14 @@ impl CssNode {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Selector {
+    /// Nesting selector (`&`).
+    ///
+    /// When `true` this selector represents the CSS nesting selector `&`
+    /// and will be replaced with the parent rule's selector during nesting
+    /// resolution. It may carry additional simple selectors (tag, classes,
+    /// etc.) when it appears inside a compound selector such as `&.highlight`.
+    pub is_nesting: bool,
+
     /// Type selector (e.g. `div`)
     ///
     /// `None` represents the absence of a type selector
@@ -109,6 +117,36 @@ pub struct Selector {
 
     /// Pseudo-element (e.g. `::before`)
     pub pseudo_element: Option<String>,
+}
+
+impl Selector {
+    /// Returns `true` when this selector carries fields beyond the nesting
+    /// flag (i.e. it is a compound selector such as `&.highlight`).
+    fn is_compound(&self) -> bool {
+        self.tag.is_some()
+            || self.id.is_some()
+            || !self.classes.is_empty()
+            || !self.attributes.is_empty()
+            || !self.pseudo_classes.is_empty()
+            || self.pseudo_element.is_some()
+    }
+
+    /// Merges the non-nesting fields of `other` into this selector.
+    fn merge_from(&mut self, other: &Selector) {
+        if let Some(tag) = &other.tag {
+            self.tag = Some(tag.clone());
+        }
+        if let Some(id) = &other.id {
+            self.id = Some(id.clone());
+        }
+        self.classes.extend(other.classes.iter().cloned());
+        self.attributes.extend(other.attributes.iter().cloned());
+        self.pseudo_classes
+            .extend(other.pseudo_classes.iter().cloned());
+        if let Some(pe) = &other.pseudo_element {
+            self.pseudo_element = Some(pe.clone());
+        }
+    }
 }
 
 /// A pseudo-class attached to a simple selector.
@@ -191,6 +229,10 @@ pub struct ComplexSelector {
 }
 
 impl ComplexSelector {
+    pub fn empty() -> Self {
+        Self { parts: Vec::new() }
+    }
+
     pub fn nest(&self, child: &Self) -> Self {
         if self.parts.is_empty() {
             return child.clone();
@@ -199,17 +241,64 @@ impl ComplexSelector {
             return self.clone();
         }
 
-        let mut parts = child.parts.clone();
+        let has_nesting = child.parts.iter().any(|p| p.selector.is_nesting);
 
-        // Connect the nested selector to its parent with a descendant combinator.
-        parts
-            .last_mut()
-            .expect("child selector is known to be non-empty")
-            .combinator = Some(Combinator::Descendant);
+        if !has_nesting {
+            // No & in child – connect with a descendant combinator.
+            let mut parts = child.parts.clone();
+            parts
+                .last_mut()
+                .expect("child selector is known to be non-empty")
+                .combinator = Some(Combinator::Descendant);
+            parts.extend(self.parts.iter().cloned());
+            return Self { parts };
+        }
 
-        parts.extend(self.parts.iter().cloned());
+        // Resolve & nesting selector references.
+        let mut result_parts: Vec<SelectorPart> = Vec::new();
 
-        Self { parts }
+        for child_part in &child.parts {
+            if child_part.selector.is_nesting {
+                if child_part.selector.is_compound() {
+                    // Compound & (e.g. &.highlight) – merge parent subject
+                    // fields into this selector and append remaining parent
+                    // parts so the parent chain is preserved.
+                    let mut merged = self.parts[0].selector.clone();
+                    merged.merge_from(&child_part.selector);
+                    merged.is_nesting = false;
+
+                    let combinator = child_part.combinator.or(self.parts[0].combinator);
+
+                    result_parts.push(SelectorPart {
+                        selector: merged,
+                        combinator,
+                    });
+
+                    for parent_part in self.parts.iter().skip(1) {
+                        result_parts.push(parent_part.clone());
+                    }
+                } else {
+                    // Standalone & – replace with the full parent selector
+                    // chain.  The last (leftmost) parent part inherits the
+                    // combinator that & carried.
+                    let child_combinator = child_part.combinator;
+                    let parent_len = self.parts.len();
+                    for (i, parent_part) in self.parts.iter().enumerate() {
+                        let mut part = parent_part.clone();
+                        if i == parent_len - 1 {
+                            part.combinator = child_combinator;
+                        }
+                        result_parts.push(part);
+                    }
+                }
+            } else {
+                result_parts.push(child_part.clone());
+            }
+        }
+
+        Self {
+            parts: result_parts,
+        }
     }
 }
 
@@ -364,7 +453,7 @@ impl<'a> Parser<'a> {
     /// It consumes declarations until EOF or `}` and returns them as
     /// `Declaration` nodes, mirroring the body of a rule.
     pub fn parse_declarations(&mut self) -> ParseResult<Vec<CssNode>> {
-        self.parse_declaration_list()
+        self.parse_declaration_and_nested_rule_list()
     }
 
     fn consume_token(&mut self) -> Token {
@@ -592,7 +681,7 @@ impl<'a> Parser<'a> {
                         }
 
                         let nodes = if is_declaration {
-                            self.parse_declaration_list().map_err(|e| {
+                            self.parse_declaration_and_nested_rule_list().map_err(|e| {
                                 e.with_context(
                                     "parse_at_rule: failed to parse declaration in block",
                                 )
@@ -772,10 +861,10 @@ impl<'a> Parser<'a> {
                     });
                 }
                 _ => {
-                    let mut decls = self.parse_declaration_list().map_err(|e| {
+                    let mut child = self.parse_declaration_and_nested_rule_list().map_err(|e| {
                         e.with_context("parse_rule: failed to parse declaration list")
                     })?;
-                    children.append(&mut decls);
+                    children.append(&mut child);
                 }
             }
         }
@@ -807,6 +896,7 @@ impl<'a> Parser<'a> {
             match token {
                 Token::Ident(name) => {
                     let sel = current_selector.get_or_insert_with(|| Selector {
+                        is_nesting: false,
                         tag: None,
                         id: None,
                         classes: vec![],
@@ -824,6 +914,7 @@ impl<'a> Parser<'a> {
 
                 Token::Hash(id) => {
                     let sel = current_selector.get_or_insert_with(|| Selector {
+                        is_nesting: false,
                         tag: None,
                         id: None,
                         classes: vec![],
@@ -839,6 +930,7 @@ impl<'a> Parser<'a> {
                     self.consume_token();
                     if let Token::Ident(class) = self.consume_token() {
                         let sel = current_selector.get_or_insert_with(|| Selector {
+                            is_nesting: false,
                             tag: None,
                             id: None,
                             classes: vec![],
@@ -857,6 +949,7 @@ impl<'a> Parser<'a> {
                         self.consume_token();
                         if let Token::Ident(name) = self.consume_token() {
                             let sel = current_selector.get_or_insert_with(|| Selector {
+                                is_nesting: false,
                                 tag: None,
                                 id: None,
                                 classes: vec![],
@@ -907,6 +1000,7 @@ impl<'a> Parser<'a> {
                         };
                         if let Some(pseudo_class) = pseudo_class {
                             let sel = current_selector.get_or_insert_with(|| Selector {
+                                is_nesting: false,
                                 tag: None,
                                 id: None,
                                 classes: vec![],
@@ -953,6 +1047,7 @@ impl<'a> Parser<'a> {
                     if self.peek_token() == &Token::Delim(']') {
                         self.consume_token();
                         let sel = current_selector.get_or_insert_with(|| Selector {
+                            is_nesting: false,
                             tag: None,
                             id: None,
                             classes: vec![],
@@ -1006,6 +1101,7 @@ impl<'a> Parser<'a> {
 
                 Token::Delim('*') => {
                     current_selector.get_or_insert_with(|| Selector {
+                        is_nesting: false,
                         tag: None,
                         id: None,
                         classes: vec![],
@@ -1013,6 +1109,20 @@ impl<'a> Parser<'a> {
                         pseudo_classes: vec![],
                         pseudo_element: None,
                     });
+                    self.consume_token();
+                }
+
+                Token::Delim('&') => {
+                    let sel = current_selector.get_or_insert_with(|| Selector {
+                        is_nesting: false,
+                        tag: None,
+                        id: None,
+                        classes: vec![],
+                        attributes: vec![],
+                        pseudo_classes: vec![],
+                        pseudo_element: None,
+                    });
+                    sel.is_nesting = true;
                     self.consume_token();
                 }
 
@@ -1100,68 +1210,104 @@ impl<'a> Parser<'a> {
         tokens
     }
 
-    /// Parse declaration until `Token::Delim('}')`.
-    fn parse_declaration_list(&mut self) -> ParseResult<Vec<CssNode>> {
-        let mut declarations = vec![];
+    /// Parse declarations and nested rules until `Token::Delim('}')`.
+    fn parse_declaration_and_nested_rule_list(&mut self) -> ParseResult<Vec<CssNode>> {
+        let mut children = vec![];
         let mut parsing_name = true;
         let mut name = String::new();
         let mut value_tokens = vec![];
 
         loop {
-            let token = self.peek_token().clone();
-            match token {
-                Token::Delim(':') if parsing_name => {
-                    parsing_name = false;
-                    self.consume_token();
-                }
-                Token::Delim(';') if !parsing_name => {
-                    self.consume_token(); // consume ;
-                    declarations.push(CssNode {
-                        node: CssNodeType::Declaration {
-                            name: std::mem::take(&mut name),
-                            value: Self::parse_tokens_to_css_value(std::mem::take(
-                                &mut value_tokens,
-                            ))
-                            .map_err(|e| {
-                                e.with_context(
-                                    "parse_declaration: failed to parse declaration value list",
-                                )
-                            })?,
-                        },
-                        children: vec![],
-                    });
-                    parsing_name = true;
-                }
-                Token::Delim('}') | Token::EOF => {
-                    if !parsing_name && !name.is_empty() {
-                        declarations.push(CssNode {
+            let mut cursor = 0;
+
+            loop {
+                let token = self.peek_next_token(cursor);
+
+                match token {
+                    Token::Delim(':') if parsing_name => {
+                        for _ in 0..cursor {
+                            if let Token::Ident(s) = self.consume_token() {
+                                name.push_str(&s);
+                            }
+                        }
+
+                        self.consume_token(); // consume :
+                        parsing_name = false;
+                        break;
+                    }
+                    Token::Delim(';') if !parsing_name => {
+                        for _ in 0..cursor {
+                            value_tokens.push(self.consume_token());
+                        }
+
+                        self.consume_token(); // consume ;
+                        children.push(CssNode {
                             node: CssNodeType::Declaration {
                                 name: std::mem::take(&mut name),
                                 value: Self::parse_tokens_to_css_value(std::mem::take(
                                     &mut value_tokens,
-                                ))?,
+                                ))
+                                .map_err(|e| {
+                                    e.with_context(
+                                        "parse_declaration: failed to parse declaration value list",
+                                    )
+                                })?,
                             },
                             children: vec![],
                         });
-                    }
-                    break;
-                }
 
-                Token::Ident(s) if parsing_name => {
-                    name.push_str(&s);
-                    self.consume_token();
-                }
-                _ => {
-                    if !parsing_name {
-                        value_tokens.push(self.consume_token());
-                    } else {
-                        self.consume_token(); // skip unsupported token in name
+                        parsing_name = true;
+                        break;
+                    }
+                    Token::Delim('{') => {
+                        children.push(self.parse_rule()?);
+                        cursor = 0;
+                    }
+                    Token::Delim('}') | Token::EOF => {
+                        if !parsing_name && !name.is_empty() {
+                            for _ in 0..cursor {
+                                value_tokens.push(self.consume_token());
+                            }
+
+                            children.push(CssNode {
+                                node: CssNodeType::Declaration {
+                                    name: std::mem::take(&mut name),
+                                    value: Self::parse_tokens_to_css_value(std::mem::take(
+                                        &mut value_tokens,
+                                    ))?,
+                                },
+                                children: vec![],
+                            });
+                        } else {
+                            for _ in 0..cursor {
+                                // Just consume token.
+                                self.consume_token();
+                            }
+                        }
+
+                        break;
+                    }
+                    Token::Ident(s) if parsing_name => {
+                        if cursor == 0 {
+                            name.push_str(s);
+                            self.consume_token();
+                            break;
+                        }
+
+                        cursor += 1;
+                    }
+                    _ => {
+                        cursor += 1;
                     }
                 }
             }
+
+            if matches!(self.peek_next_token(0), Token::Delim('}') | Token::EOF) {
+                break;
+            }
         }
 
-        Ok(declarations)
+        Ok(children)
     }
 
     pub fn parse_tokens_to_css_value(tokens: Vec<Token>) -> ParseResult<CssValue> {
@@ -1352,6 +1498,9 @@ impl std::fmt::Display for PseudoClass {
 
 impl std::fmt::Display for Selector {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.is_nesting {
+            f.write_str("&")?;
+        }
         if let Some(tag) = &self.tag {
             f.write_str(tag)?;
         }
@@ -1526,5 +1675,192 @@ mod tests {
             selectors[0].parts[0].selector.classes,
             vec![String::from("valid")]
         );
+    }
+
+    #[test]
+    fn nesting_without_ampersand_uses_descendant_combinator() {
+        let stylesheet = Parser::new(".parent { span { color: red; } }")
+            .parse()
+            .unwrap();
+        let CssNodeType::Rule { selectors: parent } = stylesheet.children()[0].node() else {
+            panic!("expected parent rule");
+        };
+        let CssNodeType::Rule { selectors: child } = stylesheet.children()[0].children()[0].node()
+        else {
+            panic!("expected child rule");
+        };
+
+        // Child selector should remain as-is (no & in child).
+        assert_eq!(child[0].to_string(), "span");
+
+        // Nesting at resolver level: .parent span
+        let resolved = parent[0].nest(&child[0]);
+        assert_eq!(resolved.to_string(), ".parent span");
+    }
+
+    #[test]
+    fn nesting_with_standalone_ampersand() {
+        let stylesheet = Parser::new(".parent { & { color: red; } }")
+            .parse()
+            .unwrap();
+        let CssNodeType::Rule { selectors: parent } = stylesheet.children()[0].node() else {
+            panic!("expected parent rule");
+        };
+        let CssNodeType::Rule { selectors: child } = stylesheet.children()[0].children()[0].node()
+        else {
+            panic!("expected child rule");
+        };
+
+        assert!(child[0].parts[0].selector.is_nesting);
+
+        let resolved = parent[0].nest(&child[0]);
+        assert_eq!(resolved.to_string(), ".parent");
+    }
+
+    #[test]
+    fn nesting_with_ampersand_class_compound() {
+        let stylesheet = Parser::new(".parent { &.highlight { color: red; } }")
+            .parse()
+            .unwrap();
+        let CssNodeType::Rule { selectors: parent } = stylesheet.children()[0].node() else {
+            panic!("expected parent rule");
+        };
+        let CssNodeType::Rule { selectors: child } = stylesheet.children()[0].children()[0].node()
+        else {
+            panic!("expected child rule");
+        };
+
+        assert!(child[0].parts[0].selector.is_nesting);
+        assert_eq!(child[0].parts[0].selector.classes, vec!["highlight"]);
+
+        let resolved = parent[0].nest(&child[0]);
+        assert_eq!(resolved.to_string(), ".parent.highlight");
+    }
+
+    #[test]
+    fn nesting_with_ampersand_at_end_of_compound() {
+        let stylesheet = Parser::new(".parent { .sidebar& { color: red; } }")
+            .parse()
+            .unwrap();
+        let CssNodeType::Rule { selectors: parent } = stylesheet.children()[0].node() else {
+            panic!("expected parent rule");
+        };
+        let CssNodeType::Rule { selectors: child } = stylesheet.children()[0].children()[0].node()
+        else {
+            panic!("expected child rule");
+        };
+
+        assert!(child[0].parts[0].selector.is_nesting);
+        assert_eq!(child[0].parts[0].selector.classes, vec!["sidebar"]);
+
+        let resolved = parent[0].nest(&child[0]);
+        assert_eq!(resolved.to_string(), ".parent.sidebar");
+    }
+
+    #[test]
+    fn nesting_with_ampersand_and_child_combinator() {
+        let stylesheet = Parser::new(".parent { & > span { color: red; } }")
+            .parse()
+            .unwrap();
+        let CssNodeType::Rule { selectors: parent } = stylesheet.children()[0].node() else {
+            panic!("expected parent rule");
+        };
+        let CssNodeType::Rule { selectors: child } = stylesheet.children()[0].children()[0].node()
+        else {
+            panic!("expected child rule");
+        };
+
+        let resolved = parent[0].nest(&child[0]);
+        assert_eq!(resolved.to_string(), ".parent > span");
+    }
+
+    #[test]
+    fn nesting_with_multiple_selectors_using_ampersand() {
+        let stylesheet = Parser::new(".parent { &.a, &.b { color: red; } }")
+            .parse()
+            .unwrap();
+        let CssNodeType::Rule { selectors: parent } = stylesheet.children()[0].node() else {
+            panic!("expected parent rule");
+        };
+        let CssNodeType::Rule { selectors: child } = stylesheet.children()[0].children()[0].node()
+        else {
+            panic!("expected child rule");
+        };
+
+        assert_eq!(child.len(), 2);
+        let resolved_a = parent[0].nest(&child[0]);
+        let resolved_b = parent[0].nest(&child[1]);
+        assert_eq!(resolved_a.to_string(), ".parent.a");
+        assert_eq!(resolved_b.to_string(), ".parent.b");
+    }
+
+    #[test]
+    fn nesting_with_descendant_then_ampersand() {
+        let stylesheet = Parser::new(".outer { .parent { &.highlight { color: red; } } }")
+            .parse()
+            .unwrap();
+        let CssNodeType::Rule { selectors: outer } = stylesheet.children()[0].node() else {
+            panic!("expected outer rule");
+        };
+        let CssNodeType::Rule { selectors: parent } = stylesheet.children()[0].children()[0].node()
+        else {
+            panic!("expected parent rule");
+        };
+        let CssNodeType::Rule { selectors: child } =
+            stylesheet.children()[0].children()[0].children()[0].node()
+        else {
+            panic!("expected child rule");
+        };
+
+        // First level: .outer .parent
+        let resolved_parent = outer[0].nest(&parent[0]);
+        assert_eq!(resolved_parent.to_string(), ".outer .parent");
+
+        // Second level: .outer .parent.highlight
+        let resolved_child = resolved_parent.nest(&child[0]);
+        assert_eq!(resolved_child.to_string(), ".outer .parent.highlight");
+    }
+
+    #[test]
+    fn nesting_with_multilevel_ampersand_and_combinator() {
+        let stylesheet = Parser::new("#id .parent { .a & .b > span { color: red; } }")
+            .parse()
+            .unwrap();
+        let CssNodeType::Rule { selectors: parent } = stylesheet.children()[0].node() else {
+            panic!("expected parent rule");
+        };
+        let CssNodeType::Rule { selectors: child } = stylesheet.children()[0].children()[0].node()
+        else {
+            panic!("expected child rule");
+        };
+
+        let resolved = parent[0].nest(&child[0]);
+        assert_eq!(resolved.to_string(), ".a #id .parent .b > span");
+    }
+
+    #[test]
+    fn nested_declaration_parsing() {
+        let stylesheet = Parser::new(".parent { color: red; & { font-size: 14px; } }")
+            .parse()
+            .unwrap();
+        let CssNodeType::Rule { selectors } = stylesheet.children()[0].node() else {
+            panic!("expected parent rule");
+        };
+        assert_eq!(selectors[0].to_string(), ".parent");
+
+        let children = stylesheet.children()[0].children();
+        assert_eq!(children.len(), 2);
+
+        // First child: declaration
+        let CssNodeType::Declaration { name, .. } = children[0].node() else {
+            panic!("expected declaration");
+        };
+        assert_eq!(name, "color");
+
+        // Second child: nested rule
+        let CssNodeType::Rule { selectors: nested } = children[1].node() else {
+            panic!("expected nested rule");
+        };
+        assert!(nested[0].parts[0].selector.is_nesting);
     }
 }

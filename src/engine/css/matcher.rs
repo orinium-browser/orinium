@@ -460,6 +460,7 @@ mod tests {
         ComplexSelector {
             parts: vec![SelectorPart {
                 selector: Selector {
+                    is_nesting: false,
                     tag: Some("input".into()),
                     id: None,
                     classes: Vec::new(),

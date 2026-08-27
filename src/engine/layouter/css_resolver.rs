@@ -331,7 +331,14 @@ impl CssResolver {
     pub fn resolve_with_origin(stylesheet: &CssNode, origin: StyleOrigin) -> ResolvedStyles {
         let mut styles = Vec::new();
         let mut order = 0;
-        Self::walk(stylesheet, &mut styles, &mut order, origin, &mut Vec::new());
+        Self::walk(
+            stylesheet,
+            &mut styles,
+            &mut order,
+            origin,
+            &mut Vec::new(),
+            &[],
+        );
         styles
     }
 
@@ -359,6 +366,7 @@ impl CssResolver {
         order: &mut usize,
         origin: StyleOrigin,
         media_queries: &mut Vec<AtQuery>,
+        parent_selectors: &[ComplexSelector],
     ) {
         if let CssNodeType::AtRule { name, params } = node.node() {
             if name.eq_ignore_ascii_case("supports") && !SupportsEvaluator::evaluate(params) {
@@ -370,7 +378,14 @@ impl CssResolver {
                 media_queries.push(params.clone());
             }
             for child in node.children() {
-                Self::walk(child, styles, order, origin, media_queries);
+                Self::walk(
+                    child,
+                    styles,
+                    order,
+                    origin,
+                    media_queries,
+                    parent_selectors,
+                );
             }
             if is_media {
                 media_queries.pop();
@@ -378,9 +393,18 @@ impl CssResolver {
             return;
         }
 
-        Self::resolve_rule(node, styles, order, origin, media_queries);
+        let resolved_selectors =
+            Self::resolve_rule(node, styles, order, origin, media_queries, parent_selectors);
+
         for child in node.children() {
-            Self::walk(child, styles, order, origin, media_queries);
+            Self::walk(
+                child,
+                styles,
+                order,
+                origin,
+                media_queries,
+                &resolved_selectors,
+            );
         }
     }
 
@@ -390,14 +414,29 @@ impl CssResolver {
         order: &mut usize,
         origin: StyleOrigin,
         media_queries: &[AtQuery],
-    ) {
+        parent_selectors: &[ComplexSelector],
+    ) -> Vec<ComplexSelector> {
         let CssNodeType::Rule { selectors } = node.node() else {
-            return;
+            return vec![];
         };
+
+        let resolved_selectors: Vec<ComplexSelector> = selectors
+            .iter()
+            .flat_map(|child| {
+                if parent_selectors.is_empty() {
+                    vec![child.clone()]
+                } else {
+                    parent_selectors
+                        .iter()
+                        .map(|parent| parent.nest(child))
+                        .collect::<Vec<_>>()
+                }
+            })
+            .collect();
 
         let declarations = DeclarationResolver::collect(node.children());
 
-        for selector in selectors {
+        for selector in resolved_selectors.iter() {
             Self::push_resolved(
                 selector,
                 &declarations,
@@ -407,6 +446,8 @@ impl CssResolver {
                 media_queries,
             );
         }
+
+        resolved_selectors
     }
 
     fn push_resolved(
