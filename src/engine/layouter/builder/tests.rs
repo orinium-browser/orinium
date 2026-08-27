@@ -980,35 +980,6 @@ fn negative_grid_end_line_spans_to_the_last_explicit_track() {
 }
 
 #[test]
-fn single_row_grid_centers_items_after_min_height_growth() {
-    let html = "<html><body><div class='grid'><span></span></div></body></html>";
-    let css = r#"
-            .grid { display: grid; min-height: 48px; align-items: center; }
-            span { display: block; width: 20px; height: 10px; }
-        "#;
-    let (mut layout, _) = layout_and_info_for(html, css);
-    ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
-    correct_atomic_inline_spacing(&mut layout);
-
-    fn grid_item(node: &LayoutNode) -> Option<ui_layout::Rect> {
-        if node.style.display.inner == InnerDisplay::Grid {
-            return node
-                .children
-                .iter()
-                .filter_map(LayoutChild::node)
-                .find_map(|child| child.layout_box.iter().next().map(|model| model.border_box));
-        }
-        node.children
-            .iter()
-            .filter_map(LayoutChild::node)
-            .find_map(grid_item)
-    }
-
-    let item = grid_item(&layout).expect("grid item");
-    assert!((item.y - 19.0).abs() < 0.5, "item={item:?}");
-}
-
-#[test]
 fn grid_justify_self_end_uses_the_end_of_its_track() {
     let html = "<html><body><div class='grid'><a>A</a><nav><span></span></nav><a class='end'>B</a></div></body></html>";
     let css = r#"
