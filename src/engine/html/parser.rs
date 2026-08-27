@@ -15,6 +15,7 @@ use std::rc::Rc;
 #[derive(Debug, Clone)]
 pub enum HtmlNodeType {
     Document,
+    DocumentFragment,
     Element {
         tag_name: String,
         attributes: Vec<Attribute>,
