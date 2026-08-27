@@ -1,7 +1,8 @@
 use crate::engine::html::HtmlNodeType;
 use crate::engine::js::common::{dom_node, is_callable, node_dom_id, with_host, with_host_mut};
 use crate::engine::js::web_apis::dom::element::{
-    accessor_property, make_element, make_text_node, read_only_accessor_property,
+    accessor_property, make_document_fragment, make_element, make_text_node,
+    read_only_accessor_property,
 };
 use crate::engine::tree::{NodeRef, TreeNode};
 use pixi_byte::value::jsobject::{JSObject, Property};
@@ -85,6 +86,10 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
         document.set(
             "createTextNode".to_string(),
             JSValue::NativeFunction(create_text_node),
+        );
+        document.set(
+            "createDocumentFragment".to_string(),
+            JSValue::NativeFunction(create_document_fragment),
         );
         document.set(
             "addEventListener".to_string(),
@@ -286,6 +291,11 @@ pub(crate) fn create_text_node(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVa
     Ok(expose_detached_node(vm, node).unwrap_or(JSValue::Null))
 }
 
+fn create_document_fragment(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let node = TreeNode::new(HtmlNodeType::DocumentFragment);
+    Ok(expose_detached_node(vm, node).unwrap_or(JSValue::Null))
+}
+
 fn get_document_element(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     let node = with_host(vm, |host| {
         host.dom
@@ -402,13 +412,14 @@ pub(crate) fn expose_detached_node(vm: &mut VM, node: NodeRef<HtmlNodeType>) -> 
 // Expose a DOM node as a JavaScript object.
 pub(crate) fn expose_node(vm: &VM, node: NodeRef<HtmlNodeType>) -> Option<JSValue> {
     let node_kind = {
-        let node = node.borrow();
-        match &node.value {
-            HtmlNodeType::Element { tag_name, .. } => Some((
-                tag_name.clone(),
-                node.value.get_attr("id").unwrap_or("").to_string(),
-            )),
-            HtmlNodeType::Text(_) => None,
+        let borrowed = node.borrow();
+        match &borrowed.value {
+            HtmlNodeType::Element { tag_name, .. } => NodeKind::Element {
+                tag_name: tag_name.clone(),
+                id: borrowed.value.get_attr("id").unwrap_or("").to_string(),
+            },
+            HtmlNodeType::Text(_) => NodeKind::Text,
+            HtmlNodeType::DocumentFragment => NodeKind::Fragment,
             HtmlNodeType::Document => {
                 return with_host(vm, |host| host.document.as_ref().cloned())
                     .flatten()
@@ -418,8 +429,16 @@ pub(crate) fn expose_node(vm: &VM, node: NodeRef<HtmlNodeType>) -> Option<JSValu
         }
     };
 
-    // Register the live node so later property access can resolve it. Reuse
-    // the existing id and element object when this node was already exposed.
+    expose_node_inner(vm, node, node_kind)
+}
+
+enum NodeKind {
+    Element { tag_name: String, id: String },
+    Text,
+    Fragment,
+}
+
+fn expose_node_inner(vm: &VM, node: NodeRef<HtmlNodeType>, kind: NodeKind) -> Option<JSValue> {
     let dom_id = with_host_mut(vm, |host| {
         if let Some(dom_id) = host.dom_id_for_node(&node) {
             return dom_id;
@@ -434,15 +453,16 @@ pub(crate) fn expose_node(vm: &VM, node: NodeRef<HtmlNodeType>) -> Option<JSValu
         if let Some(existing) = host.objects.get(&dom_id) {
             return Rc::clone(existing);
         }
-        let obj = match node_kind {
-            Some((tag_name, attr_id)) => make_element(
+        let obj = match kind {
+            NodeKind::Element { tag_name, id } => make_element(
                 tag_name,
-                attr_id,
+                id,
                 dom_id,
                 Rc::clone(&host.element_prototype),
                 Rc::clone(&host.element_constructor),
             ),
-            None => make_text_node(dom_id),
+            NodeKind::Text => make_text_node(dom_id),
+            NodeKind::Fragment => make_document_fragment(dom_id),
         };
         host.objects.insert(dom_id, Rc::clone(&obj));
         obj
