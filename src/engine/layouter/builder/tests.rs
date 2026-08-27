@@ -891,7 +891,6 @@ fn grid_min_height_pushes_later_block_flow_content() {
         "#;
     let (mut layout, _) = layout_and_info_for(html, css);
     ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
-    correct_atomic_inline_spacing(&mut layout);
 
     fn children(node: &LayoutNode) -> Option<Vec<ui_layout::Rect>> {
         let boxes: Vec<_> = node
