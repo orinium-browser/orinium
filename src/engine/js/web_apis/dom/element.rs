@@ -378,6 +378,90 @@ pub(crate) fn make_text_node(dom_id: u64) -> Rc<RefCell<JSObject>> {
     Rc::new(RefCell::new(obj))
 }
 
+pub(crate) fn make_document_fragment(dom_id: u64) -> Rc<RefCell<JSObject>> {
+    let mut obj = JSObject::new();
+    define_node_id(&mut obj, dom_id);
+    obj.define_property(
+        "nodeType".to_string(),
+        Property::read_only(JSValue::Number(11.0)),
+    );
+    obj.define_property(
+        "nodeName".to_string(),
+        Property::read_only(JSValue::String("#document-fragment".to_string())),
+    );
+    obj.define_property(
+        "textContent".to_string(),
+        accessor_property(get_text_content, set_text_content),
+    );
+    obj.define_property(
+        "parentNode".to_string(),
+        read_only_accessor_property(get_parent_node),
+    );
+    obj.define_property(
+        "parentElement".to_string(),
+        read_only_accessor_property(get_parent_element),
+    );
+    obj.define_property(
+        "isConnected".to_string(),
+        read_only_accessor_property(get_is_connected),
+    );
+    obj.define_property(
+        "ownerDocument".to_string(),
+        read_only_accessor_property(get_owner_document),
+    );
+    obj.define_property(
+        "childNodes".to_string(),
+        read_only_accessor_property(get_child_nodes),
+    );
+    obj.define_property(
+        "firstChild".to_string(),
+        read_only_accessor_property(get_first_child),
+    );
+    obj.define_property(
+        "lastChild".to_string(),
+        read_only_accessor_property(get_last_child),
+    );
+    obj.define_property(
+        "nextSibling".to_string(),
+        read_only_accessor_property(get_next_sibling),
+    );
+    obj.define_property(
+        "previousSibling".to_string(),
+        read_only_accessor_property(get_previous_sibling),
+    );
+    obj.define_property(
+        "children".to_string(),
+        read_only_accessor_property(get_element_children),
+    );
+    obj.set(
+        "appendChild".to_string(),
+        JSValue::NativeFunction(append_child),
+    );
+    obj.set(
+        "insertBefore".to_string(),
+        JSValue::NativeFunction(insert_before),
+    );
+    obj.set(
+        "removeChild".to_string(),
+        JSValue::NativeFunction(remove_child),
+    );
+    obj.set(
+        "replaceChild".to_string(),
+        JSValue::NativeFunction(replace_child),
+    );
+    obj.set("cloneNode".to_string(), JSValue::NativeFunction(clone_node));
+    obj.set("remove".to_string(), JSValue::NativeFunction(remove_node));
+    obj.set(
+        "querySelector".to_string(),
+        JSValue::NativeFunction(element_query_selector),
+    );
+    obj.set(
+        "querySelectorAll".to_string(),
+        JSValue::NativeFunction(element_query_selector_all),
+    );
+    Rc::new(RefCell::new(obj))
+}
+
 fn define_node_id(obj: &mut JSObject, dom_id: u64) {
     obj.define_property(
         "__orinium_dom_id".to_string(),
@@ -396,7 +480,10 @@ fn append_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(parent) = dom_node(vm, args.first().unwrap_or(&JSValue::Undefined)) else {
         return Ok(JSValue::Null);
     };
-    if !matches!(parent.borrow().value, HtmlNodeType::Element { .. }) {
+    if !matches!(
+        parent.borrow().value,
+        HtmlNodeType::Element { .. } | HtmlNodeType::DocumentFragment
+    ) {
         return Ok(JSValue::Null);
     }
     let Some(child_value) = args.get(1).cloned() else {
@@ -405,6 +492,17 @@ fn append_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(child) = dom_node(vm, &child_value) else {
         return Ok(JSValue::Null);
     };
+
+    // Per DOM spec, appending a DocumentFragment moves its children.
+    if matches!(child.borrow().value, HtmlNodeType::DocumentFragment) {
+        let fragment_children: Vec<_> = child.borrow().children().to_vec();
+        for fragment_child in fragment_children {
+            let _ = TreeNode::append_child(&parent, Rc::clone(&fragment_child));
+            mark_dom_dirty(vm);
+        }
+        return Ok(child_value);
+    }
+
     if !TreeNode::append_child(&parent, child) {
         return Ok(JSValue::Null);
     }
@@ -445,16 +543,30 @@ fn insert_before(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         return Ok(JSValue::Null);
     };
 
-    let inserted = match args.get(2) {
-        None | Some(JSValue::Null) | Some(JSValue::Undefined) => {
-            TreeNode::append_child(&parent, child)
-        }
-        Some(reference_value) => {
-            let Some(reference) = dom_node(vm, reference_value) else {
-                return Ok(JSValue::Null);
+    let reference_value = args.get(2).cloned();
+    let reference = match &reference_value {
+        None | Some(JSValue::Null) | Some(JSValue::Undefined) => None,
+        Some(val) => dom_node(vm, val),
+    };
+
+    // Per DOM spec, inserting a DocumentFragment moves its children.
+    if matches!(child.borrow().value, HtmlNodeType::DocumentFragment) {
+        let fragment_children: Vec<_> = child.borrow().children().to_vec();
+        for fragment_child in fragment_children {
+            let inserted = match &reference {
+                Some(r) => TreeNode::insert_before(&parent, Rc::clone(&fragment_child), r),
+                None => TreeNode::append_child(&parent, Rc::clone(&fragment_child)),
             };
-            TreeNode::insert_before(&parent, child, &reference)
+            if inserted {
+                mark_dom_dirty(vm);
+            }
         }
+        return Ok(child_value);
+    }
+
+    let inserted = match &reference {
+        Some(r) => TreeNode::insert_before(&parent, child, r),
+        None => TreeNode::append_child(&parent, child),
     };
     if !inserted {
         return Ok(JSValue::Null);
