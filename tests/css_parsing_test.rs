@@ -161,8 +161,9 @@ fn test_css_nesting_without_ampersand() {
     let stylesheet = result.unwrap();
     let parent_rule = &stylesheet.children()[0];
 
-    let CssNodeType::Rule { selectors: child_selectors } =
-        parent_rule.children()[0].node()
+    let CssNodeType::Rule {
+        selectors: child_selectors,
+    } = parent_rule.children()[0].node()
     else {
         panic!("expected nested rule");
     };
@@ -185,15 +186,13 @@ fn test_css_nesting_resolves_correctly() {
     let mut parser = Parser::new(css);
     let stylesheet = parser.parse().unwrap();
 
-    let CssNodeType::Rule { selectors: parent } = stylesheet.children()[0].node()
-    else {
+    let CssNodeType::Rule { selectors: parent } = stylesheet.children()[0].node() else {
         panic!("expected parent rule");
     };
     let parent_sel = &parent[0];
 
     // &.highlight → .parent.highlight
-    let CssNodeType::Rule { selectors: child1 } =
-        stylesheet.children()[0].children()[0].node()
+    let CssNodeType::Rule { selectors: child1 } = stylesheet.children()[0].children()[0].node()
     else {
         panic!("expected nested rule");
     };
@@ -201,8 +200,7 @@ fn test_css_nesting_resolves_correctly() {
     assert_eq!(resolved1.to_string(), ".parent.highlight");
 
     // & > span → .parent > span
-    let CssNodeType::Rule { selectors: child2 } =
-        stylesheet.children()[0].children()[1].node()
+    let CssNodeType::Rule { selectors: child2 } = stylesheet.children()[0].children()[1].node()
     else {
         panic!("expected nested rule");
     };
@@ -210,8 +208,7 @@ fn test_css_nesting_resolves_correctly() {
     assert_eq!(resolved2.to_string(), ".parent > span");
 
     // .sidebar& → .sidebar.parent
-    let CssNodeType::Rule { selectors: child3 } =
-        stylesheet.children()[0].children()[2].node()
+    let CssNodeType::Rule { selectors: child3 } = stylesheet.children()[0].children()[2].node()
     else {
         panic!("expected nested rule");
     };
