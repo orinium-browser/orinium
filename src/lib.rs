@@ -37,20 +37,13 @@
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
-/// ブラウザ関連のモジュールをまとめたトップレベルモジュール
-pub mod browser;
+pub use browser;
 
-/// ブラウザのコア機能を提供するモジュール
-/// このモジュールには、HTML/CSSパーサー、DOMツリー構築、
-/// JavaScriptエンジンなどブラウザの中核となる機能が含まれます。
-pub mod engine;
+pub use engine;
 
-/// プラットフォーム依存の機能を提供するモジュール
-/// このモジュールには、ネットワーク処理、レンダリング、UI表示、
-/// ファイルI/Oなどプラットフォーム固有の実装が含まれます。
-pub mod platform;
+pub use platform;
 
 mod process;
 pub use process::*;
 
-mod profile;
+pub(crate) use profile;

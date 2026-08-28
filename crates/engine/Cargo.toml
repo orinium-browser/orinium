@@ -1,0 +1,15 @@
+[package]
+name = "engine"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+dark-light.workspace = true
+entities = "1.0.1"
+log.workspace = true
+once_cell.workspace = true
+pixi_byte = { git = "https://github.com/orinium-browser/pixi_byte", rev = "00c51e01427c852f7903a520ba0462613af6831a" }
+resvg.workspace = true
+smol_str.workspace = true
+ui_layout = { git = "https://github.com/098orin/ui_layout-rs", rev = "75b98bd170c47c80f774de9e42312b2894d8b226" }

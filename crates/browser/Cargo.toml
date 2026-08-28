@@ -1,0 +1,10 @@
+[package]
+name = "browser"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+engine.workspace = true
+platform.workspace = true
+
+log.workspace = true

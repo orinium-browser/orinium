@@ -6,8 +6,23 @@ license = "Apache-2.0"
 
 [workspace]
 resolver = "3"
+members = [
+  "crates/browser/",
+  "crates/engine/",
+  "crates/platform/",
+  "crates/profile/",
+]
 
-[dependencies]
+[workspace.package]
+edition = "2024"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+browser = { path = "crates/browser/" }
+engine = { path = "crates/engine/" }
+platform = { path = "crates/platform/" }
+profile = { path = "crates/profile/" }
+
 dhat = "0.3.3"
 
 orinium_text = { git = "https://github.com/orinium-browser/orinium_text", rev = "e647a94996f72caacaaa06322ddb75cde06077f5" }
@@ -18,7 +33,6 @@ base64 = "0.23"
 bytemuck = { version = "1.25", features = ["derive"] }
 cpal = "0.18.1"
 dark-light = "3.0"
-entities = "1.0.1"
 env_logger = "0.11.10"
 etagere = "0.3.0"
 fontdue = "0.9.3"
@@ -30,7 +44,6 @@ ipc-channel = "0.22.0"
 log = "0.4.32"
 lru = "0.18"
 once_cell = "1.21.4"
-pixi_byte = { git = "https://github.com/orinium-browser/pixi_byte", rev = "00c51e01427c852f7903a520ba0462613af6831a" }
 pollster = "1.0"
 resvg = "0.48.1"
 rustls = { version = "0.23.40", default-features = false, features = ["tls12"] }
@@ -43,7 +56,6 @@ symphonia = { version = "0.6.0", features = ["aac", "flac", "mp3", "vorbis", "wa
 tokio = { version = "1.52", features = ["fs", "io-std", "net", "rt", "time"] }
 tokio-rustls = "0.26.4"
 ttf-parser = "0.25.1"
-ui_layout = { git = "https://github.com/098orin/ui_layout-rs", rev = "75b98bd170c47c80f774de9e42312b2894d8b226" }
 url = "2.5"
 wgpu = "30.0.1"
 wgpu-types = "30.0.1"
