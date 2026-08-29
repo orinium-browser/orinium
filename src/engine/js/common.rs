@@ -39,12 +39,8 @@ pub(crate) fn mark_dom_dirty(vm: &VM) {
 
 /// Extracts the hidden DOM id counter from an element `this` object.
 pub(crate) fn node_dom_id(this: &JSValue) -> Option<u64> {
-    let Some(obj) = this.as_object() else {
-        return None;
-    };
-    let Some(n) = obj.borrow().get("__orinium_dom_id").as_number() else {
-        return None;
-    };
+    let obj = this.as_object()?;
+    let n = obj.borrow().get("__orinium_dom_id").as_number()?;
     Some(n as u64)
 }
 
