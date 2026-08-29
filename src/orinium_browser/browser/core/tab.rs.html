@@ -545,231 +545,230 @@
 <a href=#545 id=545 data-nosnippet>545</a>        <span class="kw">let </span><span class="prelude-val">Some</span>((layout, info)) = <span class="self">self</span>.layout_and_info() <span class="kw">else </span>{
 <a href=#546 id=546 data-nosnippet>546</a>            <span class="kw">return </span><span class="macro">vec!</span>[];
 <a href=#547 id=547 data-nosnippet>547</a>        };
-<a href=#548 id=548 data-nosnippet>548</a>        <span class="kw">let </span>path = <span class="kw">crate</span>::engine::input::hit_test(layout, info, px, py);
-<a href=#549 id=549 data-nosnippet>549</a>
-<a href=#550 id=550 data-nosnippet>550</a>        path
-<a href=#551 id=551 data-nosnippet>551</a>    }
-<a href=#552 id=552 data-nosnippet>552</a>
-<a href=#553 id=553 data-nosnippet>553</a>    <span class="doccomment">/// Settles a DevTools inspection request with its JSON envelope.
-<a href=#554 id=554 data-nosnippet>554</a>    </span><span class="kw">pub fn </span>on_devtools_response(<span class="kw-2">&amp;mut </span><span class="self">self</span>, id: u64, result: String) {
-<a href=#555 id=555 data-nosnippet>555</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(webview) = <span class="self">self</span>.webview.as_mut() {
-<a href=#556 id=556 data-nosnippet>556</a>            webview.on_devtools_response(id, result);
-<a href=#557 id=557 data-nosnippet>557</a>        }
-<a href=#558 id=558 data-nosnippet>558</a>    }
-<a href=#559 id=559 data-nosnippet>559</a>
-<a href=#560 id=560 data-nosnippet>560</a>    <span class="doccomment">/// Display error page on fetch failure
-<a href=#561 id=561 data-nosnippet>561</a>    </span><span class="kw">pub fn </span>on_fetch_failed(<span class="kw-2">&amp;mut </span><span class="self">self</span>, err: BrowserNetworkError, failed_url: Url) {
-<a href=#562 id=562 data-nosnippet>562</a>        <span class="self">self</span>.navigate(<span class="string">"resource:///error.html"</span>.parse().unwrap());
-<a href=#563 id=563 data-nosnippet>563</a>        <span class="self">self</span>.state = TabState::Error(TabError::NetworkError(err), <span class="prelude-val">Some</span>(failed_url));
-<a href=#564 id=564 data-nosnippet>564</a>    }
-<a href=#565 id=565 data-nosnippet>565</a>
-<a href=#566 id=566 data-nosnippet>566</a>    <span class="kw">pub fn </span>navigate(<span class="kw-2">&amp;mut </span><span class="self">self</span>, url: Url) {
-<a href=#567 id=567 data-nosnippet>567</a>        <span class="self">self</span>.navigate_internal(url, <span class="bool-val">true</span>);
-<a href=#568 id=568 data-nosnippet>568</a>    }
-<a href=#569 id=569 data-nosnippet>569</a>
-<a href=#570 id=570 data-nosnippet>570</a>    <span class="doccomment">/// Navigates to the previous URL in the history, if any.
-<a href=#571 id=571 data-nosnippet>571</a>    ///
-<a href=#572 id=572 data-nosnippet>572</a>    /// Returns `false` when there is no history to go back to.
-<a href=#573 id=573 data-nosnippet>573</a>    </span><span class="kw">pub fn </span>go_back(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; bool {
-<a href=#574 id=574 data-nosnippet>574</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(previous) = <span class="self">self</span>.history.pop() <span class="kw">else </span>{
-<a href=#575 id=575 data-nosnippet>575</a>            <span class="kw">return </span><span class="bool-val">false</span>;
-<a href=#576 id=576 data-nosnippet>576</a>        };
-<a href=#577 id=577 data-nosnippet>577</a>        <span class="self">self</span>.navigate_internal(previous, <span class="bool-val">false</span>);
-<a href=#578 id=578 data-nosnippet>578</a>        <span class="bool-val">true
-<a href=#579 id=579 data-nosnippet>579</a>    </span>}
-<a href=#580 id=580 data-nosnippet>580</a>
-<a href=#581 id=581 data-nosnippet>581</a>    <span class="doccomment">/// Reloads the current document, if one is loaded.
-<a href=#582 id=582 data-nosnippet>582</a>    </span><span class="kw">pub fn </span>reload(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
-<a href=#583 id=583 data-nosnippet>583</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(url) = <span class="self">self</span>.document_url.clone() {
-<a href=#584 id=584 data-nosnippet>584</a>            <span class="self">self</span>.navigate_internal(url, <span class="bool-val">false</span>);
-<a href=#585 id=585 data-nosnippet>585</a>        }
-<a href=#586 id=586 data-nosnippet>586</a>    }
-<a href=#587 id=587 data-nosnippet>587</a>
-<a href=#588 id=588 data-nosnippet>588</a>    <span class="doccomment">/// Returns whether the back button can navigate to a previous page.
-<a href=#589 id=589 data-nosnippet>589</a>    </span><span class="kw">pub fn </span>can_go_back(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#590 id=590 data-nosnippet>590</a>        !<span class="self">self</span>.history.is_empty()
-<a href=#591 id=591 data-nosnippet>591</a>    }
-<a href=#592 id=592 data-nosnippet>592</a>
-<a href=#593 id=593 data-nosnippet>593</a>    <span class="kw">fn </span>navigate_internal(<span class="kw-2">&amp;mut </span><span class="self">self</span>, url: Url, record_history: bool) {
-<a href=#594 id=594 data-nosnippet>594</a>        <span class="kw">if </span>record_history
-<a href=#595 id=595 data-nosnippet>595</a>            &amp;&amp; <span class="self">self</span>.document_url.as_ref() != <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>url)
-<a href=#596 id=596 data-nosnippet>596</a>            &amp;&amp; <span class="kw">let </span><span class="prelude-val">Some</span>(previous) = <span class="self">self</span>.document_url.clone()
-<a href=#597 id=597 data-nosnippet>597</a>        {
-<a href=#598 id=598 data-nosnippet>598</a>            <span class="self">self</span>.history.push(previous);
-<a href=#599 id=599 data-nosnippet>599</a>        }
-<a href=#600 id=600 data-nosnippet>600</a>        <span class="self">self</span>.document_url = <span class="prelude-val">Some</span>(url);
-<a href=#601 id=601 data-nosnippet>601</a>        <span class="kw">let </span><span class="kw-2">mut </span>webview = WebView::new(<span class="self">self</span>.system_color_scheme, <span class="self">self</span>.js_policy);
-<a href=#602 id=602 data-nosnippet>602</a>        webview.navigate();
-<a href=#603 id=603 data-nosnippet>603</a>        <span class="self">self</span>.webview = <span class="prelude-val">Some</span>(webview);
-<a href=#604 id=604 data-nosnippet>604</a>        <span class="self">self</span>.state = TabState::Loading;
-<a href=#605 id=605 data-nosnippet>605</a>        <span class="self">self</span>.title = <span class="prelude-val">None</span>;
-<a href=#606 id=606 data-nosnippet>606</a>        <span class="self">self</span>.base_url = <span class="prelude-val">None</span>;
-<a href=#607 id=607 data-nosnippet>607</a>    }
-<a href=#608 id=608 data-nosnippet>608</a>
-<a href=#609 id=609 data-nosnippet>609</a>    <span class="kw">pub fn </span>move_to(<span class="kw-2">&amp;mut </span><span class="self">self</span>, href: <span class="kw-2">&amp;</span>str) {
-<a href=#610 id=610 data-nosnippet>610</a>        <span class="kw">let </span>base_url = <span class="kw">match </span><span class="self">self</span>.base_url.as_ref() {
-<a href=#611 id=611 data-nosnippet>611</a>            <span class="prelude-val">Some</span>(u) =&gt; u,
-<a href=#612 id=612 data-nosnippet>612</a>            <span class="prelude-val">None </span>=&gt; <span class="kw">return</span>,
-<a href=#613 id=613 data-nosnippet>613</a>        };
-<a href=#614 id=614 data-nosnippet>614</a>
-<a href=#615 id=615 data-nosnippet>615</a>        <span class="kw">let </span>url = <span class="kw">super</span>::webview::resolve_url(base_url, href).unwrap();
-<a href=#616 id=616 data-nosnippet>616</a>
-<a href=#617 id=617 data-nosnippet>617</a>        <span class="comment">// navigate と同じ扱い
-<a href=#618 id=618 data-nosnippet>618</a>        </span><span class="self">self</span>.navigate(url)
-<a href=#619 id=619 data-nosnippet>619</a>    }
-<a href=#620 id=620 data-nosnippet>620</a>
-<a href=#621 id=621 data-nosnippet>621</a>    <span class="kw">pub fn </span>relayout(<span class="kw-2">&amp;mut </span><span class="self">self</span>, viewport: (f32, f32)) {
-<a href=#622 id=622 data-nosnippet>622</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(wv) = <span class="self">self</span>.webview.as_mut() {
-<a href=#623 id=623 data-nosnippet>623</a>            wv.relayout(viewport);
-<a href=#624 id=624 data-nosnippet>624</a>        }
-<a href=#625 id=625 data-nosnippet>625</a>    }
-<a href=#626 id=626 data-nosnippet>626</a>
-<a href=#627 id=627 data-nosnippet>627</a>    <span class="doccomment">/// Returns layout_and_info
-<a href=#628 id=628 data-nosnippet>628</a>    /// Only InfoNode will be mutable.
-<a href=#629 id=629 data-nosnippet>629</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>layout_and_info_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;(<span class="kw-2">&amp;</span>LayoutNode, <span class="kw-2">&amp;mut </span>InfoNode)&gt; {
-<a href=#630 id=630 data-nosnippet>630</a>        <span class="self">self</span>.webview
-<a href=#631 id=631 data-nosnippet>631</a>            .as_mut()
-<a href=#632 id=632 data-nosnippet>632</a>            .and_then(|wv| wv.layout_and_info_mut())
-<a href=#633 id=633 data-nosnippet>633</a>    }
-<a href=#634 id=634 data-nosnippet>634</a>
-<a href=#635 id=635 data-nosnippet>635</a>    <span class="doccomment">/// Dispatches a click on a DOM node to the page's JS `onclick` handler.
-<a href=#636 id=636 data-nosnippet>636</a>    ///
-<a href=#637 id=637 data-nosnippet>637</a>    /// Returns whether the click mutated the DOM and needs a redraw.
-<a href=#638 id=638 data-nosnippet>638</a>    </span><span class="kw">pub fn </span>on_js_click(<span class="kw-2">&amp;mut </span><span class="self">self</span>, dom_id: u32) -&gt; bool {
-<a href=#639 id=639 data-nosnippet>639</a>        <span class="self">self</span>.webview
-<a href=#640 id=640 data-nosnippet>640</a>            .as_mut()
-<a href=#641 id=641 data-nosnippet>641</a>            .is_some_and(|wv| wv.on_js_click(dom_id))
-<a href=#642 id=642 data-nosnippet>642</a>    }
-<a href=#643 id=643 data-nosnippet>643</a>
-<a href=#644 id=644 data-nosnippet>644</a>    <span class="kw">pub fn </span>set_system_color_scheme(<span class="kw-2">&amp;mut </span><span class="self">self</span>, scheme: ColorScheme) {
-<a href=#645 id=645 data-nosnippet>645</a>        <span class="self">self</span>.system_color_scheme = scheme;
-<a href=#646 id=646 data-nosnippet>646</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(wv) = <span class="self">self</span>.webview.as_mut() {
-<a href=#647 id=647 data-nosnippet>647</a>            wv.set_system_color_scheme(scheme)
-<a href=#648 id=648 data-nosnippet>648</a>        }
-<a href=#649 id=649 data-nosnippet>649</a>    }
-<a href=#650 id=650 data-nosnippet>650</a>
-<a href=#651 id=651 data-nosnippet>651</a>    <span class="doccomment">/// Returns title of the document
-<a href=#652 id=652 data-nosnippet>652</a>    </span><span class="kw">pub fn </span>title(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;String&gt; {
-<a href=#653 id=653 data-nosnippet>653</a>        <span class="self">self</span>.title.clone()
-<a href=#654 id=654 data-nosnippet>654</a>    }
-<a href=#655 id=655 data-nosnippet>655</a>
-<a href=#656 id=656 data-nosnippet>656</a>    <span class="doccomment">/// Returns document url
-<a href=#657 id=657 data-nosnippet>657</a>    </span><span class="kw">pub fn </span>document_url(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Url&gt; {
-<a href=#658 id=658 data-nosnippet>658</a>        <span class="self">self</span>.document_url.clone()
-<a href=#659 id=659 data-nosnippet>659</a>    }
-<a href=#660 id=660 data-nosnippet>660</a>
-<a href=#661 id=661 data-nosnippet>661</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>layout_and_info(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;(<span class="kw-2">&amp;</span>LayoutNode, <span class="kw-2">&amp;</span>InfoNode)&gt; {
-<a href=#662 id=662 data-nosnippet>662</a>        <span class="self">self</span>.webview.as_ref().and_then(|wv| wv.layout_and_info())
-<a href=#663 id=663 data-nosnippet>663</a>    }
-<a href=#664 id=664 data-nosnippet>664</a>
-<a href=#665 id=665 data-nosnippet>665</a>    <span class="kw">pub fn </span>needs_redraw(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#666 id=666 data-nosnippet>666</a>        <span class="self">self</span>.webview.as_ref().is_some_and(|wv| wv.needs_redraw())
-<a href=#667 id=667 data-nosnippet>667</a>    }
-<a href=#668 id=668 data-nosnippet>668</a>
-<a href=#669 id=669 data-nosnippet>669</a>    <span class="kw">pub fn </span>clear_redraw_flag(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
-<a href=#670 id=670 data-nosnippet>670</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(wv) = <span class="self">self</span>.webview.as_mut() {
-<a href=#671 id=671 data-nosnippet>671</a>            wv.clear_redraw_flag();
-<a href=#672 id=672 data-nosnippet>672</a>        }
-<a href=#673 id=673 data-nosnippet>673</a>    }
-<a href=#674 id=674 data-nosnippet>674</a>
-<a href=#675 id=675 data-nosnippet>675</a>    <span class="kw">pub fn </span>set_js_policy(<span class="kw-2">&amp;mut </span><span class="self">self</span>, policy: JsPolicy) {
-<a href=#676 id=676 data-nosnippet>676</a>        <span class="self">self</span>.js_policy = policy;
-<a href=#677 id=677 data-nosnippet>677</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(wv) = <span class="self">self</span>.webview.as_mut() {
-<a href=#678 id=678 data-nosnippet>678</a>            wv.set_js_policy(policy);
-<a href=#679 id=679 data-nosnippet>679</a>        }
-<a href=#680 id=680 data-nosnippet>680</a>    }
-<a href=#681 id=681 data-nosnippet>681</a>}
-<a href=#682 id=682 data-nosnippet>682</a>
-<a href=#683 id=683 data-nosnippet>683</a><span class="attr">#[cfg(test)]
-<a href=#684 id=684 data-nosnippet>684</a></span><span class="kw">mod </span>tests {
-<a href=#685 id=685 data-nosnippet>685</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
-<a href=#686 id=686 data-nosnippet>686</a>
-<a href=#687 id=687 data-nosnippet>687</a>    <span class="kw">fn </span>url(s: <span class="kw-2">&amp;</span>str) -&gt; Url {
-<a href=#688 id=688 data-nosnippet>688</a>        Url::parse(s).unwrap()
-<a href=#689 id=689 data-nosnippet>689</a>    }
-<a href=#690 id=690 data-nosnippet>690</a>
-<a href=#691 id=691 data-nosnippet>691</a>    <span class="attr">#[test]
-<a href=#692 id=692 data-nosnippet>692</a>    </span><span class="kw">fn </span>navigate_records_history() {
-<a href=#693 id=693 data-nosnippet>693</a>        <span class="kw">let </span><span class="kw-2">mut </span>tab = Tab::default();
-<a href=#694 id=694 data-nosnippet>694</a>        tab.navigate(url(<span class="string">"https://example.test/a"</span>));
-<a href=#695 id=695 data-nosnippet>695</a>        tab.navigate(url(<span class="string">"https://example.test/b"</span>));
-<a href=#696 id=696 data-nosnippet>696</a>
-<a href=#697 id=697 data-nosnippet>697</a>        <span class="macro">assert!</span>(tab.can_go_back());
-<a href=#698 id=698 data-nosnippet>698</a>        <span class="macro">assert_eq!</span>(
-<a href=#699 id=699 data-nosnippet>699</a>            tab.document_url().as_ref().map(Url::as_str),
-<a href=#700 id=700 data-nosnippet>700</a>            <span class="prelude-val">Some</span>(<span class="string">"https://example.test/b"</span>)
-<a href=#701 id=701 data-nosnippet>701</a>        );
-<a href=#702 id=702 data-nosnippet>702</a>    }
-<a href=#703 id=703 data-nosnippet>703</a>
-<a href=#704 id=704 data-nosnippet>704</a>    <span class="attr">#[test]
-<a href=#705 id=705 data-nosnippet>705</a>    </span><span class="kw">fn </span>navigating_to_same_url_does_not_duplicate_history() {
-<a href=#706 id=706 data-nosnippet>706</a>        <span class="kw">let </span><span class="kw-2">mut </span>tab = Tab::default();
+<a href=#548 id=548 data-nosnippet>548</a>
+<a href=#549 id=549 data-nosnippet>549</a>        <span class="kw">crate</span>::engine::input::hit_test(layout, info, px, py)
+<a href=#550 id=550 data-nosnippet>550</a>    }
+<a href=#551 id=551 data-nosnippet>551</a>
+<a href=#552 id=552 data-nosnippet>552</a>    <span class="doccomment">/// Settles a DevTools inspection request with its JSON envelope.
+<a href=#553 id=553 data-nosnippet>553</a>    </span><span class="kw">pub fn </span>on_devtools_response(<span class="kw-2">&amp;mut </span><span class="self">self</span>, id: u64, result: String) {
+<a href=#554 id=554 data-nosnippet>554</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(webview) = <span class="self">self</span>.webview.as_mut() {
+<a href=#555 id=555 data-nosnippet>555</a>            webview.on_devtools_response(id, result);
+<a href=#556 id=556 data-nosnippet>556</a>        }
+<a href=#557 id=557 data-nosnippet>557</a>    }
+<a href=#558 id=558 data-nosnippet>558</a>
+<a href=#559 id=559 data-nosnippet>559</a>    <span class="doccomment">/// Display error page on fetch failure
+<a href=#560 id=560 data-nosnippet>560</a>    </span><span class="kw">pub fn </span>on_fetch_failed(<span class="kw-2">&amp;mut </span><span class="self">self</span>, err: BrowserNetworkError, failed_url: Url) {
+<a href=#561 id=561 data-nosnippet>561</a>        <span class="self">self</span>.navigate(<span class="string">"resource:///error.html"</span>.parse().unwrap());
+<a href=#562 id=562 data-nosnippet>562</a>        <span class="self">self</span>.state = TabState::Error(TabError::NetworkError(err), <span class="prelude-val">Some</span>(failed_url));
+<a href=#563 id=563 data-nosnippet>563</a>    }
+<a href=#564 id=564 data-nosnippet>564</a>
+<a href=#565 id=565 data-nosnippet>565</a>    <span class="kw">pub fn </span>navigate(<span class="kw-2">&amp;mut </span><span class="self">self</span>, url: Url) {
+<a href=#566 id=566 data-nosnippet>566</a>        <span class="self">self</span>.navigate_internal(url, <span class="bool-val">true</span>);
+<a href=#567 id=567 data-nosnippet>567</a>    }
+<a href=#568 id=568 data-nosnippet>568</a>
+<a href=#569 id=569 data-nosnippet>569</a>    <span class="doccomment">/// Navigates to the previous URL in the history, if any.
+<a href=#570 id=570 data-nosnippet>570</a>    ///
+<a href=#571 id=571 data-nosnippet>571</a>    /// Returns `false` when there is no history to go back to.
+<a href=#572 id=572 data-nosnippet>572</a>    </span><span class="kw">pub fn </span>go_back(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; bool {
+<a href=#573 id=573 data-nosnippet>573</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(previous) = <span class="self">self</span>.history.pop() <span class="kw">else </span>{
+<a href=#574 id=574 data-nosnippet>574</a>            <span class="kw">return </span><span class="bool-val">false</span>;
+<a href=#575 id=575 data-nosnippet>575</a>        };
+<a href=#576 id=576 data-nosnippet>576</a>        <span class="self">self</span>.navigate_internal(previous, <span class="bool-val">false</span>);
+<a href=#577 id=577 data-nosnippet>577</a>        <span class="bool-val">true
+<a href=#578 id=578 data-nosnippet>578</a>    </span>}
+<a href=#579 id=579 data-nosnippet>579</a>
+<a href=#580 id=580 data-nosnippet>580</a>    <span class="doccomment">/// Reloads the current document, if one is loaded.
+<a href=#581 id=581 data-nosnippet>581</a>    </span><span class="kw">pub fn </span>reload(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+<a href=#582 id=582 data-nosnippet>582</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(url) = <span class="self">self</span>.document_url.clone() {
+<a href=#583 id=583 data-nosnippet>583</a>            <span class="self">self</span>.navigate_internal(url, <span class="bool-val">false</span>);
+<a href=#584 id=584 data-nosnippet>584</a>        }
+<a href=#585 id=585 data-nosnippet>585</a>    }
+<a href=#586 id=586 data-nosnippet>586</a>
+<a href=#587 id=587 data-nosnippet>587</a>    <span class="doccomment">/// Returns whether the back button can navigate to a previous page.
+<a href=#588 id=588 data-nosnippet>588</a>    </span><span class="kw">pub fn </span>can_go_back(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#589 id=589 data-nosnippet>589</a>        !<span class="self">self</span>.history.is_empty()
+<a href=#590 id=590 data-nosnippet>590</a>    }
+<a href=#591 id=591 data-nosnippet>591</a>
+<a href=#592 id=592 data-nosnippet>592</a>    <span class="kw">fn </span>navigate_internal(<span class="kw-2">&amp;mut </span><span class="self">self</span>, url: Url, record_history: bool) {
+<a href=#593 id=593 data-nosnippet>593</a>        <span class="kw">if </span>record_history
+<a href=#594 id=594 data-nosnippet>594</a>            &amp;&amp; <span class="self">self</span>.document_url.as_ref() != <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>url)
+<a href=#595 id=595 data-nosnippet>595</a>            &amp;&amp; <span class="kw">let </span><span class="prelude-val">Some</span>(previous) = <span class="self">self</span>.document_url.clone()
+<a href=#596 id=596 data-nosnippet>596</a>        {
+<a href=#597 id=597 data-nosnippet>597</a>            <span class="self">self</span>.history.push(previous);
+<a href=#598 id=598 data-nosnippet>598</a>        }
+<a href=#599 id=599 data-nosnippet>599</a>        <span class="self">self</span>.document_url = <span class="prelude-val">Some</span>(url);
+<a href=#600 id=600 data-nosnippet>600</a>        <span class="kw">let </span><span class="kw-2">mut </span>webview = WebView::new(<span class="self">self</span>.system_color_scheme, <span class="self">self</span>.js_policy);
+<a href=#601 id=601 data-nosnippet>601</a>        webview.navigate();
+<a href=#602 id=602 data-nosnippet>602</a>        <span class="self">self</span>.webview = <span class="prelude-val">Some</span>(webview);
+<a href=#603 id=603 data-nosnippet>603</a>        <span class="self">self</span>.state = TabState::Loading;
+<a href=#604 id=604 data-nosnippet>604</a>        <span class="self">self</span>.title = <span class="prelude-val">None</span>;
+<a href=#605 id=605 data-nosnippet>605</a>        <span class="self">self</span>.base_url = <span class="prelude-val">None</span>;
+<a href=#606 id=606 data-nosnippet>606</a>    }
+<a href=#607 id=607 data-nosnippet>607</a>
+<a href=#608 id=608 data-nosnippet>608</a>    <span class="kw">pub fn </span>move_to(<span class="kw-2">&amp;mut </span><span class="self">self</span>, href: <span class="kw-2">&amp;</span>str) {
+<a href=#609 id=609 data-nosnippet>609</a>        <span class="kw">let </span>base_url = <span class="kw">match </span><span class="self">self</span>.base_url.as_ref() {
+<a href=#610 id=610 data-nosnippet>610</a>            <span class="prelude-val">Some</span>(u) =&gt; u,
+<a href=#611 id=611 data-nosnippet>611</a>            <span class="prelude-val">None </span>=&gt; <span class="kw">return</span>,
+<a href=#612 id=612 data-nosnippet>612</a>        };
+<a href=#613 id=613 data-nosnippet>613</a>
+<a href=#614 id=614 data-nosnippet>614</a>        <span class="kw">let </span>url = <span class="kw">super</span>::webview::resolve_url(base_url, href).unwrap();
+<a href=#615 id=615 data-nosnippet>615</a>
+<a href=#616 id=616 data-nosnippet>616</a>        <span class="comment">// navigate と同じ扱い
+<a href=#617 id=617 data-nosnippet>617</a>        </span><span class="self">self</span>.navigate(url)
+<a href=#618 id=618 data-nosnippet>618</a>    }
+<a href=#619 id=619 data-nosnippet>619</a>
+<a href=#620 id=620 data-nosnippet>620</a>    <span class="kw">pub fn </span>relayout(<span class="kw-2">&amp;mut </span><span class="self">self</span>, viewport: (f32, f32)) {
+<a href=#621 id=621 data-nosnippet>621</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(wv) = <span class="self">self</span>.webview.as_mut() {
+<a href=#622 id=622 data-nosnippet>622</a>            wv.relayout(viewport);
+<a href=#623 id=623 data-nosnippet>623</a>        }
+<a href=#624 id=624 data-nosnippet>624</a>    }
+<a href=#625 id=625 data-nosnippet>625</a>
+<a href=#626 id=626 data-nosnippet>626</a>    <span class="doccomment">/// Returns layout_and_info
+<a href=#627 id=627 data-nosnippet>627</a>    /// Only InfoNode will be mutable.
+<a href=#628 id=628 data-nosnippet>628</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>layout_and_info_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;(<span class="kw-2">&amp;</span>LayoutNode, <span class="kw-2">&amp;mut </span>InfoNode)&gt; {
+<a href=#629 id=629 data-nosnippet>629</a>        <span class="self">self</span>.webview
+<a href=#630 id=630 data-nosnippet>630</a>            .as_mut()
+<a href=#631 id=631 data-nosnippet>631</a>            .and_then(|wv| wv.layout_and_info_mut())
+<a href=#632 id=632 data-nosnippet>632</a>    }
+<a href=#633 id=633 data-nosnippet>633</a>
+<a href=#634 id=634 data-nosnippet>634</a>    <span class="doccomment">/// Dispatches a click on a DOM node to the page's JS `onclick` handler.
+<a href=#635 id=635 data-nosnippet>635</a>    ///
+<a href=#636 id=636 data-nosnippet>636</a>    /// Returns whether the click mutated the DOM and needs a redraw.
+<a href=#637 id=637 data-nosnippet>637</a>    </span><span class="kw">pub fn </span>on_js_click(<span class="kw-2">&amp;mut </span><span class="self">self</span>, dom_id: u32) -&gt; bool {
+<a href=#638 id=638 data-nosnippet>638</a>        <span class="self">self</span>.webview
+<a href=#639 id=639 data-nosnippet>639</a>            .as_mut()
+<a href=#640 id=640 data-nosnippet>640</a>            .is_some_and(|wv| wv.on_js_click(dom_id))
+<a href=#641 id=641 data-nosnippet>641</a>    }
+<a href=#642 id=642 data-nosnippet>642</a>
+<a href=#643 id=643 data-nosnippet>643</a>    <span class="kw">pub fn </span>set_system_color_scheme(<span class="kw-2">&amp;mut </span><span class="self">self</span>, scheme: ColorScheme) {
+<a href=#644 id=644 data-nosnippet>644</a>        <span class="self">self</span>.system_color_scheme = scheme;
+<a href=#645 id=645 data-nosnippet>645</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(wv) = <span class="self">self</span>.webview.as_mut() {
+<a href=#646 id=646 data-nosnippet>646</a>            wv.set_system_color_scheme(scheme)
+<a href=#647 id=647 data-nosnippet>647</a>        }
+<a href=#648 id=648 data-nosnippet>648</a>    }
+<a href=#649 id=649 data-nosnippet>649</a>
+<a href=#650 id=650 data-nosnippet>650</a>    <span class="doccomment">/// Returns title of the document
+<a href=#651 id=651 data-nosnippet>651</a>    </span><span class="kw">pub fn </span>title(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;String&gt; {
+<a href=#652 id=652 data-nosnippet>652</a>        <span class="self">self</span>.title.clone()
+<a href=#653 id=653 data-nosnippet>653</a>    }
+<a href=#654 id=654 data-nosnippet>654</a>
+<a href=#655 id=655 data-nosnippet>655</a>    <span class="doccomment">/// Returns document url
+<a href=#656 id=656 data-nosnippet>656</a>    </span><span class="kw">pub fn </span>document_url(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Url&gt; {
+<a href=#657 id=657 data-nosnippet>657</a>        <span class="self">self</span>.document_url.clone()
+<a href=#658 id=658 data-nosnippet>658</a>    }
+<a href=#659 id=659 data-nosnippet>659</a>
+<a href=#660 id=660 data-nosnippet>660</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>layout_and_info(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;(<span class="kw-2">&amp;</span>LayoutNode, <span class="kw-2">&amp;</span>InfoNode)&gt; {
+<a href=#661 id=661 data-nosnippet>661</a>        <span class="self">self</span>.webview.as_ref().and_then(|wv| wv.layout_and_info())
+<a href=#662 id=662 data-nosnippet>662</a>    }
+<a href=#663 id=663 data-nosnippet>663</a>
+<a href=#664 id=664 data-nosnippet>664</a>    <span class="kw">pub fn </span>needs_redraw(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#665 id=665 data-nosnippet>665</a>        <span class="self">self</span>.webview.as_ref().is_some_and(|wv| wv.needs_redraw())
+<a href=#666 id=666 data-nosnippet>666</a>    }
+<a href=#667 id=667 data-nosnippet>667</a>
+<a href=#668 id=668 data-nosnippet>668</a>    <span class="kw">pub fn </span>clear_redraw_flag(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+<a href=#669 id=669 data-nosnippet>669</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(wv) = <span class="self">self</span>.webview.as_mut() {
+<a href=#670 id=670 data-nosnippet>670</a>            wv.clear_redraw_flag();
+<a href=#671 id=671 data-nosnippet>671</a>        }
+<a href=#672 id=672 data-nosnippet>672</a>    }
+<a href=#673 id=673 data-nosnippet>673</a>
+<a href=#674 id=674 data-nosnippet>674</a>    <span class="kw">pub fn </span>set_js_policy(<span class="kw-2">&amp;mut </span><span class="self">self</span>, policy: JsPolicy) {
+<a href=#675 id=675 data-nosnippet>675</a>        <span class="self">self</span>.js_policy = policy;
+<a href=#676 id=676 data-nosnippet>676</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(wv) = <span class="self">self</span>.webview.as_mut() {
+<a href=#677 id=677 data-nosnippet>677</a>            wv.set_js_policy(policy);
+<a href=#678 id=678 data-nosnippet>678</a>        }
+<a href=#679 id=679 data-nosnippet>679</a>    }
+<a href=#680 id=680 data-nosnippet>680</a>}
+<a href=#681 id=681 data-nosnippet>681</a>
+<a href=#682 id=682 data-nosnippet>682</a><span class="attr">#[cfg(test)]
+<a href=#683 id=683 data-nosnippet>683</a></span><span class="kw">mod </span>tests {
+<a href=#684 id=684 data-nosnippet>684</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#685 id=685 data-nosnippet>685</a>
+<a href=#686 id=686 data-nosnippet>686</a>    <span class="kw">fn </span>url(s: <span class="kw-2">&amp;</span>str) -&gt; Url {
+<a href=#687 id=687 data-nosnippet>687</a>        Url::parse(s).unwrap()
+<a href=#688 id=688 data-nosnippet>688</a>    }
+<a href=#689 id=689 data-nosnippet>689</a>
+<a href=#690 id=690 data-nosnippet>690</a>    <span class="attr">#[test]
+<a href=#691 id=691 data-nosnippet>691</a>    </span><span class="kw">fn </span>navigate_records_history() {
+<a href=#692 id=692 data-nosnippet>692</a>        <span class="kw">let </span><span class="kw-2">mut </span>tab = Tab::default();
+<a href=#693 id=693 data-nosnippet>693</a>        tab.navigate(url(<span class="string">"https://example.test/a"</span>));
+<a href=#694 id=694 data-nosnippet>694</a>        tab.navigate(url(<span class="string">"https://example.test/b"</span>));
+<a href=#695 id=695 data-nosnippet>695</a>
+<a href=#696 id=696 data-nosnippet>696</a>        <span class="macro">assert!</span>(tab.can_go_back());
+<a href=#697 id=697 data-nosnippet>697</a>        <span class="macro">assert_eq!</span>(
+<a href=#698 id=698 data-nosnippet>698</a>            tab.document_url().as_ref().map(Url::as_str),
+<a href=#699 id=699 data-nosnippet>699</a>            <span class="prelude-val">Some</span>(<span class="string">"https://example.test/b"</span>)
+<a href=#700 id=700 data-nosnippet>700</a>        );
+<a href=#701 id=701 data-nosnippet>701</a>    }
+<a href=#702 id=702 data-nosnippet>702</a>
+<a href=#703 id=703 data-nosnippet>703</a>    <span class="attr">#[test]
+<a href=#704 id=704 data-nosnippet>704</a>    </span><span class="kw">fn </span>navigating_to_same_url_does_not_duplicate_history() {
+<a href=#705 id=705 data-nosnippet>705</a>        <span class="kw">let </span><span class="kw-2">mut </span>tab = Tab::default();
+<a href=#706 id=706 data-nosnippet>706</a>        tab.navigate(url(<span class="string">"https://example.test/a"</span>));
 <a href=#707 id=707 data-nosnippet>707</a>        tab.navigate(url(<span class="string">"https://example.test/a"</span>));
-<a href=#708 id=708 data-nosnippet>708</a>        tab.navigate(url(<span class="string">"https://example.test/a"</span>));
-<a href=#709 id=709 data-nosnippet>709</a>        <span class="macro">assert!</span>(!tab.can_go_back());
-<a href=#710 id=710 data-nosnippet>710</a>    }
-<a href=#711 id=711 data-nosnippet>711</a>
-<a href=#712 id=712 data-nosnippet>712</a>    <span class="attr">#[test]
-<a href=#713 id=713 data-nosnippet>713</a>    </span><span class="kw">fn </span>go_back_restores_previous_url() {
-<a href=#714 id=714 data-nosnippet>714</a>        <span class="kw">let </span><span class="kw-2">mut </span>tab = Tab::default();
-<a href=#715 id=715 data-nosnippet>715</a>        tab.navigate(url(<span class="string">"https://example.test/a"</span>));
-<a href=#716 id=716 data-nosnippet>716</a>        tab.navigate(url(<span class="string">"https://example.test/b"</span>));
-<a href=#717 id=717 data-nosnippet>717</a>
-<a href=#718 id=718 data-nosnippet>718</a>        <span class="macro">assert!</span>(tab.go_back());
-<a href=#719 id=719 data-nosnippet>719</a>        <span class="macro">assert_eq!</span>(
-<a href=#720 id=720 data-nosnippet>720</a>            tab.document_url().as_ref().map(Url::as_str),
-<a href=#721 id=721 data-nosnippet>721</a>            <span class="prelude-val">Some</span>(<span class="string">"https://example.test/a"</span>)
-<a href=#722 id=722 data-nosnippet>722</a>        );
-<a href=#723 id=723 data-nosnippet>723</a>        <span class="macro">assert!</span>(!tab.can_go_back());
-<a href=#724 id=724 data-nosnippet>724</a>        <span class="comment">// No history left: going back again reports failure.
-<a href=#725 id=725 data-nosnippet>725</a>        </span><span class="macro">assert!</span>(!tab.go_back());
-<a href=#726 id=726 data-nosnippet>726</a>    }
-<a href=#727 id=727 data-nosnippet>727</a>
-<a href=#728 id=728 data-nosnippet>728</a>    <span class="attr">#[test]
-<a href=#729 id=729 data-nosnippet>729</a>    </span><span class="kw">fn </span>reload_keeps_url_without_recording_history() {
-<a href=#730 id=730 data-nosnippet>730</a>        <span class="kw">let </span><span class="kw-2">mut </span>tab = Tab::default();
-<a href=#731 id=731 data-nosnippet>731</a>        tab.navigate(url(<span class="string">"https://example.test/a"</span>));
-<a href=#732 id=732 data-nosnippet>732</a>        tab.reload();
-<a href=#733 id=733 data-nosnippet>733</a>        <span class="macro">assert_eq!</span>(
-<a href=#734 id=734 data-nosnippet>734</a>            tab.document_url().as_ref().map(Url::as_str),
-<a href=#735 id=735 data-nosnippet>735</a>            <span class="prelude-val">Some</span>(<span class="string">"https://example.test/a"</span>)
-<a href=#736 id=736 data-nosnippet>736</a>        );
-<a href=#737 id=737 data-nosnippet>737</a>        <span class="macro">assert!</span>(!tab.can_go_back());
-<a href=#738 id=738 data-nosnippet>738</a>    }
-<a href=#739 id=739 data-nosnippet>739</a>
-<a href=#740 id=740 data-nosnippet>740</a>    <span class="attr">#[test]
-<a href=#741 id=741 data-nosnippet>741</a>    </span><span class="kw">fn </span>pointer_move_between_press_and_release_keeps_click_pending() {
-<a href=#742 id=742 data-nosnippet>742</a>        <span class="kw">let </span><span class="kw-2">mut </span>tab = Tab::default();
-<a href=#743 id=743 data-nosnippet>743</a>        tab.navigate(url(<span class="string">"https://example.test/a"</span>));
-<a href=#744 id=744 data-nosnippet>744</a>        tab.on_fetch_succeeded_html(<span class="string">"&lt;html&gt;&lt;body&gt;&lt;p&gt;click me&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;"</span>.to_string());
-<a href=#745 id=745 data-nosnippet>745</a>
-<a href=#746 id=746 data-nosnippet>746</a>        <span class="comment">// Force a relayout, wait for the background layout thread, then draw
-<a href=#747 id=747 data-nosnippet>747</a>        // again so the applied tree gets its boxes positioned.
-<a href=#748 id=748 data-nosnippet>748</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>buf = Vec::new();
-<a href=#749 id=749 data-nosnippet>749</a>        tab.draw(<span class="kw-2">&amp;mut </span>buf, <span class="number">800.0</span>, <span class="number">600.0</span>);
-<a href=#750 id=750 data-nosnippet>750</a>        <span class="kw">for _ in </span><span class="number">0</span>..<span class="number">500 </span>{
-<a href=#751 id=751 data-nosnippet>751</a>            <span class="kw">for _ in </span>tab.tick() {}
-<a href=#752 id=752 data-nosnippet>752</a>            <span class="kw">if </span>tab.layout_and_info().is_some() {
-<a href=#753 id=753 data-nosnippet>753</a>                <span class="kw">break</span>;
-<a href=#754 id=754 data-nosnippet>754</a>            }
-<a href=#755 id=755 data-nosnippet>755</a>            std::thread::sleep(std::time::Duration::from_millis(<span class="number">2</span>));
-<a href=#756 id=756 data-nosnippet>756</a>        }
-<a href=#757 id=757 data-nosnippet>757</a>        tab.draw(<span class="kw-2">&amp;mut </span>buf, <span class="number">800.0</span>, <span class="number">600.0</span>);
-<a href=#758 id=758 data-nosnippet>758</a>
-<a href=#759 id=759 data-nosnippet>759</a>        <span class="comment">// Press on the page, move before releasing: the move must not
-<a href=#760 id=760 data-nosnippet>760</a>        // complete or cancel the in-flight press.
-<a href=#761 id=761 data-nosnippet>761</a>        </span>tab.handle_mouse_input(<span class="number">400.0</span>, <span class="number">12.0</span>, ElementState::Pressed);
-<a href=#762 id=762 data-nosnippet>762</a>        <span class="macro">assert!</span>(tab.has_pending_press(), <span class="string">"press should land on an element"</span>);
-<a href=#763 id=763 data-nosnippet>763</a>
-<a href=#764 id=764 data-nosnippet>764</a>        tab.handle_pointer_move(<span class="number">401.0</span>, <span class="number">13.0</span>);
-<a href=#765 id=765 data-nosnippet>765</a>        <span class="macro">assert!</span>(
-<a href=#766 id=766 data-nosnippet>766</a>            tab.has_pending_press(),
-<a href=#767 id=767 data-nosnippet>767</a>            <span class="string">"a pointer move must not cancel an in-flight press"
-<a href=#768 id=768 data-nosnippet>768</a>        </span>);
-<a href=#769 id=769 data-nosnippet>769</a>
-<a href=#770 id=770 data-nosnippet>770</a>        <span class="comment">// The release completes the click and clears the pending press.
-<a href=#771 id=771 data-nosnippet>771</a>        </span>tab.handle_mouse_input(<span class="number">401.0</span>, <span class="number">13.0</span>, ElementState::Released);
-<a href=#772 id=772 data-nosnippet>772</a>        <span class="macro">assert!</span>(!tab.has_pending_press());
-<a href=#773 id=773 data-nosnippet>773</a>    }
-<a href=#774 id=774 data-nosnippet>774</a>}
+<a href=#708 id=708 data-nosnippet>708</a>        <span class="macro">assert!</span>(!tab.can_go_back());
+<a href=#709 id=709 data-nosnippet>709</a>    }
+<a href=#710 id=710 data-nosnippet>710</a>
+<a href=#711 id=711 data-nosnippet>711</a>    <span class="attr">#[test]
+<a href=#712 id=712 data-nosnippet>712</a>    </span><span class="kw">fn </span>go_back_restores_previous_url() {
+<a href=#713 id=713 data-nosnippet>713</a>        <span class="kw">let </span><span class="kw-2">mut </span>tab = Tab::default();
+<a href=#714 id=714 data-nosnippet>714</a>        tab.navigate(url(<span class="string">"https://example.test/a"</span>));
+<a href=#715 id=715 data-nosnippet>715</a>        tab.navigate(url(<span class="string">"https://example.test/b"</span>));
+<a href=#716 id=716 data-nosnippet>716</a>
+<a href=#717 id=717 data-nosnippet>717</a>        <span class="macro">assert!</span>(tab.go_back());
+<a href=#718 id=718 data-nosnippet>718</a>        <span class="macro">assert_eq!</span>(
+<a href=#719 id=719 data-nosnippet>719</a>            tab.document_url().as_ref().map(Url::as_str),
+<a href=#720 id=720 data-nosnippet>720</a>            <span class="prelude-val">Some</span>(<span class="string">"https://example.test/a"</span>)
+<a href=#721 id=721 data-nosnippet>721</a>        );
+<a href=#722 id=722 data-nosnippet>722</a>        <span class="macro">assert!</span>(!tab.can_go_back());
+<a href=#723 id=723 data-nosnippet>723</a>        <span class="comment">// No history left: going back again reports failure.
+<a href=#724 id=724 data-nosnippet>724</a>        </span><span class="macro">assert!</span>(!tab.go_back());
+<a href=#725 id=725 data-nosnippet>725</a>    }
+<a href=#726 id=726 data-nosnippet>726</a>
+<a href=#727 id=727 data-nosnippet>727</a>    <span class="attr">#[test]
+<a href=#728 id=728 data-nosnippet>728</a>    </span><span class="kw">fn </span>reload_keeps_url_without_recording_history() {
+<a href=#729 id=729 data-nosnippet>729</a>        <span class="kw">let </span><span class="kw-2">mut </span>tab = Tab::default();
+<a href=#730 id=730 data-nosnippet>730</a>        tab.navigate(url(<span class="string">"https://example.test/a"</span>));
+<a href=#731 id=731 data-nosnippet>731</a>        tab.reload();
+<a href=#732 id=732 data-nosnippet>732</a>        <span class="macro">assert_eq!</span>(
+<a href=#733 id=733 data-nosnippet>733</a>            tab.document_url().as_ref().map(Url::as_str),
+<a href=#734 id=734 data-nosnippet>734</a>            <span class="prelude-val">Some</span>(<span class="string">"https://example.test/a"</span>)
+<a href=#735 id=735 data-nosnippet>735</a>        );
+<a href=#736 id=736 data-nosnippet>736</a>        <span class="macro">assert!</span>(!tab.can_go_back());
+<a href=#737 id=737 data-nosnippet>737</a>    }
+<a href=#738 id=738 data-nosnippet>738</a>
+<a href=#739 id=739 data-nosnippet>739</a>    <span class="attr">#[test]
+<a href=#740 id=740 data-nosnippet>740</a>    </span><span class="kw">fn </span>pointer_move_between_press_and_release_keeps_click_pending() {
+<a href=#741 id=741 data-nosnippet>741</a>        <span class="kw">let </span><span class="kw-2">mut </span>tab = Tab::default();
+<a href=#742 id=742 data-nosnippet>742</a>        tab.navigate(url(<span class="string">"https://example.test/a"</span>));
+<a href=#743 id=743 data-nosnippet>743</a>        tab.on_fetch_succeeded_html(<span class="string">"&lt;html&gt;&lt;body&gt;&lt;p&gt;click me&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;"</span>.to_string());
+<a href=#744 id=744 data-nosnippet>744</a>
+<a href=#745 id=745 data-nosnippet>745</a>        <span class="comment">// Force a relayout, wait for the background layout thread, then draw
+<a href=#746 id=746 data-nosnippet>746</a>        // again so the applied tree gets its boxes positioned.
+<a href=#747 id=747 data-nosnippet>747</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>buf = Vec::new();
+<a href=#748 id=748 data-nosnippet>748</a>        tab.draw(<span class="kw-2">&amp;mut </span>buf, <span class="number">800.0</span>, <span class="number">600.0</span>);
+<a href=#749 id=749 data-nosnippet>749</a>        <span class="kw">for _ in </span><span class="number">0</span>..<span class="number">500 </span>{
+<a href=#750 id=750 data-nosnippet>750</a>            <span class="kw">for _ in </span>tab.tick() {}
+<a href=#751 id=751 data-nosnippet>751</a>            <span class="kw">if </span>tab.layout_and_info().is_some() {
+<a href=#752 id=752 data-nosnippet>752</a>                <span class="kw">break</span>;
+<a href=#753 id=753 data-nosnippet>753</a>            }
+<a href=#754 id=754 data-nosnippet>754</a>            std::thread::sleep(std::time::Duration::from_millis(<span class="number">2</span>));
+<a href=#755 id=755 data-nosnippet>755</a>        }
+<a href=#756 id=756 data-nosnippet>756</a>        tab.draw(<span class="kw-2">&amp;mut </span>buf, <span class="number">800.0</span>, <span class="number">600.0</span>);
+<a href=#757 id=757 data-nosnippet>757</a>
+<a href=#758 id=758 data-nosnippet>758</a>        <span class="comment">// Press on the page, move before releasing: the move must not
+<a href=#759 id=759 data-nosnippet>759</a>        // complete or cancel the in-flight press.
+<a href=#760 id=760 data-nosnippet>760</a>        </span>tab.handle_mouse_input(<span class="number">400.0</span>, <span class="number">12.0</span>, ElementState::Pressed);
+<a href=#761 id=761 data-nosnippet>761</a>        <span class="macro">assert!</span>(tab.has_pending_press(), <span class="string">"press should land on an element"</span>);
+<a href=#762 id=762 data-nosnippet>762</a>
+<a href=#763 id=763 data-nosnippet>763</a>        tab.handle_pointer_move(<span class="number">401.0</span>, <span class="number">13.0</span>);
+<a href=#764 id=764 data-nosnippet>764</a>        <span class="macro">assert!</span>(
+<a href=#765 id=765 data-nosnippet>765</a>            tab.has_pending_press(),
+<a href=#766 id=766 data-nosnippet>766</a>            <span class="string">"a pointer move must not cancel an in-flight press"
+<a href=#767 id=767 data-nosnippet>767</a>        </span>);
+<a href=#768 id=768 data-nosnippet>768</a>
+<a href=#769 id=769 data-nosnippet>769</a>        <span class="comment">// The release completes the click and clears the pending press.
+<a href=#770 id=770 data-nosnippet>770</a>        </span>tab.handle_mouse_input(<span class="number">401.0</span>, <span class="number">13.0</span>, ElementState::Released);
+<a href=#771 id=771 data-nosnippet>771</a>        <span class="macro">assert!</span>(!tab.has_pending_press());
+<a href=#772 id=772 data-nosnippet>772</a>    }
+<a href=#773 id=773 data-nosnippet>773</a>}
 </code></pre></div></section></main></body></html>

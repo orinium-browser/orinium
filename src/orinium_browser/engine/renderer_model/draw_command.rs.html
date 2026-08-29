@@ -74,7 +74,7 @@
 <a href=#74 id=74 data-nosnippet>74</a>        <span class="comment">// tiny-skia returns premultiplied RGBA; the renderer samples
 <a href=#75 id=75 data-nosnippet>75</a>        // straight-alpha pixels.
 <a href=#76 id=76 data-nosnippet>76</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>rgba = pixmap.data().to_vec();
-<a href=#77 id=77 data-nosnippet>77</a>        <span class="kw">for </span>pixel <span class="kw">in </span>rgba.chunks_exact_mut(<span class="number">4</span>) {
+<a href=#77 id=77 data-nosnippet>77</a>        <span class="kw">for </span>pixel <span class="kw">in </span>rgba.as_chunks_mut::&lt;<span class="number">4</span>&gt;().<span class="number">0 </span>{
 <a href=#78 id=78 data-nosnippet>78</a>            <span class="kw">let </span>alpha = pixel[<span class="number">3</span>] <span class="kw">as </span>u16;
 <a href=#79 id=79 data-nosnippet>79</a>            <span class="kw">if </span>alpha == <span class="number">0 </span>{
 <a href=#80 id=80 data-nosnippet>80</a>                pixel[<span class="number">0</span>] = <span class="number">0</span>;
