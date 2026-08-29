@@ -337,7 +337,7 @@
 <a href=#337 id=337 data-nosnippet>337</a>    <span class="kw">let </span>size = <span class="kw-2">&amp;</span>style.size;
 <a href=#338 id=338 data-nosnippet>338</a>    <span class="kw">let </span>scroll = info.kind.scroll_offsets();
 <a href=#339 id=339 data-nosnippet>339</a>    <span class="macro">json!</span>({
-<a href=#340 id=340 data-nosnippet>340</a>        <span class="string">"display"</span>: <span class="macro">format!</span>(<span class="string">"{:?}"</span>, style.display.inner),
+<a href=#340 id=340 data-nosnippet>340</a>        <span class="string">"display"</span>: <span class="macro">format!</span>(<span class="string">"{:?}{:?}"</span>, style.display.outer, style.display.inner),
 <a href=#341 id=341 data-nosnippet>341</a>        <span class="string">"position"</span>: <span class="macro">format!</span>(<span class="string">"{:?}"</span>, style.position.kind),
 <a href=#342 id=342 data-nosnippet>342</a>        <span class="string">"width"</span>: length_text(<span class="kw-2">&amp;</span>size.width),
 <a href=#343 id=343 data-nosnippet>343</a>        <span class="string">"height"</span>: length_text(<span class="kw-2">&amp;</span>size.height),
