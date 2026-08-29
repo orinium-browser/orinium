@@ -32,6 +32,7 @@ use crate::engine::{
     tree::TreeNode,
 };
 use crate::platform::{locale, renderer::text_measurer::PlatformTextMeasurer};
+use crate::{perf_scope, profile_log};
 use ui_layout::{LayoutChild, LayoutNode};
 use url::Url;
 
@@ -556,7 +557,10 @@ impl WebView {
         log::info!("Fetched HTML: {}", document_url);
         self.pending_fragment_scroll = document_url.fragment().map(str::to_string);
         self.fragment_ready_version = None;
+        perf_scope!(html_parse);
         let parsed = parse_html(&html, document_url, self.js_policy.into());
+        #[cfg(any(feature = "profile", debug_assertions))]
+        let html_parse_time = html_parse.elapsed();
 
         self.pending_css_urls = parsed.style_links;
         self.pending_images = parsed.image_sources;
@@ -571,8 +575,15 @@ impl WebView {
 
         let mut initial_js_tasks = 0;
         let mut initial_js_dom_ids = HashMap::new();
+        #[cfg(any(feature = "profile", debug_assertions))]
+        let mut js_snapshot_time = std::time::Duration::ZERO;
         self.js_processor = if self.js_policy == JsPolicy::Enabled {
+            perf_scope!(js_snapshot);
             let (snapshot, dom_ids) = js_snapshot_from_tree(&parsed.dom);
+            #[cfg(any(feature = "profile", debug_assertions))]
+            {
+                js_snapshot_time = js_snapshot.elapsed();
+            }
             initial_js_dom_ids = dom_ids;
             let processor = JsProcessor::new(snapshot);
             processor.send(JsTask::SetDocumentUrl {
@@ -620,6 +631,13 @@ impl WebView {
             );
         }
         self.phase = PagePhase::HtmlParsed;
+        profile_log!(
+            target: "PageLoad",
+            log::Level::Info,
+            "[HtmlParse] html_parse: {:?} | js_snapshot: {:?}",
+            html_parse_time,
+            js_snapshot_time,
+        );
     }
 
     pub fn on_css_fetched(&mut self, css: String) {
@@ -805,16 +823,19 @@ impl WebView {
             self.update_layout();
             return;
         };
+        perf_scope!(resolve_styles);
         let mut resolved = layouter::css_resolver::CssResolver::resolve_with_origin(
             &CssParser::new(USER_AGENT_CSS).parse().unwrap(),
             layouter::css_resolver::StyleOrigin::UserAgent,
         );
+        let mut stylesheet_count = 1;
         for source in &self.linked_css {
             let sheet = CssParser::new(source).parse_lossy();
             layouter::css_resolver::append_resolved_styles(
                 &mut resolved,
                 layouter::css_resolver::CssResolver::resolve(&sheet),
             );
+            stylesheet_count += 1;
         }
         for source in document.dom.collect_text_by_tag("style") {
             let sheet = CssParser::new(&source).parse_lossy();
@@ -822,7 +843,17 @@ impl WebView {
                 &mut resolved,
                 layouter::css_resolver::CssResolver::resolve(&sheet),
             );
+            stylesheet_count += 1;
         }
+        #[cfg(any(feature = "profile", debug_assertions))]
+        let resolve_styles_time = resolve_styles.elapsed();
+        profile_log!(
+            target: "PageLoad",
+            log::Level::Info,
+            "[StyleResolve] stylesheet_resolve: {:?} (sheets: {})",
+            resolve_styles_time,
+            stylesheet_count,
+        );
         self.resolved_styles = Arc::new(resolved);
         self.update_layout();
     }
@@ -1124,23 +1155,45 @@ impl WebView {
 
         let doc_info = self.docment_info.as_ref().unwrap();
         let dom_version = doc_info.dom.version();
-        let (snapshot, dom_refs) = match &self.snapshot_cache {
+        // Snapshot construction happens at function scope so the profile log
+        // below can read accumulators regardless of which branch ran.
+        #[cfg(any(feature = "profile", debug_assertions))]
+        let mut snapshot_build_time = std::time::Duration::ZERO;
+        #[cfg(any(feature = "profile", debug_assertions))]
+        let mut snapshot_cached = false;
+
+        let (snapshot, dom_refs) = if let Some(cache) = &self.snapshot_cache
             // The DOM is unchanged since the last snapshot: reuse it instead of
             // re-cloning the whole tree (CSS/image relayouts dominate).
-            Some(cache) if cache.dom_version == dom_version => {
-                (Arc::clone(&cache.snapshot), cache.dom_refs.clone())
+            && cache.dom_version == dom_version
+        {
+            #[cfg(any(feature = "profile", debug_assertions))]
+            {
+                snapshot_cached = true;
             }
-            _ => {
-                let (snapshot, dom_refs) = DomSnapshot::from_tree(&doc_info.dom.root);
-                let snapshot = Arc::new(snapshot);
-                self.snapshot_cache = Some(SnapshotCache {
-                    dom_version,
-                    snapshot: Arc::clone(&snapshot),
-                    dom_refs: dom_refs.clone(),
-                });
-                (snapshot, dom_refs)
+            (Arc::clone(&cache.snapshot), cache.dom_refs.clone())
+        } else {
+            perf_scope!(snapshot_build);
+            let (snapshot, dom_refs) = DomSnapshot::from_tree(&doc_info.dom.root);
+            #[cfg(any(feature = "profile", debug_assertions))]
+            {
+                snapshot_build_time = snapshot_build.elapsed();
             }
+            let snapshot = Arc::new(snapshot);
+            self.snapshot_cache = Some(SnapshotCache {
+                dom_version,
+                snapshot: Arc::clone(&snapshot),
+                dom_refs: dom_refs.clone(),
+            });
+            (snapshot, dom_refs)
         };
+        profile_log!(
+            target: "PageLoad",
+            log::Level::Info,
+            "[DomSnapshot] build: {:?} (cache hit: {})",
+            snapshot_build_time,
+            snapshot_cached,
+        );
         let root = snapshot.roots()[0];
 
         let media_environment =

@@ -280,6 +280,22 @@ pub fn build_layout_and_info_from_snapshot(
     #[cfg(any(feature = "profile", debug_assertions))]
     let mut exit_phase_time = std::time::Duration::ZERO;
     #[cfg(any(feature = "profile", debug_assertions))]
+    let mut sibling_info_time = std::time::Duration::ZERO;
+    #[cfg(any(feature = "profile", debug_assertions))]
+    let mut whitespace_keep_time = std::time::Duration::ZERO;
+    #[cfg(any(feature = "profile", debug_assertions))]
+    let mut enter_prep_time = std::time::Duration::ZERO;
+    #[cfg(any(feature = "profile", debug_assertions))]
+    let mut child_slot_build_time = std::time::Duration::ZERO;
+    #[cfg(any(feature = "profile", debug_assertions))]
+    let mut leaf_assemble_time = std::time::Duration::ZERO;
+    #[cfg(any(feature = "profile", debug_assertions))]
+    let mut push_children_time = std::time::Duration::ZERO;
+    #[cfg(any(feature = "profile", debug_assertions))]
+    let mut exit_setup_time = std::time::Duration::ZERO;
+    #[cfg(any(feature = "profile", debug_assertions))]
+    let mut exit_build_time = std::time::Duration::ZERO;
+    #[cfg(any(feature = "profile", debug_assertions))]
     let mut node_count = 0u64;
 
     #[cfg(any(feature = "profile", debug_assertions))]
@@ -361,6 +377,7 @@ pub fn build_layout_and_info_from_snapshot(
                 css_match_time += css_match.elapsed();
             }
 
+            perf_scope!(enter_prep);
             let mut custom_properties = child_css.custom_props.clone();
             if let Some(own) = custom_property_candidates {
                 custom_properties.extend(own);
@@ -386,6 +403,10 @@ pub fn build_layout_and_info_from_snapshot(
                     system_color_scheme,
                 )
             };
+            #[cfg(any(feature = "profile", debug_assertions))]
+            {
+                enter_prep_time += enter_prep.elapsed();
+            }
 
             // Apply CSS declarations.
             perf_scope!(apply_decl);
@@ -663,6 +684,7 @@ pub fn build_layout_and_info_from_snapshot(
             let mut child_slots: Vec<ChildSlot> = Vec::new();
             let mut element_kids: Vec<NodeId> = Vec::new();
 
+            perf_scope!(child_slot_build);
             if style.display.outer != OuterDisplay::None {
                 let parent_tag_name = snapshot.node(stack[top_idx].dom).kind.tag_name();
                 for &child in snapshot.children(stack[top_idx].dom) {
@@ -727,10 +749,20 @@ pub fn build_layout_and_info_from_snapshot(
                     }
                 }
             }
+            #[cfg(any(feature = "profile", debug_assertions))]
+            {
+                child_slot_build_time += child_slot_build.elapsed();
+            }
 
             if element_kids.is_empty() {
                 // ── No element children → leaf, build immediately ──
+                perf_scope!(leaf_assemble);
+                perf_scope!(whitespace_keep);
                 let keep = compute_whitespace_keep(&child_slots, &[]);
+                #[cfg(any(feature = "profile", debug_assertions))]
+                {
+                    whitespace_keep_time += whitespace_keep.elapsed();
+                }
                 let (layout_children, info_children): (Vec<_>, Vec<_>) = child_slots
                     .into_iter()
                     .enumerate()
@@ -754,11 +786,13 @@ pub fn build_layout_and_info_from_snapshot(
                 results.insert(ptr, (layout, info));
                 #[cfg(any(feature = "profile", debug_assertions))]
                 {
+                    leaf_assemble_time += leaf_assemble.elapsed();
                     node_count += 1;
                 }
                 stack.pop();
             } else {
                 // ── Has element children → save state, push children ──
+                perf_scope!(push_children);
                 let parent_chain = stack[top_idx].chain.clone();
                 let parent_container = match &kind {
                     NodeKind::Container { style, .. } => style.clone(),
@@ -780,7 +814,12 @@ pub fn build_layout_and_info_from_snapshot(
                     f.element_children.clone()
                 };
                 let child_css = Arc::clone(&stack[top_idx].child);
+                perf_scope!(sibling_info);
                 let kid_infos = element_sibling_infos(snapshot, &kids_for_push);
+                #[cfg(any(feature = "profile", debug_assertions))]
+                {
+                    sibling_info_time += sibling_info.elapsed();
+                }
                 let parent_style_for_children = stack[top_idx].parent_style.clone();
                 let parent_container_for_children = stack[top_idx].parent_container_style.clone();
                 for (&kid, info) in kids_for_push.iter().zip(kid_infos).rev() {
@@ -796,11 +835,16 @@ pub fn build_layout_and_info_from_snapshot(
                         element_children: Vec::new(),
                     });
                 }
+                #[cfg(any(feature = "profile", debug_assertions))]
+                {
+                    push_children_time += push_children.elapsed();
+                }
             }
         } else {
             // ── EXIT phase ────────────────────────────────────────────────
             // Take ownership of frame data for building results.
             perf_scope!(exit_phase);
+            perf_scope!(exit_setup);
 
             let frame = stack.swap_remove(top_idx);
 
@@ -836,13 +880,24 @@ pub fn build_layout_and_info_from_snapshot(
                 }
             }
 
+            #[cfg(any(feature = "profile", debug_assertions))]
+            {
+                exit_setup_time += exit_setup.elapsed();
+            }
+
+            perf_scope!(exit_build);
             let mut element_results: Vec<_> = element_results.into_iter().map(Some).collect();
 
             // Whitespace-only text nodes between two block-level siblings, or adjacent
             // to a `<br>`, would otherwise create stray inline boxes and spurious line
             // boxes in block, flex, and grid containers. Drop them now that every
             // sibling's display is resolved.
+            perf_scope!(whitespace_keep);
             let keep = compute_whitespace_keep(&frame.child_slots, &element_results);
+            #[cfg(any(feature = "profile", debug_assertions))]
+            {
+                whitespace_keep_time += whitespace_keep.elapsed();
+            }
 
             let mut all_layout: Vec<LayoutChild> = Vec::with_capacity(frame.child_slots.len());
             let mut all_info: Vec<InfoNode> = Vec::with_capacity(frame.child_slots.len());
@@ -941,6 +996,7 @@ pub fn build_layout_and_info_from_snapshot(
             results.insert(ptr, (layout, info));
             #[cfg(any(feature = "profile", debug_assertions))]
             {
+                exit_build_time += exit_build.elapsed();
                 exit_phase_time += exit_phase.elapsed();
                 node_count += 1;
             }
@@ -984,6 +1040,45 @@ pub fn build_layout_and_info_from_snapshot(
         custom_node_time,
         text_layout_time,
         exit_phase_time,
+    );
+    profile_log!(
+        target: "LayoutRun",
+        log::Level::Info,
+        "[LayoutMetrics] sibling_info: {:?} | whitespace_keep: {:?}",
+        sibling_info_time,
+        whitespace_keep_time,
+    );
+    profile_log!(
+        target: "LayoutRun",
+        log::Level::Info,
+        "[LayoutMetrics] enter_prep: {:?} | child_slot_build: {:?} | leaf_assemble: {:?}",
+        enter_prep_time,
+        child_slot_build_time,
+        leaf_assemble_time,
+    );
+    profile_log!(
+        target: "LayoutRun",
+        log::Level::Info,
+        "[LayoutMetrics] push_children: {:?} | exit_setup: {:?} | exit_build: {:?}",
+        push_children_time,
+        exit_setup_time,
+        exit_build_time,
+    );
+    profile_log!(
+        target: "LayoutRun",
+        log::Level::Info,
+        "[LayoutMetrics] rest: {:?}",
+        total.elapsed().saturating_sub(
+            css_match_time
+                + apply_decl_time
+                + custom_node_time
+                + enter_prep_time
+                + child_slot_build_time
+                + leaf_assemble_time
+                + push_children_time
+                + exit_setup_time
+                + exit_build_time
+        ),
     );
 
     results

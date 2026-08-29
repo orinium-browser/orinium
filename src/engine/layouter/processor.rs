@@ -31,7 +31,7 @@ use crate::engine::layouter::css_resolver::RuleSet;
 use crate::engine::layouter::types::ColorScheme;
 use crate::engine::renderer_model::Image;
 use crate::engine::ui::registry::DomWriteBack;
-use crate::profile_log;
+use crate::{perf_scope, profile_log};
 
 /// The complete set of inputs the builder needs to run on the background thread.
 pub struct LayoutTask {
@@ -119,8 +119,12 @@ impl LayoutProcessor {
                         return None;
                     }
                     let version = task.version;
+                    perf_scope!(worker_total);
+                    perf_scope!(ruleset_build);
                     let rule_set =
                         RuleSet::from_declarations(&task.resolved_styles, &task.media_environment);
+                    #[cfg(any(feature = "profile", debug_assertions))]
+                    let ruleset_build_time = ruleset_build.elapsed();
                     let (layout, info) = build_layout_and_info_from_snapshot(
                         &task.snapshot,
                         task.root,
@@ -143,7 +147,9 @@ impl LayoutProcessor {
                     profile_log!(
                         target: "LayoutRun",
                         log::Level::Info,
-                        "build_layout_and_info done."
+                        "[LayoutRun] build: total {:?} | ruleset_build: {:?}",
+                        worker_total.elapsed(),
+                        ruleset_build_time,
                     );
                     Some(SendableResult(Box::into_raw(Box::new(result))))
                 }

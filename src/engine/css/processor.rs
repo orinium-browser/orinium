@@ -1,6 +1,7 @@
 use super::parser::Parser as CssParser;
 use crate::engine::background_worker::BackgroundWorker;
 use crate::engine::layouter::css_resolver::{CssResolver, ResolvedStyles, append_resolved_styles};
+use crate::{perf_scope, profile_log};
 
 enum CssCommand {
     Process { css_sources: Vec<String> },
@@ -38,14 +39,41 @@ impl CssProcessor {
     }
 
     fn process_all(css_sources: &[String]) -> ResolvedStyles {
+        perf_scope!(total);
         let mut resolved = ResolvedStyles::default();
 
-        for css in css_sources {
-            let sheet = CssParser::new(css).parse_lossy();
+        #[cfg(any(feature = "profile", debug_assertions))]
+        let mut parse_time = std::time::Duration::ZERO;
+        #[cfg(any(feature = "profile", debug_assertions))]
+        let mut resolve_time = std::time::Duration::ZERO;
 
-            append_resolved_styles(&mut resolved, CssResolver::resolve(&sheet));
+        for css in css_sources {
+            perf_scope!(parse);
+            let sheet = CssParser::new(css).parse_lossy();
+            #[cfg(any(feature = "profile", debug_assertions))]
+            {
+                parse_time += parse.elapsed();
+            }
+
+            perf_scope!(resolve);
+            let resolved_sheet = CssResolver::resolve(&sheet);
+            #[cfg(any(feature = "profile", debug_assertions))]
+            {
+                resolve_time += resolve.elapsed();
+            }
+
+            append_resolved_styles(&mut resolved, resolved_sheet);
         }
 
+        profile_log!(
+            target: "CssRun",
+            log::Level::Info,
+            "[CssResolve] sources: {} | total: {:?} | parse: {:?} | resolve: {:?}",
+            css_sources.len(),
+            total.elapsed(),
+            parse_time,
+            resolve_time,
+        );
         resolved
     }
 }
