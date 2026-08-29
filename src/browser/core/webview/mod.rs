@@ -150,6 +150,9 @@ pub struct WebView {
     audio: HashMap<String, Arc<[u8]>>,
 
     resolved_styles: Arc<layouter::css_resolver::ResolvedStyles>,
+    /// Monotonic version of `resolved_styles`, bumped on every in-place or
+    /// wholesale mutation so the layout processor can detect stale rule sets.
+    resolved_styles_version: u64,
     layout_and_info: Option<(LayoutNode, InfoNode)>,
 
     needs_redraw: bool,
@@ -328,6 +331,7 @@ impl WebView {
             audio: HashMap::new(),
 
             resolved_styles: Arc::new(layouter::css_resolver::ResolvedStyles::default()),
+            resolved_styles_version: 0,
             layout_and_info: None,
 
             needs_redraw: false,
@@ -466,6 +470,7 @@ impl WebView {
                     Arc::make_mut(&mut self.resolved_styles),
                     ua_styles,
                 );
+                self.resolved_styles_version += 1;
 
                 tasks.push(WebViewTask::AskTabHtml);
 
@@ -629,6 +634,7 @@ impl WebView {
                 Arc::make_mut(&mut self.resolved_styles),
                 layouter::css_resolver::CssResolver::resolve(&sheet),
             );
+            self.resolved_styles_version += 1;
         }
         self.phase = PagePhase::HtmlParsed;
         profile_log!(
@@ -815,6 +821,7 @@ impl WebView {
             Arc::make_mut(&mut self.resolved_styles),
             resolved,
         );
+        self.resolved_styles_version += 1;
         self.update_layout();
     }
 
@@ -855,6 +862,7 @@ impl WebView {
             stylesheet_count,
         );
         self.resolved_styles = Arc::new(resolved);
+        self.resolved_styles_version += 1;
         self.update_layout();
     }
 
@@ -1217,6 +1225,7 @@ impl WebView {
             },
             chain: ElementChain::default(),
             write_back_sender: Some(self.write_back_tx.clone()),
+            styles_version: self.resolved_styles_version,
             version: 0,
         };
         self.layout_dom_refs = dom_refs;

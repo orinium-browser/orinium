@@ -15,6 +15,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use ui_layout::LayoutNode;
@@ -47,9 +48,44 @@ pub struct LayoutTask {
     pub parent: InheritedCss,
     pub chain: ElementChain,
     pub write_back_sender: Option<DomWriteBack>,
+    /// Monotonic version of `resolved_styles` at task creation time. Assigned
+    /// by the UI thread; see [`LayoutProcessor`] for how it drives the
+    /// [`RuleSet`] cache.
+    pub styles_version: u64,
     /// Monotonic sequence number used to coalesce stale tasks. Assigned by
     /// [`LayoutProcessor::send`], ignore when constructing a task.
     pub version: u64,
+}
+
+/// Per-worker cache of the last built [`RuleSet`].
+///
+/// Building a `RuleSet` (`@media` filtering, selector grouping and subject
+/// indexing) is the dominant fixed cost of every layout build. The styles
+/// only change on CSS application, so the rule set is reusable across the
+/// numerous visual-update tasks in between. The UI thread bumps
+/// [`LayoutTask::styles_version`] on every mutation of the styles, so the
+/// worker can tell a stale rule set from the current one even when the
+/// styles were changed in place (`Arc::make_mut`).
+struct RuleSetCache {
+    /// Styles version the cached rule set was built from.
+    styles_version: u64,
+    /// Media environment the cached rule set was built against.
+    media_environment: MediaEnvironment,
+    /// The cached rule set; valid only when `have_rule_set` is set.
+    rule_set: RuleSet,
+    /// Whether `rule_set` has been populated at least once.
+    have_rule_set: bool,
+}
+
+impl Default for RuleSetCache {
+    fn default() -> Self {
+        Self {
+            styles_version: 0,
+            media_environment: MediaEnvironment::new((0.0, 0.0), ColorScheme::Light),
+            rule_set: RuleSet::default(),
+            have_rule_set: false,
+        }
+    }
 }
 
 /// The layout the builder finished on the background thread.
@@ -108,6 +144,7 @@ impl LayoutProcessor {
     pub fn new() -> Self {
         let latest = Arc::new(AtomicU64::new(0));
         let latest_clone = Arc::clone(&latest);
+        let cache = Arc::new(Mutex::new(RuleSetCache::default()));
 
         let worker = BackgroundWorker::new(1, move |cmd: LayoutCommand| {
             match cmd {
@@ -120,15 +157,39 @@ impl LayoutProcessor {
                     }
                     let version = task.version;
                     perf_scope!(worker_total);
-                    perf_scope!(ruleset_build);
-                    let rule_set =
-                        RuleSet::from_declarations(&task.resolved_styles, &task.media_environment);
+
+                    let mut cache = cache.lock().expect("layout rule-set cache poisoned");
+                    let cache_hit = cache.have_rule_set
+                        && cache.styles_version == task.styles_version
+                        && cache.media_environment == task.media_environment;
+
                     #[cfg(any(feature = "profile", debug_assertions))]
-                    let ruleset_build_time = ruleset_build.elapsed();
+                    let ruleset_build_time;
+                    if cache_hit {
+                        #[cfg(any(feature = "profile", debug_assertions))]
+                        {
+                            ruleset_build_time = std::time::Duration::ZERO;
+                        }
+                    } else {
+                        // TODO: Add incremental RuleSet updates
+                        perf_scope!(ruleset_build);
+                        cache.rule_set = RuleSet::from_declarations(
+                            &task.resolved_styles,
+                            &task.media_environment,
+                        );
+                        #[cfg(any(feature = "profile", debug_assertions))]
+                        {
+                            ruleset_build_time = ruleset_build.elapsed();
+                        }
+                        cache.styles_version = task.styles_version;
+                        cache.media_environment = task.media_environment;
+                        cache.have_rule_set = true;
+                    }
+
                     let (layout, info) = build_layout_and_info_from_snapshot(
                         &task.snapshot,
                         task.root,
-                        &rule_set,
+                        &cache.rule_set,
                         task.measurer,
                         task.parent,
                         task.chain,
@@ -147,9 +208,10 @@ impl LayoutProcessor {
                     profile_log!(
                         target: "LayoutRun",
                         log::Level::Info,
-                        "[LayoutRun] build: total {:?} | ruleset_build: {:?}",
+                        "[LayoutRun] build: total {:?} | ruleset_build: {:?} | cache_hit: {}",
                         worker_total.elapsed(),
                         ruleset_build_time,
+                        cache_hit,
                     );
                     Some(SendableResult(Box::into_raw(Box::new(result))))
                 }
@@ -212,6 +274,7 @@ mod tests {
             parent: InheritedCss::default(),
             chain: ElementChain::default(),
             write_back_sender,
+            styles_version: 0,
             version: 0,
         }
     }

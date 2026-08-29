@@ -76,7 +76,7 @@ struct Pending {
 pub fn collect_matched_rules(
     snapshot: &DomSnapshot,
     target: NodeId,
-    rule_set: &RuleSet<'_>,
+    rule_set: &RuleSet,
     inline_style_attr: Option<&str>,
 ) -> Vec<MatchedRule> {
     let Some(chain) = chain_for_node(snapshot, target) else {

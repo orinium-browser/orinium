@@ -73,11 +73,11 @@ pub type ResolvedStyles = Vec<ResolvedDeclaration>;
 /// grouped matching evaluates each selector at most once per element instead of
 /// once per declaration.
 #[derive(Debug, Clone, Default)]
-pub struct RuleSet<'a> {
-    declarations: &'a [ResolvedDeclaration],
+pub struct RuleSet {
+    declarations: Vec<ResolvedDeclaration>,
     /// Declarations sharing a structurally identical selector, so a selector is
     /// matched once per element for the whole group.
-    groups: Vec<SelectorGroup<'a>>,
+    groups: Vec<SelectorGroup>,
     id_rules: HashMap<String, Vec<usize>>,
     class_rules: HashMap<String, Vec<usize>>,
     tag_rules: HashMap<String, Vec<usize>>,
@@ -89,37 +89,36 @@ pub struct RuleSet<'a> {
 /// `selector` once is sufficient to cascade every declaration in `decls`;
 /// `decls` holds indices into [`RuleSet::declarations`].
 #[derive(Debug, Clone)]
-pub struct SelectorGroup<'a> {
-    pub selector: &'a ComplexSelector,
+pub struct SelectorGroup {
+    pub selector: Arc<ComplexSelector>,
     pub decls: Vec<usize>,
 }
 
-impl<'a> RuleSet<'a> {
-    /// Builds a `RuleSet` referencing a list of `ResolvedDeclaration`s, pre-filtering by `MediaEnvironment`.
+impl RuleSet {
+    /// Builds a `RuleSet` holding a copy of a list of `ResolvedDeclaration`s, pre-filtering by `MediaEnvironment`.
     pub fn from_declarations(
-        declarations: &'a [ResolvedDeclaration],
+        declarations: &[ResolvedDeclaration],
         media_env: &MediaEnvironment,
     ) -> Self {
         // First pass: media-filter and group declarations by selector. All
         // declarations of one rule block share an identical selector, so each
         // unique selector is matched once per element for all its declarations.
-        let mut groups = Vec::<SelectorGroup<'a>>::new();
-        let mut group_by_selector: HashMap<&'a ComplexSelector, usize> = HashMap::new();
+        let mut groups = Vec::<SelectorGroup>::new();
+        let mut group_by_selector: HashMap<Arc<ComplexSelector>, usize> = HashMap::new();
         for (idx, decl) in declarations.iter().enumerate() {
             // Media query evaluation done ONCE per declaration during RuleSet construction!
             if !decl.matches_media(media_env) {
                 continue;
             }
-            let selector: &'a ComplexSelector = &decl.selector;
-            match group_by_selector.get(selector) {
+            match group_by_selector.get(&decl.selector) {
                 Some(&group_idx) => groups[group_idx].decls.push(idx),
                 None => {
                     let group_idx = groups.len();
                     groups.push(SelectorGroup {
-                        selector,
+                        selector: Arc::clone(&decl.selector),
                         decls: vec![idx],
                     });
-                    group_by_selector.insert(selector, group_idx);
+                    group_by_selector.insert(Arc::clone(&decl.selector), group_idx);
                 }
             }
         }
@@ -158,7 +157,7 @@ impl<'a> RuleSet<'a> {
         }
 
         Self {
-            declarations,
+            declarations: declarations.to_vec(),
             groups,
             id_rules,
             class_rules,
@@ -173,7 +172,7 @@ impl<'a> RuleSet<'a> {
     pub fn query_candidates(
         &self,
         element: &crate::engine::css::matcher::ElementInfo,
-    ) -> impl Iterator<Item = &SelectorGroup<'a>> {
+    ) -> impl Iterator<Item = &SelectorGroup> {
         let universal = self.universal_rules.iter().map(|&g| &self.groups[g]);
 
         let id = element
@@ -208,8 +207,8 @@ impl<'a> RuleSet<'a> {
             .chain(attributes)
     }
 
-    pub fn declarations(&self) -> &'a [ResolvedDeclaration] {
-        self.declarations
+    pub fn declarations(&self) -> &[ResolvedDeclaration] {
+        &self.declarations
     }
 }
 
@@ -797,7 +796,7 @@ mod tests {
         );
         let env = MediaEnvironment::new((800.0, 600.0), ColorScheme::Light);
         let rule_set = RuleSet::from_declarations(&styles, &env);
-        let decls_of = |group: &SelectorGroup<'_>| -> Vec<&ResolvedDeclaration> {
+        let decls_of = |group: &SelectorGroup| -> Vec<&ResolvedDeclaration> {
             group
                 .decls
                 .iter()
