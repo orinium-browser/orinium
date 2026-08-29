@@ -6,6 +6,10 @@ use pixi_byte::vm::VM;
 use pixi_byte::{JSResult, JSValue};
 use std::any::Any;
 
+/// `&JSValue` sentinel for `undefined`. A `const fn` call can't be a promoted
+/// rvalue, so `&JSValue::undefined()` wouldn't outlive the statement.
+pub(crate) static UNDEFINED: JSValue = JSValue::undefined();
+
 /// Runs `f` with an immutable borrow of the host data, if set and downcastable.
 pub(crate) fn with_host<R>(vm: &VM, f: impl FnOnce(&JsHost) -> R) -> Option<R> {
     let host = vm.host.as_ref()?;
@@ -35,10 +39,10 @@ pub(crate) fn mark_dom_dirty(vm: &VM) {
 
 /// Extracts the hidden DOM id counter from an element `this` object.
 pub(crate) fn node_dom_id(this: &JSValue) -> Option<u64> {
-    let JSValue::Object(obj) = this else {
+    let Some(obj) = this.as_object() else {
         return None;
     };
-    let JSValue::Number(n) = obj.borrow().get("__orinium_dom_id") else {
+    let Some(n) = obj.borrow().get("__orinium_dom_id").as_number() else {
         return None;
     };
     Some(n as u64)
@@ -58,26 +62,20 @@ pub(crate) fn host_read_only_property(value: JSValue) -> Property {
 }
 
 pub(crate) fn is_callable(value: &JSValue) -> bool {
-    matches!(
-        value,
-        JSValue::Function(..)
-            | JSValue::ArrowFunction(..)
-            | JSValue::NativeFunction(_)
-            | JSValue::BoundFunction(..)
-    )
+    value.is_callable()
 }
 
 pub(crate) fn noop(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
-    Ok(JSValue::Undefined)
+    Ok(JSValue::undefined())
 }
 
 pub(crate) fn read_only_accessor_property(getter: pixi_byte::NativeFunctionType) -> Property {
     Property {
-        value: JSValue::Undefined,
+        value: JSValue::undefined(),
         enumerable: true,
         writable: false,
         configurable: false,
-        getter: Some(JSValue::NativeFunction(getter)),
+        getter: Some(JSValue::from_native_function(getter)),
         setter: None,
     }
 }

@@ -10,34 +10,43 @@ pub(crate) fn install_console(engine: &mut pixi_byte::JSEngine) {
     let console_obj = Rc::new(RefCell::new(JSObject::new()));
     {
         let mut console = console_obj.borrow_mut();
-        console.set("log".to_string(), JSValue::NativeFunction(console_log));
-        console.set("warn".to_string(), JSValue::NativeFunction(console_warn));
-        console.set("error".to_string(), JSValue::NativeFunction(console_error));
+        console.set(
+            "log".to_string(),
+            JSValue::from_native_function(console_log),
+        );
+        console.set(
+            "warn".to_string(),
+            JSValue::from_native_function(console_warn),
+        );
+        console.set(
+            "error".to_string(),
+            JSValue::from_native_function(console_error),
+        );
     }
     engine
         .global_mut()
         .borrow_mut()
-        .set("console".to_string(), JSValue::Object(console_obj));
+        .set("console".to_string(), JSValue::from_object(console_obj));
 }
 
 fn console_message(vm: &mut VM, args: Vec<JSValue>, level: log::Level) -> JSResult<JSValue> {
     let message: Vec<String> = args.iter().skip(1).map(|v| v.to_console_string()).collect();
     log::log!(target: "Console", level, "{}", message.join(" "));
     let _ = vm;
-    Ok(JSValue::Undefined)
+    Ok(JSValue::undefined())
 }
 
 pub(crate) fn intl_get_canonical_locales(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let input = args.get(1).cloned().unwrap_or(JSValue::Undefined);
-    let candidates = match input {
-        JSValue::Undefined => Vec::new(),
-        JSValue::Object(values) => {
-            let length = values.borrow().get("length").to_number() as usize;
-            (0..length)
-                .map(|index| values.borrow().get(&index.to_string()).to_string())
-                .collect()
-        }
-        value => vec![value.to_string()],
+    let input = args.get(1).cloned().unwrap_or(JSValue::undefined());
+    let candidates = if input.is_undefined() {
+        Vec::new()
+    } else if let Some(values) = input.as_object() {
+        let length = values.borrow().get("length").to_number() as usize;
+        (0..length)
+            .map(|index| values.borrow().get(&index.to_string()).to_string())
+            .collect()
+    } else {
+        vec![input.to_string()]
     };
     let mut canonical = Vec::new();
     for candidate in candidates {
@@ -59,34 +68,34 @@ pub(crate) fn intl_get_canonical_locales(vm: &mut VM, args: Vec<JSValue>) -> JSR
             canonical.push(locale);
         }
     }
-    Ok(vm.array_from_values(canonical.into_iter().map(JSValue::String).collect()))
+    Ok(vm.array_from_values(canonical.into_iter().map(JSValue::from_string).collect()))
 }
 
 pub(crate) fn intl_locale_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let Some(JSValue::Object(locale)) = args.first() else {
+    let Some(locale) = args.first().and_then(JSValue::as_object) else {
         return Err(JSError::TypeError("Intl.Locale requires new".to_string()));
     };
     let tag = args
         .get(1)
         .cloned()
-        .unwrap_or_else(|| JSValue::String("und".to_string()))
+        .unwrap_or_else(|| JSValue::from_string("und".to_string()))
         .to_string();
     let canonical = canonicalize_locale(&tag);
     let (language, script, region) = locale_parts(&canonical);
     let mut locale = locale.borrow_mut();
-    locale.set("__locale".to_string(), JSValue::String(canonical));
-    locale.set("language".to_string(), JSValue::String(language));
-    locale.set("script".to_string(), JSValue::String(script));
-    locale.set("region".to_string(), JSValue::String(region));
+    locale.set("__locale".to_string(), JSValue::from_string(canonical));
+    locale.set("language".to_string(), JSValue::from_string(language));
+    locale.set("script".to_string(), JSValue::from_string(script));
+    locale.set("region".to_string(), JSValue::from_string(region));
     locale.set(
         "maximize".to_string(),
-        JSValue::NativeFunction(intl_locale_maximize),
+        JSValue::from_native_function(intl_locale_maximize),
     );
     locale.set(
         "toString".to_string(),
-        JSValue::NativeFunction(intl_locale_to_string),
+        JSValue::from_native_function(intl_locale_to_string),
     );
-    Ok(JSValue::Undefined)
+    Ok(JSValue::undefined())
 }
 
 pub(crate) fn make_intl_constructor(
@@ -95,33 +104,33 @@ pub(crate) fn make_intl_constructor(
 ) -> JSValue {
     let mut prototype = JSObject::new();
     for (name, method) in methods {
-        prototype.set((*name).to_string(), JSValue::NativeFunction(*method));
+        prototype.set((*name).to_string(), JSValue::from_native_function(*method));
     }
     let prototype = Rc::new(RefCell::new(prototype));
     let mut object = JSObject::new();
     object.set(
         "__construct__".to_string(),
-        JSValue::NativeFunction(constructor),
+        JSValue::from_native_function(constructor),
     );
-    object.set("prototype".to_string(), JSValue::Object(prototype));
+    object.set("prototype".to_string(), JSValue::from_object(prototype));
     object.set(
         "supportedLocalesOf".to_string(),
-        JSValue::NativeFunction(intl_supported_locales_of),
+        JSValue::from_native_function(intl_supported_locales_of),
     );
-    JSValue::Object(Rc::new(RefCell::new(object)))
+    JSValue::from_object(Rc::new(RefCell::new(object)))
 }
 
 pub(crate) fn intl_supported_locales_of(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let input = args.get(1).cloned().unwrap_or(JSValue::Undefined);
-    let values = match input {
-        JSValue::Object(values) => {
-            let length = values.borrow().get("length").to_number() as usize;
-            (0..length)
-                .map(|index| values.borrow().get(&index.to_string()))
-                .collect()
-        }
-        JSValue::Undefined => Vec::new(),
-        value => vec![value],
+    let input = args.get(1).cloned().unwrap_or(JSValue::undefined());
+    let values = if let Some(values) = input.as_object() {
+        let length = values.borrow().get("length").to_number() as usize;
+        (0..length)
+            .map(|index| values.borrow().get(&index.to_string()))
+            .collect()
+    } else if input.is_undefined() {
+        Vec::new()
+    } else {
+        vec![input]
     };
     Ok(vm.array_from_values(values))
 }
@@ -130,18 +139,18 @@ pub(crate) fn intl_plural_rules_constructor(
     _vm: &mut VM,
     _args: Vec<JSValue>,
 ) -> JSResult<JSValue> {
-    Ok(JSValue::Undefined)
+    Ok(JSValue::undefined())
 }
 
 pub(crate) fn intl_plural_rules_select(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
-    Ok(JSValue::String("other".to_string()))
+    Ok(JSValue::from_string("other".to_string()))
 }
 
 pub(crate) fn intl_relative_time_constructor(
     _vm: &mut VM,
     _args: Vec<JSValue>,
 ) -> JSResult<JSValue> {
-    Ok(JSValue::Undefined)
+    Ok(JSValue::undefined())
 }
 
 pub(crate) fn intl_relative_time_resolved_options(
@@ -151,36 +160,38 @@ pub(crate) fn intl_relative_time_resolved_options(
     let mut options = JSObject::new();
     options.set(
         "numberingSystem".to_string(),
-        JSValue::String("latn".to_string()),
+        JSValue::from_string("latn".to_string()),
     );
-    Ok(JSValue::Object(Rc::new(RefCell::new(options))))
+    Ok(JSValue::from_object(Rc::new(RefCell::new(options))))
 }
 
 pub(crate) fn intl_number_format_constructor(
     _vm: &mut VM,
     args: Vec<JSValue>,
 ) -> JSResult<JSValue> {
-    if let (Some(JSValue::Object(this)), Some(JSValue::Object(options))) =
-        (args.first(), args.get(2))
-    {
+    if let (Some(this), Some(options)) = (
+        args.first().and_then(JSValue::as_object),
+        args.get(2).and_then(JSValue::as_object),
+    ) {
         this.borrow_mut().set(
             "__intl_options".to_string(),
-            JSValue::Object(Rc::clone(options)),
+            JSValue::from_object(Rc::clone(&options)),
         );
     }
-    Ok(JSValue::Undefined)
+    Ok(JSValue::undefined())
 }
 
 pub(crate) fn intl_number_format_format(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let value = args.get(1).map(JSValue::to_number).unwrap_or(f64::NAN);
-    let options = match args.first() {
-        Some(JSValue::Object(this)) => this.borrow().get("__intl_options"),
-        _ => JSValue::Undefined,
-    };
-    let notation = match &options {
-        JSValue::Object(options) => options.borrow().get("notation").to_string(),
-        _ => String::new(),
-    };
+    let options = args
+        .first()
+        .and_then(JSValue::as_object)
+        .map(|this| this.borrow().get("__intl_options"))
+        .unwrap_or(JSValue::undefined());
+    let notation = options
+        .as_object()
+        .map(|options| options.borrow().get("notation").to_string())
+        .unwrap_or_default();
     let formatted = if notation == "scientific" && value == 10_000.0 {
         "1E4 bits".to_string()
     } else if notation == "compact" && value == 100_000_000.0 {
@@ -188,34 +199,35 @@ pub(crate) fn intl_number_format_format(_vm: &mut VM, args: Vec<JSValue>) -> JSR
     } else {
         value.to_string()
     };
-    Ok(JSValue::String(formatted))
+    Ok(JSValue::from_string(formatted))
 }
 
 pub(crate) fn intl_date_time_format_constructor(
     _vm: &mut VM,
     args: Vec<JSValue>,
 ) -> JSResult<JSValue> {
-    if let Some(JSValue::Object(options)) = args.get(2)
-        && !matches!(options.borrow().get("dateStyle"), JSValue::Undefined)
-        && !matches!(options.borrow().get("hour"), JSValue::Undefined)
+    if let Some(options) = args.get(2).and_then(JSValue::as_object)
+        && !options.borrow().get("dateStyle").is_undefined()
+        && !options.borrow().get("hour").is_undefined()
     {
         return Err(JSError::TypeError(
             "dateStyle cannot be combined with hour".to_string(),
         ));
     }
-    if let (Some(JSValue::Object(this)), Some(JSValue::Object(options))) =
-        (args.first(), args.get(2))
-    {
+    if let (Some(this), Some(options)) = (
+        args.first().and_then(JSValue::as_object),
+        args.get(2).and_then(JSValue::as_object),
+    ) {
         this.borrow_mut().set(
             "__intl_options".to_string(),
-            JSValue::Object(Rc::clone(options)),
+            JSValue::from_object(Rc::clone(&options)),
         );
     }
-    Ok(JSValue::Undefined)
+    Ok(JSValue::undefined())
 }
 
 pub(crate) fn intl_date_time_format_format(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
-    Ok(JSValue::String("1/1/1970".to_string()))
+    Ok(JSValue::from_string("1/1/1970".to_string()))
 }
 
 pub(crate) fn intl_date_time_format_to_parts(
@@ -223,15 +235,21 @@ pub(crate) fn intl_date_time_format_to_parts(
     _args: Vec<JSValue>,
 ) -> JSResult<JSValue> {
     let mut literal = JSObject::new();
-    literal.set("type".to_string(), JSValue::String("literal".to_string()));
+    literal.set(
+        "type".to_string(),
+        JSValue::from_string("literal".to_string()),
+    );
     let mut value = JSObject::new();
-    value.set("type".to_string(), JSValue::String("hour".to_string()));
+    value.set("type".to_string(), JSValue::from_string("hour".to_string()));
     let mut period = JSObject::new();
-    period.set("type".to_string(), JSValue::String("dayPeriod".to_string()));
+    period.set(
+        "type".to_string(),
+        JSValue::from_string("dayPeriod".to_string()),
+    );
     Ok(vm.array_from_values(vec![
-        JSValue::Object(Rc::new(RefCell::new(value))),
-        JSValue::Object(Rc::new(RefCell::new(literal))),
-        JSValue::Object(Rc::new(RefCell::new(period))),
+        JSValue::from_object(Rc::new(RefCell::new(value))),
+        JSValue::from_object(Rc::new(RefCell::new(literal))),
+        JSValue::from_object(Rc::new(RefCell::new(period))),
     ]))
 }
 
@@ -239,23 +257,27 @@ pub(crate) fn intl_date_time_format_resolved_options(
     _vm: &mut VM,
     args: Vec<JSValue>,
 ) -> JSResult<JSValue> {
-    let date_style = match args.first() {
-        Some(JSValue::Object(this)) => match this.borrow().get("__intl_options") {
-            JSValue::Object(options) => options.borrow().get("dateStyle"),
-            _ => JSValue::Undefined,
-        },
-        _ => JSValue::Undefined,
-    };
+    let date_style = args
+        .first()
+        .and_then(JSValue::as_object)
+        .map(|this| {
+            let options = this.borrow().get("__intl_options");
+            options
+                .as_object()
+                .map(|options| options.borrow().get("dateStyle"))
+                .unwrap_or(JSValue::undefined())
+        })
+        .unwrap_or(JSValue::undefined());
     let mut result = JSObject::new();
-    if !matches!(date_style, JSValue::Undefined) {
+    if !date_style.is_undefined() {
         result.set("dateStyle".to_string(), date_style);
     }
-    Ok(JSValue::Object(Rc::new(RefCell::new(result))))
+    Ok(JSValue::from_object(Rc::new(RefCell::new(result))))
 }
 
 pub(crate) fn intl_locale_maximize(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let Some(JSValue::Object(locale)) = args.first() else {
-        return Ok(JSValue::Undefined);
+    let Some(locale) = args.first().and_then(JSValue::as_object) else {
+        return Ok(JSValue::undefined());
     };
     let language = locale.borrow().get("language").to_string();
     let script = locale.borrow().get("script").to_string();
@@ -286,21 +308,22 @@ pub(crate) fn intl_locale_maximize(_vm: &mut VM, args: Vec<JSValue>) -> JSResult
         region
     };
     let mut locale_mut = locale.borrow_mut();
-    locale_mut.set("script".to_string(), JSValue::String(script.clone()));
-    locale_mut.set("region".to_string(), JSValue::String(region.clone()));
+    locale_mut.set("script".to_string(), JSValue::from_string(script.clone()));
+    locale_mut.set("region".to_string(), JSValue::from_string(region.clone()));
     locale_mut.set(
         "__locale".to_string(),
-        JSValue::String(format!("{language}-{script}-{region}")),
+        JSValue::from_string(format!("{language}-{script}-{region}")),
     );
     drop(locale_mut);
-    Ok(JSValue::Object(Rc::clone(locale)))
+    Ok(JSValue::from_object(Rc::clone(&locale)))
 }
 
 pub(crate) fn intl_locale_to_string(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    Ok(match args.first() {
-        Some(JSValue::Object(locale)) => locale.borrow().get("__locale"),
-        _ => JSValue::String(String::new()),
-    })
+    Ok(args
+        .first()
+        .and_then(JSValue::as_object)
+        .map(|locale| locale.borrow().get("__locale"))
+        .unwrap_or_else(|| JSValue::from_string(String::new())))
 }
 
 pub(crate) fn canonicalize_locale(tag: &str) -> String {

@@ -9,36 +9,45 @@ const STORAGE_KIND: &str = "__orinium_storage_kind";
 
 pub(crate) fn make_storage(kind: &str) -> Rc<RefCell<JSObject>> {
     let mut storage = JSObject::new();
-    storage.set(STORAGE_KIND.to_string(), JSValue::String(kind.to_string()));
+    storage.set(
+        STORAGE_KIND.to_string(),
+        JSValue::from_string(kind.to_string()),
+    );
     storage.define_property(
         "length".to_string(),
         read_only_accessor_property(storage_length),
     );
     storage.set(
         "getItem".to_string(),
-        JSValue::NativeFunction(storage_get_item),
+        JSValue::from_native_function(storage_get_item),
     );
     storage.set(
         "setItem".to_string(),
-        JSValue::NativeFunction(storage_set_item),
+        JSValue::from_native_function(storage_set_item),
     );
     storage.set(
         "removeItem".to_string(),
-        JSValue::NativeFunction(storage_remove_item),
+        JSValue::from_native_function(storage_remove_item),
     );
-    storage.set("clear".to_string(), JSValue::NativeFunction(storage_clear));
-    storage.set("key".to_string(), JSValue::NativeFunction(storage_key));
+    storage.set(
+        "clear".to_string(),
+        JSValue::from_native_function(storage_clear),
+    );
+    storage.set(
+        "key".to_string(),
+        JSValue::from_native_function(storage_key),
+    );
     Rc::new(RefCell::new(storage))
 }
 
 fn storage_kind(args: &[JSValue]) -> JSResult<String> {
-    let Some(JSValue::Object(storage)) = args.first() else {
+    let Some(storage) = args.first().and_then(JSValue::as_object) else {
         return Err(JSError::TypeError(
             "Storage method called on incompatible receiver".to_string(),
         ));
     };
-    match storage.borrow().get(STORAGE_KIND) {
-        JSValue::String(kind) if kind == "local" || kind == "session" => Ok(kind),
+    match storage.borrow().get(STORAGE_KIND).as_string() {
+        Some(kind) if kind == "local" || kind == "session" => Ok(kind.to_string()),
         _ => Err(JSError::TypeError(
             "Storage method called on incompatible receiver".to_string(),
         )),
@@ -55,12 +64,12 @@ fn storage_length(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         }
     })
     .unwrap_or(0);
-    Ok(JSValue::Number(length as f64))
+    Ok(JSValue::from_number(length as f64))
 }
 
 fn storage_get_item(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let kind = storage_kind(&args)?;
-    let key = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
+    let key = args.get(1).unwrap_or(&JSValue::undefined()).to_string();
     let value = with_host(vm, |host| {
         let storage = if kind == "local" {
             &host.local_storage
@@ -70,13 +79,13 @@ fn storage_get_item(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         storage.get(&key).cloned()
     })
     .flatten();
-    Ok(value.map(JSValue::String).unwrap_or(JSValue::Null))
+    Ok(value.map(JSValue::from_string).unwrap_or(JSValue::null()))
 }
 
 fn storage_set_item(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let kind = storage_kind(&args)?;
-    let key = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
-    let value = args.get(2).unwrap_or(&JSValue::Undefined).to_string();
+    let key = args.get(1).unwrap_or(&JSValue::undefined()).to_string();
+    let value = args.get(2).unwrap_or(&JSValue::undefined()).to_string();
     let _ = with_host_mut(vm, |host| {
         let storage = if kind == "local" {
             &mut host.local_storage
@@ -85,12 +94,12 @@ fn storage_set_item(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         };
         storage.insert(key, value);
     });
-    Ok(JSValue::Undefined)
+    Ok(JSValue::undefined())
 }
 
 fn storage_remove_item(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let kind = storage_kind(&args)?;
-    let key = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
+    let key = args.get(1).unwrap_or(&JSValue::undefined()).to_string();
     let _ = with_host_mut(vm, |host| {
         let storage = if kind == "local" {
             &mut host.local_storage
@@ -99,7 +108,7 @@ fn storage_remove_item(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         };
         storage.remove(&key);
     });
-    Ok(JSValue::Undefined)
+    Ok(JSValue::undefined())
 }
 
 fn storage_clear(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -111,14 +120,14 @@ fn storage_clear(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
             host.session_storage.clear();
         }
     });
-    Ok(JSValue::Undefined)
+    Ok(JSValue::undefined())
 }
 
 fn storage_key(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let kind = storage_kind(&args)?;
     let index = args.get(1).map(JSValue::to_number).unwrap_or(f64::NAN);
     if !index.is_finite() || index < 0.0 {
-        return Ok(JSValue::Null);
+        return Ok(JSValue::null());
     }
     let value = with_host(vm, |host| {
         let storage = if kind == "local" {
@@ -131,5 +140,5 @@ fn storage_key(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         keys.get(index as usize).cloned()
     })
     .flatten();
-    Ok(value.map(JSValue::String).unwrap_or(JSValue::Null))
+    Ok(value.map(JSValue::from_string).unwrap_or(JSValue::null()))
 }

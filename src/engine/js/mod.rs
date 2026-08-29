@@ -276,10 +276,10 @@ impl JsRuntime {
         let width = width.max(0.0) as f64;
         let height = height.max(0.0) as f64;
         let mut global = self.engine.global_mut().borrow_mut();
-        global.set("innerWidth".to_string(), JSValue::Number(width));
-        global.set("innerHeight".to_string(), JSValue::Number(height));
-        global.set("outerWidth".to_string(), JSValue::Number(width));
-        global.set("outerHeight".to_string(), JSValue::Number(height));
+        global.set("innerWidth".to_string(), JSValue::from_number(width));
+        global.set("innerHeight".to_string(), JSValue::from_number(height));
+        global.set("outerWidth".to_string(), JSValue::from_number(width));
+        global.set("outerHeight".to_string(), JSValue::from_number(height));
         drop(global);
         with_host_mut(self.engine.vm(), |host| host.viewport = (width, height));
     }
@@ -305,25 +305,25 @@ impl JsRuntime {
         if language.is_empty() {
             return;
         }
-        let mut languages = vec![JSValue::String(language.to_string())];
+        let mut languages = vec![JSValue::from_string(language.to_string())];
         if let Some(base) = language.split('-').next()
             && !base.eq_ignore_ascii_case(language)
         {
-            languages.push(JSValue::String(base.to_string()));
+            languages.push(JSValue::from_string(base.to_string()));
         }
         if !language.eq_ignore_ascii_case("en-US") {
-            languages.push(JSValue::String("en-US".to_string()));
+            languages.push(JSValue::from_string("en-US".to_string()));
         }
 
         let global = self.engine.global_mut().borrow_mut();
-        let JSValue::Object(navigator) = global.get("navigator") else {
+        let Some(navigator) = global.get("navigator").as_object() else {
             return;
         };
         drop(global);
         let mut navigator = navigator.borrow_mut();
         navigator.define_property(
             "language".to_string(),
-            host_read_only_property(JSValue::String(language.to_string())),
+            host_read_only_property(JSValue::from_string(language.to_string())),
         );
         navigator.define_property(
             "languages".to_string(),
@@ -335,17 +335,21 @@ impl JsRuntime {
     pub fn run_script(&mut self, source: &str) {
         match self.engine.eval(source) {
             Ok(_) => {}
-            Err(JSError::Thrown(JSValue::Object(object))) => {
-                let object = object.borrow();
-                let details = object
-                    .keys()
-                    .into_iter()
-                    .map(|key| format!("{key}={}", object.get(&key).to_console_string()))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                log::info!("JS error: uncaught object ({details})");
+            Err(err) => {
+                if let JSError::Thrown(value) = &err {
+                    if let Some(object) = value.as_object() {
+                        let object = object.borrow();
+                        let details = object
+                            .keys()
+                            .into_iter()
+                            .map(|key| format!("{key}={}", object.get(&key).to_console_string()))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        log::info!("JS error: uncaught object ({details})");
+                    }
+                }
+                log::info!("JS error: {}", err);
             }
-            Err(err) => log::info!("JS error: {}", err),
         }
         self.perform_microtask_checkpoint();
     }
@@ -391,8 +395,8 @@ impl JsRuntime {
             );
             if let Err(err) = self.engine.call(
                 listener,
-                JSValue::Object(Rc::clone(&document)),
-                vec![JSValue::Object(event)],
+                JSValue::from_object(Rc::clone(&document)),
+                vec![JSValue::from_object(event)],
             ) {
                 log::info!("JS error on DOMContentLoaded: {}", err);
             }
@@ -432,7 +436,7 @@ impl JsRuntime {
 
         let ran_callback = !invocations.is_empty();
         for (callback, arguments) in invocations {
-            if let Err(err) = self.engine.call(callback, JSValue::Undefined, arguments) {
+            if let Err(err) = self.engine.call(callback, JSValue::undefined(), arguments) {
                 log::info!("JS error in timer callback: {}", err);
             }
             self.perform_microtask_checkpoint();
@@ -499,8 +503,8 @@ impl JsRuntime {
         if is_callable(&handler)
             && let Err(error) = self.engine.call(
                 handler,
-                JSValue::Object(Rc::clone(&target)),
-                vec![JSValue::Object(Rc::clone(&event))],
+                JSValue::from_object(Rc::clone(&target)),
+                vec![JSValue::from_object(Rc::clone(&event))],
             )
         {
             log::info!("JS error in on{event_type}: {error}");
@@ -511,8 +515,8 @@ impl JsRuntime {
             }
             if let Err(error) = self.engine.call(
                 listener,
-                JSValue::Object(Rc::clone(&target)),
-                vec![JSValue::Object(Rc::clone(&event))],
+                JSValue::from_object(Rc::clone(&target)),
+                vec![JSValue::from_object(Rc::clone(&event))],
             ) {
                 log::info!("JS error in {event_type} listener: {error}");
             }
@@ -527,8 +531,8 @@ impl JsRuntime {
             let response = make_fetch_response(response);
             if let Err(err) = self.engine.call(
                 capability.resolve,
-                JSValue::Undefined,
-                vec![JSValue::Object(response)],
+                JSValue::undefined(),
+                vec![JSValue::from_object(response)],
             ) {
                 log::info!("JS error while resolving fetch: {}", err);
             }
@@ -548,8 +552,8 @@ impl JsRuntime {
         if let Some(capability) = capability {
             if let Err(err) = self.engine.call(
                 capability.reject,
-                JSValue::Undefined,
-                vec![JSValue::String(reason)],
+                JSValue::undefined(),
+                vec![JSValue::from_string(reason)],
             ) {
                 log::info!("JS error while rejecting fetch: {}", err);
             }
@@ -562,8 +566,8 @@ impl JsRuntime {
         if is_callable(&handler) {
             let _ = self.engine.call(
                 handler,
-                JSValue::Object(Rc::clone(&xhr)),
-                vec![JSValue::String(reason)],
+                JSValue::from_object(Rc::clone(&xhr)),
+                vec![JSValue::from_string(reason)],
             );
         }
         self.perform_microtask_checkpoint();
@@ -637,7 +641,7 @@ impl JsRuntime {
         let mut current = Some(Rc::clone(node));
         while let Some(node) = current {
             current = node.borrow().parent();
-            if let Some(JSValue::Object(object)) = expose_node(self.engine.vm(), node) {
+            if let Some(object) = expose_node(self.engine.vm(), node).and_then(|v| v.as_object()) {
                 path.push(object);
             }
         }
@@ -647,7 +651,8 @@ impl JsRuntime {
 
         let mut ran_handler = false;
         for current_target in path {
-            let Some(dom_id) = node_dom_id(&JSValue::Object(Rc::clone(&current_target))) else {
+            let Some(dom_id) = node_dom_id(&JSValue::from_object(Rc::clone(&current_target)))
+            else {
                 continue;
             };
             let onclick = current_target.borrow().get("onclick");
@@ -669,8 +674,8 @@ impl JsRuntime {
             if has_onclick
                 && let Err(err) = self.engine.call(
                     onclick,
-                    JSValue::Object(Rc::clone(&current_target)),
-                    vec![JSValue::Object(Rc::clone(&event))],
+                    JSValue::from_object(Rc::clone(&current_target)),
+                    vec![JSValue::from_object(Rc::clone(&event))],
                 )
             {
                 log::info!("JS error in onclick: {}", err);
@@ -679,8 +684,8 @@ impl JsRuntime {
                 for listener in listeners {
                     if let Err(err) = self.engine.call(
                         listener,
-                        JSValue::Object(Rc::clone(&current_target)),
-                        vec![JSValue::Object(Rc::clone(&event))],
+                        JSValue::from_object(Rc::clone(&current_target)),
+                        vec![JSValue::from_object(Rc::clone(&event))],
                     ) {
                         log::info!("JS error in click listener: {}", err);
                     }
@@ -702,7 +707,9 @@ impl JsRuntime {
     /// Drains queued microtasks in FIFO order, including jobs queued by jobs.
     fn perform_microtask_checkpoint(&mut self) {
         while let Err(err) = self.engine.run_jobs() {
-            if let JSError::Thrown(JSValue::Object(object)) = &err {
+            if let JSError::Thrown(value) = &err
+                && let Some(object) = value.as_object()
+            {
                 let object = object.borrow();
                 let details = object
                     .keys()

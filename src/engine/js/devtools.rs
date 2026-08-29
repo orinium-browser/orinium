@@ -30,28 +30,33 @@ const DEVTOOLS_GLOBAL: &str = "__orinium_devtools";
 pub(super) fn install(engine: &mut pixi_byte::JSEngine) {
     engine.global_mut().borrow_mut().set(
         DEVTOOLS_GLOBAL.to_string(),
-        JSValue::NativeFunction(inspect),
+        JSValue::from_native_function(inspect),
     );
 }
 
 fn inspect(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let JSValue::String(method) = args.get(1).cloned().unwrap_or(JSValue::Undefined) else {
+    let Some(method) = args.get(1).and_then(JSValue::as_string_owned) else {
         return Err(JSError::TypeError(
             "__orinium_devtools requires a method string".to_string(),
         ));
     };
-    let params = match args.get(2).cloned().unwrap_or(JSValue::Undefined) {
-        JSValue::String(params) => params,
-        JSValue::Undefined | JSValue::Null => "{}".to_string(),
-        _ => {
-            return Err(JSError::TypeError(
-                "__orinium_devtools params must be a JSON string".to_string(),
-            ));
+    let params = match args.get(2) {
+        Some(value) => {
+            if let Some(params) = value.as_string_owned() {
+                params
+            } else if value.is_undefined() || value.is_null() {
+                "{}".to_string()
+            } else {
+                return Err(JSError::TypeError(
+                    "__orinium_devtools params must be a JSON string".to_string(),
+                ));
+            }
         }
+        None => "{}".to_string(),
     };
 
     let promise_constructor = vm.global_object.borrow().get("Promise");
-    let JSValue::Object(constructor) = &promise_constructor else {
+    let Some(constructor) = promise_constructor.as_object() else {
         return Err(JSError::InternalError(
             "Promise constructor is unavailable".to_string(),
         ));
@@ -61,7 +66,7 @@ fn inspect(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let promise = vm.call(
         construct,
         promise_constructor,
-        vec![JSValue::NativeFunction(capture_capability)],
+        vec![JSValue::from_native_function(capture_capability)],
     )?;
     let capability = with_host_mut(vm, |host| host.constructing_devtools_capability.take())
         .flatten()
@@ -78,7 +83,7 @@ fn inspect(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 }
 
 fn capture_capability(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let resolve = args.get(1).cloned().unwrap_or(JSValue::Undefined);
+    let resolve = args.get(1).cloned().unwrap_or(JSValue::undefined());
     let Some(()) = with_host_mut(vm, |host| {
         host.constructing_devtools_capability = Some(JsDevToolsCapability { resolve });
     }) else {
@@ -86,7 +91,7 @@ fn capture_capability(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
             "DevTools host state is unavailable".to_string(),
         ));
     };
-    Ok(JSValue::Undefined)
+    Ok(JSValue::undefined())
 }
 
 impl JsRuntime {
@@ -110,8 +115,8 @@ impl JsRuntime {
         };
         if let Err(err) = self.engine.call(
             capability.resolve,
-            JSValue::Undefined,
-            vec![JSValue::String(result)],
+            JSValue::undefined(),
+            vec![JSValue::from_string(result)],
         ) {
             log::info!("JS error while resolving devtools request: {}", err);
         }

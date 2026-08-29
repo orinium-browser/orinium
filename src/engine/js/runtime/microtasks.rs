@@ -5,7 +5,7 @@ use pixi_byte::{JSError, JSResult, JSValue};
 pub(crate) fn install_microtasks(engine: &mut pixi_byte::JSEngine) {
     engine.global_mut().borrow_mut().set(
         "queueMicrotask".to_string(),
-        JSValue::NativeFunction(queue_microtask),
+        JSValue::from_native_function(queue_microtask),
     );
 }
 
@@ -15,6 +15,6 @@ fn queue_microtask(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
             "queueMicrotask callback must be callable".to_string(),
         ));
     };
-    vm.enqueue_job(callback, JSValue::Undefined, Vec::new());
-    Ok(JSValue::Undefined)
+    vm.enqueue_job(callback, JSValue::undefined(), Vec::new());
+    Ok(JSValue::undefined())
 }

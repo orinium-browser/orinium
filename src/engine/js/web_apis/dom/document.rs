@@ -17,11 +17,11 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
         let mut document = document_obj.borrow_mut();
         document.define_property(
             "nodeType".to_string(),
-            Property::read_only(JSValue::Number(9.0)),
+            Property::read_only(JSValue::from_number(9.0)),
         );
         document.define_property(
             "nodeName".to_string(),
-            Property::read_only(JSValue::String("#document".to_string())),
+            Property::read_only(JSValue::from_string("#document".to_string())),
         );
         document.define_property(
             "documentElement".to_string(),
@@ -53,51 +53,51 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
         );
         document.set(
             "hasFocus".to_string(),
-            JSValue::NativeFunction(document_has_focus),
+            JSValue::from_native_function(document_has_focus),
         );
         document.set(
             "getElementById".to_string(),
-            JSValue::NativeFunction(get_element_by_id),
+            JSValue::from_native_function(get_element_by_id),
         );
         document.set(
             "querySelector".to_string(),
-            JSValue::NativeFunction(document_query_selector),
+            JSValue::from_native_function(document_query_selector),
         );
         document.set(
             "querySelectorAll".to_string(),
-            JSValue::NativeFunction(document_query_selector_all),
+            JSValue::from_native_function(document_query_selector_all),
         );
         document.set(
             "getElementsByTagName".to_string(),
-            JSValue::NativeFunction(document_get_elements_by_tag_name),
+            JSValue::from_native_function(document_get_elements_by_tag_name),
         );
         document.set(
             "getElementsByClassName".to_string(),
-            JSValue::NativeFunction(document_get_elements_by_class_name),
+            JSValue::from_native_function(document_get_elements_by_class_name),
         );
         document.set(
             "createElement".to_string(),
-            JSValue::NativeFunction(create_element),
+            JSValue::from_native_function(create_element),
         );
         document.set(
             "createElementNS".to_string(),
-            JSValue::NativeFunction(create_element_ns),
+            JSValue::from_native_function(create_element_ns),
         );
         document.set(
             "createTextNode".to_string(),
-            JSValue::NativeFunction(create_text_node),
+            JSValue::from_native_function(create_text_node),
         );
         document.set(
             "createDocumentFragment".to_string(),
-            JSValue::NativeFunction(create_document_fragment),
+            JSValue::from_native_function(create_document_fragment),
         );
         document.set(
             "addEventListener".to_string(),
-            JSValue::NativeFunction(add_document_event_listener),
+            JSValue::from_native_function(add_document_event_listener),
         );
         document.set(
             "removeEventListener".to_string(),
-            JSValue::NativeFunction(remove_document_event_listener),
+            JSValue::from_native_function(remove_document_event_listener),
         );
     }
     let _ = with_host_mut(engine.vm(), |host| {
@@ -106,7 +106,7 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
     engine
         .global_mut()
         .borrow_mut()
-        .set("document".to_string(), JSValue::Object(document_obj));
+        .set("document".to_string(), JSValue::from_object(document_obj));
 
     if let Some(element_constructor) =
         with_host(engine.vm(), |host| Rc::clone(&host.element_constructor))
@@ -114,39 +114,39 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
         let mut global = engine.global_mut().borrow_mut();
         global.set(
             "Element".to_string(),
-            JSValue::Object(Rc::clone(&element_constructor)),
+            JSValue::from_object(Rc::clone(&element_constructor)),
         );
         global.set(
             "HTMLElement".to_string(),
-            JSValue::Object(element_constructor),
+            JSValue::from_object(element_constructor),
         );
     }
 
     let mut iframe_constructor = JSObject::new();
     iframe_constructor.set(
         "__host_has_instance__".to_string(),
-        JSValue::NativeFunction(html_iframe_element_has_instance),
+        JSValue::from_native_function(html_iframe_element_has_instance),
     );
     engine.global_mut().borrow_mut().set(
         "HTMLIFrameElement".to_string(),
-        JSValue::Object(Rc::new(RefCell::new(iframe_constructor))),
+        JSValue::from_object(Rc::new(RefCell::new(iframe_constructor))),
     );
 }
 
 fn html_iframe_element_has_instance(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(node) = args.get(1).and_then(|value| dom_node(vm, value)) else {
-        return Ok(JSValue::Boolean(false));
+        return Ok(JSValue::from_bool(false));
     };
     let is_iframe = node.borrow().value.tag_name() == Some("iframe");
-    Ok(JSValue::Boolean(is_iframe))
+    Ok(JSValue::from_bool(is_iframe))
 }
 
 pub(crate) fn add_document_event_listener(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let Some(JSValue::String(event_type)) = args.get(1) else {
-        return Ok(JSValue::Undefined);
+    let Some(event_type) = args.get(1).and_then(JSValue::as_string_owned) else {
+        return Ok(JSValue::undefined());
     };
     let Some(listener) = args.get(2).filter(|value| is_callable(value)).cloned() else {
-        return Ok(JSValue::Undefined);
+        return Ok(JSValue::undefined());
     };
 
     let _ = with_host_mut(vm, |host| {
@@ -161,47 +161,47 @@ pub(crate) fn add_document_event_listener(vm: &mut VM, args: Vec<JSValue>) -> JS
             listeners.push(listener);
         }
     });
-    Ok(JSValue::Undefined)
+    Ok(JSValue::undefined())
 }
 
 pub(crate) fn remove_document_event_listener(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let Some(JSValue::String(event_type)) = args.get(1) else {
-        return Ok(JSValue::Undefined);
+    let Some(event_type) = args.get(1).and_then(JSValue::as_string) else {
+        return Ok(JSValue::undefined());
     };
     let Some(listener) = args.get(2) else {
-        return Ok(JSValue::Undefined);
+        return Ok(JSValue::undefined());
     };
     let _ = with_host_mut(vm, |host| {
         if let Some(listeners) = host.document_event_listeners.get_mut(event_type) {
             listeners.retain(|candidate| !candidate.strict_equals(listener));
         }
     });
-    Ok(JSValue::Undefined)
+    Ok(JSValue::undefined())
 }
 
 fn get_element_by_id(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let Some(JSValue::String(id)) = args.get(1) else {
-        return Ok(JSValue::Null);
+    let Some(id) = args.get(1).and_then(JSValue::as_string) else {
+        return Ok(JSValue::null());
     };
 
     let Some(node) = with_host(vm, |host| host.dom.get_element_by_id(id)).flatten() else {
-        return Ok(JSValue::Null);
+        return Ok(JSValue::null());
     };
-    Ok(expose_node(vm, node).unwrap_or(JSValue::Null))
+    Ok(expose_node(vm, node).unwrap_or(JSValue::null()))
 }
 
 fn document_query_selector(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let Some(JSValue::String(selector)) = args.get(1) else {
-        return Ok(JSValue::Null);
+    let Some(selector) = args.get(1).and_then(JSValue::as_string) else {
+        return Ok(JSValue::null());
     };
     let Some(node) = with_host(vm, |host| host.dom.query_selector(selector)).flatten() else {
-        return Ok(JSValue::Null);
+        return Ok(JSValue::null());
     };
-    Ok(expose_node(vm, node).unwrap_or(JSValue::Null))
+    Ok(expose_node(vm, node).unwrap_or(JSValue::null()))
 }
 
 fn document_query_selector_all(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let Some(JSValue::String(selector)) = args.get(1) else {
+    let Some(selector) = args.get(1).and_then(JSValue::as_string) else {
         return Ok(vm.array_from_values(Vec::new()));
     };
     let nodes = with_host(vm, |host| host.dom.query_selector_all(selector)).unwrap_or_default();
@@ -209,7 +209,7 @@ fn document_query_selector_all(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVa
 }
 
 fn document_get_elements_by_tag_name(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let tag_name = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
+    let tag_name = args.get(1).unwrap_or(&JSValue::undefined()).to_string();
     let nodes = with_host(vm, |host| {
         if tag_name == "*" {
             host.dom.find_all(|node| node.tag_name().is_some())
@@ -232,7 +232,7 @@ pub(crate) fn class_selector(value: &JSValue) -> String {
 }
 
 fn document_get_elements_by_class_name(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let selector = class_selector(args.get(1).unwrap_or(&JSValue::Undefined));
+    let selector = class_selector(args.get(1).unwrap_or(&JSValue::undefined()));
     if selector.is_empty() {
         return Ok(vm.array_from_values(Vec::new()));
     }
@@ -241,39 +241,40 @@ fn document_get_elements_by_class_name(vm: &mut VM, args: Vec<JSValue>) -> JSRes
 }
 
 fn create_element(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let Some(JSValue::String(tag_name)) = args.get(1) else {
-        return Ok(JSValue::Null);
+    let Some(tag_name) = args.get(1).and_then(JSValue::as_string) else {
+        return Ok(JSValue::null());
     };
     let tag_name = tag_name.trim().to_ascii_lowercase();
     if tag_name.is_empty() {
-        return Ok(JSValue::Null);
+        return Ok(JSValue::null());
     }
     let node = TreeNode::new(HtmlNodeType::Element {
         tag_name,
         attributes: Vec::new(),
     });
-    Ok(expose_detached_node(vm, node).unwrap_or(JSValue::Null))
+    Ok(expose_detached_node(vm, node).unwrap_or(JSValue::null()))
 }
 
 fn create_element_ns(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let namespace = match args.get(1) {
-        Some(JSValue::String(namespace)) => namespace.clone(),
-        Some(JSValue::Null) | Some(JSValue::Undefined) | None => String::new(),
+        Some(value) if value.is_string() => value.as_string().unwrap_or("").to_string(),
+        Some(value) if value.is_null() || value.is_undefined() => String::new(),
         Some(value) => value.to_console_string(),
+        None => String::new(),
     };
-    let Some(JSValue::String(qualified_name)) = args.get(2) else {
-        return Ok(JSValue::Null);
+    let Some(qualified_name) = args.get(2).and_then(JSValue::as_string) else {
+        return Ok(JSValue::null());
     };
     let tag_name = qualified_name.trim().to_ascii_lowercase();
     if tag_name.is_empty() {
-        return Ok(JSValue::Null);
+        return Ok(JSValue::null());
     }
 
     let node = TreeNode::new(HtmlNodeType::Element {
         tag_name,
         attributes: Vec::new(),
     });
-    let value = expose_detached_node(vm, node).unwrap_or(JSValue::Null);
+    let value = expose_detached_node(vm, node).unwrap_or(JSValue::null());
     if let Some(dom_id) = node_dom_id(&value) {
         let _ = with_host_mut(vm, |host| {
             host.namespaces.insert(dom_id, namespace);
@@ -288,12 +289,12 @@ pub(crate) fn create_text_node(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVa
         .map(JSValue::to_console_string)
         .unwrap_or_default();
     let node = TreeNode::new(HtmlNodeType::Text(text));
-    Ok(expose_detached_node(vm, node).unwrap_or(JSValue::Null))
+    Ok(expose_detached_node(vm, node).unwrap_or(JSValue::null()))
 }
 
 fn create_document_fragment(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     let node = TreeNode::new(HtmlNodeType::DocumentFragment);
-    Ok(expose_detached_node(vm, node).unwrap_or(JSValue::Null))
+    Ok(expose_detached_node(vm, node).unwrap_or(JSValue::null()))
 }
 
 fn get_document_element(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -309,21 +310,21 @@ fn get_document_element(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     .flatten();
     Ok(node
         .and_then(|node| expose_node(vm, node))
-        .unwrap_or(JSValue::Null))
+        .unwrap_or(JSValue::null()))
 }
 
 fn get_document_body(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     let node = with_host(vm, |host| host.dom.query_selector("body")).flatten();
     Ok(node
         .and_then(|node| expose_node(vm, node))
-        .unwrap_or(JSValue::Null))
+        .unwrap_or(JSValue::null()))
 }
 
 fn get_document_head(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     let node = with_host(vm, |host| host.dom.query_selector("head")).flatten();
     Ok(node
         .and_then(|node| expose_node(vm, node))
-        .unwrap_or(JSValue::Null))
+        .unwrap_or(JSValue::null()))
 }
 
 fn get_active_element(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -333,18 +334,18 @@ fn get_active_element(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     })
     .flatten();
     if let Some(active) = active {
-        return Ok(JSValue::Object(active));
+        return Ok(JSValue::from_object(active));
     }
     get_document_body(vm, Vec::new())
 }
 
 fn get_document_default_view(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
-    Ok(JSValue::Object(Rc::clone(&vm.global_object)))
+    Ok(JSValue::from_object(Rc::clone(&vm.global_object)))
 }
 
 fn get_document_ready_state(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     let complete = with_host(vm, |host| host.dom_content_loaded_fired).unwrap_or(false);
-    Ok(JSValue::String(
+    Ok(JSValue::from_string(
         if complete { "complete" } else { "loading" }.to_string(),
     ))
 }
@@ -358,23 +359,23 @@ fn get_document_cookie(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
             .join("; ")
     })
     .unwrap_or_default();
-    Ok(JSValue::String(cookies))
+    Ok(JSValue::from_string(cookies))
 }
 
 fn set_document_cookie(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let cookie = args
         .get(1)
-        .unwrap_or(&JSValue::Undefined)
+        .unwrap_or(&JSValue::undefined())
         .to_console_string();
     let Some(pair) = cookie.split(';').next() else {
-        return Ok(JSValue::Undefined);
+        return Ok(JSValue::undefined());
     };
     let Some((name, value)) = pair.split_once('=') else {
-        return Ok(JSValue::Undefined);
+        return Ok(JSValue::undefined());
     };
     let name = name.trim();
     if name.is_empty() {
-        return Ok(JSValue::Undefined);
+        return Ok(JSValue::undefined());
     }
 
     let should_remove = cookie.split(';').skip(1).any(|attribute| {
@@ -393,11 +394,11 @@ fn set_document_cookie(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
                 .insert(name.to_string(), value.trim().to_string());
         }
     });
-    Ok(JSValue::Undefined)
+    Ok(JSValue::undefined())
 }
 
 fn document_has_focus(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
-    Ok(JSValue::Boolean(true))
+    Ok(JSValue::from_bool(true))
 }
 
 pub(crate) fn expose_detached_node(vm: &mut VM, node: NodeRef<HtmlNodeType>) -> Option<JSValue> {
@@ -423,7 +424,7 @@ pub(crate) fn expose_node(vm: &VM, node: NodeRef<HtmlNodeType>) -> Option<JSValu
             HtmlNodeType::Document => {
                 return with_host(vm, |host| host.document.as_ref().cloned())
                     .flatten()
-                    .map(JSValue::Object);
+                    .map(JSValue::from_object);
             }
             _ => return None,
         }
@@ -468,7 +469,7 @@ fn expose_node_inner(vm: &VM, node: NodeRef<HtmlNodeType>, kind: NodeKind) -> Op
         obj
     })?;
 
-    Some(JSValue::Object(obj))
+    Some(JSValue::from_object(obj))
 }
 
 pub(crate) fn expose_node_list(vm: &mut VM, nodes: Vec<NodeRef<HtmlNodeType>>) -> JSValue {

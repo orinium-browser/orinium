@@ -31,31 +31,31 @@ pub(crate) fn install_browser_environment(engine: &mut pixi_byte::JSEngine) {
     let mut navigator = JSObject::new();
     navigator.define_property(
         "userAgent".to_string(),
-        Property::read_only(JSValue::String(
+        Property::read_only(JSValue::from_string(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Orinium/0.1".to_string(),
         )),
     );
     navigator.define_property(
         "language".to_string(),
-        host_read_only_property(JSValue::String("en-US".to_string())),
+        host_read_only_property(JSValue::from_string("en-US".to_string())),
     );
     navigator.define_property(
         "languages".to_string(),
         host_read_only_property(
-            JSArray::from_vec(vec![JSValue::String("en-US".to_string())]).to_object(),
+            JSArray::from_vec(vec![JSValue::from_string("en-US".to_string())]).to_object(),
         ),
     );
     navigator.define_property(
         "platform".to_string(),
-        Property::read_only(JSValue::String("Win32".to_string())),
+        Property::read_only(JSValue::from_string("Win32".to_string())),
     );
     navigator.define_property(
         "cookieEnabled".to_string(),
-        Property::read_only(JSValue::Boolean(true)),
+        Property::read_only(JSValue::from_bool(true)),
     );
     navigator.define_property(
         "onLine".to_string(),
-        Property::read_only(JSValue::Boolean(true)),
+        Property::read_only(JSValue::from_bool(true)),
     );
 
     let mut location = JSObject::new();
@@ -96,22 +96,25 @@ pub(crate) fn install_browser_environment(engine: &mut pixi_byte::JSEngine) {
         read_only_accessor_property(location_hash),
     );
     // TODO: Implement Location navigation methods and connect them to WebView navigation.
-    location.set("assign".to_string(), JSValue::NativeFunction(noop));
-    location.set("replace".to_string(), JSValue::NativeFunction(noop));
-    location.set("reload".to_string(), JSValue::NativeFunction(noop));
+    location.set("assign".to_string(), JSValue::from_native_function(noop));
+    location.set("replace".to_string(), JSValue::from_native_function(noop));
+    location.set("reload".to_string(), JSValue::from_native_function(noop));
 
     let mut history = JSObject::new();
     history.define_property(
         "length".to_string(),
-        Property::read_only(JSValue::Number(1.0)),
+        Property::read_only(JSValue::from_number(1.0)),
     );
-    history.define_property("state".to_string(), Property::read_only(JSValue::Null));
+    history.define_property("state".to_string(), Property::read_only(JSValue::null()));
     // TODO: Implement session history traversal and pushState/replaceState state updates.
-    history.set("back".to_string(), JSValue::NativeFunction(noop));
-    history.set("forward".to_string(), JSValue::NativeFunction(noop));
-    history.set("go".to_string(), JSValue::NativeFunction(noop));
-    history.set("pushState".to_string(), JSValue::NativeFunction(noop));
-    history.set("replaceState".to_string(), JSValue::NativeFunction(noop));
+    history.set("back".to_string(), JSValue::from_native_function(noop));
+    history.set("forward".to_string(), JSValue::from_native_function(noop));
+    history.set("go".to_string(), JSValue::from_native_function(noop));
+    history.set("pushState".to_string(), JSValue::from_native_function(noop));
+    history.set(
+        "replaceState".to_string(),
+        JSValue::from_native_function(noop),
+    );
 
     let event_constructor = make_event_constructor(false);
     let custom_event_constructor = make_event_constructor(true);
@@ -119,44 +122,44 @@ pub(crate) fn install_browser_environment(engine: &mut pixi_byte::JSEngine) {
     let mut global = engine.global_mut().borrow_mut();
     global.set(
         "navigator".to_string(),
-        JSValue::Object(Rc::new(RefCell::new(navigator))),
+        JSValue::from_object(Rc::new(RefCell::new(navigator))),
     );
     global.set(
         "localStorage".to_string(),
-        JSValue::Object(make_storage("local")),
+        JSValue::from_object(make_storage("local")),
     );
     global.set(
         "sessionStorage".to_string(),
-        JSValue::Object(make_storage("session")),
+        JSValue::from_object(make_storage("session")),
     );
     global.set(
         "location".to_string(),
-        JSValue::Object(Rc::new(RefCell::new(location))),
+        JSValue::from_object(Rc::new(RefCell::new(location))),
     );
     global.set(
         "history".to_string(),
-        JSValue::Object(Rc::new(RefCell::new(history))),
+        JSValue::from_object(Rc::new(RefCell::new(history))),
     );
-    global.set("devicePixelRatio".to_string(), JSValue::Number(1.0));
-    global.set("innerWidth".to_string(), JSValue::Number(800.0));
-    global.set("innerHeight".to_string(), JSValue::Number(600.0));
-    global.set("outerWidth".to_string(), JSValue::Number(800.0));
-    global.set("outerHeight".to_string(), JSValue::Number(600.0));
+    global.set("devicePixelRatio".to_string(), JSValue::from_number(1.0));
+    global.set("innerWidth".to_string(), JSValue::from_number(800.0));
+    global.set("innerHeight".to_string(), JSValue::from_number(600.0));
+    global.set("outerWidth".to_string(), JSValue::from_number(800.0));
+    global.set("outerHeight".to_string(), JSValue::from_number(600.0));
     // Keep feature detection safe while allowing formatjs to select and load
     // its individual constructor polyfills.
     let mut intl = JSObject::new();
     intl.set(
         "getCanonicalLocales".to_string(),
-        JSValue::NativeFunction(intl_get_canonical_locales),
+        JSValue::from_native_function(intl_get_canonical_locales),
     );
     let mut locale = JSObject::new();
     locale.set(
         "__construct__".to_string(),
-        JSValue::NativeFunction(intl_locale_constructor),
+        JSValue::from_native_function(intl_locale_constructor),
     );
     intl.set(
         "Locale".to_string(),
-        JSValue::Object(Rc::new(RefCell::new(locale))),
+        JSValue::from_object(Rc::new(RefCell::new(locale))),
     );
     intl.set(
         "PluralRules".to_string(),
@@ -193,28 +196,28 @@ pub(crate) fn install_browser_environment(engine: &mut pixi_byte::JSEngine) {
     );
     global.set(
         "Intl".to_string(),
-        JSValue::Object(Rc::new(RefCell::new(intl))),
+        JSValue::from_object(Rc::new(RefCell::new(intl))),
     );
     global.set(
         "matchMedia".to_string(),
-        JSValue::NativeFunction(match_media),
+        JSValue::from_native_function(match_media),
     );
     global.set(
         "getComputedStyle".to_string(),
-        JSValue::NativeFunction(get_computed_style),
+        JSValue::from_native_function(get_computed_style),
     );
-    global.set("Event".to_string(), JSValue::Object(event_constructor));
+    global.set("Event".to_string(), JSValue::from_object(event_constructor));
     global.set(
         "CustomEvent".to_string(),
-        JSValue::Object(custom_event_constructor),
+        JSValue::from_object(custom_event_constructor),
     );
     global.set(
         "requestAnimationFrame".to_string(),
-        JSValue::NativeFunction(request_animation_frame),
+        JSValue::from_native_function(request_animation_frame),
     );
     global.set(
         "cancelAnimationFrame".to_string(),
-        JSValue::NativeFunction(clear_timer),
+        JSValue::from_native_function(clear_timer),
     );
 }
 
@@ -227,21 +230,21 @@ fn parsed_location(vm: &VM) -> Option<url::Url> {
 }
 
 fn location_href(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
-    Ok(JSValue::String(location_url(vm)))
+    Ok(JSValue::from_string(location_url(vm)))
 }
 
 fn location_origin(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     let origin = parsed_location(vm)
         .map(|url| url.origin().ascii_serialization())
         .unwrap_or_else(|| "null".to_string());
-    Ok(JSValue::String(origin))
+    Ok(JSValue::from_string(origin))
 }
 
 fn location_protocol(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     let value = parsed_location(vm)
         .map(|url| format!("{}:", url.scheme()))
         .unwrap_or_default();
-    Ok(JSValue::String(value))
+    Ok(JSValue::from_string(value))
 }
 
 fn location_host(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -249,14 +252,14 @@ fn location_host(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
         .and_then(|url| url.host_str().map(|host| (host.to_string(), url.port())))
         .map(|(host, port)| port.map_or(host.clone(), |port| format!("{host}:{port}")))
         .unwrap_or_default();
-    Ok(JSValue::String(value))
+    Ok(JSValue::from_string(value))
 }
 
 fn location_hostname(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     let value = parsed_location(vm)
         .and_then(|url| url.host_str().map(str::to_string))
         .unwrap_or_default();
-    Ok(JSValue::String(value))
+    Ok(JSValue::from_string(value))
 }
 
 fn location_port(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -264,32 +267,32 @@ fn location_port(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
         .and_then(|url| url.port())
         .map(|port| port.to_string())
         .unwrap_or_default();
-    Ok(JSValue::String(value))
+    Ok(JSValue::from_string(value))
 }
 
 fn location_pathname(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     let value = parsed_location(vm)
         .map(|url| url.path().to_string())
         .unwrap_or_default();
-    Ok(JSValue::String(value))
+    Ok(JSValue::from_string(value))
 }
 
 fn location_search(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     let value = parsed_location(vm)
         .and_then(|url| url.query().map(|query| format!("?{query}")))
         .unwrap_or_default();
-    Ok(JSValue::String(value))
+    Ok(JSValue::from_string(value))
 }
 
 fn location_hash(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     let value = parsed_location(vm)
         .and_then(|url| url.fragment().map(|fragment| format!("#{fragment}")))
         .unwrap_or_default();
-    Ok(JSValue::String(value))
+    Ok(JSValue::from_string(value))
 }
 
 fn get_computed_style(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let element = args.get(1).cloned().unwrap_or(JSValue::Undefined);
+    let element = args.get(1).cloned().unwrap_or(JSValue::undefined());
     if dom_node(vm, &element).is_none() {
         return Err(JSError::TypeError(
             "getComputedStyle requires an Element".to_string(),
@@ -299,31 +302,31 @@ fn get_computed_style(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 }
 
 pub(crate) fn match_media(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let media = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
+    let media = args.get(1).unwrap_or(&JSValue::undefined()).to_string();
     let mut query = JSObject::new();
     query.define_property(
         "media".to_string(),
-        Property::read_only(JSValue::String(media)),
+        Property::read_only(JSValue::from_string(media)),
     );
     query.define_property(
         "matches".to_string(),
-        Property::read_only(JSValue::Boolean(false)),
+        Property::read_only(JSValue::from_bool(false)),
     );
-    query.set("onchange".to_string(), JSValue::Null);
+    query.set("onchange".to_string(), JSValue::null());
     for name in [
         "addEventListener",
         "removeEventListener",
         "addListener",
         "removeListener",
     ] {
-        query.set(name.to_string(), JSValue::NativeFunction(noop));
+        query.set(name.to_string(), JSValue::from_native_function(noop));
     }
-    Ok(JSValue::Object(Rc::new(RefCell::new(query))))
+    Ok(JSValue::from_object(Rc::new(RefCell::new(query))))
 }
 
 fn request_animation_frame(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(callback) = args.get(1).filter(|value| is_callable(value)).cloned() else {
-        return Ok(JSValue::Number(0.0));
+        return Ok(JSValue::from_number(0.0));
     };
     let Some(id) = with_host_mut(vm, |host| {
         host.next_timer_id += 1;
@@ -332,15 +335,15 @@ fn request_animation_frame(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue>
         host.timers.push(JsTimer {
             id,
             callback,
-            arguments: vec![JSValue::Number(timestamp)],
+            arguments: vec![JSValue::from_number(timestamp)],
             deadline: Instant::now() + Duration::from_millis(16),
             interval: None,
         });
         id
     }) else {
-        return Ok(JSValue::Number(0.0));
+        return Ok(JSValue::from_number(0.0));
     };
-    Ok(JSValue::Number(id as f64))
+    Ok(JSValue::from_number(id as f64))
 }
 
 // --- global aliases ---
@@ -350,13 +353,13 @@ pub(crate) fn install_global_aliases(engine: &mut pixi_byte::JSEngine) {
     let mut global_object = global.borrow_mut();
     global_object.set(
         "addEventListener".to_string(),
-        JSValue::NativeFunction(add_document_event_listener),
+        JSValue::from_native_function(add_document_event_listener),
     );
     global_object.set(
         "removeEventListener".to_string(),
-        JSValue::NativeFunction(remove_document_event_listener),
+        JSValue::from_native_function(remove_document_event_listener),
     );
     for name in ["window", "self", "globalThis"] {
-        global_object.set(name.to_string(), JSValue::Object(Rc::clone(&global)));
+        global_object.set(name.to_string(), JSValue::from_object(Rc::clone(&global)));
     }
 }

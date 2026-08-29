@@ -8,19 +8,19 @@ pub(crate) fn install_timers(engine: &mut pixi_byte::JSEngine) {
     let mut global = engine.global_mut().borrow_mut();
     global.set(
         "setTimeout".to_string(),
-        JSValue::NativeFunction(set_timeout),
+        JSValue::from_native_function(set_timeout),
     );
     global.set(
         "clearTimeout".to_string(),
-        JSValue::NativeFunction(clear_timer),
+        JSValue::from_native_function(clear_timer),
     );
     global.set(
         "setInterval".to_string(),
-        JSValue::NativeFunction(set_interval),
+        JSValue::from_native_function(set_interval),
     );
     global.set(
         "clearInterval".to_string(),
-        JSValue::NativeFunction(clear_timer),
+        JSValue::from_native_function(clear_timer),
     );
 }
 
@@ -34,7 +34,7 @@ fn set_interval(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 
 fn schedule_timer(vm: &mut VM, args: Vec<JSValue>, repeating: bool) -> JSResult<JSValue> {
     let Some(callback) = args.get(1).filter(|value| is_callable(value)).cloned() else {
-        return Ok(JSValue::Number(0.0));
+        return Ok(JSValue::from_number(0.0));
     };
     let delay = timer_delay(args.get(2));
     let arguments = args.into_iter().skip(3).collect();
@@ -50,9 +50,9 @@ fn schedule_timer(vm: &mut VM, args: Vec<JSValue>, repeating: bool) -> JSResult<
         });
         id
     }) else {
-        return Ok(JSValue::Number(0.0));
+        return Ok(JSValue::from_number(0.0));
     };
-    Ok(JSValue::Number(id as f64))
+    Ok(JSValue::from_number(id as f64))
 }
 
 fn timer_delay(value: Option<&JSValue>) -> Duration {
@@ -70,5 +70,5 @@ pub(crate) fn clear_timer(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> 
     let _ = with_host_mut(vm, |host| {
         host.timers.retain(|timer| timer.id != id);
     });
-    Ok(JSValue::Undefined)
+    Ok(JSValue::undefined())
 }

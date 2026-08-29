@@ -11,37 +11,37 @@ pub(crate) fn install_url_apis(engine: &mut pixi_byte::JSEngine) {
     let mut url_constructor_object = JSObject::new();
     url_constructor_object.set(
         "__construct__".to_string(),
-        JSValue::NativeFunction(url_constructor),
+        JSValue::from_native_function(url_constructor),
     );
     let mut params_constructor_object = JSObject::new();
     params_constructor_object.set(
         "__construct__".to_string(),
-        JSValue::NativeFunction(url_search_params_constructor),
+        JSValue::from_native_function(url_search_params_constructor),
     );
     let mut global = engine.global_mut().borrow_mut();
     global.set(
         "URL".to_string(),
-        JSValue::Object(Rc::new(RefCell::new(url_constructor_object))),
+        JSValue::from_object(Rc::new(RefCell::new(url_constructor_object))),
     );
     global.set(
         "URLSearchParams".to_string(),
-        JSValue::Object(Rc::new(RefCell::new(params_constructor_object))),
+        JSValue::from_object(Rc::new(RefCell::new(params_constructor_object))),
     );
 }
 
 fn url_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let input = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
+    let input = args.get(1).unwrap_or(&JSValue::undefined()).to_string();
     let parsed = url::Url::parse(&input).or_else(|_| {
-        let base = args.get(2).unwrap_or(&JSValue::Undefined).to_string();
+        let base = args.get(2).unwrap_or(&JSValue::undefined()).to_string();
         url::Url::parse(&base)?.join(&input)
     });
     let parsed = parsed.map_err(|_| JSError::TypeError("Invalid URL".to_string()))?;
-    Ok(JSValue::Object(make_url_object(parsed)))
+    Ok(JSValue::from_object(make_url_object(parsed)))
 }
 
 fn make_url_object(url: url::Url) -> Rc<RefCell<JSObject>> {
     let mut object = JSObject::new();
-    object.set(URL_HREF.to_string(), JSValue::String(url.to_string()));
+    object.set(URL_HREF.to_string(), JSValue::from_string(url.to_string()));
     for (name, value) in [
         ("href", url.to_string()),
         ("origin", url.origin().ascii_serialization()),
@@ -76,25 +76,28 @@ fn make_url_object(url: url::Url) -> Rc<RefCell<JSObject>> {
     ] {
         object.define_property(
             name.to_string(),
-            Property::read_only(JSValue::String(value)),
+            Property::read_only(JSValue::from_string(value)),
         );
     }
     object.define_property(
         "searchParams".to_string(),
-        Property::read_only(JSValue::Object(make_url_search_params(
+        Property::read_only(JSValue::from_object(make_url_search_params(
             url.query().unwrap_or(""),
         ))),
     );
     object.set(
         "toString".to_string(),
-        JSValue::NativeFunction(url_to_string),
+        JSValue::from_native_function(url_to_string),
     );
-    object.set("toJSON".to_string(), JSValue::NativeFunction(url_to_string));
+    object.set(
+        "toJSON".to_string(),
+        JSValue::from_native_function(url_to_string),
+    );
     Rc::new(RefCell::new(object))
 }
 
 fn url_to_string(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let Some(JSValue::Object(url)) = args.first() else {
+    let Some(url) = args.first().and_then(JSValue::as_object) else {
         return Err(JSError::TypeError(
             "URL method called on incompatible receiver".to_string(),
         ));
@@ -103,8 +106,8 @@ fn url_to_string(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 }
 
 fn url_search_params_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let input = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
-    Ok(JSValue::Object(make_url_search_params(
+    let input = args.get(1).unwrap_or(&JSValue::undefined()).to_string();
+    Ok(JSValue::from_object(make_url_search_params(
         input.strip_prefix('?').unwrap_or(&input),
     )))
 }
@@ -113,51 +116,51 @@ fn make_url_search_params(source: &str) -> Rc<RefCell<JSObject>> {
     let mut object = JSObject::new();
     object.set(
         SEARCH_PARAMS_DATA.to_string(),
-        JSValue::String(source.to_string()),
+        JSValue::from_string(source.to_string()),
     );
     object.set(
         "get".to_string(),
-        JSValue::NativeFunction(search_params_get),
+        JSValue::from_native_function(search_params_get),
     );
     object.set(
         "has".to_string(),
-        JSValue::NativeFunction(search_params_has),
+        JSValue::from_native_function(search_params_has),
     );
     object.set(
         "set".to_string(),
-        JSValue::NativeFunction(search_params_set),
+        JSValue::from_native_function(search_params_set),
     );
     object.set(
         "append".to_string(),
-        JSValue::NativeFunction(search_params_append),
+        JSValue::from_native_function(search_params_append),
     );
     object.set(
         "delete".to_string(),
-        JSValue::NativeFunction(search_params_delete),
+        JSValue::from_native_function(search_params_delete),
     );
     object.set(
         "toString".to_string(),
-        JSValue::NativeFunction(search_params_to_string),
+        JSValue::from_native_function(search_params_to_string),
     );
     Rc::new(RefCell::new(object))
 }
 
 fn search_params_receiver(args: &[JSValue]) -> JSResult<Rc<RefCell<JSObject>>> {
-    let Some(JSValue::Object(params)) = args.first() else {
+    let Some(params) = args.first().and_then(JSValue::as_object) else {
         return Err(JSError::TypeError(
             "URLSearchParams method called on incompatible receiver".to_string(),
         ));
     };
-    if !matches!(params.borrow().get(SEARCH_PARAMS_DATA), JSValue::String(_)) {
+    if !params.borrow().get(SEARCH_PARAMS_DATA).is_string() {
         return Err(JSError::TypeError(
             "URLSearchParams method called on incompatible receiver".to_string(),
         ));
     }
-    Ok(Rc::clone(params))
+    Ok(Rc::clone(&params))
 }
 
 fn search_params_pairs(params: &Rc<RefCell<JSObject>>) -> Vec<(String, String)> {
-    let JSValue::String(source) = params.borrow().get(SEARCH_PARAMS_DATA) else {
+    let Some(source) = params.borrow().get(SEARCH_PARAMS_DATA).as_string_owned() else {
         return Vec::new();
     };
     url::form_urlencoded::parse(source.as_bytes())
@@ -170,23 +173,23 @@ fn set_search_params_pairs(params: &Rc<RefCell<JSObject>>, pairs: &[(String, Str
     serializer.extend_pairs(pairs.iter().map(|(key, value)| (key, value)));
     params.borrow_mut().set(
         SEARCH_PARAMS_DATA.to_string(),
-        JSValue::String(serializer.finish()),
+        JSValue::from_string(serializer.finish()),
     );
 }
 
 fn search_params_get(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let params = search_params_receiver(&args)?;
-    let name = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
+    let name = args.get(1).unwrap_or(&JSValue::undefined()).to_string();
     Ok(search_params_pairs(&params)
         .into_iter()
-        .find_map(|(key, value)| (key == name).then_some(JSValue::String(value)))
-        .unwrap_or(JSValue::Null))
+        .find_map(|(key, value)| (key == name).then_some(JSValue::from_string(value)))
+        .unwrap_or(JSValue::null()))
 }
 
 fn search_params_has(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let params = search_params_receiver(&args)?;
-    let name = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
-    Ok(JSValue::Boolean(
+    let name = args.get(1).unwrap_or(&JSValue::undefined()).to_string();
+    Ok(JSValue::from_bool(
         search_params_pairs(&params)
             .into_iter()
             .any(|(key, _)| key == name),
@@ -195,32 +198,32 @@ fn search_params_has(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 
 fn search_params_set(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let params = search_params_receiver(&args)?;
-    let name = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
-    let value = args.get(2).unwrap_or(&JSValue::Undefined).to_string();
+    let name = args.get(1).unwrap_or(&JSValue::undefined()).to_string();
+    let value = args.get(2).unwrap_or(&JSValue::undefined()).to_string();
     let mut pairs = search_params_pairs(&params);
     pairs.retain(|(key, _)| key != &name);
     pairs.push((name, value));
     set_search_params_pairs(&params, &pairs);
-    Ok(JSValue::Undefined)
+    Ok(JSValue::undefined())
 }
 
 fn search_params_append(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let params = search_params_receiver(&args)?;
-    let name = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
-    let value = args.get(2).unwrap_or(&JSValue::Undefined).to_string();
+    let name = args.get(1).unwrap_or(&JSValue::undefined()).to_string();
+    let value = args.get(2).unwrap_or(&JSValue::undefined()).to_string();
     let mut pairs = search_params_pairs(&params);
     pairs.push((name, value));
     set_search_params_pairs(&params, &pairs);
-    Ok(JSValue::Undefined)
+    Ok(JSValue::undefined())
 }
 
 fn search_params_delete(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let params = search_params_receiver(&args)?;
-    let name = args.get(1).unwrap_or(&JSValue::Undefined).to_string();
+    let name = args.get(1).unwrap_or(&JSValue::undefined()).to_string();
     let mut pairs = search_params_pairs(&params);
     pairs.retain(|(key, _)| key != &name);
     set_search_params_pairs(&params, &pairs);
-    Ok(JSValue::Undefined)
+    Ok(JSValue::undefined())
 }
 
 fn search_params_to_string(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
