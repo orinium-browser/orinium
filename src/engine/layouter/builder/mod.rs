@@ -158,7 +158,10 @@ pub(crate) fn element_sibling_infos(
 /// Add new fields here when additional deferred-resolution properties arise.
 #[derive(Clone, Default)]
 pub struct InheritedCss {
-    pub custom_props: Properties,
+    /// Inherited CSS custom properties, shared copy-on-write: descendants that
+    /// do not introduce new `--var` values reuse the parent's map via `Arc`
+    /// instead of deep-cloning it per element.
+    pub custom_props: Arc<Properties>,
     pub text_style: TextStyle,
     pub text_flow_style: TextFlowStyle,
     pub color_scheme: ColorScheme,
@@ -378,9 +381,14 @@ pub fn build_layout_and_info_from_snapshot(
             }
 
             perf_scope!(enter_prep);
-            let mut custom_properties = child_css.custom_props.clone();
-            if let Some(own) = custom_property_candidates {
-                custom_properties.extend(own);
+            // Inherit custom properties by sharing the parent's map unless this
+            // element introduces new `--var` values (copy-on-write applies
+            // cascade-discovered custom properties lazily).
+            let mut custom_properties = Arc::clone(&child_css.custom_props);
+            if let Some(own) = custom_property_candidates
+                && !own.is_empty()
+            {
+                Arc::make_mut(&mut custom_properties).extend(own);
             }
 
             // Resolve the used color scheme for this element. `light-dark()`
@@ -462,7 +470,7 @@ pub fn build_layout_and_info_from_snapshot(
                             .is_some_and(|declaration| declaration.important);
                         if *important || !stylesheet_important {
                             set_inline_custom_property(
-                                &mut custom_properties,
+                                Arc::make_mut(&mut custom_properties),
                                 name.clone(),
                                 value.clone(),
                                 *important,
