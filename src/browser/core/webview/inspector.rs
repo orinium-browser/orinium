@@ -337,7 +337,7 @@ fn serialize_layout_info(info: &InfoNode, target: &LayoutTarget<'_>) -> Value {
     let size = &style.size;
     let scroll = info.kind.scroll_offsets();
     json!({
-        "display": format!("{:?}", style.display.inner),
+        "display": format!("{:?}{:?}", style.display.outer, style.display.inner),
         "position": format!("{:?}", style.position.kind),
         "width": length_text(&size.width),
         "height": length_text(&size.height),
