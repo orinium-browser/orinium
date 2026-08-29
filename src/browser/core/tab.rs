@@ -545,9 +545,8 @@ impl Tab {
         let Some((layout, info)) = self.layout_and_info() else {
             return vec![];
         };
-        let path = crate::engine::input::hit_test(layout, info, px, py);
 
-        path
+        crate::engine::input::hit_test(layout, info, px, py)
     }
 
     /// Settles a DevTools inspection request with its JSON envelope.

@@ -336,17 +336,17 @@ impl JsRuntime {
         match self.engine.eval(source) {
             Ok(_) => {}
             Err(err) => {
-                if let JSError::Thrown(value) = &err {
-                    if let Some(object) = value.as_object() {
-                        let object = object.borrow();
-                        let details = object
-                            .keys()
-                            .into_iter()
-                            .map(|key| format!("{key}={}", object.get(&key).to_console_string()))
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        log::info!("JS error: uncaught object ({details})");
-                    }
+                if let JSError::Thrown(value) = &err
+                    && let Some(object) = value.as_object()
+                {
+                    let object = object.borrow();
+                    let details = object
+                        .keys()
+                        .into_iter()
+                        .map(|key| format!("{key}={}", object.get(&key).to_console_string()))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    log::info!("JS error: uncaught object ({details})");
                 }
                 log::info!("JS error: {}", err);
             }

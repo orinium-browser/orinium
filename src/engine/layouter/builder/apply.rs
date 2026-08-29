@@ -683,7 +683,7 @@ pub fn apply_declaration(
                     "normal" => FontStyle::Normal,
                     "italic" => FontStyle::Italic,
                     "oblique" => FontStyle::Oblique,
-                    _ => text_style.font_style.clone(),
+                    _ => text_style.font_style,
                 }
             );
         }
@@ -735,7 +735,7 @@ pub fn apply_declaration(
                 match v.as_str() {
                     "sub" => VerticalAlign::Sub,
                     "super" | "sup" => VerticalAlign::Super,
-                    _ => text_flow_style.vertical_align.clone(),
+                    _ => text_flow_style.vertical_align,
                 }
             );
         }
@@ -789,7 +789,7 @@ pub fn apply_declaration(
                     "pre-wrap" => WhiteSpace::PreWrap,
                     "pre-line" => WhiteSpace::PreLine,
                     "break-spaces" => WhiteSpace::BreakSpaces,
-                    _ => text_flow_style.white_space.clone(),
+                    _ => text_flow_style.white_space,
                 }
             );
         }

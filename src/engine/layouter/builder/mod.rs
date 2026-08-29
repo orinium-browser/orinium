@@ -356,7 +356,7 @@ pub fn build_layout_and_info_from_snapshot(
             let parent_style = stack[top_idx].parent_style.clone();
             let parent_container_style = stack[top_idx].parent_container_style.clone();
             let parent_text_style = text_style.clone();
-            let parent_text_flow_style = text_flow_style.clone();
+            let parent_text_flow_style = text_flow_style;
 
             // Inherit container visibility
             container_style.visibility = parent_container_style.visibility;

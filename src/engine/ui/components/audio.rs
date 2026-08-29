@@ -297,7 +297,7 @@ fn rasterize_svg(svg: &[u8]) -> anyhow::Result<Image> {
     // tiny-skia stores premultiplied RGBA, while the renderer model accepts
     // straight-alpha RGBA. Convert once when the static icon is initialized.
     let mut rgba = pixmap.data().to_vec();
-    for pixel in rgba.chunks_exact_mut(4) {
+    for pixel in rgba.as_chunks_mut::<4>().0 {
         let alpha = pixel[3] as u16;
         if alpha == 0 {
             continue;

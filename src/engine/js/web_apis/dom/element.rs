@@ -814,7 +814,7 @@ fn shallow_clone_node(node: &NodeRef<HtmlNodeType>) -> NodeRef<HtmlNodeType> {
 fn deep_clone_tree(node: &NodeRef<HtmlNodeType>) -> NodeRef<HtmlNodeType> {
     let cloned = shallow_clone_node(node);
     for child in node.borrow().children() {
-        let cloned_child = deep_clone_tree(&child);
+        let cloned_child = deep_clone_tree(child);
         TreeNode::append_child(&cloned, cloned_child);
     }
     cloned

@@ -74,7 +74,7 @@ impl Image {
         // tiny-skia returns premultiplied RGBA; the renderer samples
         // straight-alpha pixels.
         let mut rgba = pixmap.data().to_vec();
-        for pixel in rgba.chunks_exact_mut(4) {
+        for pixel in rgba.as_chunks_mut::<4>().0 {
             let alpha = pixel[3] as u16;
             if alpha == 0 {
                 pixel[0] = 0;
