@@ -8,19 +8,19 @@
 <a href=#8 id=8 data-nosnippet>8</a>    <span class="kw">let </span><span class="kw-2">mut </span>global = engine.global_mut().borrow_mut();
 <a href=#9 id=9 data-nosnippet>9</a>    global.set(
 <a href=#10 id=10 data-nosnippet>10</a>        <span class="string">"setTimeout"</span>.to_string(),
-<a href=#11 id=11 data-nosnippet>11</a>        JSValue::NativeFunction(set_timeout),
+<a href=#11 id=11 data-nosnippet>11</a>        JSValue::from_native_function(set_timeout),
 <a href=#12 id=12 data-nosnippet>12</a>    );
 <a href=#13 id=13 data-nosnippet>13</a>    global.set(
 <a href=#14 id=14 data-nosnippet>14</a>        <span class="string">"clearTimeout"</span>.to_string(),
-<a href=#15 id=15 data-nosnippet>15</a>        JSValue::NativeFunction(clear_timer),
+<a href=#15 id=15 data-nosnippet>15</a>        JSValue::from_native_function(clear_timer),
 <a href=#16 id=16 data-nosnippet>16</a>    );
 <a href=#17 id=17 data-nosnippet>17</a>    global.set(
 <a href=#18 id=18 data-nosnippet>18</a>        <span class="string">"setInterval"</span>.to_string(),
-<a href=#19 id=19 data-nosnippet>19</a>        JSValue::NativeFunction(set_interval),
+<a href=#19 id=19 data-nosnippet>19</a>        JSValue::from_native_function(set_interval),
 <a href=#20 id=20 data-nosnippet>20</a>    );
 <a href=#21 id=21 data-nosnippet>21</a>    global.set(
 <a href=#22 id=22 data-nosnippet>22</a>        <span class="string">"clearInterval"</span>.to_string(),
-<a href=#23 id=23 data-nosnippet>23</a>        JSValue::NativeFunction(clear_timer),
+<a href=#23 id=23 data-nosnippet>23</a>        JSValue::from_native_function(clear_timer),
 <a href=#24 id=24 data-nosnippet>24</a>    );
 <a href=#25 id=25 data-nosnippet>25</a>}
 <a href=#26 id=26 data-nosnippet>26</a>
@@ -34,7 +34,7 @@
 <a href=#34 id=34 data-nosnippet>34</a>
 <a href=#35 id=35 data-nosnippet>35</a><span class="kw">fn </span>schedule_timer(vm: <span class="kw-2">&amp;mut </span>VM, args: Vec&lt;JSValue&gt;, repeating: bool) -&gt; JSResult&lt;JSValue&gt; {
 <a href=#36 id=36 data-nosnippet>36</a>    <span class="kw">let </span><span class="prelude-val">Some</span>(callback) = args.get(<span class="number">1</span>).filter(|value| is_callable(value)).cloned() <span class="kw">else </span>{
-<a href=#37 id=37 data-nosnippet>37</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>(JSValue::Number(<span class="number">0.0</span>));
+<a href=#37 id=37 data-nosnippet>37</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>(JSValue::from_number(<span class="number">0.0</span>));
 <a href=#38 id=38 data-nosnippet>38</a>    };
 <a href=#39 id=39 data-nosnippet>39</a>    <span class="kw">let </span>delay = timer_delay(args.get(<span class="number">2</span>));
 <a href=#40 id=40 data-nosnippet>40</a>    <span class="kw">let </span>arguments = args.into_iter().skip(<span class="number">3</span>).collect();
@@ -50,9 +50,9 @@
 <a href=#50 id=50 data-nosnippet>50</a>        });
 <a href=#51 id=51 data-nosnippet>51</a>        id
 <a href=#52 id=52 data-nosnippet>52</a>    }) <span class="kw">else </span>{
-<a href=#53 id=53 data-nosnippet>53</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>(JSValue::Number(<span class="number">0.0</span>));
+<a href=#53 id=53 data-nosnippet>53</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>(JSValue::from_number(<span class="number">0.0</span>));
 <a href=#54 id=54 data-nosnippet>54</a>    };
-<a href=#55 id=55 data-nosnippet>55</a>    <span class="prelude-val">Ok</span>(JSValue::Number(id <span class="kw">as </span>f64))
+<a href=#55 id=55 data-nosnippet>55</a>    <span class="prelude-val">Ok</span>(JSValue::from_number(id <span class="kw">as </span>f64))
 <a href=#56 id=56 data-nosnippet>56</a>}
 <a href=#57 id=57 data-nosnippet>57</a>
 <a href=#58 id=58 data-nosnippet>58</a><span class="kw">fn </span>timer_delay(value: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>JSValue&gt;) -&gt; Duration {
@@ -70,6 +70,6 @@
 <a href=#70 id=70 data-nosnippet>70</a>    <span class="kw">let _ </span>= with_host_mut(vm, |host| {
 <a href=#71 id=71 data-nosnippet>71</a>        host.timers.retain(|timer| timer.id != id);
 <a href=#72 id=72 data-nosnippet>72</a>    });
-<a href=#73 id=73 data-nosnippet>73</a>    <span class="prelude-val">Ok</span>(JSValue::Undefined)
+<a href=#73 id=73 data-nosnippet>73</a>    <span class="prelude-val">Ok</span>(JSValue::undefined())
 <a href=#74 id=74 data-nosnippet>74</a>}
 </code></pre></div></section></main></body></html>

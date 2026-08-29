@@ -7,18 +7,21 @@
 <a href=#7 id=7 data-nosnippet>7</a>
 <a href=#8 id=8 data-nosnippet>8</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>install_performance(engine: <span class="kw-2">&amp;mut </span>pixi_byte::JSEngine) {
 <a href=#9 id=9 data-nosnippet>9</a>    <span class="kw">let </span><span class="kw-2">mut </span>performance = JSObject::new();
-<a href=#10 id=10 data-nosnippet>10</a>    performance.set(<span class="string">"now"</span>.to_string(), JSValue::NativeFunction(performance_now));
-<a href=#11 id=11 data-nosnippet>11</a>    engine.global_mut().borrow_mut().set(
-<a href=#12 id=12 data-nosnippet>12</a>        <span class="string">"performance"</span>.to_string(),
-<a href=#13 id=13 data-nosnippet>13</a>        JSValue::Object(Rc::new(RefCell::new(performance))),
-<a href=#14 id=14 data-nosnippet>14</a>    );
-<a href=#15 id=15 data-nosnippet>15</a>}
-<a href=#16 id=16 data-nosnippet>16</a>
-<a href=#17 id=17 data-nosnippet>17</a><span class="kw">fn </span>performance_now(vm: <span class="kw-2">&amp;mut </span>VM, _args: Vec&lt;JSValue&gt;) -&gt; JSResult&lt;JSValue&gt; {
-<a href=#18 id=18 data-nosnippet>18</a>    <span class="kw">let </span>milliseconds = with_host(vm, |host| {
-<a href=#19 id=19 data-nosnippet>19</a>        host.time_origin.elapsed().as_secs_f64() * <span class="number">1_000.0
-<a href=#20 id=20 data-nosnippet>20</a>    </span>})
-<a href=#21 id=21 data-nosnippet>21</a>    .unwrap_or(<span class="number">0.0</span>);
-<a href=#22 id=22 data-nosnippet>22</a>    <span class="prelude-val">Ok</span>(JSValue::Number(milliseconds))
-<a href=#23 id=23 data-nosnippet>23</a>}
+<a href=#10 id=10 data-nosnippet>10</a>    performance.set(
+<a href=#11 id=11 data-nosnippet>11</a>        <span class="string">"now"</span>.to_string(),
+<a href=#12 id=12 data-nosnippet>12</a>        JSValue::from_native_function(performance_now),
+<a href=#13 id=13 data-nosnippet>13</a>    );
+<a href=#14 id=14 data-nosnippet>14</a>    engine.global_mut().borrow_mut().set(
+<a href=#15 id=15 data-nosnippet>15</a>        <span class="string">"performance"</span>.to_string(),
+<a href=#16 id=16 data-nosnippet>16</a>        JSValue::from_object(Rc::new(RefCell::new(performance))),
+<a href=#17 id=17 data-nosnippet>17</a>    );
+<a href=#18 id=18 data-nosnippet>18</a>}
+<a href=#19 id=19 data-nosnippet>19</a>
+<a href=#20 id=20 data-nosnippet>20</a><span class="kw">fn </span>performance_now(vm: <span class="kw-2">&amp;mut </span>VM, _args: Vec&lt;JSValue&gt;) -&gt; JSResult&lt;JSValue&gt; {
+<a href=#21 id=21 data-nosnippet>21</a>    <span class="kw">let </span>milliseconds = with_host(vm, |host| {
+<a href=#22 id=22 data-nosnippet>22</a>        host.time_origin.elapsed().as_secs_f64() * <span class="number">1_000.0
+<a href=#23 id=23 data-nosnippet>23</a>    </span>})
+<a href=#24 id=24 data-nosnippet>24</a>    .unwrap_or(<span class="number">0.0</span>);
+<a href=#25 id=25 data-nosnippet>25</a>    <span class="prelude-val">Ok</span>(JSValue::from_number(milliseconds))
+<a href=#26 id=26 data-nosnippet>26</a>}
 </code></pre></div></section></main></body></html>
