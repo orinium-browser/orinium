@@ -62,7 +62,21 @@ pub enum AtQuery {
         name: String,    // max-width
         value: CssValue, // 600px
     },
+    Range {
+        left: Option<(CssValue, RangeOperator)>,
+        name: String,
+        right: Option<(RangeOperator, CssValue)>,
+    },
     Group(Vec<AtQuery>), // ( ... )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RangeOperator {
+    Less,
+    LessEqual,
+    Equal,
+    GreaterEqual,
+    Greater,
 }
 
 /// Node in the CSS syntax tree.
@@ -748,7 +762,7 @@ impl<'a> Parser<'a> {
                     break;
                 }
 
-                Token::Ident(_) => {
+                Token::Ident(_) | Token::Number(_) | Token::Dimension(_, _) => {
                     items.push(Self::parse_at_query_item(tokens, cursor)?);
                 }
 
@@ -767,9 +781,26 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_at_query_item(tokens: &[Token], cursor: &mut usize) -> ParseResult<AtQuery> {
+        let start = *cursor;
+
+        // Try a range beginning with a media feature.
+        if let Some(range) = Self::parse_at_query_range(tokens, cursor)? {
+            return Ok(range);
+        }
+
+        *cursor = start;
+
         let name = match &tokens[*cursor] {
             Token::Ident(s) => s.clone(),
-            _ => unreachable!(),
+            _ => {
+                return Err(ParserError {
+                    kind: ParserErrorKind::UnexpectedToken {
+                        expected: "Ident(_)",
+                        found: format!("{:?}", tokens[*cursor]),
+                    },
+                    context: vec![],
+                });
+            }
         };
         *cursor += 1;
 
@@ -786,6 +817,136 @@ impl<'a> Parser<'a> {
             Ok(AtQuery::Condition { name, value })
         } else {
             Ok(AtQuery::Keyword(name))
+        }
+    }
+
+    fn parse_at_query_range(tokens: &[Token], cursor: &mut usize) -> ParseResult<Option<AtQuery>> {
+        let start = *cursor;
+
+        // `width <= 1044px`
+        if let Token::Ident(name) = tokens.get(*cursor).cloned().unwrap() {
+            *cursor += 1;
+            Self::skip_at_query_whitespace(tokens, cursor);
+
+            if let Some(operator) = Self::parse_range_operator(tokens, cursor) {
+                Self::skip_at_query_whitespace(tokens, cursor);
+
+                if let Some(value) = Self::try_parse_at_query_value(tokens, cursor)? {
+                    return Ok(Some(AtQuery::Range {
+                        left: None,
+                        name,
+                        right: Some((operator, value)),
+                    }));
+                }
+            }
+        }
+
+        *cursor = start;
+
+        // `600px <= width`
+        let Some(left) = Self::try_parse_at_query_value(tokens, cursor)? else {
+            return Ok(None);
+        };
+
+        Self::skip_at_query_whitespace(tokens, cursor);
+
+        let Some(left_operator) = Self::parse_range_operator(tokens, cursor) else {
+            *cursor = start;
+            return Ok(None);
+        };
+
+        Self::skip_at_query_whitespace(tokens, cursor);
+
+        let name = match tokens.get(*cursor) {
+            Some(Token::Ident(name)) => name.clone(),
+            _ => {
+                *cursor = start;
+                return Ok(None);
+            }
+        };
+        *cursor += 1;
+
+        Self::skip_at_query_whitespace(tokens, cursor);
+
+        // Optional second range: `600px <= width <= 1044px`
+        let right = if let Some(operator) = Self::parse_range_operator(tokens, cursor) {
+            Self::skip_at_query_whitespace(tokens, cursor);
+
+            let Some(value) = Self::try_parse_at_query_value(tokens, cursor)? else {
+                *cursor = start;
+                return Ok(None);
+            };
+
+            Some((operator, value))
+        } else {
+            None
+        };
+
+        Ok(Some(AtQuery::Range {
+            left: Some((left, left_operator)),
+            name,
+            right,
+        }))
+    }
+
+    fn parse_range_operator(tokens: &[Token], cursor: &mut usize) -> Option<RangeOperator> {
+        match tokens.get(*cursor) {
+            Some(Token::Delim('<')) => {
+                if matches!(tokens.get(*cursor + 1), Some(Token::Delim('='))) {
+                    *cursor += 2;
+                    Some(RangeOperator::LessEqual)
+                } else {
+                    *cursor += 1;
+                    Some(RangeOperator::Less)
+                }
+            }
+
+            Some(Token::Delim('>')) => {
+                if matches!(tokens.get(*cursor + 1), Some(Token::Delim('='))) {
+                    *cursor += 2;
+                    Some(RangeOperator::GreaterEqual)
+                } else {
+                    *cursor += 1;
+                    Some(RangeOperator::Greater)
+                }
+            }
+
+            Some(Token::Delim('=')) => {
+                *cursor += 1;
+                Some(RangeOperator::Equal)
+            }
+
+            _ => None,
+        }
+    }
+
+    fn skip_at_query_whitespace(tokens: &[Token], cursor: &mut usize) {
+        while matches!(
+            tokens.get(*cursor),
+            Some(Token::Whitespace | Token::Comment(_))
+        ) {
+            *cursor += 1;
+        }
+    }
+
+    fn try_parse_at_query_value(
+        tokens: &[Token],
+        cursor: &mut usize,
+    ) -> ParseResult<Option<CssValue>> {
+        let start = *cursor;
+
+        match tokens.get(*cursor) {
+            Some(Token::Number(_)) | Some(Token::Dimension(_, _)) | Some(Token::Function(_)) => {
+                match Self::parse_at_query_value(tokens, cursor) {
+                    Ok(value) => Ok(Some(value)),
+                    Err(_) => {
+                        *cursor = start;
+                        Ok(None)
+                    }
+                }
+            }
+
+            _ => Ok(None),
         }
     }
 

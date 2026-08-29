@@ -1,6 +1,6 @@
 //! A CSS resolver that handles selector matching and value resolution.
 
-use crate::engine::css::parser::{AtQuery, ComplexSelector, CssNode, CssNodeType};
+use crate::engine::css::parser::{AtQuery, ComplexSelector, CssNode, CssNodeType, RangeOperator};
 use crate::engine::css::values::{CssIdent, CssValue, Unit};
 use crate::engine::layouter::types::ColorScheme;
 
@@ -543,12 +543,6 @@ impl MediaEvaluator {
         }
     }
 
-    fn evaluate_group(items: &[AtQuery], environment: &MediaEnvironment) -> bool {
-        items
-            .split(|item| matches!(item, AtQuery::Keyword(keyword) if keyword == ","))
-            .any(|clause| Self::evaluate_clause(clause, environment))
-    }
-
     fn evaluate_clause(items: &[AtQuery], environment: &MediaEnvironment) -> bool {
         if items.is_empty() {
             return false;
@@ -584,6 +578,10 @@ impl MediaEvaluator {
                     saw_operand = true;
                     Self::evaluate_condition(name, value, environment)
                 }
+                AtQuery::Range { left, name, right } => {
+                    saw_operand = true;
+                    Self::evaluate_range(left.as_ref(), name, right.as_ref(), environment)
+                }
                 AtQuery::Group(group) => {
                     saw_operand = true;
                     Self::evaluate_group(group, environment)
@@ -593,6 +591,59 @@ impl MediaEvaluator {
             return false;
         }
         if negate { !matches } else { matches }
+    }
+
+    fn evaluate_group(items: &[AtQuery], environment: &MediaEnvironment) -> bool {
+        items
+            .split(|item| matches!(item, AtQuery::Keyword(keyword) if keyword == ","))
+            .any(|clause| Self::evaluate_clause(clause, environment))
+    }
+
+    fn evaluate_range(
+        left: Option<&(CssValue, RangeOperator)>,
+        name: &str,
+        right: Option<&(RangeOperator, CssValue)>,
+        environment: &MediaEnvironment,
+    ) -> bool {
+        let name = name.to_ascii_lowercase();
+
+        let actual = match name.as_str() {
+            "width" => environment.viewport_width,
+            "height" => environment.viewport_height,
+            _ => return false,
+        };
+
+        if let Some((value, operator)) = left {
+            let Some(expected) = Self::length_px(value, environment) else {
+                return false;
+            };
+
+            if !Self::compare_range(expected, *operator, actual) {
+                return false;
+            }
+        }
+
+        if let Some((operator, value)) = right {
+            let Some(expected) = Self::length_px(value, environment) else {
+                return false;
+            };
+
+            if !Self::compare_range(actual, *operator, expected) {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn compare_range(actual: f32, operator: RangeOperator, expected: f32) -> bool {
+        match operator {
+            RangeOperator::Less => actual < expected,
+            RangeOperator::LessEqual => actual <= expected,
+            RangeOperator::Equal => (actual - expected).abs() <= f32::EPSILON,
+            RangeOperator::GreaterEqual => actual >= expected,
+            RangeOperator::Greater => actual > expected,
+        }
     }
 
     fn evaluate_condition(name: &str, value: &CssValue, environment: &MediaEnvironment) -> bool {
@@ -930,6 +981,8 @@ impl SupportsEvaluator {
             AtQuery::Group(items) => Self::evaluate_group(items),
             // `@supports (display: grid)` — the inner condition after unwrapping
             AtQuery::Condition { name, value } => Self::is_supported(name, value),
+            // Media query range syntax is not a @supports condition.
+            AtQuery::Range { .. } => false,
             // Stray keyword outside a group (malformed input)
             AtQuery::Keyword(_) => false,
         }
