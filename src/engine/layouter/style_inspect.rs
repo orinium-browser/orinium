@@ -124,33 +124,36 @@ pub fn collect_matched_rules(
     }
 
     let mut rule_index: HashMap<(String, StyleOrigin), usize> = HashMap::new();
-    for declaration in rule_set.query_candidates(element) {
-        if !declaration.selector.matches(&chain) {
+    for group in rule_set.query_candidates(element) {
+        if !group.selector.matches(&chain) {
             continue;
         }
-        let selector = declaration.selector.to_string();
-        let key = (selector, declaration.origin);
-        let rule = *rule_index.entry(key).or_insert_with(|| {
-            rules.push(MatchedRule {
-                selector: declaration.selector.to_string(),
-                origin: declaration.origin,
-                inline: false,
-                declarations: Vec::new(),
+        for &decl_idx in &group.decls {
+            let declaration = &rule_set.declarations()[decl_idx];
+            let selector = declaration.selector.to_string();
+            let key = (selector, declaration.origin);
+            let rule = *rule_index.entry(key).or_insert_with(|| {
+                rules.push(MatchedRule {
+                    selector: declaration.selector.to_string(),
+                    origin: declaration.origin,
+                    inline: false,
+                    declarations: Vec::new(),
+                });
+                rules.len() - 1
             });
-            rules.len() - 1
-        });
-        pendings.push(Pending {
-            name: declaration.name.clone(),
-            key: CascadeKey::from_declaration(declaration),
-            rule,
-            declaration: rules[rule].declarations.len(),
-        });
-        rules[rule].declarations.push(InspectedDeclaration {
-            name: declaration.name.clone(),
-            value: declaration.value.clone(),
-            important: declaration.important,
-            applied: false,
-        });
+            pendings.push(Pending {
+                name: declaration.name.clone(),
+                key: CascadeKey::from_declaration(declaration),
+                rule,
+                declaration: rules[rule].declarations.len(),
+            });
+            rules[rule].declarations.push(InspectedDeclaration {
+                name: declaration.name.clone(),
+                value: declaration.value.clone(),
+                important: declaration.important,
+                applied: false,
+            });
+        }
     }
 
     mark_cascade_winners(&mut rules, &pendings);

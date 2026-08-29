@@ -1403,14 +1403,16 @@ fn collect_candidates(
         stats.query_candidates_time += query.elapsed();
     }
 
-    for decl in candidates_iter {
+    for group in candidates_iter {
         #[cfg(any(feature = "profile", debug_assertions))]
         {
             stats.candidates_examined += 1;
         }
 
+        // Declarations sharing an identical selector are grouped, so the
+        // (comparatively expensive) selector walk happens once per group.
         perf_scope!(sel_match);
-        let matches_sel = decl.selector.matches(chain);
+        let matches_sel = group.selector.matches(chain);
         #[cfg(any(feature = "profile", debug_assertions))]
         {
             stats.selector_match_time += sel_match.elapsed();
@@ -1422,25 +1424,29 @@ fn collect_candidates(
             continue;
         }
 
-        let target = if decl.name.starts_with("--") {
-            &mut custom_properties
-        } else {
-            &mut properties
-        };
+        for &decl_idx in &group.decls {
+            let decl = &rule_set.declarations()[decl_idx];
 
-        perf_scope!(cascade);
-        let should_replace = match target.get(&decl.name) {
-            Some(current) => decl.outranks(current),
-            None => true,
-        };
+            let target = if decl.name.starts_with("--") {
+                &mut custom_properties
+            } else {
+                &mut properties
+            };
 
-        if should_replace {
-            target.insert(decl.name.clone(), decl.clone());
-        }
+            perf_scope!(cascade);
+            let should_replace = match target.get(&decl.name) {
+                Some(current) => decl.outranks(current),
+                None => true,
+            };
 
-        #[cfg(any(feature = "profile", debug_assertions))]
-        {
-            stats.cascade_insert_time += cascade.elapsed();
+            if should_replace {
+                target.insert(decl.name.clone(), decl.clone());
+            }
+
+            #[cfg(any(feature = "profile", debug_assertions))]
+            {
+                stats.cascade_insert_time += cascade.elapsed();
+            }
         }
     }
 

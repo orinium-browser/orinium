@@ -5,6 +5,7 @@ use crate::engine::css::values::{CssIdent, CssValue, Unit};
 use crate::engine::layouter::types::ColorScheme;
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 pub(super) type Properties = HashMap<String, ResolvedDeclaration>;
 
@@ -43,34 +44,54 @@ pub enum StyleOrigin {
 /// 4. `order` (later declarations win)
 #[derive(Debug, Clone)]
 pub struct ResolvedDeclaration {
-    pub selector: ComplexSelector,
+    pub selector: Arc<ComplexSelector>,
     pub name: String,
     pub value: CssValue,
     pub specificity: (u32, u32, u32),
     pub order: usize,
     pub important: bool,
     pub origin: StyleOrigin,
-    /// Nested `@media` conditions which must all match before this declaration applies.
-    pub media_queries: Vec<AtQuery>,
+    /// Nested `@media`/`@supports` conditions which must all match before this
+    /// declaration applies. Shared across declarations of the same rule block.
+    pub media_queries: Arc<Vec<AtQuery>>,
 }
 
 pub type ResolvedStyles = Vec<ResolvedDeclaration>;
 
 /// Indexed collection of resolved CSS declarations partitioned by selector subject.
 ///
-/// Instead of matching every declaration against every DOM element ($O(N_{DOM} \times M_{CSS})$),
-/// declarations are indexed by their subject selector (rightmost part):
+/// Instead of matching every declaration against every DOM element
+/// `O(N_DOM * M_CSS)`, declarations are grouped by *selector* and
+/// indexed by their subject selector (rightmost part):
 /// - ID selector (`#id`)
 /// - Class selectors (`.class`)
 /// - Tag name selector (`div`, `p`, etc.)
-/// - Universal / attribute-only / complex selectors
+/// - Attribute selectors (`[hidden]`)
+/// - Universal / pseudo-class-only selectors
+///
+/// Declarations produced by one rule block share an identical selector, so
+/// grouped matching evaluates each selector at most once per element instead of
+/// once per declaration.
 #[derive(Debug, Clone, Default)]
 pub struct RuleSet<'a> {
     declarations: &'a [ResolvedDeclaration],
+    /// Declarations sharing a structurally identical selector, so a selector is
+    /// matched once per element for the whole group.
+    groups: Vec<SelectorGroup<'a>>,
     id_rules: HashMap<String, Vec<usize>>,
     class_rules: HashMap<String, Vec<usize>>,
     tag_rules: HashMap<String, Vec<usize>>,
+    attribute_rules: HashMap<String, Vec<usize>>,
     universal_rules: Vec<usize>,
+}
+
+/// Declarations whose selectors are structurally identical. Matching
+/// `selector` once is sufficient to cascade every declaration in `decls`;
+/// `decls` holds indices into [`RuleSet::declarations`].
+#[derive(Debug, Clone)]
+pub struct SelectorGroup<'a> {
+    pub selector: &'a ComplexSelector,
+    pub decls: Vec<usize>,
 }
 
 impl<'a> RuleSet<'a> {
@@ -79,77 +100,112 @@ impl<'a> RuleSet<'a> {
         declarations: &'a [ResolvedDeclaration],
         media_env: &MediaEnvironment,
     ) -> Self {
-        let mut id_rules: HashMap<String, Vec<usize>> = HashMap::new();
-        let mut class_rules: HashMap<String, Vec<usize>> = HashMap::new();
-        let mut tag_rules: HashMap<String, Vec<usize>> = HashMap::new();
-        let mut universal_rules = Vec::new();
-
+        // First pass: media-filter and group declarations by selector. All
+        // declarations of one rule block share an identical selector, so each
+        // unique selector is matched once per element for all its declarations.
+        let mut groups = Vec::<SelectorGroup<'a>>::new();
+        let mut group_by_selector: HashMap<&'a ComplexSelector, usize> = HashMap::new();
         for (idx, decl) in declarations.iter().enumerate() {
             // Media query evaluation done ONCE per declaration during RuleSet construction!
             if !decl.matches_media(media_env) {
                 continue;
             }
+            let selector: &'a ComplexSelector = &decl.selector;
+            match group_by_selector.get(selector) {
+                Some(&group_idx) => groups[group_idx].decls.push(idx),
+                None => {
+                    let group_idx = groups.len();
+                    groups.push(SelectorGroup {
+                        selector,
+                        decls: vec![idx],
+                    });
+                    group_by_selector.insert(selector, group_idx);
+                }
+            }
+        }
 
+        let mut id_rules: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut class_rules: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut tag_rules: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut attribute_rules: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut universal_rules = Vec::new();
+
+        for (group_idx, group) in groups.iter().enumerate() {
             // ComplexSelector parts are stored right-to-left: parts[0] is the subject selector.
-            if let Some(subject_part) = decl.selector.parts.first() {
+            if let Some(subject_part) = group.selector.parts.first() {
                 let sel = &subject_part.selector;
                 if let Some(id) = &sel.id {
-                    id_rules.entry(id.clone()).or_default().push(idx);
+                    id_rules.entry(id.clone()).or_default().push(group_idx);
                 } else if let Some(first_class) = sel.classes.first() {
                     // Index by the first class to prevent duplicate indexing
                     class_rules
                         .entry(first_class.clone())
                         .or_default()
-                        .push(idx);
+                        .push(group_idx);
                 } else if let Some(tag) = &sel.tag {
-                    tag_rules.entry(tag.clone()).or_default().push(idx);
+                    tag_rules.entry(tag.clone()).or_default().push(group_idx);
+                } else if let Some(first_attr) = sel.attributes.first() {
+                    attribute_rules
+                        .entry(first_attr.name.clone())
+                        .or_default()
+                        .push(group_idx);
                 } else {
-                    universal_rules.push(idx);
+                    universal_rules.push(group_idx);
                 }
             } else {
-                universal_rules.push(idx);
+                universal_rules.push(group_idx);
             }
         }
 
         Self {
             declarations,
+            groups,
             id_rules,
             class_rules,
             tag_rules,
+            attribute_rules,
             universal_rules,
         }
     }
 
-    /// Returns an iterator over declaration candidates that might match the given element.
+    /// Returns an iterator over selector candidates that might match the given
+    /// element, each unique selector at most once per element.
     pub fn query_candidates(
         &self,
         element: &crate::engine::css::matcher::ElementInfo,
-    ) -> impl Iterator<Item = &'a ResolvedDeclaration> {
-        let universal = self
-            .universal_rules
-            .iter()
-            .map(|&idx| &self.declarations[idx]);
+    ) -> impl Iterator<Item = &SelectorGroup<'a>> {
+        let universal = self.universal_rules.iter().map(|&g| &self.groups[g]);
 
         let id = element
             .id
             .as_ref()
             .and_then(|id_str| self.id_rules.get(id_str))
             .into_iter()
-            .flat_map(|indices| indices.iter().map(|&idx| &self.declarations[idx]));
+            .flat_map(|indices| indices.iter().map(|&g| &self.groups[g]));
 
         let tag = self
             .tag_rules
             .get(&element.tag_name)
             .into_iter()
-            .flat_map(|indices| indices.iter().map(|&idx| &self.declarations[idx]));
+            .flat_map(|indices| indices.iter().map(|&g| &self.groups[g]));
 
         let classes = element
             .classes
             .iter()
             .filter_map(|class_str| self.class_rules.get(class_str))
-            .flat_map(|indices| indices.iter().map(|&idx| &self.declarations[idx]));
+            .flat_map(|indices| indices.iter().map(|&g| &self.groups[g]));
 
-        universal.chain(id).chain(tag).chain(classes)
+        let attributes = element
+            .attributes
+            .iter()
+            .filter_map(|(name, _)| self.attribute_rules.get(name))
+            .flat_map(|indices| indices.iter().map(|&g| &self.groups[g]));
+
+        universal
+            .chain(id)
+            .chain(tag)
+            .chain(classes)
+            .chain(attributes)
     }
 
     pub fn declarations(&self) -> &'a [ResolvedDeclaration] {
@@ -303,14 +359,14 @@ pub(super) fn set_inline_custom_property(
     properties.insert(
         name.clone(),
         ResolvedDeclaration {
-            selector: ComplexSelector { parts: Vec::new() },
+            selector: Arc::new(ComplexSelector { parts: Vec::new() }),
             name,
             value,
             specificity: (u32::MAX, u32::MAX, u32::MAX),
             order: usize::MAX,
             important,
             origin: StyleOrigin::Author,
-            media_queries: Vec::new(),
+            media_queries: Arc::new(Vec::new()),
         },
     );
 }
@@ -459,17 +515,19 @@ impl CssResolver {
         media_queries: &[AtQuery],
     ) {
         let specificity = selector.specificity();
+        let selector = Arc::new(selector.clone());
+        let media_queries = Arc::new(media_queries.to_vec());
 
         for decl in declarations {
             styles.push(ResolvedDeclaration {
-                selector: selector.clone(),
+                selector: Arc::clone(&selector),
                 name: decl.name.clone(),
                 value: decl.value.clone(),
                 specificity,
                 order: *order,
                 important: decl.important,
                 origin,
-                media_queries: media_queries.to_vec(),
+                media_queries: Arc::clone(&media_queries),
             });
             *order += 1;
         }
@@ -739,6 +797,13 @@ mod tests {
         );
         let env = MediaEnvironment::new((800.0, 600.0), ColorScheme::Light);
         let rule_set = RuleSet::from_declarations(&styles, &env);
+        let decls_of = |group: &SelectorGroup<'_>| -> Vec<&ResolvedDeclaration> {
+            group
+                .decls
+                .iter()
+                .map(|&idx| &rule_set.declarations()[idx])
+                .collect()
+        };
 
         // Test element 1: <div id="header" class="btn">
         let el1 = crate::engine::css::matcher::ElementInfo {
@@ -747,7 +812,7 @@ mod tests {
             classes: vec!["btn".to_string()],
             ..Default::default()
         };
-        let candidates1: Vec<_> = rule_set.query_candidates(&el1).collect();
+        let candidates1: Vec<_> = rule_set.query_candidates(&el1).flat_map(decls_of).collect();
         // Should match universal (*), id (#header), and class (.btn)
         assert!(candidates1.iter().any(|d| d.name == "margin"));
         assert!(candidates1.iter().any(|d| d.name == "color"));
@@ -762,13 +827,93 @@ mod tests {
             classes: vec!["other".to_string()],
             ..Default::default()
         };
-        let candidates2: Vec<_> = rule_set.query_candidates(&el2).collect();
+        let candidates2: Vec<_> = rule_set.query_candidates(&el2).flat_map(decls_of).collect();
         // Should match universal (*) and tag (span)
         assert!(candidates2.iter().any(|d| d.name == "margin"));
         assert!(candidates2.iter().any(|d| d.name == "font-size"));
         // Should NOT include id (#header) or class (.btn)
         assert!(!candidates2.iter().any(|d| d.name == "color"));
         assert!(!candidates2.iter().any(|d| d.name == "display"));
+    }
+
+    #[test]
+    fn rule_set_groups_shared_selectors() {
+        let styles = resolve(
+            r#"
+            div { color: red; font-size: 12px; }
+            div { margin: 0; }
+            p { padding: 1px; }
+            p.padded { padding: 2px; }
+            "#,
+            StyleOrigin::Author,
+        );
+        let env = MediaEnvironment::new((800.0, 600.0), ColorScheme::Light);
+        let rule_set = RuleSet::from_declarations(&styles, &env);
+
+        // The two `div` blocks share an identical selector, so all three
+        // declarations merge into a single group.
+        let div = crate::engine::css::matcher::ElementInfo {
+            tag_name: "div".to_string(),
+            ..Default::default()
+        };
+        let groups: Vec<_> = rule_set.query_candidates(&div).collect();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].decls.len(), 3);
+
+        // Plain `p` only matches the `p` group.
+        let p = crate::engine::css::matcher::ElementInfo {
+            tag_name: "p".to_string(),
+            ..Default::default()
+        };
+        let groups: Vec<_> = rule_set.query_candidates(&p).collect();
+        assert_eq!(groups.len(), 1);
+
+        // Distinct selectors stay in distinct groups.
+        let padded = crate::engine::css::matcher::ElementInfo {
+            tag_name: "p".to_string(),
+            classes: vec!["padded".to_string()],
+            ..Default::default()
+        };
+        let groups: Vec<_> = rule_set.query_candidates(&padded).collect();
+        assert_eq!(groups.len(), 2);
+    }
+
+    #[test]
+    fn rule_set_indexes_attribute_subjects() {
+        let styles = resolve(
+            r#"
+            [hidden] { display: none; }
+            [data-tip] { position: relative; }
+            "#,
+            StyleOrigin::Author,
+        );
+        let env = MediaEnvironment::new((800.0, 600.0), ColorScheme::Light);
+        let rule_set = RuleSet::from_declarations(&styles, &env);
+
+        let hidden = crate::engine::css::matcher::ElementInfo {
+            tag_name: "div".to_string(),
+            attributes: vec![("hidden".to_string(), String::new())],
+            ..Default::default()
+        };
+        let candidates: Vec<_> = rule_set
+            .query_candidates(&hidden)
+            .flat_map(|group| group.decls.iter())
+            .collect();
+        assert_eq!(candidates.len(), 1, "only the [hidden] group is queried");
+
+        let plain = crate::engine::css::matcher::ElementInfo {
+            tag_name: "div".to_string(),
+            ..Default::default()
+        };
+        let candidates: Vec<_> = rule_set
+            .query_candidates(&plain)
+            .flat_map(|group| group.decls.iter())
+            .collect();
+        assert_eq!(
+            candidates.len(),
+            0,
+            "no candidates for attribute-less element"
+        );
     }
 }
 
