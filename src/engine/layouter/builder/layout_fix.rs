@@ -242,49 +242,11 @@ fn correct_atomic_inline_spacing_impl(node: &mut LayoutNode, info: Option<&InfoN
 
     expand_auto_inline_width_to_children(node);
     expand_auto_flex_item_widths(node);
-    correct_horizontal_flex_spacing(node);
     expand_auto_flex_width_to_children(node);
     expand_auto_flex_height_to_children(node);
     enforce_fixed_layout_height(node);
     correct_single_row_grid_inline_alignment(node);
     expand_auto_flow_height_to_children(node);
-}
-
-/// **Bug fix:** `column-gap`, `margin-left`, `margin-right`
-///
-/// `ui_layout` computes `column-gap` for flex containers but applies it
-/// imprecisely, causing adjacent flex items in a row to overlap their margins.
-fn correct_horizontal_flex_spacing(node: &mut LayoutNode) {
-    if node.style.display.inner != InnerDisplay::Flex
-        || node.style.flex_direction != FlexDirection::Row
-    {
-        return;
-    }
-    let column_gap = fixed_nonnegative_px(&node.style.column_gap);
-    let mut previous_right: Option<f32> = None;
-    for child in &mut node.children {
-        let LayoutChild::Node(child) = child else {
-            continue;
-        };
-        let Some(model) = child.layout_box.iter().next() else {
-            continue;
-        };
-        let margin_left = fixed_nonnegative_px(&child.style.spacing.margin_left);
-        let margin_right = fixed_nonnegative_px(&child.style.spacing.margin_right);
-        let desired_x = previous_right
-            .map(|right| right + column_gap + margin_left)
-            .unwrap_or(model.border_box.x + margin_left);
-        if model.border_box.x < desired_x {
-            shift_layout_box_x(&mut child.layout_box, desired_x - model.border_box.x);
-        }
-        previous_right = Some(
-            model
-                .border_box
-                .right()
-                .max(desired_x + model.border_box.width)
-                + margin_right,
-        );
-    }
 }
 
 /// **Bug fix:** `width`
