@@ -1064,22 +1064,6 @@ pub fn apply_declaration(
         ("max-height", _) => {
             style.size.max_height = resolve_css_len_auto(name, value, text_flow_style)?;
         }
-        ("aspect-ratio", _) => {
-            style.size.aspect_ratio = match value {
-                CssValue::Keyword(v) if v == "auto" => None,
-                CssValue::Number(v) if *v > 0.0 => Some(*v),
-                CssValue::List(l) => {
-                    let mut nums = l.iter().filter_map(|v| match v {
-                        CssValue::Number(n) if *n > 0.0 => Some(*n),
-                        _ => None,
-                    });
-                    let w = nums.next()?;
-                    let h = nums.next()?;
-                    Some(w / h)
-                }
-                _ => return None,
-            };
-        }
 
         /* ======================
          * Position

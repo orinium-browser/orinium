@@ -74,7 +74,7 @@ pub(crate) fn resolve_border_box_size(
     viewport_height: f32,
 ) -> ContentSize {
     let intrinsic = node.intrinsic_size();
-    let aspect_ratio = style.size.aspect_ratio.or_else(|| {
+    let aspect_ratio = {
         if node.preserves_intrinsic_aspect_ratio()
             && intrinsic.width > 0.0
             && intrinsic.height > 0.0
