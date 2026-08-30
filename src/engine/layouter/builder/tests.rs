@@ -975,7 +975,10 @@ fn negative_grid_end_line_spans_to_the_last_explicit_track() {
         .next()
         .expect("large grid item");
     assert_eq!(large.style.grid_column.start, Some(1));
-    assert_eq!(large.style.grid_column.end, GridPlacementEnd::Line(3));
+    assert_eq!(
+        large.style.grid_column.end,
+        GridPlacementEnd::NegativeLine(1)
+    );
     assert!((large.layout_box.width_box() - 600.0).abs() < 0.5);
 }
 
