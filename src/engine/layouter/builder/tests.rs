@@ -782,6 +782,49 @@ fn atomic_inline_block_starts_below_its_top_margin() {
         "#;
     let (mut layout, _) = layout_and_info_for(html, css);
     ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+
+    // Debug BEFORE correct_atomic_inline_spacing
+    {
+        fn find_flex_links(node: &LayoutNode) -> Option<(&LayoutNode, &LayoutNode)> {
+            let links: Vec<_> = node
+                .children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .filter(|child| child.style.display.outer == OuterDisplay::Block)
+                .collect();
+            if node.style.display.inner == InnerDisplay::Flex && links.len() == 2 {
+                return Some((links[0], links[1]));
+            }
+            node.children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .find_map(find_flex_links)
+        }
+        if let Some((f, s)) = find_flex_links(&layout) {
+            let fb = f.layout_box.iter().next().unwrap();
+            let sb = s.layout_box.iter().next().unwrap();
+            eprintln!(
+                "PRE-CORRECT first bb: x={}, w={}, right={}",
+                fb.border_box.x,
+                fb.border_box.width,
+                fb.border_box.right()
+            );
+            eprintln!(
+                "PRE-CORRECT second bb: x={}, w={}",
+                sb.border_box.x, sb.border_box.width
+            );
+            // Check the button inside first
+            if let Some(btn) = f.children.iter().filter_map(LayoutChild::node).next() {
+                if let Some(bm) = btn.layout_box.iter().next() {
+                    eprintln!(
+                        "PRE-CORRECT button bb: x={}, w={}",
+                        bm.border_box.x, bm.border_box.width
+                    );
+                }
+            }
+        }
+    }
+
     correct_atomic_inline_spacing(&mut layout);
 
     fn main_box(node: &LayoutNode) -> Option<ui_layout::Rect> {
@@ -867,6 +910,49 @@ fn auto_flex_height_includes_child_vertical_margins() {
         "#;
     let (mut layout, _) = layout_and_info_for(html, css);
     ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+
+    // Debug BEFORE correct_atomic_inline_spacing
+    {
+        fn find_flex_links(node: &LayoutNode) -> Option<(&LayoutNode, &LayoutNode)> {
+            let links: Vec<_> = node
+                .children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .filter(|child| child.style.display.outer == OuterDisplay::Block)
+                .collect();
+            if node.style.display.inner == InnerDisplay::Flex && links.len() == 2 {
+                return Some((links[0], links[1]));
+            }
+            node.children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .find_map(find_flex_links)
+        }
+        if let Some((f, s)) = find_flex_links(&layout) {
+            let fb = f.layout_box.iter().next().unwrap();
+            let sb = s.layout_box.iter().next().unwrap();
+            eprintln!(
+                "PRE-CORRECT first bb: x={}, w={}, right={}",
+                fb.border_box.x,
+                fb.border_box.width,
+                fb.border_box.right()
+            );
+            eprintln!(
+                "PRE-CORRECT second bb: x={}, w={}",
+                sb.border_box.x, sb.border_box.width
+            );
+            // Check the button inside first
+            if let Some(btn) = f.children.iter().filter_map(LayoutChild::node).next() {
+                if let Some(bm) = btn.layout_box.iter().next() {
+                    eprintln!(
+                        "PRE-CORRECT button bb: x={}, w={}",
+                        bm.border_box.x, bm.border_box.width
+                    );
+                }
+            }
+        }
+    }
+
     correct_atomic_inline_spacing(&mut layout);
 
     fn flex_box(node: &LayoutNode) -> Option<ui_layout::Rect> {
@@ -1068,6 +1154,49 @@ fn flex_navigation_blockifies_and_spaces_inline_links() {
     let css = "nav { display: flex; gap: 30px; } a { display: inline; }";
     let (mut layout, _) = layout_and_info_for(html, css);
     ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+
+    // Debug BEFORE correct_atomic_inline_spacing
+    {
+        fn find_flex_links(node: &LayoutNode) -> Option<(&LayoutNode, &LayoutNode)> {
+            let links: Vec<_> = node
+                .children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .filter(|child| child.style.display.outer == OuterDisplay::Block)
+                .collect();
+            if node.style.display.inner == InnerDisplay::Flex && links.len() == 2 {
+                return Some((links[0], links[1]));
+            }
+            node.children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .find_map(find_flex_links)
+        }
+        if let Some((f, s)) = find_flex_links(&layout) {
+            let fb = f.layout_box.iter().next().unwrap();
+            let sb = s.layout_box.iter().next().unwrap();
+            eprintln!(
+                "PRE-CORRECT first bb: x={}, w={}, right={}",
+                fb.border_box.x,
+                fb.border_box.width,
+                fb.border_box.right()
+            );
+            eprintln!(
+                "PRE-CORRECT second bb: x={}, w={}",
+                sb.border_box.x, sb.border_box.width
+            );
+            // Check the button inside first
+            if let Some(btn) = f.children.iter().filter_map(LayoutChild::node).next() {
+                if let Some(bm) = btn.layout_box.iter().next() {
+                    eprintln!(
+                        "PRE-CORRECT button bb: x={}, w={}",
+                        bm.border_box.x, bm.border_box.width
+                    );
+                }
+            }
+        }
+    }
+
     correct_atomic_inline_spacing(&mut layout);
 
     fn navigation(layout: &LayoutNode) -> Option<&LayoutNode> {
@@ -1108,6 +1237,49 @@ fn bottom_anchored_grid_repositions_after_min_height_growth() {
         "#;
     let (mut layout, _) = layout_and_info_for(html, css);
     ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+
+    // Debug BEFORE correct_atomic_inline_spacing
+    {
+        fn find_flex_links(node: &LayoutNode) -> Option<(&LayoutNode, &LayoutNode)> {
+            let links: Vec<_> = node
+                .children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .filter(|child| child.style.display.outer == OuterDisplay::Block)
+                .collect();
+            if node.style.display.inner == InnerDisplay::Flex && links.len() == 2 {
+                return Some((links[0], links[1]));
+            }
+            node.children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .find_map(find_flex_links)
+        }
+        if let Some((f, s)) = find_flex_links(&layout) {
+            let fb = f.layout_box.iter().next().unwrap();
+            let sb = s.layout_box.iter().next().unwrap();
+            eprintln!(
+                "PRE-CORRECT first bb: x={}, w={}, right={}",
+                fb.border_box.x,
+                fb.border_box.width,
+                fb.border_box.right()
+            );
+            eprintln!(
+                "PRE-CORRECT second bb: x={}, w={}",
+                sb.border_box.x, sb.border_box.width
+            );
+            // Check the button inside first
+            if let Some(btn) = f.children.iter().filter_map(LayoutChild::node).next() {
+                if let Some(bm) = btn.layout_box.iter().next() {
+                    eprintln!(
+                        "PRE-CORRECT button bb: x={}, w={}",
+                        bm.border_box.x, bm.border_box.width
+                    );
+                }
+            }
+        }
+    }
+
     correct_atomic_inline_spacing(&mut layout);
 
     fn dialog(node: &LayoutNode) -> Option<ui_layout::Rect> {
@@ -1159,6 +1331,49 @@ fn full_width_inline_blocks_wrap_onto_separate_lines() {
         "#;
     let (mut layout, _) = layout_and_info_for(html, css);
     ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+
+    // Debug BEFORE correct_atomic_inline_spacing
+    {
+        fn find_flex_links(node: &LayoutNode) -> Option<(&LayoutNode, &LayoutNode)> {
+            let links: Vec<_> = node
+                .children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .filter(|child| child.style.display.outer == OuterDisplay::Block)
+                .collect();
+            if node.style.display.inner == InnerDisplay::Flex && links.len() == 2 {
+                return Some((links[0], links[1]));
+            }
+            node.children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .find_map(find_flex_links)
+        }
+        if let Some((f, s)) = find_flex_links(&layout) {
+            let fb = f.layout_box.iter().next().unwrap();
+            let sb = s.layout_box.iter().next().unwrap();
+            eprintln!(
+                "PRE-CORRECT first bb: x={}, w={}, right={}",
+                fb.border_box.x,
+                fb.border_box.width,
+                fb.border_box.right()
+            );
+            eprintln!(
+                "PRE-CORRECT second bb: x={}, w={}",
+                sb.border_box.x, sb.border_box.width
+            );
+            // Check the button inside first
+            if let Some(btn) = f.children.iter().filter_map(LayoutChild::node).next() {
+                if let Some(bm) = btn.layout_box.iter().next() {
+                    eprintln!(
+                        "PRE-CORRECT button bb: x={}, w={}",
+                        bm.border_box.x, bm.border_box.width
+                    );
+                }
+            }
+        }
+    }
+
     correct_atomic_inline_spacing(&mut layout);
 
     fn sections(node: &LayoutNode) -> Option<Vec<ui_layout::Rect>> {
@@ -1201,6 +1416,49 @@ fn auto_flex_container_expands_to_corrected_inline_margin_boxes() {
         "#;
     let (mut layout, _) = layout_and_info_for(html, css);
     ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+
+    // Debug BEFORE correct_atomic_inline_spacing
+    {
+        fn find_flex_links(node: &LayoutNode) -> Option<(&LayoutNode, &LayoutNode)> {
+            let links: Vec<_> = node
+                .children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .filter(|child| child.style.display.outer == OuterDisplay::Block)
+                .collect();
+            if node.style.display.inner == InnerDisplay::Flex && links.len() == 2 {
+                return Some((links[0], links[1]));
+            }
+            node.children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .find_map(find_flex_links)
+        }
+        if let Some((f, s)) = find_flex_links(&layout) {
+            let fb = f.layout_box.iter().next().unwrap();
+            let sb = s.layout_box.iter().next().unwrap();
+            eprintln!(
+                "PRE-CORRECT first bb: x={}, w={}, right={}",
+                fb.border_box.x,
+                fb.border_box.width,
+                fb.border_box.right()
+            );
+            eprintln!(
+                "PRE-CORRECT second bb: x={}, w={}",
+                sb.border_box.x, sb.border_box.width
+            );
+            // Check the button inside first
+            if let Some(btn) = f.children.iter().filter_map(LayoutChild::node).next() {
+                if let Some(bm) = btn.layout_box.iter().next() {
+                    eprintln!(
+                        "PRE-CORRECT button bb: x={}, w={}",
+                        bm.border_box.x, bm.border_box.width
+                    );
+                }
+            }
+        }
+    }
+
     correct_atomic_inline_spacing(&mut layout);
 
     fn flex_row(node: &LayoutNode) -> Option<&LayoutNode> {
