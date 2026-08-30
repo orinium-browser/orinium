@@ -6,13 +6,14 @@ use ui_layout::{BoxModel, EdgeOption, LayoutChild, LayoutNode, Position, Rect};
 use crate::engine::layouter::text_layouter::TextFlowLayouter;
 use crate::engine::layouter::types::{
     Background, BackgroundDimension, BackgroundOffset, BackgroundPositionAxis, BackgroundRepeat,
-    BackgroundSize, BorderRadius, Color, ContainerStyle, CornerRadius, InfoNode, NodeKind,
-    TextDecoration, TextFlowStyle, TextStyle, Visibility,
+    BackgroundSize, BorderRadius, ClipPath, Color, ContainerStyle, CornerRadius, InfoNode,
+    NodeKind, TextDecoration, TextFlowStyle, TextStyle, Visibility,
 };
 use crate::engine::renderer_model::draw_command::{Brush, DrawCommand, FillRule, Paint};
 use crate::engine::renderer_model::geom::AffineTransform;
 use crate::engine::renderer_model::path::{
-    Path, append_quarter_ellipse, clamp_radii, offset_path, rect_path, rounded_rect_path,
+    Path, append_quarter_ellipse, clamp_radii, ellipse_path, offset_path, polygon_path, rect_path,
+    rounded_rect_path,
 };
 use crate::engine::ui::ContentSize;
 
@@ -20,7 +21,8 @@ use crate::engine::ui::ContentSize;
 #[derive(Default, Clone, Copy)]
 struct BoxPushState {
     border: bool,
-    clip: bool,
+    clip_path: bool,
+    overflow_clip: bool,
     content: bool,
     scroll: bool,
 }
@@ -630,6 +632,52 @@ fn background_tile_positions(base: f32, tile: f32, area: f32, repeat: bool) -> V
     positions
 }
 
+/// Convert a [`ClipPath`] definition into a concrete [`Path`] resolved
+/// against the element's border-box dimensions.
+fn clip_path_to_path(clip: &ClipPath, w: f32, h: f32) -> Path {
+    match clip {
+        ClipPath::None => rect_path(0.0, 0.0, w, h),
+        ClipPath::Circle {
+            radius,
+            center_x,
+            center_y,
+        } => {
+            let cx = center_x * w;
+            let cy = center_y * h;
+            // `radius` is a fraction of farthest-side (max(w, h)) per CSS.
+            let farthest = w.max(h);
+            let r = (radius * farthest).min(farthest);
+            ellipse_path(cx, cy, r, r)
+        }
+        ClipPath::Ellipse {
+            rx,
+            ry,
+            center_x,
+            center_y,
+        } => {
+            let cx = center_x * w;
+            let cy = center_y * h;
+            ellipse_path(cx, cy, rx * w, ry * h)
+        }
+        ClipPath::Inset {
+            top,
+            right,
+            bottom,
+            left,
+        } => {
+            let x = left * w;
+            let y = top * h;
+            let iw = (w - left * w - right * w).max(0.0);
+            let ih = (h - top * h - bottom * h).max(0.0);
+            rect_path(x, y, iw, ih)
+        }
+        ClipPath::Polygon { points } => {
+            let verts: Vec<(f32, f32)> = points.iter().map(|(px, py)| (px * w, py * h)).collect();
+            polygon_path(&verts)
+        }
+    }
+}
+
 /// Push all draw commands for a single box model, returning the pop state.
 #[allow(clippy::too_many_arguments)]
 fn push_box_model(
@@ -664,14 +712,29 @@ fn push_box_model(
         (0.0, 0.0)
     };
 
+    // Push clip-path clip before drawing borders/backgrounds so the shape
+    // clips the entire element (border-box per CSS spec).
+    let clip_path_pushed = !is_inline
+        && !matches!(style.clip_path, ClipPath::None)
+        && border_box.width > 0.0
+        && border_box.height > 0.0;
+    if clip_path_pushed {
+        let path = clip_path_to_path(&style.clip_path, border_box.width, border_box.height);
+        cmd_buf.push(DrawCommand::PushClip {
+            path,
+            rule: FillRule::NonZero,
+        });
+    }
+
     draw_border(cmd_buf, &border_box, &padding_box, style, ox, oy);
 
     if draw_bg {
         draw_background(cmd_buf, &border_box, &padding_box, style, ox, oy);
     }
 
-    let clip = !is_inline && clips_overflow && padding_box.width > 0.0 && padding_box.height > 0.0;
-    if clip {
+    let overflow_clip =
+        !is_inline && clips_overflow && padding_box.width > 0.0 && padding_box.height > 0.0;
+    if overflow_clip {
         cmd_buf.push(DrawCommand::PushClip {
             path: rect_path(
                 padding_box.x - border_box.x,
@@ -688,7 +751,8 @@ fn push_box_model(
 
     BoxPushState {
         border,
-        clip,
+        clip_path: clip_path_pushed,
+        overflow_clip,
         content,
         scroll,
     }
@@ -702,7 +766,10 @@ fn pop_box_model(cmd_buf: &mut Vec<DrawCommand>, state: BoxPushState) {
     if state.content {
         cmd_buf.push(DrawCommand::PopTransform);
     }
-    if state.clip {
+    if state.overflow_clip {
+        cmd_buf.push(DrawCommand::PopClip);
+    }
+    if state.clip_path {
         cmd_buf.push(DrawCommand::PopClip);
     }
     if state.border {

@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use smol_str::SmolStr;
 
-use crate::engine::css::values::CssValue;
+use crate::engine::css::values::{CssValue, Unit};
 use crate::engine::layouter::types::CursorStyle;
 
 use ui_layout::{
@@ -11,8 +11,8 @@ use ui_layout::{
 };
 
 use crate::engine::layouter::types::{
-    Background, BorderRadius, BorderStyle, Color, ColorScheme, ContainerStyle, CornerRadius,
-    CssFloat, FontStyle, FontWeight, LineHeight, Overflow, TextAlign, TextDecoration,
+    Background, BorderRadius, BorderStyle, ClipPath, Color, ColorScheme, ContainerStyle,
+    CornerRadius, CssFloat, FontStyle, FontWeight, LineHeight, Overflow, TextAlign, TextDecoration,
     TextFlowStyle, TextStyle, TextTransform, VerticalAlign, Visibility, WhiteSpace,
 };
 
@@ -451,6 +451,242 @@ pub fn apply_declaration(
         }
 
         Some((width, style_v, color_v))
+    }
+
+    fn parse_clip_path(
+        name: &str,
+        value: &CssValue,
+        text_flow_style: &TextFlowStyle,
+    ) -> Option<ClipPath> {
+        match value {
+            CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("none") => Some(ClipPath::None),
+
+            CssValue::Function(func, args) if func.eq_ignore_ascii_case("circle") => {
+                let mut radius = 0.5f32; // default: closest-side
+                let mut center_x = 0.5f32;
+                let mut center_y = 0.5f32;
+                let mut after_at = false;
+
+                for arg in args {
+                    match arg {
+                        CssValue::Keyword(k) if k.eq_ignore_ascii_case("at") => {
+                            after_at = true;
+                        }
+                        CssValue::Keyword(k) if k.eq_ignore_ascii_case("closest-side") => {
+                            if !after_at {
+                                radius = 0.5;
+                            }
+                        }
+                        CssValue::Keyword(k) if k.eq_ignore_ascii_case("farthest-side") => {
+                            if !after_at {
+                                radius = 1.0;
+                            }
+                        }
+                        CssValue::Keyword(k) if k.eq_ignore_ascii_case("farthest-corner") => {
+                            if !after_at {
+                                radius = std::f32::consts::SQRT_2;
+                            }
+                        }
+                        CssValue::Length(v, unit) => {
+                            let pct = match unit {
+                                Unit::Percent => v / 100.0,
+                                _ => resolve_css_len(name, arg, text_flow_style)
+                                    .map(|l| length_to_px(&l, text_flow_style.font_size) / 100.0)
+                                    .unwrap_or(0.0),
+                            };
+                            if after_at {
+                                // Two position values: x y
+                                if center_x != 0.5 {
+                                    // already have x, this is y
+                                    center_y = pct;
+                                } else {
+                                    center_x = pct;
+                                }
+                            } else {
+                                radius = pct;
+                            }
+                        }
+                        CssValue::Number(n) => {
+                            if after_at {
+                                if center_x != 0.5 {
+                                    center_y = *n;
+                                } else {
+                                    center_x = *n;
+                                }
+                            } else {
+                                radius = *n;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Some(ClipPath::Circle {
+                    radius: radius.clamp(0.0, 1.0),
+                    center_x: center_x.clamp(0.0, 1.0),
+                    center_y: center_y.clamp(0.0, 1.0),
+                })
+            }
+
+            CssValue::Function(func, args) if func.eq_ignore_ascii_case("ellipse") => {
+                let mut rx = 0.5f32;
+                let mut ry = 0.5f32;
+                let mut center_x = 0.5f32;
+                let mut center_y = 0.5f32;
+                let mut after_at = false;
+                let mut got_ry = false;
+
+                for arg in args {
+                    match arg {
+                        CssValue::Keyword(k) if k.eq_ignore_ascii_case("at") => {
+                            after_at = true;
+                        }
+                        CssValue::Keyword(k)
+                            if k.eq_ignore_ascii_case("closest-side")
+                                || k.eq_ignore_ascii_case("farthest-side")
+                                || k.eq_ignore_ascii_case("farthest-corner") =>
+                        {
+                            // keyword sizes: use defaults
+                        }
+                        CssValue::Length(v, unit) => {
+                            let pct = match unit {
+                                Unit::Percent => v / 100.0,
+                                _ => resolve_css_len(name, arg, text_flow_style)
+                                    .map(|l| length_to_px(&l, text_flow_style.font_size) / 100.0)
+                                    .unwrap_or(0.0),
+                            };
+                            if after_at {
+                                if center_x != 0.5 {
+                                    center_y = pct;
+                                } else {
+                                    center_x = pct;
+                                }
+                            } else if !got_ry {
+                                rx = pct;
+                                got_ry = true;
+                            } else {
+                                ry = pct;
+                            }
+                        }
+                        CssValue::Number(n) => {
+                            if after_at {
+                                if center_x != 0.5 {
+                                    center_y = *n;
+                                } else {
+                                    center_x = *n;
+                                }
+                            } else if !got_ry {
+                                rx = *n;
+                                got_ry = true;
+                            } else {
+                                ry = *n;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Some(ClipPath::Ellipse {
+                    rx: rx.clamp(0.0, 1.0),
+                    ry: ry.clamp(0.0, 1.0),
+                    center_x: center_x.clamp(0.0, 1.0),
+                    center_y: center_y.clamp(0.0, 1.0),
+                })
+            }
+
+            CssValue::Function(func, args) if func.eq_ignore_ascii_case("inset") => {
+                let mut top = 0.0f32;
+                let mut right = 0.0f32;
+                let mut bottom = 0.0f32;
+                let mut left = 0.0f32;
+                let mut idx = 0;
+
+                for arg in args {
+                    if let CssValue::Keyword(k) = arg
+                        && k.eq_ignore_ascii_case("round")
+                    {
+                        break; // round keywords / border-radius not yet supported
+                    }
+                    let pct = match arg {
+                        CssValue::Length(v, Unit::Percent) => v / 100.0,
+                        CssValue::Length(v, _) => resolve_css_len(name, arg, text_flow_style)
+                            .map(|l| length_to_px(&l, text_flow_style.font_size) / 100.0)
+                            .unwrap_or(*v / 100.0),
+                        CssValue::Number(n) => *n,
+                        _ => continue,
+                    };
+                    match idx {
+                        0 => {
+                            top = pct;
+                            right = pct;
+                            bottom = pct;
+                            left = pct;
+                        }
+                        1 => {
+                            right = pct;
+                            left = pct;
+                        }
+                        2 => bottom = pct,
+                        3 => left = pct,
+                        _ => {}
+                    }
+                    idx += 1;
+                }
+                Some(ClipPath::Inset {
+                    top: top.clamp(0.0, 1.0),
+                    right: right.clamp(0.0, 1.0),
+                    bottom: bottom.clamp(0.0, 1.0),
+                    left: left.clamp(0.0, 1.0),
+                })
+            }
+
+            CssValue::Function(func, args) if func.eq_ignore_ascii_case("polygon") => {
+                let mut points = Vec::new();
+                let mut x_opt: Option<f32> = None;
+                for arg in args {
+                    match arg {
+                        CssValue::Length(v, Unit::Percent) => {
+                            let pct = v / 100.0;
+                            if let Some(x) = x_opt.take() {
+                                points.push((x, pct));
+                            } else {
+                                x_opt = Some(pct);
+                            }
+                        }
+                        CssValue::Length(v, _) => {
+                            let pct = resolve_css_len(name, arg, text_flow_style)
+                                .map(|l| length_to_px(&l, text_flow_style.font_size) / 100.0)
+                                .unwrap_or(*v / 100.0);
+                            if let Some(x) = x_opt.take() {
+                                points.push((x, pct));
+                            } else {
+                                x_opt = Some(pct);
+                            }
+                        }
+                        CssValue::Number(n) => {
+                            if let Some(x) = x_opt.take() {
+                                points.push((x, *n));
+                            } else {
+                                x_opt = Some(*n);
+                            }
+                        }
+                        CssValue::Keyword(k)
+                            if k.eq_ignore_ascii_case("fill")
+                                || k.eq_ignore_ascii_case("stroke")
+                                || k.eq_ignore_ascii_case("evenodd") =>
+                        {
+                            // fill-rule keywords: ignore
+                        }
+                        _ => {}
+                    }
+                }
+                if points.is_empty() {
+                    None
+                } else {
+                    Some(ClipPath::Polygon { points })
+                }
+            }
+
+            _ => None,
+        }
     }
 
     match (name, value) {
@@ -1070,6 +1306,10 @@ pub fn apply_declaration(
         ("border-bottom-left-radius", v) => {
             container_style.border_radius.bottom_left =
                 parse_corner_radius(name, v, text_flow_style)?;
+        }
+
+        ("clip-path", _) => {
+            container_style.clip_path = parse_clip_path(name, value, text_flow_style)?;
         }
 
         ("border-style", v) => {

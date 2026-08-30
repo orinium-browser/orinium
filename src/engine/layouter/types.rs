@@ -454,6 +454,46 @@ pub struct BorderRadius {
     pub bottom_left: CornerRadius,
 }
 
+/// CSS `clip-path` shape, stored as normalized (0.0–1.0) percentages.
+///
+/// The renderer resolves these against the element's border-box dimensions
+/// to produce a [`Path`] for `PushClip`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClipPath {
+    None,
+    Circle {
+        /// Radius as a fraction of the farthest-side distance.
+        radius: f32,
+        /// Center X (0.0–1.0, default 0.5).
+        center_x: f32,
+        /// Center Y (0.0–1.0, default 0.5).
+        center_y: f32,
+    },
+    Ellipse {
+        /// Horizontal radius as fraction of box width.
+        rx: f32,
+        /// Vertical radius as fraction of box height.
+        ry: f32,
+        center_x: f32,
+        center_y: f32,
+    },
+    Inset {
+        top: f32,
+        right: f32,
+        bottom: f32,
+        left: f32,
+    },
+    Polygon {
+        points: Vec<(f32, f32)>,
+    },
+}
+
+impl Default for ClipPath {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ContainerStyle {
     pub cursor: CursorStyle,
@@ -471,6 +511,8 @@ pub struct ContainerStyle {
     pub border_radius: BorderRadius,
     /// Inherited inline content alignment for atomic inline descendants.
     pub text_align: TextAlign,
+    /// CSS `clip-path` applied to the element's border box.
+    pub clip_path: ClipPath,
 }
 
 // =========================
