@@ -15,6 +15,7 @@ use crate::{
             self,
             types::{ColorScheme, ContainerRole, InfoNode, NodeKind},
         },
+        origin::Origin,
         renderer_model::{self, DrawCommand},
         tree::TreeNode,
         ui::{CustomNode, PointerEvent, input_text_types::InputTextEvent},
@@ -30,6 +31,8 @@ pub enum TabTask {
     Fetch {
         url: Url,
         kind: FetchKind,
+        /// The origin of the document that requested this resource.
+        origin: Origin,
     },
     NeedsRedraw,
     /// A page asked the DevTools bridge to inspect rendered state.
@@ -125,12 +128,50 @@ impl Tab {
         }
     }
 
+    /// The tab's current page origin, derived from the loaded document URL.
+    ///
+    /// Opaque until a document has been fetched, so pages backed by internal
+    /// schemes (e.g. the DevTools page) are treated as non-network origins.
+    fn page_origin(&self) -> Origin {
+        self.document_url
+            .as_ref()
+            .map(Origin::from_url)
+            .unwrap_or_else(Origin::opaque)
+    }
+
+    /// Whether a `fetch()`/`XMLHttpRequest` response may be read by the given
+    /// initiator.
+    ///
+    /// Internal (opaque) initiators may always read responses; web origins are
+    /// restricted to same-origin responses and cross-origin responses that opt
+    /// in via `Access-Control-Allow-Origin`. Responses targeted at internal
+    /// schemes are exempt here because the resource loader already prevented
+    /// web origins from ever receiving them.
+    fn may_read_fetch_response(
+        &self,
+        initiator: &Origin,
+        url: &Url,
+        headers: &[(String, String)],
+    ) -> bool {
+        if !initiator.is_network() {
+            return true;
+        }
+        match url.scheme() {
+            "http" | "https" => {
+                let response_origin = Origin::from_url_string(url.as_str());
+                initiator.same_origin(&response_origin) || headers_allow_cors(headers, initiator)
+            }
+            _ => true,
+        }
+    }
+
     /// Tab 内の状態を 1 ステップ進める
     ///
     /// - WebView.tick() を呼び出す
     /// - 発生した Task を BrowserApp に返す
     pub fn tick(&mut self) -> Vec<TabTask> {
         let mut tasks = Vec::new();
+        let page_origin = self.page_origin();
         let Some(wv) = self.webview.as_mut() else {
             return tasks;
         };
@@ -139,12 +180,17 @@ impl Tab {
             match task {
                 WebViewTask::Fetch { url, kind } => {
                     log::info!("Fetch requested in Tab: url={}", url);
-                    tasks.push(TabTask::Fetch { url, kind });
+                    tasks.push(TabTask::Fetch {
+                        url,
+                        kind,
+                        origin: page_origin.clone(),
+                    });
                 }
                 WebViewTask::AskTabHtml => {
                     tasks.push(TabTask::Fetch {
                         url: self.document_url.as_ref().unwrap().clone(),
                         kind: FetchKind::Html,
+                        origin: page_origin.clone(),
                     });
                 }
                 WebViewTask::DevToolsRequest { id, method, params } => {
@@ -200,8 +246,20 @@ impl Tab {
                     self.on_fetch_succeeded_audio(source, &resp.body);
                 }
                 FetchKind::JavaScript { request_id, .. } => {
-                    let redirected = resp.url != url.as_str();
-                    self.on_fetch_succeeded_js(request_id, resp, redirected);
+                    let initiator = self.page_origin();
+                    if self.may_read_fetch_response(&initiator, &url, &resp.headers) {
+                        let redirected = resp.url != url.as_str();
+                        self.on_fetch_succeeded_js(request_id, resp, redirected);
+                    } else {
+                        log::warn!(
+                            "Blocked CORS read of {url} from {}",
+                            initiator.ascii_serialization()
+                        );
+                        self.on_fetch_failed_js(
+                            request_id,
+                            "Cross-origin response blocked by CORS policy".to_string(),
+                        );
+                    }
                 }
             },
             Err(err) => match kind {
@@ -677,6 +735,18 @@ impl Tab {
             wv.set_js_policy(policy);
         }
     }
+}
+
+/// Whether the response headers allow `initiator` to read the response.
+///
+/// Credentials are not tracked, so a wildcard `*` grants access exactly as an
+/// explicit origin would.
+fn headers_allow_cors(headers: &[(String, String)], initiator: &Origin) -> bool {
+    let serialized = initiator.ascii_serialization();
+    headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("access-control-allow-origin"))
+        .is_some_and(|(_, value)| value == "*" || value == &serialized)
 }
 
 #[cfg(test)]

@@ -163,6 +163,8 @@ pub struct JsHost {
     // TODO: Move cookies into a shared origin/path-aware jar with expiry and security attributes.
     pub(crate) document_cookies: HashMap<String, String>,
     pub(crate) document_url: String,
+    /// ASCII serialization of the document's origin (`"null"` when opaque).
+    pub(crate) origin: String,
     pub(crate) viewport: (f64, f64),
     /// Committed layout measurements keyed by the address of a live DOM node.
     pub(crate) layout_metrics: HashMap<usize, JsLayoutMetrics>,
@@ -234,6 +236,7 @@ impl JsRuntime {
             session_storage: HashMap::new(),
             document_cookies: HashMap::new(),
             document_url: "about:blank".to_string(),
+            origin: "null".to_string(),
             viewport: (800.0, 600.0),
             layout_metrics: HashMap::new(),
             layout_metrics_by_dom_id: HashMap::new(),
@@ -358,6 +361,14 @@ impl JsRuntime {
     pub(crate) fn set_document_url(&mut self, url: &str) {
         let _ = with_host_mut(self.engine.vm(), |host| {
             host.document_url = url.to_string();
+        });
+    }
+
+    /// Updates the serialized origin exposed through the window's
+    /// `location`/`window`/`document` objects.
+    pub(crate) fn set_page_origin(&mut self, origin: &str) {
+        let _ = with_host_mut(self.engine.vm(), |host| {
+            host.origin = origin.to_string();
         });
     }
 

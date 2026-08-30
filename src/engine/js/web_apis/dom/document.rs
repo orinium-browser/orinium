@@ -48,6 +48,10 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
             read_only_accessor_property(get_document_ready_state),
         );
         document.define_property(
+            "origin".to_string(),
+            read_only_accessor_property(get_document_origin),
+        );
+        document.define_property(
             "cookie".to_string(),
             accessor_property(get_document_cookie, set_document_cookie),
         );
@@ -348,6 +352,11 @@ fn get_document_ready_state(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValu
     Ok(JSValue::from_string(
         if complete { "complete" } else { "loading" }.to_string(),
     ))
+}
+
+fn get_document_origin(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let origin = with_host(vm, |host| host.origin.clone()).unwrap_or_else(|| "null".to_string());
+    Ok(JSValue::from_string(origin))
 }
 
 fn get_document_cookie(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {

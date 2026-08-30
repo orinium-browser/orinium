@@ -28,6 +28,7 @@ use crate::engine::{
         dom_snapshot::DomSnapshot,
         types::{InfoNode, NodeKind},
     },
+    origin::Origin,
     renderer_model::Image,
     tree::TreeNode,
 };
@@ -275,12 +276,14 @@ impl std::fmt::Debug for SnapshotCache {
 ///
 /// - document_url: The URL of the document.
 /// - base_url: The base URL for resolving relative URLs.
+/// - origin: The origin of the document.
 /// - title: The title of the document.
 /// - dom: The DOM tree of the document.
 #[derive(Debug)]
 pub struct DocumentInfo {
     document_url: Url,
     base_url: Url,
+    pub origin: crate::engine::origin::Origin,
     title: String,
     pub dom: Rc<DomTree>,
 }
@@ -409,9 +412,15 @@ impl WebView {
                 .as_ref()
                 .map(|info| info.document_url.to_string())
                 .unwrap_or_default();
+            let origin = self
+                .docment_info
+                .as_ref()
+                .map(|info| info.origin.ascii_serialization())
+                .unwrap_or_else(|| "null".to_string());
             let (snapshot, dom_ids) = js_snapshot_from_tree(&dom);
             let processor = JsProcessor::new(snapshot);
             processor.send(JsTask::SetDocumentUrl { url: document_url });
+            processor.send(JsTask::SetOrigin { origin });
             processor.send(JsTask::SetViewport {
                 width: self.viewport.0,
                 height: self.viewport.1,
@@ -421,7 +430,7 @@ impl WebView {
             });
             self.js_processor = Some(processor);
             self.js_dom_ids = dom_ids;
-            self.pending_js_tasks = 3;
+            self.pending_js_tasks = 4;
         }
     }
 
@@ -594,6 +603,9 @@ impl WebView {
             processor.send(JsTask::SetDocumentUrl {
                 url: parsed.document_url.to_string(),
             });
+            processor.send(JsTask::SetOrigin {
+                origin: Origin::from_url(&parsed.document_url).ascii_serialization(),
+            });
             processor.send(JsTask::SetViewport {
                 width: self.viewport.0,
                 height: self.viewport.1,
@@ -601,7 +613,7 @@ impl WebView {
             processor.send(JsTask::SetLanguage {
                 language: locale::preferred_language(),
             });
-            initial_js_tasks = 3;
+            initial_js_tasks = 4;
             Some(processor)
         } else {
             None
@@ -619,6 +631,7 @@ impl WebView {
 
         let css_base_url = parsed.base_url.clone();
         let docment_info = DocumentInfo {
+            origin: Origin::from_url(&parsed.document_url),
             document_url: parsed.document_url,
             base_url: parsed.base_url,
             dom: parsed.dom,

@@ -92,6 +92,8 @@ pub(crate) struct TabFetchRequest {
 pub struct FetchRequest {
     pub url: Url,
     pub kind: FetchKind,
+    /// The origin of the document that requested this resource.
+    pub origin: crate::engine::origin::Origin,
 }
 
 /// [`BrowserUi::tick`] の結果。
@@ -273,11 +275,11 @@ impl BrowserUi {
             };
             for task in tab.tick() {
                 match task {
-                    TabTask::Fetch { url, kind } => {
+                    TabTask::Fetch { url, kind, origin } => {
                         log::info!("Fetch requested in BrowserUi: url={}", url);
                         fetches.push(TabFetchRequest {
                             tab_id: *tab_id,
-                            request: FetchRequest { url, kind },
+                            request: FetchRequest { url, kind, origin },
                         });
                     }
                     TabTask::NeedsRedraw => {

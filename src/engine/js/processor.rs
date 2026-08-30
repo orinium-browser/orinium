@@ -26,6 +26,8 @@ use crate::engine::layouter::dom_snapshot::DomSnapshot;
 pub enum JsTask {
     /// Set the URL exposed through `document` and related browser APIs.
     SetDocumentUrl { url: String },
+    /// Set the serialized origin exposed through `window`/`location`/`document`.
+    SetOrigin { origin: String },
     /// Update CSS-pixel dimensions exposed through the Window API.
     SetViewport { width: f32, height: f32 },
     /// Update the language preferences exposed through `navigator`.
@@ -207,6 +209,10 @@ fn run_task(runtime: &mut JsRuntime, task: JsTask) -> bool {
     match task {
         JsTask::SetDocumentUrl { url } => {
             runtime.set_document_url(&url);
+            false
+        }
+        JsTask::SetOrigin { origin } => {
+            runtime.set_page_origin(&origin);
             false
         }
         JsTask::SetViewport { width, height } => {

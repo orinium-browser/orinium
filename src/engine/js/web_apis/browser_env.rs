@@ -145,6 +145,10 @@ pub(crate) fn install_browser_environment(engine: &mut pixi_byte::JSEngine) {
     global.set("innerHeight".to_string(), JSValue::from_number(600.0));
     global.set("outerWidth".to_string(), JSValue::from_number(800.0));
     global.set("outerHeight".to_string(), JSValue::from_number(600.0));
+    global.define_property(
+        "origin".to_string(),
+        read_only_accessor_property(window_origin),
+    );
     // Keep feature detection safe while allowing formatjs to select and load
     // its individual constructor polyfills.
     let mut intl = JSObject::new();
@@ -225,6 +229,11 @@ fn location_url(vm: &VM) -> String {
     with_host(vm, |host| host.document_url.clone()).unwrap_or_else(|| "about:blank".to_string())
 }
 
+/// Serialized origin of the current document, `"null"` when opaque.
+fn page_origin(vm: &VM) -> String {
+    with_host(vm, |host| host.origin.clone()).unwrap_or_else(|| "null".to_string())
+}
+
 fn parsed_location(vm: &VM) -> Option<url::Url> {
     url::Url::parse(&location_url(vm)).ok()
 }
@@ -234,10 +243,11 @@ fn location_href(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
 }
 
 fn location_origin(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
-    let origin = parsed_location(vm)
-        .map(|url| url.origin().ascii_serialization())
-        .unwrap_or_else(|| "null".to_string());
-    Ok(JSValue::from_string(origin))
+    Ok(JSValue::from_string(page_origin(vm)))
+}
+
+fn window_origin(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::from_string(page_origin(vm)))
 }
 
 fn location_protocol(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {

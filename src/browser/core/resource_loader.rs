@@ -3,11 +3,24 @@
 //! Supports the `http(s)://` scheme (via the platform `NetworkCore`), and the
 //! network-free `resource:///` and `data:` schemes.
 
+use crate::engine::origin::Origin;
 use crate::platform::network::{NetworkCore, NetworkError, NetworkRequest, StatusCode};
 use anyhow::{Context, Result, anyhow};
 use base64::Engine;
 use std::{fmt, rc::Rc};
 use url::Url;
+
+/// Whether a document with `initiator` may load a resource addressed by `url`.
+///
+/// Web (network) origins may only reach external schemes and `data:`; every
+/// other custom scheme (`resource:`, `about:`, unknown schemes) requires an
+/// opaque origin, i.e. a page that is itself internal.
+fn scheme_allowed(initiator: &Origin, url: &Url) -> bool {
+    match url.scheme() {
+        "http" | "https" | "data" => true,
+        _ => initiator.is_opaque(),
+    }
+}
 
 /// BrowserResourceLoader
 ///
@@ -76,12 +89,16 @@ impl BrowserResourceLoader {
 
     /// Async fetch: resolve immediate schemes (`resource` / `data`) in place and
     /// push the result to `immediate_pool`; delegate all other schemes to `NetworkCore`.
-    pub fn fetch_async(&mut self, url: Url, id: usize) {
-        self.fetch_request_async(NetworkRequest::get(url.to_string()), id);
+    ///
+    /// `initiator` is the origin of the requesting document. Its scheme access
+    /// is enforced here: web (network) origins can never reach internal
+    /// `resource:`/custom scheme content.
+    pub fn fetch_async(&mut self, url: Url, id: usize, initiator: &Origin) {
+        self.fetch_request_async(NetworkRequest::get(url.to_string()), id, initiator);
     }
 
     /// Fetches a request while preserving method, headers, and body for HTTP(S).
-    pub fn fetch_request_async(&mut self, request: NetworkRequest, id: usize) {
+    pub fn fetch_request_async(&mut self, request: NetworkRequest, id: usize, initiator: &Origin) {
         let Ok(url) = Url::parse(&request.url) else {
             self.immediate_pool.push(BrowserNetworkMessage {
                 id,
@@ -92,6 +109,20 @@ impl BrowserResourceLoader {
             });
             return;
         };
+        if !scheme_allowed(initiator, &url) {
+            log::warn!(
+                "Blocked {} from {} (internal scheme access denied)",
+                url,
+                initiator.ascii_serialization()
+            );
+            self.immediate_pool.push(BrowserNetworkMessage {
+                id,
+                response: Err(BrowserNetworkError::AnyhowError(anyhow!(
+                    "Blocked request for {url}: the requesting page is not allowed to access this scheme"
+                ))),
+            });
+            return;
+        }
         let Some(body) = load_immediate(&url) else {
             if let Some(net) = &self.network {
                 net.fetch_request_async(request, id);
@@ -351,7 +382,7 @@ mod tests {
         let mut loader = BrowserResourceLoader::new(None);
         let url = Url::parse("data:text/plain,hi").unwrap();
 
-        loader.fetch_async(url, 7);
+        loader.fetch_async(url, 7, &Origin::opaque());
         let msgs = loader.try_receive();
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].id, 7);
@@ -370,12 +401,61 @@ mod tests {
                 body: b"request body".to_vec(),
             },
             8,
+            &Origin::opaque(),
         );
 
         let messages = loader.try_receive();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].id, 8);
         assert!(messages[0].response.is_err());
+    }
+
+    #[test]
+    fn network_origin_cannot_reach_resource_scheme() {
+        let mut loader = BrowserResourceLoader::new(None);
+        let web = Origin::from_url(&Url::parse("https://example.test/").unwrap());
+
+        loader.fetch_async(
+            Url::parse("resource:///devtools/index.html").unwrap(),
+            9,
+            &web,
+        );
+
+        let messages = loader.try_receive();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].id, 9);
+        assert!(messages[0].response.is_err());
+    }
+
+    #[test]
+    fn internal_origin_can_reach_resource_scheme() {
+        let mut loader = BrowserResourceLoader::new(None);
+        let internal = Origin::opaque();
+
+        loader.fetch_async(
+            Url::parse("resource:///devtools/index.html").unwrap(),
+            10,
+            &internal,
+        );
+
+        let messages = loader.try_receive();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].id, 10);
+        assert!(messages[0].response.as_ref().is_ok());
+    }
+
+    #[test]
+    fn any_origin_can_reach_data_scheme() {
+        let mut loader = BrowserResourceLoader::new(None);
+        let web = Origin::from_url(&Url::parse("https://example.test/").unwrap());
+
+        loader.fetch_async(Url::parse("data:text/plain,hi").unwrap(), 11, &web);
+
+        let messages = loader.try_receive();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].id, 11);
+        let resp = messages[0].response.as_ref().unwrap();
+        assert_eq!(resp.body, b"hi");
     }
 
     #[test]

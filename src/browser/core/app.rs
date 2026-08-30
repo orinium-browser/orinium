@@ -43,6 +43,7 @@ use super::tab::FetchKind;
 use super::ui::BrowserUi;
 use super::{BrowserCommand, resource_loader::BrowserResourceLoader};
 use crate::browser::core::ui::TabId;
+use crate::engine::origin::Origin;
 use crate::platform::network::{NetworkCore, NetworkRequest};
 use crate::platform::renderer::gpu::GpuRenderer;
 use crate::platform::system::App;
@@ -310,8 +311,9 @@ impl BrowserApp {
         for fetch in outcome.fetches {
             let url = fetch.request.url;
             let kind = fetch.request.kind;
+            let initiator = fetch.request.origin;
             log::info!("Fetch requested in App: url={}", url);
-            let request = match &kind {
+            let mut request = match &kind {
                 FetchKind::JavaScript {
                     method,
                     headers,
@@ -325,10 +327,15 @@ impl BrowserApp {
                 },
                 _ => NetworkRequest::get(url.to_string()),
             };
+            // Add browser-controlled Origin / Referer headers and strip any the
+            // page script supplied, so internal resource URLs never leak to
+            // external servers.
+            apply_fetch_headers(&mut request, &initiator, &kind);
             let id = self
                 .pending_fetches
                 .insert(window_id, fetch.tab_id, kind, url);
-            self.network.fetch_request_async(request, id);
+            // The initiator gates access to internal schemes inside the loader.
+            self.network.fetch_request_async(request, id, &initiator);
         }
 
         if outcome.needs_redraw {
@@ -357,6 +364,37 @@ impl BrowserApp {
             };
             ui.deliver_fetch(&tab_id, kind, url, msg.response);
         }
+    }
+}
+
+/// Applies the browser-controlled `Origin` / `Referer` request headers.
+///
+/// - Any `Origin` / `Referer` supplied by page scripts is stripped.
+/// - An `Origin` header is sent for CORS-mode requests (`fetch`/`XMLHttpRequest`)
+///   and for non-GET requests; the value is the initiator's serialized origin
+///   (`"null"` for opaque/internal pages), as required by the Fetch standard.
+/// - A `Referer` origin-only header is sent for network origins only; opaque
+///   pages never send one, so bundled `resource:` URLs cannot be leaked.
+fn apply_fetch_headers(request: &mut NetworkRequest, initiator: &Origin, kind: &FetchKind) {
+    request.headers.retain(|(name, _)| {
+        let name = name.to_ascii_lowercase();
+        name != "origin" && name != "referer"
+    });
+
+    if !request.url.starts_with("http://") && !request.url.starts_with("https://") {
+        return;
+    }
+
+    let is_cors_request = matches!(kind, FetchKind::JavaScript { .. }) || request.method != "GET";
+    if is_cors_request {
+        request
+            .headers
+            .push(("Origin".to_string(), initiator.ascii_serialization()));
+    }
+    if initiator.is_network() {
+        request
+            .headers
+            .push(("Referer".to_string(), initiator.ascii_serialization()));
     }
 }
 
