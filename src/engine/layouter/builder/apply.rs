@@ -695,6 +695,116 @@ pub fn apply_declaration(
             }
         }
 
+        ("font", v) => {
+            // CSS `font` shorthand:
+            // [ [ <'font-style'> || <'font-variant'> || <'font-weight'> ] font-size [/ line-height]? font-family ]
+            let values: Vec<&CssValue> = match v {
+                CssValue::List(list) => list.iter().collect(),
+                CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("inherit") => {
+                    text_style.font_style = parent_text_style.font_style;
+                    text_style.font_weight = parent_text_style.font_weight;
+                    text_style.font_families = parent_text_style.font_families.clone();
+                    text_flow_style.font_size = parent_text_flow_style.font_size;
+                    text_flow_style.line_height = parent_text_flow_style.line_height.clone();
+                    return Some(());
+                }
+                CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("initial") => {
+                    text_style.font_style = DEFAULT_TEXT_STYLE.font_style;
+                    text_style.font_weight = DEFAULT_TEXT_STYLE.font_weight;
+                    text_style.font_families = DEFAULT_TEXT_STYLE.font_families.clone();
+                    text_flow_style.font_size = DEFAULT_TEXT_FLOW_STYLE.font_size;
+                    text_flow_style.line_height = DEFAULT_TEXT_FLOW_STYLE.line_height.clone();
+                    return Some(());
+                }
+                _ => return None,
+            };
+
+            if values.is_empty() {
+                return None;
+            }
+
+            // font-size (first <length>) is required.
+            let font_size_idx = values
+                .iter()
+                .position(|v| matches!(v, CssValue::Length(_, _)))?;
+
+            // Resolve font-size.
+            let len = resolve_css_len(name, values[font_size_idx], text_flow_style)?;
+            let px = resolve_font_size_px(&len, text_flow_style.font_size)?;
+            text_flow_style.font_size = px;
+
+            // Everything before font-size is font-style / font-weight keywords.
+            for v in &values[..font_size_idx] {
+                if let CssValue::Keyword(kw) = v {
+                    match kw.as_str() {
+                        "italic" => text_style.font_style = FontStyle::Italic,
+                        "oblique" => text_style.font_style = FontStyle::Oblique,
+                        "normal" => text_style.font_style = FontStyle::Normal,
+                        "bold" => text_style.font_weight = FontWeight::BOLD,
+                        "bolder" | "lighter" | "small-caps" => {} // simplified: skip
+                        s if s.len() <= 3 && s.bytes().all(|b| b.is_ascii_digit()) => {
+                            if let Ok(w) = s.parse::<u16>()
+                                && (100..=900).contains(&w)
+                            {
+                                text_style.font_weight = FontWeight(w);
+                            }
+                        }
+                        _ => {}
+                    }
+                } else if let CssValue::Number(n) = v {
+                    if *n >= 100.0 && *n <= 900.0 && n.fract().abs() < f32::EPSILON {
+                        text_style.font_weight = FontWeight(*n as u16);
+                    }
+                }
+            }
+
+            // After font-size: optional `/` line-height, then font-family.
+            let after = &values[font_size_idx + 1..];
+            let family_start = if after
+                .first()
+                .is_some_and(|v| matches!(v, CssValue::Keyword(k) if k == "/"))
+            {
+                if after.len() > 1 {
+                    match after[1] {
+                        CssValue::Number(factor) => {
+                            text_flow_style.line_height = LineHeight::Number(*factor);
+                        }
+                        _ => {
+                            if let Some(lh_len) = resolve_css_len(name, after[1], text_flow_style) {
+                                text_flow_style.line_height = LineHeight::Px(length_to_px(
+                                    &lh_len,
+                                    text_flow_style.font_size,
+                                ));
+                            }
+                        }
+                    }
+                    2 // skip `/` and line-height value
+                } else {
+                    1 // skip bare `/`
+                }
+            } else {
+                0
+            };
+
+            // Rest is font-family.
+            let family_values = &values[font_size_idx + 1 + family_start..];
+            if !family_values.is_empty() {
+                let families: Vec<String> = family_values
+                    .iter()
+                    .filter_map(|v| match v {
+                        CssValue::Keyword(k) if !k.is_empty() => Some(k.to_string()),
+                        CssValue::String(s) if !s.is_empty() => Some(s.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                if !families.is_empty() {
+                    text_style.font_families = families;
+                }
+            }
+
+            return Some(());
+        }
+
         ("text-decoration", v) => {
             let items: Vec<&CssValue> = match v {
                 CssValue::List(list) => list.iter().collect(),
