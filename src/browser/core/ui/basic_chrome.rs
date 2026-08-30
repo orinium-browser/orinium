@@ -57,6 +57,8 @@ enum ChromeHit {
     Scripting,
     /// DevTools pane toggle button.
     DevTools,
+    /// DevTools orientation toggle (vertical ↔ horizontal).
+    DevToolsOrientation,
     /// URL entry bar.
     UrlBar,
 }
@@ -74,6 +76,8 @@ struct ToolbarRects {
     scripting: Rect,
     /// DevTools pane toggle button.
     devtools: Rect,
+    /// DevTools orientation toggle button.
+    devtools_orientation: Rect,
     /// URL bar.
     url_bar: Rect,
 }
@@ -94,6 +98,8 @@ struct BrowserToolbar {
     reload_button: ButtonComponent,
     /// DevTools pane toggle button.
     devtools_button: ButtonComponent,
+    /// DevTools orientation toggle button.
+    devtools_orientation_button: ButtonComponent,
     /// Switch the scripting mode.
     scripting_button: ButtonComponent,
     /// URL entry bar.
@@ -128,12 +134,15 @@ impl BrowserToolbar {
             LABEL_COLOR,
             Arc::clone(&measurer),
         );
+        let devtools_orientation_button =
+            ButtonComponent::new("↔", BUTTON_BACKGROUND, LABEL_COLOR, Arc::clone(&measurer));
         let url_bar = InputTextComponent::new("", "Enter URL", measurer);
         Self {
             back_button,
             reload_button,
             scripting_button,
             devtools_button,
+            devtools_orientation_button,
             url_bar,
         }
     }
@@ -144,6 +153,7 @@ impl BrowserToolbar {
         let reload_size = self.reload_button.intrinsic_size();
         let scripting_size = self.scripting_button.intrinsic_size();
         let devtools_size = self.devtools_button.intrinsic_size();
+        let devtools_orientation_size = self.devtools_orientation_button.intrinsic_size();
         let url_size = self.url_bar.intrinsic_size();
 
         let row_height = [back_size.height, reload_size.height, url_size.height]
@@ -176,7 +186,14 @@ impl BrowserToolbar {
             devtools_size.width,
             devtools_size.height,
         );
-        let url_x = (devtools.x + devtools.width + CHROME_GAP).min(width - CHROME_PADDING);
+        let devtools_orientation = Rect::new(
+            devtools.x + devtools.width + CHROME_GAP,
+            center_y(devtools_orientation_size.height),
+            devtools_orientation_size.width,
+            devtools_orientation_size.height,
+        );
+        let url_x = (devtools_orientation.x + devtools_orientation.width + CHROME_GAP)
+            .min(width - CHROME_PADDING);
         let url_width = (width - CHROME_PADDING - url_x).max(0.0);
         let url_bar = Rect::new(url_x, center_y(url_size.height), url_width, url_size.height);
 
@@ -186,6 +203,7 @@ impl BrowserToolbar {
             reload,
             scripting,
             devtools,
+            devtools_orientation,
             url_bar,
         }
     }
@@ -202,6 +220,8 @@ impl BrowserToolbar {
             Some(ChromeHit::Scripting)
         } else if rects.devtools.contains(x, y) {
             Some(ChromeHit::DevTools)
+        } else if rects.devtools_orientation.contains(x, y) {
+            Some(ChromeHit::DevToolsOrientation)
         } else if rects.url_bar.contains(x, y) {
             Some(ChromeHit::UrlBar)
         } else {
@@ -227,12 +247,49 @@ pub struct BasicChrome {
     /// since moved over the toolbar or the page, so the click completes.
     debug_press_active: bool,
 
+    /// `true` = pane on the right (vertical split), `false` = pane on the bottom (horizontal split).
+    debug_pane_vertical: bool,
+    /// Split ratio (0.0–1.0) of the page area consumed by the pane.
+    debug_pane_ratio: f32,
+    /// Whether the user is currently dragging the pane divider.
+    debug_dragging: bool,
+    /// `(start_x_or_y, initial_ratio)` when a drag begins.
+    debug_drag_anchor: Option<(f32, f32)>,
+
     scripting_mode: ScriptingMode,
     /// Toolbar element currently under the pointer, if any.
     hovered: Option<ChromeHit>,
 }
 
 impl BasicChrome {
+    /// Returns `(pane_x, pane_y, pane_w, pane_h)` when the debug pane is open,
+    /// or `None` when it is closed.
+    fn debug_pane_rect(&self, width: f32, height: f32) -> Option<Rect> {
+        if !self.is_debug_open {
+            return None;
+        }
+        let toolbar_h = self.toolbar.rects(width).height();
+        let area_h = height - toolbar_h;
+        if self.debug_pane_vertical {
+            let pane_w = width * self.debug_pane_ratio;
+            Some(Rect::new(width - pane_w, toolbar_h, pane_w, area_h))
+        } else {
+            let pane_h = area_h * self.debug_pane_ratio;
+            Some(Rect::new(0.0, toolbar_h + area_h - pane_h, width, pane_h))
+        }
+    }
+
+    /// Returns the divider rect (a thin strip along the pane border).
+    fn divider_rect(&self, width: f32, height: f32) -> Option<Rect> {
+        let pane = self.debug_pane_rect(width, height)?;
+        let half = 4.0;
+        if self.debug_pane_vertical {
+            Some(Rect::new(pane.x - half, pane.y, half * 2.0, pane.height))
+        } else {
+            Some(Rect::new(pane.x, pane.y - half, pane.width, half * 2.0))
+        }
+    }
+
     /// Create a new default chrome with an empty toolbar.
     pub fn new() -> Self {
         let mut tab = Tab::default();
@@ -244,6 +301,10 @@ impl BasicChrome {
             is_debug_open: false,
             debug_pane: tab,
             debug_press_active: false,
+            debug_pane_vertical: true,
+            debug_pane_ratio: 0.5,
+            debug_dragging: false,
+            debug_drag_anchor: None,
             scripting_mode: ScriptingMode::default(),
             hovered: None,
         }
@@ -258,6 +319,7 @@ impl BasicChrome {
             ChromeHit::Reload => &self.toolbar.reload_button,
             ChromeHit::Scripting => &self.toolbar.scripting_button,
             ChromeHit::DevTools => &self.toolbar.devtools_button,
+            ChromeHit::DevToolsOrientation => &self.toolbar.devtools_orientation_button,
             ChromeHit::UrlBar => &self.toolbar.url_bar,
         };
         node.on_pointer_event(event)
@@ -281,7 +343,14 @@ impl Chrome for BasicChrome {
     fn content_rect(&self, width: f32, height: f32) -> Rect {
         let toolbar_height = self.toolbar.rects(width).height();
         if self.is_debug_open {
-            Rect::new(0.0, toolbar_height, width / 2.0, height - toolbar_height)
+            let area_h = height - toolbar_height;
+            if self.debug_pane_vertical {
+                let pane_w = width * self.debug_pane_ratio;
+                Rect::new(0.0, toolbar_height, width - pane_w, area_h)
+            } else {
+                let pane_h = area_h * self.debug_pane_ratio;
+                Rect::new(0.0, toolbar_height, width, area_h - pane_h)
+            }
         } else {
             Rect::new(0.0, toolbar_height, width, height - toolbar_height)
         }
@@ -308,11 +377,15 @@ impl Chrome for BasicChrome {
         let text_flow_style = TextFlowStyle::default();
         let style = Style::default();
 
-        let components: [(&dyn CustomNode, Rect); 5] = [
+        let components: [(&dyn CustomNode, Rect); 6] = [
             (&self.toolbar.back_button, rects.back),
             (&self.toolbar.reload_button, rects.reload),
             (&self.toolbar.scripting_button, rects.scripting),
             (&self.toolbar.devtools_button, rects.devtools),
+            (
+                &self.toolbar.devtools_orientation_button,
+                rects.devtools_orientation,
+            ),
             (&self.toolbar.url_bar, rects.url_bar),
         ];
 
@@ -334,13 +407,22 @@ impl Chrome for BasicChrome {
         }
 
         if self.is_debug_open {
+            let area_h = height - rects.height();
+            let (pane_x, pane_y, pane_w, pane_h) = if self.debug_pane_vertical {
+                let pane_w = width * self.debug_pane_ratio;
+                (width - pane_w, rects.height(), pane_w, area_h)
+            } else {
+                let pane_h = area_h * self.debug_pane_ratio;
+                (0.0, rects.height() + area_h - pane_h, width, pane_h)
+            };
+
             cmd_buf.push(DrawCommand::PushTransform {
-                transform: AffineTransform::translate(width / 2.0, rects.height()),
+                transform: AffineTransform::translate(pane_x, pane_y),
             });
 
-            let rect_path = rect_path(0.0, 0.0, width / 2.0, height - rects.height());
+            let pane_rect = rect_path(0.0, 0.0, pane_w, pane_h);
             cmd_buf.push(DrawCommand::Fill {
-                path: rect_path.clone(),
+                path: pane_rect.clone(),
                 rule: FillRule::NonZero,
                 paint: Paint {
                     brush: Brush::Solid(Color(200, 200, 200, 200)),
@@ -348,15 +430,39 @@ impl Chrome for BasicChrome {
                 },
             });
             cmd_buf.push(DrawCommand::PushClip {
-                path: rect_path,
+                path: pane_rect,
                 rule: FillRule::NonZero,
             });
 
-            self.debug_pane
-                .draw(cmd_buf, width / 2.0, height - rects.height());
+            self.debug_pane.draw(cmd_buf, pane_w, pane_h);
 
             cmd_buf.push(DrawCommand::PopClip);
             cmd_buf.push(DrawCommand::PopTransform);
+
+            // Draw the drag divider when the pane is open.
+            let divider_color = Color(160, 160, 160, 255);
+            let divider_w = 4.0;
+            if self.debug_pane_vertical {
+                let dx = pane_x - divider_w * 0.5;
+                cmd_buf.push(DrawCommand::Fill {
+                    path: rect_path(dx, rects.height(), divider_w, area_h),
+                    rule: FillRule::NonZero,
+                    paint: Paint {
+                        brush: Brush::Solid(divider_color),
+                        opacity: 1.0,
+                    },
+                });
+            } else {
+                let dy = pane_y - divider_w * 0.5;
+                cmd_buf.push(DrawCommand::Fill {
+                    path: rect_path(0.0, dy, width, divider_w),
+                    rule: FillRule::NonZero,
+                    paint: Paint {
+                        brush: Brush::Solid(divider_color),
+                        opacity: 1.0,
+                    },
+                });
+            }
         }
     }
 
@@ -414,20 +520,73 @@ impl Chrome for BasicChrome {
         };
 
         let Some(hit) = self.toolbar.hit_test(x, y, width) else {
-            // Pointer over the page or the debug pane: clear any chrome hover.
+            // Pointer over the page, the debug pane, or the divider:
+            // clear any chrome hover.
             self.clear_hover();
 
             if !self.is_debug_open {
                 return ChromeEventResult::none();
             }
 
-            let rects = self.toolbar.rects(width);
-            let pane = Rect {
-                x: width / 2.0,
-                y: rects.height(),
-                width: width / 2.0,
-                height: height - rects.height(),
-            };
+            let pane = self
+                .debug_pane_rect(width, height)
+                .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
+            let divider = self.divider_rect(width, height);
+
+            // Check if we're on the divider (drag area).
+            let on_divider = divider.as_ref().is_some_and(|d| d.contains(x, y));
+
+            // Handle divider drag.
+            if on_divider {
+                match event {
+                    PointerEvent::Down { .. } => {
+                        let anchor = if self.debug_pane_vertical { x } else { y };
+                        self.debug_dragging = true;
+                        self.debug_drag_anchor = Some((anchor, self.debug_pane_ratio));
+                        return ChromeEventResult {
+                            consumed: true,
+                            action: ChromeAction::None,
+                        };
+                    }
+                    _ => {}
+                }
+            }
+
+            // Handle ongoing drag even if pointer moved off the divider.
+            if self.debug_dragging {
+                match event {
+                    PointerEvent::Move { .. } => {
+                        if let Some((anchor, initial_ratio)) = self.debug_drag_anchor {
+                            let delta = if self.debug_pane_vertical {
+                                x - anchor
+                            } else {
+                                y - anchor
+                            };
+                            let area = if self.debug_pane_vertical {
+                                width
+                            } else {
+                                height - self.toolbar.rects(width).height()
+                            };
+                            let ratio_delta = if area > 0.0 { -delta / area } else { 0.0 };
+                            self.debug_pane_ratio = (initial_ratio + ratio_delta).clamp(0.1, 0.9);
+                        }
+                        return ChromeEventResult {
+                            consumed: true,
+                            action: ChromeAction::None,
+                        };
+                    }
+                    PointerEvent::Up { .. } => {
+                        self.debug_dragging = false;
+                        self.debug_drag_anchor = None;
+                        return ChromeEventResult {
+                            consumed: true,
+                            action: ChromeAction::None,
+                        };
+                    }
+                    _ => {}
+                }
+            }
+
             let inside = pane.contains(x, y);
 
             // The page area must not be consumed, or clicks would never
@@ -468,9 +627,10 @@ impl Chrome for BasicChrome {
         // activates chrome buttons the pointer happens to have drifted over.
         if matches!(event, PointerEvent::Up { .. }) && self.debug_press_active {
             self.debug_press_active = false;
-            let rects = self.toolbar.rects(width);
-            self.debug_pane
-                .handle_mouse_input(x - width / 2.0, y - rects.height(), state);
+            if let Some(pane) = self.debug_pane_rect(width, height) {
+                self.debug_pane
+                    .handle_mouse_input(x - pane.x, y - pane.y, state);
+            }
             return ChromeEventResult {
                 consumed: true,
                 action: ChromeAction::None,
@@ -510,6 +670,17 @@ impl Chrome for BasicChrome {
                 self.is_debug_open = !self.is_debug_open;
                 ChromeAction::None
             }
+            ChromeHit::DevToolsOrientation if clicked => {
+                self.debug_pane_vertical = !self.debug_pane_vertical;
+                // Update the orientation button label.
+                self.toolbar.devtools_orientation_button.label = if self.debug_pane_vertical {
+                    "↔"
+                } else {
+                    "↕"
+                }
+                .into();
+                ChromeAction::None
+            }
             _ => ChromeAction::None,
         };
 
@@ -528,20 +699,9 @@ impl Chrome for BasicChrome {
         scroll_x: f32,
         scroll_y: f32,
     ) {
-        if self.is_debug_open {
-            let rects = self.toolbar.rects(width);
-
-            let rect = Rect {
-                x: width / 2.0,
-                y: rects.height(),
-                width: width / 2.0,
-                height: height - rects.height(),
-            };
-
-            // The core hands us coordinates relative to the content rect
-            // origin; the pane sits at (width / 2, toolbar height) in window
-            // space, so only its horizontal offset needs translating.
-            if rect.contains(mouse_x, mouse_y + rects.height()) {
+        if let Some(rect) = self.debug_pane_rect(width, height) {
+            let toolbar_h = self.toolbar.rects(width).height();
+            if rect.contains(mouse_x, mouse_y + toolbar_h) {
                 self.debug_pane.scroll_at(
                     mouse_x - rect.x,
                     mouse_y,
