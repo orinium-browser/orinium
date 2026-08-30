@@ -1274,7 +1274,10 @@ fn inline_flex_item_wraps_padded_atomic_child_without_overlap() {
         .iter()
         .next()
         .unwrap();
-    assert!(first.content_box.width >= first_button.border_box.right() + 8.0);
+    assert!(
+        first.content_box.width >= first_button.border_box.width + 8.0,
+        "first flex item does not contain its padded atomic child and margin"
+    );
     assert!(second.border_box.x >= first.border_box.right());
 }
 
