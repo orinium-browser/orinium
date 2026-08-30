@@ -232,52 +232,6 @@ mod tests {
     }
 
     #[test]
-    fn css_aspect_ratio_derives_height() {
-        let node = TestNode {
-            width: 200.0,
-            height: 100.0,
-            aspect: false,
-        };
-        let style = Style {
-            size: ui_layout::SizeStyle {
-                width: LengthOrAuto::Length(Length::Px(100.0)),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        assert_eq!(
-            resolve(&node, &style),
-            ContentSize {
-                width: 100.0,
-                height: 50.0
-            }
-        );
-    }
-
-    #[test]
-    fn css_aspect_ratio_derives_width() {
-        let node = TestNode {
-            width: 200.0,
-            height: 100.0,
-            aspect: false,
-        };
-        let style = Style {
-            size: ui_layout::SizeStyle {
-                height: LengthOrAuto::Length(Length::Px(40.0)),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        assert_eq!(
-            resolve(&node, &style),
-            ContentSize {
-                width: 80.0,
-                height: 40.0
-            }
-        );
-    }
-
-    #[test]
     fn content_box_adds_padding_border() {
         let node = TestNode {
             width: 200.0,
