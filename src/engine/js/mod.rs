@@ -841,6 +841,42 @@ mod tests {
     }
 
     #[test]
+    fn browser_origin_exposed_consistently_across_window_location_and_document() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.set_page_origin("https://example.test");
+        runtime.run_script(
+            r#"document.getElementById("result").setAttribute(
+                "data-origins",
+                window.origin + ":" + location.origin + ":" + document.origin
+            );"#,
+        );
+
+        let node = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            node.borrow().value.get_attr("data-origins"),
+            Some("https://example.test:https://example.test:https://example.test")
+        );
+    }
+
+    #[test]
+    fn opaque_page_reports_null_origin_everywhere() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.set_page_origin("null");
+        runtime.run_script(
+            r#"document.getElementById("result").setAttribute(
+                "data-origins",
+                window.origin + ":" + location.origin + ":" + document.origin
+            );"#,
+        );
+
+        let node = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            node.borrow().value.get_attr("data-origins"),
+            Some("null:null:null")
+        );
+    }
+
+    #[test]
     fn browser_language_preferences_follow_the_host() {
         let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
         runtime.set_language("ja-JP");

@@ -450,3 +450,109 @@ fn configure_winit_backend_for_wslg() {
         log::info!("WSLg detected: defaulting to X11 backend for stability");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn js_fetch(method: &str) -> FetchKind {
+        FetchKind::JavaScript {
+            request_id: 1,
+            method: method.to_string(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        }
+    }
+
+    fn header<'a>(request: &'a NetworkRequest, name: &str) -> Option<&'a str> {
+        request
+            .headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn web_fetch_gets_browser_origin_and_origin_only_referer() {
+        let initiator = Origin::from_url_string("https://example.test/index.html");
+        let mut request = NetworkRequest::get("https://api.example.test/data".to_string());
+        request
+            .headers
+            .push(("Origin".to_string(), "https://evil.test".to_string()));
+        request
+            .headers
+            .push(("Referer".to_string(), "https://evil.test/leak".to_string()));
+
+        apply_fetch_headers(&mut request, &initiator, &js_fetch("GET"));
+
+        assert_eq!(header(&request, "Origin"), Some("https://example.test"));
+        assert_eq!(header(&request, "Referer"), Some("https://example.test"));
+    }
+
+    #[test]
+    fn non_get_requests_carry_origin_without_requiring_fetch_kind() {
+        let initiator = Origin::from_url_string("https://example.test/");
+        let mut request = NetworkRequest {
+            url: "https://api.example.test/items".to_string(),
+            method: "POST".to_string(),
+            headers: Vec::new(),
+            body: b"{}".to_vec(),
+        };
+
+        apply_fetch_headers(
+            &mut request,
+            &initiator,
+            &FetchKind::Image {
+                source: "irrelevant".to_string(),
+            },
+        );
+
+        assert_eq!(header(&request, "Origin"), Some("https://example.test"));
+        assert_eq!(header(&request, "Referer"), Some("https://example.test"));
+    }
+
+    #[test]
+    fn plain_subresources_skip_origin_header() {
+        let initiator = Origin::from_url_string("https://example.test/");
+        let mut request = NetworkRequest::get("https://cdn.example.test/pic.png".to_string());
+
+        apply_fetch_headers(
+            &mut request,
+            &initiator,
+            &FetchKind::Image {
+                source: "pic".to_string(),
+            },
+        );
+
+        assert_eq!(header(&request, "Origin"), None);
+        assert_eq!(header(&request, "Referer"), Some("https://example.test"));
+    }
+
+    #[test]
+    fn opaque_pages_never_leak_referer_or_internal_scheme() {
+        let initiator = Origin::opaque();
+        let mut request = NetworkRequest::get("resource:///devtools/index.html".to_string());
+        request
+            .headers
+            .push(("Referer".to_string(), "resource:///secret".to_string()));
+
+        apply_fetch_headers(&mut request, &initiator, &js_fetch("GET"));
+
+        assert!(
+            request.headers.is_empty(),
+            "headers = {:?}",
+            request.headers
+        );
+    }
+
+    #[test]
+    fn opaque_fetch_sends_null_origin_but_no_referer() {
+        let initiator = Origin::opaque();
+        let mut request = NetworkRequest::get("https://api.example.test/data".to_string());
+
+        apply_fetch_headers(&mut request, &initiator, &js_fetch("GET"));
+
+        assert_eq!(header(&request, "Origin"), Some("null"));
+        assert_eq!(header(&request, "Referer"), None);
+    }
+}

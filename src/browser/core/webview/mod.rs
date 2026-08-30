@@ -3190,6 +3190,86 @@ mod tests {
     }
 
     #[test]
+    fn document_origin_is_exposed_to_page_scripts() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"
+                <div id="result"></div>
+                <script>
+                    document.getElementById("result").setAttribute(
+                        "data-origin",
+                        location.origin + ":" + window.origin + ":" + document.origin
+                    );
+                </script>
+            "#
+            .to_string(),
+            Url::parse("https://example.test/path/index.html").unwrap(),
+        );
+
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.document_info()
+                    .unwrap()
+                    .dom
+                    .get_element_by_id("result")
+                    .is_some_and(|node| node.borrow().value.get_attr("data-origin").is_some())
+            },
+            "the origin-handling script to run",
+        );
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-origin"),
+            Some("https://example.test:https://example.test:https://example.test")
+        );
+    }
+
+    #[test]
+    fn internal_document_reports_null_origin() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"
+                <div id="result"></div>
+                <script>
+                    document.getElementById("result").setAttribute(
+                        "data-origin",
+                        location.origin + ":" + window.origin + ":" + document.origin
+                    );
+                </script>
+            "#
+            .to_string(),
+            Url::parse("resource:///devtools/index.html").unwrap(),
+        );
+
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.document_info()
+                    .unwrap()
+                    .dom
+                    .get_element_by_id("result")
+                    .is_some_and(|node| node.borrow().value.get_attr("data-origin").is_some())
+            },
+            "the origin-handling script to run",
+        );
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-origin"),
+            Some("null:null:null")
+        );
+    }
+
+    #[test]
     fn zero_delay_timer_runs_from_webview_tick_and_updates_dom() {
         let mut webview = WebView::default();
         webview.on_html_fetched(

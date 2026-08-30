@@ -1,7 +1,7 @@
 //! Browser resource loading process.
 //!
 //! Supports the `http(s)://` scheme (via the platform `NetworkCore`), and the
-//! network-free `resource:///` and `data:` schemes.
+//! network-free `resource:///`, `data:` and `file://` schemes.
 
 use crate::engine::origin::Origin;
 use crate::platform::network::{NetworkCore, NetworkError, NetworkRequest, StatusCode};
@@ -13,8 +13,8 @@ use url::Url;
 /// Whether a document with `initiator` may load a resource addressed by `url`.
 ///
 /// Web (network) origins may only reach external schemes and `data:`; every
-/// other custom scheme (`resource:`, `about:`, unknown schemes) requires an
-/// opaque origin, i.e. a page that is itself internal.
+/// other custom scheme (`resource:`, `file:`, `about:`, unknown schemes)
+/// requires an opaque origin, i.e. a page that is itself internal.
 fn scheme_allowed(initiator: &Origin, url: &Url) -> bool {
     match url.scheme() {
         "http" | "https" | "data" => true,
@@ -200,6 +200,7 @@ fn load_immediate(url: &Url) -> Option<Result<Vec<u8>>> {
     match url.scheme() {
         "resource" => Some(ResourceURI::load(url.as_str())),
         "data" => Some(DataURI::decode(url.as_str())),
+        "file" => Some(FileURI::load(url)),
         _ => None,
     }
 }
@@ -289,6 +290,22 @@ impl DataURI {
     }
 }
 
+/// `file://` 用ローダー。
+///
+/// URL をローカルファイルシステムのパスに変換して読み込む。`file://host/...`
+/// のように空でも `localhost` でもないホストを伴う URL は拒否し、ローカルの
+/// ファイル URL 以外は解決しない。
+pub struct FileURI;
+
+impl FileURI {
+    pub fn load(url: &Url) -> Result<Vec<u8>> {
+        let path = url
+            .to_file_path()
+            .map_err(|()| anyhow!("Unsupported file URL (non-local host): {url}"))?;
+        crate::platform::io::load_local_file(&path.to_string_lossy())
+    }
+}
+
 /// Converts `%XX` sequences into their byte values. Invalid `%` sequences are kept as-is.
 fn percent_decode(input: &str) -> Vec<u8> {
     let bytes = input.as_bytes();
@@ -321,6 +338,21 @@ fn hex_value(b: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Creates a unique temporary file with `contents` and returns its path.
+    /// The caller is responsible for removing the file.
+    fn temp_file(contents: &[u8]) -> std::path::PathBuf {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let name = format!(
+            "orinium-file-uri-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        let path = std::env::temp_dir().join(name);
+        std::fs::write(&path, contents).unwrap();
+        path
+    }
 
     #[test]
     fn data_uri_decodes_base64_payload() {
@@ -463,5 +495,63 @@ mod tests {
         let loader = BrowserResourceLoader::new(None);
         let url = Url::parse("data:image/png;base64,@@@not-base64@@@").unwrap();
         assert!(loader.fetch_blocking(url).is_err());
+    }
+
+    #[test]
+    fn file_uri_loads_local_file_bytes() {
+        let path = temp_file(b"file content");
+        let url = Url::from_file_path(&path).unwrap();
+
+        assert_eq!(FileURI::load(&url).unwrap(), b"file content");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn file_url_with_nonlocal_host_is_rejected() {
+        let url = Url::parse("file://evil.example/etc/passwd").unwrap();
+        assert!(FileURI::load(&url).is_err());
+    }
+
+    #[test]
+    fn fetch_async_resolves_file_url_into_immediate_pool() {
+        let path = temp_file(b"file bytes");
+        let url = Url::from_file_path(&path).unwrap();
+        let mut loader = BrowserResourceLoader::new(None);
+
+        loader.fetch_async(url, 12, &Origin::opaque());
+        let msgs = loader.try_receive();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].id, 12);
+        let resp = msgs[0].response.as_ref().unwrap();
+        assert_eq!(resp.body, b"file bytes");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn internal_origin_can_read_local_file() {
+        let path = temp_file(b"local data");
+        let url = Url::from_file_path(&path).unwrap();
+        let mut loader = BrowserResourceLoader::new(None);
+
+        loader.fetch_async(url, 13, &Origin::opaque());
+        let msgs = loader.try_receive();
+        assert_eq!(msgs.len(), 1);
+        let resp = msgs[0].response.as_ref().unwrap();
+        assert_eq!(resp.body, b"local data");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn network_origin_cannot_read_local_file() {
+        let path = temp_file(b"secret");
+        let url = Url::from_file_path(&path).unwrap();
+        let web = Origin::from_url(&Url::parse("https://example.test/").unwrap());
+        let mut loader = BrowserResourceLoader::new(None);
+
+        loader.fetch_async(url, 14, &web);
+        let msgs = loader.try_receive();
+        assert_eq!(msgs.len(), 1);
+        assert!(msgs[0].response.is_err());
+        let _ = std::fs::remove_file(&path);
     }
 }

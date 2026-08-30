@@ -840,4 +840,77 @@ mod tests {
         tab.handle_mouse_input(401.0, 13.0, ElementState::Released);
         assert!(!tab.has_pending_press());
     }
+
+    #[test]
+    fn cross_origin_fetch_requires_matching_cors_header() {
+        let tab = Tab::default();
+        let web_origin = Origin::from_url_string("https://example.test/index.html");
+        let url = Url::parse("https://other.test/data.json").unwrap();
+
+        assert!(!tab.may_read_fetch_response(&web_origin, &url, &[]));
+
+        let wildcard = vec![("Access-Control-Allow-Origin".to_string(), "*".to_string())];
+        assert!(tab.may_read_fetch_response(&web_origin, &url, &wildcard));
+
+        let matching = vec![(
+            "Access-Control-Allow-Origin".to_string(),
+            "https://example.test".to_string(),
+        )];
+        assert!(tab.may_read_fetch_response(&web_origin, &url, &matching));
+
+        let other = vec![(
+            "Access-Control-Allow-Origin".to_string(),
+            "https://other.test".to_string(),
+        )];
+        assert!(!tab.may_read_fetch_response(&web_origin, &url, &other));
+    }
+
+    #[test]
+    fn same_origin_fetch_is_readable_without_cors_header() {
+        let tab = Tab::default();
+        let web_origin = Origin::from_url_string("https://example.test/");
+        let url = Url::parse("https://example.test:443/api").unwrap();
+        assert!(tab.may_read_fetch_response(&web_origin, &url, &[]));
+    }
+
+    #[test]
+    fn internal_page_reads_any_response_without_cors() {
+        let tab = Tab::default();
+        let internal = Origin::opaque();
+        let url = Url::parse("https://other.test/api").unwrap();
+        assert!(tab.may_read_fetch_response(&internal, &url, &[]));
+    }
+
+    #[test]
+    fn web_page_reads_internal_scheme_responses_without_cors() {
+        // The resource loader refuses to serve internal schemes to web origins,
+        // so such responses never reach this check in practice.
+        let tab = Tab::default();
+        let web_origin = Origin::from_url_string("https://example.test/");
+        let url = Url::parse("data:text/plain,hello").unwrap();
+        assert!(tab.may_read_fetch_response(&web_origin, &url, &[]));
+    }
+
+    #[test]
+    fn headers_allow_cors_requires_exact_origin_value() {
+        let initiator = Origin::from_url_string("https://example.test/");
+        assert!(headers_allow_cors(
+            &[("Access-Control-Allow-Origin".to_string(), "*".to_string())],
+            &initiator
+        ));
+        assert!(headers_allow_cors(
+            &[(
+                "ACCEss-cOntRoL-aLLow-orIgIn".to_string(),
+                "https://example.test".to_string()
+            )],
+            &initiator
+        ));
+        assert!(!headers_allow_cors(
+            &[(
+                "Access-Control-Allow-Origin".to_string(),
+                "https://other.test".to_string()
+            )],
+            &initiator
+        ));
+    }
 }
