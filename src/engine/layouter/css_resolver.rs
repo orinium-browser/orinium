@@ -1,7 +1,8 @@
 //! A CSS resolver that handles selector matching and value resolution.
 
+use super::builder::resolve_css_len;
 use crate::engine::css::parser::{AtQuery, ComplexSelector, CssNode, CssNodeType, RangeOperator};
-use crate::engine::css::values::{CssIdent, CssValue, Unit};
+use crate::engine::css::values::{CssIdent, CssValue};
 use crate::engine::layouter::types::ColorScheme;
 
 use std::collections::{HashMap, HashSet};
@@ -696,16 +697,13 @@ impl MediaEvaluator {
     }
 
     fn length_px(value: &CssValue, environment: &MediaEnvironment) -> Option<f32> {
-        match value {
-            CssValue::Length(value, Unit::Px) => Some(*value),
-            CssValue::Length(value, Unit::Em) | CssValue::Length(value, Unit::Rem) => {
-                Some(*value * 16.0)
-            }
-            CssValue::Length(value, Unit::Vw) => Some(*value * environment.viewport_width / 100.0),
-            CssValue::Length(value, Unit::Vh) => Some(*value * environment.viewport_height / 100.0),
-            CssValue::Number(0.0) => Some(0.0),
-            _ => None,
-        }
+        let text_flow = crate::engine::layouter::types::TextFlowStyle::default();
+        let len = resolve_css_len("media", value, &text_flow)?;
+        len.resolve_with(
+            None,
+            environment.viewport_width,
+            environment.viewport_height,
+        )
     }
 }
 
@@ -713,6 +711,7 @@ impl MediaEvaluator {
 mod tests {
     use super::*;
     use crate::engine::css::parser::Parser;
+    use crate::engine::css::values::Unit;
 
     fn resolve(css: &str, origin: StyleOrigin) -> ResolvedStyles {
         let stylesheet = Parser::new(css).parse().unwrap();
@@ -964,6 +963,67 @@ mod tests {
             0,
             "no candidates for attribute-less element"
         );
+    }
+
+    #[test]
+    fn media_width_calc_rem_is_resolved() {
+        let styles = resolve(
+            "@media (width > calc(19rem)) { div { color: red; } }",
+            StyleOrigin::Author,
+        );
+        // 19rem = 304px
+        let wide = MediaEnvironment::new((400.0, 800.0), ColorScheme::Light);
+        let narrow = MediaEnvironment::new((200.0, 800.0), ColorScheme::Light);
+        assert_eq!(filter_media(&styles, &wide).count(), 1);
+        assert_eq!(filter_media(&styles, &narrow).count(), 0);
+    }
+
+    #[test]
+    fn media_range_calc_vw() {
+        let styles = resolve(
+            "@media (width > calc(100vw - 40px)) { div { color: red; } }",
+            StyleOrigin::Author,
+        );
+        // 100vw = viewport_width, so condition is width > (viewport_width - 40)
+        let env = MediaEnvironment::new((100.0, 800.0), ColorScheme::Light);
+        // 100 > (100 - 40) = 60 => true
+        assert_eq!(filter_media(&styles, &env).count(), 1);
+        let env2 = MediaEnvironment::new((30.0, 800.0), ColorScheme::Light);
+        // 30 > (30 - 40) = -10 => true
+        assert_eq!(filter_media(&styles, &env2).count(), 1);
+    }
+
+    #[test]
+    fn media_min_width_rem() {
+        let styles = resolve(
+            "@media (min-width: 2rem) { div { color: red; } }",
+            StyleOrigin::Author,
+        );
+        // 2rem = 32px
+        let env = MediaEnvironment::new((40.0, 800.0), ColorScheme::Light);
+        assert_eq!(filter_media(&styles, &env).count(), 1);
+        let env2 = MediaEnvironment::new((20.0, 800.0), ColorScheme::Light);
+        assert_eq!(filter_media(&styles, &env2).count(), 0);
+    }
+
+    #[test]
+    fn media_width_calc_min_function() {
+        let styles = resolve(
+            "@media (width > min(800px, 90vw)) { div { color: red; } }",
+            StyleOrigin::Author,
+        );
+        // viewport 1000px: min(800, 900) = 800, 1000 > 800 => true
+        let env = MediaEnvironment::new((1000.0, 800.0), ColorScheme::Light);
+        assert_eq!(filter_media(&styles, &env).count(), 1);
+        // viewport 500px: min(800, 450) = 450, 500 > 450 => true
+        let env2 = MediaEnvironment::new((500.0, 800.0), ColorScheme::Light);
+        assert_eq!(filter_media(&styles, &env2).count(), 1);
+        // viewport 400px: min(800, 360) = 360, 400 > 360 => true
+        let env3 = MediaEnvironment::new((400.0, 800.0), ColorScheme::Light);
+        assert_eq!(filter_media(&styles, &env3).count(), 1);
+        // viewport 300px: min(800, 270) = 270, 300 > 270 => true
+        let env4 = MediaEnvironment::new((300.0, 800.0), ColorScheme::Light);
+        assert_eq!(filter_media(&styles, &env4).count(), 1);
     }
 }
 
