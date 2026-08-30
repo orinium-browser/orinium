@@ -1004,6 +1004,85 @@ pub fn apply_declaration(
                 },
             )?;
         }
+        ("border-top-color", _) => {
+            container_style.border_color.top = resolve_css_color(name, value, color_scheme)?;
+        }
+        ("border-right-color", _) => {
+            container_style.border_color.right = resolve_css_color(name, value, color_scheme)?;
+        }
+        ("border-bottom-color", _) => {
+            container_style.border_color.bottom = resolve_css_color(name, value, color_scheme)?;
+        }
+        ("border-left-color", _) => {
+            container_style.border_color.left = resolve_css_color(name, value, color_scheme)?;
+        }
+
+        ("border-width", v) => {
+            expand_box(
+                name,
+                v,
+                text_flow_style,
+                &|_, cv, ts| match cv {
+                    CssValue::Keyword(s) => match s.as_str() {
+                        "thin" => Some(Length::Px(1.0)),
+                        "medium" => Some(Length::Px(3.0)),
+                        "thick" => Some(Length::Px(5.0)),
+                        _ => resolve_css_len(name, cv, ts),
+                    },
+                    _ => resolve_css_len(name, cv, ts),
+                },
+                |t, r, b, l| {
+                    style.spacing.border_top = t;
+                    style.spacing.border_right = r;
+                    style.spacing.border_bottom = b;
+                    style.spacing.border_left = l;
+                },
+            )?;
+        }
+        ("border-top-width", _) => {
+            style.spacing.border_top = match value {
+                CssValue::Keyword(s) => match s.as_str() {
+                    "thin" => Length::Px(1.0),
+                    "medium" => Length::Px(3.0),
+                    "thick" => Length::Px(5.0),
+                    _ => resolve_css_len(name, value, text_flow_style)?,
+                },
+                _ => resolve_css_len(name, value, text_flow_style)?,
+            };
+        }
+        ("border-right-width", _) => {
+            style.spacing.border_right = match value {
+                CssValue::Keyword(s) => match s.as_str() {
+                    "thin" => Length::Px(1.0),
+                    "medium" => Length::Px(3.0),
+                    "thick" => Length::Px(5.0),
+                    _ => resolve_css_len(name, value, text_flow_style)?,
+                },
+                _ => resolve_css_len(name, value, text_flow_style)?,
+            };
+        }
+        ("border-bottom-width", _) => {
+            style.spacing.border_bottom = match value {
+                CssValue::Keyword(s) => match s.as_str() {
+                    "thin" => Length::Px(1.0),
+                    "medium" => Length::Px(3.0),
+                    "thick" => Length::Px(5.0),
+                    _ => resolve_css_len(name, value, text_flow_style)?,
+                },
+                _ => resolve_css_len(name, value, text_flow_style)?,
+            };
+        }
+        ("border-left-width", _) => {
+            style.spacing.border_left = match value {
+                CssValue::Keyword(s) => match s.as_str() {
+                    "thin" => Length::Px(1.0),
+                    "medium" => Length::Px(3.0),
+                    "thick" => Length::Px(5.0),
+                    _ => resolve_css_len(name, value, text_flow_style)?,
+                },
+                _ => resolve_css_len(name, value, text_flow_style)?,
+            };
+        }
 
         ("padding", v) => {
             expand_box(
