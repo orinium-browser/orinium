@@ -83,7 +83,7 @@ pub(crate) fn resolve_border_box_size(
         } else {
             None
         }
-    });
+    };
 
     let (content_width, content_height) = ui_layout::resolve_custom_box_size(
         style,
@@ -241,7 +241,6 @@ mod tests {
         let style = Style {
             size: ui_layout::SizeStyle {
                 width: LengthOrAuto::Length(Length::Px(100.0)),
-                aspect_ratio: Some(2.0),
                 ..Default::default()
             },
             ..Default::default()
@@ -265,7 +264,6 @@ mod tests {
         let style = Style {
             size: ui_layout::SizeStyle {
                 height: LengthOrAuto::Length(Length::Px(40.0)),
-                aspect_ratio: Some(2.0),
                 ..Default::default()
             },
             ..Default::default()
