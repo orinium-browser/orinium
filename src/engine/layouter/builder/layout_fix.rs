@@ -1,8 +1,8 @@
 use crate::engine::layouter::text_layouter::TextFlowLayouter;
 use crate::engine::layouter::types::{InfoNode, NodeKind, TextAlign};
 use ui_layout::{
-    AutoSizeBehavior, BoxSizing, FlexDirection, GridTrack, InnerDisplay, LayoutChild, LayoutNode,
-    Length, LengthOrAuto, OuterDisplay,
+    AutoSizeBehavior, GridTrack, InnerDisplay, LayoutChild, LayoutNode, Length, LengthOrAuto,
+    OuterDisplay,
 };
 
 // ---------------------------------------------------------------------------
@@ -241,137 +241,58 @@ fn correct_atomic_inline_spacing_impl(node: &mut LayoutNode, info: Option<&InfoN
     }
 
     expand_auto_inline_width_to_children(node);
-    expand_auto_flex_item_widths(node);
-    expand_auto_flex_width_to_children(node);
-    expand_auto_flex_height_to_children(node);
-    enforce_fixed_layout_height(node);
     correct_single_row_grid_inline_alignment(node);
-    expand_auto_flow_height_to_children(node);
 }
 
-/// **Bug fix:** `width`
+/// **Supplement:** `width`
 ///
-/// `ui_layout` partially handles auto-width flex items but they do not
-/// correctly shrink-wrap to their children's margin-box width.
-fn expand_auto_flex_item_widths(node: &mut LayoutNode) {
-    if node.style.display.inner != InnerDisplay::Flex
-        || node.style.flex_direction != FlexDirection::Row
+/// `ui_layout` does not handle `width: auto` for inline containers wrapping
+/// block children. Grow the inline container's width to accommodate the
+/// widest child's margin box.
+fn expand_auto_inline_width_to_children(node: &mut LayoutNode) {
+    if node.style.display.outer != OuterDisplay::Inline
+        || node.style.size.width != LengthOrAuto::Auto
     {
         return;
     }
-    for child in &mut node.children {
-        let LayoutChild::Node(child) = child else {
-            continue;
-        };
-        if child.style.size.width != LengthOrAuto::Auto {
-            continue;
-        }
-        let required_width = required_children_margin_box_width(child);
-        grow_auto_layout_width(child, required_width);
-    }
-}
-
-/// **Bug fix:** `width`
-///
-/// `ui_layout` partially handles auto-width flex containers but uses the
-/// total main-axis extent of flex items (`children_width`) rather than the
-/// widest child's margin-box width.
-fn expand_auto_flex_width_to_children(node: &mut LayoutNode) {
-    if node.style.display.inner != InnerDisplay::Flex || node.style.size.width != LengthOrAuto::Auto
-    {
-        return;
-    }
-    let required_width = required_children_margin_box_width(node);
-    grow_auto_layout_width(node, required_width);
-}
-
-/// **Bug fix:** `height`
-///
-/// `ui_layout` partially handles auto-height flex containers but does not
-/// account for child bottom margins, leaving the container shorter than it
-/// should be.
-fn expand_auto_flex_height_to_children(node: &mut LayoutNode) {
-    if node.style.display.inner != InnerDisplay::Flex
-        || node.style.size.height != LengthOrAuto::Auto
-    {
-        return;
-    }
-    let required_height = node
+    // Use the margin-box width of the widest child.
+    let required_width = node
         .children
         .iter()
         .filter_map(LayoutChild::node)
         .filter_map(|child| {
             child.layout_box.iter().next().map(|model| {
-                model.border_box.bottom() + fixed_nonnegative_px(&child.style.spacing.margin_bottom)
+                model.border_box.right() + fixed_nonnegative_px(&child.style.spacing.margin_right)
             })
         })
         .fold(0.0, f32::max);
-    grow_auto_layout_height(node, required_height);
-}
-
-/// **Bug fix:** `height`, `min-height`
-///
-/// `ui_layout` has constraint infrastructure for `min-height` but does not
-/// fully enforce it in all scenarios, particularly for bottom-anchored
-/// out-of-flow elements. Grow the layout box to at least the declared size and
-/// shift upward so the bottom edge stays in place.
-fn enforce_fixed_layout_height(node: &mut LayoutNode) {
-    let declared = match (&node.style.size.height, &node.style.size.min_height) {
-        (LengthOrAuto::Length(Length::Px(height)), LengthOrAuto::Length(Length::Px(minimum))) => {
-            Some(height.max(*minimum))
+    if required_width <= 0.0 {
+        return;
+    }
+    if let Some(model) = node.layout_box.iter().next() {
+        let extra = required_width - model.content_box.width;
+        if extra > 0.0 {
+            match &mut node.layout_box {
+                ui_layout::LayoutBox::BlockBox(model) => {
+                    model.content_box.width += extra;
+                    model.padding_box.width += extra;
+                    model.border_box.width += extra;
+                    model.children_box.width = model.children_box.width.max(required_width);
+                }
+                ui_layout::LayoutBox::InlineBox(inline) => {
+                    inline.box_model.content_box.width += extra;
+                    inline.box_model.padding_box.width += extra;
+                    inline.box_model.border_box.width += extra;
+                    inline.box_model.children_box.width =
+                        inline.box_model.children_box.width.max(required_width);
+                    if let Some(last) = inline.line_spans.last_mut() {
+                        last.x_range.end += extra;
+                    }
+                }
+                ui_layout::LayoutBox::None => {}
+            }
         }
-        (LengthOrAuto::Length(Length::Px(height)), _) => Some(*height),
-        (_, LengthOrAuto::Length(Length::Px(minimum))) => Some(*minimum),
-        _ => None,
-    };
-    let Some(declared) = declared else {
-        return;
-    };
-    let Some(model) = node.layout_box.iter().next() else {
-        return;
-    };
-    let current = if node.style.box_sizing == BoxSizing::BorderBox {
-        model.border_box.height
-    } else {
-        model.content_box.height
-    };
-    let extra = declared - current;
-    if extra <= 0.0 {
-        return;
     }
-
-    grow_layout_height(&mut node.layout_box, extra);
-    if node.style.position.kind.is_out_of_flow()
-        && node.style.position.top == LengthOrAuto::Auto
-        && node.style.position.bottom != LengthOrAuto::Auto
-    {
-        shift_layout_box_y(&mut node.layout_box, -extra);
-    }
-}
-
-/// **Bug fix:** `height`
-///
-/// `ui_layout` partially handles auto-height flow containers but does not
-/// account for child bottom margins. Grow the container to fit the tallest
-/// in-flow child's bottom edge (including its bottom margin).
-fn expand_auto_flow_height_to_children(node: &mut LayoutNode) {
-    if node.style.display.inner != InnerDisplay::Flow
-        || node.style.size.height != LengthOrAuto::Auto
-    {
-        return;
-    }
-    let required_height = node
-        .children
-        .iter()
-        .filter_map(LayoutChild::node)
-        .filter(|child| !child.style.position.kind.is_out_of_flow())
-        .filter_map(|child| {
-            child.layout_box.iter().next().map(|model| {
-                model.border_box.bottom() + fixed_nonnegative_px(&child.style.spacing.margin_bottom)
-            })
-        })
-        .fold(0.0, f32::max);
-    grow_auto_layout_height(node, required_height);
 }
 
 // ---------------------------------------------------------------------------
@@ -425,21 +346,6 @@ pub fn refresh_missing_text_layout_results(
             _ => {}
         }
     }
-}
-
-/// **Supplement:** `width`
-///
-/// `ui_layout` does not handle `width: auto` for inline containers wrapping
-/// block children. Grow the inline container's width to accommodate the
-/// widest child's margin box.
-fn expand_auto_inline_width_to_children(node: &mut LayoutNode) {
-    if node.style.display.outer != OuterDisplay::Inline
-        || node.style.size.width != LengthOrAuto::Auto
-    {
-        return;
-    }
-    let required_width = required_children_margin_box_width(node);
-    grow_auto_layout_width(node, required_width);
 }
 
 /// **Supplement:** `margin-left`, `margin-right`, `column-gap`
@@ -501,101 +407,6 @@ fn correct_single_row_grid_inline_alignment(node: &mut LayoutNode) {
 // ---------------------------------------------------------------------------
 // utilities
 // ---------------------------------------------------------------------------
-
-/// Compute the right-most edge (border-box right + right margin) among all
-/// in-flow children.
-fn required_children_margin_box_width(node: &LayoutNode) -> f32 {
-    node.children
-        .iter()
-        .filter_map(LayoutChild::node)
-        .filter_map(|child| {
-            child.layout_box.iter().next().map(|model| {
-                model.border_box.right() + fixed_nonnegative_px(&child.style.spacing.margin_right)
-            })
-        })
-        .fold(0.0, f32::max)
-}
-
-/// Grow a node's layout box (content, padding, border, children) horizontally
-/// to reach `required_width`.
-fn grow_auto_layout_width(node: &mut LayoutNode, required_width: f32) {
-    let Some(model) = node.layout_box.iter().next() else {
-        return;
-    };
-    let extra = required_width - model.content_box.width;
-    if extra <= 0.0 {
-        return;
-    }
-
-    match &mut node.layout_box {
-        ui_layout::LayoutBox::BlockBox(model) => {
-            model.content_box.width += extra;
-            model.padding_box.width += extra;
-            model.border_box.width += extra;
-            model.children_box.width = model.children_box.width.max(required_width);
-        }
-        ui_layout::LayoutBox::InlineBox(inline) => {
-            inline.box_model.content_box.width += extra;
-            inline.box_model.padding_box.width += extra;
-            inline.box_model.border_box.width += extra;
-            inline.box_model.children_box.width =
-                inline.box_model.children_box.width.max(required_width);
-            if let Some(last) = inline.line_spans.last_mut() {
-                last.x_range.end += extra;
-            }
-        }
-        ui_layout::LayoutBox::None => {}
-    }
-}
-
-/// Grow a node's layout box (content, padding, border, children) vertically
-/// to reach `required_height`.
-fn grow_auto_layout_height(node: &mut LayoutNode, required_height: f32) {
-    let Some(model) = node.layout_box.iter().next() else {
-        return;
-    };
-    let extra = required_height - model.content_box.height;
-    if extra <= 0.0 {
-        return;
-    }
-
-    match &mut node.layout_box {
-        ui_layout::LayoutBox::BlockBox(model) => {
-            model.content_box.height += extra;
-            model.padding_box.height += extra;
-            model.border_box.height += extra;
-            model.children_box.height = model.children_box.height.max(required_height);
-        }
-        ui_layout::LayoutBox::InlineBox(inline) => {
-            inline.box_model.content_box.height += extra;
-            inline.box_model.padding_box.height += extra;
-            inline.box_model.border_box.height += extra;
-            inline.box_model.children_box.height =
-                inline.box_model.children_box.height.max(required_height);
-        }
-        ui_layout::LayoutBox::None => {}
-    }
-}
-
-/// Add `extra` pixels to every layer (content, padding, border, children) of a
-/// layout box vertically.
-fn grow_layout_height(layout_box: &mut ui_layout::LayoutBox, extra: f32) {
-    match layout_box {
-        ui_layout::LayoutBox::BlockBox(model) => {
-            model.content_box.height += extra;
-            model.padding_box.height += extra;
-            model.border_box.height += extra;
-            model.children_box.height += extra;
-        }
-        ui_layout::LayoutBox::InlineBox(inline) => {
-            inline.box_model.content_box.height += extra;
-            inline.box_model.padding_box.height += extra;
-            inline.box_model.border_box.height += extra;
-            inline.box_model.children_box.height += extra;
-        }
-        ui_layout::LayoutBox::None => {}
-    }
-}
 
 /// Shift every layer (content, padding, border, children) of a layout box
 /// horizontally by `shift_x` pixels.
