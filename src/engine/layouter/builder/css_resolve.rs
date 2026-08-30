@@ -2,8 +2,6 @@ use crate::engine::css::values::{CssValue, Unit};
 use crate::engine::layouter::types::TextFlowStyle;
 use ui_layout::{GridPlacement, GridPlacementEnd, GridRepeat, GridTrack, Length, LengthOrAuto};
 
-const GRID_LINE_TO_END: GridPlacementEnd = GridPlacementEnd::Line(usize::MAX);
-
 /// Extract font family names from a `font-family` CSS value.
 ///
 /// Accepts a single keyword/string or a comma-separated list.
@@ -331,13 +329,19 @@ pub fn parse_grid_placement(value: &CssValue) -> Option<GridPlacement> {
             end: GridPlacementEnd::Span(1),
         });
     }
-    if matches!(end_values, [CssValue::Number(end)] if *end == -1.0) {
+    if matches!(end_values, [CssValue::Number(end)] if *end < 0.0) {
+        let [CssValue::Number(end)] = end_values else {
+            unreachable!();
+        };
+        if end.fract().abs() >= f32::EPSILON {
+            return None;
+        }
+
         return Some(GridPlacement {
             start: Some(start),
-            end: GRID_LINE_TO_END,
+            end: GridPlacementEnd::NegativeLine((-*end) as usize),
         });
     }
-    // TODO: Resolve every negative CSS grid line against the explicit grid, not only -1.
     let end = parse_positive_grid_line(end_values)?;
     (end > start).then_some(GridPlacement {
         start: Some(start),
@@ -459,11 +463,17 @@ pub fn parse_grid_line(value: &CssValue) -> Option<usize> {
 }
 
 pub fn parse_grid_line_end(value: &CssValue) -> Option<GridPlacementEnd> {
-    match value {
-        CssValue::Number(n) if *n == -1.0 => Some(GRID_LINE_TO_END),
-        CssValue::Number(n) if *n >= 1.0 && n.fract() == 0.0 => {
-            Some(GridPlacementEnd::Line(*n as usize))
-        }
+    let CssValue::Number(n) = value else {
+        return None;
+    };
+
+    if n.fract().abs() >= f32::EPSILON {
+        return None;
+    }
+
+    match *n {
+        n if n >= 1.0 => Some(GridPlacementEnd::Line(n as usize)),
+        n if n <= -1.0 => Some(GridPlacementEnd::NegativeLine(-n as usize)),
         _ => None,
     }
 }
