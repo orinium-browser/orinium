@@ -4466,7 +4466,7 @@ dependencies = [
 [[package]]
 name = "ui_layout"
 version = "0.12.1"
-source = "git+https://github.com/098orin/ui_layout-rs?rev=6ba7926a6b1480da352127e6296775ac7eedf9f9#6ba7926a6b1480da352127e6296775ac7eedf9f9"
+source = "git+https://github.com/098orin/ui_layout-rs?rev=1a891acff5485a5499440bf2b00ce166a289d4af#1a891acff5485a5499440bf2b00ce166a289d4af"
 
 [[package]]
 name = "unicode-bidi"
