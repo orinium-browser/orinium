@@ -33,7 +33,9 @@ pub fn resolve_css_len_auto(
 ) -> Option<LengthOrAuto> {
     match &css_len {
         CssValue::Keyword(s) if s == "auto" => Some(LengthOrAuto::Auto),
-        _ => resolve_css_len(name, css_len, text_flow_style).map(|l| l.into()),
+        _ => {
+            resolve_css_len(name, std::slice::from_ref(css_len), text_flow_style).map(|l| l.into())
+        }
     }
 }
 
@@ -195,13 +197,23 @@ fn resolve_calc_value(
     text_flow_style: &TextFlowStyle,
 ) -> Option<CalcValue> {
     match value {
+        CssValue::List(v) => {
+            if v.len() == 1 {
+                resolve_calc_value(name, &v[0], text_flow_style)
+            } else {
+                resolve_calc_value_slice(name, v, text_flow_style)
+            }
+        }
         CssValue::Length(v, unit) => {
             resolve_length(name, *v, unit, text_flow_style).map(CalcValue::Length)
         }
         CssValue::Number(n) => Some(CalcValue::Number(*n)),
-        CssValue::Function(fn_name, args) if fn_name == "calc" && !args.is_empty() => {
-            let mut iter = args.iter();
-            let mut result = resolve_calc_value(name, iter.next().unwrap(), text_flow_style)?;
+        CssValue::Function(fn_name, args) if fn_name == "calc" => {
+            let mut iter = args.iter().flatten();
+            let Some(first) = iter.next() else {
+                return None;
+            };
+            let mut result = resolve_calc_value(name, first, text_flow_style)?;
 
             while let (Some(op), Some(val)) = (iter.next(), iter.next()) {
                 let rhs = resolve_calc_value(name, val, text_flow_style)?;
@@ -214,7 +226,7 @@ fn resolve_calc_value(
             if (fn_name == "min" || fn_name == "max") && args.len() >= 2 =>
         {
             let mut resolved: Vec<Length> = Vec::with_capacity(args.len());
-            for arg in args {
+            for arg in args.iter().flatten() {
                 resolved.push(match resolve_calc_value(name, arg, text_flow_style)? {
                     CalcValue::Length(l) => l,
                     CalcValue::Number(0.0) => Length::Px(0.0),
@@ -240,10 +252,25 @@ fn resolve_calc_value(
             Some(CalcValue::Length(result))
         }
         CssValue::Function(fn_name, args) if fn_name == "clamp" && args.len() == 3 => {
+            let min = resolve_css_len(
+                name,
+                std::slice::from_ref(args[0].first()?),
+                text_flow_style,
+            )?;
+            let val = resolve_css_len(
+                name,
+                std::slice::from_ref(args[1].first()?),
+                text_flow_style,
+            )?;
+            let max = resolve_css_len(
+                name,
+                std::slice::from_ref(args[2].first()?),
+                text_flow_style,
+            )?;
             Some(CalcValue::Length(Length::Clamp {
-                min: Box::new(resolve_css_len(name, &args[0], text_flow_style)?),
-                val: Box::new(resolve_css_len(name, &args[1], text_flow_style)?),
-                max: Box::new(resolve_css_len(name, &args[2], text_flow_style)?),
+                min: Box::new(min),
+                val: Box::new(val),
+                max: Box::new(max),
             }))
         }
         _ => {
@@ -258,35 +285,93 @@ fn resolve_calc_value(
     }
 }
 
-/// Resolve CssValue to Length.
+/// Resolve a slice of CSS component values to a Length.
+///
+/// Accepts a component list and supports several forms:
+/// - A single primitive (`&[10px]`)
+/// - A single length-valued function (`&[calc(...)]`, `&[min(...)]`, ...)
+/// - A flat arithmetic expression (`&[a, +, b]`)
+///
+/// Arithmetic over multiple components is resolved using the same type-checked
+/// rules as `calc()`.
 pub fn resolve_css_len(
     name: &str,
-    css_len: &CssValue,
+    components: &[CssValue],
     text_flow_style: &TextFlowStyle,
 ) -> Option<Length> {
-    match &css_len {
-        CssValue::Length(v, unit) => resolve_length(name, *v, unit, text_flow_style),
-        CssValue::Number(0.0) => Some(Length::Px(0.0)),
-        CssValue::Keyword(_) => None,
-        CssValue::Function(_, _) => match resolve_calc_value(name, css_len, text_flow_style)? {
-            CalcValue::Length(l) => Some(l),
-            CalcValue::Number(0.0) => Some(Length::Px(0.0)),
-            CalcValue::Number(n) => {
-                log::error!(
-                    target: "Layouter",
-                    "calc() resolved to a number ({}) for `{}` (expected length)",
-                    n,
-                    name
+    if components.len() > 1 {
+        return calc_value_to_length(
+            name,
+            resolve_calc_value_slice(name, components, text_flow_style)?,
+        );
+    }
+
+    match components.first() {
+        Some(CssValue::List(v)) => {
+            if v.len() > 1 {
+                return calc_value_to_length(
+                    name,
+                    resolve_calc_value_slice(name, v, text_flow_style)?,
                 );
-                None
+            } else {
+                resolve_css_len(name, v, text_flow_style)
             }
-        },
-        CssValue::Color(_) => None,
+        }
+        Some(CssValue::Length(v, unit)) => resolve_length(name, *v, unit, text_flow_style),
+        Some(CssValue::Number(0.0)) => Some(Length::Px(0.0)),
+        Some(CssValue::Keyword(_)) => None,
+        Some(CssValue::Color(_)) => None,
+        Some(CssValue::Function(_, _)) => calc_value_to_length(
+            name,
+            resolve_calc_value(name, components.first()?, text_flow_style)?,
+        ),
+        None => None,
         _ => {
-            log::error!(target: "Layouter", "Unknown CSS Length type for `{}`: {:?}", name, css_len);
+            log::error!(
+                target: "Layouter",
+                "Unknown CSS Length type for `{}`: {:?}",
+                name,
+                components
+            );
             None
         }
     }
+}
+
+/// Convert a resolved `CalcValue` into a `Length`, rejecting bare numbers.
+fn calc_value_to_length(name: &str, value: CalcValue) -> Option<Length> {
+    match value {
+        CalcValue::Length(l) => Some(l),
+        CalcValue::Number(0.0) => Some(Length::Px(0.0)),
+        CalcValue::Number(n) => {
+            log::error!(
+                target: "Layouter",
+                "calc() resolved to a number ({}) for `{}` (expected length)",
+                n,
+                name
+            );
+            None
+        }
+    }
+}
+
+/// Resolve a sequence of `[value, operator, value, ...]` into a `CalcValue`,
+/// applying the same type-checked arithmetic as `calc()`.
+fn resolve_calc_value_slice(
+    name: &str,
+    components: &[CssValue],
+    text_flow_style: &TextFlowStyle,
+) -> Option<CalcValue> {
+    let mut iter = components.iter();
+    let Some(first) = iter.next() else {
+        return None;
+    };
+    let mut result = resolve_calc_value(name, first, text_flow_style)?;
+    while let (Some(op), Some(val)) = (iter.next(), iter.next()) {
+        let rhs = resolve_calc_value(name, val, text_flow_style)?;
+        result = calc_combine(name, op, result, rhs)?;
+    }
+    Some(result)
 }
 
 pub fn parse_grid_tracks(
@@ -370,6 +455,8 @@ fn parse_grid_track(
             let [minimum, maximum] = args.as_slice() else {
                 return None;
             };
+            let minimum = minimum.first()?;
+            let maximum = maximum.first()?;
             Some(GridTrack::MinMax(
                 Box::new(parse_grid_track(name, minimum, text_flow_style)?),
                 Box::new(parse_grid_track(name, maximum, text_flow_style)?),
@@ -377,21 +464,24 @@ fn parse_grid_track(
         }
         CssValue::Function(function, args) if function == "repeat" => {
             let (repeat, pattern) = args.split_first()?;
-            let repeat = match repeat {
-                CssValue::Number(count) if *count >= 1.0 && count.fract().abs() < f32::EPSILON => {
+            let repeat = match repeat.first() {
+                Some(CssValue::Number(count))
+                    if *count >= 1.0 && count.fract().abs() < f32::EPSILON =>
+                {
                     GridRepeat::Count(*count as usize)
                 }
-                CssValue::Keyword(keyword) if keyword == "auto-fit" => GridRepeat::AutoFit,
-                CssValue::Keyword(keyword) if keyword == "auto-fill" => GridRepeat::AutoFill,
+                Some(CssValue::Keyword(keyword)) if keyword == "auto-fit" => GridRepeat::AutoFit,
+                Some(CssValue::Keyword(keyword)) if keyword == "auto-fill" => GridRepeat::AutoFill,
                 _ => return None,
             };
             let pattern = pattern
                 .iter()
+                .flatten()
                 .map(|value| parse_grid_track(name, value, text_flow_style))
                 .collect::<Option<Vec<_>>>()?;
             (!pattern.is_empty()).then_some(GridTrack::Repeat(repeat, pattern))
         }
-        _ => resolve_css_len(name, value, text_flow_style)
+        _ => resolve_css_len(name, std::slice::from_ref(value), text_flow_style)
             .map(LengthOrAuto::Length)
             .map(GridTrack::Breadth),
     }
