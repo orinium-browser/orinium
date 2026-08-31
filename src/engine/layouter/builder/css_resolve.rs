@@ -234,18 +234,13 @@ fn resolve_calc_value(
         }
         CssValue::Number(n) => Some(CalcValue::Number(*n)),
         CssValue::Function(fn_name, args) if fn_name == "calc" => {
-            let mut iter = args.iter().flatten();
-            let Some(first) = iter.next() else {
-                return None;
-            };
-            let mut result = resolve_calc_value(name, first, text_flow_style)?;
-
-            while let (Some(op), Some(val)) = (iter.next(), iter.next()) {
-                let rhs = resolve_calc_value(name, val, text_flow_style)?;
-                result = calc_combine(name, op, result, rhs)?;
+            if args.len() == 1 {
+                let list = args[0].clone();
+                resolve_calc_value(name, &CssValue::List(list), text_flow_style)
+            } else {
+                // Syntax error
+                None
             }
-
-            Some(result)
         }
         CssValue::Function(fn_name, args)
             if (fn_name == "min" || fn_name == "max") && args.len() >= 2 =>
