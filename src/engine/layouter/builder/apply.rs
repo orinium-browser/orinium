@@ -868,16 +868,14 @@ pub fn apply_declaration(
         }
 
         ("color", _) => {
-            text_style.color = match value {
-                CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("inherit") => {
-                    // inherit: use parent's color
-                    text_style.color
-                }
-                CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentColor") => {
-                    text_style.color
-                }
-                _ => resolve_css_color(name, value, color_scheme)?,
-            }
+            apply_property!(
+                color,
+                text_style,
+                parent_text_style,
+                DEFAULT_TEXT_STYLE,
+                value,
+                resolve_css_color(name, value, color_scheme)?
+            );
         }
 
         // `color-scheme` is resolved separately above.
