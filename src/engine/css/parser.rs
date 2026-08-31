@@ -1516,8 +1516,9 @@ impl<'a> Parser<'a> {
                 match token {
                     Token::Whitespace if component_depth == 0 => {
                         if !component_tokens.is_empty() {
-                            let value =
-                                Self::parse_tokens_to_css_value(std::mem::take(&mut component_tokens))?;
+                            let value = Self::parse_tokens_to_css_value(std::mem::take(
+                                &mut component_tokens,
+                            ))?;
                             components.push(value);
                         }
                     }
