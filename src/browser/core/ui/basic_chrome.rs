@@ -537,16 +537,14 @@ impl Chrome for BasicChrome {
             let on_divider = divider.as_ref().is_some_and(|d| d.contains(x, y));
 
             // Handle divider drag.
-            if on_divider {
-                if let PointerEvent::Down { .. } = event {
-                    let anchor = if self.debug_pane_vertical { x } else { y };
-                    self.debug_dragging = true;
-                    self.debug_drag_anchor = Some((anchor, self.debug_pane_ratio));
-                    return ChromeEventResult {
-                        consumed: true,
-                        action: ChromeAction::None,
-                    };
-                }
+            if on_divider && let PointerEvent::Down { .. } = event {
+                let anchor = if self.debug_pane_vertical { x } else { y };
+                self.debug_dragging = true;
+                self.debug_drag_anchor = Some((anchor, self.debug_pane_ratio));
+                return ChromeEventResult {
+                    consumed: true,
+                    action: ChromeAction::None,
+                };
             }
 
             // Handle ongoing drag even if pointer moved off the divider.
