@@ -240,15 +240,15 @@ fn resolve_channel(value: &CssValue) -> Option<f32> {
             }
             // If the last element is a bare "%" keyword, the preceding
             // elements form the numeric expression (the result is a percent).
-            if let Some(CssValue::Keyword(pct)) = items.last() {
-                if pct == "%" {
-                    let expr: Vec<&CssValue> = items[..items.len() - 1].iter().collect();
-                    return if expr.len() == 1 {
-                        resolve_channel(expr[0])
-                    } else {
-                        resolve_channel_expr(&expr)
-                    };
-                }
+            if let Some(CssValue::Keyword(pct)) = items.last()
+                && pct == "%"
+            {
+                let expr: Vec<&CssValue> = items[..items.len() - 1].iter().collect();
+                return if expr.len() == 1 {
+                    resolve_channel(expr[0])
+                } else {
+                    resolve_channel_expr(&expr)
+                };
             }
             resolve_channel_slice(items)
         }
