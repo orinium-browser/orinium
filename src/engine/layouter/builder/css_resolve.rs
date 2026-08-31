@@ -96,18 +96,43 @@ fn resolve_length(
     text_flow_style: &TextFlowStyle,
 ) -> Option<Length> {
     match unit {
+        Unit::Px => Some(Length::Px(v)),
         Unit::Em => Some(Length::Px(text_flow_style.font_size * v)),
         Unit::Rem => Some(Length::Px(16.0 * v)), // Stub
         Unit::Percent => Some(Length::Percent(v)),
-        Unit::Px => Some(Length::Px(v)),
         Unit::Vw => Some(Length::Vw(v)),
         Unit::Vh => Some(Length::Vh(v)),
+
+        // TODO: Resolve physical units using the device DPI.
+        Unit::Cm | Unit::Mm | Unit::In | Unit::Pt | Unit::Pc => {
+            log::warn!(
+                target: "Layouter",
+                "TODO: Resolve physical length unit: {}", unit.as_str());
+            None
+        }
+
+        // TODO: Resolve against the viewport dimensions.
+        Unit::Vmin | Unit::Vmax => {
+            log::warn!(
+                target: "Layouter",
+                "TODO: Resolve viewport length unit: {}", unit.as_str());
+            None
+        }
+
         Unit::Deg => {
-            log::error!(target: "Layouter", "Unexpected deg unit for `{}` (expected length)", name);
+            log::error!(
+                target: "Layouter",
+                "Unexpected deg unit for `{}` (expected length)",
+                name
+            );
             None
         }
         Unit::Fr => {
-            log::error!(target: "Layouter", "Unexpected fr unit for `{}` (expected length)", name);
+            log::error!(
+                target: "Layouter",
+                "Unexpected fr unit for `{}` (expected length)",
+                name
+            );
             None
         }
     }
