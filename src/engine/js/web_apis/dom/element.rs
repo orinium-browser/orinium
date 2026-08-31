@@ -2,6 +2,9 @@ use crate::engine::html::{DomTree, HtmlNodeType, Parser as HtmlParser};
 use crate::engine::js::common::{
     UNDEFINED, dom_node, is_callable, mark_dom_dirty, node_dom_id, noop, with_host, with_host_mut,
 };
+use crate::engine::js::web_apis::dom::custom_elements::{
+    fire_attribute_changed_callback, fire_connected_callback, fire_disconnected_callback,
+};
 use crate::engine::js::web_apis::dom::document::{
     class_selector, create_text_node, expose_detached_node, expose_node, expose_node_list,
 };
@@ -119,6 +122,14 @@ pub(crate) fn make_element_interface() -> (Rc<RefCell<JSObject>>, Rc<RefCell<JSO
     prototype.set(
         "getBoundingClientRect".to_string(),
         JSValue::from_native_function(get_bounding_client_rect),
+    );
+    prototype.set(
+        "attachShadow".to_string(),
+        JSValue::from_native_function(super::shadow_dom::element_attach_shadow),
+    );
+    prototype.define_property(
+        "shadowRoot".to_string(),
+        read_only_accessor_property(super::shadow_dom::get_shadow_root),
     );
     let prototype = Rc::new(RefCell::new(prototype));
     let mut constructor = JSObject::new();
@@ -483,7 +494,7 @@ pub(crate) fn make_document_fragment(dom_id: u64) -> Rc<RefCell<JSObject>> {
     Rc::new(RefCell::new(obj))
 }
 
-fn define_node_id(obj: &mut JSObject, dom_id: u64) {
+pub(crate) fn define_node_id(obj: &mut JSObject, dom_id: u64) {
     obj.define_property(
         "__orinium_dom_id".to_string(),
         Property {
@@ -497,13 +508,15 @@ fn define_node_id(obj: &mut JSObject, dom_id: u64) {
     );
 }
 
-fn append_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn append_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(parent) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
         return Ok(JSValue::null());
     };
     if !matches!(
         parent.borrow().value,
-        HtmlNodeType::Element { .. } | HtmlNodeType::DocumentFragment
+        HtmlNodeType::Element { .. }
+            | HtmlNodeType::DocumentFragment
+            | HtmlNodeType::ShadowRoot { .. }
     ) {
         return Ok(JSValue::null());
     }
@@ -532,6 +545,7 @@ fn append_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         let _ = with_host_mut(vm, |host| {
             host.detached_nodes.remove(&dom_id);
         });
+        fire_connected_callback(vm, dom_id);
     }
     queue_dynamic_script(vm, &child_value);
     queue_dynamic_stylesheet(vm, &child_value);
@@ -553,7 +567,7 @@ fn element_append(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(JSValue::undefined())
 }
 
-fn insert_before(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn insert_before(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(parent) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
         return Ok(JSValue::null());
     };
@@ -597,6 +611,7 @@ fn insert_before(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         let _ = with_host_mut(vm, |host| {
             host.detached_nodes.remove(&dom_id);
         });
+        fire_connected_callback(vm, dom_id);
     }
     queue_dynamic_script(vm, &child_value);
     queue_dynamic_stylesheet(vm, &child_value);
@@ -705,7 +720,7 @@ fn queue_dynamic_image(vm: &mut VM, value: &JSValue) {
     });
 }
 
-fn remove_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn remove_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(parent) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
         return Ok(JSValue::null());
     };
@@ -719,6 +734,7 @@ fn remove_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         return Ok(JSValue::null());
     };
     if let Some(dom_id) = node_dom_id(&child_value) {
+        fire_disconnected_callback(vm, dom_id);
         let _ = with_host_mut(vm, |host| {
             host.detached_nodes.insert(dom_id, detached);
         });
@@ -734,6 +750,7 @@ fn remove_node(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     };
     if TreeNode::detach(&node) {
         if let Some(dom_id) = node_dom_id(this) {
+            fire_disconnected_callback(vm, dom_id);
             let _ = with_host_mut(vm, |host| {
                 host.detached_nodes.insert(dom_id, node);
             });
@@ -743,7 +760,7 @@ fn remove_node(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(JSValue::undefined())
 }
 
-fn replace_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn replace_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(parent) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
         return Ok(JSValue::null());
     };
@@ -767,6 +784,7 @@ fn replace_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         return Ok(JSValue::null());
     };
     if let Some(dom_id) = node_dom_id(&old_child_value) {
+        fire_disconnected_callback(vm, dom_id);
         let _ = with_host_mut(vm, |host| {
             host.detached_nodes.insert(dom_id, detached);
         });
@@ -775,6 +793,7 @@ fn replace_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         let _ = with_host_mut(vm, |host| {
             host.detached_nodes.remove(&dom_id);
         });
+        fire_connected_callback(vm, dom_id);
     }
     queue_dynamic_script(vm, &new_child_value);
     queue_dynamic_stylesheet(vm, &new_child_value);
@@ -783,7 +802,7 @@ fn replace_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(old_child_value)
 }
 
-fn clone_node(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn clone_node(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let this = args.first().unwrap_or(&UNDEFINED);
     let Some(node) = dom_node(vm, this) else {
         return Ok(JSValue::null());
@@ -1217,7 +1236,7 @@ fn get_sibling(vm: &mut VM, args: &[JSValue], offset: isize) -> JSResult<JSValue
         .unwrap_or(JSValue::null()))
 }
 
-fn get_element_children(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn get_element_children(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
         return Ok(vm.array_from_values(Vec::new()));
     };
@@ -1954,7 +1973,7 @@ pub(crate) fn element_layout_size(vm: &VM, value: &JSValue) -> Option<(f64, f64)
     Some(size)
 }
 
-fn element_layout_metrics(vm: &VM, value: &JSValue) -> Option<JsLayoutMetrics> {
+pub(crate) fn element_layout_metrics(vm: &VM, value: &JSValue) -> Option<JsLayoutMetrics> {
     let node = dom_node(vm, value)?;
     let node_key = Rc::as_ptr(&node) as usize;
     let dom_id = node_dom_id(value);
@@ -2660,7 +2679,11 @@ fn set_attribute(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         .get(2)
         .map(|v| v.to_console_string())
         .unwrap_or_default();
-    node.borrow_mut().value.set_attr(name, value);
+    let old_value = node.borrow().value.get_attr(name).map(str::to_string);
+    node.borrow_mut().value.set_attr(name, value.clone());
+    if let Some(dom_id) = node_dom_id(args.first().unwrap_or(&UNDEFINED)) {
+        fire_attribute_changed_callback(vm, dom_id, name, old_value.as_deref(), Some(&value));
+    }
     if name.eq_ignore_ascii_case("src")
         && let Some(element) = args.first()
     {
@@ -2686,7 +2709,11 @@ fn remove_attribute(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(name) = args.get(1).and_then(JSValue::as_string) else {
         return Ok(JSValue::undefined());
     };
+    let old_value = node.borrow().value.get_attr(name).map(str::to_string);
     if node.borrow_mut().value.remove_attr(name).is_some() {
+        if let Some(dom_id) = node_dom_id(args.first().unwrap_or(&UNDEFINED)) {
+            fire_attribute_changed_callback(vm, dom_id, name, old_value.as_deref(), None);
+        }
         mark_dom_dirty(vm);
     }
     Ok(JSValue::undefined())

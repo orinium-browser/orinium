@@ -12,6 +12,12 @@ use crate::engine::{
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShadowRootMode {
+    Open,
+    Closed,
+}
+
 #[derive(Debug, Clone)]
 pub enum HtmlNodeType {
     Document,
@@ -19,6 +25,11 @@ pub enum HtmlNodeType {
     Element {
         tag_name: String,
         attributes: Vec<Attribute>,
+    },
+    /// Shadow root attached to a host element.
+    /// Children live here and are not part of the host's normal children.
+    ShadowRoot {
+        mode: ShadowRootMode,
     },
     Text(String),
     Comment(String),
@@ -154,12 +165,23 @@ impl DomTree {
         })
     }
 
-    /// Returns the concatenated text content of this node (including children)
+    /// Returns the concatenated text content of this node (including children).
+    /// Shadow root children are skipped (they are not part of light DOM text).
     pub fn inner_text(node: &NodeRef<HtmlNodeType>) -> String {
         let n = node.borrow();
         match &n.value {
             HtmlNodeType::Text(content) => content.clone(),
-            HtmlNodeType::Element { .. } => n.children().iter().map(DomTree::inner_text).collect(),
+            HtmlNodeType::Element { .. } => n
+                .children()
+                .iter()
+                // Skip shadow root children — not part of light DOM.
+                .filter(|c| !matches!(c.borrow().value, HtmlNodeType::ShadowRoot { .. }))
+                .map(DomTree::inner_text)
+                .collect(),
+            HtmlNodeType::ShadowRoot { .. } => {
+                // Inside a shadow root, traverse its children.
+                n.children().iter().map(DomTree::inner_text).collect()
+            }
             _ => "".to_string(),
         }
     }
@@ -278,6 +300,10 @@ impl DomTree {
 
         let mut current = Some(Rc::clone(node));
         while let Some(n) = current.clone() {
+            // Stop at shadow boundary — closest() should not cross it.
+            if matches!(n.borrow().value, HtmlNodeType::ShadowRoot { .. }) {
+                break;
+            }
             let chain = element_chain(&n);
             if selectors.iter().any(|s| s.matches(&chain)) {
                 return Some(Rc::clone(&n));
@@ -356,7 +382,9 @@ fn query_selector_all_from(
         .collect()
 }
 
-fn parse_query_selectors(selector: &str) -> Vec<crate::engine::css::parser::ComplexSelector> {
+pub(crate) fn parse_query_selectors(
+    selector: &str,
+) -> Vec<crate::engine::css::parser::ComplexSelector> {
     if selector.trim().is_empty() {
         return Vec::new();
     }
@@ -375,30 +403,50 @@ fn parse_query_selectors(selector: &str) -> Vec<crate::engine::css::parser::Comp
         .unwrap_or_default()
 }
 
-fn collect_element_nodes(
+pub(crate) fn collect_element_nodes(
     node: &NodeRef<HtmlNodeType>,
     include_node: bool,
     output: &mut Vec<NodeRef<HtmlNodeType>>,
 ) {
-    let (is_element, children) = {
+    let (is_element, is_shadow, children) = {
         let node = node.borrow();
         (
             matches!(node.value, HtmlNodeType::Element { .. }),
+            matches!(node.value, HtmlNodeType::ShadowRoot { .. }),
             node.children().to_vec(),
         )
     };
     if include_node && is_element {
         output.push(Rc::clone(node));
     }
-    for child in children {
-        collect_element_nodes(&child, true, output);
+    // Shadow root children are inside the shadow tree — only
+    // reachable through the shadow root, not through the host element's
+    // light DOM traversal.  Skip them when traversing light DOM.
+    if !is_shadow {
+        for child in children {
+            // Skip shadow root children during light DOM traversal.
+            let is_child_shadow = matches!(child.borrow().value, HtmlNodeType::ShadowRoot { .. });
+            if !is_child_shadow {
+                collect_element_nodes(&child, true, output);
+            }
+        }
+    } else {
+        // We're inside a shadow root — do traverse its children
+        // (shadow tree is traversable from within).
+        for child in children {
+            collect_element_nodes(&child, true, output);
+        }
     }
 }
 
-fn element_chain(node: &NodeRef<HtmlNodeType>) -> ElementChain {
+pub(crate) fn element_chain(node: &NodeRef<HtmlNodeType>) -> ElementChain {
     let mut chain = Vec::new();
     let mut current = Some(Rc::clone(node));
     while let Some(node) = current {
+        // Stop at shadow boundary — element chains should not cross it.
+        if matches!(node.borrow().value, HtmlNodeType::ShadowRoot { .. }) {
+            break;
+        }
         if let Some(info) = element_info(&node) {
             chain.push(info);
         }

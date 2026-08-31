@@ -1,4 +1,4 @@
-use crate::engine::html::HtmlNodeType;
+use crate::engine::html::{DomTree, HtmlNodeType};
 use crate::engine::js::common::{dom_node, is_callable, node_dom_id, with_host, with_host_mut};
 use crate::engine::js::web_apis::dom::element::{
     accessor_property, make_document_fragment, make_element, make_text_node,
@@ -7,7 +7,7 @@ use crate::engine::js::web_apis::dom::element::{
 use crate::engine::tree::{NodeRef, TreeNode};
 use pixi_byte::value::jsobject::{JSObject, Property};
 use pixi_byte::vm::VM;
-use pixi_byte::{JSResult, JSValue};
+use pixi_byte::{JSError, JSResult, JSValue};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -487,4 +487,155 @@ pub(crate) fn expose_node_list(vm: &mut VM, nodes: Vec<NodeRef<HtmlNodeType>>) -
         .filter_map(|node| expose_node(vm, node))
         .collect();
     vm.array_from_values(values)
+}
+
+// ---------------------------------------------------------------------------
+// ShadowRoot exposure
+// ---------------------------------------------------------------------------
+
+/// Creates or retrieves the JS object wrapping a shadow root DOM node.
+pub(crate) fn expose_shadow_root(
+    vm: &VM,
+    node: &NodeRef<HtmlNodeType>,
+    dom_id: u64,
+) -> Option<Rc<RefCell<JSObject>>> {
+    let mode_str = match &node.borrow().value {
+        HtmlNodeType::ShadowRoot { mode } => match mode {
+            crate::engine::html::ShadowRootMode::Open => "open",
+            crate::engine::html::ShadowRootMode::Closed => "closed",
+        },
+        _ => return None,
+    };
+
+    let obj = with_host_mut(vm, |host| {
+        if let Some(existing) = host.objects.get(&dom_id) {
+            return Rc::clone(existing);
+        }
+        let mut obj = JSObject::new();
+        // __orinium_dom_id for DOM tree lookups
+        obj.define_property(
+            "__orinium_dom_id".to_string(),
+            Property {
+                value: JSValue::from_number(dom_id as f64),
+                enumerable: false,
+                configurable: false,
+                writable: false,
+                getter: None,
+                setter: None,
+            },
+        );
+        // nodeType = 11 (DOCUMENT_FRAGMENT_NODE)
+        obj.define_property(
+            "nodeType".to_string(),
+            Property::read_only(JSValue::from_number(11.0)),
+        );
+        obj.define_property(
+            "nodeName".to_string(),
+            Property::read_only(JSValue::from_string("#shadow-root".to_string())),
+        );
+        obj.define_property(
+            "mode".to_string(),
+            Property::read_only(JSValue::from_string(mode_str.to_string())),
+        );
+        obj.define_property(
+            "textContent".to_string(),
+            accessor_property(get_shadow_text_content, set_shadow_text_content),
+        );
+        // querySelector / querySelectorAll
+        obj.define_property(
+            "querySelector".to_string(),
+            Property::read_only(JSValue::from_native_function(shadow_query_selector)),
+        );
+        obj.define_property(
+            "querySelectorAll".to_string(),
+            Property::read_only(JSValue::from_native_function(shadow_query_selector_all)),
+        );
+        // DOM mutation methods (delegate to element functions).
+        obj.set(
+            "appendChild".to_string(),
+            JSValue::from_native_function(super::element::append_child),
+        );
+        obj.set(
+            "removeChild".to_string(),
+            JSValue::from_native_function(super::element::remove_child),
+        );
+        obj.set(
+            "insertBefore".to_string(),
+            JSValue::from_native_function(super::element::insert_before),
+        );
+        obj.set(
+            "replaceChild".to_string(),
+            JSValue::from_native_function(super::element::replace_child),
+        );
+        obj.set(
+            "cloneNode".to_string(),
+            JSValue::from_native_function(super::element::clone_node),
+        );
+        obj.define_property(
+            "children".to_string(),
+            read_only_accessor_property(super::element::get_element_children),
+        );
+        let host_obj = Rc::new(RefCell::new(obj));
+        host.objects.insert(dom_id, Rc::clone(&host_obj));
+        host_obj
+    });
+
+    obj
+}
+
+// ShadowRoot native functions
+
+fn get_shadow_text_content(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let this = args.first().cloned().unwrap_or(JSValue::undefined());
+    let dom_id = node_dom_id(&this)
+        .ok_or_else(|| JSError::TypeError("textContent: not a node".to_string()))?;
+    let node = with_host(vm, |host| host.refs.get(&dom_id).cloned())
+        .flatten()
+        .and_then(|w| w.upgrade())
+        .ok_or_else(|| JSError::TypeError("textContent: node not found".to_string()))?;
+    Ok(JSValue::from_string(DomTree::inner_text(&node)))
+}
+
+fn set_shadow_text_content(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let this = args.first().cloned().unwrap_or(JSValue::undefined());
+    let new_text = args.get(1).and_then(JSValue::as_string).unwrap_or("");
+    let dom_id = node_dom_id(&this)
+        .ok_or_else(|| JSError::TypeError("textContent: not a node".to_string()))?;
+    let node = with_host(vm, |host| host.refs.get(&dom_id).cloned())
+        .flatten()
+        .and_then(|w| w.upgrade())
+        .ok_or_else(|| JSError::TypeError("textContent: node not found".to_string()))?;
+    DomTree::set_text_content(&node, new_text);
+    Ok(JSValue::undefined())
+}
+
+fn shadow_query_selector(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let this = args.first().cloned().unwrap_or(JSValue::undefined());
+    let dom_id = node_dom_id(&this)
+        .ok_or_else(|| JSError::TypeError("querySelector: not a node".to_string()))?;
+    let selector = args.get(1).and_then(JSValue::as_string).unwrap_or("");
+    let node = with_host(vm, |host| host.refs.get(&dom_id).cloned())
+        .flatten()
+        .and_then(|w| w.upgrade())
+        .ok_or_else(|| JSError::TypeError("querySelector: node not found".to_string()))?;
+    let result = DomTree::query_selector_all_within(&node, selector)
+        .into_iter()
+        .next();
+    match result {
+        Some(found) => Ok(super::document::expose_node(vm, found).unwrap_or(JSValue::null())),
+        None => Ok(JSValue::null()),
+    }
+}
+
+fn shadow_query_selector_all(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let this = args.first().cloned().unwrap_or(JSValue::undefined());
+    let dom_id = node_dom_id(&this)
+        .ok_or_else(|| JSError::TypeError("querySelectorAll: not a node".to_string()))?;
+    let selector = args.get(1).and_then(JSValue::as_string).unwrap_or("");
+    let node = with_host(vm, |host| host.refs.get(&dom_id).cloned())
+        .flatten()
+        .and_then(|w| w.upgrade())
+        .ok_or_else(|| JSError::TypeError("querySelectorAll: node not found".to_string()))?;
+    let results = DomTree::query_selector_all_within(&node, selector);
+    Ok(super::document::expose_node_list(vm, results))
 }
