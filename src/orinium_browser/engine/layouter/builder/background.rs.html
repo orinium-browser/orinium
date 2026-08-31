@@ -330,7 +330,7 @@
 <a href=#330 id=330 data-nosnippet>330</a>        {
 <a href=#331 id=331 data-nosnippet>331</a>            maybe_gradient = <span class="prelude-val">Some</span>(parse_gradient(
 <a href=#332 id=332 data-nosnippet>332</a>                fn_name,
-<a href=#333 id=333 data-nosnippet>333</a>                args,
+<a href=#333 id=333 data-nosnippet>333</a>                <span class="kw-2">&amp;</span>args.iter().flatten().cloned().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
 <a href=#334 id=334 data-nosnippet>334</a>                text_style,
 <a href=#335 id=335 data-nosnippet>335</a>                text_flow_style,
 <a href=#336 id=336 data-nosnippet>336</a>                color_scheme,
@@ -341,7 +341,7 @@
 <a href=#341 id=341 data-nosnippet>341</a>        <span class="kw">if let </span>CssValue::Function(fn_name, args) = v
 <a href=#342 id=342 data-nosnippet>342</a>            &amp;&amp; fn_name.eq_ignore_ascii_case(<span class="string">"url"</span>)
 <a href=#343 id=343 data-nosnippet>343</a>        {
-<a href=#344 id=344 data-nosnippet>344</a>            maybe_image = args.iter().find_map(|value| <span class="kw">match </span>value {
+<a href=#344 id=344 data-nosnippet>344</a>            maybe_image = args.iter().flatten().find_map(|value| <span class="kw">match </span>value {
 <a href=#345 id=345 data-nosnippet>345</a>                CssValue::String(source) =&gt; <span class="prelude-val">Some</span>(source.clone()),
 <a href=#346 id=346 data-nosnippet>346</a>                CssValue::Keyword(source) =&gt; <span class="prelude-val">Some</span>(source.to_string()),
 <a href=#347 id=347 data-nosnippet>347</a>                <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
@@ -729,35 +729,36 @@
 <a href=#729 id=729 data-nosnippet>729</a>        CssValue::Number(<span class="number">0.0</span>) =&gt; <span class="prelude-val">Some</span>(<span class="number">0.0</span>),
 <a href=#730 id=730 data-nosnippet>730</a>        CssValue::Function(fn_name, args) <span class="kw">if </span>fn_name == <span class="string">"calc" </span>=&gt; {
 <a href=#731 id=731 data-nosnippet>731</a>            <span class="kw">let </span>value = CssValue::Function(fn_name.clone(), args.clone());
-<a href=#732 id=732 data-nosnippet>732</a>            <span class="kw">let </span>length = resolve_css_len(<span class="string">"gradient"</span>, <span class="kw-2">&amp;</span>value, text_flow_style)<span class="question-mark">?</span>;
-<a href=#733 id=733 data-nosnippet>733</a>            length_to_fraction(<span class="kw-2">&amp;</span>length)
-<a href=#734 id=734 data-nosnippet>734</a>        }
-<a href=#735 id=735 data-nosnippet>735</a>        <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
-<a href=#736 id=736 data-nosnippet>736</a>    }
-<a href=#737 id=737 data-nosnippet>737</a>}
-<a href=#738 id=738 data-nosnippet>738</a>
-<a href=#739 id=739 data-nosnippet>739</a><span class="doccomment">/// Convert a resolved [`Length`] into a normalized gradient fraction. Percent
-<a href=#740 id=740 data-nosnippet>740</a>/// values are relative to the gradient length (100% == 1.0). Absolute lengths
-<a href=#741 id=741 data-nosnippet>741</a>/// (px/vw/vh) cannot be resolved without the gradient box and yield `None`.
-<a href=#742 id=742 data-nosnippet>742</a></span><span class="kw">fn </span>length_to_fraction(length: <span class="kw-2">&amp;</span>Length) -&gt; <span class="prelude-ty">Option</span>&lt;f32&gt; {
-<a href=#743 id=743 data-nosnippet>743</a>    <span class="kw">match </span>length {
-<a href=#744 id=744 data-nosnippet>744</a>        Length::Percent(v) =&gt; <span class="prelude-val">Some</span>(<span class="kw-2">*</span>v / <span class="number">100.0</span>),
-<a href=#745 id=745 data-nosnippet>745</a>        Length::Add(a, b) =&gt; <span class="prelude-val">Some</span>(length_to_fraction(a)<span class="question-mark">? </span>+ length_to_fraction(b)<span class="question-mark">?</span>),
-<a href=#746 id=746 data-nosnippet>746</a>        Length::Sub(a, b) =&gt; <span class="prelude-val">Some</span>(length_to_fraction(a)<span class="question-mark">? </span>- length_to_fraction(b)<span class="question-mark">?</span>),
-<a href=#747 id=747 data-nosnippet>747</a>        Length::Mul(a, factor) =&gt; <span class="prelude-val">Some</span>(length_to_fraction(a)<span class="question-mark">? </span>* factor),
-<a href=#748 id=748 data-nosnippet>748</a>        Length::Div(a, factor) =&gt; {
-<a href=#749 id=749 data-nosnippet>749</a>            <span class="kw">if </span><span class="kw-2">*</span>factor == <span class="number">0.0 </span>{
-<a href=#750 id=750 data-nosnippet>750</a>                <span class="prelude-val">None
-<a href=#751 id=751 data-nosnippet>751</a>            </span>} <span class="kw">else </span>{
-<a href=#752 id=752 data-nosnippet>752</a>                <span class="prelude-val">Some</span>(length_to_fraction(a)<span class="question-mark">? </span>/ factor)
-<a href=#753 id=753 data-nosnippet>753</a>            }
-<a href=#754 id=754 data-nosnippet>754</a>        }
-<a href=#755 id=755 data-nosnippet>755</a>        Length::Min(a, b) =&gt; <span class="prelude-val">Some</span>(length_to_fraction(a)<span class="question-mark">?</span>.min(length_to_fraction(b)<span class="question-mark">?</span>)),
-<a href=#756 id=756 data-nosnippet>756</a>        Length::Max(a, b) =&gt; <span class="prelude-val">Some</span>(length_to_fraction(a)<span class="question-mark">?</span>.max(length_to_fraction(b)<span class="question-mark">?</span>)),
-<a href=#757 id=757 data-nosnippet>757</a>        Length::Clamp { min, val, max } =&gt; {
-<a href=#758 id=758 data-nosnippet>758</a>            <span class="prelude-val">Some</span>(length_to_fraction(val)<span class="question-mark">?</span>.clamp(length_to_fraction(min)<span class="question-mark">?</span>, length_to_fraction(max)<span class="question-mark">?</span>))
-<a href=#759 id=759 data-nosnippet>759</a>        }
-<a href=#760 id=760 data-nosnippet>760</a>        Length::Px(<span class="kw">_</span>) | Length::Vw(<span class="kw">_</span>) | Length::Vh(<span class="kw">_</span>) =&gt; <span class="prelude-val">None</span>,
-<a href=#761 id=761 data-nosnippet>761</a>    }
-<a href=#762 id=762 data-nosnippet>762</a>}
+<a href=#732 id=732 data-nosnippet>732</a>            <span class="kw">let </span>length =
+<a href=#733 id=733 data-nosnippet>733</a>                resolve_css_len(<span class="string">"gradient"</span>, std::slice::from_ref(<span class="kw-2">&amp;</span>value), text_flow_style)<span class="question-mark">?</span>;
+<a href=#734 id=734 data-nosnippet>734</a>            length_to_fraction(<span class="kw-2">&amp;</span>length)
+<a href=#735 id=735 data-nosnippet>735</a>        }
+<a href=#736 id=736 data-nosnippet>736</a>        <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
+<a href=#737 id=737 data-nosnippet>737</a>    }
+<a href=#738 id=738 data-nosnippet>738</a>}
+<a href=#739 id=739 data-nosnippet>739</a>
+<a href=#740 id=740 data-nosnippet>740</a><span class="doccomment">/// Convert a resolved [`Length`] into a normalized gradient fraction. Percent
+<a href=#741 id=741 data-nosnippet>741</a>/// values are relative to the gradient length (100% == 1.0). Absolute lengths
+<a href=#742 id=742 data-nosnippet>742</a>/// (px/vw/vh) cannot be resolved without the gradient box and yield `None`.
+<a href=#743 id=743 data-nosnippet>743</a></span><span class="kw">fn </span>length_to_fraction(length: <span class="kw-2">&amp;</span>Length) -&gt; <span class="prelude-ty">Option</span>&lt;f32&gt; {
+<a href=#744 id=744 data-nosnippet>744</a>    <span class="kw">match </span>length {
+<a href=#745 id=745 data-nosnippet>745</a>        Length::Percent(v) =&gt; <span class="prelude-val">Some</span>(<span class="kw-2">*</span>v / <span class="number">100.0</span>),
+<a href=#746 id=746 data-nosnippet>746</a>        Length::Add(a, b) =&gt; <span class="prelude-val">Some</span>(length_to_fraction(a)<span class="question-mark">? </span>+ length_to_fraction(b)<span class="question-mark">?</span>),
+<a href=#747 id=747 data-nosnippet>747</a>        Length::Sub(a, b) =&gt; <span class="prelude-val">Some</span>(length_to_fraction(a)<span class="question-mark">? </span>- length_to_fraction(b)<span class="question-mark">?</span>),
+<a href=#748 id=748 data-nosnippet>748</a>        Length::Mul(a, factor) =&gt; <span class="prelude-val">Some</span>(length_to_fraction(a)<span class="question-mark">? </span>* factor),
+<a href=#749 id=749 data-nosnippet>749</a>        Length::Div(a, factor) =&gt; {
+<a href=#750 id=750 data-nosnippet>750</a>            <span class="kw">if </span><span class="kw-2">*</span>factor == <span class="number">0.0 </span>{
+<a href=#751 id=751 data-nosnippet>751</a>                <span class="prelude-val">None
+<a href=#752 id=752 data-nosnippet>752</a>            </span>} <span class="kw">else </span>{
+<a href=#753 id=753 data-nosnippet>753</a>                <span class="prelude-val">Some</span>(length_to_fraction(a)<span class="question-mark">? </span>/ factor)
+<a href=#754 id=754 data-nosnippet>754</a>            }
+<a href=#755 id=755 data-nosnippet>755</a>        }
+<a href=#756 id=756 data-nosnippet>756</a>        Length::Min(a, b) =&gt; <span class="prelude-val">Some</span>(length_to_fraction(a)<span class="question-mark">?</span>.min(length_to_fraction(b)<span class="question-mark">?</span>)),
+<a href=#757 id=757 data-nosnippet>757</a>        Length::Max(a, b) =&gt; <span class="prelude-val">Some</span>(length_to_fraction(a)<span class="question-mark">?</span>.max(length_to_fraction(b)<span class="question-mark">?</span>)),
+<a href=#758 id=758 data-nosnippet>758</a>        Length::Clamp { min, val, max } =&gt; {
+<a href=#759 id=759 data-nosnippet>759</a>            <span class="prelude-val">Some</span>(length_to_fraction(val)<span class="question-mark">?</span>.clamp(length_to_fraction(min)<span class="question-mark">?</span>, length_to_fraction(max)<span class="question-mark">?</span>))
+<a href=#760 id=760 data-nosnippet>760</a>        }
+<a href=#761 id=761 data-nosnippet>761</a>        Length::Px(<span class="kw">_</span>) | Length::Vw(<span class="kw">_</span>) | Length::Vh(<span class="kw">_</span>) =&gt; <span class="prelude-val">None</span>,
+<a href=#762 id=762 data-nosnippet>762</a>    }
+<a href=#763 id=763 data-nosnippet>763</a>}
 </code></pre></div></section></main></body></html>
