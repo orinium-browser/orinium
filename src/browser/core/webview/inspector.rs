@@ -107,6 +107,11 @@ impl DomIdRegistry {
                 "type": "document-fragment",
                 "children": Self::serialize_children(self, &borrowed),
             }),
+            HtmlNodeType::ShadowRoot { .. } => json!({
+                "id": id,
+                "type": "shadow-root",
+                "children": Self::serialize_children(self, &borrowed),
+            }),
         }
     }
 
