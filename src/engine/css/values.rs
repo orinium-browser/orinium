@@ -53,7 +53,7 @@ impl CssValue {
 }
 
 impl Unit {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Unit::Px => "px",
             Unit::Cm => "cm",
