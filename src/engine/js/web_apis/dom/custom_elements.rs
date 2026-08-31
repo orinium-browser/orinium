@@ -188,11 +188,11 @@ fn custom_elements_upgrade(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue>
                     let mut current = Some(Rc::clone(&node));
                     let mut found = false;
                     while let Some(n) = current {
-                        if let Some(n_id) = host.dom_id_for_node(&n) {
-                            if n_id == root_id {
-                                found = true;
-                                break;
-                            }
+                        if let Some(n_id) = host.dom_id_for_node(&n)
+                            && n_id == root_id
+                        {
+                            found = true;
+                            break;
                         }
                         current = n.borrow().parent();
                     }

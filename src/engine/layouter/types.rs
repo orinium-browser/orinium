@@ -458,8 +458,9 @@ pub struct BorderRadius {
 ///
 /// The renderer resolves these against the element's border-box dimensions
 /// to produce a [`Path`] for `PushClip`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum ClipPath {
+    #[default]
     None,
     Circle {
         /// Radius as a fraction of the farthest-side distance.
@@ -486,12 +487,6 @@ pub enum ClipPath {
     Polygon {
         points: Vec<(f32, f32)>,
     },
-}
-
-impl Default for ClipPath {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]

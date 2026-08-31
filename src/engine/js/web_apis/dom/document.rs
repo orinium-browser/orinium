@@ -507,7 +507,7 @@ pub(crate) fn expose_shadow_root(
         _ => return None,
     };
 
-    let obj = with_host_mut(vm, |host| {
+    with_host_mut(vm, |host| {
         if let Some(existing) = host.objects.get(&dom_id) {
             return Rc::clone(existing);
         }
@@ -578,9 +578,7 @@ pub(crate) fn expose_shadow_root(
         let host_obj = Rc::new(RefCell::new(obj));
         host.objects.insert(dom_id, Rc::clone(&host_obj));
         host_obj
-    });
-
-    obj
+    })
 }
 
 // ShadowRoot native functions

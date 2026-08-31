@@ -991,13 +991,12 @@ pub fn build_layout_and_info_from_snapshot(
                     if let LayoutChild::Node(child) = child
                         && child.style.display.outer() == Some(OuterDisplay::Inline)
                         && !child.style.position.kind.is_out_of_flow()
+                        && let Display::OutsideInner { inner, .. } = child.style.display
                     {
-                        if let Display::OutsideInner { inner, .. } = child.style.display {
-                            child.style.display = Display::OutsideInner {
-                                outer: OuterDisplay::Block,
-                                inner,
-                            };
-                        }
+                        child.style.display = Display::OutsideInner {
+                            outer: OuterDisplay::Block,
+                            inner,
+                        };
                     }
                 }
             }

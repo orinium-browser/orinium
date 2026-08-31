@@ -329,10 +329,7 @@ pub fn resolve_css_len(
     match components.first() {
         Some(CssValue::List(v)) => {
             if v.len() > 1 {
-                return calc_value_to_length(
-                    name,
-                    resolve_calc_value_slice(name, v, text_flow_style)?,
-                );
+                calc_value_to_length(name, resolve_calc_value_slice(name, v, text_flow_style)?)
             } else {
                 resolve_css_len(name, v, text_flow_style)
             }

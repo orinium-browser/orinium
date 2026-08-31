@@ -62,13 +62,14 @@ static DEFAULT_TEXT_STYLE: LazyLock<TextStyle> = LazyLock::new(TextStyle::defaul
 static DEFAULT_TEXT_FLOW_STYLE: LazyLock<TextFlowStyle> = LazyLock::new(TextFlowStyle::default);
 
 pub fn blockify_out_of_flow_positioned(style: &mut Style) {
-    if style.position.kind.is_out_of_flow() && style.display.outer() == Some(OuterDisplay::Inline) {
-        if let Display::OutsideInner { inner, .. } = style.display {
-            style.display = Display::OutsideInner {
-                outer: OuterDisplay::Block,
-                inner,
-            };
-        }
+    if style.position.kind.is_out_of_flow()
+        && style.display.outer() == Some(OuterDisplay::Inline)
+        && let Display::OutsideInner { inner, .. } = style.display
+    {
+        style.display = Display::OutsideInner {
+            outer: OuterDisplay::Block,
+            inner,
+        };
     }
 }
 
@@ -955,7 +956,7 @@ pub fn apply_declaration(
                     text_style.font_weight = parent_text_style.font_weight;
                     text_style.font_families = parent_text_style.font_families.clone();
                     text_flow_style.font_size = parent_text_flow_style.font_size;
-                    text_flow_style.line_height = parent_text_flow_style.line_height.clone();
+                    text_flow_style.line_height = parent_text_flow_style.line_height;
                     return Some(());
                 }
                 CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("initial") => {
@@ -963,7 +964,7 @@ pub fn apply_declaration(
                     text_style.font_weight = DEFAULT_TEXT_STYLE.font_weight;
                     text_style.font_families = DEFAULT_TEXT_STYLE.font_families.clone();
                     text_flow_style.font_size = DEFAULT_TEXT_FLOW_STYLE.font_size;
-                    text_flow_style.line_height = DEFAULT_TEXT_FLOW_STYLE.line_height.clone();
+                    text_flow_style.line_height = DEFAULT_TEXT_FLOW_STYLE.line_height;
                     return Some(());
                 }
                 _ => return None,
@@ -1005,10 +1006,12 @@ pub fn apply_declaration(
                         }
                         _ => {}
                     }
-                } else if let CssValue::Number(n) = v {
-                    if *n >= 100.0 && *n <= 900.0 && n.fract().abs() < f32::EPSILON {
-                        text_style.font_weight = FontWeight(*n as u16);
-                    }
+                } else if let CssValue::Number(n) = v
+                    && *n >= 100.0
+                    && *n <= 900.0
+                    && n.fract().abs() < f32::EPSILON
+                {
+                    text_style.font_weight = FontWeight(*n as u16);
                 }
             }
 
