@@ -5,22 +5,33 @@ pub type CssIdent = smol_str::SmolStr;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Unit {
     Px,
+    Cm,
+    Mm,
+    In,
+    Pt,
+    Pc,
+
     Em,
     Rem,
+
     Percent,
+
     Vw,
     Vh,
+    Vmin,
+    Vmax,
+
     Deg,
     Fr,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CssValue {
-    Keyword(CssIdent),               // e.g. auto, none
-    Length(f32, Unit),               // e.g. 10px
-    Number(f32),                     // e.g. 1.5
-    String(String),                  // e.g. "http"
-    Color(String),                   // e.g. #fff, #1f1f11
+    Keyword(CssIdent), // e.g. auto, none
+    Length(f32, Unit), // e.g. 10px
+    Number(f32),       // e.g. 1.5
+    String(String),    // e.g. "http"
+    Color(String),     // e.g. #fff, #1f1f11
     /// e.g. `rgb(255,0,0)`.
     ///
     /// Arguments are comma-separated; within each argument, whitespace
@@ -28,7 +39,7 @@ pub enum CssValue {
     /// the outer `Vec` holds comma-separated arguments, and each inner `Vec`
     /// holds the whitespace-separated components of that argument.
     Function(String, Vec<Vec<CssValue>>),
-    List(Vec<CssValue>),             // e.g. 100px auto
+    List(Vec<CssValue>), // e.g. 100px auto
 }
 
 impl CssValue {
@@ -45,11 +56,22 @@ impl Unit {
     fn as_str(self) -> &'static str {
         match self {
             Unit::Px => "px",
+            Unit::Cm => "cm",
+            Unit::Mm => "mm",
+            Unit::In => "in",
+            Unit::Pt => "pt",
+            Unit::Pc => "pc",
+
             Unit::Em => "em",
             Unit::Rem => "rem",
+
             Unit::Percent => "%",
+
             Unit::Vw => "vw",
             Unit::Vh => "vh",
+            Unit::Vmin => "vmin",
+            Unit::Vmax => "vmax",
+
             Unit::Deg => "deg",
             Unit::Fr => "fr",
         }
