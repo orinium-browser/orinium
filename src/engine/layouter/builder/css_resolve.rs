@@ -387,15 +387,42 @@ fn resolve_calc_value_slice(
     components: &[CssValue],
     text_flow_style: &TextFlowStyle,
 ) -> Option<CalcValue> {
-    let mut iter = components.iter();
-    let Some(first) = iter.next() else {
-        return None;
-    };
-    let mut result = resolve_calc_value(name, first, text_flow_style)?;
-    while let (Some(op), Some(val)) = (iter.next(), iter.next()) {
-        let rhs = resolve_calc_value(name, val, text_flow_style)?;
+    fn resolve_product<'a>(
+        name: &str,
+        iter: &mut std::iter::Peekable<impl Iterator<Item = &'a CssValue>>,
+        text_flow_style: &TextFlowStyle,
+    ) -> Option<CalcValue> {
+        let first = iter.next()?;
+        let mut result = resolve_calc_value(name, first, text_flow_style)?;
+
+        loop {
+            let op = match iter.peek() {
+                Some(CssValue::Keyword(value)) if value == "*" || value == "/" => iter.next()?,
+                _ => break,
+            };
+
+            let value = iter.next()?;
+            let rhs = resolve_calc_value(name, value, text_flow_style)?;
+
+            result = calc_combine(name, op, result, rhs)?;
+        }
+
+        Some(result)
+    }
+
+    let mut iter = components.iter().peekable();
+    let mut result = resolve_product(name, &mut iter, text_flow_style)?;
+
+    loop {
+        let op = match iter.peek() {
+            Some(CssValue::Keyword(value)) if value == "+" || value == "-" => iter.next()?,
+            _ => break,
+        };
+
+        let rhs = resolve_product(name, &mut iter, text_flow_style)?;
         result = calc_combine(name, op, result, rhs)?;
     }
+
     Some(result)
 }
 
