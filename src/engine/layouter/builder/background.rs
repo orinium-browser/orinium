@@ -330,7 +330,7 @@ pub fn parse_background_shorthand(
         {
             maybe_gradient = Some(parse_gradient(
                 fn_name,
-                args,
+                &args.iter().flatten().cloned().collect::<Vec<_>>(),
                 text_style,
                 text_flow_style,
                 color_scheme,
@@ -341,7 +341,7 @@ pub fn parse_background_shorthand(
         if let CssValue::Function(fn_name, args) = v
             && fn_name.eq_ignore_ascii_case("url")
         {
-            maybe_image = args.iter().find_map(|value| match value {
+            maybe_image = args.iter().flatten().find_map(|value| match value {
                 CssValue::String(source) => Some(source.clone()),
                 CssValue::Keyword(source) => Some(source.to_string()),
                 _ => None,
@@ -729,7 +729,7 @@ fn resolve_gradient_position(value: &CssValue, text_flow_style: &TextFlowStyle) 
         CssValue::Number(0.0) => Some(0.0),
         CssValue::Function(fn_name, args) if fn_name == "calc" => {
             let value = CssValue::Function(fn_name.clone(), args.clone());
-            let length = resolve_css_len("gradient", &value, text_flow_style)?;
+            let length = resolve_css_len("gradient", std::slice::from_ref(&value), text_flow_style)?;
             length_to_fraction(&length)
         }
         _ => None,

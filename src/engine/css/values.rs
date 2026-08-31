@@ -21,7 +21,13 @@ pub enum CssValue {
     Number(f32),                     // e.g. 1.5
     String(String),                  // e.g. "http"
     Color(String),                   // e.g. #fff, #1f1f11
-    Function(String, Vec<CssValue>), // e.g. rgb(255,0,0)
+    /// e.g. `rgb(255,0,0)`.
+    ///
+    /// Arguments are comma-separated; within each argument, whitespace
+    /// separates individual components. The result is a two-level structure:
+    /// the outer `Vec` holds comma-separated arguments, and each inner `Vec`
+    /// holds the whitespace-separated components of that argument.
+    Function(String, Vec<Vec<CssValue>>),
     List(Vec<CssValue>),             // e.g. 100px auto
 }
 
@@ -63,7 +69,13 @@ impl std::fmt::Display for CssValue {
             CssValue::Function(name, arguments) => {
                 let arguments = arguments
                     .iter()
-                    .map(CssValue::to_string)
+                    .map(|argument| {
+                        argument
+                            .iter()
+                            .map(CssValue::to_string)
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    })
                     .collect::<Vec<_>>()
                     .join(", ");
                 write!(f, "{name}({arguments})")
@@ -138,9 +150,9 @@ mod tests {
             CssValue::Function(
                 "rgb".into(),
                 vec![
-                    CssValue::Number(255.0),
-                    CssValue::Number(0.0),
-                    CssValue::Number(0.0)
+                    vec![CssValue::Number(255.0)],
+                    vec![CssValue::Number(0.0)],
+                    vec![CssValue::Number(0.0)],
                 ]
             )
             .to_string(),

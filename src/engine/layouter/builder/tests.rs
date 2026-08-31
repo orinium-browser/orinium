@@ -134,18 +134,18 @@ fn nested_calc_operands_resolve_with_type_checking() {
         "margin-top",
         CssValue::Function(
             "calc".into(),
-            vec![
+            vec![vec![
                 CssValue::Function(
                     "calc".into(),
-                    vec![
+                    vec![vec![
                         CssValue::Number(1.0),
                         CssValue::Keyword("-".into()),
                         CssValue::Number(0.0),
-                    ],
+                    ]],
                 ),
                 CssValue::Keyword("*".into()),
                 CssValue::Length(10.0, Unit::Px),
-            ],
+            ]],
         ),
     );
     assert_eq!(
@@ -160,23 +160,23 @@ fn calc_rejects_mixed_number_length_arithmetic() {
     // 10px + 5 is invalid: cannot add a number to a length
     let add = CssValue::Function(
         "calc".into(),
-        vec![
+        vec![vec![
             CssValue::Length(10.0, Unit::Px),
             CssValue::Keyword("+".into()),
             CssValue::Number(5.0),
-        ],
+        ]],
     );
-    assert_eq!(resolve_css_len("margin-top", &add, &text_flow_style), None);
+    assert_eq!(resolve_css_len("margin-top", std::slice::from_ref(&add), &text_flow_style), None);
     // 10px * 5px is invalid: cannot multiply two lengths
     let mul = CssValue::Function(
         "calc".into(),
-        vec![
+        vec![vec![
             CssValue::Length(10.0, Unit::Px),
             CssValue::Keyword("*".into()),
             CssValue::Length(5.0, Unit::Px),
-        ],
+        ]],
     );
-    assert_eq!(resolve_css_len("margin-top", &mul, &text_flow_style), None);
+    assert_eq!(resolve_css_len("margin-top", std::slice::from_ref(&mul), &text_flow_style), None);
 }
 
 #[test]
@@ -305,14 +305,14 @@ fn grid_tracks_map_repeat_and_minmax() {
         CssValue::Function(
             "repeat".into(),
             vec![
-                CssValue::Keyword("auto-fit".into()),
-                CssValue::Function(
+                vec![CssValue::Keyword("auto-fit".into())],
+                vec![CssValue::Function(
                     "minmax".into(),
                     vec![
-                        CssValue::Length(100.0, Unit::Px),
-                        CssValue::Length(1.0, Unit::Fr),
+                        vec![CssValue::Length(100.0, Unit::Px)],
+                        vec![CssValue::Length(1.0, Unit::Fr)],
                     ],
-                ),
+                )],
             ],
         ),
     );
@@ -518,9 +518,9 @@ fn clamp_font_size_uses_pixel_bound_for_viewport_preference() {
     let clamp = CssValue::Function(
         "clamp".into(),
         vec![
-            CssValue::Length(60.0, Unit::Px),
-            CssValue::Length(8.4, Unit::Vw),
-            CssValue::Length(100.0, Unit::Px),
+            vec![CssValue::Length(60.0, Unit::Px)],
+            vec![CssValue::Length(8.4, Unit::Vw)],
+            vec![CssValue::Length(100.0, Unit::Px)],
         ],
     );
 
@@ -1913,13 +1913,13 @@ fn hsla_accepts_percentage_channels_and_alpha() {
     assert_eq!(
         resolve_color(CssValue::Function(
             "hsla".into(),
-            vec![
+            vec![vec![
                 CssValue::Length(120.0, Unit::Deg),
                 CssValue::Length(100.0, Unit::Percent),
                 CssValue::Length(25.0, Unit::Percent),
                 CssValue::Keyword("/".into()),
                 CssValue::Length(50.0, Unit::Percent),
-            ],
+            ]],
         )),
         Color(0, 128, 0, 128)
     );
@@ -1930,10 +1930,12 @@ fn color_mix_in_srgb_blends_weights() {
     let mixed = resolve_color(CssValue::Function(
         "color-mix".into(),
         vec![
-            CssValue::Keyword("in".into()),
-            CssValue::Keyword("srgb".into()),
-            CssValue::Keyword("red".into()),
-            CssValue::Keyword("blue".into()),
+            vec![
+                CssValue::Keyword("in".into()),
+                CssValue::Keyword("srgb".into()),
+            ],
+            vec![CssValue::Keyword("red".into())],
+            vec![CssValue::Keyword("blue".into())],
         ],
     ));
     // 50/50 of red and blue in linear sRGB.
@@ -1945,11 +1947,15 @@ fn color_mix_with_percentages_and_missing_weight() {
     let mixed = resolve_color(CssValue::Function(
         "color-mix".into(),
         vec![
-            CssValue::Keyword("in".into()),
-            CssValue::Keyword("srgb".into()),
-            CssValue::Keyword("red".into()),
-            CssValue::Length(25.0, Unit::Percent),
-            CssValue::Keyword("blue".into()),
+            vec![
+                CssValue::Keyword("in".into()),
+                CssValue::Keyword("srgb".into()),
+            ],
+            vec![
+                CssValue::Keyword("red".into()),
+                CssValue::Length(25.0, Unit::Percent),
+            ],
+            vec![CssValue::Keyword("blue".into())],
         ],
     ));
     // red 25% + blue (missing weight takes the remaining 75%).
@@ -1961,10 +1967,12 @@ fn color_mix_in_lch_produces_purple() {
     let mixed = resolve_color(CssValue::Function(
         "color-mix".into(),
         vec![
-            CssValue::Keyword("in".into()),
-            CssValue::Keyword("lch".into()),
-            CssValue::Keyword("red".into()),
-            CssValue::Keyword("blue".into()),
+            vec![
+                CssValue::Keyword("in".into()),
+                CssValue::Keyword("lch".into()),
+            ],
+            vec![CssValue::Keyword("red".into())],
+            vec![CssValue::Keyword("blue".into())],
         ],
     ));
     // Mixing red and blue in LCH stays on the purple hue arc.
@@ -1983,10 +1991,12 @@ fn color_mix_alpha_is_premultiplied() {
     let mixed = resolve_color(CssValue::Function(
         "color-mix".into(),
         vec![
-            CssValue::Keyword("in".into()),
-            CssValue::Keyword("srgb".into()),
-            CssValue::Keyword("transparent".into()),
-            CssValue::Keyword("blue".into()),
+            vec![
+                CssValue::Keyword("in".into()),
+                CssValue::Keyword("srgb".into()),
+            ],
+            vec![CssValue::Keyword("transparent".into())],
+            vec![CssValue::Keyword("blue".into())],
         ],
     ));
     // transparent is (0,0,0,0); mixing with opaque blue gives half alpha.
@@ -2038,10 +2048,10 @@ fn conic_gradient_background_shorthand() {
         CssValue::Function(
             "conic-gradient".into(),
             vec![
-                CssValue::Keyword("red".into()),
-                CssValue::Length(0.0, Unit::Deg),
-                CssValue::Keyword("blue".into()),
-                CssValue::Length(180.0, Unit::Deg),
+                vec![CssValue::Keyword("red".into())],
+                vec![CssValue::Length(0.0, Unit::Deg)],
+                vec![CssValue::Keyword("blue".into())],
+                vec![CssValue::Length(180.0, Unit::Deg)],
             ],
         ),
     );
@@ -2065,7 +2075,7 @@ fn background_image_shorthand_keeps_its_fallback_color() {
         CssValue::List(vec![
             CssValue::Function(
                 "url".into(),
-                vec![CssValue::String("/images/caret.svg".into())],
+                vec![vec![CssValue::String("/images/caret.svg".into())]],
             ),
             CssValue::Keyword("no-repeat".into()),
             CssValue::Keyword("right".into()),
@@ -2105,7 +2115,7 @@ fn background_image_longhand_preserves_background_color() {
             "background-image",
             CssValue::Function(
                 "url".into(),
-                vec![CssValue::String("/images/hero.svg".into())],
+                vec![vec![CssValue::String("/images/hero.svg".into())]],
             ),
         ),
     ] {
@@ -2223,11 +2233,11 @@ fn linear_gradient_calc_position_resolves() {
         CssValue::Keyword("blue".into()),
         CssValue::Function(
             "calc".into(),
-            vec![
+            vec![vec![
                 CssValue::Length(50.0, Unit::Percent),
                 CssValue::Keyword("+".into()),
                 CssValue::Length(10.0, Unit::Percent),
-            ],
+            ]],
         ),
         CssValue::Keyword("green".into()),
         CssValue::Length(100.0, Unit::Percent),
@@ -2251,11 +2261,11 @@ fn linear_gradient_calc_negative_position_clamps() {
         CssValue::Keyword("red".into()),
         CssValue::Function(
             "calc".into(),
-            vec![
+            vec![vec![
                 CssValue::Length(50.0, Unit::Percent),
                 CssValue::Keyword("*".into()),
                 CssValue::Number(-1.0),
-            ],
+            ]],
         ),
         CssValue::Keyword("blue".into()),
         CssValue::Length(100.0, Unit::Percent),
@@ -2275,7 +2285,10 @@ fn linear_gradient_calc_negative_position_clamps() {
 fn linear_gradient_calc_zero_position() {
     let args = vec![
         CssValue::Keyword("red".into()),
-        CssValue::Function("calc".into(), vec![CssValue::Length(0.0, Unit::Percent)]),
+        CssValue::Function(
+            "calc".into(),
+            vec![vec![CssValue::Length(0.0, Unit::Percent)]],
+        ),
         CssValue::Keyword("blue".into()),
         CssValue::Length(100.0, Unit::Percent),
     ];
@@ -2297,13 +2310,13 @@ fn repeating_gradient_parses_through_background_shorthand() {
         CssValue::Function(
             "repeating-linear-gradient".into(),
             vec![
-                CssValue::Length(90.0, Unit::Deg),
-                CssValue::Keyword("red".into()),
-                CssValue::Length(0.0, Unit::Percent),
-                CssValue::Length(10.0, Unit::Percent),
-                CssValue::Keyword("blue".into()),
-                CssValue::Length(10.0, Unit::Percent),
-                CssValue::Length(20.0, Unit::Percent),
+                vec![CssValue::Length(90.0, Unit::Deg)],
+                vec![CssValue::Keyword("red".into())],
+                vec![CssValue::Length(0.0, Unit::Percent)],
+                vec![CssValue::Length(10.0, Unit::Percent)],
+                vec![CssValue::Keyword("blue".into())],
+                vec![CssValue::Length(10.0, Unit::Percent)],
+                vec![CssValue::Length(20.0, Unit::Percent)],
             ],
         ),
     );

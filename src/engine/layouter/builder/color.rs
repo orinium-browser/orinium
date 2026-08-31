@@ -434,7 +434,7 @@ pub fn resolve_css_color(
             let mut alpha: Option<f32> = None;
             let mut after_slash = false;
 
-            for arg in args {
+            for arg in args.iter().flatten() {
                 match arg {
                     CssValue::Keyword(k) if k == "/" => {
                         after_slash = true;
@@ -495,7 +495,7 @@ pub fn resolve_css_color(
             let mut alpha: Option<f32> = None;
             let mut after_slash = false;
 
-            for arg in args {
+            for arg in args.iter().flatten() {
                 match arg {
                     CssValue::Keyword(k) if k == "/" => {
                         after_slash = true;
@@ -552,15 +552,16 @@ pub fn resolve_css_color(
         // light-dark(<light-color>, <dark-color>)
         CssValue::Function(func, args) if func == "light-dark" && args.len() == 2 => {
             let chosen = match color_scheme {
-                ColorScheme::Light => &args[0],
-                ColorScheme::Dark => &args[1],
+                ColorScheme::Light => args[0].first()?,
+                ColorScheme::Dark => args[1].first()?,
             };
             resolve_css_color(name, chosen, color_scheme)
         }
 
         // color-mix(in <space>, <color> [<percentage>], <color> [<percentage>])
         CssValue::Function(func, args) if func == "color-mix" => {
-            parse_color_mix(args, name, color_scheme)
+            let flat_args: Vec<CssValue> = args.iter().flatten().cloned().collect();
+            parse_color_mix(&flat_args, name, color_scheme)
         }
 
         // Any other value reaching here is a pipeline error

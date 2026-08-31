@@ -1841,7 +1841,7 @@ fn collect_css_image_sources(css: &str) -> Vec<String> {
     fn collect_value(value: &CssValue, sources: &mut Vec<String>) {
         match value {
             CssValue::Function(name, arguments) if name.eq_ignore_ascii_case("url") => {
-                if let Some(source) = arguments.iter().find_map(|argument| match argument {
+                if let Some(source) = arguments.iter().flatten().find_map(|argument| match argument {
                     CssValue::String(source) => Some(source.clone()),
                     CssValue::Keyword(source) => Some(source.to_string()),
                     _ => None,
@@ -1851,7 +1851,12 @@ fn collect_css_image_sources(css: &str) -> Vec<String> {
                     sources.push(source);
                 }
             }
-            CssValue::Function(_, arguments) | CssValue::List(arguments) => {
+            CssValue::Function(_, arguments) => {
+                for argument in arguments.iter().flatten() {
+                    collect_value(argument, sources);
+                }
+            }
+            CssValue::List(arguments) => {
                 for argument in arguments {
                     collect_value(argument, sources);
                 }

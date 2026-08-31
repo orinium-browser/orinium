@@ -698,7 +698,7 @@ impl MediaEvaluator {
 
     fn length_px(value: &CssValue, environment: &MediaEnvironment) -> Option<f32> {
         let text_flow = crate::engine::layouter::types::TextFlowStyle::default();
-        let len = resolve_css_len("media", value, &text_flow)?;
+        let len = resolve_css_len("media", std::slice::from_ref(value), &text_flow)?;
         len.resolve_with(
             None,
             environment.viewport_width,
@@ -1182,7 +1182,7 @@ impl DeclarationResolver {
         match value {
             // `var(--accent)` / `var(--missing, red)` — resolve the custom property
             CssValue::Function(name, args) if name == "var" => {
-                let var_name = match args.first() {
+                let var_name = match args.first().and_then(|argument| argument.first()) {
                     Some(CssValue::Keyword(name)) => name,
                     _ => return None,
                 };
@@ -1193,7 +1193,9 @@ impl DeclarationResolver {
 
                 let result = if let Some(v) = custom_props.get(var_name.as_str()) {
                     Self::resolve_var(&v.value, custom_props, visited)
-                } else if let Some(fallback) = args.get(1) {
+                } else if let Some(fallback) =
+                    args.get(1).and_then(|argument| argument.first())
+                {
                     Self::resolve_var(fallback, custom_props, visited)
                 } else {
                     None
@@ -1207,7 +1209,12 @@ impl DeclarationResolver {
             CssValue::Function(name, args) => {
                 let resolved_args = args
                     .iter()
-                    .map(|v| Self::resolve_var(v, custom_props, &mut visited.clone()))
+                    .map(|argument| {
+                        argument
+                            .iter()
+                            .map(|v| Self::resolve_var(v, custom_props, &mut visited.clone()))
+                            .collect::<Option<Vec<_>>>()
+                    })
                     .collect::<Option<Vec<_>>>()?;
                 Some(CssValue::Function(name.clone(), resolved_args))
             }
