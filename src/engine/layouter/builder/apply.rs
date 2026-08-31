@@ -495,9 +495,13 @@ pub fn apply_declaration(
                         CssValue::Length(v, unit) => {
                             let pct = match unit {
                                 Unit::Percent => v / 100.0,
-                                _ => resolve_css_len(name, std::slice::from_ref(arg), text_flow_style)
-                                    .map(|l| length_to_px(&l, text_flow_style.font_size) / 100.0)
-                                    .unwrap_or(0.0),
+                                _ => resolve_css_len(
+                                    name,
+                                    std::slice::from_ref(arg),
+                                    text_flow_style,
+                                )
+                                .map(|l| length_to_px(&l, text_flow_style.font_size) / 100.0)
+                                .unwrap_or(0.0),
                             };
                             if after_at {
                                 // Two position values: x y
@@ -555,9 +559,13 @@ pub fn apply_declaration(
                         CssValue::Length(v, unit) => {
                             let pct = match unit {
                                 Unit::Percent => v / 100.0,
-                                _ => resolve_css_len(name, std::slice::from_ref(arg), text_flow_style)
-                                    .map(|l| length_to_px(&l, text_flow_style.font_size) / 100.0)
-                                    .unwrap_or(0.0),
+                                _ => resolve_css_len(
+                                    name,
+                                    std::slice::from_ref(arg),
+                                    text_flow_style,
+                                )
+                                .map(|l| length_to_px(&l, text_flow_style.font_size) / 100.0)
+                                .unwrap_or(0.0),
                             };
                             if after_at {
                                 if center_x != 0.5 {
@@ -612,9 +620,11 @@ pub fn apply_declaration(
                     }
                     let pct = match arg {
                         CssValue::Length(v, Unit::Percent) => v / 100.0,
-                        CssValue::Length(v, _) => resolve_css_len(name, std::slice::from_ref(arg), text_flow_style)
-                            .map(|l| length_to_px(&l, text_flow_style.font_size) / 100.0)
-                            .unwrap_or(*v / 100.0),
+                        CssValue::Length(v, _) => {
+                            resolve_css_len(name, std::slice::from_ref(arg), text_flow_style)
+                                .map(|l| length_to_px(&l, text_flow_style.font_size) / 100.0)
+                                .unwrap_or(*v / 100.0)
+                        }
                         CssValue::Number(n) => *n,
                         _ => continue,
                     };
@@ -657,9 +667,10 @@ pub fn apply_declaration(
                             }
                         }
                         CssValue::Length(v, _) => {
-                            let pct = resolve_css_len(name, std::slice::from_ref(arg), text_flow_style)
-                                .map(|l| length_to_px(&l, text_flow_style.font_size) / 100.0)
-                                .unwrap_or(*v / 100.0);
+                            let pct =
+                                resolve_css_len(name, std::slice::from_ref(arg), text_flow_style)
+                                    .map(|l| length_to_px(&l, text_flow_style.font_size) / 100.0)
+                                    .unwrap_or(*v / 100.0);
                             if let Some(x) = x_opt.take() {
                                 points.push((x, pct));
                             } else {
@@ -968,7 +979,11 @@ pub fn apply_declaration(
                 .position(|v| matches!(v, CssValue::Length(_, _)))?;
 
             // Resolve font-size.
-            let len = resolve_css_len(name, std::slice::from_ref(values[font_size_idx]), text_flow_style)?;
+            let len = resolve_css_len(
+                name,
+                std::slice::from_ref(values[font_size_idx]),
+                text_flow_style,
+            )?;
             let px = resolve_font_size_px(&len, text_flow_style.font_size)?;
             text_flow_style.font_size = px;
 
@@ -1009,7 +1024,11 @@ pub fn apply_declaration(
                             text_flow_style.line_height = LineHeight::Number(*factor);
                         }
                         _ => {
-                            if let Some(lh_len) = resolve_css_len(name, std::slice::from_ref(after[1]), text_flow_style) {
+                            if let Some(lh_len) = resolve_css_len(
+                                name,
+                                std::slice::from_ref(after[1]),
+                                text_flow_style,
+                            ) {
                                 text_flow_style.line_height = LineHeight::Px(length_to_px(
                                     &lh_len,
                                     text_flow_style.font_size,
@@ -1169,7 +1188,8 @@ pub fn apply_declaration(
                 text_flow_style,
                 &|_, cv, tfs| match cv {
                     CssValue::Keyword(s) if s == "auto" => Some(ui_layout::LengthOrAuto::Auto),
-                    _ => resolve_css_len(name, std::slice::from_ref(cv), tfs).map(ui_layout::LengthOrAuto::Length),
+                    _ => resolve_css_len(name, std::slice::from_ref(cv), tfs)
+                        .map(ui_layout::LengthOrAuto::Length),
                 },
                 |t, r, b, l| {
                     style.spacing.margin_top = t;
@@ -1452,27 +1472,35 @@ pub fn apply_declaration(
             )?;
         }
         ("padding-top", _) => {
-            style.spacing.padding_top = resolve_css_len(name, std::slice::from_ref(value), text_flow_style)?;
+            style.spacing.padding_top =
+                resolve_css_len(name, std::slice::from_ref(value), text_flow_style)?;
         }
         ("padding-right", _) => {
-            style.spacing.padding_right = resolve_css_len(name, std::slice::from_ref(value), text_flow_style)?;
+            style.spacing.padding_right =
+                resolve_css_len(name, std::slice::from_ref(value), text_flow_style)?;
         }
         ("padding-bottom", _) => {
-            style.spacing.padding_bottom = resolve_css_len(name, std::slice::from_ref(value), text_flow_style)?;
+            style.spacing.padding_bottom =
+                resolve_css_len(name, std::slice::from_ref(value), text_flow_style)?;
         }
         ("padding-left", _) => {
-            style.spacing.padding_left = resolve_css_len(name, std::slice::from_ref(value), text_flow_style)?;
+            style.spacing.padding_left =
+                resolve_css_len(name, std::slice::from_ref(value), text_flow_style)?;
         }
         ("padding-inline", _) => {
             let values = one_or_two_values(value)?;
-            style.spacing.padding_left = resolve_css_len(name, std::slice::from_ref(values.0), text_flow_style)?;
-            style.spacing.padding_right = resolve_css_len(name, std::slice::from_ref(values.1), text_flow_style)?;
+            style.spacing.padding_left =
+                resolve_css_len(name, std::slice::from_ref(values.0), text_flow_style)?;
+            style.spacing.padding_right =
+                resolve_css_len(name, std::slice::from_ref(values.1), text_flow_style)?;
         }
         ("padding-inline-start", _) => {
-            style.spacing.padding_left = resolve_css_len(name, std::slice::from_ref(value), text_flow_style)?;
+            style.spacing.padding_left =
+                resolve_css_len(name, std::slice::from_ref(value), text_flow_style)?;
         }
         ("padding-inline-end", _) => {
-            style.spacing.padding_right = resolve_css_len(name, std::slice::from_ref(value), text_flow_style)?;
+            style.spacing.padding_right =
+                resolve_css_len(name, std::slice::from_ref(value), text_flow_style)?;
         }
 
         /* ======================
@@ -1534,7 +1562,8 @@ pub fn apply_declaration(
                     CssValue::Keyword(s) if s.eq_ignore_ascii_case("auto") => {
                         Some(ui_layout::LengthOrAuto::Auto)
                     }
-                    _ => resolve_css_len(name, std::slice::from_ref(cv), ts).map(ui_layout::LengthOrAuto::Length),
+                    _ => resolve_css_len(name, std::slice::from_ref(cv), ts)
+                        .map(ui_layout::LengthOrAuto::Length),
                 },
                 |t, r, b, l| {
                     style.position.top = t;
