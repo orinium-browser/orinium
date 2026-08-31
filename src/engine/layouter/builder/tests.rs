@@ -2860,6 +2860,107 @@ fn hwb_with_alpha() {
     );
 }
 
+#[test]
+fn hwb_green() {
+    assert_eq!(rc("div { color: hwb(120 0% 0%); }"), Color(0, 255, 0, 255));
+}
+
+#[test]
+fn hwb_blue() {
+    assert_eq!(rc("div { color: hwb(240 0% 0%); }"), Color(0, 0, 255, 255));
+}
+
+#[test]
+fn hwb_yellow() {
+    assert_eq!(rc("div { color: hwb(60 0% 0%); }"), Color(255, 255, 0, 255));
+}
+
+#[test]
+fn hwb_white_plus_black_is_gray() {
+    // w + b >= 1 → gray = w / (w + b)
+    assert_eq!(rc("div { color: hwb(0 25% 75%); }"), Color(64, 64, 64, 255));
+}
+
+#[test]
+fn hwb_white_plus_black_half_half() {
+    assert_eq!(
+        rc("div { color: hwb(0 50% 50%); }"),
+        Color(128, 128, 128, 255)
+    );
+}
+
+#[test]
+fn hwb_white_plus_black_all_gray() {
+    // w + b == 1 → gray
+    assert_eq!(
+        rc("div { color: hwb(0 100% 0%); }"),
+        Color(255, 255, 255, 255)
+    );
+    assert_eq!(rc("div { color: hwb(0 0% 100%); }"), Color(0, 0, 0, 255));
+    assert_eq!(
+        rc("div { color: hwb(0 75% 25%); }"),
+        Color(191, 191, 191, 255)
+    );
+}
+
+#[test]
+fn hwb_tint() {
+    // Adding whiteness to a hue tints it
+    let c = rc("div { color: hwb(0 30% 0%); }");
+    // Pure red tinted 30% white: R stays high, G and B increase
+    assert!(c.0 > 200, "red dominant: {c:?}");
+    assert!(c.1 > 50, "green raised by white: {c:?}");
+    assert!(c.2 > 50, "blue raised by white: {c:?}");
+}
+
+#[test]
+fn hwb_shade() {
+    // Adding blackness to a hue shades it
+    let c = rc("div { color: hwb(0 0% 30%); }");
+    // Pure red shaded 30% black: all channels decrease
+    assert!(c.0 > 100, "red still visible: {c:?}");
+    assert!(c.1 < 50, "green stays low: {c:?}");
+    assert!(c.2 < 50, "blue stays low: {c:?}");
+}
+
+#[test]
+fn hwb_zero_alpha() {
+    assert_eq!(
+        rc("div { color: hwb(120 0% 0% / 0); }"),
+        Color(0, 255, 0, 0)
+    );
+}
+
+#[test]
+fn hwb_full_alpha() {
+    assert_eq!(
+        rc("div { color: hwb(240 0% 0% / 1); }"),
+        Color(0, 0, 255, 255)
+    );
+}
+
+#[test]
+fn hwb_hue_wraps() {
+    // 360 == 0 (red)
+    assert_eq!(rc("div { color: hwb(360 0% 0%); }"), Color(255, 0, 0, 255));
+    // 420 == 60 (yellow)
+    assert_eq!(
+        rc("div { color: hwb(420 0% 0%); }"),
+        Color(255, 255, 0, 255)
+    );
+    // -60 == 300 (magenta)
+    assert_eq!(
+        rc("div { color: hwb(-60 0% 0%); }"),
+        Color(255, 0, 255, 255)
+    );
+}
+
+#[test]
+fn hwb_without_percent_syntax() {
+    // hwb can also accept 0.0..1.0 without percent signs
+    assert_eq!(rc("div { color: hwb(0 0.3 0); }"), Color(255, 77, 77, 255));
+}
+
 // ─── light-dark() ──────────────────────────────────────────────────────────
 
 #[test]
