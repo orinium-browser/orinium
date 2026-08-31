@@ -1,12 +1,13 @@
 //! Unified layout bridge for custom nodes.
 //!
 //! Implements the unified [`CustomLayouter`] trait for both block and inline
-//! formatting contexts. The resolved [`OuterDisplay`] is taken from the owned
+//! formatting contexts. The resolved [`Display`] is taken from the owned
 //! [`Style`] (`layout_style`) at layout time and drives the shape of the
 //! returned [`LayoutBox`].
 
 use ui_layout::{
-    BoxModel, CustomLayouter, InlineBox, LayoutBox, LayoutContext, OuterDisplay, Rect, Style,
+    BoxModel, CustomLayouter, Display, InlineBox, LayoutBox, LayoutContext, OuterDisplay, Rect,
+    Style,
 };
 
 use crate::engine::ui::custom_node::{ContentSize, CustomNode};
@@ -27,7 +28,7 @@ use super::inline_cache::resolve_border_box_size;
 ///   element's full border-box height contributes to the line box.
 /// - [`OuterDisplay::Block`] → `layout` returns a [`LayoutBox::BlockBox`]
 ///   positioned at the origin; the engine translates it to its final position.
-/// - [`OuterDisplay::None`] → the element produces nothing.
+/// - [`Display::None`] / [`Display::Contents`] → the element produces nothing.
 ///
 /// [`measure`](Self::measure) is implemented for every context so flex sizing
 /// and auto-height work regardless of the display value.
@@ -70,8 +71,11 @@ impl CustomNodeBridge {
 
 impl CustomLayouter for CustomNodeBridge {
     fn layout(&mut self, ctx: &LayoutContext) -> LayoutBox {
-        match self.layout_style.display.outer {
-            OuterDisplay::Inline => {
+        match self.layout_style.display {
+            Display::OutsideInner {
+                outer: OuterDisplay::Inline,
+                ..
+            } => {
                 let x = ctx.start_pos.0;
                 let y = ctx.start_pos.1;
 
@@ -106,7 +110,10 @@ impl CustomLayouter for CustomNodeBridge {
                     line_spans: Vec::new(),
                 })
             }
-            OuterDisplay::Block => {
+            Display::OutsideInner {
+                outer: OuterDisplay::Block,
+                ..
+            } => {
                 let resolved = self.resolve_size(
                     ctx.containing_block_width,
                     ctx.containing_block_height,
@@ -130,7 +137,7 @@ impl CustomLayouter for CustomNodeBridge {
 
                 LayoutBox::BlockBox(box_model)
             }
-            OuterDisplay::None => LayoutBox::None,
+            Display::None | Display::Contents => LayoutBox::None,
         }
     }
 
@@ -159,6 +166,7 @@ mod tests {
 
     use crate::engine::layouter::types::{TextFlowStyle, TextStyle};
     use crate::engine::renderer_model::DrawCommand;
+    use ui_layout::InnerDisplay;
 
     #[derive(Debug)]
     struct TestNode {
@@ -185,9 +193,9 @@ mod tests {
         }
     }
 
-    fn bridge(display: OuterDisplay) -> CustomNodeBridge {
+    fn bridge(display: Display) -> CustomNodeBridge {
         let mut style = Style::default();
-        style.display.outer = display;
+        style.display = display;
         CustomNodeBridge::new(
             std::sync::Arc::new(TestNode {
                 width: 200.0,
@@ -200,14 +208,23 @@ mod tests {
     #[test]
     fn block_context_reports_block() {
         assert_eq!(
-            bridge(OuterDisplay::Block).style().display.outer,
-            OuterDisplay::Block
+            bridge(Display::OutsideInner {
+                outer: OuterDisplay::Block,
+                inner: InnerDisplay::Flow,
+            })
+            .style()
+            .display
+            .outer(),
+            Some(OuterDisplay::Block)
         );
     }
 
     #[test]
     fn block_layout_returns_block_box_at_origin() {
-        let mut b = bridge(OuterDisplay::Block);
+        let mut b = bridge(Display::OutsideInner {
+            outer: OuterDisplay::Block,
+            inner: InnerDisplay::Flow,
+        });
         match b.layout(&LayoutContext::default()) {
             LayoutBox::BlockBox(bm) => {
                 assert_eq!(bm.border_box.x, 0.0);
@@ -221,7 +238,10 @@ mod tests {
 
     #[test]
     fn block_measure_returns_intrinsic_size() {
-        let b = bridge(OuterDisplay::Block);
+        let b = bridge(Display::OutsideInner {
+            outer: OuterDisplay::Block,
+            inner: InnerDisplay::Flow,
+        });
         let m = b.measure(&LayoutContext::default());
         assert_eq!(m.width, 200.0);
         assert_eq!(m.height, 100.0);
@@ -230,14 +250,23 @@ mod tests {
     #[test]
     fn inline_context_reports_inline() {
         assert_eq!(
-            bridge(OuterDisplay::Inline).style().display.outer,
-            OuterDisplay::Inline
+            bridge(Display::OutsideInner {
+                outer: OuterDisplay::Inline,
+                inner: InnerDisplay::Flow,
+            })
+            .style()
+            .display
+            .outer(),
+            Some(OuterDisplay::Inline)
         );
     }
 
     #[test]
     fn inline_layout_returns_an_atomic_unpositioned_box() {
-        let mut b = bridge(OuterDisplay::Inline);
+        let mut b = bridge(Display::OutsideInner {
+            outer: OuterDisplay::Inline,
+            inner: InnerDisplay::Flow,
+        });
         let ctx = LayoutContext {
             start_pos: (10.0, 20.0),
             available_inline_size: 300.0,
@@ -259,7 +288,10 @@ mod tests {
 
     #[test]
     fn inline_measure_returns_intrinsic_size() {
-        let b = bridge(OuterDisplay::Inline);
+        let b = bridge(Display::OutsideInner {
+            outer: OuterDisplay::Inline,
+            inner: InnerDisplay::Flow,
+        });
         let m = b.measure(&LayoutContext::default());
         assert_eq!(m.width, 200.0);
         assert_eq!(m.height, 100.0);
@@ -267,8 +299,8 @@ mod tests {
 
     #[test]
     fn none_context_skips_element() {
-        let mut b = bridge(OuterDisplay::None);
-        assert_eq!(b.style().display.outer, OuterDisplay::None);
+        let mut b = bridge(Display::None);
+        assert_eq!(b.style().display, Display::None);
         assert!(matches!(
             b.layout(&LayoutContext::default()),
             LayoutBox::None
@@ -286,7 +318,10 @@ mod tests {
             },
             ..Default::default()
         };
-        style.display.outer = OuterDisplay::Inline;
+        style.display = Display::OutsideInner {
+            outer: OuterDisplay::Inline,
+            inner: InnerDisplay::Flow,
+        };
         let b = CustomNodeBridge::new(
             std::sync::Arc::new(TestNode {
                 width: 200.0,

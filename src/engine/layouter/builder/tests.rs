@@ -355,7 +355,7 @@ fn grid_named_areas_map_rows_and_item_name() {
 fn absolute_and_fixed_inline_boxes_are_blockified() {
     for position in [Position::Absolute, Position::Fixed] {
         let mut style = Style {
-            display: Display {
+            display: Display::OutsideInner {
                 outer: OuterDisplay::Inline,
                 inner: InnerDisplay::Flow,
             },
@@ -366,7 +366,7 @@ fn absolute_and_fixed_inline_boxes_are_blockified() {
             ..Default::default()
         };
         blockify_out_of_flow_positioned(&mut style);
-        assert_eq!(style.display.outer, OuterDisplay::Block);
+        assert_eq!(style.display.outer(), Some(OuterDisplay::Block));
     }
 }
 
@@ -637,7 +637,7 @@ fn named_grid_area_css_controls_final_layout() {
     ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
 
     fn find_grid(node: &LayoutNode) -> Option<&LayoutNode> {
-        if node.style.display.inner == InnerDisplay::Grid {
+        if node.style.display.inner() == Some(InnerDisplay::Grid) {
             return Some(node);
         }
         node.children
@@ -674,7 +674,7 @@ fn flex_wrap_css_creates_multiple_lines() {
     ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
 
     fn find_flex(node: &LayoutNode) -> Option<&LayoutNode> {
-        if node.style.display.inner == InnerDisplay::Flex {
+        if node.style.display.inner() == Some(InnerDisplay::Flex) {
             return Some(node);
         }
         node.children
@@ -717,7 +717,7 @@ fn floated_carousel_slides_shrink_to_fixed_descendant_width() {
             .filter_map(LayoutChild::node)
             .filter(|child| {
                 child.style.size.auto_behavior == AutoSizeBehavior::ShrinkToFit
-                    && child.style.display.inner == InnerDisplay::FlowRoot
+                    && child.style.display.inner() == Some(InnerDisplay::FlowRoot)
             })
             .collect();
         if children.len() == 2 {
@@ -754,7 +754,7 @@ fn adjacent_inline_blocks_advance_past_padding_and_margins() {
             .children
             .iter()
             .filter_map(LayoutChild::node)
-            .filter(|child| child.style.display.inner == InnerDisplay::FlowRoot)
+            .filter(|child| child.style.display.inner() == Some(InnerDisplay::FlowRoot))
             .filter_map(|child| child.layout_box.iter().next().map(|model| model.border_box))
             .collect();
         if boxes.len() == 2 {
@@ -790,9 +790,9 @@ fn atomic_inline_block_starts_below_its_top_margin() {
                 .children
                 .iter()
                 .filter_map(LayoutChild::node)
-                .filter(|child| child.style.display.outer == OuterDisplay::Block)
+                .filter(|child| child.style.display.outer() == Some(OuterDisplay::Block))
                 .collect();
-            if node.style.display.inner == InnerDisplay::Flex && links.len() == 2 {
+            if node.style.display.inner() == Some(InnerDisplay::Flex) && links.len() == 2 {
                 return Some((links[0], links[1]));
             }
             node.children
@@ -829,7 +829,7 @@ fn atomic_inline_block_starts_below_its_top_margin() {
 
     fn main_box(node: &LayoutNode) -> Option<ui_layout::Rect> {
         if node.style.display
-            == (Display {
+            == (Display::OutsideInner {
                 outer: OuterDisplay::Inline,
                 inner: InnerDisplay::FlowRoot,
             })
@@ -918,9 +918,9 @@ fn auto_flex_height_includes_child_vertical_margins() {
                 .children
                 .iter()
                 .filter_map(LayoutChild::node)
-                .filter(|child| child.style.display.outer == OuterDisplay::Block)
+                .filter(|child| child.style.display.outer() == Some(OuterDisplay::Block))
                 .collect();
-            if node.style.display.inner == InnerDisplay::Flex && links.len() == 2 {
+            if node.style.display.inner() == Some(InnerDisplay::Flex) && links.len() == 2 {
                 return Some((links[0], links[1]));
             }
             node.children
@@ -956,7 +956,7 @@ fn auto_flex_height_includes_child_vertical_margins() {
     correct_atomic_inline_spacing(&mut layout);
 
     fn flex_box(node: &LayoutNode) -> Option<ui_layout::Rect> {
-        if node.style.display.inner == InnerDisplay::Flex {
+        if node.style.display.inner() == Some(InnerDisplay::Flex) {
             return node.layout_box.iter().next().map(|model| model.border_box);
         }
         node.children
@@ -983,7 +983,7 @@ fn grid_min_height_pushes_later_block_flow_content() {
             .children
             .iter()
             .filter_map(LayoutChild::node)
-            .filter(|child| child.style.display.outer == OuterDisplay::Block)
+            .filter(|child| child.style.display.outer() == Some(OuterDisplay::Block))
             .filter_map(|child| child.layout_box.iter().next().map(|model| model.border_box))
             .collect();
         if boxes.len() == 2 {
@@ -1014,7 +1014,7 @@ fn grid_auto_track_can_measure_flex_contents() {
     ui_layout::LayoutEngine::layout(&mut layout, 1280.0, 600.0);
 
     fn grid(node: &LayoutNode) -> Option<&LayoutNode> {
-        if node.style.display.inner == InnerDisplay::Grid {
+        if node.style.display.inner() == Some(InnerDisplay::Grid) {
             return Some(node);
         }
         node.children
@@ -1024,8 +1024,8 @@ fn grid_auto_track_can_measure_flex_contents() {
     }
     let grid = grid(&layout).expect("grid");
     let items: Vec<_> = grid.children.iter().filter_map(LayoutChild::node).collect();
-    assert_eq!(items[0].style.display.outer, OuterDisplay::Block);
-    assert_eq!(items[2].style.display.outer, OuterDisplay::Block);
+    assert_eq!(items[0].style.display.outer(), Some(OuterDisplay::Block));
+    assert_eq!(items[2].style.display.outer(), Some(OuterDisplay::Block));
     let middle = items[1].layout_box.iter().next().expect("middle");
     assert!((middle.content_box.width - 210.0).abs() < 0.5);
     assert!(items[0].layout_box.width_box() > 400.0);
@@ -1043,7 +1043,7 @@ fn negative_grid_end_line_spans_to_the_last_explicit_track() {
     ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
 
     fn grid(layout: &LayoutNode) -> Option<&LayoutNode> {
-        if layout.style.display.inner == InnerDisplay::Grid {
+        if layout.style.display.inner() == Some(InnerDisplay::Grid) {
             return Some(layout);
         }
         layout
@@ -1109,7 +1109,7 @@ fn inline_flex_lays_out_direct_text_with_inherited_style() {
     refresh_missing_text_layout_results(&mut layout, &info, (800.0, 600.0));
 
     fn inline_flex(layout: &LayoutNode) -> Option<&LayoutNode> {
-        if layout.style.display.inner == InnerDisplay::Flex {
+        if layout.style.display.inner() == Some(InnerDisplay::Flex) {
             return Some(layout);
         }
         layout
@@ -1125,7 +1125,7 @@ fn inline_flex_lays_out_direct_text_with_inherited_style() {
         .filter_map(LayoutChild::node)
         .next()
         .expect("span flex item");
-    assert_eq!(span.style.display.outer, OuterDisplay::Block);
+    assert_eq!(span.style.display.outer(), Some(OuterDisplay::Block));
 
     let label_style = text_style_for(&info, "目指すこと");
     assert_eq!(text_flow_style_for(&info, "目指すこと").font_size, 19.0);
@@ -1162,9 +1162,9 @@ fn flex_navigation_blockifies_and_spaces_inline_links() {
                 .children
                 .iter()
                 .filter_map(LayoutChild::node)
-                .filter(|child| child.style.display.outer == OuterDisplay::Block)
+                .filter(|child| child.style.display.outer() == Some(OuterDisplay::Block))
                 .collect();
-            if node.style.display.inner == InnerDisplay::Flex && links.len() == 2 {
+            if node.style.display.inner() == Some(InnerDisplay::Flex) && links.len() == 2 {
                 return Some((links[0], links[1]));
             }
             node.children
@@ -1204,9 +1204,9 @@ fn flex_navigation_blockifies_and_spaces_inline_links() {
             .children
             .iter()
             .filter_map(LayoutChild::node)
-            .filter(|child| child.style.display.outer == OuterDisplay::Block)
+            .filter(|child| child.style.display.outer() == Some(OuterDisplay::Block))
             .collect();
-        if layout.style.display.inner == InnerDisplay::Flex && links.len() == 3 {
+        if layout.style.display.inner() == Some(InnerDisplay::Flex) && links.len() == 3 {
             return Some(layout);
         }
         layout
@@ -1245,9 +1245,9 @@ fn bottom_anchored_grid_repositions_after_min_height_growth() {
                 .children
                 .iter()
                 .filter_map(LayoutChild::node)
-                .filter(|child| child.style.display.outer == OuterDisplay::Block)
+                .filter(|child| child.style.display.outer() == Some(OuterDisplay::Block))
                 .collect();
-            if node.style.display.inner == InnerDisplay::Flex && links.len() == 2 {
+            if node.style.display.inner() == Some(InnerDisplay::Flex) && links.len() == 2 {
                 return Some((links[0], links[1]));
             }
             node.children
@@ -1339,9 +1339,9 @@ fn full_width_inline_blocks_wrap_onto_separate_lines() {
                 .children
                 .iter()
                 .filter_map(LayoutChild::node)
-                .filter(|child| child.style.display.outer == OuterDisplay::Block)
+                .filter(|child| child.style.display.outer() == Some(OuterDisplay::Block))
                 .collect();
-            if node.style.display.inner == InnerDisplay::Flex && links.len() == 2 {
+            if node.style.display.inner() == Some(InnerDisplay::Flex) && links.len() == 2 {
                 return Some((links[0], links[1]));
             }
             node.children
@@ -1383,7 +1383,7 @@ fn full_width_inline_blocks_wrap_onto_separate_lines() {
             .filter_map(LayoutChild::node)
             .filter(|child| {
                 child.style.display
-                    == (Display {
+                    == (Display::OutsideInner {
                         outer: OuterDisplay::Inline,
                         inner: InnerDisplay::FlowRoot,
                     })
@@ -1424,9 +1424,9 @@ fn auto_flex_container_expands_to_corrected_inline_margin_boxes() {
                 .children
                 .iter()
                 .filter_map(LayoutChild::node)
-                .filter(|child| child.style.display.outer == OuterDisplay::Block)
+                .filter(|child| child.style.display.outer() == Some(OuterDisplay::Block))
                 .collect();
-            if node.style.display.inner == InnerDisplay::Flex && links.len() == 2 {
+            if node.style.display.inner() == Some(InnerDisplay::Flex) && links.len() == 2 {
                 return Some((links[0], links[1]));
             }
             node.children
@@ -1466,9 +1466,9 @@ fn auto_flex_container_expands_to_corrected_inline_margin_boxes() {
             .children
             .iter()
             .filter_map(LayoutChild::node)
-            .filter(|child| child.style.display.inner == InnerDisplay::FlowRoot)
+            .filter(|child| child.style.display.inner() == Some(InnerDisplay::FlowRoot))
             .count();
-        if node.style.display.inner == InnerDisplay::Flex && atomic_children == 2 {
+        if node.style.display.inner() == Some(InnerDisplay::Flex) && atomic_children == 2 {
             return Some(node);
         }
         node.children
@@ -1511,9 +1511,9 @@ fn inline_flex_item_wraps_padded_atomic_child_without_overlap() {
             .children
             .iter()
             .filter_map(LayoutChild::node)
-            .filter(|child| child.style.display.outer == OuterDisplay::Block)
+            .filter(|child| child.style.display.outer() == Some(OuterDisplay::Block))
             .collect();
-        if node.style.display.inner == InnerDisplay::Flex && links.len() == 2 {
+        if node.style.display.inner() == Some(InnerDisplay::Flex) && links.len() == 2 {
             return Some(links);
         }
         node.children

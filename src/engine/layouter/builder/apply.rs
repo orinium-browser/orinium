@@ -62,8 +62,13 @@ static DEFAULT_TEXT_STYLE: LazyLock<TextStyle> = LazyLock::new(TextStyle::defaul
 static DEFAULT_TEXT_FLOW_STYLE: LazyLock<TextFlowStyle> = LazyLock::new(TextFlowStyle::default);
 
 pub fn blockify_out_of_flow_positioned(style: &mut Style) {
-    if style.position.kind.is_out_of_flow() && style.display.outer == OuterDisplay::Inline {
-        style.display.outer = OuterDisplay::Block;
+    if style.position.kind.is_out_of_flow() && style.display.outer() == Some(OuterDisplay::Inline) {
+        if let Display::OutsideInner { inner, .. } = style.display {
+            style.display = Display::OutsideInner {
+                outer: OuterDisplay::Block,
+                inner,
+            };
+        }
     }
 }
 

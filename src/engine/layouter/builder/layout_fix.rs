@@ -1,8 +1,8 @@
 use crate::engine::layouter::text_layouter::TextFlowLayouter;
 use crate::engine::layouter::types::{InfoNode, NodeKind, TextAlign};
 use ui_layout::{
-    AutoSizeBehavior, GridTrack, InnerDisplay, LayoutChild, LayoutNode, Length, LengthOrAuto,
-    OuterDisplay,
+    AutoSizeBehavior, Display, GridTrack, InnerDisplay, LayoutChild, LayoutNode, Length,
+    LengthOrAuto, OuterDisplay,
 };
 
 // ---------------------------------------------------------------------------
@@ -44,8 +44,8 @@ pub fn is_collapsible_whitespace_info(info: &InfoNode) -> bool {
 /// flex/grid wrapper).
 pub fn is_block_layout_child(child: &LayoutChild) -> bool {
     child.node().is_some_and(|node| {
-        node.style.display.outer == OuterDisplay::Block
-            || (node.style.display.inner == InnerDisplay::FlowRoot
+        node.style.display.outer() == Some(OuterDisplay::Block)
+            || (node.style.display.inner() == Some(InnerDisplay::FlowRoot)
                 && node.style.size.auto_behavior == AutoSizeBehavior::ShrinkToFit)
     })
 }
@@ -70,7 +70,8 @@ pub fn constrain_auto_grid_track_items(node: &mut LayoutNode) -> bool {
         }
     }
 
-    if node.style.display.inner != InnerDisplay::Grid || node.style.grid_template_columns.is_empty()
+    if node.style.display.inner() != Some(InnerDisplay::Grid)
+        || node.style.grid_template_columns.is_empty()
     {
         return changed;
     }
@@ -80,9 +81,7 @@ pub fn constrain_auto_grid_track_items(node: &mut LayoutNode) -> bool {
         let LayoutChild::Node(child) = child else {
             continue;
         };
-        if child.style.display.outer == OuterDisplay::None
-            || child.style.position.kind.is_out_of_flow()
-        {
+        if child.style.display == Display::None || child.style.position.kind.is_out_of_flow() {
             continue;
         }
 
@@ -139,8 +138,8 @@ fn correct_atomic_inline_spacing_impl(node: &mut LayoutNode, info: Option<&InfoN
         })
         .unwrap_or_default();
     let wraps_inline_content = matches!(
-        node.style.display.inner,
-        InnerDisplay::Flow | InnerDisplay::FlowRoot
+        node.style.display.inner(),
+        Some(InnerDisplay::Flow | InnerDisplay::FlowRoot)
     );
     let mut previous: Option<(f32, f32)> = None;
     let mut line_y: Option<f32> = None;
@@ -157,8 +156,8 @@ fn correct_atomic_inline_spacing_impl(node: &mut LayoutNode, info: Option<&InfoN
         let child_info = info.and_then(|info| info.children.get(child_index));
         correct_atomic_inline_spacing_impl(child, child_info);
 
-        let is_atomic_inline = child.style.display.outer == OuterDisplay::Inline
-            && child.style.display.inner != InnerDisplay::Flow;
+        let is_atomic_inline = child.style.display.outer() == Some(OuterDisplay::Inline)
+            && child.style.display.inner() != Some(InnerDisplay::Flow);
 
         if is_atomic_inline && let Some(model) = child.layout_box.iter().next() {
             let rect = model.border_box;
@@ -250,7 +249,7 @@ fn correct_atomic_inline_spacing_impl(node: &mut LayoutNode, info: Option<&InfoN
 /// block children. Grow the inline container's width to accommodate the
 /// widest child's margin box.
 fn expand_auto_inline_width_to_children(node: &mut LayoutNode) {
-    if node.style.display.outer != OuterDisplay::Inline
+    if node.style.display.outer() != Some(OuterDisplay::Inline)
         || node.style.size.width != LengthOrAuto::Auto
     {
         return;
@@ -354,7 +353,7 @@ pub fn refresh_missing_text_layout_results(
 /// all grid items land in a single row, resolve auto left/right margins within
 /// each track so that items are horizontally centered or right-aligned.
 fn correct_single_row_grid_inline_alignment(node: &mut LayoutNode) {
-    if node.style.display.inner != InnerDisplay::Grid {
+    if node.style.display.inner() != Some(InnerDisplay::Grid) {
         return;
     }
     let Some(content_box) = node.layout_box.iter().next().map(|model| model.content_box) else {
@@ -367,7 +366,7 @@ fn correct_single_row_grid_inline_alignment(node: &mut LayoutNode) {
         .enumerate()
         .filter_map(|(index, child)| {
             child.node().and_then(|child| {
-                (child.style.display.outer != OuterDisplay::None
+                (child.style.display != Display::None
                     && !child.style.position.kind.is_out_of_flow())
                 .then_some(index)
             })

@@ -548,7 +548,7 @@ pub fn build_layout_and_info_from_snapshot(
 
             if container_style.css_float != CssFloat::None && !style.position.kind.is_out_of_flow()
             {
-                style.display = Display {
+                style.display = Display::OutsideInner {
                     outer: OuterDisplay::Inline,
                     inner: InnerDisplay::FlowRoot,
                 };
@@ -672,14 +672,14 @@ pub fn build_layout_and_info_from_snapshot(
             if let Some(tag) = html_node.tag_name() {
                 match tag {
                     "table" | "tbody" | "thead" | "tfoot" => {
-                        style.display = Display {
+                        style.display = Display::OutsideInner {
                             outer: OuterDisplay::Block,
                             inner: InnerDisplay::Flex,
                         };
                         style.flex_direction = FlexDirection::Column;
                     }
                     "tr" => {
-                        style.display = Display {
+                        style.display = Display::OutsideInner {
                             outer: OuterDisplay::Block,
                             inner: InnerDisplay::Flex,
                         };
@@ -693,7 +693,7 @@ pub fn build_layout_and_info_from_snapshot(
             let mut element_kids: Vec<NodeId> = Vec::new();
 
             perf_scope!(child_slot_build);
-            if style.display.outer != OuterDisplay::None {
+            if style.display != Display::None {
                 let parent_tag_name = snapshot.node(stack[top_idx].dom).kind.tag_name();
                 for &child in snapshot.children(stack[top_idx].dom) {
                     let child_node = &snapshot.node(child).kind;
@@ -726,7 +726,7 @@ pub fn build_layout_and_info_from_snapshot(
                             node_count += 1;
                         }
                         let mut inline_style = style.clone();
-                        inline_style.display = Display {
+                        inline_style.display = Display::OutsideInner {
                             outer: OuterDisplay::Inline,
                             inner: InnerDisplay::Flow,
                         };
@@ -957,7 +957,7 @@ pub fn build_layout_and_info_from_snapshot(
             // use that width as the float's content width so carousel slides
             // do not each expand to the full track width.
             if style.display
-                == (Display {
+                == (Display::OutsideInner {
                     outer: OuterDisplay::Inline,
                     inner: InnerDisplay::FlowRoot,
                 })
@@ -972,8 +972,11 @@ pub fn build_layout_and_info_from_snapshot(
             // inline direct child makes its text-flow coordinates remain in
             // the parent's inline space, so item placement cannot move the
             // text with its box.
-            if matches!(style.display.inner, InnerDisplay::Grid | InnerDisplay::Flex) {
-                if style.display.inner == InnerDisplay::Grid {
+            if matches!(
+                style.display.inner(),
+                Some(InnerDisplay::Grid | InnerDisplay::Flex)
+            ) {
+                if style.display.inner() == Some(InnerDisplay::Grid) {
                     let columns = explicit_grid_track_count(&style.grid_template_columns);
                     let rows = explicit_grid_track_count(&style.grid_template_rows);
                     for child in &mut all_layout {
@@ -986,10 +989,15 @@ pub fn build_layout_and_info_from_snapshot(
                 }
                 for child in &mut all_layout {
                     if let LayoutChild::Node(child) = child
-                        && child.style.display.outer == OuterDisplay::Inline
+                        && child.style.display.outer() == Some(OuterDisplay::Inline)
                         && !child.style.position.kind.is_out_of_flow()
                     {
-                        child.style.display.outer = OuterDisplay::Block;
+                        if let Display::OutsideInner { inner, .. } = child.style.display {
+                            child.style.display = Display::OutsideInner {
+                                outer: OuterDisplay::Block,
+                                inner,
+                            };
+                        }
                     }
                 }
             }
@@ -1170,7 +1178,7 @@ fn neighbour(
                 if matches!(
                     child,
                     LayoutChild::Node(node)
-                        if node.style.display.outer == OuterDisplay::None
+                        if node.style.display == Display::None
                 ) {
                     continue;
                 }
@@ -1178,7 +1186,7 @@ fn neighbour(
                 return if matches!(
                     child,
                     LayoutChild::Node(node)
-                        if node.style.display.outer == OuterDisplay::Block
+                        if node.style.display.outer() == Some(OuterDisplay::Block)
                 ) {
                     Neighbour::Block
                 } else {
