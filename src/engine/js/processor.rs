@@ -40,6 +40,8 @@ pub enum JsTask {
     RunScript { source: String },
     /// Dispatch `DOMContentLoaded` to document listeners.
     DispatchDomContentLoaded,
+    /// Dispatch the window `load` event (fires `window.onload`).
+    DispatchWindowLoad,
     /// Run timer callbacks whose deadlines have elapsed (coalescable).
     RunTimers,
     /// Dispatch a click on the element with the given JS-facing dom id.
@@ -232,6 +234,7 @@ fn run_task(runtime: &mut JsRuntime, task: JsTask) -> bool {
             true
         }
         JsTask::DispatchDomContentLoaded => runtime.dispatch_dom_content_loaded(),
+        JsTask::DispatchWindowLoad => runtime.dispatch_window_load(),
         JsTask::RunTimers => runtime.run_due_timers(),
         JsTask::Click { dom_id } => runtime.click_dom_id(dom_id),
         JsTask::DispatchElementEvent { dom_id, event_type } => {

@@ -174,6 +174,7 @@ pub struct JsHost {
     pub(crate) next_timer_id: u64,
     pub(crate) time_origin: Instant,
     pub(crate) dom_content_loaded_fired: bool,
+    pub(crate) window_load_fired: bool,
     pub(crate) next_id: u64,
     pub(crate) needs_redraw: Rc<Cell<bool>>,
 }
@@ -244,6 +245,7 @@ impl JsRuntime {
             next_timer_id: 0,
             time_origin: Instant::now(),
             dom_content_loaded_fired: false,
+            window_load_fired: false,
             next_id: 0,
             needs_redraw: Rc::clone(&needs_redraw),
         }));
@@ -414,6 +416,58 @@ impl JsRuntime {
         }
         self.perform_microtask_checkpoint();
         true
+    }
+
+    /// Dispatches the window `load` event once the page has finished loading.
+    ///
+    /// Supports both the `window.onload` property and `addEventListener("load",
+    /// ...)` registrations. Returns `true` only for the first dispatch attempt.
+    pub fn dispatch_window_load(&mut self) -> bool {
+        let listeners: Vec<JSValue> = with_host_mut(self.engine.vm(), |host| {
+            if host.window_load_fired {
+                return None;
+            }
+            host.window_load_fired = true;
+            Some(
+                host.document_event_listeners
+                    .get("load")
+                    .cloned()
+                    .unwrap_or_default(),
+            )
+        })
+        .flatten()
+        .unwrap_or_default();
+
+        let window_object = Rc::clone(self.engine.global_mut());
+        let mut ran_handler = false;
+
+        let onload = window_object.borrow().get("onload");
+        if is_callable(&onload) {
+            ran_handler = true;
+            let event = make_event("load", Rc::clone(&window_object), Rc::clone(&window_object));
+            if let Err(err) = self.engine.call(
+                onload,
+                JSValue::from_object(Rc::clone(&window_object)),
+                vec![JSValue::from_object(event)],
+            ) {
+                log::info!("JS error in window.onload: {}", err);
+            }
+        }
+
+        for listener in listeners {
+            ran_handler = true;
+            let event = make_event("load", Rc::clone(&window_object), Rc::clone(&window_object));
+            if let Err(err) = self.engine.call(
+                listener,
+                JSValue::from_object(Rc::clone(&window_object)),
+                vec![JSValue::from_object(event)],
+            ) {
+                log::info!("JS error in window load listener: {}", err);
+            }
+        }
+
+        self.perform_microtask_checkpoint();
+        ran_handler
     }
 
     /// Runs timer callbacks whose deadlines have elapsed.
@@ -1684,6 +1738,48 @@ mod tests {
 
         assert!(runtime.dispatch_dom_content_loaded());
         assert!(!runtime.dispatch_dom_content_loaded());
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-count"), Some("1"));
+    }
+
+    #[test]
+    fn window_onload_runs_when_dispatched() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r#"
+            window.onload = function (event) {
+                const result = document.getElementById("result");
+                result.setAttribute("data-ready", "yes");
+                result.setAttribute("data-event-type", event.type);
+            };
+            "#,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-ready"), None);
+        assert!(runtime.dispatch_window_load());
+        assert_eq!(result.borrow().value.get_attr("data-ready"), Some("yes"));
+        assert_eq!(
+            result.borrow().value.get_attr("data-event-type"),
+            Some("load")
+        );
+    }
+
+    #[test]
+    fn window_load_listener_runs_when_dispatched_and_only_once() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r#"
+            let dispatchCount = 0;
+            window.addEventListener("load", function () {
+                dispatchCount = dispatchCount + 1;
+                document.getElementById("result").setAttribute("data-count", dispatchCount);
+            });
+            "#,
+        );
+
+        assert!(runtime.dispatch_window_load());
+        assert!(!runtime.dispatch_window_load());
         let result = dom.get_element_by_id("result").unwrap();
         assert_eq!(result.borrow().value.get_attr("data-count"), Some("1"));
     }

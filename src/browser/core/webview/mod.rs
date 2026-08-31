@@ -207,6 +207,8 @@ pub struct WebView {
     /// not synced while one is pending: a timer callback can mutate the mirror,
     /// and a snapshot produced behind the sync would clobber it.
     in_flight_timer_version: Option<u64>,
+    /// Whether the window `load` event has been dispatched for the current page.
+    window_load_dispatched: bool,
     /// `fetch()` requests collected from applied JS results.
     pending_js_fetches: Vec<JsFetchRequest>,
     /// DevTools inspection requests collected from applied JS results.
@@ -365,6 +367,7 @@ impl WebView {
             pending_js_tasks: 0,
             js_dom_dirty: false,
             in_flight_timer_version: None,
+            window_load_dispatched: false,
             pending_js_fetches: Vec::new(),
             pending_devtools_requests: Vec::new(),
             inspector_ids: RefCell::new(inspector::DomIdRegistry::default()),
@@ -564,6 +567,19 @@ impl WebView {
         self.drain_write_backs();
         self.sync_dom_to_worker();
 
+        // Window `load` fires once the page is stable: after DOMContentLoaded
+        // (phase `ScriptApplied`), with no JS-visible subresource work still in
+        // flight. Reaching `ScriptApplied` guarantees the page scripts and
+        // DOMContentLoaded listeners have already been applied, so the `onload`
+        // handler is in place before we dispatch.
+        if !self.window_load_dispatched
+            && self.phase == PagePhase::ScriptApplied
+            && self.pending_js_tasks == 0
+            && !self.has_pending_subresource_work()
+        {
+            self.dispatch_window_load();
+        }
+
         tasks
     }
 
@@ -622,6 +638,7 @@ impl WebView {
         self.js_dom_ids = initial_js_dom_ids;
         self.js_dom_dirty = false;
         self.in_flight_timer_version = None;
+        self.window_load_dispatched = false;
         self.pending_js_fetches.clear();
         self.pending_devtools_requests.clear();
         self.inspector_ids.borrow_mut().clear();
@@ -1015,6 +1032,27 @@ impl WebView {
             processor.send(JsTask::DispatchDomContentLoaded);
             self.pending_js_tasks += 1;
         }
+    }
+
+    fn dispatch_window_load(&mut self) {
+        if let Some(processor) = self.js_processor.as_ref() {
+            processor.send(JsTask::DispatchWindowLoad);
+            self.pending_js_tasks += 1;
+            self.window_load_dispatched = true;
+        }
+    }
+
+    /// Whether any JS-visible subresource work still awaits its round trip
+    /// (classic/dynamic scripts, stylesheets, images, or `fetch()` requests).
+    ///
+    /// When this returns `false` the JS thread is idle, so its `mirror` DOM
+    /// matches the committed tree and the page can be considered fully loaded.
+    fn has_pending_subresource_work(&self) -> bool {
+        !self.pending_script_fetches.is_empty()
+            || !self.pending_js_fetches.is_empty()
+            || !self.pending_dynamic_scripts.is_empty()
+            || !self.pending_dynamic_styles.is_empty()
+            || !self.pending_dynamic_images.is_empty()
     }
 
     fn run_due_js_timers(&mut self) {
@@ -2910,6 +2948,43 @@ mod tests {
             .get_element_by_id("result")
             .unwrap();
         assert_eq!(result.borrow().value.get_attr("data-ready"), Some("yes"));
+        assert_eq!(webview.phase, PagePhase::ScriptApplied);
+    }
+
+    #[test]
+    fn window_onload_fires_after_the_page_stabilizes() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"
+                <div id="result"></div>
+                <script>
+                    window.onload = function () {
+                        document.getElementById("result").setAttribute("data-loaded", "yes");
+                    };
+                </script>
+            "#
+            .to_string(),
+            Url::parse("https://example.test/index.html").unwrap(),
+        );
+
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.document_info()
+                    .unwrap()
+                    .dom
+                    .get_element_by_id("result")
+                    .is_some_and(|node| node.borrow().value.get_attr("data-loaded").is_some())
+            },
+            "window.onload to run",
+        );
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-loaded"), Some("yes"));
         assert_eq!(webview.phase, PagePhase::ScriptApplied);
     }
 
