@@ -390,6 +390,40 @@ pub fn resolve_css_color(
     }
 
     /// Convert HSL to RGB (0..255)
+    /// Convert hue degrees (0..360) to fully-saturated RGB (each 0.0..1.0).
+    fn hue_to_rgb(h: f32) -> (f32, f32, f32) {
+        let h = h.rem_euclid(360.0);
+        let sector = h / 60.0;
+        let x = 1.0 - (sector % 2.0 - 1.0).abs();
+        match sector as u32 {
+            0 => (1.0, x, 0.0),
+            1 => (x, 1.0, 0.0),
+            2 => (0.0, 1.0, x),
+            3 => (0.0, x, 1.0),
+            4 => (x, 0.0, 1.0),
+            _ => (1.0, 0.0, x),
+        }
+    }
+
+    /// HWB to RGBA conversion per CSS Color Level 4.
+    fn hwb_to_rgba(h: f32, w: f32, b: f32, a: f32) -> (u8, u8, u8, u8) {
+        let w = w.clamp(0.0, 1.0);
+        let b = b.clamp(0.0, 1.0);
+        let a = a.clamp(0.0, 1.0);
+
+        let (r, g, bl) = if w + b >= 1.0 {
+            let gray = w / (w + b);
+            (gray, gray, gray)
+        } else {
+            let (pr, pg, pb) = hue_to_rgb(h);
+            let factor = 1.0 - w - b;
+            (pr * factor + w, pg * factor + w, pb * factor + w)
+        };
+
+        let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        (to_u8(r), to_u8(g), to_u8(bl), (a * 255.0).round() as u8)
+    }
+
     fn hsla_to_rgba(h: f32, s: f32, l: f32, a: f32) -> (u8, u8, u8, u8) {
         // 1. Compute Chroma
         let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
@@ -547,6 +581,64 @@ pub fn resolve_css_color(
             let (r, g, b, a) = hsla_to_rgba(hue, saturation, lightness, alpha);
 
             Some(Color(r, g, b, a))
+        }
+
+        // hwb() — hue, whiteness, blackness
+        CssValue::Function(func, args) if func == "hwb" => {
+            let mut channels = Vec::new();
+            let mut alpha: Option<f32> = None;
+            let mut after_slash = false;
+
+            for arg in args.iter().flatten() {
+                match arg {
+                    CssValue::Keyword(k) if k == "/" => {
+                        after_slash = true;
+                    }
+                    CssValue::Number(n) => {
+                        if after_slash {
+                            alpha = Some(*n);
+                        } else {
+                            channels.push(arg);
+                        }
+                    }
+                    CssValue::Length(percent, Unit::Percent) if after_slash => {
+                        alpha = Some(percent / 100.0);
+                    }
+                    CssValue::Length(_, Unit::Percent | Unit::Deg) if !after_slash => {
+                        channels.push(arg);
+                    }
+                    _ => return None,
+                }
+            }
+
+            // Legacy 4-arg: hwb(h, w, b, a)
+            if channels.len() == 4 && alpha.is_none() {
+                alpha = match channels.pop()? {
+                    CssValue::Number(value) => Some(*value),
+                    CssValue::Length(value, Unit::Percent) => Some(value / 100.0),
+                    _ => return None,
+                };
+            }
+            let [hue, whiteness, blackness] = channels.as_slice() else {
+                return None;
+            };
+            let hue = match hue {
+                CssValue::Number(value) | CssValue::Length(value, Unit::Deg) => {
+                    value.rem_euclid(360.0)
+                }
+                _ => return None,
+            };
+            let percentage = |value: &CssValue| match value {
+                CssValue::Length(value, Unit::Percent) => Some(value / 100.0),
+                CssValue::Number(value) if (0.0..=1.0).contains(value) => Some(*value),
+                _ => None,
+            };
+            let w = percentage(whiteness)?;
+            let b = percentage(blackness)?;
+            let alpha = alpha.unwrap_or(1.0).clamp(0.0, 1.0);
+
+            let (r, g, bl, a) = hwb_to_rgba(hue, w, b, alpha);
+            Some(Color(r, g, bl, a))
         }
 
         // light-dark(<light-color>, <dark-color>)
