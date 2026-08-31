@@ -114,6 +114,18 @@ pub struct JsFetchResponse {
     pub(crate) headers: Vec<(String, String)>,
 }
 
+/// A registered custom element definition.
+#[derive(Clone)]
+pub(crate) struct CustomElementDefinition {
+    pub(crate) constructor: JSValue,
+    pub(crate) connected_callback: Option<JSValue>,
+    pub(crate) disconnected_callback: Option<JSValue>,
+    pub(crate) attribute_changed_callback: Option<JSValue>,
+    pub(crate) observed_attributes: Vec<String>,
+    /// Resolve functions for pending `whenDefined()` promises.
+    pub(crate) when_defined_resolvers: Vec<JSValue>,
+}
+
 /// State shared between the JS natives and the browser side.
 ///
 /// The JS-facing `u64` counter (`__orinium_dom_id`) maps to a live DOM node so
@@ -157,6 +169,10 @@ pub struct JsHost {
     pub(crate) devtools_capabilities: HashMap<u64, devtools::JsDevToolsCapability>,
     pub(crate) constructing_devtools_capability: Option<devtools::JsDevToolsCapability>,
     pub(crate) next_devtools_id: u64,
+    /// Registered custom element definitions keyed by lowercase tag name.
+    pub(crate) custom_elements: HashMap<String, CustomElementDefinition>,
+    /// Shadow root associations: host_dom_id -> shadow_root_dom_id.
+    pub(crate) shadow_roots: HashMap<u64, u64>,
     // TODO: Persist localStorage per origin and sessionStorage per top-level browsing context.
     pub(crate) local_storage: HashMap<String, String>,
     pub(crate) session_storage: HashMap<String, String>,
@@ -233,6 +249,8 @@ impl JsRuntime {
             devtools_capabilities: HashMap::new(),
             constructing_devtools_capability: None,
             next_devtools_id: 0,
+            custom_elements: HashMap::new(),
+            shadow_roots: HashMap::new(),
             local_storage: HashMap::new(),
             session_storage: HashMap::new(),
             document_cookies: HashMap::new(),
@@ -255,8 +273,10 @@ impl JsRuntime {
 
         web_apis::console::install_console(&mut engine);
         web_apis::dom::document::install_document(&mut engine);
+
         web_apis::observers::install_mutation_observer(&mut engine);
         web_apis::observers::install_resize_observer(&mut engine);
+        web_apis::observers::install_intersection_observer(&mut engine);
         web_apis::timers::install_timers(&mut engine);
         web_apis::performance::install_performance(&mut engine);
         runtime::microtasks::install_microtasks(&mut engine);
@@ -269,6 +289,7 @@ impl JsRuntime {
         web_apis::encoding::install_encoding_apis(&mut engine);
         web_apis::browser_env::install_browser_environment(&mut engine);
         web_apis::browser_env::install_global_aliases(&mut engine);
+        web_apis::dom::custom_elements::install_custom_elements(&mut engine);
 
         Self {
             engine,
@@ -2854,5 +2875,199 @@ mod tests {
             result.borrow().value.get_attr("data-error"),
             Some("network failed")
         );
+    }
+
+    #[test]
+    fn intersection_observer_fires_on_observe() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<div id="target" style="width: 100px; height: 50px"></div><div id="result"></div>"#,
+        );
+        runtime.run_script(
+            r#"
+            const target = document.getElementById("target");
+            const result = document.getElementById("result");
+            const observer = new IntersectionObserver(function (entries) {
+                const entry = entries[0];
+                result.setAttribute("data-target", entry.target === target);
+                result.setAttribute("data-is-intersecting", entry.isIntersecting);
+                result.setAttribute("data-ratio", entry.intersectionRatio);
+                result.setAttribute("data-has-root-bounds", entry.rootBounds !== null);
+                result.setAttribute("data-bcr-width", entry.boundingClientRect.width);
+            });
+            observer.observe(target);
+            "#,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-target"), Some("true"));
+        // The element has style width/height so it is visible within the viewport.
+        assert_eq!(result.value.get_attr("data-is-intersecting"), Some("true"));
+        assert_eq!(result.value.get_attr("data-ratio"), Some("1"));
+        assert_eq!(result.value.get_attr("data-has-root-bounds"), Some("true"));
+        assert_eq!(result.value.get_attr("data-bcr-width"), Some("100"));
+    }
+
+    #[test]
+    fn custom_elements_define_and_connect() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<html><body><div id="result"></div></body></html>"#);
+        runtime.run_script(
+            r#"
+            class MyElement extends HTMLElement {
+                connectedCallback() {
+                    document.getElementById("result").setAttribute("data-connected", "yes");
+                }
+                disconnectedCallback() {
+                    document.getElementById("result").setAttribute("data-disconnected", "yes");
+                }
+            }
+            customElements.define("my-element", MyElement);
+            document.getElementById("result").setAttribute(
+                "data-proto",
+                typeof MyElement.prototype.connectedCallback
+            );
+            const el = document.createElement("my-element");
+            document.body.appendChild(el);
+            document.body.removeChild(el);
+            "#,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        // The prototype lookup finds the function.
+        assert_eq!(result.value.get_attr("data-proto"), Some("function"));
+        // Lifecycle callbacks fire via enqueue_job + microtask checkpoint.
+        assert_eq!(result.value.get_attr("data-connected"), Some("yes"));
+        assert_eq!(result.value.get_attr("data-disconnected"), Some("yes"));
+    }
+
+    #[test]
+    fn custom_elements_define_getters_work() {
+        let (mut runtime, _dom) = runtime_from_html(r#"<html><body></body></html>"#);
+        runtime.run_script(
+            r#"
+            class MyEl extends HTMLElement {}
+            customElements.define("my-el", MyEl);
+            if (customElements.get("my-el") === undefined) throw new Error("get failed");
+            if (customElements.get("no-such") !== undefined) throw new Error("get should be undefined");
+            "#,
+        );
+    }
+
+    #[test]
+    fn custom_elements_attribute_changed_and_when_defined() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<html><body><div id="result"></div></body></html>"#);
+        runtime.run_script(
+            r#"
+            globalThis.__attrLog = [];
+            class AttrEl extends HTMLElement {
+                attributeChangedCallback(name, oldVal, newVal) {
+                    globalThis.__attrLog.push(name + ":" + (oldVal === null ? "null" : oldVal) + ":" + (newVal === null ? "null" : newVal));
+                }
+            }
+            AttrEl.observedAttributes = ["data-val"];
+            customElements.define("attr-el", AttrEl);
+            const el = document.createElement("attr-el");
+            document.body.appendChild(el);
+            el.setAttribute("data-val", "first");
+            el.setAttribute("data-val", "second");
+            el.removeAttribute("data-val");
+            // whenDefined resolves immediately for an already-defined name.
+            let wdResolved = false;
+            customElements.whenDefined("attr-el").then(function () {
+                wdResolved = true;
+            });
+            document.getElementById("result").setAttribute(
+                "data-wd", wdResolved
+            );
+            "#,
+        );
+
+        // Read the log after microtasks have fired the callbacks.
+        runtime.run_script(
+            r#"document.getElementById("result").setAttribute(
+                "data-log", globalThis.__attrLog.join("|")
+            );"#,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        // Three callbacks fire via microtask: first set, second set, remove.
+        // oldValue is null on first set (attr didn't exist before).        assert_eq!(result.value.get_attr("data-log"), Some("data-val:null:first|data-val:first:second|data-val:second:null"));
+        assert_eq!(result.value.get_attr("data-wd"), Some("true"));
+    }
+
+    #[test]
+    fn shadow_dom_attach_and_query() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<html><body><div id="host"></div></body></html>"#);
+        // First: verify attachShadow works at all
+        runtime.run_script(
+            r##"
+            var host = document.getElementById("host");
+            host.setAttribute("data-step1", "ready");
+            "##,
+        );
+        let result = dom.get_element_by_id("host").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-step1"), Some("ready"));
+
+        // Now try attachShadow in its own script
+        runtime.run_script(
+            r##"
+            var host = document.getElementById("host");
+            host.attachShadow({ mode: "open" });
+            host.setAttribute("data-step2", "shadow-attached");
+            "##,
+        );
+        assert_eq!(
+            result.borrow().value.get_attr("data-step2"),
+            Some("shadow-attached")
+        );
+
+        // Now test the rest
+        runtime.run_script(
+            r##"
+            var host = document.getElementById("host");
+            try {
+                var sr = host.shadowRoot;
+                host.setAttribute("data-sr", sr !== null ? "true" : "false");
+                var span = document.createElement("span");
+                span.id = "inner";
+                span.textContent = "shadow text";
+                sr.appendChild(span);
+                var found = sr.querySelector("#inner");
+                host.setAttribute("data-found", found !== null ? found.textContent : "NOT_FOUND");
+                var notFound = host.querySelector("#inner");
+                host.setAttribute("data-boundary", notFound === null ? "true" : "false");
+                host.setAttribute("data-text", host.textContent.trim() === "" ? "true" : "false");
+            } catch(e) {
+                host.setAttribute("data-error", e.toString());
+            }
+            "##,
+        );
+        let result = dom.get_element_by_id("host").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-sr"), Some("true"));
+        assert_eq!(result.value.get_attr("data-found"), Some("shadow text"));
+        assert_eq!(result.value.get_attr("data-boundary"), Some("true"));
+        assert_eq!(result.value.get_attr("data-text"), Some("true"));
+    }
+
+    #[test]
+    fn shadow_dom_closed_root() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<html><body><div id="host"></div></body></html>"#);
+        runtime.run_script(
+            r##"
+            var host = document.getElementById("host");
+            host.attachShadow({ mode: "closed" });
+            host.setAttribute("data-closed", host.shadowRoot === null ? "true" : "false");
+            "##,
+        );
+        let result = dom.get_element_by_id("host").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-closed"), Some("true"));
     }
 }
