@@ -1471,6 +1471,77 @@ impl<'a> Parser<'a> {
         Ok(children)
     }
 
+    /// Parses the contents of a `(...)` functional group (excluding the outer
+    /// parentheses) into a list of comma-separated arguments.
+    ///
+    /// The outer `Vec` holds comma-separated arguments and each inner `Vec`
+    /// holds the whitespace-separated components of that argument. Keeping
+    /// both boundaries preserves the syntactic structure so that, for example,
+    /// `minmax(100px, 1fr)` yields two arguments while `circle(50% at 50%)`
+    /// yields a single argument with several components.
+    fn parse_function_arguments(tokens: Vec<Token>) -> ParseResult<Vec<Vec<CssValue>>> {
+        // Split into comma-separated argument groups, respecting nesting.
+        let mut arguments: Vec<Vec<Token>> = Vec::new();
+        let mut current: Vec<Token> = Vec::new();
+        let mut depth = 0usize;
+
+        for token in tokens {
+            match token {
+                Token::Delim('(') => {
+                    depth += 1;
+                    current.push(token);
+                }
+                Token::Delim(')') => {
+                    depth = depth.saturating_sub(1);
+                    current.push(token);
+                }
+                Token::Delim(',') if depth == 0 => {
+                    arguments.push(std::mem::take(&mut current));
+                }
+                _ => current.push(token),
+            }
+        }
+        if !current.is_empty() || arguments.is_empty() {
+            arguments.push(current);
+        }
+
+        // Within each argument, split on top-level whitespace into components.
+        let mut result = Vec::new();
+        for argument in arguments {
+            let mut components = Vec::new();
+            let mut component_tokens: Vec<Token> = Vec::new();
+            let mut component_depth = 0usize;
+
+            for token in argument {
+                match token {
+                    Token::Whitespace if component_depth == 0 => {
+                        if !component_tokens.is_empty() {
+                            let value =
+                                Self::parse_tokens_to_css_value(std::mem::take(&mut component_tokens))?;
+                            components.push(value);
+                        }
+                    }
+                    Token::Delim('(') => {
+                        component_depth += 1;
+                        component_tokens.push(token);
+                    }
+                    Token::Delim(')') => {
+                        component_depth = component_depth.saturating_sub(1);
+                        component_tokens.push(token);
+                    }
+                    _ => component_tokens.push(token),
+                }
+            }
+            if !component_tokens.is_empty() {
+                let value = Self::parse_tokens_to_css_value(component_tokens)?;
+                components.push(value);
+            }
+            result.push(components);
+        }
+
+        Ok(result)
+    }
+
     pub fn parse_tokens_to_css_value(tokens: Vec<Token>) -> ParseResult<CssValue> {
         let mut values = vec![];
         let mut iter = tokens.into_iter().peekable();
@@ -1520,7 +1591,7 @@ impl<'a> Parser<'a> {
                 Token::Hash(s) => values.push(CssValue::Color(s)),
 
                 Token::Function(name) => {
-                    // () の中をそのまま集める
+                    // () の中を、外側の括弧を除いて集める
                     let mut depth = 0;
                     let mut func_tokens = vec![];
 
@@ -1528,26 +1599,23 @@ impl<'a> Parser<'a> {
                         match &tok {
                             Token::Delim('(') => {
                                 depth += 1;
-                                func_tokens.push(tok);
+                                if depth > 1 {
+                                    func_tokens.push(tok);
+                                }
                             }
                             Token::Delim(')') => {
-                                func_tokens.push(tok);
                                 depth -= 1;
                                 if depth == 0 {
                                     break;
                                 }
+                                func_tokens.push(tok);
                             }
                             _ => func_tokens.push(tok),
                         }
                     }
 
-                    let arg_value = Self::parse_tokens_to_css_value(func_tokens)
+                    let args = Self::parse_function_arguments(func_tokens)
                         .map_err(|e| e.with_context("parse function args"))?;
-
-                    let args = match arg_value {
-                        CssValue::List(list) => list,
-                        other => vec![other],
-                    };
 
                     values.push(CssValue::Function(name, args));
                 }
@@ -1799,14 +1867,14 @@ mod tests {
             &CssValue::Function(
                 "repeat".into(),
                 vec![
-                    CssValue::Keyword("auto-fit".into()),
-                    CssValue::Function(
+                    vec![CssValue::Keyword("auto-fit".into())],
+                    vec![CssValue::Function(
                         "minmax".into(),
                         vec![
-                            CssValue::Length(100.0, Unit::Px),
-                            CssValue::Length(1.0, Unit::Fr),
+                            vec![CssValue::Length(100.0, Unit::Px)],
+                            vec![CssValue::Length(1.0, Unit::Fr)],
                         ],
-                    ),
+                    )],
                 ],
             )
         );
@@ -1820,6 +1888,53 @@ mod tests {
                 CssValue::String("sidebar main".into()),
             ])
         );
+    }
+
+    #[test]
+    fn function_arguments_preserve_comma_and_whitespace_boundaries() {
+        let stylesheet = Parser::new("a { width: foo(a + b, c, d); }")
+            .parse()
+            .unwrap();
+        let declarations = stylesheet.children()[0].children();
+        let CssNodeType::Declaration { value, .. } = declarations[0].node() else {
+            panic!("expected declaration");
+        };
+        assert_eq!(
+            value,
+            &CssValue::Function(
+                "foo".into(),
+                vec![
+                    vec![
+                        CssValue::Keyword("a".into()),
+                        CssValue::Keyword("+".into()),
+                        CssValue::Keyword("b".into()),
+                    ],
+                    vec![CssValue::Keyword("c".into())],
+                    vec![CssValue::Keyword("d".into())],
+                ],
+            )
+        );
+    }
+
+    #[test]
+    fn malformed_function_arguments_are_structurally_distinct() {
+        let parse = |css: &str| {
+            let stylesheet = Parser::new(&format!("a {{ width: {css}; }}"))
+                .parse()
+                .unwrap();
+            let declarations = stylesheet.children()[0].children();
+            let CssNodeType::Declaration { value, .. } = declarations[0].node() else {
+                panic!("expected declaration");
+            };
+            value.clone()
+        };
+
+        // `foo(a + b, c, d)` — argument 1 is `a + b`.
+        let comma_separated = parse("foo(a + b, c, d)");
+        // `foo(a, + b c, d)` — argument 1 is `a`, argument 2 is `+ b c`.
+        let whitespace_separated = parse("foo(a, + b c, d)");
+
+        assert_ne!(comma_separated, whitespace_separated);
     }
 
     #[test]
