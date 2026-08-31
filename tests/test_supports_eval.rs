@@ -346,10 +346,10 @@ fn test_supports_row_gap() {
 }
 
 #[test]
-fn test_supports_display_contents_unsupported() {
+fn test_supports_display_unknown_unsupported() {
     let s = resolve(
         r#"
-        @supports (display: contents) {
+        @supports (display: unknown) {
             div {
                 --val: supported;
             }
@@ -358,7 +358,7 @@ fn test_supports_display_contents_unsupported() {
     );
     assert!(
         !has_prop_in_rule(&s, "--val"),
-        "display: contents is not supported by layout engine"
+        "display: unknown is not supported by layout engine"
     );
 }
 
