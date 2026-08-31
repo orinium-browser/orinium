@@ -701,7 +701,7 @@ pub fn apply_declaration(
                 DEFAULT_STYLE,
                 value,
                 CssValue::Keyword(v),
-                Display::from_css_name(v.as_str())?
+                Display::parse(v.as_str())?
             );
         }
 
