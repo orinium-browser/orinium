@@ -3087,6 +3087,163 @@ fn rgb_full_alpha() {
     );
 }
 
+// ─── Math functions inside color functions ─────────────────────────────────
+
+#[test]
+fn rgb_calc_addition() {
+    assert_eq!(
+        rc("div { color: rgb(calc(10 + 3), 5, 6); }"),
+        Color(13, 5, 6, 255)
+    );
+}
+
+#[test]
+fn rgb_calc_subtraction() {
+    assert_eq!(
+        rc("div { color: rgb(calc(255 - 55), 100, 50); }"),
+        Color(200, 100, 50, 255)
+    );
+}
+
+#[test]
+fn rgb_calc_multiplication() {
+    assert_eq!(
+        rc("div { color: rgb(calc(50 * 2), 25, 10); }"),
+        Color(100, 25, 10, 255)
+    );
+}
+
+#[test]
+fn rgb_calc_division() {
+    assert_eq!(
+        rc("div { color: rgb(calc(200 / 2), 100, 50); }"),
+        Color(100, 100, 50, 255)
+    );
+}
+
+#[test]
+fn rgb_calc_nested() {
+    assert_eq!(
+        rc("div { color: rgb(calc(10 + calc(5 * 2)), 0, 0); }"),
+        Color(20, 0, 0, 255)
+    );
+}
+
+#[test]
+fn rgb_calc_all_channels() {
+    assert_eq!(
+        rc("div { color: rgb(calc(100 + 55), calc(200 - 100), calc(25 * 4)); }"),
+        Color(155, 100, 100, 255)
+    );
+}
+
+#[test]
+fn rgb_calc_with_alpha() {
+    assert_eq!(
+        rc("div { color: rgb(calc(200 + 55), 0, 0, calc(0.5 + 0.5)); }"),
+        Color(255, 0, 0, 255)
+    );
+}
+
+#[test]
+fn rgb_calc_alpha_only() {
+    assert_eq!(
+        rc("div { color: rgb(255, 0, 0, calc(0.25 * 2)); }"),
+        Color(255, 0, 0, 128)
+    );
+}
+
+#[test]
+fn rgb_min_function() {
+    assert_eq!(
+        rc("div { color: rgb(min(100, 200), 50, 30); }"),
+        Color(100, 50, 30, 255)
+    );
+}
+
+#[test]
+fn rgb_max_function() {
+    assert_eq!(
+        rc("div { color: rgb(max(100, 200), 50, 30); }"),
+        Color(200, 50, 30, 255)
+    );
+}
+
+#[test]
+fn rgb_clamp_function() {
+    assert_eq!(
+        rc("div { color: rgb(clamp(0, 300, 255), 50, 30); }"),
+        Color(255, 50, 30, 255)
+    );
+}
+
+#[test]
+fn hsl_calc_hue() {
+    assert_eq!(
+        rc("div { color: hsl(calc(120 + 0)deg, 100%, 50%); }"),
+        Color(0, 255, 0, 255)
+    );
+}
+
+#[test]
+fn hsl_calc_saturation() {
+    assert_eq!(
+        rc("div { color: hsl(0deg, calc(50 + 50)%, 50%); }"),
+        Color(255, 0, 0, 255)
+    );
+}
+
+#[test]
+fn hsl_calc_lightness() {
+    assert_eq!(
+        rc("div { color: hsl(0deg, 100%, calc(100 / 2)%); }"),
+        Color(255, 0, 0, 255)
+    );
+}
+
+#[test]
+fn hwb_calc_whiteness() {
+    assert_eq!(
+        rc("div { color: hwb(0 calc(0 + 0)% 0%); }"),
+        Color(255, 0, 0, 255)
+    );
+}
+
+#[test]
+fn hwb_calc_blackness() {
+    assert_eq!(
+        rc("div { color: hwb(0 0% calc(50 + 50)%); }"),
+        Color(0, 0, 0, 255)
+    );
+}
+
+#[test]
+fn rgb_calc_with_percent_values() {
+    assert_eq!(
+        rc("div { color: rgb(calc(50 + 50)%, 0%, 0%); }"),
+        Color(255, 0, 0, 255)
+    );
+}
+
+#[test]
+fn hsl_min_max_in_channels() {
+    assert_eq!(
+        rc("div { color: hsl(min(0, 360)deg, max(50, 100)%, 50%); }"),
+        Color(255, 0, 0, 255)
+    );
+}
+
+#[test]
+fn rgb_calc_complex_expression() {
+    // calc(255 * 0.5 + 127) = 254.5 → 255
+    assert_eq!(
+        rc("div { color: rgb(calc(255 * 0.5 + 127), 0, 0); }"),
+        Color(255, 0, 0, 255)
+    );
+}
+
+// ─── hsl boundary hues (continued) ────────────────────────────────────────
+
 #[test]
 fn hsl_boundary_hues() {
     let hues = [
