@@ -2451,3 +2451,706 @@ fn normalize_whitespace_pre_wrap_preserves_newlines() {
     );
     assert_eq!(normalize_whitespace("a\n\nb", WhiteSpace::Nowrap), "a b");
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// CSS Color Function Tests — full pipeline (Parser → Resolver → Color)
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Parse a CSS rule, resolve it, and return the resolved `Color` for the
+/// given property (defaults to `"color"`).
+fn resolved_color(css: &str, prop: &str) -> Color {
+    let stylesheet = CssParser::new(css).parse().unwrap();
+    let resolved = CssResolver::resolve(&stylesheet);
+    let decl = resolved
+        .iter()
+        .find(|d| d.name == prop)
+        .unwrap_or_else(|| panic!("no `{prop}` declaration in `{css}`"));
+    resolve_css_color(&decl.name, &decl.value, ColorScheme::Light)
+        .unwrap_or_else(|| panic!("`{prop}` did not resolve to a color: {:?}", decl.value))
+}
+
+/// Same as `resolved_color` but uses a specific `ColorScheme`.
+fn resolved_color_scheme(css: &str, prop: &str, scheme: ColorScheme) -> Color {
+    let stylesheet = CssParser::new(css).parse().unwrap();
+    let resolved = CssResolver::resolve(&stylesheet);
+    let decl = resolved
+        .iter()
+        .find(|d| d.name == prop)
+        .unwrap_or_else(|| panic!("no `{prop}` declaration in `{css}`"));
+    resolve_css_color(&decl.name, &decl.value, scheme)
+        .unwrap_or_else(|| panic!("`{prop}` did not resolve to a color: {:?}", decl.value))
+}
+
+/// Convenience: resolve `color` property from a CSS rule.
+fn rc(css: &str) -> Color {
+    resolved_color(css, "color")
+}
+
+#[test]
+fn rgb_pure_red() {
+    assert_eq!(rc("div { color: rgb(255, 0, 0); }"), Color(255, 0, 0, 255));
+}
+
+#[test]
+fn rgb_pure_green() {
+    assert_eq!(rc("div { color: rgb(0, 255, 0); }"), Color(0, 255, 0, 255));
+}
+
+#[test]
+fn rgb_pure_blue() {
+    assert_eq!(rc("div { color: rgb(0, 0, 255); }"), Color(0, 0, 255, 255));
+}
+
+#[test]
+fn rgb_black() {
+    assert_eq!(rc("div { color: rgb(0, 0, 0); }"), Color(0, 0, 0, 255));
+}
+
+#[test]
+fn rgb_white() {
+    assert_eq!(
+        rc("div { color: rgb(255, 255, 255); }"),
+        Color(255, 255, 255, 255)
+    );
+}
+
+#[test]
+fn rgb_gray() {
+    assert_eq!(
+        rc("div { color: rgb(128, 128, 128); }"),
+        Color(128, 128, 128, 255)
+    );
+}
+
+#[test]
+fn rgb_mixed() {
+    assert_eq!(
+        rc("div { color: rgb(12, 34, 56); }"),
+        Color(12, 34, 56, 255)
+    );
+}
+
+#[test]
+fn rgb_alpha_zero() {
+    assert_eq!(rc("div { color: rgb(255, 0, 0, 0); }"), Color(255, 0, 0, 0));
+}
+
+#[test]
+fn rgb_alpha_half() {
+    assert_eq!(
+        rc("div { color: rgb(255, 0, 0, 0.5); }"),
+        Color(255, 0, 0, 128)
+    );
+}
+
+#[test]
+fn rgb_alpha_one() {
+    assert_eq!(
+        rc("div { color: rgb(255, 0, 0, 1); }"),
+        Color(255, 0, 0, 255)
+    );
+}
+
+#[test]
+fn rgba_pure_red() {
+    assert_eq!(
+        rc("div { color: rgba(255, 0, 0, 1); }"),
+        Color(255, 0, 0, 255)
+    );
+}
+
+#[test]
+fn rgba_transparent() {
+    assert_eq!(
+        rc("div { color: rgba(255, 0, 0, 0); }"),
+        Color(255, 0, 0, 0)
+    );
+}
+
+#[test]
+fn rgba_half_alpha() {
+    assert_eq!(
+        rc("div { color: rgba(10, 20, 30, 0.5); }"),
+        Color(10, 20, 30, 128)
+    );
+}
+
+#[test]
+fn rgb_percentage_red() {
+    assert_eq!(
+        rc("div { color: rgb(100%, 0%, 0%); }"),
+        Color(255, 0, 0, 255)
+    );
+}
+
+#[test]
+fn rgb_percentage_green() {
+    assert_eq!(
+        rc("div { color: rgb(0%, 100%, 0%); }"),
+        Color(0, 255, 0, 255)
+    );
+}
+
+#[test]
+fn rgb_percentage_blue() {
+    assert_eq!(
+        rc("div { color: rgb(0%, 0%, 100%); }"),
+        Color(0, 0, 255, 255)
+    );
+}
+
+#[test]
+fn rgb_percentage_gray() {
+    assert_eq!(
+        rc("div { color: rgb(50%, 50%, 50%); }"),
+        Color(128, 128, 128, 255)
+    );
+}
+
+#[test]
+fn rgb_space_separated() {
+    assert_eq!(rc("div { color: rgb(255 0 0); }"), Color(255, 0, 0, 255));
+}
+
+#[test]
+fn rgb_space_separated_alpha() {
+    assert_eq!(
+        rc("div { color: rgb(255 0 0 / 0.5); }"),
+        Color(255, 0, 0, 128)
+    );
+}
+
+#[test]
+fn rgba_space_separated_alpha() {
+    assert_eq!(
+        rc("div { color: rgba(255 0 0 / 0.5); }"),
+        Color(255, 0, 0, 128)
+    );
+}
+
+#[test]
+fn hex_black() {
+    assert_eq!(rc("div { color: #000000; }"), Color(0, 0, 0, 255));
+}
+
+#[test]
+fn hex_white() {
+    assert_eq!(rc("div { color: #ffffff; }"), Color(255, 255, 255, 255));
+}
+
+#[test]
+fn hex_red() {
+    assert_eq!(rc("div { color: #ff0000; }"), Color(255, 0, 0, 255));
+}
+
+#[test]
+fn hex_green() {
+    assert_eq!(rc("div { color: #00ff00; }"), Color(0, 255, 0, 255));
+}
+
+#[test]
+fn hex_blue() {
+    assert_eq!(rc("div { color: #0000ff; }"), Color(0, 0, 255, 255));
+}
+
+#[test]
+fn hex_shorthand_black() {
+    assert_eq!(rc("div { color: #000; }"), Color(0, 0, 0, 255));
+}
+
+#[test]
+fn hex_shorthand_white() {
+    assert_eq!(rc("div { color: #fff; }"), Color(255, 255, 255, 255));
+}
+
+#[test]
+fn hex_shorthand_red() {
+    assert_eq!(rc("div { color: #f00; }"), Color(255, 0, 0, 255));
+}
+
+#[test]
+fn hex_shorthand_mixed() {
+    assert_eq!(rc("div { color: #123; }"), Color(17, 34, 51, 255));
+}
+
+#[test]
+fn hex_with_alpha_zero() {
+    assert_eq!(rc("div { color: #ff000000; }"), Color(255, 0, 0, 0));
+}
+
+#[test]
+fn hex_with_alpha_half() {
+    assert_eq!(rc("div { color: #ff000080; }"), Color(255, 0, 0, 128));
+}
+
+#[test]
+fn hex_with_alpha_full() {
+    assert_eq!(rc("div { color: #ff0000ff; }"), Color(255, 0, 0, 255));
+}
+
+#[test]
+fn hex_shorthand_with_alpha_zero() {
+    assert_eq!(rc("div { color: #f000; }"), Color(255, 0, 0, 0));
+}
+
+#[test]
+fn hex_shorthand_with_alpha_full() {
+    assert_eq!(rc("div { color: #f00f; }"), Color(255, 0, 0, 255));
+}
+
+#[test]
+fn named_red() {
+    assert_eq!(rc("div { color: red; }"), Color(255, 0, 0, 255));
+}
+
+#[test]
+fn named_green() {
+    assert_eq!(rc("div { color: green; }"), Color(0, 128, 0, 255));
+}
+
+#[test]
+fn named_blue() {
+    assert_eq!(rc("div { color: blue; }"), Color(0, 0, 255, 255));
+}
+
+#[test]
+fn named_black() {
+    assert_eq!(rc("div { color: black; }"), Color(0, 0, 0, 255));
+}
+
+#[test]
+fn named_white() {
+    assert_eq!(rc("div { color: white; }"), Color(255, 255, 255, 255));
+}
+
+#[test]
+fn named_transparent() {
+    assert_eq!(rc("div { color: transparent; }"), Color(0, 0, 0, 0));
+}
+
+#[test]
+fn named_rebeccapurple() {
+    assert_eq!(
+        rc("div { color: rebeccapurple; }"),
+        Color(102, 51, 153, 255)
+    );
+}
+
+#[test]
+fn hsl_red() {
+    assert_eq!(
+        rc("div { color: hsl(0, 100%, 50%); }"),
+        Color(255, 0, 0, 255)
+    );
+}
+
+#[test]
+fn hsl_green() {
+    assert_eq!(
+        rc("div { color: hsl(120, 100%, 50%); }"),
+        Color(0, 255, 0, 255)
+    );
+}
+
+#[test]
+fn hsl_blue() {
+    assert_eq!(
+        rc("div { color: hsl(240, 100%, 50%); }"),
+        Color(0, 0, 255, 255)
+    );
+}
+
+#[test]
+fn hsl_white() {
+    assert_eq!(
+        rc("div { color: hsl(0, 0%, 100%); }"),
+        Color(255, 255, 255, 255)
+    );
+}
+
+#[test]
+fn hsl_black() {
+    assert_eq!(rc("div { color: hsl(0, 0%, 0%); }"), Color(0, 0, 0, 255));
+}
+
+#[test]
+fn hsl_gray() {
+    assert_eq!(
+        rc("div { color: hsl(0, 0%, 50%); }"),
+        Color(128, 128, 128, 255)
+    );
+}
+
+#[test]
+fn hsl_half_saturation() {
+    assert_eq!(
+        rc("div { color: hsl(0, 50%, 50%); }"),
+        Color(191, 64, 64, 255)
+    );
+}
+
+#[test]
+fn hsla_red() {
+    assert_eq!(
+        rc("div { color: hsla(0, 100%, 50%, 1); }"),
+        Color(255, 0, 0, 255)
+    );
+}
+
+#[test]
+fn hsla_transparent() {
+    assert_eq!(
+        rc("div { color: hsla(0, 100%, 50%, 0); }"),
+        Color(255, 0, 0, 0)
+    );
+}
+
+#[test]
+fn hsla_half_alpha() {
+    assert_eq!(
+        rc("div { color: hsla(120, 100%, 50%, 0.5); }"),
+        Color(0, 255, 0, 128)
+    );
+}
+
+#[test]
+fn hsl_space_separated() {
+    assert_eq!(rc("div { color: hsl(0 100% 50%); }"), Color(255, 0, 0, 255));
+}
+
+#[test]
+fn hsl_space_separated_alpha() {
+    assert_eq!(
+        rc("div { color: hsl(0 100% 50% / 0.5); }"),
+        Color(255, 0, 0, 128)
+    );
+}
+
+#[test]
+fn hwb_red() {
+    assert_eq!(rc("div { color: hwb(0 0% 0%); }"), Color(255, 0, 0, 255));
+}
+
+#[test]
+fn hwb_white() {
+    assert_eq!(
+        rc("div { color: hwb(0 100% 0%); }"),
+        Color(255, 255, 255, 255)
+    );
+}
+
+#[test]
+fn hwb_black() {
+    assert_eq!(rc("div { color: hwb(0 0% 100%); }"), Color(0, 0, 0, 255));
+}
+
+#[test]
+fn hwb_gray() {
+    assert_eq!(
+        rc("div { color: hwb(0 50% 50%); }"),
+        Color(128, 128, 128, 255)
+    );
+}
+
+#[test]
+fn hwb_with_alpha() {
+    assert_eq!(
+        rc("div { color: hwb(0 0% 0% / 0.5); }"),
+        Color(255, 0, 0, 128)
+    );
+}
+
+// ─── light-dark() ──────────────────────────────────────────────────────────
+
+#[test]
+fn light_dark_picks_light_in_light_scheme() {
+    let c = resolved_color_scheme(
+        "div { color: light-dark(white, black); }",
+        "color",
+        ColorScheme::Light,
+    );
+    assert_eq!(c, Color(255, 255, 255, 255));
+}
+
+#[test]
+fn light_dark_picks_dark_in_dark_scheme() {
+    let c = resolved_color_scheme(
+        "div { color: light-dark(white, black); }",
+        "color",
+        ColorScheme::Dark,
+    );
+    assert_eq!(c, Color(0, 0, 0, 255));
+}
+
+#[test]
+fn light_dark_with_hex_colors() {
+    let c_light = resolved_color_scheme(
+        "div { color: light-dark(#ffffff, #333333); }",
+        "color",
+        ColorScheme::Light,
+    );
+    assert_eq!(c_light, Color(255, 255, 255, 255));
+
+    let c_dark = resolved_color_scheme(
+        "div { color: light-dark(#ffffff, #333333); }",
+        "color",
+        ColorScheme::Dark,
+    );
+    assert_eq!(c_dark, Color(0x33, 0x33, 0x33, 255));
+}
+
+#[test]
+fn light_dark_with_named_colors() {
+    let c = resolved_color_scheme(
+        "div { color: light-dark(red, blue); }",
+        "color",
+        ColorScheme::Dark,
+    );
+    assert_eq!(c, Color(0, 0, 255, 255));
+}
+
+// ─── color-mix() ───────────────────────────────────────────────────────────
+
+#[test]
+fn color_mix_equal_weights_srgb() {
+    let c = rc("div { color: color-mix(in srgb, red, blue); }");
+    assert_eq!(c, Color(188, 0, 188, 255));
+}
+
+#[test]
+fn color_mix_white_black() {
+    let c = rc("div { color: color-mix(in srgb, white, black); }");
+    assert!(c.0 > 100 && c.0 < 200, "gray expected: {c:?}");
+    assert_eq!(c.0, c.1, "R == G for neutral gray");
+    assert_eq!(c.1, c.2, "G == B for neutral gray");
+    assert_eq!(c.3, 255);
+}
+
+#[test]
+fn color_mix_explicit_percentages() {
+    let c = rc("div { color: color-mix(in srgb, red 25%, blue); }");
+    // red 25% + blue (missing weight takes remaining 75%)
+    assert_eq!(c, Color(137, 0, 225, 255));
+}
+
+#[test]
+fn color_mix_transparent_alpha() {
+    let c = rc("div { color: color-mix(in srgb, transparent, blue); }");
+    assert_eq!(c.3, 128, "alpha should be ~50%");
+}
+
+#[test]
+fn color_mix_lch_space() {
+    let c = rc("div { color: color-mix(in lch, red, blue); }");
+    assert!(c.0 > 0, "has red component: {c:?}");
+    assert!(c.2 > 0, "has blue component: {c:?}");
+    assert!(c.1 < 50, "low green (purple): {c:?}");
+    assert_eq!(c.3, 255);
+}
+
+#[test]
+fn color_mix_both_percentages() {
+    let c = rc("div { color: color-mix(in srgb, red 70%, blue 30%); }");
+    assert!(c.0 > c.2, "more red than blue: {c:?}");
+    assert_eq!(c.3, 255);
+}
+
+// ─── Boundary and edge-case tests ───────────────────────────────────────────
+
+#[test]
+fn rgb_clamps_out_of_range_values() {
+    assert_eq!(
+        rc("div { color: rgb(300, 300, 300); }"),
+        Color(255, 255, 255, 255)
+    );
+}
+
+#[test]
+fn rgb_negative_values_clamp_to_zero() {
+    assert_eq!(rc("div { color: rgb(-10, 0, 0); }"), Color(0, 0, 0, 255));
+}
+
+#[test]
+fn rgb_zero_alpha() {
+    assert_eq!(
+        rc("div { color: rgb(128, 128, 128, 0); }"),
+        Color(128, 128, 128, 0)
+    );
+}
+
+#[test]
+fn rgb_full_alpha() {
+    assert_eq!(
+        rc("div { color: rgb(64, 128, 192, 1); }"),
+        Color(64, 128, 192, 255)
+    );
+}
+
+#[test]
+fn hsl_boundary_hues() {
+    let hues = [
+        (0, Color(255, 0, 0, 255)),
+        (60, Color(255, 255, 0, 255)),
+        (120, Color(0, 255, 0, 255)),
+        (180, Color(0, 255, 255, 255)),
+        (240, Color(0, 0, 255, 255)),
+        (300, Color(255, 0, 255, 255)),
+    ];
+    for (hue, expected) in hues {
+        let c = rc(&format!("div {{ color: hsl({hue}deg, 100%, 50%); }}"));
+        assert_eq!(c, expected, "hue={hue}");
+    }
+}
+
+#[test]
+fn hsl_intermediate_hues() {
+    let c30 = rc("div { color: hsl(30deg, 100%, 50%); }");
+    assert!(c30.0 > 200, "red should be high at 30 deg: {c30:?}");
+    assert!(c30.1 > 50, "green should be moderate: {c30:?}");
+    assert_eq!(c30.2, 0, "blue should be zero at 30 deg");
+
+    let c90 = rc("div { color: hsl(90deg, 100%, 50%); }");
+    assert!(c90.1 > 200, "green should be high at 90 deg: {c90:?}");
+    assert!(c90.0 > 50, "red should be moderate: {c90:?}");
+    assert_eq!(c90.2, 0, "blue should be zero at 90 deg");
+}
+
+#[test]
+fn hsl_pastel_colors() {
+    let pastel = rc("div { color: hsl(0deg, 100%, 87.5%); }");
+    assert!(pastel.0 > 200, "red channel high: {pastel:?}");
+    assert!(pastel.1 > 100, "green channel moderate: {pastel:?}");
+    assert!(pastel.2 > 100, "blue channel moderate: {pastel:?}");
+}
+
+#[test]
+fn hsl_dark_colors() {
+    let dark = rc("div { color: hsl(240deg, 100%, 25%); }");
+    assert!(dark.2 > 0, "blue channel present: {dark:?}");
+    assert!(dark.0 < 100, "red low in dark blue: {dark:?}");
+    assert!(dark.1 < 100, "green low in dark blue: {dark:?}");
+}
+
+// ─── Mixed selector contexts ───────────────────────────────────────────────
+
+#[test]
+fn color_in_multiple_selectors() {
+    let css = r#"
+        .a { color: red; }
+        .b { color: rgb(0, 0, 255); }
+        .c { color: hsl(120deg, 100%, 50%); }
+    "#;
+    assert_eq!(resolved_color(css, "color"), Color(255, 0, 0, 255));
+    // The last rule wins for the same element — but different selectors.
+    // Let's test each selector's color independently.
+    let stylesheet = CssParser::new(css).parse().unwrap();
+    let resolved = CssResolver::resolve(&stylesheet);
+    let colors: Vec<_> = resolved
+        .iter()
+        .filter(|d| d.name == "color")
+        .map(|d| resolve_css_color(&d.name, &d.value, ColorScheme::Light).unwrap())
+        .collect();
+    assert_eq!(colors.len(), 3);
+    assert_eq!(colors[0], Color(255, 0, 0, 255)); // .a: red
+    assert_eq!(colors[1], Color(0, 0, 255, 255)); // .b: rgb blue
+    assert_eq!(colors[2], Color(0, 255, 0, 255)); // .c: hsl green
+}
+
+#[test]
+fn color_with_important() {
+    let css = ".a { color: red !important; }";
+    let stylesheet = CssParser::new(css).parse().unwrap();
+    let resolved = CssResolver::resolve(&stylesheet);
+    let decl = resolved.iter().find(|d| d.name == "color").unwrap();
+    assert!(decl.important);
+    assert_eq!(
+        resolve_css_color(&decl.name, &decl.value, ColorScheme::Light).unwrap(),
+        Color(255, 0, 0, 255)
+    );
+}
+
+#[test]
+fn background_color_property() {
+    assert_eq!(
+        resolved_color("div { background-color: #ff8000; }", "background-color"),
+        Color(255, 128, 0, 255)
+    );
+}
+
+#[test]
+fn border_color_property() {
+    assert_eq!(
+        resolved_color("div { border-color: teal; }", "border-color"),
+        Color(0, 128, 128, 255)
+    );
+}
+
+// ─── var() with color values ───────────────────────────────────────────────
+// NOTE: var() resolution happens in the layout builder, not in CssResolver.
+// These tests verify that var() values survive the resolver as-is.
+
+#[test]
+fn var_preserved_in_resolver() {
+    let stylesheet = CssParser::new(":root { --main: red; } div { color: var(--main); }")
+        .parse()
+        .unwrap();
+    let resolved = CssResolver::resolve(&stylesheet);
+    let decl = resolved.iter().find(|d| d.name == "color").unwrap();
+    // var() is preserved as a function, not resolved at this stage
+    assert!(matches!(decl.value, CssValue::Function(ref name, _) if name == "var"));
+}
+
+// ─── Inheritance through the resolver ───────────────────────────────────────
+
+#[test]
+fn color_not_inherited_by_default_in_resolver() {
+    // The resolver produces declarations, not computed styles.
+    // Each declaration is independent — no inheritance at this stage.
+    let css = "div { color: red; } span { }";
+    let stylesheet = CssParser::new(css).parse().unwrap();
+    let resolved = CssResolver::resolve(&stylesheet);
+    let span_decls: Vec<_> = resolved
+        .iter()
+        .filter(|d| d.selector.to_string().contains("span"))
+        .collect();
+    assert!(span_decls.is_empty(), "span should have no declarations");
+}
+
+// ─── Display rendering of color functions (parser round-trip) ───────────────
+
+#[test]
+fn parser_roundtrip_rgb() {
+    let css = "div { color: rgb(255, 128, 0); }";
+    let stylesheet = CssParser::new(css).parse().unwrap();
+    let resolved = CssResolver::resolve(&stylesheet);
+    let decl = resolved.iter().find(|d| d.name == "color").unwrap();
+    assert_eq!(decl.value.to_string(), "rgb(255, 128, 0)");
+}
+
+#[test]
+fn parser_roundtrip_hsl() {
+    let css = "div { color: hsl(120deg, 100%, 50%); }";
+    let stylesheet = CssParser::new(css).parse().unwrap();
+    let resolved = CssResolver::resolve(&stylesheet);
+    let decl = resolved.iter().find(|d| d.name == "color").unwrap();
+    assert_eq!(decl.value.to_string(), "hsl(120deg, 100%, 50%)");
+}
+
+#[test]
+fn parser_roundtrip_hex() {
+    let css = "div { color: #ff8000; }";
+    let stylesheet = CssParser::new(css).parse().unwrap();
+    let resolved = CssResolver::resolve(&stylesheet);
+    let decl = resolved.iter().find(|d| d.name == "color").unwrap();
+    assert_eq!(decl.value.to_string(), "#ff8000");
+}
+
+#[test]
+fn parser_roundtrip_named_color() {
+    let css = "div { color: rebeccapurple; }";
+    let stylesheet = CssParser::new(css).parse().unwrap();
+    let resolved = CssResolver::resolve(&stylesheet);
+    let decl = resolved.iter().find(|d| d.name == "color").unwrap();
+    // Named colors are stored as CssValue::Keyword, display is the name itself
+    assert_eq!(decl.value.to_string(), "rebeccapurple");
+}

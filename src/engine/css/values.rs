@@ -161,6 +161,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn hex_invalid_returns_none() {
+        // Wrong length
+        assert_eq!(CssValue::Color("".into()).to_rgba_tuple(), None);
+        assert_eq!(CssValue::Color("a".into()).to_rgba_tuple(), None);
+        assert_eq!(CssValue::Color("aa".into()).to_rgba_tuple(), None);
+        assert_eq!(CssValue::Color("aaaaa".into()).to_rgba_tuple(), None);
+        assert_eq!(CssValue::Color("aaaaaaa".into()).to_rgba_tuple(), None);
+        assert_eq!(CssValue::Color("aaaaaaaaa".into()).to_rgba_tuple(), None);
+        // Non-hex characters (parse_color uses from_str_radix with base 16)
+        assert_eq!(CssValue::Color("zzz".into()).to_rgba_tuple(), None);
+        assert_eq!(CssValue::Color("gggggg".into()).to_rgba_tuple(), None);
+    }
+
+    #[test]
+    fn to_rgba_tuple_non_color_returns_none() {
+        assert_eq!(CssValue::Keyword("red".into()).to_rgba_tuple(), None);
+        assert_eq!(CssValue::Length(10.0, Unit::Px).to_rgba_tuple(), None);
+        assert_eq!(CssValue::Number(1.0).to_rgba_tuple(), None);
+        assert_eq!(CssValue::String("#fff".into()).to_rgba_tuple(), None);
+        assert_eq!(
+            CssValue::Function("rgb".into(), vec![]).to_rgba_tuple(),
+            None
+        );
+    }
+
+    #[test]
     fn display_renders_css_source_text() {
         assert_eq!(CssValue::Length(10.0, Unit::Px).to_string(), "10px");
         assert_eq!(CssValue::Length(1.5, Unit::Percent).to_string(), "1.5%");
