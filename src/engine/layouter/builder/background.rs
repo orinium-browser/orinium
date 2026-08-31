@@ -729,7 +729,8 @@ fn resolve_gradient_position(value: &CssValue, text_flow_style: &TextFlowStyle) 
         CssValue::Number(0.0) => Some(0.0),
         CssValue::Function(fn_name, args) if fn_name == "calc" => {
             let value = CssValue::Function(fn_name.clone(), args.clone());
-            let length = resolve_css_len("gradient", std::slice::from_ref(&value), text_flow_style)?;
+            let length =
+                resolve_css_len("gradient", std::slice::from_ref(&value), text_flow_style)?;
             length_to_fraction(&length)
         }
         _ => None,

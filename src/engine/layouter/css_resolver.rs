@@ -1193,9 +1193,7 @@ impl DeclarationResolver {
 
                 let result = if let Some(v) = custom_props.get(var_name.as_str()) {
                     Self::resolve_var(&v.value, custom_props, visited)
-                } else if let Some(fallback) =
-                    args.get(1).and_then(|argument| argument.first())
-                {
+                } else if let Some(fallback) = args.get(1).and_then(|argument| argument.first()) {
                     Self::resolve_var(fallback, custom_props, visited)
                 } else {
                     None

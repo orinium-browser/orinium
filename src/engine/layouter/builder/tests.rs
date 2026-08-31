@@ -166,7 +166,10 @@ fn calc_rejects_mixed_number_length_arithmetic() {
             CssValue::Number(5.0),
         ]],
     );
-    assert_eq!(resolve_css_len("margin-top", std::slice::from_ref(&add), &text_flow_style), None);
+    assert_eq!(
+        resolve_css_len("margin-top", std::slice::from_ref(&add), &text_flow_style),
+        None
+    );
     // 10px * 5px is invalid: cannot multiply two lengths
     let mul = CssValue::Function(
         "calc".into(),
@@ -176,7 +179,10 @@ fn calc_rejects_mixed_number_length_arithmetic() {
             CssValue::Length(5.0, Unit::Px),
         ]],
     );
-    assert_eq!(resolve_css_len("margin-top", std::slice::from_ref(&mul), &text_flow_style), None);
+    assert_eq!(
+        resolve_css_len("margin-top", std::slice::from_ref(&mul), &text_flow_style),
+        None
+    );
 }
 
 #[test]
