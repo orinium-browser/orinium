@@ -135,6 +135,13 @@ fn resolve_length(
             );
             None
         }
+        Unit::Unknown => {
+            log::warn!(
+                target: "Layouter",
+                "Unknown CSS unit for `{}`, treating as unsupported", name
+            );
+            None
+        }
     }
 }
 

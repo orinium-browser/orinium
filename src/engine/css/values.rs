@@ -23,6 +23,7 @@ pub enum Unit {
 
     Deg,
     Fr,
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -74,6 +75,7 @@ impl Unit {
 
             Unit::Deg => "deg",
             Unit::Fr => "fr",
+            Unit::Unknown => "unknown",
         }
     }
 }

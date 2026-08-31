@@ -1591,7 +1591,7 @@ impl<'a> Parser<'a> {
                         "vmax" => Unit::Vmax,
                         "deg" => Unit::Deg,
                         "fr" => Unit::Fr,
-                        _ => Unit::Px,
+                        _ => Unit::Unknown,
                     };
                     values.push(CssValue::Length(value, unit));
                 }
