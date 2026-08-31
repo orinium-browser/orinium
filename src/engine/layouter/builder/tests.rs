@@ -186,6 +186,59 @@ fn calc_rejects_mixed_number_length_arithmetic() {
 }
 
 #[test]
+fn flat_component_slice_resolves_as_arithmetic() {
+    let text_flow_style = TextFlowStyle::default();
+
+    // A single primitive component resolves directly.
+    let single = [CssValue::Length(10.0, Unit::Px)];
+    assert_eq!(
+        resolve_css_len("width", &single, &text_flow_style),
+        Some(Length::Px(10.0))
+    );
+
+    // A flat `[a, +, b]` expression resolves without a `calc()` wrapper.
+    let add = [
+        CssValue::Length(10.0, Unit::Px),
+        CssValue::Keyword("+".into()),
+        CssValue::Length(5.0, Unit::Px),
+    ];
+    assert_eq!(
+        resolve_css_len("width", &add, &text_flow_style),
+        Some(Length::Add(
+            Box::new(Length::Px(10.0)),
+            Box::new(Length::Px(5.0))
+        ))
+    );
+
+    // Longer left-associative chains are supported.
+    let chain = [
+        CssValue::Number(2.0),
+        CssValue::Keyword("*".into()),
+        CssValue::Length(10.0, Unit::Px),
+        CssValue::Keyword("+".into()),
+        CssValue::Length(4.0, Unit::Px),
+    ];
+    assert_eq!(
+        resolve_css_len("width", &chain, &text_flow_style),
+        Some(Length::Add(
+            Box::new(Length::Mul(Box::new(Length::Px(10.0)), 2.0)),
+            Box::new(Length::Px(4.0)),
+        ))
+    );
+
+    // Mixed number/length arithmetic type-checks and is rejected.
+    let invalid = [
+        CssValue::Length(10.0, Unit::Px),
+        CssValue::Keyword("+".into()),
+        CssValue::Number(5.0),
+    ];
+    assert_eq!(resolve_css_len("width", &invalid, &text_flow_style), None);
+
+    // An empty slice resolves to no length.
+    assert_eq!(resolve_css_len("width", &[], &text_flow_style), None);
+}
+
+#[test]
 fn flex_shorthand_expands_common_forms() {
     let one = apply_layout_property("flex", CssValue::Number(1.0));
     assert_eq!(one.item_style.flex_grow, 1.0);
