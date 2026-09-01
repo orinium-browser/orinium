@@ -151,6 +151,11 @@ pub struct JsHost {
     pub(crate) document: Option<Rc<RefCell<JSObject>>>,
     pub(crate) document_event_listeners: HashMap<String, Vec<JSValue>>,
     pub(crate) element_event_listeners: HashMap<u64, HashMap<String, Vec<JSValue>>>,
+    /// Inline event-handler content attributes mapped onto the Window per the
+    /// HTML spec (e.g. `<body onload="...">` registers a `load` event handler
+    /// on the Window). Keyed by event type; populated once when the DOM is
+    /// bound to the runtime so dispatching never re-scans the tree.
+    pub(crate) window_inline_event_handlers: HashMap<String, String>,
     pub(crate) active_element: Option<u64>,
     /// Keeps JS-created or removed nodes alive while their wrappers exist.
     pub(crate) detached_nodes: HashMap<u64, NodeRef<HtmlNodeType>>,
@@ -220,7 +225,7 @@ impl JsRuntime {
         let needs_redraw = Rc::new(Cell::new(false));
         let (element_prototype, element_constructor) =
             web_apis::dom::element::make_element_interface();
-        let host = Rc::new(RefCell::new(JsHost {
+        let mut host = JsHost {
             dom,
             refs: HashMap::new(),
             objects: HashMap::new(),
@@ -232,6 +237,7 @@ impl JsRuntime {
             document: None,
             document_event_listeners: HashMap::new(),
             element_event_listeners: HashMap::new(),
+            window_inline_event_handlers: HashMap::new(),
             active_element: None,
             detached_nodes: HashMap::new(),
             timers: Vec::new(),
@@ -266,7 +272,10 @@ impl JsRuntime {
             window_load_fired: false,
             next_id: 0,
             needs_redraw: Rc::clone(&needs_redraw),
-        }));
+        };
+        Self::register_window_event_handlers(&mut host);
+
+        let host = Rc::new(RefCell::new(host));
 
         let mut engine = pixi_byte::JSEngine::new();
         engine.set_host(host);
@@ -380,8 +389,19 @@ impl JsRuntime {
         self.perform_microtask_checkpoint();
     }
 
+    /// Evaluates an expression and returns its value, or `undefined` on error.
+    pub fn eval_value(&mut self, source: &str) -> JSValue {
+        match self.engine.eval(source) {
+            Ok(value) => value,
+            Err(err) => {
+                log::info!("JS error evaluating {source:?}: {err}");
+                JSValue::undefined()
+            }
+        }
+    }
+
     /// Updates the URL exposed through the window's `location` object.
-    pub(crate) fn set_document_url(&mut self, url: &str) {
+    pub fn set_document_url(&mut self, url: &str) {
         let _ = with_host_mut(self.engine.vm(), |host| {
             host.document_url = url.to_string();
         });
@@ -389,7 +409,7 @@ impl JsRuntime {
 
     /// Updates the serialized origin exposed through the window's
     /// `location`/`window`/`document` objects.
-    pub(crate) fn set_page_origin(&mut self, origin: &str) {
+    pub fn set_page_origin(&mut self, origin: &str) {
         let _ = with_host_mut(self.engine.vm(), |host| {
             host.origin = origin.to_string();
         });
@@ -441,54 +461,87 @@ impl JsRuntime {
 
     /// Dispatches the window `load` event once the page has finished loading.
     ///
-    /// Supports both the `window.onload` property and `addEventListener("load",
-    /// ...)` registrations. Returns `true` only for the first dispatch attempt.
+    /// Supports the body `onload` inline handler, the `window.onload` property,
+    /// and `addEventListener("load", ...)` registrations in that order. Returns
+    /// `true` only for the first dispatch attempt.
     pub fn dispatch_window_load(&mut self) -> bool {
-        let listeners: Vec<JSValue> = with_host_mut(self.engine.vm(), |host| {
+        let state = with_host_mut(self.engine.vm(), |host| {
             if host.window_load_fired {
                 return None;
             }
             host.window_load_fired = true;
-            Some(
+            Some((
+                host.window_inline_event_handlers
+                    .get("load")
+                    .cloned()
+                    .unwrap_or_default(),
                 host.document_event_listeners
                     .get("load")
                     .cloned()
                     .unwrap_or_default(),
-            )
-        })
-        .flatten()
-        .unwrap_or_default();
+            ))
+        });
+        let Some((body_onload, listeners)) = state.flatten() else {
+            return false;
+        };
 
         let window_object = Rc::clone(self.engine.global_mut());
-        let mut ran_handler = false;
+
+        // The body `onload` is a window-level inline event handler that fires
+        // first, as if it had been registered first by the parser.
+        if !body_onload.trim().is_empty() {
+            self.call_inline_load_handler(&window_object, &body_onload, "body onload");
+        }
 
         let onload = window_object.borrow().get("onload");
         if is_callable(&onload) {
-            ran_handler = true;
-            let event = make_event("load", Rc::clone(&window_object), Rc::clone(&window_object));
-            if let Err(err) = self.engine.call(
-                onload,
-                JSValue::from_object(Rc::clone(&window_object)),
-                vec![JSValue::from_object(event)],
-            ) {
-                log::info!("JS error in window.onload: {}", err);
-            }
+            self.call_load_handler(&window_object, onload, "window.onload");
         }
 
         for listener in listeners {
-            ran_handler = true;
-            let event = make_event("load", Rc::clone(&window_object), Rc::clone(&window_object));
-            if let Err(err) = self.engine.call(
-                listener,
-                JSValue::from_object(Rc::clone(&window_object)),
-                vec![JSValue::from_object(event)],
-            ) {
-                log::info!("JS error in window load listener: {}", err);
-            }
+            self.call_load_handler(&window_object, listener, "window load listener");
         }
 
         self.perform_microtask_checkpoint();
-        ran_handler
+        true
+    }
+
+    /// Compiles and runs an inline event-handler content attribute (e.g.
+    /// `<body onload="...">`) with `this` bound to the Window and an `event`
+    /// parameter, per the HTML spec's inline event handler activation.
+    fn call_inline_load_handler(
+        &mut self,
+        window: &Rc<RefCell<JSObject>>,
+        code: &str,
+        label: &str,
+    ) {
+        let event = make_event("load", Rc::clone(window), Rc::clone(window));
+        // Per HTML spec, the inline handler is compiled as a function whose
+        // `event` parameter and `this` (the Window) are set; invoking it runs
+        // the assigned code (e.g. Acid3's body onload="update()").
+        let wrapped = format!("(function(event) {{ {code} \n}})");
+        let handler = self.engine.eval(&wrapped).unwrap_or(JSValue::undefined());
+        if is_callable(&handler)
+            && let Err(err) = self.engine.call(
+                handler,
+                JSValue::from_object(Rc::clone(window)),
+                vec![JSValue::from_object(event)],
+            )
+        {
+            log::info!("JS error in {label}: {err}");
+        }
+    }
+
+    /// Invokes a registered window `load` listener with the Window as `this`.
+    fn call_load_handler(&mut self, window: &Rc<RefCell<JSObject>>, handler: JSValue, label: &str) {
+        let event = make_event("load", Rc::clone(window), Rc::clone(window));
+        if let Err(err) = self.engine.call(
+            handler,
+            JSValue::from_object(Rc::clone(window)),
+            vec![JSValue::from_object(event)],
+        ) {
+            log::info!("JS error in {label}: {err}");
+        }
     }
 
     /// Runs timer callbacks whose deadlines have elapsed.
@@ -701,7 +754,24 @@ impl JsRuntime {
             if let Some(max_id) = dom_ids.values().max() {
                 host.next_id = host.next_id.max(*max_id);
             }
+            Self::register_window_event_handlers(host);
         });
+    }
+
+    /// Hoists the document's event-handler content attributes that the HTML
+    /// spec maps onto the Window (`<body onload="...">`) into the host's
+    /// handler registry, so dispatching never searches the DOM again.
+    ///
+    /// Called once when a DOM is bound to the runtime (initial parse and every
+    /// `apply_dom`), mirroring how the parser activates a `load` handler on the
+    /// `<body>` element as it is parsed.
+    fn register_window_event_handlers(host: &mut JsHost) {
+        for node in host.dom.find_all(|node| node.tag_name() == Some("body")) {
+            if let Some(code) = node.borrow().value.get_attr("onload") {
+                host.window_inline_event_handlers
+                    .insert("load".to_string(), code.to_string());
+            }
+        }
     }
 
     /// Dispatches a click to the handlers registered on the element with the
@@ -1803,6 +1873,20 @@ mod tests {
         assert!(!runtime.dispatch_window_load());
         let result = dom.get_element_by_id("result").unwrap();
         assert_eq!(result.borrow().value.get_attr("data-count"), Some("1"));
+    }
+
+    #[test]
+    fn body_onload_registered_at_setup_runs_on_dispatch() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<body onload="document.getElementById('result').setAttribute('data-onload', 'yes')"><div id="result"></div></body>"#,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-onload"), None);
+        assert!(runtime.dispatch_window_load());
+        assert_eq!(result.borrow().value.get_attr("data-onload"), Some("yes"));
+        // The handler is registered at setup time, not re-scanned at dispatch.
+        assert!(!runtime.dispatch_window_load());
     }
 
     #[test]
