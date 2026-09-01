@@ -439,68 +439,79 @@ fn parse_linear_gradient(
     text_flow_style: &TextFlowStyle,
     color_scheme: ColorScheme,
 ) -> Option<Gradient> {
-    if args.is_empty() {
-        return None;
-    }
-
     let (skip, angle) = parse_linear_direction(args);
-    let angle = angle.unwrap_or(180.0);
     let stops = parse_color_stops(&args[skip..], text_style, text_flow_style, color_scheme)?;
 
     Some(Gradient {
-        kind: GradientKind::Linear { angle },
+        kind: GradientKind::Linear {
+            angle: angle.unwrap_or(180.0),
+        },
         stops,
     })
 }
 
-/// Returns (number_of_consumed_args, optional_angle_in_degrees).
+/// Parse the leading `<angle>` / `to <side-or-corner>` of a linear gradient.
+///
+/// Returns `(consumed, angle_in_degrees)` where `angle` is `None` when no
+/// direction is present (the caller should default to `180deg`). Only the
+/// prelude portion is consumed; color stops must follow.
 fn parse_linear_direction(args: &[CssValue]) -> (usize, Option<f32>) {
-    if args.is_empty() {
+    let Some(first) = args.first() else {
         return (0, None);
-    }
+    };
 
     // <angle>
-    if let CssValue::Length(v, Unit::Deg) = &args[0] {
+    if let CssValue::Length(v, Unit::Deg) = first {
         return (1, Some(*v));
     }
 
     // "to" <side-or-corner>
-    if let CssValue::Keyword(k) = &args[0]
-        && k.as_str() == "to"
-        && args.len() > 1
-    {
-        let mut idx = 1;
-        let mut sides: Vec<&str> = Vec::new();
-        while idx < args.len() {
-            if let CssValue::Keyword(k) = &args[idx] {
-                match k.as_str() {
-                    "top" | "bottom" | "left" | "right" => {
-                        sides.push(k.as_str());
-                        idx += 1;
-                    }
-                    _ => break,
-                }
-            } else {
-                break;
-            }
-        }
-        if !sides.is_empty() {
-            let angle = match sides.as_slice() {
-                ["top"] => Some(0.0),
-                ["top", "left"] => Some(315.0),
-                ["top", "right"] => Some(45.0),
-                ["bottom"] => Some(180.0),
-                ["bottom", "left"] => Some(225.0),
-                ["bottom", "right"] => Some(135.0),
-                ["left"] => Some(270.0),
-                ["right"] => Some(90.0),
-                _ => None,
-            };
-            return (idx, angle);
-        }
+    let CssValue::Keyword(k) = first else {
+        return (0, None);
+    };
+    if !k.eq_ignore_ascii_case("to") {
+        return (0, None);
     }
 
-    (0, None)
+    // Consume the following side keywords (case-insensitive), up to two.
+    let mut sides: Vec<&'static str> = Vec::new();
+    let mut idx = 1;
+    while idx < args.len() && sides.len() < 2 {
+        let CssValue::Keyword(k) = &args[idx] else {
+            break;
+        };
+        let side = match k.to_ascii_lowercase().as_str() {
+            "top" => "top",
+            "bottom" => "bottom",
+            "left" => "left",
+            "right" => "right",
+            _ => break,
+        };
+        sides.push(side);
+        idx += 1;
+    }
+
+    if sides.is_empty() {
+        return (0, None);
+    }
+    // The angle exists only for the valid side/corner combinations.
+    let angle = match sides.as_slice() {
+        ["top"] => Some(0.0),
+        ["top", "left"] | ["left", "top"] => Some(315.0),
+        ["top", "right"] | ["right", "top"] => Some(45.0),
+        ["bottom"] => Some(180.0),
+        ["bottom", "left"] | ["left", "bottom"] => Some(225.0),
+        ["bottom", "right"] | ["right", "bottom"] => Some(135.0),
+        ["left"] => Some(270.0),
+        ["right"] => Some(90.0),
+        _ => None,
+    };
+    // When two side keywords appear they must be opposite axes (a corner);
+    // unknown / contradictory pairs (e.g. `to top bottom`) are rejected.
+    if angle.is_none() {
+        return (0, None);
+    }
+    (idx, angle)
 }
 
 fn parse_radial_gradient(
@@ -515,83 +526,82 @@ fn parse_radial_gradient(
 
     let mut idx = 0;
 
-    // Consume known radial keywords before color stops
+    // Consume the shape and size keywords (in any order, case-insensitively)
+    // before a possible "at <position>" clause. At most one shape and one size
+    // keyword are valid; duplicates are rejected.
+    let mut shape_seen = false;
+    let mut size_seen = false;
     while idx < args.len() {
-        if let CssValue::Keyword(k) = &args[idx] {
-            match k.as_str() {
-                "circle" => {
-                    shape = RadialShape::Circle;
-                    idx += 1;
-                    continue;
-                }
-                "ellipse" => {
-                    shape = RadialShape::Ellipse;
-                    idx += 1;
-                    continue;
-                }
-                "closest-side" => {
-                    size = RadialSizeKind::ClosestSide;
-                    idx += 1;
-                    continue;
-                }
-                "farthest-side" => {
-                    size = RadialSizeKind::FarthestSide;
-                    idx += 1;
-                    continue;
-                }
-                "closest-corner" => {
-                    size = RadialSizeKind::ClosestCorner;
-                    idx += 1;
-                    continue;
-                }
-                "farthest-corner" => {
-                    size = RadialSizeKind::FarthestCorner;
-                    idx += 1;
-                    continue;
-                }
-                _ => break,
-            }
-        } else {
+        let CssValue::Keyword(k) = &args[idx] else {
             break;
+        };
+        match k.to_ascii_lowercase().as_str() {
+            "circle" => {
+                if shape_seen {
+                    return None;
+                }
+                shape = RadialShape::Circle;
+                shape_seen = true;
+                idx += 1;
+            }
+            "ellipse" => {
+                if shape_seen {
+                    return None;
+                }
+                shape = RadialShape::Ellipse;
+                shape_seen = true;
+                idx += 1;
+            }
+            "closest-side" => {
+                if size_seen {
+                    return None;
+                }
+                size = RadialSizeKind::ClosestSide;
+                size_seen = true;
+                idx += 1;
+            }
+            "farthest-side" => {
+                if size_seen {
+                    return None;
+                }
+                size = RadialSizeKind::FarthestSide;
+                size_seen = true;
+                idx += 1;
+            }
+            "closest-corner" => {
+                if size_seen {
+                    return None;
+                }
+                size = RadialSizeKind::ClosestCorner;
+                size_seen = true;
+                idx += 1;
+            }
+            "farthest-corner" => {
+                if size_seen {
+                    return None;
+                }
+                size = RadialSizeKind::FarthestCorner;
+                size_seen = true;
+                idx += 1;
+            }
+            _ => break,
         }
     }
 
-    // Optional "at <position>" — simplified to "at center" / "at top left" etc.
-    if idx < args.len() && args[idx] == CssValue::Keyword("at".into()) {
-        idx += 1; // skip "at"
-        if idx < args.len()
-            && let CssValue::Keyword(k) = &args[idx]
-        {
-            // Parse position keywords
-            match k.as_str() {
-                "center" => position = (0.5, 0.5),
-                "top" => position = (0.5, 0.0),
-                "bottom" => position = (0.5, 1.0),
-                "left" => position = (0.0, 0.5),
-                "right" => position = (1.0, 0.5),
-                _ => {} // ignore unknown
-            }
-            idx += 1;
-            // Optional second keyword (e.g. "top left")
-            if idx < args.len()
-                && let CssValue::Keyword(k2) = &args[idx]
-            {
-                match (k.as_str(), k2.as_str()) {
-                    ("top", "left") | ("left", "top") => position = (0.0, 0.0),
-                    ("top", "right") | ("right", "top") => position = (1.0, 0.0),
-                    ("bottom", "left") | ("left", "bottom") => position = (0.0, 1.0),
-                    ("bottom", "right") | ("right", "bottom") => position = (1.0, 1.0),
-                    _ => {}
-                }
-                idx += 1;
-            }
+    // Optional "at <position>".
+    if idx < args.len()
+        && let CssValue::Keyword(k) = &args[idx]
+        && k.eq_ignore_ascii_case("at")
+    {
+        let (consumed, parsed) = parse_gradient_position(&args[idx + 1..])?;
+        if consumed == 0 {
+            return None;
         }
+        position = parsed;
+        idx += 1 + consumed;
     }
 
     let stops = parse_color_stops(&args[idx..], text_style, text_flow_style, color_scheme)?;
-    if stops.is_empty() {
-        return None;
-    }
     Some(Gradient {
         kind: GradientKind::Radial {
             shape,
@@ -599,6 +609,74 @@ fn parse_radial_gradient(
             position,
         },
         stops,
+    })
+}
+
+/// Parse a CSS `<position>` (as used by radial/conic `at`) into normalized
+/// `(x, y)` fractions. Handles the single/two keyword and corner forms plus a
+/// bare `<percentage>` value, ignoring keyword case.
+///
+/// Returns `(consumed, (x, y))`; `None` when no valid position is present.
+/// Percentage/length offsets alongside a keyword (e.g. `at left 10px`) are not
+/// representable and yield `None` (the caller rejects the gradient).
+fn parse_gradient_position(args: &[CssValue]) -> Option<(usize, (f32, f32))> {
+    // `(coordinate, is_vertical)` for a side keyword.
+    fn keyword_axis(kw: &str) -> Option<(f32, bool)> {
+        match kw {
+            "left" => Some((0.0, false)),
+            "right" => Some((1.0, false)),
+            "top" => Some((0.0, true)),
+            "bottom" => Some((1.0, true)),
+            _ => None,
+        }
+    }
+    fn percent_fraction(v: &CssValue) -> Option<f32> {
+        match v {
+            CssValue::Length(value, Unit::Percent) => Some(*value / 100.0),
+            _ => None,
+        }
+    }
+
+    let (Some(k0), Some(k1)) = (args.first(), args.get(1)) else {
+        return None;
+    };
+
+    // A bare <length-percentage> → (x, +50%).
+    if let Some(x) = percent_fraction(k0) {
+        return Some((1, (x, 0.5)));
+    }
+
+    let CssValue::Keyword(k0) = k0 else {
+        return None;
+    };
+    let k0 = k0.to_ascii_lowercase();
+
+    // center alone → both axes centered.
+    if k0 == "center" {
+        return Some((1, (0.5, 0.5)));
+    }
+
+    let (v0, is_v0) = keyword_axis(&k0)?;
+
+    // Two keywords forming a corner (one horizontal, one vertical).
+    if let CssValue::Keyword(k1) = k1 {
+        let k1 = k1.to_ascii_lowercase();
+        if let Some((v1, is_v1)) = keyword_axis(&k1)
+            && is_v0 != is_v1
+        {
+            return if is_v0 {
+                Some((2, (v1, v0))) // k0 vertical (y), k1 horizontal (x)
+            } else {
+                Some((2, (v0, v1)))
+            };
+        }
+    }
+
+    // Single side keyword.
+    Some(if is_v0 {
+        (1, (0.5, v0))
+    } else {
+        (1, (v0, 0.5))
     })
 }
 
@@ -622,8 +700,12 @@ fn parse_color_stops(
         // equivalent to two stops at the same color).
         let mut positions: Vec<f32> = Vec::new();
         while positions.len() < 2 && i < args.len() {
-            if let CssValue::Length(_v, Unit::Px) = &args[i] {
-                // Absolute lengths are not resolvable here; treat as auto.
+            // Absolute lengths (px/vw/vh/…) cannot be resolved without the
+            // gradient box; they are dropped here and treated as auto stops.
+            if matches!(
+                &args[i],
+                CssValue::Length(_, Unit::Px | Unit::Em | Unit::Rem | Unit::Vw | Unit::Vh)
+            ) {
                 i += 1;
                 continue;
             }
@@ -651,6 +733,10 @@ fn parse_color_stops(
         }
     }
 
+    // A gradient must define at least two color stops per the CSS spec.
+    if stops.len() < 2 {
+        return None;
+    }
     Some(stops)
 }
 
@@ -660,59 +746,38 @@ fn parse_conic_gradient(
     text_flow_style: &TextFlowStyle,
     color_scheme: ColorScheme,
 ) -> Option<Gradient> {
-    if args.is_empty() {
-        return None;
-    }
-
     let mut angle = 0.0f32;
     let mut position = (0.5f32, 0.5f32);
     let mut idx = 0;
 
     // Optional `from <angle>`
-    if idx + 1 < args.len()
-        && matches!(&args[idx], CssValue::Keyword(k) if k.eq_ignore_ascii_case("from"))
-        && let CssValue::Length(v, Unit::Deg) = &args[idx + 1]
+    if idx < args.len()
+        && let CssValue::Keyword(k) = &args[idx]
+        && k.eq_ignore_ascii_case("from")
     {
-        angle = *v;
-        idx += 2;
-    }
-
-    // Optional `at <position>`
-    if idx + 1 < args.len()
-        && matches!(&args[idx], CssValue::Keyword(k) if k.eq_ignore_ascii_case("at"))
-    {
-        idx += 1;
-        if idx < args.len()
-            && let CssValue::Keyword(k) = &args[idx]
-        {
-            match k.as_str() {
-                "center" => position = (0.5, 0.5),
-                "top" => position = (0.5, 0.0),
-                "bottom" => position = (0.5, 1.0),
-                "left" => position = (0.0, 0.5),
-                "right" => position = (1.0, 0.5),
-                _ => {}
+        match &args.get(idx + 1) {
+            Some(CssValue::Length(v, Unit::Deg)) => {
+                angle = *v;
+                idx += 2;
             }
-            idx += 1;
-            if idx < args.len()
-                && let CssValue::Keyword(k2) = &args[idx]
-            {
-                match (k.as_str(), k2.as_str()) {
-                    ("top", "left") | ("left", "top") => position = (0.0, 0.0),
-                    ("top", "right") | ("right", "top") => position = (1.0, 0.0),
-                    ("bottom", "left") | ("left", "bottom") => position = (0.0, 1.0),
-                    ("bottom", "right") | ("right", "bottom") => position = (1.0, 1.0),
-                    _ => {}
-                }
-                idx += 1;
-            }
+            _ => return None,
         }
     }
 
-    let stops = parse_color_stops(&args[idx..], text_style, text_flow_style, color_scheme)?;
-    if stops.is_empty() {
-        return None;
+    // Optional `at <position>`
+    if idx < args.len()
+        && let CssValue::Keyword(k) = &args[idx]
+        && k.eq_ignore_ascii_case("at")
+    {
+        let (consumed, parsed) = parse_gradient_position(&args[idx + 1..])?;
+        if consumed == 0 {
+            return None;
+        }
+        position = parsed;
+        idx += 1 + consumed;
     }
+
+    let stops = parse_color_stops(&args[idx..], text_style, text_flow_style, color_scheme)?;
     Some(Gradient {
         kind: GradientKind::Conic { angle, position },
         stops,
@@ -727,7 +792,11 @@ fn resolve_gradient_position(value: &CssValue, text_flow_style: &TextFlowStyle) 
         CssValue::Length(v, Unit::Percent) => Some(*v / 100.0),
         CssValue::Length(v, Unit::Deg) => Some(*v / 360.0),
         CssValue::Number(0.0) => Some(0.0),
-        CssValue::Function(fn_name, args) if fn_name == "calc" => {
+        // calc()/min()/max()/clamp() and other math functions reduce to a
+        // Length via the shared resolver, then to a gradient fraction.
+        CssValue::Function(fn_name, args)
+            if matches!(fn_name.as_str(), "calc" | "min" | "max" | "clamp") =>
+        {
             let value = CssValue::Function(fn_name.clone(), args.clone());
             let length =
                 resolve_css_len("gradient", std::slice::from_ref(&value), text_flow_style)?;

@@ -2410,6 +2410,261 @@ fn gradient_current_color_stop_resolves_to_text_color() {
 }
 
 #[test]
+fn gradient_keywords_are_case_insensitive() {
+    let args = vec![
+        CssValue::Keyword("TO".into()),
+        CssValue::Keyword("TOP".into()),
+        CssValue::Keyword("LEFT".into()),
+        CssValue::Keyword("RED".into()),
+        CssValue::Keyword("BLUE".into()),
+    ];
+    let gradient = parse_gradient(
+        "linear-gradient",
+        &args,
+        &TextStyle::default(),
+        &TextFlowStyle::default(),
+        ColorScheme::Light,
+    )
+    .expect("gradient parses");
+    // `to top left` resolves to 315deg regardless of case.
+    assert!(matches!(
+        gradient.kind,
+        GradientKind::Linear { angle: 315.0 }
+    ));
+    assert_eq!(gradient.stops.len(), 2);
+}
+
+#[test]
+fn linear_direction_accepts_corner_in_any_order() {
+    for (args, expected) in [
+        (
+            vec![
+                CssValue::Keyword("to".into()),
+                CssValue::Keyword("left".into()),
+                CssValue::Keyword("top".into()),
+                CssValue::Keyword("red".into()),
+                CssValue::Keyword("blue".into()),
+            ],
+            315.0,
+        ),
+        (
+            vec![
+                CssValue::Keyword("to".into()),
+                CssValue::Keyword("bottom".into()),
+                CssValue::Keyword("right".into()),
+                CssValue::Keyword("red".into()),
+                CssValue::Keyword("blue".into()),
+            ],
+            135.0,
+        ),
+    ] {
+        let gradient = parse_gradient(
+            "linear-gradient",
+            &args,
+            &TextStyle::default(),
+            &TextFlowStyle::default(),
+            ColorScheme::Light,
+        )
+        .expect("gradient parses");
+        assert!(matches!(
+            gradient.kind,
+            GradientKind::Linear { angle }
+                if (angle - expected).abs() < f32::EPSILON
+        ));
+    }
+}
+
+#[test]
+fn linear_direction_rejects_contradictory_sides() {
+    let args = vec![
+        CssValue::Keyword("to".into()),
+        CssValue::Keyword("top".into()),
+        CssValue::Keyword("bottom".into()),
+        CssValue::Keyword("red".into()),
+        CssValue::Keyword("blue".into()),
+    ];
+    // Opposing keywords are not a valid corner; however "top" alone is a valid
+    // side, so the direction prelude consumes "top" and "bottom" is treated as
+    // color-stop-ish. Parsing should fail because "bottom" is not a color.
+    assert!(
+        parse_gradient(
+            "linear-gradient",
+            &args,
+            &TextStyle::default(),
+            &TextFlowStyle::default(),
+            ColorScheme::Light,
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn gradient_rejects_single_color_stop() {
+    // CSS requires at least two color stops.
+    let args = vec![CssValue::Keyword("red".into())];
+    assert!(
+        parse_gradient(
+            "linear-gradient",
+            &args,
+            &TextStyle::default(),
+            &TextFlowStyle::default(),
+            ColorScheme::Light,
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn radial_gradient_parses_shape_size_and_position() {
+    let args = vec![
+        CssValue::Keyword("circle".into()),
+        CssValue::Keyword("closest-side".into()),
+        CssValue::Keyword("at".into()),
+        CssValue::Keyword("center".into()),
+        CssValue::Keyword("red".into()),
+        CssValue::Keyword("blue".into()),
+    ];
+    let gradient = parse_gradient(
+        "radial-gradient",
+        &args,
+        &TextStyle::default(),
+        &TextFlowStyle::default(),
+        ColorScheme::Light,
+    )
+    .expect("radial gradient parses");
+    assert!(matches!(
+        gradient.kind,
+        GradientKind::Radial {
+            shape: RadialShape::Circle,
+            size: RadialSizeKind::ClosestSide,
+            position: (0.5, 0.5)
+        }
+    ));
+}
+
+#[test]
+fn radial_gradient_parses_at_top_left_corner_case_insensitive() {
+    let args = vec![
+        CssValue::Keyword("AT".into()),
+        CssValue::Keyword("TOP".into()),
+        CssValue::Keyword("LEFT".into()),
+        CssValue::Keyword("red".into()),
+        CssValue::Keyword("blue".into()),
+    ];
+    let gradient = parse_gradient(
+        "radial-gradient",
+        &args,
+        &TextStyle::default(),
+        &TextFlowStyle::default(),
+        ColorScheme::Light,
+    )
+    .expect("radial gradient parses");
+    assert!(matches!(
+        gradient.kind,
+        GradientKind::Radial {
+            position: (0.0, 0.0),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn radial_gradient_rejects_duplicate_shape() {
+    let args = vec![
+        CssValue::Keyword("circle".into()),
+        CssValue::Keyword("ellipse".into()),
+        CssValue::Keyword("red".into()),
+        CssValue::Keyword("blue".into()),
+    ];
+    assert!(
+        parse_gradient(
+            "radial-gradient",
+            &args,
+            &TextStyle::default(),
+            &TextFlowStyle::default(),
+            ColorScheme::Light,
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn conic_gradient_parses_from_and_at_angle() {
+    let args = vec![
+        CssValue::Keyword("from".into()),
+        CssValue::Length(90.0, Unit::Deg),
+        CssValue::Keyword("at".into()),
+        CssValue::Keyword("bottom".into()),
+        CssValue::Keyword("right".into()),
+        CssValue::Keyword("red".into()),
+        CssValue::Keyword("blue".into()),
+    ];
+    let gradient = parse_gradient(
+        "conic-gradient",
+        &args,
+        &TextStyle::default(),
+        &TextFlowStyle::default(),
+        ColorScheme::Light,
+    )
+    .expect("conic gradient parses");
+    assert!(matches!(
+        gradient.kind,
+        GradientKind::Conic {
+            angle: 90.0,
+            position: (1.0, 1.0)
+        }
+    ));
+}
+
+#[test]
+fn gradient_stop_position_supports_min_max_clamp() {
+    let min = CssValue::Function(
+        "min".into(),
+        vec![
+            vec![CssValue::Length(30.0, Unit::Percent)],
+            vec![CssValue::Length(50.0, Unit::Percent)],
+        ],
+    );
+    let max = CssValue::Function(
+        "max".into(),
+        vec![
+            vec![CssValue::Length(10.0, Unit::Percent)],
+            vec![CssValue::Length(60.0, Unit::Percent)],
+        ],
+    );
+    let clamp = CssValue::Function(
+        "clamp".into(),
+        vec![
+            vec![CssValue::Length(20.0, Unit::Percent)],
+            vec![CssValue::Length(40.0, Unit::Percent)],
+            vec![CssValue::Length(70.0, Unit::Percent)],
+        ],
+    );
+    let args = vec![
+        CssValue::Keyword("red".into()),
+        min,
+        CssValue::Keyword("green".into()),
+        max,
+        CssValue::Keyword("blue".into()),
+        clamp,
+        CssValue::Keyword("black".into()),
+        CssValue::Length(100.0, Unit::Percent),
+    ];
+    let gradient = parse_gradient(
+        "linear-gradient",
+        &args,
+        &TextStyle::default(),
+        &TextFlowStyle::default(),
+        ColorScheme::Light,
+    )
+    .expect("gradient parses");
+    assert_eq!(gradient.stops[0].position, Some(0.3));
+    assert_eq!(gradient.stops[1].position, Some(0.6));
+    assert_eq!(gradient.stops[2].position, Some(0.4));
+    assert_eq!(gradient.stops[3].position, Some(1.0));
+}
+
+#[test]
 fn normalize_whitespace_collapses_css_whitespace_only() {
     let normal = |s| normalize_whitespace(s, WhiteSpace::Normal);
     assert_eq!(normal("a  b\tc\nd"), "a b c d");
