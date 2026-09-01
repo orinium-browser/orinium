@@ -235,8 +235,23 @@ impl<'a> Tokenizer<'a> {
     fn state_data(&mut self, c: char) {
         match c {
             '<' => {
-                self.commit_token();
-                self.state = TokenizerState::TagOpen;
+                // In raw-text states (<script>, <style>) a `<` only opens a tag
+                // when it is `</` (the closing tag); any other `<` is literal
+                // text (e.g. the `<` inside a JS string like 'di<v').
+                let raw_text = matches!(
+                    self.state,
+                    TokenizerState::ScriptData | TokenizerState::StyleData
+                );
+                if raw_text && !self.input[self.pos..].starts_with('/') {
+                    self.buffer.push('<');
+                    match &mut self.current_token {
+                        Some(Token::Text(text)) => text.push('<'),
+                        _ => self.current_token = Some(Token::Text("<".to_string())),
+                    }
+                } else {
+                    self.commit_token();
+                    self.state = TokenizerState::TagOpen;
+                }
             }
             // Handle escape entities only in Data. Not in ScriptData, and StyleData states.
             '&' if self.state == TokenizerState::Data => {
@@ -642,6 +657,28 @@ mod tests {
         let input = "Hello, world!";
         let tokens = collect_tokens(input);
         assert_eq!(tokens, vec![Token::Text("Hello, world!".to_string())]);
+    }
+
+    #[test]
+    fn test_script_data_less_than_is_literal() {
+        // A lone `<` inside a <script> body (e.g. `'di<v'` in a JS string) must
+        // stay as text; only `</` opens a tag.
+        let input = r#"<script>test('di<v');</script>"#;
+        let tokens = collect_tokens(input);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::StartTag {
+                    name: "script".to_string(),
+                    attributes: vec![],
+                    self_closing: false
+                },
+                Token::Text("test('di<v');".to_string()),
+                Token::EndTag {
+                    name: "script".to_string()
+                }
+            ]
+        );
     }
 
     #[test]
