@@ -368,7 +368,7 @@ pub fn resolve_css_color(
     css_color: &CssValue,
     color_scheme: ColorScheme,
 ) -> Option<Color> {
-    fn keyword_color_to_color(name: &str, keyword: &str) -> Option<Color> {
+    fn keyword_color_to_color(_name: &str, keyword: &str) -> Option<Color> {
         // NOTE:
         // Keyword matching is case-insensitive according to CSS specs.
         // Keep this list limited to commonly used CSS Color Level 3 keywords.
@@ -514,7 +514,7 @@ pub fn resolve_css_color(
             "none" => Some(Color(0, 0, 0, 0)),
 
             _ => {
-                // log::error!(target: "Layouter", "Unknown CSS color keyword `{}` for `{}`", keyword, name);
+                // log::error!(target: "Layouter", "Unknown CSS color keyword `{}` for `{}`", keyword, _name);
                 None
             }
         }
