@@ -103,13 +103,12 @@ fn resolve_length(
         Unit::Vw => Some(Length::Vw(v)),
         Unit::Vh => Some(Length::Vh(v)),
 
-        // TODO: Resolve physical units using the device DPI.
-        Unit::Cm | Unit::Mm | Unit::In | Unit::Pt | Unit::Pc => {
-            log::warn!(
-                target: "Layouter",
-                "TODO: Resolve physical length unit: {}", unit.as_str());
-            None
-        }
+        // CSS 2.2 §6.4: 1px = 1/96in, so physical units map to fixed pixel values.
+        Unit::In => Some(Length::Px(v * 96.0)),
+        Unit::Cm => Some(Length::Px(v * 96.0 / 2.54)),
+        Unit::Mm => Some(Length::Px(v * 96.0 / 25.4)),
+        Unit::Pt => Some(Length::Px(v * 96.0 / 72.0)),
+        Unit::Pc => Some(Length::Px(v * 96.0 / 6.0)),
 
         // TODO: Resolve against the viewport dimensions.
         Unit::Vmin | Unit::Vmax => {
