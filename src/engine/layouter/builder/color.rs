@@ -514,7 +514,7 @@ pub fn resolve_css_color(
             "none" => Some(Color(0, 0, 0, 0)),
 
             _ => {
-                log::error!(target: "Layouter", "Unknown CSS color keyword `{}` for `{}`", keyword, name);
+                // log::error!(target: "Layouter", "Unknown CSS color keyword `{}` for `{}`", keyword, name);
                 None
             }
         }
