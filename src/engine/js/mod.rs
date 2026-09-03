@@ -63,6 +63,15 @@ pub struct JsFetchRequest {
     pub(crate) body: Vec<u8>,
 }
 
+/// An `<iframe src="...">` whose content has to be fetched and parsed.
+#[derive(Debug)]
+pub struct JsIframeFetchRequest {
+    /// The DOM id of the `<iframe>` element requesting the load.
+    pub dom_id: u64,
+    /// The absolute (resolved) URL of the iframe source.
+    pub url: String,
+}
+
 /// A script element inserted by JavaScript after the initial HTML parse.
 #[derive(Debug)]
 pub(crate) struct JsDynamicScriptRequest {
@@ -169,6 +178,10 @@ pub struct JsHost {
     pub(crate) detached_nodes: HashMap<u64, NodeRef<HtmlNodeType>>,
     pub(crate) timers: Vec<JsTimer>,
     pub(crate) fetch_requests: Vec<JsFetchRequest>,
+    pub(crate) iframe_fetch_requests: Vec<JsIframeFetchRequest>,
+    /// DOM ids of iframes whose content is already queued for loading, to avoid
+    /// re-queuing a fetch on every `contentDocument` access.
+    pub(crate) pending_iframe_fetches: std::collections::HashSet<u64>,
     pub(crate) dynamic_script_requests: Vec<JsDynamicScriptRequest>,
     pub(crate) queued_dynamic_scripts: HashSet<u64>,
     pub(crate) dynamic_style_requests: Vec<JsDynamicStyleRequest>,
@@ -252,6 +265,8 @@ impl JsRuntime {
             detached_nodes: HashMap::new(),
             timers: Vec::new(),
             fetch_requests: Vec::new(),
+            iframe_fetch_requests: Vec::new(),
+            pending_iframe_fetches: std::collections::HashSet::new(),
             dynamic_script_requests: Vec::new(),
             queued_dynamic_scripts: HashSet::new(),
             dynamic_style_requests: Vec::new(),
@@ -609,6 +624,35 @@ impl JsRuntime {
             std::mem::take(&mut host.fetch_requests)
         })
         .unwrap_or_default()
+    }
+
+    /// Takes iframe-loading requests queued by JavaScript since the previous
+    /// call. Each must be resolved via `resolve_iframe_fetch` once fetched.
+    pub fn take_iframe_fetch_requests(&mut self) -> Vec<JsIframeFetchRequest> {
+        with_host_mut(self.engine.vm(), |host| {
+            std::mem::take(&mut host.iframe_fetch_requests)
+        })
+        .unwrap_or_default()
+    }
+
+    /// Parses fetched iframe HTML, installs it as the iframe's `contentDocument`
+    /// and fires the iframe's `load` event.
+    pub fn resolve_iframe_fetch(&mut self, dom_id: u64, html: String) {
+        let installed = with_host_mut(self.engine.vm(), |host| {
+            host.pending_iframe_fetches.remove(&dom_id);
+            web_apis::dom::document::install_parsed_iframe_document(host, dom_id, &html)
+        });
+        if installed.unwrap_or(false) {
+            self.dispatch_element_event(dom_id, "load");
+        }
+    }
+
+    /// Marks an iframe load as failed so later `contentDocument` accesses do not
+    /// keep re-queuing a fetch.
+    pub fn reject_iframe_fetch(&mut self, dom_id: u64) {
+        with_host_mut(self.engine.vm(), |host| {
+            host.pending_iframe_fetches.remove(&dom_id);
+        });
     }
 
     pub(crate) fn take_dynamic_script_requests(&mut self) -> Vec<JsDynamicScriptRequest> {
