@@ -135,6 +135,10 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
             JSValue::from_native_function(create_processing_instruction),
         );
         document.set(
+            "createEvent".to_string(),
+            JSValue::from_native_function(super::events::make_create_event),
+        );
+        document.set(
             "addEventListener".to_string(),
             JSValue::from_native_function(add_document_event_listener),
         );
@@ -1169,6 +1173,10 @@ fn build_iframe_document_object(host_dom_id: u64, _tree: &Rc<DomTree>) -> Rc<Ref
     document.set(
         "createDocumentFragment".to_string(),
         JSValue::from_native_function(create_document_fragment),
+    );
+    document.set(
+        "createEvent".to_string(),
+        JSValue::from_native_function(super::events::make_create_event),
     );
     document.set(
         "createRange".to_string(),
