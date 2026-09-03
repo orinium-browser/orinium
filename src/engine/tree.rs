@@ -55,11 +55,13 @@ impl<T> TreeNode<T> {
 
     /// Removes `child` from `parent`, returning the detached node when found.
     pub fn remove_child(parent: &NodeRef<T>, child: &NodeRef<T>) -> Option<NodeRef<T>> {
-        let position = parent
-            .borrow()
-            .children
-            .iter()
-            .position(|candidate| Rc::ptr_eq(candidate, child))?;
+        let position = {
+            let borrowed = parent.borrow();
+            borrowed
+                .children
+                .iter()
+                .position(|candidate| Rc::ptr_eq(candidate, child))
+        }?;
         let removed = parent.borrow_mut().children.remove(position);
         removed.borrow_mut().parent = None;
         Some(removed)
@@ -118,7 +120,7 @@ impl<T> TreeNode<T> {
         true
     }
 
-    fn is_inclusive_ancestor(ancestor: &NodeRef<T>, node: &NodeRef<T>) -> bool {
+    pub fn is_inclusive_ancestor(ancestor: &NodeRef<T>, node: &NodeRef<T>) -> bool {
         let mut current = Some(Rc::clone(node));
         while let Some(candidate) = current {
             if Rc::ptr_eq(ancestor, &candidate) {
