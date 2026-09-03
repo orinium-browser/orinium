@@ -13,7 +13,7 @@ use crate::engine::js::web_apis::dom::dom_exception::throw_dom_exception;
 use crate::engine::js::web_apis::dom::events::event_flag;
 use crate::engine::js::{
     JsDynamicImageRequest, JsDynamicScriptRequest, JsDynamicScriptSource, JsDynamicStyleRequest,
-    JsLayoutMetrics,
+    JsIframeFetchRequest, JsLayoutMetrics,
 };
 use crate::engine::tree::{NodeRef, TreeNode};
 use pixi_byte::value::JSArray;
@@ -1076,6 +1076,42 @@ fn queue_dynamic_image(vm: &mut VM, value: &JSValue) {
     });
 }
 
+/// Queues a network fetch for an `<iframe>`'s `src` whenever the attribute is
+/// set, so the iframe content (and its `load` event) becomes available without
+/// first touching `contentDocument`.
+fn queue_iframe_source_if_needed(vm: &mut VM, value: &JSValue) {
+    let Some(node_id) = node_dom_id(value) else {
+        return;
+    };
+    let Some(node) = dom_node(vm, value) else {
+        return;
+    };
+    let source = {
+        let node = node.borrow();
+        if node.value.tag_name() != Some("iframe") {
+            return;
+        }
+        let Some(source) = node.value.get_attr("src").map(str::trim) else {
+            return;
+        };
+        if source.is_empty() {
+            return;
+        }
+        source.to_string()
+    };
+    let resolved = with_host(vm, |host| resolved_iframe_url(&host.document_url, &source))
+        .flatten()
+        .unwrap_or(source);
+    let _ = with_host_mut(vm, |host| {
+        if host.pending_iframe_fetches.insert(node_id) {
+            host.iframe_fetch_requests.push(JsIframeFetchRequest {
+                dom_id: node_id,
+                url: resolved,
+            });
+        }
+    });
+}
+
 pub(crate) fn remove_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(parent) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
         return Ok(JSValue::null());
@@ -1683,6 +1719,27 @@ fn get_iframe_content_document(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVa
         .get_attr("src")
         .unwrap_or("")
         .to_string();
+    // Request the real content when a non-empty src is present. The relative
+    // URL is resolved against the document URL, and a fetch is queued for the
+    // network layer to drain. Until it resolves, an empty placeholder document
+    // is returned so accessors never block.
+    if !src.is_empty()
+        && !with_host(vm, |host| host.pending_iframe_fetches.contains(&dom_id)).unwrap_or(false)
+    {
+        let resolved = with_host(vm, |host| {
+            resolved_iframe_url(&host.document_url, &src)
+        })
+        .flatten();
+        if let Some(resolved) = resolved {
+            with_host_mut(vm, |host| {
+                host.pending_iframe_fetches.insert(dom_id);
+                host.iframe_fetch_requests.push(JsIframeFetchRequest {
+                    dom_id,
+                    url: resolved,
+                });
+            });
+        }
+    }
     // Non-text iframe sources (e.g. png) legitimately have a document whose
     // <body> has no <p>; empty.html has a body with a single <p> as the fixture.
     let body_has_p = src.ends_with(".html");
@@ -1692,6 +1749,13 @@ fn get_iframe_content_document(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVa
         host.iframe_documents.insert(dom_id, iframe_doc);
     });
     Ok(JSValue::from_object(document))
+}
+
+/// Resolves an iframe `src` against the current document URL, producing an
+/// absolute URL. Falls back to the raw source when it cannot be resolved.
+fn resolved_iframe_url(document_url: &str, src: &str) -> Option<String> {
+    let base = url::Url::parse(document_url).ok()?;
+    base.join(src).ok().map(|u| u.to_string())
 }
 
 fn get_namespace_uri(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -2842,6 +2906,7 @@ fn set_reflected_string_property(vm: &mut VM, args: &[JSValue], name: &str) -> J
         && let Some(element) = args.first()
     {
         queue_dynamic_image(vm, element);
+        queue_iframe_source_if_needed(vm, element);
     }
     mark_dom_dirty(vm);
     Ok(JSValue::undefined())
@@ -3715,6 +3780,7 @@ fn set_attribute(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         && let Some(element) = args.first()
     {
         queue_dynamic_image(vm, element);
+        queue_iframe_source_if_needed(vm, element);
     }
     mark_dom_dirty(vm);
     Ok(JSValue::undefined())
