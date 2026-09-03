@@ -248,6 +248,11 @@ th {
     text-align: center;
 }
 
+/* --- Iframe --- */
+iframe {
+    border: 2px inset;
+}
+
 /* --- Form elements --- */
 input,
 textarea,
