@@ -38,6 +38,11 @@ pub enum HtmlNodeType {
         public_id: Option<String>,
         system_id: Option<String>,
     },
+    /// Processing instruction (e.g. `<?xml-stylesheet ...?>`).
+    ProcessingInstruction {
+        target: String,
+        data: String,
+    },
     InvalidNode(Token, String), // 不正なトークン用
 }
 
