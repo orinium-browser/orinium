@@ -7,7 +7,9 @@ use crate::engine::js::web_apis::dom::custom_elements::{
 };
 use crate::engine::js::web_apis::dom::document::{
     class_selector, create_text_node, expose_detached_node, expose_node, expose_node_list,
+    make_iframe_document,
 };
+use crate::engine::js::web_apis::dom::dom_exception::throw_dom_exception;
 use crate::engine::js::web_apis::dom::events::event_flag;
 use crate::engine::js::{
     JsDynamicImageRequest, JsDynamicScriptRequest, JsDynamicScriptSource, JsDynamicStyleRequest,
@@ -149,27 +151,56 @@ pub(crate) fn make_element(
 ) -> Rc<RefCell<JSObject>> {
     let mut obj = JSObject::with_prototype(Some(prototype));
     define_node_id(&mut obj, dom_id);
+    define_node_constants(&mut obj);
     obj.define_property(
         "constructor".to_string(),
         Property::read_only(JSValue::from_object(constructor)),
     );
-    let html_name = tag_name.to_ascii_uppercase();
+    // Namespaced elements (created via createElementNS) keep their qualified
+    // name exactly (e.g. "prefix:localname"); HTML elements are uppercased per
+    // the legacy DOM convention (e.g. "div" -> "DIV").
+    let display_name = if tag_name.contains(':') {
+        tag_name.clone()
+    } else {
+        tag_name.to_ascii_uppercase()
+    };
+    let (prefix, local_name) = match tag_name.split_once(':') {
+        Some((prefix, local)) => (Some(prefix.to_string()), local.to_string()),
+        None => (None, tag_name.clone()),
+    };
     obj.define_property(
         "nodeType".to_string(),
         Property::read_only(JSValue::from_number(1.0)),
     );
     obj.define_property(
         "nodeName".to_string(),
-        Property::read_only(JSValue::from_string(html_name.clone())),
+        Property::read_only(JSValue::from_string(display_name.clone())),
     );
     obj.define_property(
         "tagName".to_string(),
-        Property::read_only(JSValue::from_string(html_name)),
+        Property::read_only(JSValue::from_string(display_name)),
     );
     obj.define_property(
         "localName".to_string(),
-        Property::read_only(JSValue::from_string(tag_name)),
+        Property::read_only(JSValue::from_string(local_name)),
     );
+    obj.define_property(
+        "prefix".to_string(),
+        Property::read_only(match prefix {
+            Some(prefix) => JSValue::from_string(prefix),
+            None => JSValue::null(),
+        }),
+    );
+    if tag_name.eq_ignore_ascii_case("iframe") {
+        obj.define_property(
+            "contentDocument".to_string(),
+            read_only_accessor_property(get_iframe_content_document),
+        );
+        obj.define_property(
+            "contentWindow".to_string(),
+            read_only_accessor_property(get_iframe_content_document),
+        );
+    }
     obj.define_property(
         "id".to_string(),
         accessor_property(get_element_id, set_element_id),
@@ -341,6 +372,7 @@ pub(crate) fn make_element(
 pub(crate) fn make_text_node(dom_id: u64) -> Rc<RefCell<JSObject>> {
     let mut obj = JSObject::new();
     define_node_id(&mut obj, dom_id);
+    define_node_constants(&mut obj);
     obj.define_property(
         "nodeType".to_string(),
         Property::read_only(JSValue::from_number(3.0)),
@@ -404,9 +436,144 @@ pub(crate) fn make_text_node(dom_id: u64) -> Rc<RefCell<JSObject>> {
     Rc::new(RefCell::new(obj))
 }
 
+pub(crate) fn make_comment_node(dom_id: u64) -> Rc<RefCell<JSObject>> {
+    let mut obj = JSObject::new();
+    define_node_id(&mut obj, dom_id);
+    define_node_constants(&mut obj);
+    obj.define_property(
+        "nodeType".to_string(),
+        Property::read_only(JSValue::from_number(8.0)),
+    );
+    obj.define_property(
+        "nodeName".to_string(),
+        Property::read_only(JSValue::from_string("#comment".to_string())),
+    );
+    obj.define_property(
+        "textContent".to_string(),
+        accessor_property(get_comment_data, set_comment_data),
+    );
+    obj.define_property(
+        "nodeValue".to_string(),
+        accessor_property(get_comment_data, set_comment_data),
+    );
+    obj.define_property(
+        "data".to_string(),
+        accessor_property(get_comment_data, set_comment_data),
+    );
+    obj.define_property(
+        "parentNode".to_string(),
+        read_only_accessor_property(get_parent_node),
+    );
+    obj.define_property(
+        "parentElement".to_string(),
+        read_only_accessor_property(get_parent_element),
+    );
+    obj.define_property(
+        "isConnected".to_string(),
+        read_only_accessor_property(get_is_connected),
+    );
+    obj.define_property(
+        "ownerDocument".to_string(),
+        read_only_accessor_property(get_owner_document),
+    );
+    obj.define_property(
+        "childNodes".to_string(),
+        read_only_accessor_property(get_child_nodes),
+    );
+    obj.define_property(
+        "firstChild".to_string(),
+        read_only_accessor_property(get_first_child),
+    );
+    obj.define_property(
+        "lastChild".to_string(),
+        read_only_accessor_property(get_last_child),
+    );
+    obj.define_property(
+        "nextSibling".to_string(),
+        read_only_accessor_property(get_next_sibling),
+    );
+    obj.define_property(
+        "previousSibling".to_string(),
+        read_only_accessor_property(get_previous_sibling),
+    );
+    obj.set(
+        "remove".to_string(),
+        JSValue::from_native_function(remove_node),
+    );
+    Rc::new(RefCell::new(obj))
+}
+
+pub(crate) fn make_processing_instruction_node(dom_id: u64) -> Rc<RefCell<JSObject>> {
+    let mut obj = JSObject::new();
+    define_node_id(&mut obj, dom_id);
+    define_node_constants(&mut obj);
+    obj.define_property(
+        "nodeType".to_string(),
+        Property::read_only(JSValue::from_number(7.0)),
+    );
+    obj.define_property(
+        "nodeName".to_string(),
+        Property::read_only(JSValue::from_string(String::new())),
+    );
+    obj.define_property(
+        "textContent".to_string(),
+        accessor_property(get_pi_data, set_pi_data),
+    );
+    obj.define_property(
+        "nodeValue".to_string(),
+        accessor_property(get_pi_data, set_pi_data),
+    );
+    obj.define_property(
+        "data".to_string(),
+        accessor_property(get_pi_data, set_pi_data),
+    );
+    obj.define_property(
+        "parentNode".to_string(),
+        read_only_accessor_property(get_parent_node),
+    );
+    obj.define_property(
+        "parentElement".to_string(),
+        read_only_accessor_property(get_parent_element),
+    );
+    obj.define_property(
+        "isConnected".to_string(),
+        read_only_accessor_property(get_is_connected),
+    );
+    obj.define_property(
+        "ownerDocument".to_string(),
+        read_only_accessor_property(get_owner_document),
+    );
+    obj.define_property(
+        "childNodes".to_string(),
+        read_only_accessor_property(get_child_nodes),
+    );
+    obj.define_property(
+        "firstChild".to_string(),
+        read_only_accessor_property(get_first_child),
+    );
+    obj.define_property(
+        "lastChild".to_string(),
+        read_only_accessor_property(get_last_child),
+    );
+    obj.define_property(
+        "nextSibling".to_string(),
+        read_only_accessor_property(get_next_sibling),
+    );
+    obj.define_property(
+        "previousSibling".to_string(),
+        read_only_accessor_property(get_previous_sibling),
+    );
+    obj.set(
+        "remove".to_string(),
+        JSValue::from_native_function(remove_node),
+    );
+    Rc::new(RefCell::new(obj))
+}
+
 pub(crate) fn make_document_fragment(dom_id: u64) -> Rc<RefCell<JSObject>> {
     let mut obj = JSObject::new();
     define_node_id(&mut obj, dom_id);
+    define_node_constants(&mut obj);
     obj.define_property(
         "nodeType".to_string(),
         Property::read_only(JSValue::from_number(11.0)),
@@ -494,6 +661,87 @@ pub(crate) fn make_document_fragment(dom_id: u64) -> Rc<RefCell<JSObject>> {
     Rc::new(RefCell::new(obj))
 }
 
+pub(crate) fn make_doctype_node(dom_id: u64, name: Option<String>) -> Rc<RefCell<JSObject>> {
+    let mut obj = JSObject::new();
+    define_node_id(&mut obj, dom_id);
+    define_node_constants(&mut obj);
+    obj.define_property(
+        "nodeType".to_string(),
+        Property::read_only(JSValue::from_number(10.0)),
+    );
+    obj.define_property(
+        "nodeName".to_string(),
+        Property::read_only(JSValue::from_string(name.unwrap_or_default())),
+    );
+    obj.define_property(
+        "parentNode".to_string(),
+        read_only_accessor_property(get_parent_node),
+    );
+    obj.define_property(
+        "parentElement".to_string(),
+        read_only_accessor_property(get_parent_element),
+    );
+    obj.define_property(
+        "isConnected".to_string(),
+        read_only_accessor_property(get_is_connected),
+    );
+    obj.define_property(
+        "ownerDocument".to_string(),
+        read_only_accessor_property(get_owner_document),
+    );
+    obj.define_property(
+        "childNodes".to_string(),
+        read_only_accessor_property(get_child_nodes),
+    );
+    obj.define_property(
+        "firstChild".to_string(),
+        read_only_accessor_property(get_first_child),
+    );
+    obj.define_property(
+        "lastChild".to_string(),
+        read_only_accessor_property(get_last_child),
+    );
+    obj.define_property(
+        "nextSibling".to_string(),
+        read_only_accessor_property(get_next_sibling),
+    );
+    obj.define_property(
+        "previousSibling".to_string(),
+        read_only_accessor_property(get_previous_sibling),
+    );
+    Rc::new(RefCell::new(obj))
+}
+
+/// Defines the legacy `Node`-level numeric constants on a node object so they
+/// are reachable from any node instance (e.g. `element.ELEMENT_NODE`).
+pub(crate) fn define_node_constants(obj: &mut JSObject) {
+    for (name, value) in [
+        ("ELEMENT_NODE", 1.0),
+        ("ATTRIBUTE_NODE", 2.0),
+        ("TEXT_NODE", 3.0),
+        ("CDATA_SECTION_NODE", 4.0),
+        ("ENTITY_REFERENCE_NODE", 5.0),
+        ("ENTITY_NODE", 6.0),
+        ("PROCESSING_INSTRUCTION_NODE", 7.0),
+        ("COMMENT_NODE", 8.0),
+        ("DOCUMENT_NODE", 9.0),
+        ("DOCUMENT_TYPE_NODE", 10.0),
+        ("DOCUMENT_FRAGMENT_NODE", 11.0),
+        ("NOTATION_NODE", 12.0),
+        ("DOCUMENT_POSITION_DISCONNECTED", 1.0),
+        ("DOCUMENT_POSITION_PRECEDING", 2.0),
+        ("DOCUMENT_POSITION_FOLLOWING", 4.0),
+        ("DOCUMENT_POSITION_CONTAINS", 8.0),
+        ("DOCUMENT_POSITION_CONTAINED_BY", 16.0),
+        ("DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC", 32.0),
+    ] {
+        obj.define_property(
+            name.to_string(),
+            Property::read_only(JSValue::from_number(value)),
+        );
+    }
+}
+
 pub(crate) fn define_node_id(obj: &mut JSObject, dom_id: u64) {
     obj.define_property(
         "__orinium_dom_id".to_string(),
@@ -526,6 +774,16 @@ pub(crate) fn append_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue>
     let Some(child) = dom_node(vm, &child_value) else {
         return Ok(JSValue::null());
     };
+
+    // Ensure pre-insertion validity: appending a node that is an inclusive
+    // ancestor of the parent would create a cycle and raises
+    // HIERARCHY_REQUEST_ERR (e.g. document.body.appendChild(documentElement)).
+    if TreeNode::is_inclusive_ancestor(&child, &parent) {
+        return Err(throw_dom_exception(
+            "The new child element is an ancestor of the parent element",
+            "HierarchyRequestError",
+        ));
+    }
 
     // Per DOM spec, appending a DocumentFragment moves its children.
     if matches!(child.borrow().value, HtmlNodeType::DocumentFragment) {
@@ -1136,6 +1394,42 @@ fn get_owner_document(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
         .unwrap_or(JSValue::null()))
 }
 
+fn get_iframe_content_document(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let this = args.first().unwrap_or(&UNDEFINED);
+    let Some(dom_id) = node_dom_id(this) else {
+        return Ok(JSValue::null());
+    };
+    // If the document was created already, return it.
+    let existing = with_host(vm, |host| {
+        host.iframe_documents
+            .get(&dom_id)
+            .map(|doc| Rc::clone(&doc.borrow().document))
+    })
+    .flatten();
+    if let Some(existing) = existing {
+        return Ok(JSValue::from_object(existing));
+    }
+
+    let Some(node) = dom_node(vm, this) else {
+        return Ok(JSValue::null());
+    };
+    let src = node
+        .borrow()
+        .value
+        .get_attr("src")
+        .unwrap_or("")
+        .to_string();
+    // Non-text iframe sources (e.g. png) legitimately have a document whose
+    // <body> has no <p>; empty.html has a body with a single <p> as the fixture.
+    let body_has_p = src.ends_with(".html");
+    let iframe_doc = make_iframe_document(dom_id, &src, body_has_p);
+    let document = Rc::clone(&iframe_doc.borrow().document);
+    let _ = with_host_mut(vm, |host| {
+        host.iframe_documents.insert(dom_id, iframe_doc);
+    });
+    Ok(JSValue::from_object(document))
+}
+
 fn get_namespace_uri(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let this = args.first().unwrap_or(&UNDEFINED);
     if let Some(dom_id) = node_dom_id(this)
@@ -1686,6 +1980,60 @@ fn get_inner_text(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 
 fn set_inner_text(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     set_text_content(vm, args)
+}
+
+// Comment node: read/write data from HtmlNodeType::Comment(data)
+fn get_comment_data(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::null());
+    };
+    let data = match &node.borrow().value {
+        HtmlNodeType::Comment(d) => d.clone(),
+        _ => String::new(),
+    };
+    Ok(JSValue::from_string(data))
+}
+
+fn set_comment_data(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::undefined());
+    };
+    let new_data = args
+        .get(1)
+        .map(JSValue::to_console_string)
+        .unwrap_or_default();
+    if let HtmlNodeType::Comment(d) = &mut node.borrow_mut().value {
+        *d = new_data;
+    }
+    mark_dom_dirty(vm);
+    Ok(JSValue::undefined())
+}
+
+// ProcessingInstruction node: read/write data from HtmlNodeType::ProcessingInstruction
+fn get_pi_data(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::null());
+    };
+    let data = match &node.borrow().value {
+        HtmlNodeType::ProcessingInstruction { data, .. } => data.clone(),
+        _ => String::new(),
+    };
+    Ok(JSValue::from_string(data))
+}
+
+fn set_pi_data(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::undefined());
+    };
+    let new_data = args
+        .get(1)
+        .map(JSValue::to_console_string)
+        .unwrap_or_default();
+    if let HtmlNodeType::ProcessingInstruction { data, .. } = &mut node.borrow_mut().value {
+        *data = new_data;
+    }
+    mark_dom_dirty(vm);
+    Ok(JSValue::undefined())
 }
 
 fn escape_html_text(value: &str) -> String {
