@@ -155,7 +155,10 @@ pub struct JsHost {
     /// iframe element's DOM id. Each iframe gets its own DOM tree.
     pub(crate) iframe_documents: HashMap<u64, Rc<RefCell<IframeDocument>>>,
     pub(crate) document_event_listeners: HashMap<String, Vec<JSValue>>,
-    pub(crate) element_event_listeners: HashMap<u64, HashMap<String, Vec<JSValue>>>,
+    /// Element event listeners keyed by dom id and event type. Each entry is a
+    /// `(callback, capture)` pair; the capture phase flag distinguishes
+    /// capturing listeners from bubbling ones.
+    pub(crate) element_event_listeners: HashMap<u64, HashMap<String, Vec<(JSValue, bool)>>>,
     /// Inline event-handler content attributes mapped onto the Window per the
     /// HTML spec (e.g. `<body onload="...">` registers a `load` event handler
     /// on the Window). Keyed by event type; populated once when the DOM is
@@ -660,7 +663,7 @@ impl JsRuntime {
                 break;
             }
             if let Err(error) = self.engine.call(
-                listener,
+                listener.0,
                 JSValue::from_object(Rc::clone(&target)),
                 vec![JSValue::from_object(Rc::clone(&event))],
             ) {
@@ -846,7 +849,7 @@ impl JsRuntime {
             if !event_flag(&event, "__orinium_immediate_propagation_stopped") {
                 for listener in listeners {
                     if let Err(err) = self.engine.call(
-                        listener,
+                        listener.0,
                         JSValue::from_object(Rc::clone(&current_target)),
                         vec![JSValue::from_object(Rc::clone(&event))],
                     ) {
