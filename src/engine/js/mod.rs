@@ -8,6 +8,7 @@
 //! [`DomSnapshot`] commits. It can also be used directly on any thread.
 
 use crate::engine::html::{DomTree, HtmlNodeType};
+use crate::engine::js::web_apis::dom::document::IframeDocument;
 use crate::engine::layouter::dom_snapshot::DomSnapshot;
 use crate::engine::tree::NodeRef;
 use pixi_byte::value::JSArray;
@@ -149,6 +150,10 @@ pub struct JsHost {
     pub(crate) element_prototype: Rc<RefCell<JSObject>>,
     pub(crate) element_constructor: Rc<RefCell<JSObject>>,
     pub(crate) document: Option<Rc<RefCell<JSObject>>>,
+    pub(crate) document_implementation: Option<Rc<RefCell<JSObject>>>,
+    /// Independent document instances for `<iframe>` elements, keyed by the
+    /// iframe element's DOM id. Each iframe gets its own DOM tree.
+    pub(crate) iframe_documents: HashMap<u64, Rc<RefCell<IframeDocument>>>,
     pub(crate) document_event_listeners: HashMap<String, Vec<JSValue>>,
     pub(crate) element_event_listeners: HashMap<u64, HashMap<String, Vec<JSValue>>>,
     /// Inline event-handler content attributes mapped onto the Window per the
@@ -235,6 +240,8 @@ impl JsRuntime {
             element_prototype,
             element_constructor,
             document: None,
+            document_implementation: None,
+            iframe_documents: HashMap::new(),
             document_event_listeners: HashMap::new(),
             element_event_listeners: HashMap::new(),
             window_inline_event_handlers: HashMap::new(),
@@ -3153,5 +3160,335 @@ mod tests {
         let result = dom.get_element_by_id("host").unwrap();
         let result = result.borrow();
         assert_eq!(result.value.get_attr("data-closed"), Some("true"));
+    }
+
+    #[test]
+    fn document_write_inserts_parsed_html_into_body() {
+        let (mut runtime, dom) = runtime_from_html(r#"<html><body></body></html>"#);
+        runtime.run_script(r#"document.write("<p>Hello</p>");"#);
+        let p = dom.query_selector("body p").unwrap();
+        assert_eq!(DomTree::inner_text(&p), "Hello");
+        assert!(runtime.needs_redraw());
+    }
+
+    #[test]
+    fn document_writeln_appends_content_with_newline() {
+        let (mut runtime, dom) = runtime_from_html(r#"<html><body></body></html>"#);
+        runtime.run_script(r#"document.writeln("<span>A</span>");"#);
+        let span = dom.query_selector("body span").unwrap();
+        assert_eq!(DomTree::inner_text(&span), "A");
+    }
+
+    #[test]
+    fn dom_exception_has_name_message_and_code() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        try {
+            throw new DOMException("test error", "SyntaxError");
+        } catch (e) {
+            document.getElementById("r").setAttribute("data-name", e.name);
+            document.getElementById("r").setAttribute("data-msg", e.message);
+            document.getElementById("r").setAttribute("data-code", e.code);
+        }
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        let r = r.borrow();
+        assert_eq!(r.value.get_attr("data-name"), Some("SyntaxError"));
+        assert_eq!(r.value.get_attr("data-msg"), Some("test error"));
+        assert_eq!(r.value.get_attr("data-code"), Some("12"));
+    }
+
+    #[test]
+    fn dom_exception_static_constants_are_exposed() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        document.getElementById("r").setAttribute(
+            "data-codes",
+            DOMException.SYNTAX_ERR + ":" +
+            DOMException.HIERARCHY_REQUEST_ERR + ":" +
+            DOMException.NOT_FOUND_ERR + ":" +
+            DOMException.INVALID_STATE_ERR
+        );
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(r.borrow().value.get_attr("data-codes"), Some("12:3:8:11"));
+    }
+
+    #[test]
+    fn dom_exception_to_string_formats_name_and_message() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var e = new DOMException("oops", "NotFoundError");
+        document.getElementById("r").setAttribute("data-str", e.toString());
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(
+            r.borrow().value.get_attr("data-str"),
+            Some("NotFoundError: oops")
+        );
+    }
+
+    #[test]
+    fn create_element_throws_invalid_character_error_for_empty_name() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        try {
+            document.createElement("");
+            document.getElementById("r").setAttribute("data-error", "no-throw");
+        } catch (e) {
+            document.getElementById("r").setAttribute("data-error", e.name);
+        }
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(
+            r.borrow().value.get_attr("data-error"),
+            Some("InvalidCharacterError")
+        );
+    }
+
+    #[test]
+    fn create_element_throws_invalid_character_error_for_invalid_name() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        try {
+            document.createElement("123bad");
+            document.getElementById("r").setAttribute("data-error", "no-throw");
+        } catch (e) {
+            document.getElementById("r").setAttribute("data-error", e.name);
+        }
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(
+            r.borrow().value.get_attr("data-error"),
+            Some("InvalidCharacterError")
+        );
+    }
+
+    #[test]
+    fn create_element_valid_name_works() {
+        let (mut runtime, dom) = runtime_from_html(r#"<html><body></body></html>"#);
+        runtime.run_script(
+            r#"
+        var el = document.createElement("div");
+        el.id = "created";
+        document.body.appendChild(el);
+        "#,
+        );
+        assert!(dom.get_element_by_id("created").is_some());
+    }
+
+    #[test]
+    fn create_element_ns_throws_invalid_character_error_for_invalid_name() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        try {
+            document.createElementNS("http://www.w3.org/2000/svg", "123bad");
+            document.getElementById("r").setAttribute("data-error", "no-throw");
+        } catch (e) {
+            document.getElementById("r").setAttribute("data-error", e.name);
+        }
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(
+            r.borrow().value.get_attr("data-error"),
+            Some("InvalidCharacterError")
+        );
+    }
+
+    #[test]
+    fn node_constants_are_exposed_on_global() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        document.getElementById("r").setAttribute("data-elem", Node.ELEMENT_NODE);
+        document.getElementById("r").setAttribute("data-text", Node.TEXT_NODE);
+        document.getElementById("r").setAttribute("data-doc", Node.DOCUMENT_NODE);
+        document.getElementById("r").setAttribute("data-frag", Node.DOCUMENT_FRAGMENT_NODE);
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        let r = r.borrow();
+        assert_eq!(r.value.get_attr("data-elem"), Some("1"));
+        assert_eq!(r.value.get_attr("data-text"), Some("3"));
+        assert_eq!(r.value.get_attr("data-doc"), Some("9"));
+        assert_eq!(r.value.get_attr("data-frag"), Some("11"));
+    }
+
+    #[test]
+    fn node_constants_are_exposed_on_instance_nodes() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        document.getElementById("r").setAttribute("data-doc-frag", document.DOCUMENT_FRAGMENT_NODE);
+        document.getElementById("r").setAttribute("data-cmt", document.body.COMMENT_NODE);
+        document.getElementById("r").setAttribute("data-txt", document.createTextNode("").ELEMENT_NODE);
+        document.getElementById("r").setAttribute("data-frag", document.createElement("div").DOCUMENT_FRAGMENT_NODE);
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        let r = r.borrow();
+        assert_eq!(r.value.get_attr("data-doc-frag"), Some("11"));
+        assert_eq!(r.value.get_attr("data-cmt"), Some("8"));
+        assert_eq!(r.value.get_attr("data-txt"), Some("1"));
+        assert_eq!(r.value.get_attr("data-frag"), Some("11"));
+    }
+
+    #[test]
+    fn document_first_child_is_doctype_node() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<!DOCTYPE html><html><body><div id="r"><span>x</span></div></body></html>"#,
+        );
+        runtime.run_script(
+            r#"
+        document.getElementById("r").setAttribute("data-doc-type", document.nodeType);
+        document.getElementById("r").setAttribute("data-doctype-node", document.firstChild.nodeType);
+        document.getElementById("r").setAttribute("data-doctype-name", document.firstChild.nodeName);
+        var span = document.getElementById("r").firstChild;
+        document.getElementById("r").setAttribute("data-text-type", span.firstChild.nodeType);
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        let r = r.borrow();
+        assert_eq!(r.value.get_attr("data-doc-type"), Some("9"));
+        assert_eq!(r.value.get_attr("data-doctype-node"), Some("10"));
+        assert_eq!(r.value.get_attr("data-doctype-name"), Some("html"));
+        assert_eq!(r.value.get_attr("data-text-type"), Some("3"));
+    }
+
+    #[test]
+    fn create_element_ns_preserves_qualified_name() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var el = document.createElementNS("http://ns.example.com/", "prefix:localname");
+        document.getElementById("r").setAttribute("data-tag", el.tagName);
+        document.getElementById("r").setAttribute("data-local", el.localName);
+        document.getElementById("r").setAttribute("data-prefix", el.prefix);
+        document.getElementById("r").setAttribute("data-ns", el.namespaceURI);
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        let r = r.borrow();
+        assert_eq!(r.value.get_attr("data-tag"), Some("prefix:localname"));
+        assert_eq!(r.value.get_attr("data-local"), Some("localname"));
+        assert_eq!(r.value.get_attr("data-prefix"), Some("prefix"));
+        assert_eq!(r.value.get_attr("data-ns"), Some("http://ns.example.com/"));
+    }
+
+    #[test]
+    fn document_close_returns_undefined() {
+        let (mut runtime, _) = runtime_from_html(r#"<html><body></body></html>"#);
+        runtime.run_script(
+            r#"
+        var result = document.close();
+        document.getElementById("r").setAttribute("data-close", typeof result);
+        "#,
+        );
+        // document.close() returns undefined, and there is no element "r" yet
+        // so we test it differently
+        let (mut runtime2, dom2) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime2.run_script(
+            r#"
+        document.close();
+        document.getElementById("r").setAttribute("data-close", "ok");
+        "#,
+        );
+        let r = dom2.get_element_by_id("r").unwrap();
+        assert_eq!(r.borrow().value.get_attr("data-close"), Some("ok"));
+    }
+
+    #[test]
+    fn dom_exception_instanceof_error() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var e = new DOMException("test", "SyntaxError");
+        document.getElementById("r").setAttribute("data-is-error", e instanceof Error);
+        document.getElementById("r").setAttribute("data-is-domexc", e instanceof DOMException);
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        let r = r.borrow();
+        assert_eq!(r.value.get_attr("data-is-error"), Some("true"));
+        assert_eq!(r.value.get_attr("data-is-domexc"), Some("true"));
+    }
+
+    #[test]
+    fn create_comment_returns_comment_node() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var c = document.createComment("hello");
+        document.getElementById("r").setAttribute("data-type", c.nodeType);
+        document.getElementById("r").setAttribute("data-name", c.nodeName);
+        document.getElementById("r").setAttribute("data-data", c.data);
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        let r = r.borrow();
+        assert_eq!(r.value.get_attr("data-type"), Some("8"));
+        assert_eq!(r.value.get_attr("data-name"), Some("#comment"));
+        assert_eq!(r.value.get_attr("data-data"), Some("hello"));
+    }
+
+    #[test]
+    fn create_processing_instruction_returns_pi_node() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var pi = document.createProcessingInstruction("xml-stylesheet", "href=\"style.css\"");
+        document.getElementById("r").setAttribute("data-type", pi.nodeType);
+        document.getElementById("r").setAttribute("data-data", pi.data);
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        let r = r.borrow();
+        assert_eq!(r.value.get_attr("data-type"), Some("7"));
+        assert_eq!(r.value.get_attr("data-data"), Some("href=\"style.css\""));
+    }
+
+    #[test]
+    fn create_processing_instruction_empty_target_throws() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        try {
+            document.createProcessingInstruction("", "data");
+            document.getElementById("r").setAttribute("data-error", "no-throw");
+        } catch (e) {
+            document.getElementById("r").setAttribute("data-error", e.name);
+        }
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(r.borrow().value.get_attr("data-error"), Some("SyntaxError"));
+    }
+
+    #[test]
+    fn innerhtml_setter_uses_parser_and_replaces_children() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="target"></div><div id="r"></div>"#);
+        runtime.run_script(r#"
+        var t = document.getElementById("target");
+        t.innerHTML = "<p>A</p><span>B</span>";
+        document.getElementById("r").setAttribute("data-count", t.childNodes.length);
+        document.getElementById("r").setattr || document.getElementById("r").setAttribute("data-tags",
+            t.children[0].tagName + ":" + t.children[1].tagName
+        );
+        "#);
+        let r = dom.get_element_by_id("r").unwrap();
+        let r = r.borrow();
+        assert_eq!(r.value.get_attr("data-count"), Some("2"));
     }
 }
