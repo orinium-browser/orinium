@@ -2,6 +2,7 @@ use crate::engine::html::{DomTree, HtmlNodeType, Parser as HtmlParser};
 use crate::engine::js::common::{
     dom_node, is_callable, mark_dom_dirty, node_dom_id, with_host, with_host_mut,
 };
+use crate::engine::js::JsHost;
 use crate::engine::js::web_apis::dom::dom_exception::throw_dom_exception;
 use crate::engine::js::web_apis::dom::element::{
     accessor_property, define_node_constants, make_comment_node, make_doctype_node,
@@ -1086,6 +1087,27 @@ pub(crate) fn make_iframe_document(
         document: document_obj,
         document_element: html,
     }))
+}
+
+/// Parses fetched HTML and installs it as the content document of the iframe
+/// with the given DOM id. Returns `true` if a document was installed.
+pub(crate) fn install_parsed_iframe_document(
+    host: &mut JsHost,
+    iframe_dom_id: u64,
+    html: &str,
+) -> bool {
+    let tree = Rc::new(HtmlParser::new(html).parse());
+    let document_element = tree
+        .query_selector("html")
+        .unwrap_or_else(|| Rc::clone(&tree.root));
+    let document_obj = build_iframe_document_object(iframe_dom_id, &tree);
+    let iframe_doc = Rc::new(RefCell::new(IframeDocument {
+        tree,
+        document: document_obj,
+        document_element,
+    }));
+    host.iframe_documents.insert(iframe_dom_id, iframe_doc);
+    true
 }
 
 fn build_iframe_document_object(host_dom_id: u64, _tree: &Rc<DomTree>) -> Rc<RefCell<JSObject>> {
