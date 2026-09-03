@@ -77,6 +77,25 @@ fn run_acid3(raw_url: &str) -> Result<()> {
             break;
         }
         js.run_due_timers();
+
+        // Drain any `<iframe src>` loads requested by JS (e.g. Acid3 bucket 5).
+        // Each is fetched, parsed, installed as the iframe's contentDocument,
+        // and its `load` event fired.
+        for req in std::mem::take(&mut js.take_iframe_fetch_requests()) {
+            match req.url.parse::<url::Url>() {
+                Ok(url) if url.scheme() == "http" || url.scheme() == "https" => {
+                    match loader.fetch_blocking(url) {
+                        Ok(resp) => {
+                            let html = String::from_utf8_lossy(&resp.body).to_string();
+                            js.resolve_iframe_fetch(req.dom_id, html);
+                        }
+                        Err(_) => js.reject_iframe_fetch(req.dom_id),
+                    }
+                }
+                _ => js.reject_iframe_fetch(req.dom_id),
+            }
+        }
+
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 
