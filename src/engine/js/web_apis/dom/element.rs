@@ -1207,7 +1207,9 @@ fn element_dispatch_event(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> 
             let parent = node.borrow().parent();
             let Some(parent) = parent else { break };
             node = parent;
-            if let Some(object) = expose_node(vm, Rc::clone(&node)).and_then(|value| value.as_object()) {
+            if let Some(object) =
+                expose_node(vm, Rc::clone(&node)).and_then(|value| value.as_object())
+            {
                 path.push(object);
             }
         }
@@ -1232,9 +1234,16 @@ fn propagate_event(
         "__orinium_immediate_propagation_stopped".to_string(),
         JSValue::from_bool(false),
     );
-    event.borrow_mut().set("cancelBubble".to_string(), JSValue::from_bool(false));
-    event.borrow_mut().set("target".to_string(), JSValue::from_object(Rc::clone(target_obj)));
-    event.borrow_mut().set("__orinium_bubbles".to_string(), JSValue::from_bool(bubbles));
+    event
+        .borrow_mut()
+        .set("cancelBubble".to_string(), JSValue::from_bool(false));
+    event.borrow_mut().set(
+        "target".to_string(),
+        JSValue::from_object(Rc::clone(target_obj)),
+    );
+    event
+        .borrow_mut()
+        .set("__orinium_bubbles".to_string(), JSValue::from_bool(bubbles));
 
     // Capture phase: from the root down to (but excluding) the target.
     for ancestor in path.iter().rev().skip(1) {
@@ -1346,7 +1355,10 @@ fn element_click(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         return Ok(JSValue::undefined());
     };
     let mut event = JSObject::new();
-    event.set("type".to_string(), JSValue::from_string("click".to_string()));
+    event.set(
+        "type".to_string(),
+        JSValue::from_string("click".to_string()),
+    );
     event.set("bubbles".to_string(), JSValue::from_bool(true));
     event.set("cancelable".to_string(), JSValue::from_bool(true));
     event.set("detail".to_string(), JSValue::from_number(1.0));
@@ -1375,7 +1387,9 @@ fn element_click(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
             let parent = node.borrow().parent();
             let Some(parent) = parent else { break };
             node = parent;
-            if let Some(object) = expose_node(vm, Rc::clone(&node)).and_then(|value| value.as_object()) {
+            if let Some(object) =
+                expose_node(vm, Rc::clone(&node)).and_then(|value| value.as_object())
+            {
                 path.push(object);
             }
         }
@@ -1447,9 +1461,10 @@ fn add_element_event_listener(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVal
             .or_default()
             .entry(event_type.clone())
             .or_default();
-        if !listeners.iter().any(|(candidate, c)| {
-            c == &capture && candidate.strict_equals(&listener)
-        }) {
+        if !listeners
+            .iter()
+            .any(|(candidate, c)| c == &capture && candidate.strict_equals(&listener))
+        {
             listeners.push((listener, capture));
         }
     });

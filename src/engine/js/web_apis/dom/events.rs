@@ -131,7 +131,10 @@ pub(crate) fn event_stop_propagation(_vm: &mut VM, args: Vec<JSValue>) -> JSResu
     Ok(JSValue::undefined())
 }
 
-pub(crate) fn event_stop_immediate_propagation(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn event_stop_immediate_propagation(
+    vm: &mut VM,
+    args: Vec<JSValue>,
+) -> JSResult<JSValue> {
     event_stop_propagation(vm, args.clone())?;
     if let Some(event) = args.first().and_then(JSValue::as_object) {
         event.borrow_mut().set(
