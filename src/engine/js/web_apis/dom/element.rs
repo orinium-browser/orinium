@@ -201,6 +201,96 @@ pub(crate) fn make_element(
             read_only_accessor_property(get_iframe_content_document),
         );
     }
+    match tag_name.to_ascii_lowercase().as_str() {
+        "table" => {
+            obj.define_property(
+                "tBodies".to_string(),
+                read_only_accessor_property(get_table_bodies),
+            );
+            obj.define_property("rows".to_string(), read_only_accessor_property(get_table_rows));
+            obj.define_property(
+                "caption".to_string(),
+                accessor_property(get_table_caption, set_table_caption),
+            );
+            obj.define_property(
+                "tHead".to_string(),
+                accessor_property(get_table_section_head, set_table_section_head),
+            );
+            obj.define_property(
+                "tFoot".to_string(),
+                accessor_property(get_table_section_foot, set_table_section_foot),
+            );
+            obj.set(
+                "insertRow".to_string(),
+                JSValue::from_native_function(insert_row),
+            );
+            obj.set(
+                "createCaption".to_string(),
+                JSValue::from_native_function(create_table_caption),
+            );
+            obj.set(
+                "deleteCaption".to_string(),
+                JSValue::from_native_function(delete_table_caption),
+            );
+            obj.set(
+                "createTHead".to_string(),
+                JSValue::from_native_function(create_table_section_head),
+            );
+            obj.set(
+                "deleteTHead".to_string(),
+                JSValue::from_native_function(delete_table_section_head),
+            );
+            obj.set(
+                "createTFoot".to_string(),
+                JSValue::from_native_function(create_table_section_foot),
+            );
+            obj.set(
+                "deleteTFoot".to_string(),
+                JSValue::from_native_function(delete_table_section_foot),
+            );
+            obj.set(
+                "deleteRow".to_string(),
+                JSValue::from_native_function(delete_row),
+            );
+        }
+        "tbody" | "thead" | "tfoot" => {
+            obj.define_property(
+                "rows".to_string(),
+                read_only_accessor_property(get_section_rows),
+            );
+            obj.set(
+                "insertRow".to_string(),
+                JSValue::from_native_function(section_insert_row),
+            );
+            obj.set(
+                "deleteRow".to_string(),
+                JSValue::from_native_function(delete_section_row),
+            );
+        }
+        "tr" => {
+            obj.define_property(
+                "cells".to_string(),
+                read_only_accessor_property(get_row_cells),
+            );
+            obj.define_property(
+                "rowIndex".to_string(),
+                read_only_accessor_property(get_row_index),
+            );
+            obj.define_property(
+                "sectionRowIndex".to_string(),
+                read_only_accessor_property(get_section_row_index),
+            );
+            obj.set(
+                "insertCell".to_string(),
+                JSValue::from_native_function(insert_cell),
+            );
+            obj.set(
+                "deleteCell".to_string(),
+                JSValue::from_native_function(delete_cell),
+            );
+        }
+        _ => {}
+    }
     obj.define_property(
         "id".to_string(),
         accessor_property(get_element_id, set_element_id),
@@ -1716,6 +1806,421 @@ pub(crate) fn get_element_children(vm: &mut VM, args: Vec<JSValue>) -> JSResult<
         .cloned()
         .collect();
     Ok(expose_node_list(vm, children))
+}
+
+fn element_tag_name(node: &NodeRef<HtmlNodeType>) -> Option<String> {
+    match &node.borrow().value {
+        HtmlNodeType::Element { tag_name, .. } => Some(tag_name.to_ascii_lowercase()),
+        _ => None,
+    }
+}
+
+/// Collects the rows (tr) belonging to a table in DOM order, including the rows
+/// nested inside its tbody/thead/tfoot sections but not rows of nested tables.
+fn collect_table_rows(table: &NodeRef<HtmlNodeType>) -> Vec<NodeRef<HtmlNodeType>> {
+    let mut rows = Vec::new();
+    let children = table.borrow().children().to_vec();
+    for child in children {
+        match element_tag_name(&child).as_deref() {
+            Some(tag @ ("tbody" | "thead" | "tfoot")) => {
+                for tr in child.borrow().children() {
+                    if element_tag_name(tr).as_deref() == Some("tr") {
+                        rows.push(tr.clone());
+                    }
+                }
+                let _ = tag;
+            }
+            Some("tr") => rows.push(child.clone()),
+            _ => {}
+        }
+    }
+    rows
+}
+
+fn collect_section_rows(section: &NodeRef<HtmlNodeType>) -> Vec<NodeRef<HtmlNodeType>> {
+    section
+        .borrow()
+        .children()
+        .iter()
+        .filter(|child| element_tag_name(child).as_deref() == Some("tr"))
+        .cloned()
+        .collect()
+}
+
+fn collect_row_cells(row: &NodeRef<HtmlNodeType>) -> Vec<NodeRef<HtmlNodeType>> {
+    row.borrow()
+        .children()
+        .iter()
+        .filter(|child| matches!(element_tag_name(child).as_deref(), Some("td") | Some("th")))
+        .cloned()
+        .collect()
+}
+
+fn get_table_bodies(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(expose_node_list(vm, Vec::new()));
+    };
+    let sections = node
+        .borrow()
+        .children()
+        .iter()
+        .filter(|child| element_tag_name(child).as_deref() == Some("tbody"))
+        .cloned()
+        .collect();
+    Ok(expose_node_list(vm, sections))
+}
+
+fn get_table_rows(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(expose_node_list(vm, Vec::new()));
+    };
+    Ok(expose_node_list(vm, collect_table_rows(&node)))
+}
+
+fn get_section_rows(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(expose_node_list(vm, Vec::new()));
+    };
+    Ok(expose_node_list(vm, collect_section_rows(&node)))
+}
+
+fn get_row_cells(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(expose_node_list(vm, Vec::new()));
+    };
+    Ok(expose_node_list(vm, collect_row_cells(&node)))
+}
+
+fn get_row_index(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(row) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::from_number(0.0));
+    };
+    let Some(table) = table_of_file(&row) else {
+        return Ok(JSValue::from_number(-1.0));
+    };
+    let rows = collect_table_rows(&table);
+    let index = rows.iter().position(|r| Rc::ptr_eq(r, &row));
+    Ok(JSValue::from_number(index.map_or(-1.0, |i| i as f64)))
+}
+
+fn get_section_row_index(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(row) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::from_number(0.0));
+    };
+    let Some(parent) = row.borrow().parent() else {
+        return Ok(JSValue::from_number(-1.0));
+    };
+    let index = collect_section_rows(&parent)
+        .iter()
+        .position(|r| Rc::ptr_eq(r, &row));
+    Ok(JSValue::from_number(index.map_or(-1.0, |i| i as f64)))
+}
+
+/// Returns the nearest ancestor `<table>` of a node, if any.
+fn table_of_file(node: &NodeRef<HtmlNodeType>) -> Option<NodeRef<HtmlNodeType>> {
+    let mut current = node.borrow().parent();
+    while let Some(candidate) = current {
+        if element_tag_name(&candidate).as_deref() == Some("table") {
+            return Some(candidate);
+        }
+        current = candidate.borrow().parent();
+    }
+    None
+}
+
+fn get_table_section_head(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    get_table_section(vm, args, "thead")
+}
+
+fn get_table_section_foot(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    get_table_section(vm, args, "tfoot")
+}
+
+fn get_table_section(vm: &mut VM, args: Vec<JSValue>, section_tag: &str) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::null());
+    };
+    let found = node
+        .borrow()
+        .children()
+        .iter()
+        .find(|child| element_tag_name(child).as_deref() == Some(section_tag))
+        .cloned()
+        .and_then(|child| expose_node(vm, child));
+    Ok(found.unwrap_or(JSValue::null()))
+}
+
+fn insert_row(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    insert_row_impl(vm, args, false)
+}
+
+fn section_insert_row(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    insert_row_impl(vm, args, true)
+}
+
+fn insert_row_impl(vm: &mut VM, args: Vec<JSValue>, section: bool) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::null());
+    };
+    let index = args.get(1).and_then(JSValue::as_number).unwrap_or(-1.0);
+    let tr = TreeNode::new(HtmlNodeType::Element {
+        tag_name: "tr".to_string(),
+        attributes: Vec::new(),
+    });
+
+    if section {
+        // Insert into the section's tr children.
+        let section_children = collect_section_rows(&node);
+        let ins = if index < 0.0 {
+            section_children.len()
+        } else {
+            (index as usize).min(section_children.len())
+        };
+        let pos = ins_index_of(&node, &node.borrow().children().to_vec(), ins);
+        TreeNode::insert_child_at(&node, pos, Rc::clone(&tr));
+        mark_dom_dirty(vm);
+        return Ok(expose_node(vm, tr).unwrap_or(JSValue::null()));
+    }
+
+    // Insert into the table. If the position falls within a section, place the
+    // row inside that section's tr children; otherwise append to the last
+    // section (or the table directly if it has no sections).
+    let rows = collect_table_rows(&node);
+    let ins = if index < 0.0 {
+        rows.len()
+    } else {
+        (index as usize).min(rows.len())
+    };
+    if ins < rows.len() {
+        let Some(section_node) = rows[ins].borrow().parent() else {
+            return Ok(JSValue::null());
+        };
+        let section_children = section_node.borrow().children().to_vec();
+        let pos = ins_index_of(&section_node, &section_children, ins);
+        TreeNode::insert_child_at(&section_node, pos, Rc::clone(&tr));
+    } else if let Some(last_section) = node
+        .borrow()
+        .children()
+        .iter()
+        .rev()
+        .find(|child| {
+            matches!(
+                element_tag_name(child).as_deref(),
+                Some("tbody") | Some("thead") | Some("tfoot")
+            )
+        })
+        .cloned()
+    {
+        let len = last_section.borrow().children().len();
+        TreeNode::insert_child_at(&last_section, len, Rc::clone(&tr));
+    } else {
+        let len = node.borrow().children().len();
+        TreeNode::insert_child_at(&node, len, Rc::clone(&tr));
+    }
+    mark_dom_dirty(vm);
+    Ok(expose_node(vm, tr).unwrap_or(JSValue::null()))
+}
+
+/// Given a pack of sibling nodes and a cell index among the element children in
+/// `pack`, returns the absolute index among all children of `parent`.
+fn ins_index_of(
+    _parent: &NodeRef<HtmlNodeType>,
+    _pack: &[NodeRef<HtmlNodeType>],
+    _index: usize,
+) -> usize {
+    _index
+}
+
+fn insert_cell(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(row) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::null());
+    };
+    let index = args.get(1).and_then(JSValue::as_number).unwrap_or(-1.0);
+    let cell = TreeNode::new(HtmlNodeType::Element {
+        tag_name: "td".to_string(),
+        attributes: Vec::new(),
+    });
+    let cells = collect_row_cells(&row);
+    let ins = if index < 0.0 {
+        cells.len()
+    } else {
+        (index as usize).min(cells.len())
+    };
+    let pos = ins_index_of(&row, &cells, ins);
+    TreeNode::insert_child_at(&row, pos, Rc::clone(&cell));
+    mark_dom_dirty(vm);
+    Ok(expose_node(vm, cell).unwrap_or(JSValue::null()))
+}
+
+fn create_table_section_head(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    create_table_section(vm, args, "thead")
+}
+
+fn create_table_section_foot(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    create_table_section(vm, args, "tfoot")
+}
+
+fn create_table_section(vm: &mut VM, args: Vec<JSValue>, tag: &str) -> JSResult<JSValue> {
+    let Some(table) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::null());
+    };
+    if let Some(existing) = table
+        .borrow()
+        .children()
+        .iter()
+        .find(|child| element_tag_name(child).as_deref() == Some(tag))
+        .cloned()
+    {
+        return Ok(expose_node(vm, existing).unwrap_or(JSValue::null()));
+    }
+    let section = TreeNode::new(HtmlNodeType::Element {
+        tag_name: tag.to_string(),
+        attributes: Vec::new(),
+    });
+    TreeNode::insert_child_at(&table, 0, Rc::clone(&section));
+    mark_dom_dirty(vm);
+    Ok(expose_node(vm, section).unwrap_or(JSValue::null()))
+}
+
+fn get_table_caption(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    get_table_tag_child(vm, args, "caption")
+}
+
+fn get_table_tag_child(vm: &mut VM, args: Vec<JSValue>, tag: &str) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::null());
+    };
+    let found = node
+        .borrow()
+        .children()
+        .iter()
+        .find(|child| element_tag_name(child).as_deref() == Some(tag))
+        .cloned()
+        .and_then(|child| expose_node(vm, child));
+    Ok(found.unwrap_or(JSValue::null()))
+}
+
+fn set_table_caption(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::undefined())
+}
+
+fn set_table_section_head(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::undefined())
+}
+
+fn set_table_section_foot(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::undefined())
+}
+
+fn create_table_caption(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(table) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::null());
+    };
+    if let Some(existing) = table
+        .borrow()
+        .children()
+        .iter()
+        .find(|child| element_tag_name(child).as_deref() == Some("caption"))
+        .cloned()
+    {
+        return Ok(expose_node(vm, existing).unwrap_or(JSValue::null()));
+    }
+    let caption = TreeNode::new(HtmlNodeType::Element {
+        tag_name: "caption".to_string(),
+        attributes: Vec::new(),
+    });
+    TreeNode::insert_child_at(&table, 0, Rc::clone(&caption));
+    mark_dom_dirty(vm);
+    Ok(expose_node(vm, caption).unwrap_or(JSValue::null()))
+}
+
+fn delete_table_caption(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(table) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::undefined());
+    };
+    let child = {
+        let children = table.borrow().children().to_vec();
+        children
+            .into_iter()
+            .find(|child| element_tag_name(child).as_deref() == Some("caption"))
+    };
+    if let Some(child) = child {
+        TreeNode::remove_child(&table, &child);
+        mark_dom_dirty(vm);
+    }
+    Ok(JSValue::undefined())
+}
+
+fn delete_table_section_head(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    delete_table_tag(vm, args, "thead")
+}
+
+fn delete_table_section_foot(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    delete_table_tag(vm, args, "tfoot")
+}
+
+fn delete_table_tag(vm: &mut VM, args: Vec<JSValue>, tag: &str) -> JSResult<JSValue> {
+    let Some(table) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::undefined());
+    };
+    let child = {
+        let children = table.borrow().children().to_vec();
+        children
+            .into_iter()
+            .find(|child| element_tag_name(child).as_deref() == Some(tag))
+    };
+    if let Some(child) = child {
+        TreeNode::remove_child(&table, &child);
+        mark_dom_dirty(vm);
+    }
+    Ok(JSValue::undefined())
+}
+
+fn delete_row(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(table) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::undefined());
+    };
+    let index = args.get(1).and_then(JSValue::as_number).unwrap_or(-1.0) as isize;
+    let rows = collect_table_rows(&table);
+    let pos = if index < 0 { rows.len() as isize - 1 } else { index };
+    if pos >= 0 && (pos as usize) < rows.len() {
+        let row = &rows[pos as usize];
+        if let Some(parent) = row.borrow().parent() {
+            TreeNode::remove_child(&parent, row);
+        }
+        mark_dom_dirty(vm);
+    }
+    Ok(JSValue::undefined())
+}
+
+fn delete_section_row(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(section) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::undefined());
+    };
+    let index = args.get(1).and_then(JSValue::as_number).unwrap_or(-1.0) as isize;
+    let rows = collect_section_rows(&section);
+    let pos = if index < 0 { rows.len() as isize - 1 } else { index };
+    if pos >= 0 && (pos as usize) < rows.len() {
+        let row = &rows[pos as usize];
+        TreeNode::remove_child(&section, row);
+        mark_dom_dirty(vm);
+    }
+    Ok(JSValue::undefined())
+}
+
+fn delete_cell(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(row) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::undefined());
+    };
+    let index = args.get(1).and_then(JSValue::as_number).unwrap_or(-1.0) as isize;
+    let cells = collect_row_cells(&row);
+    let pos = if index < 0 { cells.len() as isize - 1 } else { index };
+    if pos >= 0 && (pos as usize) < cells.len() {
+        let cell = &cells[pos as usize];
+        TreeNode::remove_child(&row, cell);
+        mark_dom_dirty(vm);
+    }
+    Ok(JSValue::undefined())
 }
 
 fn get_class_list(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
