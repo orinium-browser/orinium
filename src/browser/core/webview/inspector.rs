@@ -112,6 +112,12 @@ impl DomIdRegistry {
                 "type": "shadow-root",
                 "children": Self::serialize_children(self, &borrowed),
             }),
+            HtmlNodeType::ProcessingInstruction { target, data } => json!({
+                "id": id,
+                "type": "processing-instruction",
+                "target": target,
+                "data": data,
+            }),
         }
     }
 
