@@ -642,6 +642,25 @@ impl<'a> Parser<'a> {
                 return;
             }
 
+            // Table-context auto-insertion: a <tbody> is implied around
+            // <tr>/<td>/<th> (and sections around <caption>/<col>/<colgroup>)
+            // inserted directly into a <table>.
+            if matches!(name.as_str(), "tr" | "td" | "th")
+                && let Some(top) = self.stack.last()
+                && top.borrow().value.tag_name().is_some_and(|t| t.eq_ignore_ascii_case("table"))
+            {
+                let tbody = TreeNode::add_child_value(
+                    &parent,
+                    HtmlNodeType::Element {
+                        tag_name: "tbody".to_string(),
+                        attributes: Vec::new(),
+                    },
+                );
+                self.tag_stack.push("tbody".to_string());
+                self.stack.push(tbody);
+                parent = Rc::clone(self.stack.last().unwrap());
+            }
+
             // noscript は scripting フラグに応じて特別な処理を行う
             if name == "noscript" {
                 self.handle_noscript(attributes);
