@@ -323,6 +323,14 @@ pub(crate) fn make_element(
         JSValue::from_native_function(element_contains),
     );
     obj.set(
+        "hasChildNodes".to_string(),
+        JSValue::from_native_function(element_has_child_nodes),
+    );
+    obj.set(
+        "click".to_string(),
+        JSValue::from_native_function(element_click),
+    );
+    obj.set(
         "focus".to_string(),
         JSValue::from_native_function(focus_element),
     );
@@ -1189,42 +1197,190 @@ fn element_dispatch_event(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> 
             "Event type must not be empty".to_string(),
         ));
     }
+
+    let target_obj = Rc::clone(&target);
+
+    // Build the ancestor path of exposed JS objects: [target, ..., root].
+    let mut path: Vec<Rc<RefCell<JSObject>>> = vec![Rc::clone(&target_obj)];
+    if let Some(mut node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) {
+        loop {
+            let parent = node.borrow().parent();
+            let Some(parent) = parent else { break };
+            node = parent;
+            if let Some(object) = expose_node(vm, Rc::clone(&node)).and_then(|value| value.as_object()) {
+                path.push(object);
+            }
+        }
+    }
+
+    propagate_event(vm, &target_obj, &event, path)
+}
+
+/// Runs the capture/target/bubble propagation for an event whose `target` is
+/// `target_obj` and whose ancestor path (target first) is `path`.
+fn propagate_event(
+    vm: &mut VM,
+    target_obj: &Rc<RefCell<JSObject>>,
+    event: &Rc<RefCell<JSObject>>,
+    path: Vec<Rc<RefCell<JSObject>>>,
+) -> JSResult<JSValue> {
+    let event_type = event.borrow().get("type").to_string();
+    let bubbles = event.borrow().get("bubbles").to_boolean();
+
+    // Reset propagation state for this dispatch.
     event.borrow_mut().set(
-        "target".to_string(),
-        JSValue::from_object(Rc::clone(&target)),
+        "__orinium_immediate_propagation_stopped".to_string(),
+        JSValue::from_bool(false),
     );
-    event.borrow_mut().set(
-        "currentTarget".to_string(),
-        JSValue::from_object(Rc::clone(&target)),
-    );
-    let dom_id = node_dom_id(&JSValue::from_object(Rc::clone(&target))).unwrap_or(0);
+    event.borrow_mut().set("cancelBubble".to_string(), JSValue::from_bool(false));
+    event.borrow_mut().set("target".to_string(), JSValue::from_object(Rc::clone(target_obj)));
+    event.borrow_mut().set("__orinium_bubbles".to_string(), JSValue::from_bool(bubbles));
+
+    // Capture phase: from the root down to (but excluding) the target.
+    for ancestor in path.iter().rev().skip(1) {
+        if event_flag(&event, "cancelBubble") {
+            break;
+        }
+        dispatch_at_phase(vm, ancestor, event, &event_type, 1 /* capture */)?;
+    }
+
+    // Target phase: the target's own handlers (both capturing and bubbling).
+    if !event_flag(event, "cancelBubble") {
+        dispatch_at_phase(vm, target_obj, event, &event_type, 2 /* target */)?;
+    }
+
+    // Bubble phase: from the target's ancestors up to the root.
+    if bubbles {
+        for ancestor in path.iter().skip(1) {
+            if event_flag(event, "cancelBubble") {
+                break;
+            }
+            dispatch_at_phase(vm, ancestor, event, &event_type, 3 /* bubble */)?;
+        }
+    }
+
+    Ok(JSValue::from_bool(!event_flag(event, "defaultPrevented")))
+}
+
+/// Invokes the listeners/pending on-element handlers stored on `current` during
+/// the given propagation phase.
+///
+/// `phase` is `1` (capture), `2` (target) or `3` (bubble). During capture only
+/// capturing listeners run; during bubble only non-capturing listeners run; the
+/// target runs both, plus any inline `on<type>` handler.
+fn dispatch_at_phase(
+    vm: &mut VM,
+    current: &Rc<RefCell<JSObject>>,
+    event: &Rc<RefCell<JSObject>>,
+    event_type: &str,
+    phase: u8,
+) -> JSResult<()> {
+    let current_js = JSValue::from_object(Rc::clone(current));
+    event
+        .borrow_mut()
+        .set("currentTarget".to_string(), current_js.clone());
+    event
+        .borrow_mut()
+        .set("eventPhase".to_string(), JSValue::from_number(phase as f64));
+
+    let dom_id = node_dom_id(&current_js).unwrap_or(0);
+    if dom_id == 0 {
+        return Ok(());
+    }
     let listeners = with_host(vm, |host| {
         host.element_event_listeners
             .get(&dom_id)
-            .and_then(|events| events.get(&event_type))
+            .and_then(|events| events.get(event_type))
             .cloned()
             .unwrap_or_default()
     })
     .unwrap_or_default();
-    let handler = target.borrow().get(&format!("on{event_type}"));
-    if is_callable(&handler) {
-        vm.call(
-            handler,
-            JSValue::from_object(Rc::clone(&target)),
-            vec![JSValue::from_object(Rc::clone(&event))],
-        )?;
-    }
-    for listener in listeners {
-        vm.call(
-            listener,
-            JSValue::from_object(Rc::clone(&target)),
-            vec![JSValue::from_object(Rc::clone(&event))],
-        )?;
-        if event_flag(&event, "__orinium_immediate_propagation_stopped") {
-            break;
+
+    if phase == 2 {
+        let handler = current.borrow().get(&format!("on{event_type}"));
+        if is_callable(&handler) {
+            vm.call(
+                handler,
+                current_js.clone(),
+                vec![JSValue::from_object(Rc::clone(event))],
+            )?;
         }
     }
-    Ok(JSValue::from_bool(!event_flag(&event, "defaultPrevented")))
+
+    for (listener, capture) in listeners {
+        if event_flag(event, "__orinium_immediate_propagation_stopped") {
+            break;
+        }
+        if (phase == 1 && !capture) || (phase == 3 && capture) {
+            continue;
+        }
+        vm.call(
+            listener,
+            current_js.clone(),
+            vec![JSValue::from_object(Rc::clone(event))],
+        )?;
+    }
+
+    // stopImmediatePropagation halts all remaining propagation.
+    if event_flag(event, "__orinium_immediate_propagation_stopped") {
+        event
+            .borrow_mut()
+            .set("cancelBubble".to_string(), JSValue::from_bool(true));
+    }
+    Ok(())
+}
+
+/// The DOM `node.hasChildNodes()` method: returns true if the node has at
+/// least one child node.
+fn element_has_child_nodes(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::from_bool(false));
+    };
+    Ok(JSValue::from_bool(!node.borrow().children().is_empty()))
+}
+
+/// The DOM `element.click()` method: synthesizes a bubbling click event
+/// (detail 1) and dispatches it through the capture/bubble propagation engine.
+fn element_click(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(target) = args.first().and_then(JSValue::as_object) else {
+        return Ok(JSValue::undefined());
+    };
+    let mut event = JSObject::new();
+    event.set("type".to_string(), JSValue::from_string("click".to_string()));
+    event.set("bubbles".to_string(), JSValue::from_bool(true));
+    event.set("cancelable".to_string(), JSValue::from_bool(true));
+    event.set("detail".to_string(), JSValue::from_number(1.0));
+    event.set("defaultPrevented".to_string(), JSValue::from_bool(false));
+    event.set("cancelBubble".to_string(), JSValue::from_bool(false));
+    event.set("eventPhase".to_string(), JSValue::from_number(0.0));
+    event.set(
+        "preventDefault".to_string(),
+        JSValue::from_native_function(super::events::event_prevent_default),
+    );
+    event.set(
+        "stopPropagation".to_string(),
+        JSValue::from_native_function(super::events::event_stop_propagation),
+    );
+    event.set(
+        "stopImmediatePropagation".to_string(),
+        JSValue::from_native_function(super::events::event_stop_immediate_propagation),
+    );
+    let event = Rc::new(RefCell::new(event));
+
+    // Build the ancestor path (target first) like element_dispatch_event.
+    let target_obj = Rc::clone(&target);
+    let mut path: Vec<Rc<RefCell<JSObject>>> = vec![Rc::clone(&target_obj)];
+    if let Some(mut node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) {
+        loop {
+            let parent = node.borrow().parent();
+            let Some(parent) = parent else { break };
+            node = parent;
+            if let Some(object) = expose_node(vm, Rc::clone(&node)).and_then(|value| value.as_object()) {
+                path.push(object);
+            }
+        }
+    }
+    propagate_event(vm, &target_obj, &event, path)
 }
 
 fn element_contains(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -1279,6 +1435,10 @@ fn add_element_event_listener(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVal
     let Some(listener) = args.get(2).filter(|value| is_callable(value)).cloned() else {
         return Ok(JSValue::undefined());
     };
+    let capture = args.get(3).map_or(false, |v| match v.as_object() {
+        Some(o) => o.borrow().get("capture").to_boolean(),
+        None => v.as_boolean() == Some(true),
+    });
 
     let _ = with_host_mut(vm, |host| {
         let listeners = host
@@ -1287,11 +1447,10 @@ fn add_element_event_listener(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVal
             .or_default()
             .entry(event_type.clone())
             .or_default();
-        if !listeners
-            .iter()
-            .any(|candidate| candidate.strict_equals(&listener))
-        {
-            listeners.push(listener);
+        if !listeners.iter().any(|(candidate, c)| {
+            c == &capture && candidate.strict_equals(&listener)
+        }) {
+            listeners.push((listener, capture));
         }
     });
     Ok(JSValue::undefined())
@@ -1313,7 +1472,7 @@ fn remove_element_event_listener(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JS
             .get_mut(&dom_id)
             .and_then(|events| events.get_mut(event_type))
         {
-            listeners.retain(|candidate| !candidate.strict_equals(listener));
+            listeners.retain(|(candidate, _)| !candidate.strict_equals(listener));
         }
     });
     Ok(JSValue::undefined())
