@@ -1247,7 +1247,7 @@ fn propagate_event(
 
     // Capture phase: from the root down to (but excluding) the target.
     for ancestor in path.iter().rev().skip(1) {
-        if event_flag(&event, "cancelBubble") {
+        if event_flag(event, "cancelBubble") {
             break;
         }
         dispatch_at_phase(vm, ancestor, event, &event_type, 1 /* capture */)?;
@@ -1449,7 +1449,7 @@ fn add_element_event_listener(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVal
     let Some(listener) = args.get(2).filter(|value| is_callable(value)).cloned() else {
         return Ok(JSValue::undefined());
     };
-    let capture = args.get(3).map_or(false, |v| match v.as_object() {
+    let capture = args.get(3).is_some_and(|v| match v.as_object() {
         Some(o) => o.borrow().get("capture").to_boolean(),
         None => v.as_boolean() == Some(true),
     });

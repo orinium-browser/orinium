@@ -149,7 +149,7 @@ pub(crate) fn event_stop_immediate_propagation(
 /// object with mutable `type`/`bubbles`/`cancelable`/`detail`/`eventPhase`
 /// populated by `initEvent`/`initUIEvent` (and initMouseEvent stubs).
 pub(crate) fn make_create_event(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let _type = args.get(0).unwrap_or(&JSValue::undefined()).to_string();
+    let _type = args.first().unwrap_or(&JSValue::undefined()).to_string();
     let mut event = JSObject::new();
     event.set("type".to_string(), JSValue::from_string(String::new()));
     event.set("bubbles".to_string(), JSValue::from_bool(false));
