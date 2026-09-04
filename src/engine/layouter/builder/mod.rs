@@ -567,6 +567,22 @@ pub fn build_layout_and_info_from_snapshot(
             };
             container_style.text_align = text_flow_style.text_align;
 
+            // ── Replaced <iframe> box ──
+            // An iframe renders its content document (grafted into the DOM as
+            // its children) inside a fixed 300×150 viewport that clips overflow,
+            // per the CSS default for the element. Width/height attributes or
+            // CSS override these defaults when supplied.
+            if html_node.tag_name() == Some("iframe") {
+                overflow.x = true;
+                overflow.y = true;
+                if matches!(style.size.width, LengthOrAuto::Auto) {
+                    style.size.width = LengthOrAuto::Length(Length::Px(300.0));
+                }
+                if matches!(style.size.height, LengthOrAuto::Auto) {
+                    style.size.height = LengthOrAuto::Length(Length::Px(150.0));
+                }
+            }
+
             let child = Arc::new(InheritedCss {
                 custom_props: custom_properties,
                 text_style: text_style.clone(),
