@@ -245,6 +245,10 @@ impl Tab {
                 FetchKind::Audio { source } => {
                     self.on_fetch_succeeded_audio(source, &resp.body);
                 }
+                FetchKind::Iframe { dom_id } => {
+                    let html = String::from_utf8_lossy(&resp.body).to_string();
+                    self.on_fetch_succeeded_iframe(dom_id, html);
+                }
                 FetchKind::JavaScript { request_id, .. } => {
                     let initiator = self.page_origin();
                     if self.may_read_fetch_response(&initiator, &url, &resp.headers) {
@@ -265,6 +269,10 @@ impl Tab {
             Err(err) => match kind {
                 FetchKind::Image { .. } | FetchKind::Audio { .. } => {
                     log::warn!("Media fetch failed without aborting page load: {url}");
+                }
+                FetchKind::Iframe { dom_id } => {
+                    log::warn!("Iframe fetch failed without aborting page load: {url}");
+                    self.on_fetch_failed_iframe(dom_id);
                 }
                 FetchKind::Script { index } => {
                     log::warn!("Classic script fetch failed without aborting page load: {url}");
@@ -396,6 +404,21 @@ impl Tab {
     pub fn on_fetch_failed_dynamic_style(&mut self, node_id: u64) {
         if let Some(webview) = self.webview.as_mut() {
             webview.on_dynamic_style_fetch_failed(node_id);
+        }
+    }
+
+    /// Installs fetched HTML as an `<iframe>` element's `contentDocument`.
+    pub fn on_fetch_succeeded_iframe(&mut self, dom_id: u64, html: String) {
+        if let Some(webview) = self.webview.as_mut() {
+            webview.on_iframe_fetched(dom_id, html);
+        }
+    }
+
+    /// Marks an iframe load as failed so later `contentDocument` accesses do
+    /// not keep re-queuing a fetch.
+    pub fn on_fetch_failed_iframe(&mut self, dom_id: u64) {
+        if let Some(webview) = self.webview.as_mut() {
+            webview.on_iframe_fetch_failed(dom_id);
         }
     }
 
@@ -579,10 +602,19 @@ impl Tab {
 
     /// Scrolls the scrollable container under the cursor.
     pub fn scroll_at(&mut self, px: f32, py: f32, dx: f32, dy: f32, viewport: (f32, f32)) {
-        let Some((layout, info)) = self.layout_and_info_mut() else {
+        let Some(scrolled_id) = self
+            .layout_and_info_mut()
+            .and_then(|(layout, info)| {
+                crate::engine::input::scroll_at(layout, info, viewport, px, py, dx, dy)
+            })
+        else {
             return;
         };
-        crate::engine::input::scroll_at(layout, info, viewport, px, py, dx, dy);
+        if scrolled_id != crate::engine::input::NO_SCROLL_DOM_ID
+            && let Some(wv) = self.webview.as_mut()
+        {
+            wv.on_js_scroll(scrolled_id);
+        }
     }
 
     /// Whether this tab has a layout tree ready for drawing or hit-testing.
