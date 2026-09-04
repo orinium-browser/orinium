@@ -2811,10 +2811,168 @@ fn radial_gradient_parses_at_top_left_corner_case_insensitive() {
 }
 
 #[test]
+fn radial_gradient_at_two_percentages_resolves_position_and_stops() {
+    // `radial-gradient(ellipse at 50% 50%, black 16%, transparent 66%)`
+    let args = vec![
+        CssValue::Keyword("ellipse".into()),
+        CssValue::Keyword("at".into()),
+        CssValue::Length(50.0, Unit::Percent),
+        CssValue::Length(50.0, Unit::Percent),
+        CssValue::Keyword("black".into()),
+        CssValue::Length(16.0, Unit::Percent),
+        CssValue::Keyword("transparent".into()),
+        CssValue::Length(66.0, Unit::Percent),
+    ];
+    let gradient = parse_gradient(
+        "radial-gradient",
+        &args,
+        &TextStyle::default(),
+        &TextFlowStyle::default(),
+        ColorScheme::Light,
+    )
+    .expect("gradient parses");
+    assert!(matches!(
+        gradient.kind,
+        GradientKind::Radial {
+            shape: RadialShape::Ellipse,
+            size: RadialSizeKind::FarthestCorner,
+            position: (0.5, 0.5)
+        }
+    ));
+    assert_eq!(gradient.stops.len(), 2);
+    assert_eq!(gradient.stops[0].position, Some(0.16));
+    assert_eq!(gradient.stops[1].position, Some(0.66));
+}
+
+#[test]
+fn radial_gradient_at_center_percent_position() {
+    // `radial-gradient(ellipse farthest-side at center 22%, #ffcd33, #a37b00)`
+    let args = vec![
+        CssValue::Keyword("ellipse".into()),
+        CssValue::Keyword("farthest-side".into()),
+        CssValue::Keyword("at".into()),
+        CssValue::Keyword("center".into()),
+        CssValue::Length(22.0, Unit::Percent),
+        CssValue::Color("ffcd33".into()),
+        CssValue::Color("a37b00".into()),
+    ];
+    let gradient = parse_gradient(
+        "radial-gradient",
+        &args,
+        &TextStyle::default(),
+        &TextFlowStyle::default(),
+        ColorScheme::Light,
+    )
+    .expect("gradient parses");
+    assert!(matches!(
+        gradient.kind,
+        GradientKind::Radial {
+            shape: RadialShape::Ellipse,
+            size: RadialSizeKind::FarthestSide,
+            position: (0.5, 0.22)
+        }
+    ));
+    assert_eq!(gradient.stops.len(), 2);
+}
+
+#[test]
 fn radial_gradient_rejects_duplicate_shape() {
     let args = vec![
         CssValue::Keyword("circle".into()),
         CssValue::Keyword("ellipse".into()),
+        CssValue::Keyword("red".into()),
+        CssValue::Keyword("blue".into()),
+    ];
+    assert!(
+        parse_gradient(
+            "radial-gradient",
+            &args,
+            &TextStyle::default(),
+            &TextFlowStyle::default(),
+            ColorScheme::Light,
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn radial_gradient_parses_ellipse_percentage_size_after_shape_keyword() {
+    let args = vec![
+        CssValue::Keyword("ellipse".into()),
+        CssValue::Length(30.0, Unit::Percent),
+        CssValue::Length(50.0, Unit::Percent),
+        CssValue::Keyword("red".into()),
+        CssValue::Keyword("blue".into()),
+    ];
+    let gradient = parse_gradient(
+        "radial-gradient",
+        &args,
+        &TextStyle::default(),
+        &TextFlowStyle::default(),
+        ColorScheme::Light,
+    )
+    .expect("gradient parses");
+    assert!(matches!(
+        gradient.kind,
+        GradientKind::Radial {
+            shape: RadialShape::Ellipse,
+            size: RadialSizeKind::Explicit { rx, ry },
+            position: (0.5, 0.5)
+        } if rx == 0.3 && ry == 0.5
+    ));
+}
+
+#[test]
+fn radial_gradient_parses_ellipse_percentage_size_before_shape_keyword() {
+    let args = vec![
+        CssValue::Length(30.0, Unit::Percent),
+        CssValue::Length(50.0, Unit::Percent),
+        CssValue::Keyword("ellipse".into()),
+        CssValue::Keyword("red".into()),
+        CssValue::Keyword("blue".into()),
+    ];
+    let gradient = parse_gradient(
+        "radial-gradient",
+        &args,
+        &TextStyle::default(),
+        &TextFlowStyle::default(),
+        ColorScheme::Light,
+    )
+    .expect("gradient parses");
+    assert!(matches!(
+        gradient.kind,
+        GradientKind::Radial {
+            shape: RadialShape::Ellipse,
+            size: RadialSizeKind::Explicit { rx, ry },
+            ..
+        } if rx == 0.3 && ry == 0.5
+    ));
+}
+
+#[test]
+fn radial_gradient_rejects_lone_percentage_size() {
+    let args = vec![
+        CssValue::Length(50.0, Unit::Percent),
+        CssValue::Keyword("red".into()),
+        CssValue::Keyword("blue".into()),
+    ];
+    assert!(
+        parse_gradient(
+            "radial-gradient",
+            &args,
+            &TextStyle::default(),
+            &TextFlowStyle::default(),
+            ColorScheme::Light,
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn radial_gradient_rejects_negative_percentage_size() {
+    let args = vec![
+        CssValue::Length(30.0, Unit::Percent),
+        CssValue::Length(-50.0, Unit::Percent),
         CssValue::Keyword("red".into()),
         CssValue::Keyword("blue".into()),
     ];
