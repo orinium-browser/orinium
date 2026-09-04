@@ -20,8 +20,8 @@ use crate::engine::{
     },
     js::{
         JsDevToolsRequest, JsDynamicImageRequest, JsDynamicScriptRequest, JsDynamicScriptSource,
-        JsDynamicStyleRequest, JsFetchRequest, JsFetchResponse, JsLayoutMetrics, JsProcessor,
-        JsTask, JsTaskResult,
+        JsDynamicStyleRequest, JsFetchRequest, JsFetchResponse, JsIframeFetchRequest,
+        JsLayoutMetrics, JsProcessor, JsTask, JsTaskResult,
     },
     layouter::{
         self, InheritedCss, LayoutResult, NodeId,
@@ -30,7 +30,7 @@ use crate::engine::{
     },
     origin::Origin,
     renderer_model::Image,
-    tree::TreeNode,
+    tree::{NodeRef, TreeNode},
 };
 use crate::platform::{locale, renderer::text_measurer::PlatformTextMeasurer};
 use crate::{perf_scope, profile_log};
@@ -79,6 +79,9 @@ pub enum FetchKind {
         method: String,
         headers: Vec<(String, String)>,
         body: Vec<u8>,
+    },
+    Iframe {
+        dom_id: u64,
     },
 }
 
@@ -186,6 +189,9 @@ pub struct WebView {
     /// Cached DOM snapshot, reused while the tree's mutation version is
     /// unchanged so that CSS/image-driven relayouts skip the full clone.
     snapshot_cache: Option<SnapshotCache>,
+    /// The most recent serialized content documents of any `<iframe>`s, keyed
+    /// by the iframe's JS-facing dom id. Used by layout to render them nested.
+    iframe_content: HashMap<u64, DomSnapshot>,
     /// Channel on which text inputs report value write-backs (received here).
     write_back_tx: mpsc::Sender<(u32, String)>,
     write_back_rx: mpsc::Receiver<(u32, String)>,
@@ -221,6 +227,8 @@ pub struct WebView {
     pending_dynamic_styles: Vec<JsDynamicStyleRequest>,
     /// Images created or populated by scripts, awaiting network scheduling.
     pending_dynamic_images: Vec<JsDynamicImageRequest>,
+    /// `<iframe src="...">` requests queued by JS results, awaiting fetch.
+    pending_iframe_fetches: Vec<JsIframeFetchRequest>,
     /// Classic scripts in document order. Execution starts after CSS is applied.
     classic_scripts: Vec<ClassicScript>,
     next_script_index: usize,
@@ -262,6 +270,41 @@ fn js_snapshot_from_tree(dom: &DomTree) -> (DomSnapshot, HashMap<usize, u64>) {
         next_id += 1;
     });
     (DomSnapshot::from_mirror(&dom.root, &dom_ids), dom_ids)
+}
+
+/// Grafts each committed iframe's content document into its host `<iframe>`
+/// node so the normal layout/paint pipeline renders the content nested inside
+/// the host box. The JS domain keeps iframe documents in a separate tree, so we
+/// splice their `<html>` subtree under the matching host node here.
+fn graft_iframe_documents(
+    dom: &Rc<DomTree>,
+    js_dom_ids: &HashMap<usize, u64>,
+    iframes: &HashMap<u64, DomSnapshot>,
+) {
+    if iframes.is_empty() {
+        return;
+    }
+    // Build a reverse map: js_dom_id -> live node, so host lookups are O(1)
+    // per iframe instead of O(n) DOM traversals.
+    let mut node_by_dom_id: HashMap<u64, NodeRef<HtmlNodeType>> = HashMap::new();
+    dom.traverse(|node| {
+        if let Some(&dom_id) = js_dom_ids.get(&(Rc::as_ptr(node) as usize)) {
+            node_by_dom_id.insert(dom_id, Rc::clone(node));
+        }
+    });
+    for (iframe_dom_id, content) in iframes {
+        let (content_tree, _ids) = content.into_tree();
+        let Some(html) = content_tree.query_selector("html") else {
+            continue;
+        };
+        let Some(host) = node_by_dom_id.get(iframe_dom_id) else {
+            continue;
+        };
+        if host.borrow().value.tag_name() != Some("iframe") {
+            continue;
+        }
+        TreeNode::add_child(host, html);
+    }
 }
 
 impl std::fmt::Debug for SnapshotCache {
@@ -360,6 +403,7 @@ impl WebView {
             positioned_layout: None,
             layout_dom_refs: Vec::new(),
             snapshot_cache: None,
+            iframe_content: HashMap::new(),
             write_back_tx,
             write_back_rx,
             js_processor: None,
@@ -374,6 +418,7 @@ impl WebView {
             pending_dynamic_scripts: Vec::new(),
             pending_dynamic_styles: Vec::new(),
             pending_dynamic_images: Vec::new(),
+            pending_iframe_fetches: Vec::new(),
             classic_scripts: Vec::new(),
             next_script_index: 0,
             pending_script_fetches: HashMap::new(),
@@ -455,6 +500,7 @@ impl WebView {
         self.pending_dynamic_scripts.clear();
         self.pending_dynamic_styles.clear();
         self.pending_dynamic_images.clear();
+        self.pending_iframe_fetches.clear();
         self.js_dom_ids.clear();
         self.classic_scripts.clear();
         self.next_script_index = 0;
@@ -550,6 +596,7 @@ impl WebView {
 
         self.try_apply_js_results();
         self.schedule_js_fetches(&mut tasks);
+        self.schedule_iframe_fetches(&mut tasks);
         self.schedule_dynamic_scripts(&mut tasks);
         for request in std::mem::take(&mut self.pending_devtools_requests) {
             tasks.push(WebViewTask::DevToolsRequest {
@@ -645,6 +692,8 @@ impl WebView {
         self.pending_dynamic_scripts.clear();
         self.pending_dynamic_styles.clear();
         self.pending_dynamic_images.clear();
+        self.pending_iframe_fetches.clear();
+        self.iframe_content.clear();
 
         let css_base_url = parsed.base_url.clone();
         let docment_info = DocumentInfo {
@@ -806,6 +855,24 @@ impl WebView {
                 id: request_id,
                 reason,
             });
+            self.pending_js_tasks += 1;
+        }
+    }
+
+    /// Installs parsed iframe HTML as the host element's `contentDocument` and
+    /// fires its `load` event.
+    pub fn on_iframe_fetched(&mut self, dom_id: u64, html: String) {
+        if let Some(processor) = self.js_processor.as_ref() {
+            processor.send(JsTask::ResolveIframe { dom_id, html });
+            self.pending_js_tasks += 1;
+        }
+    }
+
+    /// Marks an iframe load as failed so later `contentDocument` accesses do
+    /// not keep re-queuing a fetch.
+    pub fn on_iframe_fetch_failed(&mut self, dom_id: u64) {
+        if let Some(processor) = self.js_processor.as_ref() {
+            processor.send(JsTask::RejectIframe { dom_id });
             self.pending_js_tasks += 1;
         }
     }
@@ -1050,6 +1117,7 @@ impl WebView {
     fn has_pending_subresource_work(&self) -> bool {
         !self.pending_script_fetches.is_empty()
             || !self.pending_js_fetches.is_empty()
+            || !self.pending_iframe_fetches.is_empty()
             || !self.pending_dynamic_scripts.is_empty()
             || !self.pending_dynamic_styles.is_empty()
             || !self.pending_dynamic_images.is_empty()
@@ -1086,6 +1154,28 @@ impl WebView {
                 }),
                 Err(error) => self
                     .on_js_fetch_failed(request.id, format!("Failed to parse fetch URL: {error}")),
+            }
+        }
+    }
+
+    fn schedule_iframe_fetches(&mut self, tasks: &mut Vec<WebViewTask>) {
+        let requests = std::mem::take(&mut self.pending_iframe_fetches);
+
+        for request in requests {
+            match Url::parse(&request.url) {
+                Ok(url) => {
+                    log::info!("Iframe fetch requested in WebView: url={}", url);
+                    tasks.push(WebViewTask::Fetch {
+                        url,
+                        kind: FetchKind::Iframe {
+                            dom_id: request.dom_id,
+                        },
+                    })
+                }
+                Err(error) => {
+                    log::warn!("Failed to parse iframe URL: {error}");
+                    self.on_iframe_fetch_failed(request.dom_id);
+                }
             }
         }
     }
@@ -1195,6 +1285,31 @@ impl WebView {
             return false;
         };
         processor.send(JsTask::Click { dom_id: *js_dom_id });
+        self.pending_js_tasks += 1;
+        false
+    }
+
+    /// Dispatches a `scroll` event on the given DOM snapshot node id to the
+    /// page's JS.
+    ///
+    /// Resolves the live DOM node behind the snapshot id, translates it to the
+    /// JS-facing dom id and hands the scroll to the JS thread. Returns whether
+    /// a redraw is needed; the JS result triggers the relayout once applied.
+    pub fn on_js_scroll(&mut self, dom_id: u32) -> bool {
+        let Some(processor) = self.js_processor.as_ref() else {
+            return false;
+        };
+        let Some(node) = self
+            .layout_dom_refs
+            .get(dom_id as usize)
+            .and_then(|weak| weak.upgrade())
+        else {
+            return false;
+        };
+        let Some(js_dom_id) = self.js_dom_ids.get(&(Rc::as_ptr(&node) as usize)) else {
+            return false;
+        };
+        processor.send(JsTask::Scroll { dom_id: *js_dom_id });
         self.pending_js_tasks += 1;
         false
     }
@@ -1358,6 +1473,8 @@ impl WebView {
                 .extend(result.dynamic_style_requests);
             self.pending_dynamic_images
                 .extend(result.dynamic_image_requests);
+            self.pending_iframe_fetches
+                .extend(result.iframe_fetch_requests);
 
             if let Some(in_flight) = self.in_flight_timer_version
                 && result.version >= in_flight
@@ -1377,8 +1494,18 @@ impl WebView {
             // rebuilt tree starts with a fresh version, so the cached snapshot
             // and live layout references are stale and must be dropped.
             let (tree, dom_ids) = snapshot.into_tree();
+            // Retain only iframe content for iframes still present; stale
+            // entries from removed iframes are dropped on the next nav anyway.
+            self.iframe_content.clear();
+            for iframe_doc in result.iframe_documents {
+                self.iframe_content
+                    .insert(iframe_doc.iframe_dom_id, iframe_doc.content);
+            }
             info.dom = Rc::new(tree);
             self.js_dom_ids = dom_ids;
+            // Splice committed iframe content under the host <iframe> nodes so
+            // layout/paint render it nested.
+            graft_iframe_documents(&info.dom, &self.js_dom_ids, &self.iframe_content);
             self.snapshot_cache = None;
             self.layout_dom_refs.clear();
 
@@ -1482,6 +1609,8 @@ impl WebView {
         self.pending_dynamic_scripts.clear();
         self.pending_dynamic_styles.clear();
         self.pending_dynamic_images.clear();
+        self.pending_iframe_fetches.clear();
+        self.iframe_content.clear();
         self.classic_scripts.clear();
         self.next_script_index = 0;
         self.pending_script_fetches.clear();
@@ -2055,6 +2184,7 @@ mod tests {
     use super::*;
     use crate::engine::layouter::types::{ContainerRole, ContainerStyle};
     use serde_json::{Value, json};
+    use ui_layout::{Length, LengthOrAuto};
     use std::time::{Duration, Instant};
 
     /// Drives `tick()` until `done` holds, or panics after a timeout.
@@ -2704,6 +2834,213 @@ mod tests {
                 })
             },
             "JS-inserted style element to be resolved",
+        );
+    }
+
+    /// Concatenates every text node under an info subtree.
+    fn collect_text(info: &InfoNode) -> String {
+        let mut text = match &info.kind {
+            NodeKind::Text { text, .. } => text.clone(),
+            _ => String::new(),
+        };
+        for child in &info.children {
+            text.push_str(&collect_text(child));
+        }
+        text
+    }
+
+    /// Whether any box in the layout is sized 300×150 — the content-box size
+    /// the builder gives an `<iframe>` by default (the border box is larger
+    /// because the UA stylesheet adds a 2px border).
+    fn has_300x150_box(node: &LayoutNode) -> bool {
+        let sized = matches!(node.style.size.width, LengthOrAuto::Length(Length::Px(w)) if (w - 300.0).abs() < 0.001)
+            && matches!(node.style.size.height, LengthOrAuto::Length(Length::Px(h)) if (h - 150.0).abs() < 0.001);
+        sized
+            || node
+                .children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .any(has_300x150_box)
+    }
+
+    /// Whether some dual-axis scroll container (the `<iframe>` box, or the
+    /// nested `<html>` document root grafted into it) holds only the given
+    /// nested text and none of the host page's text.
+    fn iframe_holds_grafted_content(info: &InfoNode) -> bool {
+        if matches!(
+            info.kind,
+            NodeKind::Container {
+                scroll_x: true,
+                scroll_y: true,
+                ..
+            }
+        ) {
+            let text = collect_text(info);
+            if text.contains("grafted inner paragraph") && !text.contains("host paragraph") {
+                return true;
+            }
+        }
+        info.children.iter().any(iframe_holds_grafted_content)
+    }
+
+    /// Runs the committed layout through draw-command generation and returns
+    /// the whitespace-stripped text payload of every `DrawText` command — i.e.
+    /// the text that would actually be rasterized on screen.
+    fn paint_text(webview: &WebView) -> String {
+        let Some((layout, info)) = webview.layout_and_info() else {
+            return String::new();
+        };
+        let mut commands = Vec::new();
+        crate::engine::renderer_model::generate_draw_commands(
+            &mut commands,
+            layout,
+            info,
+            (800.0, 600.0),
+        );
+        let mut text = String::new();
+        for command in &commands {
+            if let crate::engine::renderer_model::DrawCommand::DrawText { text: run, .. } = command
+            {
+                text.push_str(run);
+            }
+        }
+        text.chars().filter(|c| !c.is_whitespace()).collect()
+    }
+
+    #[test]
+    fn iframe_content_documents_are_fetched_grafted_and_laid_out() {
+        let mut webview = WebView::default();
+        webview.tick();
+        webview.on_html_fetched(
+            r#"<html><body><p>host paragraph</p></body></html>"#.to_string(),
+            Url::parse("https://example.test/inside-host.html").unwrap(),
+        );
+        // Create the iframe from JS so the src attribute is set on a live node
+        // (the same path the acid3 harness exercises).
+        webview.send_script(
+            r#"
+            const frame = document.createElement("iframe");
+            document.body.appendChild(frame);
+            frame.src = "https://example.test/inside.html";
+            "#,
+        );
+
+        // The JS thread reports the iframe's src as a fetch request.
+        let task = pump_for_task(
+            &mut webview,
+            |task| {
+                matches!(
+                    task,
+                    WebViewTask::Fetch {
+                        kind: FetchKind::Iframe { .. },
+                        ..
+                    }
+                )
+            },
+            "iframe fetch request",
+        );
+        let (url, dom_id) = match task {
+            WebViewTask::Fetch {
+                url,
+                kind: FetchKind::Iframe { dom_id },
+            } => (url, dom_id),
+            _ => unreachable!("pump_for_task only returns matching tasks"),
+        };
+        assert_eq!(url.as_str(), "https://example.test/inside.html");
+
+        // The fetched HTML is parsed on the JS thread and installed as the
+        // iframe's content document; the committed result must carry it back so
+        // the browser can graft it under the host <iframe> node.
+        webview.on_iframe_fetched(
+            dom_id,
+            r#"<html><body><p>grafted inner paragraph</p></body></html>"#.to_string(),
+        );
+
+        pump_until(
+            &mut webview,
+            |wv| {
+                let Some((layout, info)) = wv.layout_and_info() else {
+                    return false;
+                };
+                iframe_holds_grafted_content(info)
+                    && collect_text(info).contains("host paragraph")
+                    && has_300x150_box(layout)
+            },
+            "grafted iframe content to reach the layout",
+        );
+
+        // The nested content must be reachable by the paint pass, not just the
+        // layout tree.
+        let painted = paint_text(&webview);
+        assert!(
+            painted.contains("hostparagraph"),
+            "host page text must be painted"
+        );
+        assert!(
+            painted.contains("graftedinnerparagraph"),
+            "iframe content text must be painted"
+        );
+    }
+
+    #[test]
+    fn markup_declared_iframes_load_content_without_javascript() {
+        let mut webview = WebView::default();
+        webview.tick();
+        // A plain `<iframe src>` in the parsed HTML must load like any other
+        // subresource: real pages declare frames in markup, and nothing sets
+        // their `src` property from JavaScript.
+        webview.on_html_fetched(
+            r#"<html><body><p>host paragraph</p><iframe src="https://example.test/inside.html"></iframe></body></html>"#.to_string(),
+            Url::parse("https://example.test/inside-host.html").unwrap(),
+        );
+
+        let task = pump_for_task(
+            &mut webview,
+            |task| {
+                matches!(
+                    task,
+                    WebViewTask::Fetch {
+                        kind: FetchKind::Iframe { .. },
+                        ..
+                    }
+                )
+            },
+            "fetch request for a markup-declared iframe",
+        );
+        let (url, dom_id) = match task {
+            WebViewTask::Fetch {
+                url,
+                kind: FetchKind::Iframe { dom_id },
+            } => (url, dom_id),
+            _ => unreachable!("pump_for_task only returns matching tasks"),
+        };
+        assert_eq!(url.as_str(), "https://example.test/inside.html");
+
+        webview.on_iframe_fetched(
+            dom_id,
+            r#"<html><body><p>grafted inner paragraph</p></body></html>"#.to_string(),
+        );
+        pump_until(
+            &mut webview,
+            |wv| {
+                let Some((layout, info)) = wv.layout_and_info() else {
+                    return false;
+                };
+                iframe_holds_grafted_content(info)
+                    && collect_text(info).contains("host paragraph")
+                    && has_300x150_box(layout)
+            },
+            "markup-declared iframe content to reach the layout",
+        );
+
+        let painted = paint_text(&webview);
+        assert!(
+            painted.contains("hostparagraph"),
+            "host page text must be painted"
+        );
+        assert!(
+            painted.contains("graftedinnerparagraph"),
+            "iframe content text must be painted"
         );
     }
 
