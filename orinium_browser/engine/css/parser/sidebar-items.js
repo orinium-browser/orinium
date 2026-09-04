@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["AtQuery","Combinator","CssNodeType","ParserErrorKind","PseudoClass","RangeOperator"],"struct":["AttributeSelector","ComplexSelector","CssNode","Parser","ParserError","Selector","SelectorPart"],"type":["ParseResult"]};
+window.SIDEBAR_ITEMS = {"enum":["AtQuery","AttributeSelectorOperator","Combinator","CssNodeType","ParserErrorKind","PseudoClass","RangeOperator"],"struct":["AttributeSelector","ComplexSelector","CssNode","Parser","ParserError","Selector","SelectorPart"],"type":["ParseResult"]};
