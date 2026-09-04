@@ -2090,7 +2090,7 @@ fn insert_row_impl(vm: &mut VM, args: Vec<JSValue>, section: bool) -> JSResult<J
         } else {
             (index as usize).min(section_children.len())
         };
-        let pos = ins_index_of(&node, &node.borrow().children().to_vec(), ins);
+        let pos = ins_index_of(&node, node.borrow().children(), ins);
         TreeNode::insert_child_at(&node, pos, Rc::clone(&tr));
         mark_dom_dirty(vm);
         return Ok(expose_node(vm, tr).unwrap_or(JSValue::null()));
