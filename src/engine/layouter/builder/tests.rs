@@ -676,6 +676,248 @@ fn noscript_content_is_absent_from_layout_when_scripting_is_enabled() {
 }
 
 #[test]
+fn iframe_is_a_clipped_fixed_size_container_that_renders_grafted_content() {
+    // Simulate the graft performed by the browser: the iframe's content
+    // document is spliced under the <iframe> as an <html>/<body> subtree.
+    let html = r#"
+        <html><body>
+            <iframe>
+                <html><body><p>nested iframe text</p></body></html>
+            </iframe>
+        </body></html>
+    "#;
+    let (mut layout, info) = layout_and_info_for(html, "");
+    ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+
+    fn find_iframe<'a>(info: &'a InfoNode) -> Option<&'a InfoNode> {
+        if matches!(
+            info.kind,
+            NodeKind::Container {
+                scroll_x: true,
+                scroll_y: true,
+                ..
+            }
+        ) {
+            return Some(info);
+        }
+        info.children.iter().find_map(find_iframe)
+    }
+    fn find_iframe_layout<'a>(node: &'a LayoutNode) -> Option<&'a LayoutNode> {
+        let size = &node.style.size;
+        if matches!(size.width, LengthOrAuto::Length(Length::Px(w)) if (w - 300.0).abs() < 0.001)
+            && matches!(size.height, LengthOrAuto::Length(Length::Px(h)) if (h - 150.0).abs() < 0.001)
+        {
+            return Some(node);
+        }
+        node.children
+            .iter()
+            .filter_map(LayoutChild::node)
+            .find_map(find_iframe_layout)
+    }
+
+    let iframe = find_iframe(&info).expect("iframe node must exist in layout");
+    let NodeKind::Container {
+        scroll_x, scroll_y, ..
+    } = &iframe.kind
+    else {
+        panic!("iframe must be a Container, got {:?}", iframe.kind);
+    };
+    // Overflow clips (scroll container) so content is constrained to the box.
+    assert!(*scroll_x && *scroll_y);
+
+    // The grafted content document is laid out as the iframe's child subtree.
+    let text = text_content(iframe);
+    assert!(text.contains("nested iframe text"));
+
+    // Rendered default iframe size is 300×150.
+    let iframe_layout = find_iframe_layout(&layout).expect("iframe layout node");
+    let bm = iframe_layout.layout_box.iter().next().unwrap();
+    assert_eq!(bm.border_box.width, 300.0);
+    assert_eq!(bm.border_box.height, 150.0);
+}
+
+/// The first node in `info` that is a scroll container in both axes — the
+/// shape the builder gives an `<iframe>`.
+fn find_iframe(info: &InfoNode) -> Option<&InfoNode> {
+    if matches!(
+        info.kind,
+        NodeKind::Container {
+            scroll_x: true,
+            scroll_y: true,
+            ..
+        }
+    ) {
+        return Some(info);
+    }
+    info.children.iter().find_map(find_iframe)
+}
+
+/// Whether `needle` is `root` itself or one of its descendants.
+fn is_within(root: &InfoNode, needle: &InfoNode) -> bool {
+    if std::ptr::eq(root, needle) {
+        return true;
+    }
+    root.children.iter().any(|child| is_within(child, needle))
+}
+
+/// Collects every container that currently holds a non-zero vertical scroll
+/// offset (i.e. whose own content has actually been scrolled).
+fn scrolled_containers<'a>(info: &'a InfoNode, out: &mut Vec<&'a InfoNode>) {
+    match &info.kind {
+        NodeKind::Container {
+            scroll_offset_y, ..
+        }
+        | NodeKind::Custom {
+            scroll_offset_y, ..
+        } if scroll_offset_y.abs() > 0.001 => {
+            out.push(info);
+        }
+        _ => {}
+    }
+    for child in &info.children {
+        scrolled_containers(child, out);
+    }
+}
+
+#[test]
+fn wheel_over_iframe_scrolls_nested_content_not_the_host_page() {
+    // The iframe's grafted content document is taller than the iframe's
+    // 300×150 viewport, and the host page has its own scrollable box below.
+    let html = r#"
+        <html><body>
+            <iframe>
+                <html><body><div style="height: 400px">nested content</div></body></html>
+            </iframe>
+            <div style="height: 100px; overflow-y: auto">
+                <div style="height: 300px"></div>
+            </div>
+        </body></html>
+    "#;
+
+    // Wheel over the iframe: the delta must scroll the iframe's own content
+    // (inside its subtree) and never the host page around it.
+    let (mut layout, mut info) = layout_and_info_for(html, "");
+    ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+    let scrolled =
+        crate::engine::input::scroll_at(&layout, &mut info, (800.0, 600.0), 150.0, 75.0, 0.0, 60.0);
+    assert!(scrolled.is_some(), "wheel over the iframe must be consumed by it");
+    let mut changed = Vec::new();
+    scrolled_containers(&info, &mut changed);
+    let iframe = find_iframe(&info).expect("iframe node must exist in layout");
+    assert!(
+        !changed.is_empty(),
+        "wheel over the iframe must scroll its content"
+    );
+    for node in &changed {
+        assert!(
+            is_within(iframe, node),
+            "scroll delta over the iframe must stay inside the iframe subtree"
+        );
+    }
+
+    // Wheel over the host page's own scrollable box: that box scrolls, and
+    // the iframe content must not move.
+    let (mut layout, mut info) = layout_and_info_for(html, "");
+    ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+    let scrolled = crate::engine::input::scroll_at(
+        &layout,
+        &mut info,
+        (800.0, 600.0),
+        150.0,
+        200.0,
+        0.0,
+        60.0,
+    );
+    assert!(scrolled.is_some(), "wheel over the host scroll box must be consumed");
+    let mut changed = Vec::new();
+    scrolled_containers(&info, &mut changed);
+    assert!(
+        !changed.is_empty(),
+        "wheel over the host scroll box must scroll it"
+    );
+    let iframe = find_iframe(&info).expect("iframe node must exist in layout");
+    for node in &changed {
+        assert!(
+            !is_within(iframe, node),
+            "scrolling the host page must not move the iframe content"
+        );
+    }
+}
+
+#[test]
+fn nested_iframe_content_is_only_hit_inside_the_iframe_box() {
+    // The grafted nested document is followed by host-page content below the
+    // iframe box.
+    let html = r#"
+        <html><body>
+            <iframe>
+                <html><body><p>nested text visible</p></body></html>
+            </iframe>
+            <div style="height: 120px">host content below</div>
+        </body></html>
+    "#;
+    let (mut layout, info) = layout_and_info_for(html, "");
+    ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+    let iframe = find_iframe(&info).expect("iframe node must exist in layout");
+
+    // A click over the visible nested text resolves into the iframe subtree:
+    // the hit path is child → parent, so the innermost hit is nested content.
+    let inside = crate::engine::input::hit_test(&layout, &info, 100.0, 8.0);
+    assert!(!inside.is_empty(), "click inside the iframe must hit");
+    assert!(
+        inside.iter().any(|hit| is_within(iframe, hit.info)),
+        "hit path must contain the iframe"
+    );
+    let innermost = inside[0].info;
+    assert!(
+        is_within(iframe, innermost),
+        "innermost hit inside the iframe box must be nested content"
+    );
+
+    // A click below the box (on host content) never reaches the nested
+    // document, even though the nested layout extends past 150 px.
+    let below = crate::engine::input::hit_test(&layout, &info, 100.0, 200.0);
+    assert!(!below.is_empty(), "click on host content must hit");
+    assert!(
+        below.iter().all(|hit| !is_within(iframe, hit.info)),
+        "content below the fold must not be hit outside the iframe box"
+    );
+}
+
+#[test]
+fn iframe_width_height_attributes_override_the_300x150_defaults() {
+    let html = r#"<html><body><iframe width="400" height="250"></iframe></body></html>"#;
+    let (mut layout, info) = layout_and_info_for(html, "");
+    ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+
+    fn find_box(node: &LayoutNode, w: f32, h: f32) -> Option<&LayoutNode> {
+        if node.layout_box.iter().any(|b| {
+            (b.border_box.width - w).abs() < 0.001 && (b.border_box.height - h).abs() < 0.001
+        }) {
+            return Some(node);
+        }
+        node.children
+            .iter()
+            .filter_map(LayoutChild::node)
+            .find_map(|child| find_box(child, w, h))
+    }
+
+    // The iframe box itself sizes from the attributes, not 300×150.
+    let iframe = find_iframe(&info).expect("iframe node must exist in layout");
+    let NodeKind::Container {
+        scroll_x, scroll_y, ..
+    } = &iframe.kind
+    else {
+        panic!("iframe must be a Container");
+    };
+    assert!(*scroll_x && *scroll_y, "iframe keeps its clipping viewport");
+    let iframe_layout = find_box(&layout, 400.0, 250.0).expect("layout must size the iframe box");
+    let bm = iframe_layout.layout_box.iter().next().unwrap();
+    assert_eq!(bm.border_box.width, 400.0);
+    assert_eq!(bm.border_box.height, 250.0);
+}
+
+#[test]
 fn named_grid_area_css_controls_final_layout() {
     let html = r#"<html><body><div class="grid"><div class="header"></div><div class="sidebar"></div><div class="main"></div><div class="footer"></div></div></body></html>"#;
     let css = r#"
