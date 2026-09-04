@@ -72,6 +72,16 @@ pub struct JsIframeFetchRequest {
     pub url: String,
 }
 
+/// The serialized content document of a single `<iframe>`, carried from the JS
+/// thread so the layout can render it nested inside the host page.
+#[derive(Debug)]
+pub struct IframeContentSnapshot {
+    /// The JS-facing DOM id of the `<iframe>` element this content belongs to.
+    pub iframe_dom_id: u64,
+    /// The iframe's content document tree, serialized as a movable snapshot.
+    pub content: DomSnapshot,
+}
+
 /// A script element inserted by JavaScript after the initial HTML parse.
 #[derive(Debug)]
 pub(crate) struct JsDynamicScriptRequest {
@@ -163,6 +173,9 @@ pub struct JsHost {
     /// Independent document instances for `<iframe>` elements, keyed by the
     /// iframe element's DOM id. Each iframe gets its own DOM tree.
     pub(crate) iframe_documents: HashMap<u64, Rc<RefCell<IframeDocument>>>,
+    /// DOM ids of iframes whose content failed to load; a failed load is not
+    /// retried automatically (only a new `src` re-queues it).
+    pub(crate) failed_iframe_fetches: HashSet<u64>,
     pub(crate) document_event_listeners: HashMap<String, Vec<JSValue>>,
     /// Element event listeners keyed by dom id and event type. Each entry is a
     /// `(callback, capture)` pair; the capture phase flag distinguishes
@@ -258,6 +271,7 @@ impl JsRuntime {
             document: None,
             document_implementation: None,
             iframe_documents: HashMap::new(),
+            failed_iframe_fetches: HashSet::new(),
             document_event_listeners: HashMap::new(),
             element_event_listeners: HashMap::new(),
             window_inline_event_handlers: HashMap::new(),
@@ -618,6 +632,13 @@ impl JsRuntime {
         self.needs_redraw.replace(false)
     }
 
+    /// Flags that the runtime produced visible state (e.g. an iframe content
+    /// document) that must be carried back to the browser side even though the
+    /// host DOM tree itself did not mutate.
+    pub(crate) fn mark_needs_redraw(&self) {
+        self.needs_redraw.set(true);
+    }
+
     /// Takes fetch requests queued by JavaScript since the previous call.
     pub(crate) fn take_fetch_requests(&mut self) -> Vec<JsFetchRequest> {
         with_host_mut(self.engine.vm(), |host| {
@@ -640,10 +661,16 @@ impl JsRuntime {
     pub fn resolve_iframe_fetch(&mut self, dom_id: u64, html: String) {
         let installed = with_host_mut(self.engine.vm(), |host| {
             host.pending_iframe_fetches.remove(&dom_id);
+            host.failed_iframe_fetches.remove(&dom_id);
             web_apis::dom::document::install_parsed_iframe_document(host, dom_id, &html)
         });
         if installed.unwrap_or(false) {
             self.dispatch_element_event(dom_id, "load");
+            // Installing a content document does not mutate the host tree, so
+            // nothing would otherwise flag this task's result: mark the runtime
+            // so the processor ships the snapshot with the iframe documents and
+            // the browser thread grafts them into layout.
+            self.mark_needs_redraw();
         }
     }
 
@@ -652,7 +679,47 @@ impl JsRuntime {
     pub fn reject_iframe_fetch(&mut self, dom_id: u64) {
         with_host_mut(self.engine.vm(), |host| {
             host.pending_iframe_fetches.remove(&dom_id);
+            host.failed_iframe_fetches.insert(dom_id);
         });
+    }
+
+    /// Queues network loads for every `<iframe src>` in the bound DOM that has
+    /// not yet been queued, loaded, or failed.
+    ///
+    /// Markup-declared iframes (and frames inserted through fragment parsing
+    /// such as `innerHTML`) never pass through the `src` setter, so nothing
+    /// would otherwise request their content. The processor runs this after
+    /// each task so those frames load like any other subresource. Returns the
+    /// number of loads newly queued.
+    pub(crate) fn queue_markup_iframe_loads(&mut self) -> usize {
+        with_host_mut(self.engine.vm(), |host| {
+            let iframes = host.dom.find_all(|node| node.tag_name() == Some("iframe"));
+            let mut queued = 0;
+            for node in iframes {
+                let src = {
+                    let node_ref = node.borrow();
+                    node_ref
+                        .value
+                        .get_attr("src")
+                        .map(str::trim)
+                        .unwrap_or("")
+                        .to_string()
+                };
+                if src.is_empty() {
+                    continue;
+                }
+                let Some(dom_id) = host.dom_id_for_node(&node) else {
+                    continue;
+                };
+                let before = host.pending_iframe_fetches.len();
+                web_apis::dom::element::queue_iframe_fetch_if_needed(host, dom_id, &src);
+                if host.pending_iframe_fetches.len() > before {
+                    queued += 1;
+                }
+            }
+            queued
+        })
+        .unwrap_or(0)
     }
 
     pub(crate) fn take_dynamic_script_requests(&mut self) -> Vec<JsDynamicScriptRequest> {
@@ -785,6 +852,30 @@ impl JsRuntime {
         DomSnapshot::from_mirror(&root, &dom_ids)
     }
 
+    /// Serializes every iframe's content document into movable snapshots so the
+    /// layout can render each `<iframe>`'s content nested inside the host page.
+    pub fn snapshot_iframe_documents(&self) -> Vec<IframeContentSnapshot> {
+        let Some(docs) = with_host(self.engine.vm(), |host| {
+            let mut out: Vec<(u64, Rc<DomTree>)> = Vec::new();
+            for (dom_id, doc) in &host.iframe_documents {
+                out.push((*dom_id, Rc::clone(&doc.borrow().tree)));
+            }
+            Some(out)
+        })
+        .flatten() else {
+            return Vec::new();
+        };
+        let mut snapshots = Vec::with_capacity(docs.len());
+        for (dom_id, tree) in docs {
+            let (content, _refs) = DomSnapshot::from_tree(&tree.root);
+            snapshots.push(IframeContentSnapshot {
+                iframe_dom_id: dom_id,
+                content,
+            });
+        }
+        snapshots
+    }
+
     /// Replaces the mirror DOM with a snapshot produced by the browser side.
     ///
     /// The mirror is rebuilt from `snapshot` and node references are re-registered
@@ -914,6 +1005,91 @@ impl JsRuntime {
         ran_handler
     }
 
+    /// Dispatches a `scroll` event to the handlers registered on the element
+    /// with the given JS-facing dom id. Returns whether at least one handler
+    /// ran.
+    pub fn scroll_dom_id(&mut self, dom_id: u64) -> bool {
+        let Some(node) = with_host(self.engine.vm(), |host| {
+            host.refs.get(&dom_id).and_then(|w| w.upgrade())
+        })
+        .flatten() else {
+            return false;
+        };
+        self.scroll(&node)
+    }
+
+    /// Dispatches a `scroll` event that bubbles through `node`'s exposed
+    /// ancestors.
+    ///
+    /// Both the `onscroll` property and `addEventListener("scroll", ...)` are
+    /// supported. Returns whether at least one handler ran.
+    pub fn scroll(&mut self, node: &NodeRef<HtmlNodeType>) -> bool {
+        let mut path = Vec::new();
+        let mut current = Some(Rc::clone(node));
+        while let Some(node) = current {
+            current = node.borrow().parent();
+            if let Some(object) = expose_node(self.engine.vm(), node).and_then(|v| v.as_object()) {
+                path.push(object);
+            }
+        }
+        let Some(target) = path.first().cloned() else {
+            return false;
+        };
+
+        let mut ran_handler = false;
+        for current_target in path {
+            let Some(dom_id) = node_dom_id(&JSValue::from_object(Rc::clone(&current_target)))
+            else {
+                continue;
+            };
+            let onscroll = current_target.borrow().get("onscroll");
+            let listeners = with_host(self.engine.vm(), |host| {
+                host.element_event_listeners
+                    .get(&dom_id)
+                    .and_then(|events| events.get("scroll"))
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+            let has_onscroll = is_callable(&onscroll);
+            if !has_onscroll && listeners.is_empty() {
+                continue;
+            }
+
+            ran_handler = true;
+            let event = make_event("scroll", Rc::clone(&target), Rc::clone(&current_target));
+            if has_onscroll
+                && let Err(err) = self.engine.call(
+                    onscroll,
+                    JSValue::from_object(Rc::clone(&current_target)),
+                    vec![JSValue::from_object(Rc::clone(&event))],
+                )
+            {
+                log::info!("JS error in onscroll: {}", err);
+            }
+            if !event_flag(&event, "__orinium_immediate_propagation_stopped") {
+                for listener in listeners {
+                    if let Err(err) = self.engine.call(
+                        listener.0,
+                        JSValue::from_object(Rc::clone(&current_target)),
+                        vec![JSValue::from_object(Rc::clone(&event))],
+                    ) {
+                        log::info!("JS error in scroll listener: {}", err);
+                    }
+                    if event_flag(&event, "__orinium_immediate_propagation_stopped") {
+                        break;
+                    }
+                }
+            }
+            if event_flag(&event, "cancelBubble") {
+                break;
+            }
+        }
+        if ran_handler {
+            self.perform_microtask_checkpoint();
+        }
+        ran_handler
+    }
     /// Drains queued microtasks in FIFO order, including jobs queued by jobs.
     fn perform_microtask_checkpoint(&mut self) {
         while let Err(err) = self.engine.run_jobs() {
@@ -1832,6 +2008,135 @@ mod tests {
     }
 
     #[test]
+    fn scroll_invokes_onscroll_and_mutates_dom() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<div id="s">scroll</div><p id="result">not scrolled</p>"#);
+        runtime.run_script(
+            r#"
+            const s = document.getElementById("s");
+            const result = document.getElementById("result");
+            window.__scrolls = 0;
+            s.onscroll = function () {
+                window.__scrolls = (window.__scrolls || 0) + 1;
+                result.textContent = "scrolled!";
+            };
+            "#,
+        );
+
+        let s = dom.get_element_by_id("s").unwrap();
+        assert!(runtime.scroll(&s));
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(DomTree::inner_text(&result), "scrolled!");
+    }
+
+    #[test]
+    fn scroll_without_handler_is_noop() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="x"></div>"#);
+        runtime.run_script(r#"document.getElementById("x");"#);
+        let node = dom.get_element_by_id("x").unwrap();
+        assert!(!runtime.scroll(&node));
+    }
+
+    #[test]
+    fn scroll_invokes_element_listeners_in_registration_order() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<div id="s">scroll</div><div id="result"></div>"#);
+        runtime.run_script(
+            r#"
+            const s = document.getElementById("s");
+            const result = document.getElementById("result");
+            let order = "";
+            s.addEventListener("scroll", function (event) {
+                order = order + "a";
+                result.setAttribute("data-event-type", event.type);
+            });
+            s.addEventListener("scroll", function () {
+                order = order + "b";
+                result.setAttribute("data-order", order);
+            });
+            "#,
+        );
+
+        let s = dom.get_element_by_id("s").unwrap();
+        assert!(runtime.scroll(&s));
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-order"), Some("ab"));
+        assert_eq!(
+            result.borrow().value.get_attr("data-event-type"),
+            Some("scroll")
+        );
+    }
+
+    #[test]
+    fn scroll_bubbles_to_delegated_ancestor_listeners() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<main id="root"><div id="s">scroll</div></main><div id="result"></div>"#,
+        );
+        runtime.run_script(
+            r#"
+            const root = document.getElementById("root");
+            const result = document.getElementById("result");
+            root.addEventListener("scroll", function (event) {
+                result.setAttribute("data-target", event.target.id);
+            });
+            "#,
+        );
+
+        let s = dom.get_element_by_id("s").unwrap();
+        assert!(runtime.scroll(&s));
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-target"), Some("s"));
+    }
+
+    #[test]
+    fn scroll_dom_id_dispatches_to_the_named_element() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="s">scroll</div>"#);
+        runtime.run_script(
+            r#"
+            const s = document.getElementById("s");
+            s.addEventListener("scroll", function () {
+                s.setAttribute("data-ran", "yes");
+            });
+            "#,
+        );
+        let s = dom.get_element_by_id("s").unwrap();
+        // mirror the browser's mapping: resolve the live node's hidden dom id
+        // and route the scroll through it.
+        let dom_id = with_host(runtime.engine.vm(), |host| {
+            host.refs
+                .iter()
+                .find(|(_, weak)| {
+                    weak.upgrade()
+                        .is_some_and(|n| Rc::as_ptr(&n) == Rc::as_ptr(&s))
+                })
+                .map(|(id, _)| *id)
+        })
+        .flatten()
+        .expect("element must be registered in the host refs");
+        assert!(runtime.scroll_dom_id(dom_id));
+        assert_eq!(s.borrow().value.get_attr("data-ran"), Some("yes"));
+    }
+
+    #[test]
+    fn scroll_does_not_invoke_other_event_types() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="s">scroll</div>"#);
+        runtime.run_script(
+            r#"
+            const s = document.getElementById("s");
+            s.addEventListener("mouseover", function () {
+                s.setAttribute("data-ran", "yes");
+            });
+            "#,
+        );
+
+        let s = dom.get_element_by_id("s").unwrap();
+        assert!(!runtime.scroll(&s));
+        assert_eq!(s.borrow().value.get_attr("data-ran"), None);
+    }
+
+    #[test]
     fn get_element_by_id_reuses_the_same_object() {
         let (mut runtime, _dom) = runtime_from_html(r#"<div id="x"></div>"#);
         runtime.run_script(
@@ -2248,6 +2553,69 @@ mod tests {
         let result = result.borrow();
         assert_eq!(result.value.get_attr("data-frame"), Some("true"));
         assert_eq!(result.value.get_attr("data-body"), Some("false"));
+    }
+
+    #[test]
+    fn markup_declared_iframes_queue_loads_once_and_failures_are_not_retried() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<html><body>
+                <iframe src="https://example.test/frame-a.html"></iframe>
+                <iframe src="frames/frame-b.html"></iframe>
+                <iframe id="placeholder"></iframe>
+            </body></html>"#,
+        );
+        runtime.set_document_url("https://example.test/dir/page.html");
+
+        // Register a stable dom id per node, as the processor's initial
+        // `apply_dom` does, so the markup iframes are visible to the scan.
+        let ids: HashMap<usize, u64> = {
+            let mut ids = HashMap::new();
+            let mut next_id = 1u64;
+            dom.traverse(|node| {
+                ids.insert(Rc::as_ptr(node) as usize, next_id);
+                next_id += 1;
+            });
+            ids
+        };
+        let snapshot = DomSnapshot::from_mirror(&dom.root, &ids);
+        runtime.apply_dom(&snapshot);
+
+        // The two iframes with a src are queued exactly once; the src-less
+        // placeholder is skipped.
+        assert_eq!(runtime.queue_markup_iframe_loads(), 2);
+        let requests = runtime.take_iframe_fetch_requests();
+        assert_eq!(requests.len(), 2);
+        let by_url: HashMap<String, u64> = requests
+            .into_iter()
+            .map(|req| (req.url, req.dom_id))
+            .collect();
+        assert_eq!(
+            by_url.len(),
+            2,
+            "one request per src-ified iframe, absolute or relative"
+        );
+        // Absolute src stays as-is; relative src resolves against the document.
+        assert!(by_url.contains_key("https://example.test/frame-a.html"));
+        assert!(by_url.contains_key("https://example.test/dir/frames/frame-b.html"));
+        let frame_a = by_url["https://example.test/frame-a.html"];
+        let frame_b = by_url["https://example.test/dir/frames/frame-b.html"];
+
+        // A second scan finds nothing new to queue.
+        assert_eq!(runtime.queue_markup_iframe_loads(), 0);
+        assert!(runtime.take_iframe_fetch_requests().is_empty());
+
+        // A resolved load is not re-queued on later scans.
+        runtime.resolve_iframe_fetch(
+            frame_a,
+            r#"<html><body><p>frame content</p></body></html>"#.to_string(),
+        );
+        assert_eq!(runtime.queue_markup_iframe_loads(), 0);
+        assert!(runtime.take_iframe_fetch_requests().is_empty());
+
+        // A failed load is remembered so it is not refetched every scan.
+        runtime.reject_iframe_fetch(frame_b);
+        assert_eq!(runtime.queue_markup_iframe_loads(), 0);
+        assert!(runtime.take_iframe_fetch_requests().is_empty());
     }
 
     #[test]
