@@ -1532,6 +1532,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_radial_ellipse_explicit_percentage_resolves_against_box_axes() {
+        // 30% of width (200) and 50% of height (100) => rx=60, ry=50.
+        let kind = make_radial(
+            RadialShape::Ellipse,
+            RadialSizeKind::Explicit { rx: 0.3, ry: 0.5 },
+            (0.5, 0.5),
+        );
+        let (_cx, _cy, rx, ry) =
+            compute_radial_params(&kind, &corners_from_rect(0.0, 0.0, 200.0, 100.0));
+        assert!((rx - 60.0).abs() < 0.01, "rx={}", rx);
+        assert!((ry - 50.0).abs() < 0.01, "ry={}", ry);
+    }
+
     // ── sample_gradient_stops / lerp_color ────────────────────────────
 
     #[test]
