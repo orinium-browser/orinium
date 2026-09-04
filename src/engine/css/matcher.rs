@@ -3,6 +3,8 @@
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
+use crate::engine::css::parser::AttributeSelectorOperator;
+
 use super::parser::{Combinator, ComplexSelector, PseudoClass, Selector};
 
 #[derive(Debug, Clone, Default)]
@@ -201,10 +203,45 @@ impl Selector {
                 .attributes
                 .iter()
                 .find(|(name, _)| name.eq_ignore_ascii_case(&expected.name));
-            match (&expected.value, actual) {
-                (None, Some(_)) => {}
-                (Some(expected_value), Some((_, actual_value)))
-                    if actual_value == expected_value => {}
+
+            match (&expected.operator, &expected.value, actual) {
+                (AttributeSelectorOperator::Exists, _, Some(_)) => {}
+                (
+                    AttributeSelectorOperator::Equals,
+                    Some(expected_value),
+                    Some((_, actual_value)),
+                ) if actual_value == expected_value => {}
+                (
+                    AttributeSelectorOperator::Includes,
+                    Some(expected_value),
+                    Some((_, actual_value)),
+                ) if actual_value
+                    .split_ascii_whitespace()
+                    .any(|value| value == expected_value) => {}
+                (
+                    AttributeSelectorOperator::DashMatch,
+                    Some(expected_value),
+                    Some((_, actual_value)),
+                ) if actual_value == expected_value
+                    || actual_value
+                        .strip_prefix(expected_value)
+                        .is_some_and(|rest| rest.starts_with('-')) => {}
+                (
+                    AttributeSelectorOperator::Prefix,
+                    Some(expected_value),
+                    Some((_, actual_value)),
+                ) if actual_value.starts_with(expected_value) => {}
+                (
+                    AttributeSelectorOperator::Suffix,
+                    Some(expected_value),
+                    Some((_, actual_value)),
+                ) if actual_value.ends_with(expected_value) => {}
+                (
+                    AttributeSelectorOperator::Substring,
+                    Some(expected_value),
+                    Some((_, actual_value)),
+                ) if actual_value.contains(expected_value) => {}
+
                 _ => return false,
             }
         }
@@ -454,7 +491,9 @@ impl ComplexSelector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::css::parser::{AttributeSelector, Parser, SelectorPart};
+    use crate::engine::css::parser::{
+        AttributeSelector, AttributeSelectorOperator, Parser, SelectorPart,
+    };
 
     fn input_selector(value: Option<&str>) -> ComplexSelector {
         ComplexSelector {
@@ -466,6 +505,7 @@ mod tests {
                     classes: Vec::new(),
                     attributes: vec![AttributeSelector {
                         name: "type".into(),
+                        operator: AttributeSelectorOperator::Includes,
                         value: value.map(Into::into),
                     }],
                     pseudo_classes: Vec::new(),

@@ -191,8 +191,29 @@ pub enum PseudoClass {
 pub struct AttributeSelector {
     /// Attribute name to match.
     pub name: String,
+    /// Matching operation.
+    pub operator: AttributeSelectorOperator,
     /// Required exact value, or `None` for a presence selector.
     pub value: Option<String>,
+}
+
+/// An attribute selector matching operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AttributeSelectorOperator {
+    /// `[attr]`
+    Exists,
+    /// `[attr=value]`
+    Equals,
+    /// `[attr~=value]`
+    Includes,
+    /// `[attr|=value]`
+    DashMatch,
+    /// `[attr^=value]`
+    Prefix,
+    /// `[attr$=value]`
+    Suffix,
+    /// `[attr*=value]`
+    Substring,
 }
 
 /// Combinator defining the relationship between selectors.
@@ -1189,17 +1210,49 @@ impl<'a> Parser<'a> {
                         self.consume_token();
                     }
 
-                    let value = if self.peek_token() == &Token::Delim('=') {
-                        self.consume_token();
+                    let operator = match self.peek_token() {
+                        Token::Delim('=') => {
+                            self.consume_token();
+                            AttributeSelectorOperator::Equals
+                        }
+                        Token::Delim('~')
+                        | Token::Delim('|')
+                        | Token::Delim('^')
+                        | Token::Delim('$')
+                        | Token::Delim('*') => {
+                            let operator = match self.consume_token() {
+                                Token::Delim(c) => c,
+                                _ => unreachable!(),
+                            };
+
+                            if self.peek_token() != &Token::Delim('=') {
+                                continue;
+                            }
+                            self.consume_token();
+
+                            match operator {
+                                '~' => AttributeSelectorOperator::Includes,
+                                '|' => AttributeSelectorOperator::DashMatch,
+                                '^' => AttributeSelectorOperator::Prefix,
+                                '$' => AttributeSelectorOperator::Suffix,
+                                '*' => AttributeSelectorOperator::Substring,
+                                _ => unreachable!(),
+                            }
+                        }
+                        _ => AttributeSelectorOperator::Exists,
+                    };
+
+                    let value = if operator == AttributeSelectorOperator::Exists {
+                        None
+                    } else {
                         while matches!(self.peek_token(), Token::Whitespace | Token::Comment(_)) {
                             self.consume_token();
                         }
+
                         match self.consume_token() {
                             Token::Ident(value) | Token::String(value) => Some(value),
                             _ => continue,
                         }
-                    } else {
-                        None
                     };
 
                     while matches!(self.peek_token(), Token::Whitespace | Token::Comment(_)) {
@@ -1216,7 +1269,11 @@ impl<'a> Parser<'a> {
                             pseudo_classes: vec![],
                             pseudo_element: None,
                         });
-                        sel.attributes.push(AttributeSelector { name, value });
+                        sel.attributes.push(AttributeSelector {
+                            name,
+                            operator,
+                            value,
+                        });
                     }
                 }
 
@@ -1750,8 +1807,28 @@ impl std::fmt::Display for Selector {
         for attribute in &self.attributes {
             f.write_str("[")?;
             f.write_str(&attribute.name)?;
-            if let Some(value) = &attribute.value {
-                write!(f, "=\"{value}\"")?;
+            match (&attribute.operator, &attribute.value) {
+                (AttributeSelectorOperator::Exists, _) => {}
+                (AttributeSelectorOperator::Equals, Some(value)) => {
+                    write!(f, "=\"{value}\"")?;
+                }
+                (AttributeSelectorOperator::Includes, Some(value)) => {
+                    write!(f, "~=\"{value}\"")?;
+                }
+                (AttributeSelectorOperator::DashMatch, Some(value)) => {
+                    write!(f, "|=\"{value}\"")?;
+                }
+                (AttributeSelectorOperator::Prefix, Some(value)) => {
+                    write!(f, "^=\"{value}\"")?;
+                }
+                (AttributeSelectorOperator::Suffix, Some(value)) => {
+                    write!(f, "$=\"{value}\"")?;
+                }
+                (AttributeSelectorOperator::Substring, Some(value)) => {
+                    write!(f, "*=\"{value}\"")?;
+                }
+
+                _ => {}
             }
             f.write_str("]")?;
         }
@@ -1832,6 +1909,7 @@ mod tests {
             selector.attributes,
             vec![AttributeSelector {
                 name: "type".into(),
+                operator: AttributeSelectorOperator::Equals,
                 value: Some("hidden".into()),
             }]
         );
