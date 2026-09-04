@@ -514,6 +514,36 @@ fn parse_linear_direction(args: &[CssValue]) -> (usize, Option<f32>) {
     (idx, angle)
 }
 
+/// Parse an explicit radial size given as `<length-percentage>` values.
+///
+/// Returns `(consumed, size, inferred_shape)`.
+///
+/// An `<ellipse>` takes two values whose percentages resolve against the box's
+/// width and height respectively; a `<circle>` takes a single `<length>`. A lone
+/// percentage is ambiguous (no axis to resolve against) and therefore invalid.
+/// Only the two-percentage (ellipse) form is representable here; mixed lengths
+/// and single-length circle radii yield `None` and reject the gradient.
+fn parse_explicit_radial_size(
+    args: &[CssValue],
+) -> Option<(usize, RadialSizeKind, Option<RadialShape>)> {
+    let (CssValue::Length(rx, Unit::Percent), CssValue::Length(ry, Unit::Percent)) =
+        (args.first()?, args.get(1)?)
+    else {
+        return None;
+    };
+    if *rx < 0.0 || *ry < 0.0 {
+        return None;
+    }
+    Some((
+        2,
+        RadialSizeKind::Explicit {
+            rx: *rx / 100.0,
+            ry: *ry / 100.0,
+        },
+        Some(RadialShape::Ellipse),
+    ))
+}
+
 fn parse_radial_gradient(
     args: &[CssValue],
     text_style: &TextStyle,
@@ -526,18 +556,47 @@ fn parse_radial_gradient(
 
     let mut idx = 0;
 
-    // Consume the shape and size keywords (in any order, case-insensitively)
-    // before a possible "at <position>" clause. At most one shape and one size
-    // keyword are valid; duplicates are rejected.
+    // Consume the shape and size (in any order, case-insensitively) before a
+    // possible "at <position>" clause. At most one shape and one size are valid;
+    // duplicates are rejected.
     let mut shape_seen = false;
     let mut size_seen = false;
     while idx < args.len() {
+        // Explicit size (`<length-percentage>`): the size may precede the shape
+        // keyword (e.g. `30% 50% ellipse`), so consume it here too.
+        if matches!(&args[idx], CssValue::Length(_, Unit::Percent | Unit::Px)) {
+            if size_seen {
+                return None;
+            }
+            let Some((consumed, parsed_size, inferred_shape)) =
+                parse_explicit_radial_size(&args[idx..])
+            else {
+                break;
+            };
+            size = parsed_size;
+            size_seen = true;
+            if let Some(shape_hint) = inferred_shape {
+                if shape_seen && shape != shape_hint {
+                    return None;
+                }
+                // Do not mark `shape_seen`: an explicit size carries its own
+                // inferred shape, and a redundant matching shape keyword may
+                // still follow (e.g. `30% 50% ellipse`).
+                if !shape_seen {
+                    shape = shape_hint;
+                }
+            }
+            idx += consumed;
+            continue;
+        }
         let CssValue::Keyword(k) = &args[idx] else {
             break;
         };
         match k.to_ascii_lowercase().as_str() {
             "circle" => {
-                if shape_seen {
+                if shape_seen
+                    || (size_seen && matches!(size, RadialSizeKind::Explicit { .. }))
+                {
                     return None;
                 }
                 shape = RadialShape::Circle;
@@ -641,8 +700,12 @@ fn parse_gradient_position(args: &[CssValue]) -> Option<(usize, (f32, f32))> {
         return None;
     };
 
-    // A bare <length-percentage> → (x, +50%).
+    // A bare <length-percentage>. One value means x with y centered;
+    // two values are (x, y) horizontal-then-vertical.
     if let Some(x) = percent_fraction(k0) {
+        if let Some(y) = percent_fraction(k1) {
+            return Some((2, (x, y)));
+        }
         return Some((1, (x, 0.5)));
     }
 
@@ -651,12 +714,24 @@ fn parse_gradient_position(args: &[CssValue]) -> Option<(usize, (f32, f32))> {
     };
     let k0 = k0.to_ascii_lowercase();
 
-    // center alone → both axes centered.
+    // center + optional bare percent → (0.5, y) or (0.5, 0.5).
     if k0 == "center" {
+        if let Some(y) = percent_fraction(k1) {
+            return Some((2, (0.5, y)));
+        }
         return Some((1, (0.5, 0.5)));
     }
 
     let (v0, is_v0) = keyword_axis(&k0)?;
+
+    // keyword + bare <length-percentage> → perpendicular axis.
+    if let Some(y) = percent_fraction(k1) {
+        return if is_v0 {
+            Some((2, (y, v0))) // k0 vertical, percentage is horizontal
+        } else {
+            Some((2, (v0, y))) // k0 horizontal, percentage is vertical
+        };
+    }
 
     // Two keywords forming a corner (one horizontal, one vertical).
     if let CssValue::Keyword(k1) = k1 {
