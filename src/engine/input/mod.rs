@@ -405,7 +405,12 @@ fn hit_test_popup_inner<'a>(
     prefix.pop();
 }
 
-/// Scrolls the deepest scrollable container under `(x, y)` by `(dx, dy)`.
+/// Marker returned from [`scroll_at`] when a container scrolled but carries no
+/// snapshot dom id (so no `scroll` event can be dispatched to it). Callers can
+/// treat any `Some(..)` as "scrolled" and use this value to skip dispatch.
+pub const NO_SCROLL_DOM_ID: u32 = u32::MAX;
+
+/// Scrolls the innermost scrollable container under `(x, y)` by `(dx, dy)`.
 ///
 /// Mirrors [`hit_test`]: boxes are tested front-to-back and children are
 /// visited before the node itself, so the innermost container wins. Only
@@ -413,8 +418,12 @@ fn hit_test_popup_inner<'a>(
 /// scrolling for an axis are scrolled, clamped to the scrollable range
 /// (`children_box` extent minus the visible `content_box`).
 ///
-/// Returns whether any scroll offset actually changed. Callers can use a
-/// `false` result to chain the wheel event to an ancestor (e.g. the root).
+/// Returns `Some(dom_id)` when any scroll offset actually changed, where
+/// `dom_id` names the scrollable container that absorbed the scroll. The value
+/// is [`NO_SCROLL_DOM_ID`] when the scrolled container had no snapshot dom id
+/// (used to trigger a redraw without dispatching a `scroll` event); `None` when
+/// nothing scrolled, so a caller can chain the wheel event to an ancestor
+/// (e.g. the root).
 pub fn scroll_at(
     layout: &LayoutNode,
     info: &mut InfoNode,
@@ -423,7 +432,7 @@ pub fn scroll_at(
     y: f32,
     dx: f32,
     dy: f32,
-) -> bool {
+) -> Option<u32> {
     scroll_at_inner(layout, info, viewport, x, y, dx, dy, (0.0, 0.0))
 }
 
@@ -437,9 +446,9 @@ fn scroll_at_inner(
     dx: f32,
     dy: f32,
     accumulated_scroll: (f32, f32),
-) -> bool {
+) -> Option<u32> {
     if layout.layout_box.is_empty() {
-        return false;
+        return None;
     }
 
     let is_inline = matches!(layout.layout_box, ui_layout::LayoutBox::InlineBox(_));
@@ -488,7 +497,7 @@ fn scroll_at_inner(
 
         for (child_layout, child_info) in layout.children.iter().zip(&mut info.children).rev() {
             if let Some(child_node) = child_layout.node()
-                && scroll_at_inner(
+                && let Some(scrolled_id) = scroll_at_inner(
                     child_node,
                     child_info,
                     viewport,
@@ -499,7 +508,7 @@ fn scroll_at_inner(
                     child_scroll,
                 )
             {
-                return true;
+                return Some(scrolled_id);
             }
         }
 
@@ -547,11 +556,11 @@ fn scroll_at_inner(
             _ => false,
         };
         if scrolled {
-            return true;
+            return Some(info.dom_id.unwrap_or(NO_SCROLL_DOM_ID));
         }
     }
 
-    false
+    None
 }
 
 /// Focuses `target` and clears focus from every other text input.
@@ -898,7 +907,8 @@ mod tests {
             15.0,
             0.0,
             10.0
-        ));
+        )
+        .is_some());
         let NodeKind::Container {
             scroll_offset_y: child_scroll,
             ..
@@ -933,7 +943,8 @@ mod tests {
             50.0,
             0.0,
             100.0
-        ));
+        )
+        .is_some());
         let NodeKind::Container {
             scroll_offset_y, ..
         } = &info.kind
@@ -951,7 +962,8 @@ mod tests {
             50.0,
             0.0,
             300.0
-        ));
+        )
+        .is_some());
         let NodeKind::Container {
             scroll_offset_y, ..
         } = &info.kind
@@ -969,7 +981,8 @@ mod tests {
             50.0,
             0.0,
             -500.0
-        ));
+        )
+        .is_some());
         let NodeKind::Container {
             scroll_offset_y, ..
         } = &info.kind
@@ -986,7 +999,7 @@ mod tests {
             ui_layout::LayoutBox::BlockBox(box_model(0.0, 0.0, 200.0, 100.0, 200.0, 300.0));
         let mut info = scrollable_info();
 
-        assert!(!scroll_at(
+        assert!(scroll_at(
             &layout,
             &mut info,
             (VIEWPORT_WIDTH, VIEWPORT_HEIGHT),
@@ -994,7 +1007,8 @@ mod tests {
             50.0,
             0.0,
             -100.0
-        ));
+        )
+        .is_none());
     }
 
     #[test]
@@ -1015,7 +1029,7 @@ mod tests {
             dom_id: None,
         };
 
-        assert!(!scroll_at(
+        assert!(scroll_at(
             &layout,
             &mut info,
             (VIEWPORT_WIDTH, VIEWPORT_HEIGHT),
@@ -1023,7 +1037,8 @@ mod tests {
             50.0,
             0.0,
             -100.0
-        ));
+        )
+        .is_none());
         let NodeKind::Container {
             scroll_offset_y, ..
         } = &info.kind
@@ -1065,7 +1080,8 @@ mod tests {
             50.0,
             0.0,
             30.0
-        ));
+        )
+        .is_some());
         let NodeKind::Container {
             scroll_offset_y, ..
         } = &outer_info.children[0].kind
@@ -1081,6 +1097,42 @@ mod tests {
             panic!("expected outer container");
         };
         assert_eq!(*outer_off, 0.0);
+    }
+
+    #[test]
+    fn scroll_at_reports_the_scrolled_containers_dom_id() {
+        // Outer (dom 7) with scrollable inner (dom 9): scrolling over the inner
+        // reports the inner's dom id.
+        let outer_children_box = box_model(0.0, 0.0, 400.0, 300.0, 400.0, 900.0);
+        let inner_children_box = box_model(10.0, 10.0, 100.0, 80.0, 100.0, 240.0);
+
+        let mut outer_layout = LayoutNode::with_children(
+            ui_layout::Style::default(),
+            [LayoutNode::new(ui_layout::Style::default())],
+        );
+        outer_layout.layout_box = ui_layout::LayoutBox::BlockBox(outer_children_box);
+        let mut inner_layout = LayoutNode::new(ui_layout::Style::default());
+        inner_layout.layout_box = ui_layout::LayoutBox::BlockBox(inner_children_box);
+        outer_layout.children[0] = ui_layout::LayoutChild::Node(Box::new(inner_layout));
+
+        let mut outer_info = container_info(true, Some(7));
+        let inner_info = container_info(true, Some(9));
+        outer_info.children.push(inner_info);
+
+        let scrolled =
+            scroll_at(&outer_layout, &mut outer_info, (VIEWPORT_WIDTH, VIEWPORT_HEIGHT), 50.0, 50.0, 0.0, 30.0);
+        assert_eq!(scrolled, Some(9));
+    }
+
+    #[test]
+    fn scroll_at_reports_marker_when_scrolled_container_has_no_dom_id() {
+        let mut layout = LayoutNode::new(ui_layout::Style::default());
+        layout.layout_box =
+            ui_layout::LayoutBox::BlockBox(box_model(0.0, 0.0, 200.0, 100.0, 200.0, 300.0));
+        let mut info = container_info(true, None);
+        let scrolled =
+            scroll_at(&layout, &mut info, (VIEWPORT_WIDTH, VIEWPORT_HEIGHT), 50.0, 50.0, 0.0, 10.0);
+        assert_eq!(scrolled, Some(NO_SCROLL_DOM_ID));
     }
 
     /// Records pointer events for asserting `dispatch_pointer` coordinates.
@@ -1510,7 +1562,8 @@ mod tests {
             15.0,
             0.0,
             10.0
-        ));
+        )
+        .is_some());
         // The child under the cursor scrolls; the block parent does not.
         assert_eq!(scroll_offset_y_of(&b_info.children[0].children[0]), 10.0);
         assert_eq!(scroll_offset_y_of(&b_info), 0.0);
