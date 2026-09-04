@@ -1052,8 +1052,6 @@ pub(crate) struct IframeDocument {
 /// with its own DOM tree whose `documentElement` is `<html>`.
 pub(crate) fn make_iframe_document(
     host_dom_id: u64,
-    _src: &str,
-    body_has_p: bool,
 ) -> Rc<RefCell<IframeDocument>> {
     let document = TreeNode::new(HtmlNodeType::Document);
     let html = TreeNode::new(HtmlNodeType::Element {
@@ -1071,13 +1069,6 @@ pub(crate) fn make_iframe_document(
     TreeNode::add_child(&document, Rc::clone(&html));
     TreeNode::add_child(&html, Rc::clone(&head));
     TreeNode::add_child(&html, Rc::clone(&body));
-    if body_has_p {
-        let p = TreeNode::new(HtmlNodeType::Element {
-            tag_name: "p".to_string(),
-            attributes: Vec::new(),
-        });
-        TreeNode::add_child(&body, p);
-    }
     let tree = Rc::new(DomTree::from_root(document));
 
     let document_obj = build_iframe_document_object(host_dom_id, &tree);
