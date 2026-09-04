@@ -1,4 +1,5 @@
 use crate::engine::html::{DomTree, HtmlNodeType, Parser as HtmlParser};
+use crate::engine::js::JsHost;
 use crate::engine::js::common::{
     UNDEFINED, dom_node, is_callable, mark_dom_dirty, node_dom_id, noop, with_host, with_host_mut,
 };
@@ -198,7 +199,7 @@ pub(crate) fn make_element(
         );
         obj.define_property(
             "contentWindow".to_string(),
-            read_only_accessor_property(get_iframe_content_document),
+            read_only_accessor_property(get_iframe_content_window),
         );
     }
     match tag_name.to_ascii_lowercase().as_str() {
@@ -1076,9 +1077,21 @@ fn queue_dynamic_image(vm: &mut VM, value: &JSValue) {
     });
 }
 
+/// Cleans up iframe-related state when an iframe element is removed from the
+/// DOM, preventing stale content documents and pending fetches from lingering.
+fn cleanup_iframe_state(vm: &mut VM, dom_id: u64) {
+    let _ = with_host_mut(vm, |host| {
+        host.iframe_documents.remove(&dom_id);
+        host.pending_iframe_fetches.remove(&dom_id);
+        host.failed_iframe_fetches.remove(&dom_id);
+    });
+}
+
 /// Queues a network fetch for an `<iframe>`'s `src` whenever the attribute is
 /// set, so the iframe content (and its `load` event) becomes available without
-/// first touching `contentDocument`.
+/// first touching `contentDocument`. When `src` changes, any in-flight fetch
+/// and stale content document for this iframe are discarded so the new URL is
+/// fetched immediately.
 fn queue_iframe_source_if_needed(vm: &mut VM, value: &JSValue) {
     let Some(node_id) = node_dom_id(value) else {
         return;
@@ -1103,12 +1116,16 @@ fn queue_iframe_source_if_needed(vm: &mut VM, value: &JSValue) {
         .flatten()
         .unwrap_or(source);
     let _ = with_host_mut(vm, |host| {
-        if host.pending_iframe_fetches.insert(node_id) {
-            host.iframe_fetch_requests.push(JsIframeFetchRequest {
-                dom_id: node_id,
-                url: resolved,
-            });
-        }
+        // When src changes, discard any in-flight fetch and stale content
+        // document so the new URL is fetched immediately.
+        host.pending_iframe_fetches.remove(&node_id);
+        host.failed_iframe_fetches.remove(&node_id);
+        host.iframe_documents.remove(&node_id);
+        host.pending_iframe_fetches.insert(node_id);
+        host.iframe_fetch_requests.push(JsIframeFetchRequest {
+            dom_id: node_id,
+            url: resolved,
+        });
     });
 }
 
@@ -1127,6 +1144,7 @@ pub(crate) fn remove_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue>
     };
     if let Some(dom_id) = node_dom_id(&child_value) {
         fire_disconnected_callback(vm, dom_id);
+        cleanup_iframe_state(vm, dom_id);
         let _ = with_host_mut(vm, |host| {
             host.detached_nodes.insert(dom_id, detached);
         });
@@ -1143,6 +1161,7 @@ fn remove_node(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     if TreeNode::detach(&node) {
         if let Some(dom_id) = node_dom_id(this) {
             fire_disconnected_callback(vm, dom_id);
+            cleanup_iframe_state(vm, dom_id);
             let _ = with_host_mut(vm, |host| {
                 host.detached_nodes.insert(dom_id, node);
             });
@@ -1177,6 +1196,7 @@ pub(crate) fn replace_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue
     };
     if let Some(dom_id) = node_dom_id(&old_child_value) {
         fire_disconnected_callback(vm, dom_id);
+        cleanup_iframe_state(vm, dom_id);
         let _ = with_host_mut(vm, |host| {
             host.detached_nodes.insert(dom_id, detached);
         });
@@ -1723,27 +1743,10 @@ fn get_iframe_content_document(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVa
     // URL is resolved against the document URL, and a fetch is queued for the
     // network layer to drain. Until it resolves, an empty placeholder document
     // is returned so accessors never block.
-    if !src.is_empty()
-        && !with_host(vm, |host| host.pending_iframe_fetches.contains(&dom_id)).unwrap_or(false)
-    {
-        let resolved = with_host(vm, |host| {
-            resolved_iframe_url(&host.document_url, &src)
-        })
-        .flatten();
-        if let Some(resolved) = resolved {
-            with_host_mut(vm, |host| {
-                host.pending_iframe_fetches.insert(dom_id);
-                host.iframe_fetch_requests.push(JsIframeFetchRequest {
-                    dom_id,
-                    url: resolved,
-                });
-            });
-        }
-    }
-    // Non-text iframe sources (e.g. png) legitimately have a document whose
-    // <body> has no <p>; empty.html has a body with a single <p> as the fixture.
-    let body_has_p = src.ends_with(".html");
-    let iframe_doc = make_iframe_document(dom_id, &src, body_has_p);
+    let _ = with_host_mut(vm, |host| {
+        queue_iframe_fetch_if_needed(host, dom_id, &src);
+    });
+    let iframe_doc = make_iframe_document(dom_id);
     let document = Rc::clone(&iframe_doc.borrow().document);
     let _ = with_host_mut(vm, |host| {
         host.iframe_documents.insert(dom_id, iframe_doc);
@@ -1751,11 +1754,60 @@ fn get_iframe_content_document(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVa
     Ok(JSValue::from_object(document))
 }
 
+/// Returns a lightweight window-like proxy for the iframe's content window.
+/// The proxy exposes `document` pointing to the iframe's contentDocument, so
+/// `iframe.contentWindow.document === iframe.contentDocument` holds true.
+fn get_iframe_content_window(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let this = args.first().unwrap_or(&UNDEFINED);
+    let Some(dom_id) = node_dom_id(this) else {
+        return Ok(JSValue::null());
+    };
+    let existing = with_host(vm, |host| {
+        host.iframe_documents
+            .get(&dom_id)
+            .map(|doc| Rc::clone(&doc.borrow().document))
+    })
+    .flatten();
+    let Some(content_document) = existing else {
+        return Ok(JSValue::null());
+    };
+    let mut window_proxy = JSObject::new();
+    window_proxy.define_property(
+        "document".to_string(),
+        Property::read_only(JSValue::from_object(content_document)),
+    );
+    Ok(JSValue::from_object(Rc::new(RefCell::new(window_proxy))))
+}
+
 /// Resolves an iframe `src` against the current document URL, producing an
 /// absolute URL. Falls back to the raw source when it cannot be resolved.
-fn resolved_iframe_url(document_url: &str, src: &str) -> Option<String> {
+pub(crate) fn resolved_iframe_url(document_url: &str, src: &str) -> Option<String> {
     let base = url::Url::parse(document_url).ok()?;
     base.join(src).ok().map(|u| u.to_string())
+}
+
+/// Queues an iframe fetch request if the dom_id is not already pending, failed,
+/// or loaded. Shared by the `src` setter, `contentDocument` getter, and the
+/// markup-declared iframe scan.
+pub(crate) fn queue_iframe_fetch_if_needed(
+    host: &mut JsHost,
+    dom_id: u64,
+    src: &str,
+) {
+    if src.is_empty()
+        || host.pending_iframe_fetches.contains(&dom_id)
+        || host.failed_iframe_fetches.contains(&dom_id)
+        || host.iframe_documents.contains_key(&dom_id)
+    {
+        return;
+    }
+    let resolved = resolved_iframe_url(&host.document_url, src)
+        .unwrap_or_else(|| src.to_string());
+    host.pending_iframe_fetches.insert(dom_id);
+    host.iframe_fetch_requests.push(JsIframeFetchRequest {
+        dom_id,
+        url: resolved,
+    });
 }
 
 fn get_namespace_uri(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
