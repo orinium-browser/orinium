@@ -248,34 +248,38 @@ fn resolve_calc_value(
                 None
             }
         }
-        CssValue::Function(fn_name, args)
-            if (fn_name == "min" || fn_name == "max") && args.len() >= 2 =>
-        {
-            let mut resolved: Vec<Length> = Vec::with_capacity(args.len());
-            for arg in args.iter().flatten() {
-                resolved.push(match resolve_calc_value(name, arg, text_flow_style)? {
-                    CalcValue::Length(l) => l,
-                    CalcValue::Number(0.0) => Length::Px(0.0),
-                    CalcValue::Number(n) => {
-                        log::error!(
-                            target: "Layouter",
-                            "Invalid operand for {fn_name}() in `{}` (expected length): {}",
-                            name,
-                            n
-                        );
-                        return None;
-                    }
-                });
+        CssValue::Function(fn_name, args) if (fn_name == "min" || fn_name == "max") => {
+            if args.len() == 1 {
+                resolve_calc_value(name, args[0].get(0)?, text_flow_style)
+            } else if args.len() >= 2 {
+                let mut resolved: Vec<Length> = Vec::with_capacity(args.len());
+                for arg in args.iter().flatten() {
+                    resolved.push(match resolve_calc_value(name, arg, text_flow_style)? {
+                        CalcValue::Length(l) => l,
+                        CalcValue::Number(0.0) => Length::Px(0.0),
+                        CalcValue::Number(n) => {
+                            log::error!(
+                                target: "Layouter",
+                                "Invalid operand for {fn_name}() in `{}` (expected length): {}",
+                                name,
+                                n
+                            );
+                            return None;
+                        }
+                    });
+                }
+                let mut result = resolved.remove(resolved.len() - 1);
+                for arg in resolved.into_iter().rev() {
+                    result = if fn_name == "min" {
+                        Length::Min(Box::new(arg), Box::new(result))
+                    } else {
+                        Length::Max(Box::new(arg), Box::new(result))
+                    };
+                }
+                Some(CalcValue::Length(result))
+            } else {
+                None
             }
-            let mut result = resolved.remove(resolved.len() - 1);
-            for arg in resolved.into_iter().rev() {
-                result = if fn_name == "min" {
-                    Length::Min(Box::new(arg), Box::new(result))
-                } else {
-                    Length::Max(Box::new(arg), Box::new(result))
-                };
-            }
-            Some(CalcValue::Length(result))
         }
         CssValue::Function(fn_name, args) if fn_name == "clamp" && args.len() == 3 => {
             let min = resolve_css_len(
