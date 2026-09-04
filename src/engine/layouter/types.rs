@@ -377,7 +377,10 @@ pub enum RadialSizeKind {
     /// Explicit elliptical size given as `<length-percentage>{2}`. `rx`/`ry`
     /// are fractions of the gradient box's width/height respectively
     /// (an `<ellipse>` percentages resolve against the matching axis).
-    Explicit { rx: f32, ry: f32 },
+    Explicit {
+        rx: f32,
+        ry: f32,
+    },
 }
 
 /// A single color stop in a gradient.

@@ -800,7 +800,10 @@ fn wheel_over_iframe_scrolls_nested_content_not_the_host_page() {
     ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
     let scrolled =
         crate::engine::input::scroll_at(&layout, &mut info, (800.0, 600.0), 150.0, 75.0, 0.0, 60.0);
-    assert!(scrolled.is_some(), "wheel over the iframe must be consumed by it");
+    assert!(
+        scrolled.is_some(),
+        "wheel over the iframe must be consumed by it"
+    );
     let mut changed = Vec::new();
     scrolled_containers(&info, &mut changed);
     let iframe = find_iframe(&info).expect("iframe node must exist in layout");
@@ -828,7 +831,10 @@ fn wheel_over_iframe_scrolls_nested_content_not_the_host_page() {
         0.0,
         60.0,
     );
-    assert!(scrolled.is_some(), "wheel over the host scroll box must be consumed");
+    assert!(
+        scrolled.is_some(),
+        "wheel over the host scroll box must be consumed"
+    );
     let mut changed = Vec::new();
     scrolled_containers(&info, &mut changed);
     assert!(

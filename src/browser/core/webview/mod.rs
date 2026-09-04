@@ -2184,8 +2184,8 @@ mod tests {
     use super::*;
     use crate::engine::layouter::types::{ContainerRole, ContainerStyle};
     use serde_json::{Value, json};
-    use ui_layout::{Length, LengthOrAuto};
     use std::time::{Duration, Instant};
+    use ui_layout::{Length, LengthOrAuto};
 
     /// Drives `tick()` until `done` holds, or panics after a timeout.
     ///

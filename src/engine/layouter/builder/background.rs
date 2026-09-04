@@ -594,9 +594,7 @@ fn parse_radial_gradient(
         };
         match k.to_ascii_lowercase().as_str() {
             "circle" => {
-                if shape_seen
-                    || (size_seen && matches!(size, RadialSizeKind::Explicit { .. }))
-                {
+                if shape_seen || (size_seen && matches!(size, RadialSizeKind::Explicit { .. })) {
                     return None;
                 }
                 shape = RadialShape::Circle;

@@ -602,12 +602,9 @@ impl Tab {
 
     /// Scrolls the scrollable container under the cursor.
     pub fn scroll_at(&mut self, px: f32, py: f32, dx: f32, dy: f32, viewport: (f32, f32)) {
-        let Some(scrolled_id) = self
-            .layout_and_info_mut()
-            .and_then(|(layout, info)| {
-                crate::engine::input::scroll_at(layout, info, viewport, px, py, dx, dy)
-            })
-        else {
+        let Some(scrolled_id) = self.layout_and_info_mut().and_then(|(layout, info)| {
+            crate::engine::input::scroll_at(layout, info, viewport, px, py, dx, dy)
+        }) else {
             return;
         };
         if scrolled_id != crate::engine::input::NO_SCROLL_DOM_ID

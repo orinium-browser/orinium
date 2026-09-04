@@ -1,8 +1,8 @@
 use crate::engine::html::{DomTree, HtmlNodeType, Parser as HtmlParser};
+use crate::engine::js::JsHost;
 use crate::engine::js::common::{
     dom_node, is_callable, mark_dom_dirty, node_dom_id, with_host, with_host_mut,
 };
-use crate::engine::js::JsHost;
 use crate::engine::js::web_apis::dom::dom_exception::throw_dom_exception;
 use crate::engine::js::web_apis::dom::element::{
     accessor_property, define_node_constants, make_comment_node, make_doctype_node,
@@ -1050,9 +1050,7 @@ pub(crate) struct IframeDocument {
 
 /// Builds an `iframe.contentDocument`-compatible object: an empty document
 /// with its own DOM tree whose `documentElement` is `<html>`.
-pub(crate) fn make_iframe_document(
-    host_dom_id: u64,
-) -> Rc<RefCell<IframeDocument>> {
+pub(crate) fn make_iframe_document(host_dom_id: u64) -> Rc<RefCell<IframeDocument>> {
     let document = TreeNode::new(HtmlNodeType::Document);
     let html = TreeNode::new(HtmlNodeType::Element {
         tag_name: "html".to_string(),

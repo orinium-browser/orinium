@@ -1072,7 +1072,7 @@ fn compute_radial_params(kind: &GradientKind, corners: &[(f32, f32); 4]) -> (f32
             }
             (best_rx, best_ry)
         }
-        (_, RadialSizeKind::Explicit { rx, ry }) => (rx * w, ry * h)
+        (_, RadialSizeKind::Explicit { rx, ry }) => (rx * w, ry * h),
     };
 
     let rx = rx.max(0.001);

@@ -647,7 +647,11 @@ impl<'a> Parser<'a> {
             // inserted directly into a <table>.
             if matches!(name.as_str(), "tr" | "td" | "th")
                 && let Some(top) = self.stack.last()
-                && top.borrow().value.tag_name().is_some_and(|t| t.eq_ignore_ascii_case("table"))
+                && top
+                    .borrow()
+                    .value
+                    .tag_name()
+                    .is_some_and(|t| t.eq_ignore_ascii_case("table"))
             {
                 let tbody = TreeNode::add_child_value(
                     &parent,

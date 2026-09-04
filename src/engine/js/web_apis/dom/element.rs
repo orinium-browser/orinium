@@ -208,7 +208,10 @@ pub(crate) fn make_element(
                 "tBodies".to_string(),
                 read_only_accessor_property(get_table_bodies),
             );
-            obj.define_property("rows".to_string(), read_only_accessor_property(get_table_rows));
+            obj.define_property(
+                "rows".to_string(),
+                read_only_accessor_property(get_table_rows),
+            );
             obj.define_property(
                 "caption".to_string(),
                 accessor_property(get_table_caption, set_table_caption),
@@ -1789,11 +1792,7 @@ pub(crate) fn resolved_iframe_url(document_url: &str, src: &str) -> Option<Strin
 /// Queues an iframe fetch request if the dom_id is not already pending, failed,
 /// or loaded. Shared by the `src` setter, `contentDocument` getter, and the
 /// markup-declared iframe scan.
-pub(crate) fn queue_iframe_fetch_if_needed(
-    host: &mut JsHost,
-    dom_id: u64,
-    src: &str,
-) {
+pub(crate) fn queue_iframe_fetch_if_needed(host: &mut JsHost, dom_id: u64, src: &str) {
     if src.is_empty()
         || host.pending_iframe_fetches.contains(&dom_id)
         || host.failed_iframe_fetches.contains(&dom_id)
@@ -1801,8 +1800,7 @@ pub(crate) fn queue_iframe_fetch_if_needed(
     {
         return;
     }
-    let resolved = resolved_iframe_url(&host.document_url, src)
-        .unwrap_or_else(|| src.to_string());
+    let resolved = resolved_iframe_url(&host.document_url, src).unwrap_or_else(|| src.to_string());
     host.pending_iframe_fetches.insert(dom_id);
     host.iframe_fetch_requests.push(JsIframeFetchRequest {
         dom_id,
@@ -2298,7 +2296,11 @@ fn delete_row(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     };
     let index = args.get(1).and_then(JSValue::as_number).unwrap_or(-1.0) as isize;
     let rows = collect_table_rows(&table);
-    let pos = if index < 0 { rows.len() as isize - 1 } else { index };
+    let pos = if index < 0 {
+        rows.len() as isize - 1
+    } else {
+        index
+    };
     if pos >= 0 && (pos as usize) < rows.len() {
         let row = &rows[pos as usize];
         if let Some(parent) = row.borrow().parent() {
@@ -2315,7 +2317,11 @@ fn delete_section_row(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     };
     let index = args.get(1).and_then(JSValue::as_number).unwrap_or(-1.0) as isize;
     let rows = collect_section_rows(&section);
-    let pos = if index < 0 { rows.len() as isize - 1 } else { index };
+    let pos = if index < 0 {
+        rows.len() as isize - 1
+    } else {
+        index
+    };
     if pos >= 0 && (pos as usize) < rows.len() {
         let row = &rows[pos as usize];
         TreeNode::remove_child(&section, row);
@@ -2330,7 +2336,11 @@ fn delete_cell(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     };
     let index = args.get(1).and_then(JSValue::as_number).unwrap_or(-1.0) as isize;
     let cells = collect_row_cells(&row);
-    let pos = if index < 0 { cells.len() as isize - 1 } else { index };
+    let pos = if index < 0 {
+        cells.len() as isize - 1
+    } else {
+        index
+    };
     if pos >= 0 && (pos as usize) < cells.len() {
         let cell = &cells[pos as usize];
         TreeNode::remove_child(&row, cell);
