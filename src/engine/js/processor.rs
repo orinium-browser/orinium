@@ -16,8 +16,9 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 
 use super::{
-    JsDevToolsRequest, JsDynamicImageRequest, JsDynamicScriptRequest, JsDynamicStyleRequest,
-    JsFetchRequest, JsFetchResponse, JsLayoutMetrics, JsRuntime,
+    IframeContentSnapshot, JsDevToolsRequest, JsDynamicImageRequest, JsDynamicScriptRequest,
+    JsDynamicStyleRequest, JsFetchRequest, JsFetchResponse, JsIframeFetchRequest, JsLayoutMetrics,
+    JsRuntime,
 };
 use crate::engine::layouter::dom_snapshot::DomSnapshot;
 
@@ -46,6 +47,8 @@ pub enum JsTask {
     RunTimers,
     /// Dispatch a click on the element with the given JS-facing dom id.
     Click { dom_id: u64 },
+    /// Dispatch a `scroll` event on the element with the given JS-facing dom id.
+    Scroll { dom_id: u64 },
     /// Dispatch an event on the element with the given JS-facing dom id.
     DispatchElementEvent { dom_id: u64, event_type: String },
     /// Resolve a pending JavaScript `fetch()` with a network response.
@@ -54,6 +57,12 @@ pub enum JsTask {
     RejectFetch { id: u64, reason: String },
     /// Settle a pending DevTools inspection request with its JSON envelope.
     ResolveDevTools { id: u64, result: String },
+    /// Parse fetched iframe HTML and install it as the host element's
+    /// `contentDocument`, then fire its `load` event.
+    ResolveIframe { dom_id: u64, html: String },
+    /// Mark an iframe load as failed so later `contentDocument` accesses do not
+    /// keep re-queuing a fetch.
+    RejectIframe { dom_id: u64 },
     /// Replace the JS thread's mirror DOM with the UI's tree (write-backs).
     UpdateDom { snapshot: DomSnapshot },
 }
@@ -69,10 +78,15 @@ enum JsCommand {
 pub struct JsTaskResult {
     /// The JS thread's mirror DOM, present only when a script mutated it.
     pub dom: Option<DomSnapshot>,
+    /// The serialized content documents of any `<iframe>`s, present alongside
+    /// `dom` so layout can render them nested inside the host page.
+    pub iframe_documents: Vec<IframeContentSnapshot>,
     /// Whether the DOM changed and the UI needs to relayout and redraw.
     pub needs_redraw: bool,
     /// `fetch()` requests queued by scripts while running this task.
     pub fetch_requests: Vec<JsFetchRequest>,
+    /// `<iframe src="...">` fetch requests queued while running this task.
+    pub iframe_fetch_requests: Vec<JsIframeFetchRequest>,
     /// DevTools inspection requests queued by scripts while running this task.
     pub devtools_requests: Vec<JsDevToolsRequest>,
     /// Dynamically inserted script elements discovered while running this task.
@@ -135,15 +149,26 @@ impl JsProcessor {
                 }
 
                 perf_scope!(total);
+                // Markup-declared `<iframe src>` elements (and frames inserted
+                // via fragment parsing) never hit the `src` setter, so queue
+                // their loads whenever the document URL or bound tree changes.
+                let tree_may_have_new_iframes = matches!(
+                    &task,
+                    JsTask::SetDocumentUrl { .. } | JsTask::UpdateDom { .. }
+                );
                 perf_scope!(run);
                 #[cfg_attr(not(feature = "profile"), allow(unused_variables))]
                 let did_work = run_task(&mut runtime, task);
+                if tree_may_have_new_iframes || did_work {
+                    runtime.queue_markup_iframe_loads();
+                }
                 #[cfg(any(feature = "profile", debug_assertions))]
                 let run_time = run.elapsed();
 
                 perf_scope!(collect);
                 let needs_redraw = runtime.take_needs_redraw();
                 let fetch_requests = runtime.take_fetch_requests();
+                let iframe_fetch_requests = runtime.take_iframe_fetch_requests();
                 let devtools_requests = runtime.take_devtools_requests();
                 let dynamic_script_requests = runtime.take_dynamic_script_requests();
                 let dynamic_style_requests = runtime.take_dynamic_style_requests();
@@ -153,13 +178,20 @@ impl JsProcessor {
                 } else {
                     None
                 };
+                let iframe_documents = if needs_redraw {
+                    runtime.snapshot_iframe_documents()
+                } else {
+                    Vec::new()
+                };
                 #[cfg(any(feature = "profile", debug_assertions))]
                 let collect_time = collect.elapsed();
 
                 let _ = result_tx.send(JsTaskResult {
                     dom,
+                    iframe_documents,
                     needs_redraw,
                     fetch_requests,
+                    iframe_fetch_requests,
                     devtools_requests,
                     dynamic_script_requests,
                     dynamic_style_requests,
@@ -237,6 +269,7 @@ fn run_task(runtime: &mut JsRuntime, task: JsTask) -> bool {
         JsTask::DispatchWindowLoad => runtime.dispatch_window_load(),
         JsTask::RunTimers => runtime.run_due_timers(),
         JsTask::Click { dom_id } => runtime.click_dom_id(dom_id),
+        JsTask::Scroll { dom_id } => runtime.scroll_dom_id(dom_id),
         JsTask::DispatchElementEvent { dom_id, event_type } => {
             runtime.dispatch_element_event(dom_id, &event_type);
             true
@@ -251,6 +284,14 @@ fn run_task(runtime: &mut JsRuntime, task: JsTask) -> bool {
         }
         JsTask::ResolveDevTools { id, result } => {
             runtime.resolve_devtools(id, result);
+            true
+        }
+        JsTask::ResolveIframe { dom_id, html } => {
+            runtime.resolve_iframe_fetch(dom_id, html);
+            true
+        }
+        JsTask::RejectIframe { dom_id } => {
+            runtime.reject_iframe_fetch(dom_id);
             true
         }
         JsTask::UpdateDom { snapshot } => {
