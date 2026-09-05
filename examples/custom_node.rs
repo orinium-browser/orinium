@@ -15,7 +15,7 @@ use orinium_browser::engine::{
     html::parser::Parser as HtmlParser,
     layouter::{
         InheritedCss, build_layout_and_info,
-        css_resolver::{CssResolver, ResolvedStyles},
+        css_resolver::{CssResolver, ResolvedStyles, StyleOrigin, append_resolved_styles},
         types::TextFlowStyle,
     },
     renderer_model::{DrawCommand, SystemUiKind, generate_draw_commands},
@@ -56,13 +56,16 @@ fn main() {
 
     let ua_css = include_str!("../resource/user-agent.css");
     let ua_sheet = CssParser::new(ua_css).parse().expect("parse UA CSS");
-    resolved.extend(CssResolver::resolve(&ua_sheet));
+    append_resolved_styles(
+        &mut resolved,
+        CssResolver::resolve_with_origin(&ua_sheet, StyleOrigin::UserAgent),
+    );
 
     // inline styles from <style> elements
     let inline = dom.collect_text_by_tag("style");
     for css in &inline {
         if let Ok(sheet) = CssParser::new(css).parse() {
-            resolved.extend(CssResolver::resolve(&sheet));
+            append_resolved_styles(&mut resolved, CssResolver::resolve(&sheet));
         }
     }
 

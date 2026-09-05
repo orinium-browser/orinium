@@ -8,7 +8,7 @@ use orinium_browser::{
         js::JsRuntime,
         layouter::{
             InheritedCss, build_layout_and_info,
-            css_resolver::{CssResolver, ResolvedStyles},
+            css_resolver::{CssResolver, ResolvedStyles, StyleOrigin, append_resolved_styles},
             types::{TextFlowStyle, TextStyle},
         },
         renderer_model::generate_draw_commands,
@@ -413,11 +413,14 @@ fn build_layout_info(raw_url: &str) -> Result<LayoutInfo> {
     let ua_sheet = CssParser::new(ua_css)
         .parse()
         .expect("Failed to parse UA CSS");
-    resolved_styles.extend(CssResolver::resolve(&ua_sheet));
+    append_resolved_styles(
+        &mut resolved_styles,
+        CssResolver::resolve_with_origin(&ua_sheet, StyleOrigin::UserAgent),
+    );
 
     for css in &inline_styles {
         if let Ok(sheet) = CssParser::new(css).parse() {
-            resolved_styles.extend(CssResolver::resolve(&sheet));
+            append_resolved_styles(&mut resolved_styles, CssResolver::resolve(&sheet));
         }
     }
 
@@ -428,7 +431,7 @@ fn build_layout_info(raw_url: &str) -> Result<LayoutInfo> {
         if let Ok(css_resp) = css_loader.fetch_blocking(css_url.clone()) {
             let css = String::from_utf8_lossy(&css_resp.body).to_string();
             if let Ok(sheet) = CssParser::new(&css).parse() {
-                resolved_styles.extend(CssResolver::resolve(&sheet));
+                append_resolved_styles(&mut resolved_styles, CssResolver::resolve(&sheet));
             }
         }
     }
