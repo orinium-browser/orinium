@@ -860,6 +860,102 @@ pub fn resolve_css_color(
             Some(Color(r, g, bl, a))
         }
 
+        // lab() — CIE L*a*b*
+        CssValue::Function(func, args) if func == "lab" => {
+            let mut lightness: Option<f32> = None;
+            let mut a_val: Option<f32> = None;
+            let mut b_val: Option<f32> = None;
+            let mut alpha: Option<f32> = None;
+            let mut after_slash = false;
+            let mut channel_index = 0u8;
+
+            for arg in args.iter().flatten() {
+                match arg {
+                    CssValue::Keyword(k) if k == "/" => {
+                        after_slash = true;
+                    }
+                    CssValue::Keyword(k) if k == "%" => {
+                        // A bare % applies to the preceding component.
+                        if after_slash {
+                            if let Some(ref mut value) = alpha {
+                                *value /= 100.0;
+                            }
+                        } else if channel_index > 0 {
+                            match channel_index - 1 {
+                                0 => {
+                                    if let Some(ref mut value) = lightness {
+                                        *value = (*value).clamp(0.0, 100.0);
+                                    }
+                                }
+                                1 => {
+                                    if let Some(ref mut value) = a_val {
+                                        *value *= 1.25;
+                                    }
+                                }
+                                2 => {
+                                    if let Some(ref mut value) = b_val {
+                                        *value *= 1.25;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    CssValue::Length(value, Unit::Percent) if after_slash => {
+                        alpha = Some(value / 100.0);
+                    }
+                    CssValue::Length(value, Unit::Percent) if !after_slash => {
+                        match channel_index {
+                            0 => {
+                                // 0%..100% maps to 0..100.
+                                lightness = Some(*value);
+                            }
+                            1 => {
+                                // -100%..100% maps to -125..125.
+                                a_val = Some(*value * 1.25);
+                            }
+                            2 => {
+                                // -100%..100% maps to -125..125.
+                                b_val = Some(*value * 1.25);
+                            }
+                            _ => {}
+                        }
+                        channel_index += 1;
+                    }
+                    _ => {
+                        let value = resolve_channel(arg)?;
+
+                        if after_slash {
+                            alpha = Some(value);
+                        } else {
+                            match channel_index {
+                                0 => lightness = Some(value),
+                                1 => a_val = Some(value),
+                                2 => b_val = Some(value),
+                                _ => {}
+                            }
+                            channel_index += 1;
+                        }
+                    }
+                }
+            }
+
+            let l = lightness?.clamp(0.0, 100.0);
+            let a = a_val?.clamp(-125.0, 125.0);
+            let b = b_val?.clamp(-125.0, 125.0);
+            let alpha = alpha.unwrap_or(1.0).clamp(0.0, 1.0);
+
+            let (x, y, z) = lab_to_xyz(l, a, b);
+            let (r, g, b) = xyz_to_srgb(x, y, z);
+
+            Some(Color(
+                (r.clamp(0.0, 1.0) * 255.0).round() as u8,
+                (g.clamp(0.0, 1.0) * 255.0).round() as u8,
+                (b.clamp(0.0, 1.0) * 255.0).round() as u8,
+                (alpha * 255.0).round() as u8,
+            ))
+        }
+
         // light-dark(<light-color>, <dark-color>)
         CssValue::Function(func, args) if func == "light-dark" && args.len() == 2 => {
             let chosen = match color_scheme {
