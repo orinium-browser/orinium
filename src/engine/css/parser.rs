@@ -1631,6 +1631,11 @@ impl<'a> Parser<'a> {
 
                 Token::String(s) => values.push(CssValue::String(s)),
 
+                Token::Url(raw) => values.push(CssValue::Function(
+                    "url".to_string(),
+                    vec![vec![CssValue::String(raw)]],
+                )),
+
                 Token::Dimension(value, unit) => {
                     let unit = match unit.as_str() {
                         "px" => Unit::Px,

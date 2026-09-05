@@ -33,6 +33,12 @@ pub enum Token {
     /// Function token (e.g. `calc`, `var`)
     Function(String),
 
+    /// Unquoted `url(...)` token (e.g. `url(data:image/png;base64,...)`). The
+    /// raw inner content is captured as a single lexeme, including characters
+    /// that would otherwise be tokenized further (such as `:` or `%` in a
+    /// base64 `data:` URL).
+    Url(String),
+
     /// Plain number without unit (e.g. `0`, `1.5`)
     Number(f32),
 
@@ -199,10 +205,61 @@ impl<'a> Tokenizer<'a> {
             }
         }
         if self.peek() == Some('(') {
-            Token::Function(ident)
+            if ident.eq_ignore_ascii_case("url") {
+                self.consume_url_after_name(ident)
+            } else {
+                Token::Function(ident)
+            }
         } else {
             Token::Ident(ident)
         }
+    }
+
+    /// Consume the body of an unquoted `url(...)` token after the name has
+    /// already been read.
+    ///
+    /// Per the CSS Syntax spec, `url(` followed by a string delimiter is a
+    /// plain function token whose quoted string argument is handled by the
+    /// parser. Otherwise we consume the raw content up to the closing `)`,
+    /// resolving escapes, so that the URL is preserved byte-for-byte.
+    fn consume_url_after_name(&mut self, ident: String) -> Token {
+        self.bump(); // consume '('
+
+        if let Some(c) = self.peek()
+            && is_string_delimiter(c)
+        {
+            // Quoted URL (e.g. `url("foo.png")`) — behave as a function token
+            // so the parser handles the string argument.
+            return Token::Function(ident);
+        }
+
+        let mut value = String::new();
+
+        loop {
+            match self.peek() {
+                None => break, // EOF without a closing paren
+                Some(')') => {
+                    self.bump();
+                    break;
+                }
+                Some('\\') => {
+                    if let Some(escaped) = self.consume_escape() {
+                        value.push(escaped);
+                    } else {
+                        // A lone trailing backslash: bad URL, but keep the
+                        // eventual closing paren in sync.
+                        self.bump();
+                        break;
+                    }
+                }
+                Some(c) => {
+                    value.push(c);
+                    self.bump();
+                }
+            }
+        }
+
+        Token::Url(value.trim().to_string())
     }
 
     fn consume_string_like(&mut self) -> Token {
