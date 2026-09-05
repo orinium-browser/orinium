@@ -505,7 +505,10 @@ mod tests {
                     classes: Vec::new(),
                     attributes: vec![AttributeSelector {
                         name: "type".into(),
-                        operator: AttributeSelectorOperator::Includes,
+                        operator: match value {
+                            Some(_) => AttributeSelectorOperator::Includes,
+                            None => AttributeSelectorOperator::Exists,
+                        },
                         value: value.map(Into::into),
                     }],
                     pseudo_classes: Vec::new(),
