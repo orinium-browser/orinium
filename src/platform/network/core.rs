@@ -305,7 +305,7 @@ impl AsyncNetworkCore {
         self.create_connection(key).await
     }
 
-    async fn create_connection(&self, key: &HostKey) -> Result<HttpSender, NetworkError> {
+       async fn create_connection(&self, key: &HostKey) -> Result<HttpSender, NetworkError> {
         let addr = format!("{}:{}", key.host, key.port);
         let stream = TcpStream::connect(addr)
             .await
@@ -314,7 +314,7 @@ impl AsyncNetworkCore {
         if key.scheme == Scheme::HTTPS {
             let tls = TlsConnector::from(Arc::clone(&self.inner.tls_config));
             let key = key.clone();
-            let domain = rustls::pki_types::ServerName::try_from(key.host.clone())
+            let domain = rustls_pki_types::ServerName::try_from(key.host.clone())
                 .map_err(|_| NetworkError::InvalidDnsName)?;
 
             let stream = tls
@@ -322,19 +322,30 @@ impl AsyncNetworkCore {
                 .await
                 .map_err(|_| NetworkError::TlsFailed)?;
 
-            let (sender, conn) = conn::http1::handshake(TokioIo::new(stream))
+            let (sender, conn) = conn::http2::handshake(hyper_util::rt::TokioExecutor::new(), TokioIo::new(stream))
                 .await
                 .map_err(|_| NetworkError::HttpHandshakeFailed)?;
 
-            self.spawn_connection_task(conn, key);
-            Ok(HttpSender::Http1(sender))
+            let pool_clone = Arc::clone(&self.sender_pool);
+            tokio::task::spawn_local(async move {
+                let _ = conn.await;
+                pool_clone.write().unwrap().remove_connection(&key);
+            });
+
+            Ok(HttpSender::Http2(sender))
         } else {
-            let (sender, conn) = conn::http1::handshake(TokioIo::new(stream))
+            let (sender, conn) = conn::http2::handshake(hyper_util::rt::TokioExecutor::new(), TokioIo::new(stream))
                 .await
                 .map_err(|_| NetworkError::HttpHandshakeFailed)?;
 
-            self.spawn_connection_task(conn, key.clone());
-            Ok(HttpSender::Http1(sender))
+            let key_clone = key.clone();
+            let pool_clone = Arc::clone(&self.sender_pool);
+            tokio::task::spawn_local(async move {
+                let _ = conn.await;
+                pool_clone.write().unwrap().remove_connection(&key_clone);
+            });
+
+            Ok(HttpSender::Http2(sender))
         }
     }
 
