@@ -2096,7 +2096,9 @@ fn parse_html(html: &str, document_url: Url, scripting_mode: ScriptingMode) -> P
         };
 
         if let (Some(rel), Some(href)) = (rel, href)
-            && rel == "stylesheet"
+            && rel
+                .split_ascii_whitespace()
+                .any(|token| token.eq_ignore_ascii_case("stylesheet"))
         {
             let css_url = match resolve_url(&base_url, &href) {
                 Ok(url) => url,
