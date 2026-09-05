@@ -346,12 +346,13 @@ pub fn resolve_css_len(
         }
         Some(CssValue::Length(v, unit)) => resolve_length(name, *v, unit, text_flow_style),
         Some(CssValue::Number(0.0)) => Some(Length::Px(0.0)),
-        Some(CssValue::Keyword(_)) => None,
-        Some(CssValue::Color(_)) => None,
         Some(CssValue::Function(_, _)) => calc_value_to_length(
             name,
             resolve_calc_value(name, components.first()?, text_flow_style)?,
         ),
+        Some(CssValue::Number(_)) => None,
+        Some(CssValue::Keyword(_)) => None,
+        Some(CssValue::Color(_)) => None,
         None => None,
         _ => {
             log::error!(
