@@ -17,11 +17,11 @@ use crate::engine::layouter::types::{
 };
 
 use super::{
-    apply_background_shorthand_geometry, extract_font_families, length_to_px, one_or_two_values,
-    parse_background_position, parse_background_repeat, parse_background_shorthand,
-    parse_background_size, parse_grid_line, parse_grid_line_end, parse_grid_placement,
-    parse_grid_template_areas, parse_grid_tracks, resolve_css_color, resolve_css_len,
-    resolve_css_len_auto, resolve_font_size_px,
+    CalcValue, apply_background_shorthand_geometry, extract_font_families, length_to_px,
+    one_or_two_values, parse_background_position, parse_background_repeat,
+    parse_background_shorthand, parse_background_size, parse_grid_line, parse_grid_line_end,
+    parse_grid_placement, parse_grid_template_areas, parse_grid_tracks, resolve_calc_value,
+    resolve_css_color, resolve_css_len, resolve_css_len_auto, resolve_font_size_px,
 };
 
 macro_rules! apply_property {
@@ -906,9 +906,15 @@ pub fn apply_declaration(
             text_flow_style.line_height = LineHeight::Normal;
         }
         ("line-height", _) => {
-            let len = resolve_css_len(name, std::slice::from_ref(value), text_flow_style)?;
-            text_flow_style.line_height =
-                LineHeight::Px(length_to_px(&len, text_flow_style.font_size));
+            // Math functions (calc/min/max/clamp) may resolve to a unitless
+            // `<number>`, which acts as a multiplier like a bare number.
+            text_flow_style.line_height = match resolve_calc_value(name, value, text_flow_style) {
+                Some(CalcValue::Number(factor)) => LineHeight::Number(factor),
+                Some(CalcValue::Length(len)) => {
+                    LineHeight::Px(length_to_px(&len, text_flow_style.font_size))
+                }
+                None => return None,
+            };
         }
 
         ("font-weight", CssValue::Keyword(v)) => {
@@ -1022,22 +1028,15 @@ pub fn apply_declaration(
                 .is_some_and(|v| matches!(v, CssValue::Keyword(k) if k == "/"))
             {
                 if after.len() > 1 {
-                    match after[1] {
-                        CssValue::Number(factor) => {
-                            text_flow_style.line_height = LineHeight::Number(*factor);
+                    match resolve_calc_value(name, after[1], text_flow_style) {
+                        Some(CalcValue::Number(factor)) => {
+                            text_flow_style.line_height = LineHeight::Number(factor);
                         }
-                        _ => {
-                            if let Some(lh_len) = resolve_css_len(
-                                name,
-                                std::slice::from_ref(after[1]),
-                                text_flow_style,
-                            ) {
-                                text_flow_style.line_height = LineHeight::Px(length_to_px(
-                                    &lh_len,
-                                    text_flow_style.font_size,
-                                ));
-                            }
+                        Some(CalcValue::Length(lh_len)) => {
+                            text_flow_style.line_height =
+                                LineHeight::Px(length_to_px(&lh_len, text_flow_style.font_size));
                         }
+                        None => {}
                     }
                     2 // skip `/` and line-height value
                 } else {

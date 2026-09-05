@@ -22,9 +22,9 @@ pub use background::{
 };
 pub use color::resolve_css_color;
 pub use css_resolve::{
-    extract_font_families, one_or_two_values, parse_grid_line, parse_grid_line_end,
-    parse_grid_placement, parse_grid_template_areas, parse_grid_tracks, resolve_css_len,
-    resolve_css_len_auto, resolve_font_size_px,
+    CalcValue, extract_font_families, one_or_two_values, parse_grid_line, parse_grid_line_end,
+    parse_grid_placement, parse_grid_template_areas, parse_grid_tracks, resolve_calc_value,
+    resolve_css_len, resolve_css_len_auto, resolve_font_size_px,
 };
 
 use crate::{perf_scope, profile_log};
