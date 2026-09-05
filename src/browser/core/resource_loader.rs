@@ -277,9 +277,10 @@ impl DataURI {
             .context("data: URL is missing the ',' delimiter")?;
 
         if metadata.to_ascii_lowercase().contains(";base64") {
-            let cleaned: String = payload
-                .chars()
-                .filter(|c| !c.is_ascii_whitespace())
+            let decoded = percent_decode(payload);
+            let cleaned: Vec<u8> = decoded
+                .into_iter()
+                .filter(|b| !b.is_ascii_whitespace())
                 .collect();
             base64::engine::general_purpose::STANDARD
                 .decode(cleaned)
