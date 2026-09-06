@@ -205,6 +205,7 @@ pub fn build_layout_and_info(
     chain: ElementChain,
     system_color_scheme: ColorScheme,
     scripting_mode: ScriptingMode,
+    viewport: (f32, f32),
 ) -> (LayoutNode, InfoNode) {
     build_layout_and_info_with_images(
         dom,
@@ -214,11 +215,15 @@ pub fn build_layout_and_info(
         chain,
         system_color_scheme,
         scripting_mode,
+        viewport,
         &HashMap::new(),
     )
 }
 
 /// Builds layout and render trees with decoded images keyed by their `src` value.
+///
+/// `viewport` supplies the viewport size used to evaluate `@media` queries while
+/// resolving the style cascade (e.g. `@media (min-width: 768px)`).
 #[allow(clippy::too_many_arguments)]
 pub fn build_layout_and_info_with_images(
     dom: &NodeRef<HtmlNodeType>,
@@ -228,10 +233,11 @@ pub fn build_layout_and_info_with_images(
     chain: ElementChain,
     system_color_scheme: ColorScheme,
     scripting_mode: ScriptingMode,
+    viewport: (f32, f32),
     images: &HashMap<String, Image>,
 ) -> (LayoutNode, InfoNode) {
     let (snapshot, _dom_refs) = DomSnapshot::from_tree(dom);
-    let media_environment = MediaEnvironment::new((0.0, 0.0), system_color_scheme);
+    let media_environment = MediaEnvironment::new(viewport, system_color_scheme);
     let rule_set = RuleSet::from_declarations(resolved_styles, &media_environment);
     build_layout_and_info_from_snapshot(
         &snapshot,
