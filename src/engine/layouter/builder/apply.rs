@@ -899,22 +899,30 @@ pub fn apply_declaration(
             text_flow_style.font_size = px;
         }
 
-        ("line-height", CssValue::Number(factor)) => {
-            text_flow_style.line_height = LineHeight::Number(*factor);
-        }
-        ("line-height", CssValue::Keyword(v)) if v == "normal" => {
-            text_flow_style.line_height = LineHeight::Normal;
-        }
         ("line-height", _) => {
-            // Math functions (calc/min/max/clamp) may resolve to a unitless
-            // `<number>`, which acts as a multiplier like a bare number.
-            text_flow_style.line_height = match resolve_calc_value(name, value, text_flow_style) {
-                Some(CalcValue::Number(factor)) => LineHeight::Number(factor),
-                Some(CalcValue::Length(len)) => {
-                    LineHeight::Px(length_to_px(&len, text_flow_style.font_size))
+            let f = |v: &CssValue| match v {
+                CssValue::Number(factor) => Some(LineHeight::Number(*factor)),
+                CssValue::Keyword(v) if v.eq_ignore_ascii_case("normal") => {
+                    Some(LineHeight::Normal)
                 }
-                None => return None,
+                _ => match resolve_calc_value(name, v, text_flow_style) {
+                    Some(CalcValue::Number(factor)) => Some(LineHeight::Number(factor)),
+                    Some(CalcValue::Length(len)) => Some(LineHeight::Px(length_to_px(
+                        &len,
+                        text_flow_style.font_size,
+                    ))),
+                    None => None,
+                },
             };
+
+            apply_property!(
+                line_height,
+                text_flow_style,
+                parent_text_flow_style,
+                DEFAULT_TEXT_FLOW_STYLE,
+                value,
+                f(value)?
+            );
         }
 
         ("font-weight", CssValue::Keyword(v)) => {
