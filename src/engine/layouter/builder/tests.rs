@@ -4139,3 +4139,44 @@ fn parser_roundtrip_named_color() {
     // Named colors are stored as CssValue::Keyword, display is the name itself
     assert_eq!(decl.value.to_string(), "rebeccapurple");
 }
+
+#[test]
+fn flex_wrap_item_with_zero_height_header_stays_on_line_start() {
+    let full_css = concat!(
+        "body { margin: 0; }",
+        ".w { max-width: 1280px; margin: 0 auto; }",
+        ".cont { display: flex; width: 100%; max-width: 100%; box-sizing: border-box; margin: 0px auto; flex-wrap: wrap; }",
+        ".head { width: 100%; box-sizing: border-box; padding: 0px 16px; height: 0px; }",
+        ".main { flex-grow: 1; flex-basis: 100%; height: 200px; }"
+    );
+    let html = "<html><body><div class='w'><div class='cont'><div class='head'></div><div class='main'></div></div></div></body></html>";
+    let (mut layout, _) = layout_and_info_for(html, full_css);
+    ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+
+    fn find_cont<'a>(l: &'a LayoutNode) -> Option<&'a LayoutNode> {
+        use ui_layout::InnerDisplay;
+        if l.style.display.inner() == Some(InnerDisplay::Flex)
+            && l.children.iter().filter(|c| c.node().is_some()).count() >= 2
+        {
+            return Some(l);
+        }
+        l.children
+            .iter()
+            .filter_map(LayoutChild::node)
+            .find_map(find_cont)
+    }
+
+    let cont = find_cont(&layout).expect("no flex container");
+    let nodes = cont
+        .children
+        .iter()
+        .filter_map(LayoutChild::node)
+        .collect::<Vec<_>>();
+    let main = nodes[1];
+    let head = nodes[0];
+
+    // The head and its wrapped main sibling both start their lines at x == 0.
+    // The main must not be pushed to the right of the zero-height head line.
+    assert_eq!(head.layout_box.iter().next().unwrap().border_box.x, 0.0);
+    assert_eq!(main.layout_box.iter().next().unwrap().border_box.x, 0.0);
+}
