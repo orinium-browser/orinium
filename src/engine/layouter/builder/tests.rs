@@ -1377,6 +1377,70 @@ fn negative_grid_end_line_spans_to_the_last_explicit_track() {
 }
 
 #[test]
+fn grid_column_with_span_keeps_explicit_start_and_span() {
+    let style = apply_layout_property(
+        "grid-column",
+        CssValue::List(vec![
+            CssValue::Number(2.0),
+            CssValue::Keyword("/".into()),
+            CssValue::Keyword("span".into()),
+            CssValue::Number(2.0),
+        ]),
+    );
+    assert_eq!(style.grid_column.start, Some(2));
+    assert_eq!(style.grid_column.end, GridPlacementEnd::Span(2));
+}
+
+#[test]
+fn grid_column_with_span_only_resolves_intrinsic_span() {
+    let style = apply_layout_property(
+        "grid-column",
+        CssValue::List(vec![
+            CssValue::Keyword("span".into()),
+            CssValue::Number(3.0),
+        ]),
+    );
+    assert_eq!(style.grid_column.start, None);
+    assert_eq!(style.grid_column.end, GridPlacementEnd::Span(3));
+}
+
+#[test]
+fn grid_item_spanning_calc_track_takes_the_calculated_width() {
+    let html = "<html><body><div class='wrap'><div class='grid'><div class='side'></div><div class='main'></div></div></div></body></html>";
+    let css = r#"
+            .wrap { max-width: 1280px; margin: 0 auto; padding: 0 24px; }
+            .grid { display: grid; grid-template-columns: auto 0px minmax(0px, calc(calc(100% - 256px) - 16px)); gap: 0; }
+            .side { grid-column: 1; width: 256px; height: 48px; }
+            .main { grid-column: 2 / span 2; min-width: 0; height: 48px; }
+        "#;
+    let (mut layout, _) = layout_and_info_for(html, css);
+    ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+
+    fn grid(layout: &LayoutNode) -> Option<&LayoutNode> {
+        if layout.style.display.inner() == Some(InnerDisplay::Grid) {
+            return Some(layout);
+        }
+        layout
+            .children
+            .iter()
+            .filter_map(LayoutChild::node)
+            .find_map(grid)
+    }
+
+    let grid = grid(&layout).expect("grid");
+    let main = grid
+        .children
+        .iter()
+        .filter_map(LayoutChild::node)
+        .nth(1)
+        .expect("main grid item");
+    assert_eq!(main.style.grid_column.start, Some(2));
+    assert_eq!(main.style.grid_column.end, GridPlacementEnd::Span(2));
+    assert!((main.layout_box.width_box() - 480.0).abs() < 1.0);
+    assert!((main.layout_box.iter().next().unwrap().border_box.x - 256.0).abs() < 1.0);
+}
+
+#[test]
 fn grid_justify_self_end_uses_the_end_of_its_track() {
     let html = "<html><body><div class='grid'><a>A</a><nav><span></span></nav><a class='end'>B</a></div></body></html>";
     let css = r#"
