@@ -519,11 +519,18 @@ pub fn parse_grid_placement(value: &CssValue) -> Option<GridPlacement> {
     let (start_values, end_values) = slash.map_or((values.as_slice(), &[][..]), |slash| {
         (&values[..slash], &values[slash + 1..])
     });
-    let start = parse_positive_grid_line(start_values)?;
+    let start = parse_positive_grid_line(start_values);
     if end_values.is_empty() {
+        let span = parse_span(start_values).unwrap_or(1);
         return Some(GridPlacement {
-            start: Some(start),
-            end: GridPlacementEnd::Span(1),
+            start,
+            end: GridPlacementEnd::Span(span),
+        });
+    }
+    if let Some(span) = parse_span(end_values) {
+        return Some(GridPlacement {
+            start,
+            end: GridPlacementEnd::Span(span),
         });
     }
     if matches!(end_values, [CssValue::Number(end)] if *end < 0.0) {
@@ -535,11 +542,12 @@ pub fn parse_grid_placement(value: &CssValue) -> Option<GridPlacement> {
         }
 
         return Some(GridPlacement {
-            start: Some(start),
+            start,
             end: GridPlacementEnd::NegativeLine((-*end) as usize),
         });
     }
     let end = parse_positive_grid_line(end_values)?;
+    let start = start?;
     (end > start).then_some(GridPlacement {
         start: Some(start),
         end: GridPlacementEnd::Line(end),
@@ -551,6 +559,14 @@ fn parse_positive_grid_line(values: &[&CssValue]) -> Option<usize> {
         return None;
     };
     (*line >= 1.0 && line.fract().abs() < f32::EPSILON).then_some(*line as usize)
+}
+
+fn parse_span(values: &[&CssValue]) -> Option<usize> {
+    let [CssValue::Keyword(keyword), CssValue::Number(span)] = values else {
+        return None;
+    };
+    (keyword == "span" && *span >= 1.0 && span.fract().abs() < f32::EPSILON)
+        .then_some(*span as usize)
 }
 
 fn parse_grid_track(
@@ -665,15 +681,32 @@ pub fn parse_grid_line(value: &CssValue) -> Option<usize> {
 }
 
 pub fn parse_grid_line_end(value: &CssValue) -> Option<GridPlacementEnd> {
-    let CssValue::Number(n) = value else {
-        return None;
-    };
+    match value {
+        CssValue::List(values) => {
+            let refs: Vec<&CssValue> = values.iter().collect();
+            if let Some(span) = parse_span(&refs) {
+                return Some(GridPlacementEnd::Span(span));
+            }
+            let [CssValue::Number(n)] = refs.as_slice() else {
+                return None;
+            };
+            resolve_grid_line_end_number(*n)
+        }
+        value => {
+            let CssValue::Number(n) = value else {
+                return None;
+            };
+            resolve_grid_line_end_number(*n)
+        }
+    }
+}
 
+fn resolve_grid_line_end_number(n: f32) -> Option<GridPlacementEnd> {
     if n.fract().abs() >= f32::EPSILON {
         return None;
     }
 
-    match *n {
+    match n {
         n if n >= 1.0 => Some(GridPlacementEnd::Line(n as usize)),
         n if n <= -1.0 => Some(GridPlacementEnd::NegativeLine(-n as usize)),
         _ => None,
