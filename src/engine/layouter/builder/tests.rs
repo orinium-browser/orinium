@@ -649,6 +649,7 @@ fn layout_and_info_for(html: &str, css: &str) -> (LayoutNode, InfoNode) {
         ElementChain::default(),
         ColorScheme::Light,
         ScriptingMode::default(),
+        (0.0, 0.0),
     )
 }
 
@@ -1897,6 +1898,7 @@ fn inline_image_keeps_intrinsic_dimensions_after_layout() {
         ElementChain::default(),
         ColorScheme::Light,
         ScriptingMode::default(),
+        (0.0, 0.0),
         &images,
     );
     ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
