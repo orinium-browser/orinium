@@ -224,7 +224,7 @@ fn main() -> Result<()> {
                     let raw_url = &args[2];
                     println!("Dumping InfoNode for URL: {}", raw_url);
 
-                    let info = build_layout_info(raw_url)?.info;
+                    let info = build_layout_info(raw_url, (800.0, 600.0))?.info;
 
                     println!("\nInfoNode:\n{:#?}", info);
                 } else {
@@ -264,7 +264,7 @@ fn main() -> Result<()> {
                     let (viewport_w, viewport_h) = viewport_args(&args, 800.0, 600.0)?;
                     println!("Dumping LayoutNode for URL: {}", raw_url);
 
-                    let mut ctx = build_layout_info(raw_url)?;
+                    let mut ctx = build_layout_info(raw_url, (viewport_w, viewport_h))?;
                     LayoutEngine::layout(&mut ctx.layout, viewport_w, viewport_h);
 
                     println!("\nLayoutNode:\n{:#}", ctx.layout);
@@ -280,7 +280,7 @@ fn main() -> Result<()> {
                     let (viewport_w, viewport_h) = viewport_args(&args, 800.0, 600.0)?;
                     println!("Dumping draw commands for URL: {}", raw_url);
 
-                    let mut ctx = build_layout_info(raw_url)?;
+                    let mut ctx = build_layout_info(raw_url, (viewport_w, viewport_h))?;
                     LayoutEngine::layout(&mut ctx.layout, viewport_w, viewport_h);
 
                     let mut draw_commands = Vec::new();
@@ -307,7 +307,7 @@ fn main() -> Result<()> {
                     let (viewport_w, viewport_h) = viewport_args(&args, 800.0, 600.0)?;
                     println!("Running layout for URL: {}", raw_url);
 
-                    let mut ctx = build_layout_info(raw_url)?;
+                    let mut ctx = build_layout_info(raw_url, (viewport_w, viewport_h))?;
                     LayoutEngine::layout(&mut ctx.layout, viewport_w, viewport_h);
 
                     println!("Done!");
@@ -359,7 +359,7 @@ struct LayoutInfo {
     info: InfoNode,
 }
 
-fn build_layout_info(raw_url: &str) -> Result<LayoutInfo> {
+fn build_layout_info(raw_url: &str, viewport: (f32, f32)) -> Result<LayoutInfo> {
     let parsed_url: url::Url = raw_url.parse()?;
 
     let net = NetworkCore::new().expect("Failed to create NetworkCore instansce");
@@ -457,6 +457,7 @@ fn build_layout_info(raw_url: &str) -> Result<LayoutInfo> {
             Default::default()
         }),
         orinium_browser::engine::html::ScriptingMode::Enabled,
+        viewport,
     );
 
     Ok(LayoutInfo { layout, info })

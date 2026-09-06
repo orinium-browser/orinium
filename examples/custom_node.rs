@@ -90,6 +90,7 @@ fn main() {
             Default::default()
         }),
         orinium_browser::engine::html::ScriptingMode::Enabled,
+        (800.0, 600.0),
     );
 
     // ── Layout pass ─────────────────────────────────────────
