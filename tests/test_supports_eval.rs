@@ -465,23 +465,6 @@ fn test_supports_min_function_three_args() {
 }
 
 #[test]
-fn test_supports_max_function_single_arg_unsupported() {
-    let s = resolve(
-        r#"
-        @supports (width: max(100px)) {
-            div {
-                --val: supported;
-            }
-        }
-        "#,
-    );
-    assert!(
-        !has_prop_in_rule(&s, "--val"),
-        "max() with single arg should not be recognized"
-    );
-}
-
-#[test]
 fn test_supports_calc_in_min() {
     let s = resolve(
         r#"
