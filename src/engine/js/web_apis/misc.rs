@@ -14,7 +14,8 @@
 use crate::engine::html::{DomTree, HtmlNodeType, Parser as HtmlParser};
 use crate::engine::js::common::is_callable;
 use crate::engine::js::web_apis::dom::document::{
-    create_element as document_create_element, create_text_node, expose_node, expose_node_list,
+    create_element as document_create_element, create_text_node, expose_detached_node,
+    expose_node_list,
 };
 use crate::engine::tree::NodeRef;
 use pixi_byte::value::jsobject::{JSObject, Property};
@@ -375,6 +376,22 @@ fn crypto_random_uuid(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
 // FormData
 // ---------------------------------------------------------------------------
 
+type FormDataMethod = fn(&mut VM, Vec<JSValue>) -> JSResult<JSValue>;
+
+const FORM_DATA_METHODS: &[(&str, FormDataMethod)] = &[
+    ("append", form_data_append),
+    ("delete", form_data_delete),
+    ("get", form_data_get),
+    ("getAll", form_data_get_all),
+    ("has", form_data_has),
+    ("set", form_data_set),
+    ("forEach", form_data_for_each),
+    ("entries", form_data_entries),
+    ("keys", form_data_keys),
+    ("values", form_data_values),
+    ("toString", form_data_to_string),
+];
+
 fn install_form_data(engine: &mut pixi_byte::JSEngine) {
     let mut constructor = JSObject::new();
     constructor.set(
@@ -382,25 +399,10 @@ fn install_form_data(engine: &mut pixi_byte::JSEngine) {
         JSValue::from_native_function(form_data_constructor),
     );
     let prototype = Rc::new(RefCell::new(JSObject::new()));
-    for (name, function) in [
-        (
-            "append",
-            form_data_append as fn(&mut VM, Vec<JSValue>) -> JSResult<JSValue>,
-        ),
-        ("delete", form_data_delete),
-        ("get", form_data_get),
-        ("getAll", form_data_get_all),
-        ("has", form_data_has),
-        ("set", form_data_set),
-        ("forEach", form_data_for_each),
-        ("entries", form_data_entries),
-        ("keys", form_data_keys),
-        ("values", form_data_values),
-        ("toString", form_data_to_string),
-    ] {
+    for (name, function) in FORM_DATA_METHODS {
         prototype
             .borrow_mut()
-            .set(name.to_string(), JSValue::from_native_function(function));
+            .set(name.to_string(), JSValue::from_native_function(*function));
     }
     constructor.set("prototype".to_string(), JSValue::from_object(prototype));
     engine.global_mut().borrow_mut().set(
@@ -418,6 +420,14 @@ fn form_data_constructor(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue>
 fn make_form_data(entries: Vec<(String, String)>) -> Rc<RefCell<JSObject>> {
     let mut form = JSObject::new();
     form.set(FORM_DATA_MARKER.to_string(), JSValue::from_bool(true));
+    // Methods are attached to the instance: the VM uses a constructor's
+    // returned object verbatim, skipping the `prototype` link.
+    for (name, function) in FORM_DATA_METHODS {
+        form.set(
+            name.to_string(),
+            JSValue::from_native_function(*function),
+        );
+    }
     let mut form = form;
     let mut serializer = url::form_urlencoded::Serializer::new(String::new());
     for (name, value) in &entries {
@@ -601,6 +611,12 @@ fn install_dom_parser(engine: &mut pixi_byte::JSEngine) {
 fn dom_parser_constructor(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     let mut parser = JSObject::new();
     parser.set(DOM_PARSER_MARKER.to_string(), JSValue::from_bool(true));
+    // Attached on the instance: the VM uses the constructor's returned object
+    // verbatim, skipping the `prototype` link.
+    parser.set(
+        "parseFromString".to_string(),
+        JSValue::from_native_function(dom_parser_parse_from_string),
+    );
     Ok(JSValue::from_object(Rc::new(RefCell::new(parser))))
 }
 
@@ -653,13 +669,13 @@ fn make_parsed_document(
     document_element: NodeRef<HtmlNodeType>,
     body: Option<NodeRef<HtmlNodeType>>,
 ) -> JSValue {
-    let document_element_value = expose_node(vm, document_element).unwrap_or(JSValue::null());
+    let document_element_value = expose_detached_node(vm, document_element).unwrap_or(JSValue::null());
     let body_value = body
-        .and_then(|body| expose_node(vm, body))
+        .and_then(|body| expose_detached_node(vm, body))
         .unwrap_or(JSValue::null());
     let head_value = dom
         .query_selector("head")
-        .and_then(|head| expose_node(vm, head))
+        .and_then(|head| expose_detached_node(vm, head))
         .unwrap_or(JSValue::null());
 
     let mut document = JSObject::new();
@@ -737,7 +753,7 @@ fn parsed_document_query_selector(vm: &mut VM, args: Vec<JSValue>) -> JSResult<J
     let root = climb_to_document_root(element);
     let found = DomTree::query_selector_within(&root, selector);
     Ok(found
-        .and_then(|node| expose_node(vm, node))
+        .and_then(|node| expose_detached_node(vm, node))
         .unwrap_or(JSValue::null()))
 }
 
@@ -778,7 +794,7 @@ fn parsed_document_get_element_by_id(vm: &mut VM, args: Vec<JSValue>) -> JSResul
     let tree = Rc::new(DomTree::from_root(root));
     let found = tree.get_element_by_id(id);
     Ok(found
-        .and_then(|node| expose_node(vm, node))
+        .and_then(|node| expose_detached_node(vm, node))
         .unwrap_or(JSValue::null()))
 }
 
