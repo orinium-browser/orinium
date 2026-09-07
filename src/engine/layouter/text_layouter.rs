@@ -402,12 +402,15 @@ impl CustomLayouter for TextFlowLayouter {
 
         let (start_x, start_y) = ctx.start_pos;
         let lh = self.line_height();
+        // The box width is the widest *line content* — alignment offsets
+        // (center/right within the line) must not widen the inline box,
+        // otherwise an auto-width inline-block containing centered text
+        // shrink-wraps to the alignment offset instead of the text.
         let total_width = spans
             .iter()
-            .map(|s| s.line_pos.0 + s.width())
-            .filter(|x| !x.is_nan())
+            .map(LineSpan::width)
+            .filter(|w| !w.is_nan())
             .max_by(f32::total_cmp)
-            .map(|max_x| (max_x - start_x).max(0.0))
             .unwrap_or(0.0);
         let total_height = spans
             .iter()
