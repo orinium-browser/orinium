@@ -337,6 +337,7 @@ impl JsRuntime {
         web_apis::encoding::install_encoding_apis(&mut engine);
         web_apis::browser_env::install_browser_environment(&mut engine);
         web_apis::browser_env::install_global_aliases(&mut engine);
+        web_apis::misc::install_misc_apis(&mut engine);
         web_apis::dom::custom_elements::install_custom_elements(&mut engine);
 
         Self {
@@ -1126,6 +1127,90 @@ mod tests {
         let dom = Rc::new(parser.parse());
         let runtime = JsRuntime::new(Rc::clone(&dom));
         (runtime, dom)
+    }
+
+    #[test]
+    fn misc_globals_behave_like_the_platform() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const results = [];
+
+            // Object.defineProperties
+            const target = {a: 1};
+            Object.defineProperties(target, {
+                b: {value: 2, enumerable: true},
+                c: {get: function () { return 3; }, enumerable: true},
+            });
+            results.push("defineProperties:" + (target.a + target.b + target.c));
+
+            // Reflect
+            results.push("reflect.has:" + Reflect.has(target, "b"));
+            results.push("reflect.get:" + Reflect.get(target, "a"));
+            results.push("reflect.ownKeys:" + Reflect.ownKeys(target).length);
+            results.push(
+                "reflect.apply:" + Reflect.apply(function (x) { return x * 2; }, null, [21])
+            );
+
+            // crypto.getRandomValues
+            const bytes = new Uint8Array(8);
+            crypto.getRandomValues(bytes);
+            const filled = Array.prototype.every.call(bytes, function (b) { return b >= 0; });
+            results.push("crypto:" + filled + ":" + bytes.length + ":" + bytes.byteLength);
+            results.push("uuid:" + /^[0-9a-f-]{36}$/.test(crypto.randomUUID()));
+
+            // FormData
+            const form = new FormData();
+            form.append("q", "hello world");
+            form.append("lang", "ja");
+            form.append("q", "second");
+            results.push("form.get:" + form.get("q"));
+            results.push("form.getAll:" + form.getAll("q").join("|"));
+            results.push("form.has:" + form.has("lang"));
+            form.set("lang", "en");
+            results.push("form.afterSet:" + form.get("lang"));
+            form.delete("lang");
+            results.push("form.afterDelete:" + form.get("lang"));
+            results.push("form.toString:" + form.toString());
+
+            // DOMParser
+            const doc = new DOMParser().parseFromString(
+                '<html><body><p id="x">hi</p><span class="k">there</span></body></html>',
+                "text/html"
+            );
+            results.push("parser.body:" + (doc.body !== null));
+            results.push("parser.qs:" + doc.querySelector("#x").textContent);
+            results.push("parser.tag:" + doc.getElementsByTagName("span").length);
+
+            document.getElementById("result").setAttribute("data-misc", results.join(";"));
+            "##,
+        );
+
+        let node = dom.get_element_by_id("result").unwrap();
+        let data = node
+            .borrow()
+            .value
+            .get_attr("data-misc")
+            .unwrap_or_default()
+            .to_string();
+        let parts: Vec<&str> = data.split(';').collect();
+
+        assert_eq!(parts[0], "defineProperties:6");
+        assert_eq!(parts[1], "reflect.has:true");
+        assert_eq!(parts[2], "reflect.get:1");
+        assert_eq!(parts[3], "reflect.ownKeys:3");
+        assert_eq!(parts[4], "reflect.apply:42");
+        assert!(parts[5].starts_with("crypto:true:8:8"), "got {}", parts[5]);
+        assert_eq!(parts[6], "uuid:true");
+        assert_eq!(parts[7], "form.get:hello world");
+        assert_eq!(parts[8], "form.getAll:hello world|second");
+        assert_eq!(parts[9], "form.has:true");
+        assert_eq!(parts[10], "form.afterSet:en");
+        assert_eq!(parts[11], "form.afterDelete:null");
+        assert_eq!(parts[12], "form.toString:q=hello+world&q=second");
+        assert_eq!(parts[13], "parser.body:true");
+        assert_eq!(parts[14], "parser.qs:hi");
+        assert_eq!(parts[15], "parser.tag:1");
     }
 
     #[test]

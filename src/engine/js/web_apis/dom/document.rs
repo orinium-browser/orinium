@@ -354,7 +354,7 @@ fn document_get_elements_by_class_name(vm: &mut VM, args: Vec<JSValue>) -> JSRes
     Ok(expose_node_list(vm, nodes))
 }
 
-fn create_element(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn create_element(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(tag_name) = args.get(1).and_then(JSValue::as_string) else {
         return Err(throw_dom_exception(
             "Must provide a tag name",
