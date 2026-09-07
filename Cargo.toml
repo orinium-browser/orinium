@@ -30,7 +30,7 @@ ipc-channel = "0.23.0"
 log = "0.4.32"
 lru = "0.18"
 once_cell = "1.21.4"
-pixi_byte = { git = "https://github.com/orinium-browser/pixi_byte", rev = "4ff015a34098598f52cdcf43bbb54d979cb609bc" }
+pixi_byte = { git = "https://github.com/orinium-browser/pixi_byte", rev = "5bf053d9b03eedcaedf5eb34ec85826ec19ed1a6" }
 pollster = "1.0"
 resvg = "0.48.1"
 rustls = { version = "0.23.40", default-features = false, features = ["tls12"] }
