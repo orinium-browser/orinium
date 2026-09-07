@@ -25,6 +25,31 @@ pub enum StyleOrigin {
     Author,
 }
 
+/// The originating pseudo-element of a declaration, if any.
+///
+/// Declarations from a `::before`/`::after` rule block carry the tag here and
+/// their selector is stored *without* the pseudo-element, so normal subject
+/// matching applies to the originating element.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum PseudoElement {
+    #[default]
+    None,
+    Before,
+    After,
+}
+
+impl PseudoElement {
+    /// Maps a parsed pseudo-element name (`before`, `after`, …) to its kind.
+    /// Legacy single-colon names are normalized by the parser.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "before" => Some(Self::Before),
+            "after" => Some(Self::After),
+            _ => None,
+        }
+    }
+}
+
 /// A single CSS declaration after selector resolution and value processing.
 ///
 /// `ResolvedDeclaration` represents one property-value pair that has been
@@ -46,6 +71,8 @@ pub enum StyleOrigin {
 #[derive(Debug, Clone)]
 pub struct ResolvedDeclaration {
     pub selector: Arc<ComplexSelector>,
+    /// The `::before`/`::after` pseudo-element this declaration styles, if any.
+    pub pseudo: PseudoElement,
     pub name: String,
     pub value: CssValue,
     pub specificity: (u32, u32, u32),
@@ -360,6 +387,7 @@ pub(super) fn set_inline_custom_property(
         name.clone(),
         ResolvedDeclaration {
             selector: Arc::new(ComplexSelector { parts: Vec::new() }),
+            pseudo: PseudoElement::None,
             name,
             value,
             specificity: (u32::MAX, u32::MAX, u32::MAX),
@@ -492,9 +520,36 @@ impl CssResolver {
 
         let declarations = DeclarationResolver::collect(node.children());
 
+        // `::before`/`::after` declarations are kept with the pseudo-element
+        // stripped from the selector and tagged on the declaration, so the
+        // builder can synthesize the generated box with normal subject
+        // matching against the originating element.
         for selector in resolved_selectors.iter() {
+            let subject_pseudo = selector
+                .parts
+                .first()
+                .and_then(|part| part.selector.pseudo_element.as_deref())
+                .and_then(PseudoElement::from_name)
+                // Only the subject selector's pseudo-element matters; a
+                // pseudo-element on an ancestor part would make the rule match
+                // nothing real, so treat it as unsupported and skip it.
+                .filter(|_| {
+                    selector.parts[1..]
+                        .iter()
+                        .all(|part| part.selector.pseudo_element.is_none())
+                });
+            let selector_for_push = if subject_pseudo.is_some() {
+                let mut selector = selector.clone();
+                for part in &mut selector.parts {
+                    part.selector.pseudo_element = None;
+                }
+                selector
+            } else {
+                selector.clone()
+            };
             Self::push_resolved(
-                selector,
+                &selector_for_push,
+                subject_pseudo.unwrap_or(PseudoElement::None),
                 &declarations,
                 styles,
                 order,
@@ -508,6 +563,7 @@ impl CssResolver {
 
     fn push_resolved(
         selector: &ComplexSelector,
+        pseudo: PseudoElement,
         declarations: &[Declaration],
         styles: &mut ResolvedStyles,
         order: &mut usize,
@@ -521,6 +577,7 @@ impl CssResolver {
         for decl in declarations {
             styles.push(ResolvedDeclaration {
                 selector: Arc::clone(&selector),
+                pseudo,
                 name: decl.name.clone(),
                 value: decl.value.clone(),
                 specificity,

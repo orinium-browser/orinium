@@ -4180,3 +4180,166 @@ fn flex_wrap_item_with_zero_height_header_stays_on_line_start() {
     assert_eq!(head.layout_box.iter().next().unwrap().border_box.x, 0.0);
     assert_eq!(main.layout_box.iter().next().unwrap().border_box.x, 0.0);
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ::before / ::after pseudo-element tests (full pipeline)
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn before_pseudo_element_generates_text_content() {
+    let info = layout_for(
+        "<html><body><p class=\"q\">body</p></body></html>",
+        "p.q::before { content: \"NOTE: \"; color: red; }",
+    );
+
+    let text = text_content(&info);
+    assert!(
+        text.contains("NOTE: "),
+        "generated content missing: {text:?}"
+    );
+    assert!(text.contains("body"));
+
+    // The generated text inherits the element's style unless overridden.
+    assert_eq!(text_style_for(&info, "NOTE: ").color, Color(255, 0, 0, 255));
+    assert_eq!(text_style_for(&info, "body").color, Color(0, 0, 0, 255));
+}
+
+#[test]
+fn legacy_single_colon_before_selects_as_pseudo_element() {
+    // Google's CSS uses the legacy `:before` spelling; it must behave
+    // identically to `::before`, not as a pseudo-class.
+    let info = layout_for(
+        "<html><body><p>body</p></body></html>",
+        "p:before { content: \"X\"; }",
+    );
+
+    assert!(text_content(&info).contains("X"));
+}
+
+#[test]
+fn after_pseudo_element_appends_generated_text() {
+    let info = layout_for(
+        "<html><body><p>start</p></body></html>",
+        "p::after { content: \"END\"; }",
+    );
+
+    let text = text_content(&info);
+    assert!(text.contains("start"));
+    assert!(text.ends_with("END"), "after-content missing: {text:?}");
+}
+
+#[test]
+fn pseudo_element_without_content_or_styling_generates_nothing() {
+    let info = layout_for(
+        "<html><body><p>body</p></body></html>",
+        "p::before { color: red; }",
+    );
+
+    // `content` omitted and no box styling: no generated box at all.
+    assert_eq!(text_content(&info), "body");
+}
+
+#[test]
+fn pseudo_element_content_none_generates_no_text() {
+    let info = layout_for(
+        "<html><body><p>body</p></body></html>",
+        "p::before { content: none; }",
+    );
+
+    assert_eq!(text_content(&info), "body");
+}
+
+#[test]
+fn before_pseudo_element_renders_background_image() {
+    let dom = HtmlParser::new("<html><body><div class=\"logo\"></div></body></html>").parse();
+    let mut images = HashMap::new();
+    images.insert(
+        "logo.png".to_string(),
+        Image::from_rgba(74, 24, vec![255; 74 * 24 * 4]).unwrap(),
+    );
+    let stylesheet = CssParser::new(
+        "div.logo::before { content: \"\"; display: inline-block; \
+         width: 74px; height: 24px; background: url(logo.png) no-repeat; }",
+    )
+    .parse()
+    .unwrap();
+    let resolved_styles = CssResolver::resolve(&stylesheet);
+    let (mut layout, _) = build_layout_and_info_with_images(
+        &dom.root,
+        &resolved_styles,
+        Arc::new(FallbackTextMeasurer),
+        InheritedCss::default(),
+        ElementChain::default(),
+        ColorScheme::Light,
+        ScriptingMode::default(),
+        (0.0, 0.0),
+        &images,
+    );
+    ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+
+    // Walk to the pseudo box: it must carry the decoded image.
+    fn find_image_box(node: &LayoutNode) -> Option<&LayoutNode> {
+        if matches!(
+            node.style.display,
+            Display::OutsideInner {
+                outer: OuterDisplay::Inline,
+                inner: InnerDisplay::FlowRoot,
+            }
+        ) {
+            return Some(node);
+        }
+        node.children
+            .iter()
+            .filter_map(LayoutChild::node)
+            .find_map(find_image_box)
+    }
+
+    // Layout must contain an extra inline flow-root (the pseudo box).
+    fn count_inline_flow_roots(node: &LayoutNode) -> usize {
+        let own = usize::from(matches!(
+            node.style.display,
+            Display::OutsideInner {
+                outer: OuterDisplay::Inline,
+                inner: InnerDisplay::FlowRoot,
+            }
+        ));
+        own + node
+            .children
+            .iter()
+            .filter_map(LayoutChild::node)
+            .map(count_inline_flow_roots)
+            .sum::<usize>()
+    }
+
+    assert!(
+        count_inline_flow_roots(&layout) > 0,
+        "pseudo-element box missing from layout"
+    );
+    let pseudo = find_image_box(&layout).unwrap();
+    let box_model = pseudo.layout_box.iter().next().unwrap();
+    assert_eq!(box_model.content_box.width, 74.0);
+    assert_eq!(box_model.content_box.height, 24.0);
+}
+
+#[test]
+fn pseudo_element_inherits_element_text_style() {
+    let info = layout_for(
+        "<html><body><p class=\"b\">x</p></body></html>",
+        "p.b { font-size: 32px; color: green; } p.b::before { content: \"y\"; }",
+    );
+
+    // Inherited from the originating element.
+    assert_eq!(text_style_for(&info, "y").color, Color(0, 128, 0, 255));
+    assert_eq!(text_flow_style_for(&info, "y").font_size, 32.0);
+}
+
+#[test]
+fn pseudo_element_declarations_do_not_leak_to_element() {
+    let info = layout_for(
+        "<html><body><p>x</p></body></html>",
+        "p::before { content: \"y\"; color: red; }",
+    );
+
+    // Only the pseudo text is red; the element's own text stays default.
+    assert_eq!(text_style_for(&info, "x").color, Color(0, 0, 0, 255));
+}

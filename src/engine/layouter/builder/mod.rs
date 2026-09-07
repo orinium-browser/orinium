@@ -36,7 +36,7 @@ use crate::engine::css::{
 };
 use crate::engine::html::{HtmlNodeType, ScriptingMode};
 use crate::engine::layouter::css_resolver::{
-    DeclarationResolver, Properties, resolve_inline_value,
+    DeclarationResolver, Properties, PseudoElement, resolve_inline_value,
 };
 use crate::engine::layouter::dom_snapshot::{DomSnapshot, NodeId};
 use crate::engine::layouter::types::WhiteSpace;
@@ -369,18 +369,23 @@ pub fn build_layout_and_info_from_snapshot(
 
             // Collect CSS candidates.
             perf_scope!(css_match);
-            let (candidates, custom_property_candidates) =
+            let (candidates, custom_property_candidates, pseudo_candidates) =
                 if let HtmlNodeType::Element { .. } = html_node {
-                    Some(collect_candidates(
-                        rule_set,
-                        &chain_for_css,
-                        #[cfg(any(feature = "profile", debug_assertions))]
-                        &mut cand_stats,
-                    ))
+                    let (candidates, custom_property_candidates, pseudo_candidates) =
+                        collect_candidates(
+                            rule_set,
+                            &chain_for_css,
+                            #[cfg(any(feature = "profile", debug_assertions))]
+                            &mut cand_stats,
+                        );
+                    (
+                        Some(candidates),
+                        Some(custom_property_candidates),
+                        pseudo_candidates,
+                    )
                 } else {
-                    None
-                }
-                .unzip();
+                    (None, None, HashMap::new())
+                };
             #[cfg(any(feature = "profile", debug_assertions))]
             {
                 css_match_time += css_match.elapsed();
@@ -716,6 +721,24 @@ pub fn build_layout_and_info_from_snapshot(
 
             perf_scope!(child_slot_build);
             if style.display != Display::None {
+                // ── ::before generated content ──
+                if let Some(pseudo) = pseudo_candidates.get(&PseudoElement::Before) {
+                    if let Some(slot) = build_pseudo_slot(
+                        pseudo,
+                        &child_css.custom_props,
+                        &text_style,
+                        text_flow_style,
+                        used_color_scheme,
+                        &*measurer,
+                        images,
+                    ) {
+                        child_slots.push(slot);
+                        #[cfg(any(feature = "profile", debug_assertions))]
+                        {
+                            node_count += 1;
+                        }
+                    }
+                }
                 let parent_tag_name = snapshot.node(stack[top_idx].dom).kind.tag_name();
                 for &child in snapshot.children(stack[top_idx].dom) {
                     let child_node = &snapshot.node(child).kind;
@@ -776,6 +799,25 @@ pub fn build_layout_and_info_from_snapshot(
                     } else {
                         child_slots.push(ChildSlot::Element(element_kids.len()));
                         element_kids.push(child);
+                    }
+                }
+
+                // ── ::after generated content ──
+                if let Some(pseudo) = pseudo_candidates.get(&PseudoElement::After) {
+                    if let Some(slot) = build_pseudo_slot(
+                        pseudo,
+                        &child_css.custom_props,
+                        &text_style,
+                        text_flow_style,
+                        used_color_scheme,
+                        &*measurer,
+                        images,
+                    ) {
+                        child_slots.push(slot);
+                        #[cfg(any(feature = "profile", debug_assertions))]
+                        {
+                            node_count += 1;
+                        }
                     }
                 }
             }
@@ -1423,6 +1465,172 @@ fn create_text_node(
     (layouter, kind)
 }
 
+/// Builds the generated-content box for a `::before`/`::after` rule block.
+///
+/// The pseudo-element box is an inline flow-root styled by the cascaded
+/// declarations. `content` supplies generated text (`none` or an empty string
+/// produces no box unless the pseudo has a background/border/dimensions, which
+/// pure-CSS icons such as the Google logo rely on). Returns `None` when the
+/// pseudo generates nothing to render.
+#[allow(clippy::too_many_arguments)]
+fn build_pseudo_slot(
+    declarations: &Properties,
+    custom_properties: &Properties,
+    inherited_text_style: &TextStyle,
+    inherited_text_flow_style: TextFlowStyle,
+    color_scheme: ColorScheme,
+    measurer: &dyn text::TextMeasurer,
+    images: &HashMap<String, Image>,
+) -> Option<ChildSlot> {
+    let mut style = Style::default();
+    let mut container_style = ContainerStyle::default();
+    let mut text_style = inherited_text_style.clone();
+    let mut text_flow_style = inherited_text_flow_style;
+    let mut overflow = Overflow::default();
+
+    // The cascade map is already ordered per-property; re-sort by source order
+    // so shorthand/longhand interactions apply deterministically.
+    let mut cascade: Vec<_> = declarations.values().collect();
+    cascade.sort_by_key(|declaration| declaration.order);
+
+    let mut content: Option<CssValue> = None;
+    for declaration in cascade {
+        if declaration.name.starts_with("--") {
+            continue;
+        }
+        if declaration.name == "content" {
+            content = Some(declaration.value.clone());
+            continue;
+        }
+        let Some(value) = DeclarationResolver::resolve_var(
+            &declaration.value,
+            custom_properties,
+            &mut HashSet::new(),
+        ) else {
+            continue;
+        };
+        apply_declaration(
+            &declaration.name,
+            &value,
+            &mut style,
+            &mut container_style,
+            &mut text_style,
+            &mut text_flow_style,
+            &Style::default(),
+            &ContainerStyle::default(),
+            inherited_text_style,
+            &inherited_text_flow_style,
+            &mut overflow,
+            color_scheme,
+        );
+    }
+
+    // Generated content: string text, or `none`/`normal`/`""`/omitted.
+    let content_text = match &content {
+        None => String::new(),
+        Some(CssValue::Keyword(k))
+            if k.eq_ignore_ascii_case("none") || k.eq_ignore_ascii_case("normal") =>
+        {
+            String::new()
+        }
+        Some(CssValue::String(s)) => s.clone(),
+        Some(CssValue::List(items)) => {
+            // `content: "a" "b"` concatenates; attr()/counter() unsupported.
+            let joined: String = items
+                .iter()
+                .filter_map(|v| match v {
+                    CssValue::String(s) => Some(s.as_str()),
+                    _ => None,
+                })
+                .collect();
+            joined
+        }
+        Some(_) => String::new(),
+    };
+
+    let has_styling = !matches!(container_style.background, Background::Color(c) if c.3 == 0)
+        || matches!(
+            (&style.size.width, &style.size.height),
+            (LengthOrAuto::Length(l), _) | (_, LengthOrAuto::Length(l))
+                if !matches!(l, Length::Px(0.0))
+        )
+        || [
+            &style.spacing.padding_top,
+            &style.spacing.padding_right,
+            &style.spacing.padding_bottom,
+            &style.spacing.padding_left,
+            &style.spacing.border_top,
+            &style.spacing.border_right,
+            &style.spacing.border_bottom,
+            &style.spacing.border_left,
+        ]
+        .iter()
+        .any(|p| !matches!(p, Length::Px(0.0)));
+
+    if content_text.is_empty() && !has_styling {
+        return None;
+    }
+
+    // Resolve line-height from the pseudo's own text-flow style.
+    style.line_height = match text_flow_style.line_height {
+        LineHeight::Number(factor) => Length::Px(text_flow_style.font_size * factor),
+        LineHeight::Normal => Length::Px(text_flow_style.font_size * DEFAULT_LINE_FACTOR),
+        LineHeight::Px(px) => Length::Px(px),
+    };
+
+    // Attach the decoded background image, mirroring element handling.
+    if let Background::Image { source, image, .. } = &mut container_style.background {
+        *image = images.get(source).cloned();
+    }
+
+    // The generated box is an inline-level flow root (inline-block): it sits
+    // on the originating element's line and shrink-wraps its content.
+    style.display = Display::OutsideInner {
+        outer: OuterDisplay::Inline,
+        inner: InnerDisplay::FlowRoot,
+    };
+
+    let mut inline_style = style.clone();
+    let mut slot_children: Vec<LayoutChild> = Vec::new();
+    let mut slot_info: Vec<InfoNode> = Vec::new();
+
+    if !content_text.is_empty() {
+        let content_text = normalize_whitespace(&content_text, text_flow_style.white_space);
+        let content_text = match text_style.text_transform {
+            TextTransform::None => content_text,
+            TextTransform::Uppercase => content_text.to_ascii_uppercase(),
+            TextTransform::Lowercase => content_text.to_ascii_lowercase(),
+        };
+        let (layouter, kind) =
+            create_text_node(content_text, text_style.clone(), text_flow_style, measurer);
+        inline_style.display = Display::OutsideInner {
+            outer: OuterDisplay::Inline,
+            inner: InnerDisplay::Flow,
+        };
+        slot_children.push((inline_style, layouter).into());
+        slot_info.push(InfoNode {
+            kind,
+            children: Vec::new(),
+            dom_id: None,
+        });
+    }
+
+    let layout = LayoutNode::with_children(style, slot_children);
+    let info = InfoNode {
+        kind: NodeKind::Container {
+            scroll_x: overflow.x,
+            scroll_y: overflow.y,
+            scroll_offset_x: 0.0,
+            scroll_offset_y: 0.0,
+            style: container_style,
+            role: ContainerRole::Normal,
+        },
+        children: slot_info,
+        dom_id: None,
+    };
+    Some(ChildSlot::Inline(layout.into(), Box::new(info)))
+}
+
 // ── Color scheme resolution ─────────────────────────────────────────────────
 
 /// How an element's `color-scheme` property constrains its used color scheme.
@@ -1509,13 +1717,14 @@ fn collect_candidates(
     rule_set: &RuleSet,
     chain: &ElementChain,
     #[cfg(any(feature = "profile", debug_assertions))] stats: &mut CandidateMetrics,
-) -> (Properties, Properties) {
+) -> (Properties, Properties, HashMap<PseudoElement, Properties>) {
     let mut properties = HashMap::new();
     let mut custom_properties = HashMap::new();
+    let mut pseudo_properties: HashMap<PseudoElement, Properties> = HashMap::new();
 
     let element = match chain.first() {
         Some(el) => el,
-        None => return (properties, custom_properties),
+        None => return (properties, custom_properties, pseudo_properties),
     };
 
     #[cfg(any(feature = "profile", debug_assertions))]
@@ -1559,7 +1768,9 @@ fn collect_candidates(
         for &decl_idx in &group.decls {
             let decl = &rule_set.declarations()[decl_idx];
 
-            let target = if decl.name.starts_with("--") {
+            let target: &mut Properties = if decl.pseudo != PseudoElement::None {
+                pseudo_properties.entry(decl.pseudo).or_default()
+            } else if decl.name.starts_with("--") {
                 &mut custom_properties
             } else {
                 &mut properties
@@ -1582,5 +1793,5 @@ fn collect_candidates(
         }
     }
 
-    (properties, custom_properties)
+    (properties, custom_properties, pseudo_properties)
 }

@@ -841,7 +841,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_at_query_range(tokens: &[Token<'_>], cursor: &mut usize) -> ParseResult<Option<AtQuery>> {
+    fn parse_at_query_range(
+        tokens: &[Token<'_>],
+        cursor: &mut usize,
+    ) -> ParseResult<Option<AtQuery>> {
         let start = *cursor;
 
         // `width <= 1044px`
@@ -1143,6 +1146,27 @@ impl<'a> Parser<'a> {
                         }
                     } else {
                         let pseudo_class = match self.consume_token() {
+                            Token::Ident(name)
+                                // Legacy single-colon pseudo-element syntax
+                                // (`:before`, `:after`) — normalized to the
+                                // pseudo-element field.
+                                if matches!(
+                                    name.to_ascii_lowercase().as_str(),
+                                    "before" | "after" | "first-line" | "first-letter"
+                                ) =>
+                            {
+                                let sel = current_selector.get_or_insert_with(|| Selector {
+                                    is_nesting: false,
+                                    tag: None,
+                                    id: None,
+                                    classes: vec![],
+                                    attributes: vec![],
+                                    pseudo_classes: vec![],
+                                    pseudo_element: None,
+                                });
+                                sel.pseudo_element = Some(name.into_owned());
+                                continue;
+                            }
                             Token::Ident(name) => Some(PseudoClass::Simple(name.into_owned())),
                             Token::Function(name) => {
                                 if self.peek_token() == &Token::Delim('(') {
