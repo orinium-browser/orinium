@@ -423,10 +423,7 @@ fn make_form_data(entries: Vec<(String, String)>) -> Rc<RefCell<JSObject>> {
     // Methods are attached to the instance: the VM uses a constructor's
     // returned object verbatim, skipping the `prototype` link.
     for (name, function) in FORM_DATA_METHODS {
-        form.set(
-            name.to_string(),
-            JSValue::from_native_function(*function),
-        );
+        form.set(name.to_string(), JSValue::from_native_function(*function));
     }
     let mut form = form;
     let mut serializer = url::form_urlencoded::Serializer::new(String::new());
@@ -669,7 +666,8 @@ fn make_parsed_document(
     document_element: NodeRef<HtmlNodeType>,
     body: Option<NodeRef<HtmlNodeType>>,
 ) -> JSValue {
-    let document_element_value = expose_detached_node(vm, document_element).unwrap_or(JSValue::null());
+    let document_element_value =
+        expose_detached_node(vm, document_element).unwrap_or(JSValue::null());
     let body_value = body
         .and_then(|body| expose_detached_node(vm, body))
         .unwrap_or(JSValue::null());
