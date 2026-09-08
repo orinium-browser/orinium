@@ -1011,7 +1011,7 @@ fn generate_draw_commands_inner(
             text_style,
             text_flow_style,
             ..
-        } => {
+        } => 'custom: {
             for box_model in &layout.layout_box {
                 box_states.push(push_box_model(
                     cmd_buf,
@@ -1025,13 +1025,15 @@ fn generate_draw_commands_inner(
                 ));
             }
 
-            let size = layout.layout_box.iter().next().map_or_else(
-                || node.intrinsic_size(),
-                |box_model| ContentSize {
-                    width: box_model.content_box.width,
-                    height: box_model.content_box.height,
-                },
-            );
+            // `display: none` / `display: contents` custom elements have no
+            // laid-out box (`LayoutBox::None`); render nothing rather than
+            // falling back to the component's intrinsic size.
+            let Some(size) = layout.layout_box.iter().next().map(|box_model| ContentSize {
+                width: box_model.content_box.width,
+                height: box_model.content_box.height,
+            }) else {
+                break 'custom;
+            };
             node.draw_sized(cmd_buf, text_style, text_flow_style, layout_style, size);
             // Collect open popups so they render above every other box,
             // outside all ancestor clips and transforms.
