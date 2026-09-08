@@ -203,6 +203,25 @@ impl CustomNodeFactory for InputTextFactory {
             return Some(Arc::new(InputHiddenComponent::new(value)));
         }
 
+        // `<input type="button|submit|reset">` renders as a button, using the
+        // `value` attribute as its label.
+        if matches!(
+            type_.to_ascii_lowercase().as_str(),
+            "button" | "submit" | "reset"
+        ) {
+            let default_bg = Color(240, 240, 240, 255);
+            let bg = match &ctx.container_style.background {
+                crate::engine::layouter::types::Background::Color(c) => *c,
+                _ => default_bg,
+            };
+            return Some(Arc::new(ButtonComponent::new(
+                value,
+                bg,
+                ctx.text_style.color,
+                Arc::clone(&ctx.measurer),
+            )));
+        }
+
         let on_value_change = ctx.write_back.as_ref().map(|(sender, node_id)| {
             let sender = sender.clone();
             let node_id = *node_id;
@@ -345,10 +364,13 @@ mod tests {
 
         let html_id = dom_snapshot.node(dom_snapshot.roots()[0]).children[0];
 
-        let button_id = dom_snapshot.children(html_id)[0];
-        let input_id = dom_snapshot.children(html_id)[1];
-        let img_id = dom_snapshot.children(html_id)[2];
-        let select_id = dom_snapshot.children(html_id)[3];
+        // The parser wraps body content in an auto-inserted `<body>`, so
+        // html holds [head, body]; the components live under body.
+        let body_id = dom_snapshot.children(html_id)[1];
+        let button_id = dom_snapshot.children(body_id)[0];
+        let input_id = dom_snapshot.children(body_id)[1];
+        let img_id = dom_snapshot.children(body_id)[2];
+        let select_id = dom_snapshot.children(body_id)[3];
 
         let button = registry
             .create(&CustomNodeContext {
