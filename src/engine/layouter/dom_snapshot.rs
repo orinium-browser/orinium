@@ -196,14 +196,18 @@ mod tests {
         let doc = snapshot.node(root);
         assert_eq!(doc.kind.tag_name(), None);
 
-        // root html has body as its only element child
+        // root html has the auto-inserted head and body as element children
         let html = doc.children[0];
         let html_node = snapshot.node(html);
         assert_eq!(html_node.kind.tag_name(), Some("html"));
-        assert_eq!(html_node.children.len(), 1);
+        assert_eq!(html_node.children.len(), 2);
 
-        // Pre-order: body is the first child of html.
-        let body = html_node.children[0];
+        // Pre-order: head comes first, then body.
+        assert_eq!(
+            snapshot.node(html_node.children[0]).kind.tag_name(),
+            Some("head")
+        );
+        let body = html_node.children[1];
         assert_eq!(snapshot.node(body).kind.tag_name(), Some("body"));
 
         // A snapshot must be movable to another thread.
@@ -261,6 +265,13 @@ mod tests {
         );
         assert_eq!(
             rebuilt.root.borrow().children()[0].borrow().children()[0]
+                .borrow()
+                .value
+                .tag_name(),
+            Some("head")
+        );
+        assert_eq!(
+            rebuilt.root.borrow().children()[0].borrow().children()[1]
                 .borrow()
                 .value
                 .tag_name(),
