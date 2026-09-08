@@ -910,66 +910,201 @@ impl<'a> Parser<'a> {
     /// DOCTYPE宣言、html, head, body 要素が存在しない場合に補完する
     fn autofill_elements(&mut self) {
         let root = Rc::clone(&self.stack[0]);
-        let has_html = root
+        let html_node = root
             .borrow()
             .children()
             .iter()
-            .any(|c| matches!(&c.borrow().value, HtmlNodeType::Element { tag_name, .. } if tag_name.to_lowercase() == "html"));
-
-        if !has_html {
-            let mut doctype_node = None;
-            let mut orphan_nodes = Vec::new();
-            for child in root.borrow().children() {
-                match &child.borrow().value {
-                    HtmlNodeType::Doctype { .. } => {
-                        doctype_node = Some(Rc::clone(child));
-                    }
-                    _ => orphan_nodes.push(Rc::clone(child)),
+            .find(|c| {
+                matches!(&c.borrow().value, HtmlNodeType::Element { tag_name, .. } if tag_name.eq_ignore_ascii_case("html"))
+            })
+            .map(Rc::clone);
+        if let Some(html_node) = html_node {
+            // <html> が明示されている場合でも head/body が無ければ補完する
+            let has_head_and_body = {
+                let children = html_node.borrow().children().to_vec();
+                let has_head = children.iter().any(|c| {
+                    matches!(&c.borrow().value, HtmlNodeType::Element { tag_name, .. } if tag_name.eq_ignore_ascii_case("head"))
+                });
+                let has_body = children.iter().any(|c| {
+                    matches!(&c.borrow().value, HtmlNodeType::Element { tag_name, .. } if tag_name.eq_ignore_ascii_case("body"))
+                });
+                has_head && has_body
+            };
+            if !has_head_and_body {
+                let children = html_node.borrow().children().to_vec();
+                let (head_node, body_node, head_content, body_content) =
+                    split_head_and_body(children);
+                let head_node = match head_node {
+                    Some(node) => node,
+                    None => TreeNode::new(HtmlNodeType::Element {
+                        tag_name: "head".to_string(),
+                        attributes: vec![],
+                    }),
+                };
+                let body_node = match body_node {
+                    Some(node) => node,
+                    None => TreeNode::new(HtmlNodeType::Element {
+                        tag_name: "body".to_string(),
+                        attributes: vec![],
+                    }),
+                };
+                html_node.borrow_mut().clear_children();
+                TreeNode::add_child(&html_node, Rc::clone(&head_node));
+                TreeNode::add_child(&html_node, Rc::clone(&body_node));
+                for node in head_content {
+                    TreeNode::add_child(&head_node, node);
+                }
+                for node in body_content {
+                    TreeNode::add_child(&body_node, node);
                 }
             }
+            return;
+        }
 
-            root.borrow_mut().clear_children();
-
-            if let Some(dt) = doctype_node {
-                TreeNode::add_child(&root, dt);
+        // <html> が無い場合: ドキュメント直下のノードを head/body に振り分けて
+        // 暗示的な <html> で包む。既存の <head>/<body> 要素はそのまま再利用する。
+        let mut doctype_node = None;
+        let mut orphan_nodes = Vec::new();
+        let root_children = root.borrow().children().to_vec();
+        for child in root_children {
+            let is_doctype = matches!(&child.borrow().value, HtmlNodeType::Doctype { .. });
+            if is_doctype {
+                doctype_node = Some(child);
             } else {
-                TreeNode::add_child_value(
-                    &root,
-                    HtmlNodeType::Doctype {
-                        name: Some("html".to_string()),
-                        public_id: None,
-                        system_id: None,
-                    },
-                );
-            }
-
-            let html_node = TreeNode::add_child_value(
-                &root,
-                HtmlNodeType::Element {
-                    tag_name: "html".to_string(),
-                    attributes: vec![],
-                },
-            );
-
-            TreeNode::add_child_value(
-                &html_node,
-                HtmlNodeType::Element {
-                    tag_name: "head".to_string(),
-                    attributes: vec![],
-                },
-            );
-
-            let body_node = TreeNode::add_child_value(
-                &html_node,
-                HtmlNodeType::Element {
-                    tag_name: "body".to_string(),
-                    attributes: vec![],
-                },
-            );
-
-            for orphan in orphan_nodes {
-                TreeNode::add_child(&body_node, orphan);
+                orphan_nodes.push(child);
             }
         }
+
+        root.borrow_mut().clear_children();
+
+        if let Some(dt) = doctype_node {
+            TreeNode::add_child(&root, dt);
+        } else {
+            TreeNode::add_child_value(
+                &root,
+                HtmlNodeType::Doctype {
+                    name: Some("html".to_string()),
+                    public_id: None,
+                    system_id: None,
+                },
+            );
+        }
+
+        let html_node = TreeNode::add_child_value(
+            &root,
+            HtmlNodeType::Element {
+                tag_name: "html".to_string(),
+                attributes: vec![],
+            },
+        );
+
+        let (head_node, body_node, head_content, body_content) = split_head_and_body(orphan_nodes);
+        let head_node = match head_node {
+            Some(node) => node,
+            None => TreeNode::new(HtmlNodeType::Element {
+                tag_name: "head".to_string(),
+                attributes: vec![],
+            }),
+        };
+        let body_node = match body_node {
+            Some(node) => node,
+            None => TreeNode::new(HtmlNodeType::Element {
+                tag_name: "body".to_string(),
+                attributes: vec![],
+            }),
+        };
+
+        TreeNode::add_child(&html_node, Rc::clone(&head_node));
+        TreeNode::add_child(&html_node, Rc::clone(&body_node));
+
+        for node in head_content {
+            TreeNode::add_child(&head_node, node);
+        }
+        for node in body_content {
+            TreeNode::add_child(&body_node, node);
+        }
     }
+}
+
+/// 要素が head 内にのみ置ける要素 (meta, title, link, style, script, ...) か
+fn is_head_only_element(tag_name: &str) -> bool {
+    matches!(
+        tag_name.to_ascii_lowercase().as_str(),
+        "base"
+            | "basefont"
+            | "bgsound"
+            | "link"
+            | "meta"
+            | "noscript"
+            | "script"
+            | "style"
+            | "template"
+            | "title"
+    )
+}
+
+/// ドキュメント直下 (または <html> 直下) のノード列を head 側と body 側に
+/// 振り分ける。既存の <head>/<body> 要素があればそれをそのまま返し、
+/// 無ければ None を返す (呼び出し側が新規作成する)。
+///
+/// HTML 仕様の "before head" / "after head" 挿入モードに対応し、
+/// - 既存の <head> より前の head 系要素・コメント・空白テキストは head へ
+/// - <body> が現れるまでの head 系要素は head へ
+/// - それ以降のノードはすべて body へ
+/// と振り分ける。空白のみのテキストノードは破棄する。
+fn split_head_and_body(
+    nodes: Vec<NodeRef<HtmlNodeType>>,
+) -> (
+    Option<NodeRef<HtmlNodeType>>,
+    Option<NodeRef<HtmlNodeType>>,
+    Vec<NodeRef<HtmlNodeType>>,
+    Vec<NodeRef<HtmlNodeType>>,
+) {
+    let mut head_node: Option<NodeRef<HtmlNodeType>> = None;
+    let mut body_node: Option<NodeRef<HtmlNodeType>> = None;
+    let mut head_content: Vec<NodeRef<HtmlNodeType>> = Vec::new();
+    let mut body_content: Vec<NodeRef<HtmlNodeType>> = Vec::new();
+    let mut body_started = false;
+
+    for node in nodes {
+        enum Slot {
+            Head,
+            Body,
+            HeadContent,
+            BodyContent,
+            Drop,
+        }
+        let slot = match &node.borrow().value {
+            HtmlNodeType::Element { tag_name, .. }
+                if tag_name.eq_ignore_ascii_case("head") && head_node.is_none() =>
+            {
+                Slot::Head
+            }
+            HtmlNodeType::Element { tag_name, .. }
+                if tag_name.eq_ignore_ascii_case("body") && body_node.is_none() =>
+            {
+                Slot::Body
+            }
+            HtmlNodeType::Element { tag_name, .. }
+                if is_head_only_element(tag_name) && body_node.is_none() && !body_started =>
+            {
+                Slot::HeadContent
+            }
+            HtmlNodeType::Text(text) if text.trim().is_empty() => Slot::Drop,
+            HtmlNodeType::Comment(_) => Slot::Drop,
+            _ => Slot::BodyContent,
+        };
+        if matches!(slot, Slot::Body | Slot::BodyContent) {
+            body_started = true;
+        }
+        match slot {
+            Slot::Head => head_node = Some(node),
+            Slot::Body => body_node = Some(node),
+            Slot::HeadContent => head_content.push(node),
+            Slot::BodyContent => body_content.push(node),
+            Slot::Drop => {}
+        }
+    }
+
+    (head_node, body_node, head_content, body_content)
 }
