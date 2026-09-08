@@ -894,8 +894,26 @@ pub fn apply_declaration(
         ("color-scheme", _) => {}
 
         ("font-size", _) => {
-            let len = resolve_css_len(name, std::slice::from_ref(value), text_flow_style)?;
-            let px = resolve_font_size_px(&len, text_flow_style.font_size)?;
+            let px = match value {
+                CssValue::Keyword(k) => match k.to_ascii_lowercase().as_str() {
+                    // CSS 2.1 §15.7 absolute sizes, keyed to a 16px medium.
+                    "xx-small" => Some(9.0),
+                    "x-small" => Some(10.0),
+                    "small" => Some(13.0),
+                    "medium" => Some(16.0),
+                    "large" => Some(18.0),
+                    "x-large" => Some(24.0),
+                    "xx-large" => Some(32.0),
+                    // Relative to the inherited size.
+                    "smaller" => Some(text_flow_style.font_size * 5.0 / 6.0),
+                    "larger" => Some(text_flow_style.font_size * 6.0 / 5.0),
+                    _ => None,
+                },
+                _ => {
+                    let len = resolve_css_len(name, std::slice::from_ref(value), text_flow_style)?;
+                    Some(resolve_font_size_px(&len, text_flow_style.font_size)?)
+                }
+            }?;
             text_flow_style.font_size = px;
         }
 
