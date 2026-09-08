@@ -287,3 +287,8 @@ template {
 [hidden] {
     display: none;
 }
+
+/* Popover API: popovers are hidden until shown */
+[popover] {
+    display: none;
+}
