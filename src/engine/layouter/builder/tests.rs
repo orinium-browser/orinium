@@ -1287,6 +1287,17 @@ fn grid_min_height_pushes_later_block_flow_content() {
     ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
 
     fn children(node: &LayoutNode) -> Option<Vec<ui_layout::Rect>> {
+        let kids: Vec<_> = node.children.iter().filter_map(LayoutChild::node).collect();
+        // The parser auto-inserts an empty <head>, so <html> holds
+        // [head, body] as two block boxes; descend into the non-empty one.
+        if let [a, b] = kids.as_slice() {
+            if a.children.is_empty() && !b.children.is_empty() {
+                return children(b);
+            }
+            if b.children.is_empty() && !a.children.is_empty() {
+                return children(a);
+            }
+        }
         let boxes: Vec<_> = node
             .children
             .iter()
@@ -1986,11 +1997,27 @@ fn inline_image_keeps_intrinsic_dimensions_after_layout() {
 
 /// Returns the body element's layout children, unwrapping the document
 /// and `<html>` wrapper nodes.
+///
+/// The parser auto-inserts an empty `<head>` when the document lacks one,
+/// so `<html>` holds `[head, body]`; descend past the empty head to reach
+/// the body's content.
 fn body_layout_children<'a>(mut node: &'a LayoutNode) -> &'a [LayoutChild] {
-    while let [LayoutChild::Node(child)] = node.children.as_slice() {
-        node = child;
+    loop {
+        match node.children.as_slice() {
+            [LayoutChild::Node(child)] => node = child,
+            [LayoutChild::Node(a), LayoutChild::Node(b)]
+                if a.children.is_empty() && !b.children.is_empty() =>
+            {
+                node = b;
+            }
+            [LayoutChild::Node(a), LayoutChild::Node(b)]
+                if b.children.is_empty() && !a.children.is_empty() =>
+            {
+                node = a;
+            }
+            _ => return &node.children,
+        }
     }
-    &node.children
 }
 
 /// Recursively counts whitespace-only text nodes in the `InfoNode` tree,
