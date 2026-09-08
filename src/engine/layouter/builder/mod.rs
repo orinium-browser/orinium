@@ -654,10 +654,60 @@ pub fn build_layout_and_info_from_snapshot(
                     text_style: text_style.clone(),
                     text_flow_style,
                 };
-                let layout = LayoutNode::with_children(style.clone(), [(style, bridge)]);
+
+                // ::before / ::after generated content for custom/replaced
+                // elements, mirroring the element path: the pseudo slots flow
+                // inline around the element's intrinsic box.
+                let mut layout_children: Vec<LayoutChild> = Vec::new();
+                let mut info_children: Vec<InfoNode> = Vec::new();
+                let add_pseudo_slot = |pseudo: &Properties,
+                                       layout_children: &mut Vec<LayoutChild>,
+                                       info_children: &mut Vec<InfoNode>| {
+                    if let Some(ChildSlot::Inline(fragment, pseudo_info)) = build_pseudo_slot(
+                        pseudo,
+                        &child_css.custom_props,
+                        &text_style,
+                        text_flow_style,
+                        used_color_scheme,
+                        &*measurer,
+                        images,
+                    ) {
+                        layout_children.push(fragment);
+                        info_children.push(*pseudo_info);
+                    }
+                };
+                let hidden = style.display == Display::None;
+                if !hidden {
+                    if let Some(pseudo) = pseudo_candidates.get(&PseudoElement::Before) {
+                        add_pseudo_slot(pseudo, &mut layout_children, &mut info_children);
+                    }
+                }
+                layout_children.push((style.clone(), bridge).into());
+                // The intrinsic box is drawn by the custom node itself, but it
+                // still owns a layout slot; mirror it with an empty info entry
+                // so the following pseudo slots line up with their siblings.
+                info_children.push(InfoNode {
+                    kind: NodeKind::Container {
+                        scroll_x: false,
+                        scroll_y: false,
+                        scroll_offset_x: 0.0,
+                        scroll_offset_y: 0.0,
+                        style: ContainerStyle::default(),
+                        role: ContainerRole::Normal,
+                    },
+                    children: Vec::new(),
+                    dom_id: None,
+                });
+                if !hidden {
+                    if let Some(pseudo) = pseudo_candidates.get(&PseudoElement::After) {
+                        add_pseudo_slot(pseudo, &mut layout_children, &mut info_children);
+                    }
+                }
+
+                let layout = LayoutNode::with_children(style.clone(), layout_children);
                 let info = InfoNode {
                     kind,
-                    children: Vec::new(),
+                    children: info_children,
                     dom_id: Some(stack[top_idx].dom),
                 };
                 let ptr = stack[top_idx].dom;
