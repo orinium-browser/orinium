@@ -176,7 +176,7 @@ impl DomTree {
         let n = node.borrow();
         match &n.value {
             HtmlNodeType::Text(content) => content.clone(),
-            HtmlNodeType::Element { .. } => n
+            HtmlNodeType::Element { .. } | HtmlNodeType::DocumentFragment => n
                 .children()
                 .iter()
                 // Skip shadow root children — not part of light DOM.
@@ -320,9 +320,13 @@ impl DomTree {
     }
 
     /// Collects classic scripts and their scheduling attributes in document order.
+    ///
+    /// Scripts nested inside a `<template>` element are skipped: template
+    /// contents are inert until the template is cloned.
     pub fn collect_classic_script_descriptors(&self) -> Vec<ClassicScriptDescriptor> {
         self.get_elements_by_tag_name("script")
             .into_iter()
+            .filter(|node| !is_inside_template(node))
             .filter_map(|node| {
                 let n = node.borrow();
                 let script_type = n.value.get_attr("type").unwrap_or("").trim();
@@ -668,6 +672,27 @@ impl<'a> Parser<'a> {
             // noscript は scripting フラグに応じて特別な処理を行う
             if name == "noscript" {
                 self.handle_noscript(attributes);
+                return;
+            }
+
+            // <template> keeps its children in a DocumentFragment
+            // (template.content). The contents are inert: layout and script
+            // collection never descend into the fragment.
+            if name == "template" {
+                let template = TreeNode::add_child_value(
+                    &parent,
+                    HtmlNodeType::Element {
+                        tag_name: name.clone(),
+                        attributes,
+                    },
+                );
+                let content = TreeNode::new(HtmlNodeType::DocumentFragment);
+                TreeNode::add_child(&template, content.clone());
+                self.tag_stack.push(name.clone());
+                // Push the template element (for end-tag matching) and the
+                // fragment on top, so contents are inserted into the fragment.
+                self.stack.push(Rc::clone(&template));
+                self.stack.push(content);
                 return;
             }
 
@@ -1026,6 +1051,21 @@ impl<'a> Parser<'a> {
     }
 }
 
+/// Returns true if `node` is nested inside a `<template>` element.
+///
+/// Template contents are inert, so this excludes them from collectable
+/// things such as document classic scripts.
+fn is_inside_template(node: &NodeRef<HtmlNodeType>) -> bool {
+    let mut current = Some(Rc::clone(node));
+    while let Some(n) = current {
+        if n.borrow().value.tag_name() == Some("template") {
+            return true;
+        }
+        current = n.borrow().parent();
+    }
+    false
+}
+
 /// 要素が head 内にのみ置ける要素 (meta, title, link, style, script, ...) か
 fn is_head_only_element(tag_name: &str) -> bool {
     matches!(
@@ -1107,4 +1147,99 @@ fn split_head_and_body(
     }
 
     (head_node, body_node, head_content, body_content)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(html: &str) -> DomTree {
+        Parser::new(html).parse()
+    }
+
+    fn tag_of(node: &NodeRef<HtmlNodeType>) -> Option<String> {
+        node.borrow()
+            .value
+            .tag_name()
+            .map(|t| t.to_ascii_lowercase())
+    }
+
+    fn children_of(node: &NodeRef<HtmlNodeType>) -> Vec<NodeRef<HtmlNodeType>> {
+        node.borrow().children().to_vec()
+    }
+
+    fn find_first_fragment(node: &NodeRef<HtmlNodeType>) -> NodeRef<HtmlNodeType> {
+        children_of(node)
+            .into_iter()
+            .find(|c| matches!(c.borrow().value, HtmlNodeType::DocumentFragment))
+            .expect("template must own a DocumentFragment")
+    }
+
+    #[test]
+    fn template_contents_go_into_its_content_fragment() {
+        let tree = parse(r#"<template><div id="x">hi</div></template>"#);
+        let template = tree
+            .query_selector("template")
+            .expect("template must be in the document");
+        assert_eq!(tag_of(&template).as_deref(), Some("template"));
+
+        let fragment = find_first_fragment(&template);
+        let content = children_of(&fragment);
+        assert_eq!(content.len(), 1);
+        assert_eq!(tag_of(&content[0]).as_deref(), Some("div"));
+
+        // Nothing leaks to the page: <div id="x"> lives only inside the template.
+        let div = tree.query_selector("#x").unwrap();
+        let body = tree.query_selector("html > body").unwrap();
+        assert!(!children_of(&body).iter().any(|c| Rc::ptr_eq(c, &div)));
+
+        let text = DomTree::inner_text(&content[0]);
+        assert_eq!(text, "hi");
+    }
+
+    #[test]
+    fn scripts_inside_template_are_inert() {
+        let tree = parse(
+            r#"<template><script>leak()</script></template><script>ok()</script>"#,
+        );
+        let scripts = tree.collect_classic_scripts();
+        assert_eq!(scripts, vec![ClassicScriptSource::Inline("ok()".to_string())]);
+    }
+
+    #[test]
+    fn nested_templates_own_separate_fragments() {
+        let tree = parse(
+            r#"<template><template><b>deep</b></template><i>x</i></template>"#,
+        );
+
+        let templates = tree.get_elements_by_tag_name("template");
+        assert_eq!(templates.len(), 2);
+
+        let outer = templates[0].clone();
+        let outer_fragment = find_first_fragment(&outer);
+        let outer_children = children_of(&outer_fragment);
+        // Inner template element and the trailing <i>, in order.
+        assert_eq!(outer_children.len(), 2);
+        assert_eq!(tag_of(&outer_children[0]).as_deref(), Some("template"));
+        assert_eq!(tag_of(&outer_children[1]).as_deref(), Some("i"));
+
+        let inner_fragment = find_first_fragment(&outer_children[0]);
+        let inner_children = children_of(&inner_fragment);
+        assert_eq!(inner_children.len(), 1);
+        assert_eq!(tag_of(&inner_children[0]).as_deref(), Some("b"));
+        assert_eq!(DomTree::inner_text(&inner_children[0]), "deep");
+    }
+
+    #[test]
+    fn template_in_head_stays_in_head() {
+        let tree = parse(r#"<template><title>t</title></template>"#);
+        let template = tree
+            .query_selector("html > head > template")
+            .expect("template in head stays in head");
+        assert!(tree.query_selector("title").is_some());
+        assert_eq!(
+            DomTree::inner_text(&find_first_fragment(&template)),
+            "t"
+        );
+    }
 }
