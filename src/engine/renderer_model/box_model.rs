@@ -1,7 +1,9 @@
 //! Generation of [`DrawCommand`]s from the layout tree (box models, borders,
 //! backgrounds and text).
 
-use ui_layout::{BoxModel, EdgeOption, LayoutChild, LayoutNode, Position, Rect};
+use ui_layout::{
+    BoxModel, EdgeOption, InnerDisplay, LayoutChild, LayoutNode, OuterDisplay, Position, Rect,
+};
 
 use crate::engine::layouter::text_layouter::TextFlowLayouter;
 use crate::engine::layouter::types::{
@@ -783,12 +785,13 @@ fn draw_text(
     style: &TextStyle,
     flow_style: TextFlowStyle,
     text_id: usize,
+    offset: (f32, f32),
 ) {
     if let Some(result) = TextFlowLayouter::get_result(text_id) {
         for (i, line_text) in result.line_texts.iter().enumerate() {
             let span = &result.spans[i];
-            let x = span.line_pos.0;
-            let y = span.line_pos.1;
+            let x = span.line_pos.0 + offset.0;
+            let y = span.line_pos.1 + offset.1;
 
             cmd_buf.push(DrawCommand::DrawText {
                 x,
@@ -869,6 +872,7 @@ pub fn generate_draw_commands(
         root_viewport,
         containing,
         origin,
+        origin,
         &mut popups,
         true,
     );
@@ -900,6 +904,24 @@ fn child_origin(child: &LayoutNode, parent_origin: (f32, f32)) -> (f32, f32) {
     })
 }
 
+/// Page-space origin of the transform a child subtree will run under. A
+/// block-level container child pushes its own content transform, so its active
+/// origin is its own; an inline container child (including inline-block) pushes
+/// no transform and inherits the enclosing block's active origin. Custom
+/// elements push a box transform of their own even when laid out inline, so the
+/// caller passes `child_origin` directly for those.
+fn child_transform_origin(
+    child: &LayoutNode,
+    parent_origin: (f32, f32),
+    inherited: (f32, f32),
+) -> (f32, f32) {
+    if matches!(child.layout_box, ui_layout::LayoutBox::InlineBox(_)) {
+        inherited
+    } else {
+        child_origin(child, parent_origin)
+    }
+}
+
 /// Recursive draw-command generation.
 ///
 /// `accumulated_scroll` is the sum of the scroll offsets of every scrollable
@@ -928,6 +950,7 @@ fn generate_draw_commands_inner(
     viewport: StickyViewport,
     containing: (f32, f32),
     origin: (f32, f32),
+    transform_origin: (f32, f32),
     popups: &mut Vec<(Vec<DrawCommand>, (f32, f32))>,
     is_root: bool,
 ) {
@@ -948,6 +971,23 @@ fn generate_draw_commands_inner(
     let is_fixed = layout.style.position.kind == Position::Fixed;
     let is_sticky = layout.style.position.kind == Position::Sticky;
     let is_inline = matches!(layout.layout_box, ui_layout::LayoutBox::InlineBox(_));
+
+    // Inline containers that establish their own inline formatting context
+    // (display: inline-block) lay their children out relative to their own
+    // content box but push no transform (unlike plain inline boxes, whose text
+    // shares the parent's line space). Their text must therefore be offset by
+    // the box's position within the active transform space.
+    let inline_block_text_offset = if is_inline
+        && layout.style.display.outer() == Some(OuterDisplay::Inline)
+        && layout.style.display.inner() == Some(InnerDisplay::FlowRoot)
+    {
+        (
+            origin.0 - transform_origin.0,
+            origin.1 - transform_origin.1,
+        )
+    } else {
+        (0.0, 0.0)
+    };
 
     // Cancel the inherited scroll displacement for fixed-position boxes.
     let cancel_scroll = is_fixed && (accumulated_scroll.0 != 0.0 || accumulated_scroll.1 != 0.0);
@@ -1131,7 +1171,13 @@ fn generate_draw_commands_inner(
                 flow_style,
                 ..
             } => {
-                draw_text(cmd_buf, style, *flow_style, *text_id);
+                draw_text(
+                    cmd_buf,
+                    style,
+                    *flow_style,
+                    *text_id,
+                    inline_block_text_offset,
+                );
                 layout_iter.next();
             }
             NodeKind::LineBreak => {
@@ -1140,6 +1186,7 @@ fn generate_draw_commands_inner(
             NodeKind::Container { .. } => {
                 if let Some(LayoutChild::Node(node)) = layout_iter.next() {
                     let child_origin = child_origin(node, origin);
+                    let child_transform_origin = child_transform_origin(node, origin, transform_origin);
                     let z_index = child_info.kind.z_index();
                     if z_index > 0 {
                         let mut child_commands = Vec::new();
@@ -1151,6 +1198,7 @@ fn generate_draw_commands_inner(
                             child_viewport,
                             child_containing,
                             child_origin,
+                            child_transform_origin,
                             popups,
                             false,
                         );
@@ -1164,6 +1212,7 @@ fn generate_draw_commands_inner(
                             child_viewport,
                             child_containing,
                             child_origin,
+                            child_transform_origin,
                             popups,
                             false,
                         );
@@ -1182,6 +1231,8 @@ fn generate_draw_commands_inner(
                     // Block custom element: recurse into the child layout node.
                     Some(LayoutChild::Node(node_layout)) => {
                         let child_origin = child_origin(node_layout, origin);
+                        // Custom elements always push a box transform of their
+                        // own, even when laid out as inline boxes.
                         generate_draw_commands_inner(
                             cmd_buf,
                             node_layout,
@@ -1189,6 +1240,7 @@ fn generate_draw_commands_inner(
                             child_scroll,
                             child_viewport,
                             child_containing,
+                            child_origin,
                             child_origin,
                             popups,
                             false,
