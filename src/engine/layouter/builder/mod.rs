@@ -846,6 +846,10 @@ pub fn build_layout_and_info_from_snapshot(
                         && scripting_mode == ScriptingMode::Enabled
                     {
                         // Skip
+                    } else if child_node.tag_name() == Some("template")
+                        || matches!(child_node, HtmlNodeType::DocumentFragment)
+                    {
+                        // Skip: template contents are inert and never rendered.
                     } else {
                         child_slots.push(ChildSlot::Element(element_kids.len()));
                         element_kids.push(child);
