@@ -27,6 +27,7 @@ pub use processor::{JsProcessor, JsTask, JsTaskResult};
 mod common;
 pub(crate) mod runtime;
 pub(crate) mod web_apis;
+pub use web_apis::missing_api_detector;
 
 // Re-export items needed by sibling modules.
 pub(crate) use common::{
@@ -168,6 +169,7 @@ pub struct JsHost {
     pub(crate) namespaces: HashMap<u64, String>,
     pub(crate) element_prototype: Rc<RefCell<JSObject>>,
     pub(crate) element_constructor: Rc<RefCell<JSObject>>,
+    pub(crate) node_prototype: Option<Rc<RefCell<JSObject>>>,
     pub(crate) document: Option<Rc<RefCell<JSObject>>>,
     pub(crate) document_implementation: Option<Rc<RefCell<JSObject>>>,
     /// Independent document instances for `<iframe>` elements, keyed by the
@@ -189,6 +191,9 @@ pub struct JsHost {
     pub(crate) active_element: Option<u64>,
     /// Keeps JS-created or removed nodes alive while their wrappers exist.
     pub(crate) detached_nodes: HashMap<u64, NodeRef<HtmlNodeType>>,
+    /// Detached document objects created via
+    /// `document.implementation.createHTMLDocument`, kept alive for scripts.
+    pub(crate) detached_documents: Vec<Rc<RefCell<JSObject>>>,
     pub(crate) timers: Vec<JsTimer>,
     pub(crate) fetch_requests: Vec<JsFetchRequest>,
     pub(crate) iframe_fetch_requests: Vec<JsIframeFetchRequest>,
@@ -268,6 +273,7 @@ impl JsRuntime {
             namespaces: HashMap::new(),
             element_prototype,
             element_constructor,
+            node_prototype: None,
             document: None,
             document_implementation: None,
             iframe_documents: HashMap::new(),
@@ -311,6 +317,7 @@ impl JsRuntime {
             window_load_fired: false,
             next_id: 0,
             needs_redraw: Rc::clone(&needs_redraw),
+            detached_documents: Vec::new(),
         };
         Self::register_window_event_handlers(&mut host);
 
@@ -423,7 +430,11 @@ impl JsRuntime {
                         .join(", ");
                     log::info!("JS error: uncaught object ({details})");
                 }
-                log::info!("JS error: {}", err);
+                log::info!(
+                    "JS error: {} (source {:?})",
+                    err,
+                    source.chars().take(60).collect::<String>()
+                );
             }
         }
         self.perform_microtask_checkpoint();
@@ -1211,6 +1222,173 @@ mod tests {
         assert_eq!(parts[13], "parser.body:true");
         assert_eq!(parts[14], "parser.qs:hi");
         assert_eq!(parts[15], "parser.tag:1");
+    }
+
+    #[test]
+    fn event_target_and_window_constructors_supported() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const results = [];
+
+            // window.EventTarget / window.Window / window.XMLHttpRequest
+            // must be constructors with an object `.prototype` for the
+            // webcomponents-sd `ab()` feature detection to pass.
+            results.push("et:" + typeof window.EventTarget);
+            results.push("et.proto:" + (typeof EventTarget.prototype === "object"));
+            results.push("win:" + (typeof Window === "function" || typeof Window === "object"));
+            results.push("win.proto:" + (typeof Window.prototype === "object"));
+            results.push("xhr:" + (typeof XMLHttpRequest));
+            results.push("xhr.proto:" + (typeof XMLHttpRequest.prototype === "object"));
+
+            // Mimic wc-sd's E(): getOwnPropertyDescriptor on each prototype.
+            function e(a, b) {
+                b = b === undefined ? [] : b;
+                const out = [];
+                for (let c = 0; c < b.length; c++) {
+                    const d = b[c];
+                    out.push(!!Object.getOwnPropertyDescriptor(a, d));
+                }
+                return out.join(",");
+            }
+            const keys = ["dispatchEvent", "addEventListener", "removeEventListener"];
+            results.push("et." + e(window.EventTarget.prototype, keys));
+            results.push("win." + e(window.Window.prototype, keys));
+            results.push("node." + e(Node.prototype, keys));
+            results.push("xr." + e(XMLHttpRequest.prototype, keys));
+
+            // Node instances are EventTargets too.
+            results.push("node.methods:" + typeof Node.prototype.addEventListener + ":" + typeof Node.prototype.dispatchEvent);
+
+            // wc-sd ab() also runs E() over Element/DocumentFragment/Document.
+            results.push("el:" + (typeof Element.prototype));
+            results.push("df:" + (typeof DocumentFragment.prototype));
+            results.push("doc:" + (typeof Document.prototype));
+
+            // new EventTarget() instances inherit the methods from the prototype
+            const t = new EventTarget();
+            results.push("inst:" + typeof t.addEventListener + ":" + typeof t.dispatchEvent);
+
+            document.getElementById("result").setAttribute("data-eventtarget", results.join(";"));
+            "##,
+        );
+
+        let node = dom.get_element_by_id("result").unwrap();
+        let data = node
+            .borrow()
+            .value
+            .get_attr("data-eventtarget")
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(
+            data,
+            "et:object;et.proto:true;win:true;win.proto:true;xhr:object;xhr.proto:true;et.true,true,true;win.true,true,true;node.true,true,true;xr.true,true,true;node.methods:function:function;el:object;df:object;doc:object;inst:function:function",
+            "got: {data}"
+        );
+    }
+
+    #[test]
+    fn wc_sd_prologue_runs_clean() {
+        let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+            .try_init();
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        let read = |path: &str| -> String {
+            std::fs::read_to_string(path).unwrap_or_default()
+        };
+        // Reproduce the page's prologue script order: web-animations,
+        // custom-elements-es5-adapter, then webcomponents-sd.
+        for path in [
+            "/tmp/opencode/yt/web-animations-next-lite.min.js",
+            "/tmp/opencode/yt/custom-elements-es5-adapter.js",
+            "/tmp/opencode/yt/wc-sd-current.js",
+        ] {
+            runtime.run_script(&read(path));
+        }
+        // wc-sd must not have aborted midway: `window.ShadyCSS` is only assigned
+        // at the very tail of the polyfill.
+        runtime.run_script(
+            r##"
+            if (typeof window.ShadyCSS === "object") {
+                document.getElementById("result").setAttribute("data-survived", "yes");
+            }
+            "##,
+        );
+        let node = dom.get_element_by_id("result").unwrap();
+        let survived = node
+            .borrow()
+            .value
+            .get_attr("data-survived")
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(survived, "yes");
+    }
+
+    #[test]
+    fn node_interface_and_html_document_helpers() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const results = [];
+
+            // Node is now a constructor with a prototype
+            results.push("node.typeof:" + typeof Node);
+            results.push("node.prototype:" + (typeof Node.prototype === "object"));
+
+            // wc-sd gate: firstChild must be a configurable accessor with a getter
+            const d = Object.getOwnPropertyDescriptor(Node.prototype, "firstChild");
+            results.push("fc.desc:" + (!!d && d.configurable === true && typeof d.get === "function"));
+            results.push("fc.enum:" + d.enumerable + ":" + d.writable);
+
+            // getRootNode gate for ShadyDOM detection
+            results.push("rootNode:" + typeof Node.prototype.getRootNode);
+            results.push("rootIsDoc:" + (document.documentElement.getRootNode() === document));
+
+            // textNode rides Node.prototype accessors? (engine: instance props win)
+
+            // document.implementation.createHTMLDocument
+            const doc = document.implementation.createHTMLDocument("inert");
+            results.push("htmlDoc.doctype:" + (doc !== null));
+            results.push("htmlDoc.ns:" + doc.namespaceURI);
+            results.push("htmlDoc.html:" + doc.documentElement.tagName);
+            results.push("htmlDoc.body:" + doc.body.tagName);
+            results.push("htmlDoc.title:" + doc.title);
+            const p = doc.createElement("p");
+            p.innerHTML = "<b>hi</b>";
+            results.push("htmlDoc.el:" + p.tagName + ":" + p.firstChild.tagName);
+
+            // createEvent('CustomEvent') + initCustomEvent
+            const ev = document.createEvent("CustomEvent");
+            results.push("ce.has:" + typeof ev.initCustomEvent);
+            ev.initCustomEvent("yt:run", true, false, {x: 1});
+            results.push("ce.prop:" + ev.type + ":" + ev.bubbles + ":" + ev.cancelable + ":" + ev.detail.x);
+
+            document.getElementById("result").setAttribute("data-node", results.join(";"));
+            "##,
+        );
+
+        let node = dom.get_element_by_id("result").unwrap();
+        let data = node
+            .borrow()
+            .value
+            .get_attr("data-node")
+            .unwrap_or_default()
+            .to_string();
+        let parts: Vec<&str> = data.split(';').collect();
+
+        assert_eq!(parts[0], "node.typeof:object");
+        assert_eq!(parts[1], "node.prototype:true");
+        assert_eq!(parts[2], "fc.desc:true");
+        assert_eq!(parts[3], "fc.enum:false:undefined");
+        assert_eq!(parts[4], "rootNode:function");
+        assert_eq!(parts[5], "rootIsDoc:true");
+        assert_eq!(parts[6], "htmlDoc.doctype:true");
+        assert_eq!(parts[7], "htmlDoc.ns:http://www.w3.org/1999/xhtml");
+        assert_eq!(parts[8], "htmlDoc.html:HTML");
+        assert_eq!(parts[9], "htmlDoc.body:BODY");
+        assert_eq!(parts[10], "htmlDoc.title:inert");
+        assert_eq!(parts[11], "htmlDoc.el:P:B");
+        assert_eq!(parts[12], "ce.has:function");
+        assert_eq!(parts[13], "ce.prop:yt:run:true:false:1");
     }
 
     #[test]
