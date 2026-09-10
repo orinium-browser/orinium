@@ -143,6 +143,107 @@ pub(crate) fn make_element_interface() -> (Rc<RefCell<JSObject>>, Rc<RefCell<JSO
     (prototype, Rc::new(RefCell::new(constructor)))
 }
 
+/// Builds the `Node` interface (constructor + prototype).
+///
+/// Exposes the tree-traversal accessors as *configurable* properties so
+/// WebComponents polyfills (which gate on
+/// `Object.getOwnPropertyDescriptor(Node.prototype, "firstChild").configurable`)
+/// recognize native-like light-DOM behavior and skip invasive patching.
+pub(crate) fn make_node_interface() -> (Rc<RefCell<JSObject>>, Rc<RefCell<JSObject>>) {
+    let mut prototype = JSObject::new();
+    prototype.define_property(
+        "firstChild".to_string(),
+        configurable_read_only_accessor_property(get_first_child),
+    );
+    prototype.define_property(
+        "lastChild".to_string(),
+        configurable_read_only_accessor_property(get_last_child),
+    );
+    prototype.define_property(
+        "childNodes".to_string(),
+        configurable_read_only_accessor_property(get_child_nodes),
+    );
+    prototype.define_property(
+        "parentNode".to_string(),
+        configurable_read_only_accessor_property(get_parent_node),
+    );
+    prototype.define_property(
+        "parentElement".to_string(),
+        configurable_read_only_accessor_property(get_parent_element),
+    );
+    prototype.define_property(
+        "nextSibling".to_string(),
+        configurable_read_only_accessor_property(get_next_sibling),
+    );
+    prototype.define_property(
+        "previousSibling".to_string(),
+        configurable_read_only_accessor_property(get_previous_sibling),
+    );
+    prototype.define_property(
+        "textContent".to_string(),
+        configurable_accessor_property(get_text_content, set_text_content),
+    );
+    prototype.define_property(
+        "isConnected".to_string(),
+        configurable_read_only_accessor_property(get_is_connected),
+    );
+    prototype.define_property(
+        "ownerDocument".to_string(),
+        configurable_read_only_accessor_property(get_owner_document),
+    );
+    prototype.set(
+        "dispatchEvent".to_string(),
+        JSValue::from_native_function(element_dispatch_event),
+    );
+    prototype.set(
+        "addEventListener".to_string(),
+        JSValue::from_native_function(add_element_event_listener),
+    );
+    prototype.set(
+        "removeEventListener".to_string(),
+        JSValue::from_native_function(remove_element_event_listener),
+    );
+    prototype.set(
+        "getRootNode".to_string(),
+        JSValue::from_native_function(node_get_root_node),
+    );
+    prototype.set(
+        "appendChild".to_string(),
+        JSValue::from_native_function(append_child),
+    );
+    prototype.set(
+        "insertBefore".to_string(),
+        JSValue::from_native_function(insert_before),
+    );
+    prototype.set(
+        "removeChild".to_string(),
+        JSValue::from_native_function(remove_child),
+    );
+    prototype.set(
+        "cloneNode".to_string(),
+        JSValue::from_native_function(clone_node),
+    );
+    prototype.set(
+        "dispatchEvent".to_string(),
+        JSValue::from_native_function(element_dispatch_event),
+    );
+    prototype.set(
+        "contains".to_string(),
+        JSValue::from_native_function(element_contains),
+    );
+    prototype.set(
+        "hasChildNodes".to_string(),
+        JSValue::from_native_function(element_has_child_nodes),
+    );
+    let prototype = Rc::new(RefCell::new(prototype));
+    let mut constructor = JSObject::new();
+    constructor.define_property(
+        "prototype".to_string(),
+        Property::read_only(JSValue::from_object(Rc::clone(&prototype))),
+    );
+    (prototype, Rc::new(RefCell::new(constructor)))
+}
+
 pub(crate) fn make_element(
     tag_name: String,
     _attr_id: String,
@@ -1329,7 +1430,7 @@ fn element_get_elements_by_class_name(vm: &mut VM, args: Vec<JSValue>) -> JSResu
     Ok(expose_node_list(vm, nodes))
 }
 
-fn element_dispatch_event(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn element_dispatch_event(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(target) = args.first().and_then(JSValue::as_object) else {
         return Err(JSError::TypeError(
             "dispatchEvent called on incompatible receiver".to_string(),
@@ -1490,7 +1591,7 @@ fn dispatch_at_phase(
 
 /// The DOM `node.hasChildNodes()` method: returns true if the node has at
 /// least one child node.
-fn element_has_child_nodes(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn element_has_child_nodes(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
         return Ok(JSValue::from_bool(false));
     };
@@ -1546,7 +1647,7 @@ fn element_click(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     propagate_event(vm, &target_obj, &event, path)
 }
 
-fn element_contains(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn element_contains(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(container) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
         return Ok(JSValue::from_bool(false));
     };
@@ -1667,7 +1768,40 @@ pub(crate) fn read_only_accessor_property(getter: pixi_byte::NativeFunctionType)
     }
 }
 
-fn get_parent_node(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+/// Configurable, non-enumerable read-only accessor property.
+///
+/// Prototype interfaces (e.g. `Node.prototype`) expose their accessors as
+/// configurable per the DOM spec. WebComponent polyfills gate on this via
+/// `Object.getOwnPropertyDescriptor(...).configurable`.
+pub(crate) fn configurable_read_only_accessor_property(
+    getter: pixi_byte::NativeFunctionType,
+) -> Property {
+    Property {
+        value: JSValue::undefined(),
+        enumerable: false,
+        writable: false,
+        configurable: true,
+        getter: Some(JSValue::from_native_function(getter)),
+        setter: None,
+    }
+}
+
+/// Configurable, non-enumerable accessor property with getter and setter.
+pub(crate) fn configurable_accessor_property(
+    getter: pixi_byte::NativeFunctionType,
+    setter: pixi_byte::NativeFunctionType,
+) -> Property {
+    Property {
+        value: JSValue::undefined(),
+        enumerable: false,
+        writable: false,
+        configurable: true,
+        getter: Some(JSValue::from_native_function(getter)),
+        setter: Some(JSValue::from_native_function(setter)),
+    }
+}
+
+pub(crate) fn get_parent_node(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
         return Ok(JSValue::null());
     };
@@ -1677,7 +1811,7 @@ fn get_parent_node(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(expose_node(vm, parent).unwrap_or(JSValue::null()))
 }
 
-fn get_parent_element(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn get_parent_element(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
         return Ok(JSValue::null());
     };
@@ -1690,7 +1824,7 @@ fn get_parent_element(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(expose_node(vm, parent).unwrap_or(JSValue::null()))
 }
 
-fn get_is_connected(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn get_is_connected(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(mut node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
         return Ok(JSValue::from_bool(false));
     };
@@ -1710,11 +1844,40 @@ fn get_is_connected(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     }
 }
 
-fn get_owner_document(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn get_owner_document(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(with_host(vm, |host| host.document.as_ref().cloned())
         .flatten()
         .map(JSValue::from_object)
         .unwrap_or(JSValue::null()))
+}
+
+/// `Node.getRootNode()`: returns the root of the node's tree
+/// (a document, document fragment, or shadow root).
+pub(crate) fn node_get_root_node(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(mut node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::null());
+    };
+    loop {
+        let parent = { node.borrow().parent() };
+        let Some(parent) = parent else { break };
+        node = parent;
+    }
+    if matches!(node.borrow().value, HtmlNodeType::ShadowRoot { .. }) {
+        let shadow_dom_id = with_host(vm, |host| {
+            host.refs
+                .iter()
+                .find_map(|(id, weak)| {
+                    weak.upgrade().is_some_and(|n| Rc::ptr_eq(&n, &node)).then_some(*id)
+                })
+        })
+        .flatten();
+        if let Some(dom_id) = shadow_dom_id {
+            return Ok(super::document::expose_shadow_root(vm, &node, dom_id)
+                .map(JSValue::from_object)
+                .unwrap_or(JSValue::null()));
+        }
+    }
+    Ok(expose_node(vm, node).unwrap_or(JSValue::null()))
 }
 
 fn get_iframe_content_document(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -1844,7 +2007,7 @@ fn get_namespace_uri(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     }
 }
 
-fn get_child_nodes(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn get_child_nodes(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
         return Ok(vm.array_from_values(Vec::new()));
     };
@@ -1852,11 +2015,11 @@ fn get_child_nodes(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(expose_node_list(vm, children))
 }
 
-fn get_first_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn get_first_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     get_edge_child(vm, &args, true)
 }
 
-fn get_last_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn get_last_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     get_edge_child(vm, &args, false)
 }
 
@@ -1874,11 +2037,11 @@ fn get_edge_child(vm: &mut VM, args: &[JSValue], first: bool) -> JSResult<JSValu
         .unwrap_or(JSValue::null()))
 }
 
-fn get_next_sibling(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn get_next_sibling(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     get_sibling(vm, &args, 1)
 }
 
-fn get_previous_sibling(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn get_previous_sibling(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     get_sibling(vm, &args, -1)
 }
 
@@ -2759,7 +2922,7 @@ fn set_class_tokens(node: &NodeRef<HtmlNodeType>, classes: &[String]) {
     node.borrow_mut().value.set_attr("class", classes.join(" "));
 }
 
-fn get_text_content(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn get_text_content(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
         return Ok(JSValue::null());
     };
