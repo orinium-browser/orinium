@@ -3,11 +3,12 @@ use crate::engine::js::JsHost;
 use crate::engine::js::common::{
     dom_node, is_callable, mark_dom_dirty, node_dom_id, with_host, with_host_mut,
 };
+use crate::engine::js::web_apis::browser_env::window_dispatch_event;
 use crate::engine::js::web_apis::dom::dom_exception::throw_dom_exception;
 use crate::engine::js::web_apis::dom::element::{
     accessor_property, define_node_constants, make_comment_node, make_doctype_node,
-    make_document_fragment, make_element, make_processing_instruction_node, make_text_node,
-    read_only_accessor_property,
+    make_document_fragment, make_element, make_node_interface, make_processing_instruction_node,
+    make_text_node, read_only_accessor_property,
 };
 use crate::engine::js::web_apis::dom::node_iterator;
 use crate::engine::js::web_apis::dom::node_iterator::{make_node_iterator, make_tree_walker};
@@ -148,6 +149,10 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
             JSValue::from_native_function(remove_document_event_listener),
         );
         document.set(
+            "dispatchEvent".to_string(),
+            JSValue::from_native_function(window_dispatch_event),
+        );
+        document.set(
             "write".to_string(),
             JSValue::from_native_function(document_write),
         );
@@ -204,47 +209,84 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
     let _ = engine.eval("Object.setPrototypeOf(DOMException.prototype, Error.prototype)");
 
     // Node constants
-    let mut node_obj = JSObject::new();
-    node_obj.define_property(
-        "ELEMENT_NODE".to_string(),
-        Property::read_only(JSValue::from_number(1.0)),
-    );
-    node_obj.define_property(
-        "ATTRIBUTE_NODE".to_string(),
-        Property::read_only(JSValue::from_number(2.0)),
-    );
-    node_obj.define_property(
-        "TEXT_NODE".to_string(),
-        Property::read_only(JSValue::from_number(3.0)),
-    );
-    node_obj.define_property(
-        "CDATA_SECTION_NODE".to_string(),
-        Property::read_only(JSValue::from_number(4.0)),
-    );
-    node_obj.define_property(
-        "PROCESSING_INSTRUCTION_NODE".to_string(),
-        Property::read_only(JSValue::from_number(7.0)),
-    );
-    node_obj.define_property(
-        "COMMENT_NODE".to_string(),
-        Property::read_only(JSValue::from_number(8.0)),
-    );
-    node_obj.define_property(
-        "DOCUMENT_NODE".to_string(),
-        Property::read_only(JSValue::from_number(9.0)),
-    );
-    node_obj.define_property(
-        "DOCUMENT_TYPE_NODE".to_string(),
-        Property::read_only(JSValue::from_number(10.0)),
-    );
-    node_obj.define_property(
-        "DOCUMENT_FRAGMENT_NODE".to_string(),
-        Property::read_only(JSValue::from_number(11.0)),
-    );
-    engine.global_mut().borrow_mut().set(
-        "Node".to_string(),
-        JSValue::from_object(Rc::new(RefCell::new(node_obj))),
-    );
+    let (node_prototype, node_constructor) = make_node_interface();
+    {
+        let mut node_obj = node_constructor.borrow_mut();
+        node_obj.define_property(
+            "ELEMENT_NODE".to_string(),
+            Property::read_only(JSValue::from_number(1.0)),
+        );
+        node_obj.define_property(
+            "ATTRIBUTE_NODE".to_string(),
+            Property::read_only(JSValue::from_number(2.0)),
+        );
+        node_obj.define_property(
+            "TEXT_NODE".to_string(),
+            Property::read_only(JSValue::from_number(3.0)),
+        );
+        node_obj.define_property(
+            "CDATA_SECTION_NODE".to_string(),
+            Property::read_only(JSValue::from_number(4.0)),
+        );
+        node_obj.define_property(
+            "PROCESSING_INSTRUCTION_NODE".to_string(),
+            Property::read_only(JSValue::from_number(7.0)),
+        );
+        node_obj.define_property(
+            "COMMENT_NODE".to_string(),
+            Property::read_only(JSValue::from_number(8.0)),
+        );
+        node_obj.define_property(
+            "DOCUMENT_NODE".to_string(),
+            Property::read_only(JSValue::from_number(9.0)),
+        );
+        node_obj.define_property(
+            "DOCUMENT_TYPE_NODE".to_string(),
+            Property::read_only(JSValue::from_number(10.0)),
+        );
+        node_obj.define_property(
+            "DOCUMENT_FRAGMENT_NODE".to_string(),
+            Property::read_only(JSValue::from_number(11.0)),
+        );
+    }
+    let _ = with_host_mut(engine.vm(), |host| {
+        host.node_prototype = Some(Rc::clone(&node_prototype));
+    });
+    engine
+        .global_mut()
+        .borrow_mut()
+        .set("Node".to_string(), JSValue::from_object(node_constructor));
+    // Wire Element.prototype -> Node.prototype so element instances inherit
+    // Node methods (getRootNode, contains, …).
+    let _ = engine.eval("Object.setPrototypeOf(Element.prototype, Node.prototype)");
+
+    // Character-data constructors: `Text`, `Comment`, `CDATASection`,
+    // `ProcessingInstruction` and `CharacterData`, plus `Document` and
+    // `DocumentFragment`. WebComponents polyfills read
+    // `window.Text.prototype` (via `Object.create`) while feature-detecting, so
+    // each constructor carries a prototype object.
+    for name in [
+        "Text",
+        "Comment",
+        "CDATASection",
+        "ProcessingInstruction",
+        "CharacterData",
+        "Document",
+        "DocumentFragment",
+    ] {
+        let mut prototype = JSObject::new();
+        prototype.set_prototype(Some(Rc::clone(&node_prototype)));
+        let prototype = Rc::new(RefCell::new(prototype));
+        let mut constructor = JSObject::new();
+        constructor.define_property(
+            "prototype".to_string(),
+            Property::read_only(JSValue::from_object(Rc::clone(&prototype))),
+        );
+        engine.global_mut().borrow_mut().set(
+            name.to_string(),
+            JSValue::from_object(Rc::new(RefCell::new(constructor))),
+        );
+    }
 }
 
 fn html_iframe_element_has_instance(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -588,6 +630,10 @@ fn install_document_implementation(engine: &mut pixi_byte::JSEngine) {
         "hasFeature".to_string(),
         JSValue::from_native_function(dom_implementation_has_feature),
     );
+    implementation.set(
+        "createHTMLDocument".to_string(),
+        JSValue::from_native_function(dom_implementation_create_html_document),
+    );
     let implementation = Rc::new(RefCell::new(implementation));
     let _ = with_host_mut(engine.vm(), |host| {
         host.document_implementation = Some(Rc::clone(&implementation));
@@ -682,6 +728,127 @@ fn dom_implementation_create_document(vm: &mut VM, args: Vec<JSValue>) -> JSResu
         }
     }
     Ok(doc)
+}
+
+/// `document.implementation.createHTMLDocument(title)`:
+/// creates a new, detached HTML document with `<head><title>…</title></head>`
+/// and `<body>` children under `<html>`.
+fn dom_implementation_create_html_document(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let title_text = args
+        .get(1)
+        .map(JSValue::to_console_string)
+        .unwrap_or_default();
+
+    let doc_node = TreeNode::new(HtmlNodeType::Document);
+    let html_node = TreeNode::new(HtmlNodeType::Element {
+        tag_name: "html".to_string(),
+        attributes: Vec::new(),
+    });
+    let head_node = TreeNode::new(HtmlNodeType::Element {
+        tag_name: "head".to_string(),
+        attributes: Vec::new(),
+    });
+    let body_node = TreeNode::new(HtmlNodeType::Element {
+        tag_name: "body".to_string(),
+        attributes: Vec::new(),
+    });
+    let title_node = TreeNode::new(HtmlNodeType::Element {
+        tag_name: "title".to_string(),
+        attributes: Vec::new(),
+    });
+    let title_text_node = TreeNode::new(HtmlNodeType::Text(title_text.clone()));
+
+    TreeNode::add_child(&doc_node, Rc::clone(&html_node));
+    TreeNode::add_child(&html_node, Rc::clone(&head_node));
+    TreeNode::add_child(&html_node, Rc::clone(&body_node));
+    TreeNode::add_child(&head_node, Rc::clone(&title_node));
+    TreeNode::add_child(&title_node, Rc::clone(&title_text_node));
+
+    let html_value = expose_detached_node(vm, html_node).unwrap_or(JSValue::null());
+    let head_value = expose_detached_node(vm, head_node).unwrap_or(JSValue::null());
+    let body_value = expose_detached_node(vm, body_node).unwrap_or(JSValue::null());
+
+    let mut document = JSObject::new();
+    document.define_property(
+        "nodeType".to_string(),
+        Property::read_only(JSValue::from_number(9.0)),
+    );
+    document.define_property(
+        "nodeName".to_string(),
+        Property::read_only(JSValue::from_string("#document".to_string())),
+    );
+    define_node_constants(&mut document);
+    document.define_property(
+        "namespaceURI".to_string(),
+        Property::read_only(JSValue::from_string(
+            "http://www.w3.org/1999/xhtml".to_string(),
+        )),
+    );
+    document.set("documentElement".to_string(), html_value);
+    document.set("head".to_string(), head_value);
+    document.set("body".to_string(), body_value);
+    document.set("title".to_string(), JSValue::from_string(title_text));
+    document.set(
+        "createElement".to_string(),
+        JSValue::from_native_function(create_element),
+    );
+    document.set(
+        "createElementNS".to_string(),
+        JSValue::from_native_function(create_element_ns),
+    );
+    document.set(
+        "createTextNode".to_string(),
+        JSValue::from_native_function(create_text_node),
+    );
+    document.set(
+        "createComment".to_string(),
+        JSValue::from_native_function(create_comment),
+    );
+    document.set(
+        "createDocumentFragment".to_string(),
+        JSValue::from_native_function(create_document_fragment),
+    );
+    document.set(
+        "createEvent".to_string(),
+        JSValue::from_native_function(super::events::make_create_event),
+    );
+    document.set(
+        "createNodeIterator".to_string(),
+        JSValue::from_native_function(create_node_iterator),
+    );
+    document.set(
+        "createTreeWalker".to_string(),
+        JSValue::from_native_function(create_tree_walker),
+    );
+    document.set(
+        "querySelector".to_string(),
+        JSValue::from_native_function(document_query_selector),
+    );
+    document.set(
+        "querySelectorAll".to_string(),
+        JSValue::from_native_function(document_query_selector_all),
+    );
+    document.set(
+        "getElementById".to_string(),
+        JSValue::from_native_function(get_element_by_id),
+    );
+    document.set(
+        "getElementsByTagName".to_string(),
+        JSValue::from_native_function(document_get_elements_by_tag_name),
+    );
+    document.set(
+        "getElementsByClassName".to_string(),
+        JSValue::from_native_function(document_get_elements_by_class_name),
+    );
+    document.set(
+        "dispatchEvent".to_string(),
+        JSValue::from_native_function(window_dispatch_event),
+    );
+    let detached_doc = Rc::new(RefCell::new(document));
+    let _ = with_host_mut(vm, |host| {
+        host.detached_documents.push(Rc::clone(&detached_doc));
+    });
+    Ok(JSValue::from_object(detached_doc))
 }
 
 fn get_document_cookie(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -798,6 +965,9 @@ fn expose_node_inner(vm: &VM, node: NodeRef<HtmlNodeType>, kind: NodeKind) -> Op
         if let Some(existing) = host.objects.get(&dom_id) {
             return Rc::clone(existing);
         }
+
+        let is_element = matches!(kind, NodeKind::Element { .. });
+
         let obj = match kind {
             NodeKind::Element { tag_name, id } => make_element(
                 tag_name,
@@ -812,6 +982,15 @@ fn expose_node_inner(vm: &VM, node: NodeRef<HtmlNodeType>, kind: NodeKind) -> Op
             NodeKind::Fragment => make_document_fragment(dom_id),
             NodeKind::Doctype { name } => make_doctype_node(dom_id, name),
         };
+
+        // Non-element nodes are created without a prototype; wire them to
+        // Node.prototype so they inherit node methods (getRootNode, contains,
+        // dispatchEvent, …). Elements already chain Element.prototype, whose
+        // own prototype was linked to Node.prototype at install time.
+        if !is_element && let Some(node_proto) = host.node_prototype.clone() {
+            obj.borrow_mut().set_prototype(Some(node_proto));
+        }
+
         host.objects.insert(dom_id, Rc::clone(&obj));
         obj
     })?;
@@ -914,6 +1093,9 @@ pub(crate) fn expose_shadow_root(
             read_only_accessor_property(super::element::get_element_children),
         );
         let host_obj = Rc::new(RefCell::new(obj));
+        if let Some(node_proto) = host.node_prototype.clone() {
+            host_obj.borrow_mut().set_prototype(Some(node_proto));
+        }
         host.objects.insert(dom_id, Rc::clone(&host_obj));
         host_obj
     })
@@ -1192,6 +1374,10 @@ fn build_iframe_document_object(host_dom_id: u64, _tree: &Rc<DomTree>) -> Rc<Ref
     document.set(
         "createRange".to_string(),
         JSValue::from_native_function(create_range_stub),
+    );
+    document.set(
+        "dispatchEvent".to_string(),
+        JSValue::from_native_function(window_dispatch_event),
     );
     document.set(
         "write".to_string(),
