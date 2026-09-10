@@ -308,10 +308,45 @@ const XHR_URL: &str = "__orinium_xhr_url";
 const XHR_HEADERS: &str = "__orinium_xhr_headers";
 
 pub(crate) fn install_xml_http_request(engine: &mut pixi_byte::JSEngine) {
+    let mut prototype = JSObject::new();
+    prototype.set(
+        "open".to_string(),
+        JSValue::from_native_function(xml_http_request_open),
+    );
+    prototype.set(
+        "send".to_string(),
+        JSValue::from_native_function(xml_http_request_send),
+    );
+    prototype.set(
+        "setRequestHeader".to_string(),
+        JSValue::from_native_function(xml_http_request_set_request_header),
+    );
+    prototype.set(
+        "getAllResponseHeaders".to_string(),
+        JSValue::from_native_function(xml_http_request_get_all_response_headers),
+    );
+    prototype.set("abort".to_string(), JSValue::from_native_function(noop));
+    prototype.set(
+        "addEventListener".to_string(),
+        JSValue::from_native_function(noop),
+    );
+    prototype.set(
+        "removeEventListener".to_string(),
+        JSValue::from_native_function(noop),
+    );
+    prototype.set(
+        "dispatchEvent".to_string(),
+        JSValue::from_native_function(noop),
+    );
+    let prototype = Rc::new(RefCell::new(prototype));
     let mut constructor = JSObject::new();
     constructor.set(
         "__construct__".to_string(),
         JSValue::from_native_function(xml_http_request_constructor),
+    );
+    constructor.define_property(
+        "prototype".to_string(),
+        pixi_byte::value::jsobject::Property::read_only(JSValue::from_object(prototype)),
     );
     engine.global_mut().borrow_mut().set(
         "XMLHttpRequest".to_string(),
