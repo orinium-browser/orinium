@@ -12,7 +12,9 @@ use crate::engine::js::web_apis::dom::document::{
     add_document_event_listener, remove_document_event_listener,
 };
 use crate::engine::js::web_apis::dom::element::{get_style, read_only_accessor_property};
-use crate::engine::js::web_apis::dom::events::make_event_constructor;
+use crate::engine::js::web_apis::dom::events::{
+    make_event_constructor, make_event_target_constructor,
+};
 use crate::engine::js::web_apis::storage::make_storage;
 use crate::engine::js::web_apis::timers::clear_timer;
 use pixi_byte::value::JSArray;
@@ -118,6 +120,7 @@ pub(crate) fn install_browser_environment(engine: &mut pixi_byte::JSEngine) {
 
     let event_constructor = make_event_constructor(false);
     let custom_event_constructor = make_event_constructor(true);
+    let event_target_constructor = make_event_target_constructor();
 
     let mut global = engine.global_mut().borrow_mut();
     global.set(
@@ -214,6 +217,10 @@ pub(crate) fn install_browser_environment(engine: &mut pixi_byte::JSEngine) {
     global.set(
         "CustomEvent".to_string(),
         JSValue::from_object(custom_event_constructor),
+    );
+    global.set(
+        "EventTarget".to_string(),
+        JSValue::from_object(event_target_constructor),
     );
     global.set(
         "requestAnimationFrame".to_string(),
@@ -369,7 +376,68 @@ pub(crate) fn install_global_aliases(engine: &mut pixi_byte::JSEngine) {
         "removeEventListener".to_string(),
         JSValue::from_native_function(remove_document_event_listener),
     );
+    global_object.set(
+        "dispatchEvent".to_string(),
+        JSValue::from_native_function(window_dispatch_event),
+    );
     for name in ["window", "self", "globalThis"] {
         global_object.set(name.to_string(), JSValue::from_object(Rc::clone(&global)));
     }
+    // `Window` constructor whose `.prototype` is the window object itself, so
+    // polyfills feature-detecting `Window.prototype` (webcomponents-sd) see the
+    // real window surface.
+    let mut window_constructor = JSObject::new();
+    window_constructor.define_property(
+        "prototype".to_string(),
+        Property::read_only(JSValue::from_object(Rc::clone(&global))),
+    );
+    global_object.set(
+        "Window".to_string(),
+        JSValue::from_object(Rc::new(RefCell::new(window_constructor))),
+    );
+}
+
+/// `window.dispatchEvent(event)`: dispatches `event` to the listeners registered
+/// through `window.addEventListener` (stored in `host.document_event_listeners`).
+pub(crate) fn window_dispatch_event(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(event) = args.get(1).and_then(JSValue::as_object) else {
+        return Err(JSError::TypeError(
+            "dispatchEvent requires an Event".to_string(),
+        ));
+    };
+    let event_type = event.borrow().get("type").to_string();
+    if event_type.is_empty() {
+        return Err(JSError::TypeError(
+            "Event type must not be empty".to_string(),
+        ));
+    }
+
+    let window = JSValue::from_object(Rc::clone(&vm.global_object));
+    event.borrow_mut().set("target".to_string(), window.clone());
+    event
+        .borrow_mut()
+        .set("currentTarget".to_string(), window.clone());
+    event.borrow_mut().set(
+        "eventPhase".to_string(),
+        JSValue::from_number(2.0),
+    );
+
+    let listeners = with_host(vm, |host| {
+        host.document_event_listeners
+            .get(&event_type)
+            .cloned()
+            .unwrap_or_default()
+    })
+    .unwrap_or_default();
+    let dispatched = !listeners.is_empty();
+    for listener in listeners {
+        if crate::engine::js::common::is_callable(&listener) {
+            vm.call(
+                listener,
+                window.clone(),
+                vec![JSValue::from_object(Rc::clone(&event))],
+            )?;
+        }
+    }
+    Ok(JSValue::from_bool(dispatched))
 }
