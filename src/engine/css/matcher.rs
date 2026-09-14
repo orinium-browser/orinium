@@ -265,6 +265,14 @@ impl Selector {
                 );
                 if pseudo.eq_ignore_ascii_case("root") {
                     is_root
+                } else if pseudo.eq_ignore_ascii_case("defined") {
+                    // Custom element tag names always contain a hyphen
+                    // (HTML spec), so an element with no hyphen is a
+                    // defined standard element. This keeps `:not(:defined)`
+                    // selectors (e.g. reddit's `visibility: hidden` on
+                    // unhydrated custom elements) from matching the whole
+                    // document tree.
+                    !element.tag_name.contains('-')
                 } else if pseudo.eq_ignore_ascii_case("link")
                     || pseudo.eq_ignore_ascii_case("any-link")
                 {
@@ -616,6 +624,18 @@ mod tests {
 
         assert!(selector.matches(&chain([html.clone()])));
         assert!(!selector.matches(&chain([body, html])));
+    }
+
+    #[test]
+    fn defined_pseudo_class_matches_standard_elements_only() {
+        let html = element("html", &[], 1, 1, 1, 1);
+        let custom = element("shreddit-app", &[], 1, 1, 1, 1);
+
+        assert!(parse_selector(":defined").matches(&chain([html.clone()])));
+        assert!(!parse_selector(":defined").matches(&chain([custom.clone()])));
+
+        assert!(!parse_selector(":not(:defined)").matches(&chain([html.clone()])));
+        assert!(parse_selector(":not(:defined)").matches(&chain([custom.clone()])));
     }
 
     #[test]
