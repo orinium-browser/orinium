@@ -1,9 +1,10 @@
 use crate::engine::html::{DomTree, HtmlNodeType, Parser as HtmlParser};
 use crate::engine::js::JsHost;
 use crate::engine::js::common::{
-    dom_node, is_callable, mark_dom_dirty, node_dom_id, with_host, with_host_mut,
+    dom_node, is_callable, mark_dom_dirty, node_dom_id, noop, with_host, with_host_mut,
 };
 use crate::engine::js::web_apis::browser_env::window_dispatch_event;
+use crate::engine::js::web_apis::dom::custom_elements::link_custom_element_prototype;
 use crate::engine::js::web_apis::dom::dom_exception::throw_dom_exception;
 use crate::engine::js::web_apis::dom::element::{
     accessor_property, define_node_constants, make_comment_node, make_doctype_node,
@@ -104,9 +105,19 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
             "getElementsByClassName".to_string(),
             JSValue::from_native_function(document_get_elements_by_class_name),
         );
+        document.define_property(
+            "forms".to_string(),
+            read_only_accessor_property(get_document_forms),
+        );
         document.set(
             "createElement".to_string(),
             JSValue::from_native_function(create_element),
+        );
+        document.set(
+            "importNode".to_string(),
+            JSValue::from_native_function(
+                crate::engine::js::web_apis::dom::element::import_node,
+            ),
         );
         document.set(
             "createElementNS".to_string(),
@@ -198,6 +209,41 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
         JSValue::from_object(Rc::new(RefCell::new(iframe_constructor))),
     );
 
+    // HTMLTemplateElement constructor with a prototype chained onto the
+    // element prototype. Polymer and webcomponents-sd feature-detect
+    // `window.HTMLTemplateElement` and read `template.content`.
+    if let Some(element_prototype) =
+        with_host(engine.vm(), |host| Rc::clone(&host.element_prototype))
+    {
+        let template_prototype = JSObject::with_prototype(Some(element_prototype));
+        let template_prototype = Rc::new(RefCell::new(template_prototype));
+        let mut template_constructor = JSObject::new();
+        // `__call__` makes `typeof X` report "function" and `__construct__`
+        // makes `new X(...)` work (returning an instance linked to `X.prototype`).
+        template_constructor.set("__call__".to_string(), JSValue::from_native_function(noop));
+        template_constructor.set("__construct__".to_string(), JSValue::from_native_function(noop));
+        template_constructor.set(
+            "__host_has_instance__".to_string(),
+            JSValue::from_native_function(html_template_element_has_instance),
+        );
+        template_constructor.define_property(
+            "prototype".to_string(),
+            Property::read_only(JSValue::from_object(Rc::clone(&template_prototype))),
+        );
+        engine.global_mut().borrow_mut().set(
+            "HTMLTemplateElement".to_string(),
+            JSValue::from_object(Rc::new(RefCell::new(template_constructor))),
+        );
+    }
+
+    // `Image`: `new Image(width, height)` creates an `<img>` element (same as
+    // `document.createElement('img')`). YouTube's prewarm script does
+    // `new Image().src = "https://…"`.
+    engine.global_mut().borrow_mut().set(
+        "Image".to_string(),
+        JSValue::from_native_function(image_constructor),
+    );
+
     // DOMException constructor
     engine.global_mut().borrow_mut().set(
         "DOMException".to_string(),
@@ -207,6 +253,115 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
     // We use Object.setPrototypeOf via eval since pixi_byte doesn't expose
     // the prototype chain through JSObject APIs.
     let _ = engine.eval("Object.setPrototypeOf(DOMException.prototype, Error.prototype)");
+
+    // Miscellaneous DOM interface constructors. Polymer and the
+    // webcomponents polyfills feature-detect these as `typeof X === 'function'`
+    // / `instanceof` before using them; missing ones make large chunks of
+    // kevlar_base.js throw and get swallowed by `_._DumpException`, which
+    // then never reaches `_.nb`/`customElements.define`.
+    // Each constructor gets a prototype chaining to the element prototype
+    // (matching the naked `Element`/`HTMLElement` exposure above) so
+    // `SVGElement.prototype` etc. resolve.
+    if let Some(element_prototype) =
+        with_host(engine.vm(), |host| Rc::clone(&host.element_prototype))
+    {
+        for (name, _tag) in [
+            ("SVGElement", "svg"),
+            ("SVGSVGElement", "svg"),
+            ("SVGGraphicsElement", "svg"),
+            ("SVGPathElement", "path"),
+            ("SVGUseElement", "use"),
+            ("SVGTextElement", "text"),
+            ("SVGImageElement", "svg"),
+            ("SVGRectElement", "rect"),
+            ("SVGCircleElement", "circle"),
+            ("SVGEllipseElement", "ellipse"),
+            ("SVGLineElement", "line"),
+            ("SVGPolygonElement", "polygon"),
+            ("SVGPolylineElement", "polyline"),
+            ("SVGDefsElement", "defs"),
+            ("SVGLinearGradientElement", "linearGradient"),
+            ("SVGRadialGradientElement", "radialGradient"),
+            ("SVGStopElement", "stop"),
+            ("SVGFilterElement", "filter"),
+            ("SVGTextPathElement", "textPath"),
+        ] {
+            let prototype = JSObject::with_prototype(Some(Rc::clone(&element_prototype)));
+            let prototype = Rc::new(RefCell::new(prototype));
+            let mut constructor = JSObject::new();
+            // `__call__` makes `typeof X` report "function" and `__construct__`
+            // makes `new X(...)` work (returning an instance linked to `X.prototype`).
+            constructor.set("__call__".to_string(), JSValue::from_native_function(noop));
+            constructor.set("__construct__".to_string(), JSValue::from_native_function(noop));
+            constructor.define_property(
+                "prototype".to_string(),
+                Property::read_only(JSValue::from_object(Rc::clone(&prototype))),
+            );
+            engine.global_mut().borrow_mut().set(
+                name.to_string(),
+                JSValue::from_object(Rc::new(RefCell::new(constructor))),
+            );
+        }
+        for name in [
+            "HTMLDocument",
+            "HTMLSlotElement",
+            "HTMLUnknownElement",
+            "HTMLLinkElement",
+            "HTMLStyleElement",
+            "HTMLHeadElement",
+            "HTMLBodyElement",
+            "HTMLDivElement",
+            "HTMLSpanElement",
+            "HTMLParagraphElement",
+            "HTMLAnchorElement",
+            "HTMLButtonElement",
+            "HTMLInputElement",
+            "HTMLFormElement",
+            "HTMLUListElement",
+            "HTMLLIElement",
+            "HTMLHRElement",
+            "HTMLBRElement",
+            "HTMLHeadingElement",
+            "HTMLVideoElement",
+            "HTMLAudioElement",
+            "HTMLMediaElement",
+            "HTMLCanvasElement",
+            "HTMLSourceElement",
+            "HTMLMetaElement",
+            "HTMLLabelElement",
+            "HTMLSelectElement",
+            "HTMLTextAreaElement",
+            "HTMLOptionElement",
+            "HTMLImageElement",
+            "HtmlElement",
+            "HTMLPictureElement",
+            "HTMLEmbedElement",
+            "HTMLObjectElement",
+            "HTMLTrackElement",
+            "HTMLTableElement",
+            "HTMLTableRowElement",
+            "HTMLTableCellElement",
+            "HTMLTableSectionElement",
+            "HTMLModElement",
+            "HTMLHRElement",
+        ] {
+            let prototype = JSObject::with_prototype(Some(Rc::clone(&element_prototype)));
+            let prototype = Rc::new(RefCell::new(prototype));
+            let mut constructor = JSObject::new();
+            // `__call__` makes `typeof X` report "function" and `__construct__`
+            // makes `new X(...)` work (returning an instance linked to `X.prototype`).
+            constructor.set("__call__".to_string(), JSValue::from_native_function(noop));
+            constructor.set("__construct__".to_string(), JSValue::from_native_function(noop));
+            constructor.define_property(
+                "prototype".to_string(),
+                Property::read_only(JSValue::from_object(Rc::clone(&prototype))),
+            );
+            engine.global_mut().borrow_mut().set(
+                name.to_string(),
+                JSValue::from_object(Rc::new(RefCell::new(constructor))),
+            );
+        }
+    }
 
     // Node constants
     let (node_prototype, node_constructor) = make_node_interface();
@@ -261,10 +416,9 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
     let _ = engine.eval("Object.setPrototypeOf(Element.prototype, Node.prototype)");
 
     // Character-data constructors: `Text`, `Comment`, `CDATASection`,
-    // `ProcessingInstruction` and `CharacterData`, plus `Document` and
-    // `DocumentFragment`. WebComponents polyfills read
-    // `window.Text.prototype` (via `Object.create`) while feature-detecting, so
-    // each constructor carries a prototype object.
+    // `ProcessingInstruction` and `CharacterData`, plus `Document`.
+    // WebComponents polyfills read `window.Text.prototype` (via `Object.create`)
+    // while feature-detecting, so each constructor carries a prototype object.
     for name in [
         "Text",
         "Comment",
@@ -272,7 +426,7 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
         "ProcessingInstruction",
         "CharacterData",
         "Document",
-        "DocumentFragment",
+        "DocumentType",
     ] {
         let mut prototype = JSObject::new();
         prototype.set_prototype(Some(Rc::clone(&node_prototype)));
@@ -287,6 +441,33 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
             JSValue::from_object(Rc::new(RefCell::new(constructor))),
         );
     }
+
+    // DocumentFragment: instances get a dedicated prototype (chained onto
+    // Node.prototype) so `fragment instanceof DocumentFragment` works and
+    // `template.content`/document.createDocumentFragment results are recognized.
+    let fragment_prototype = {
+        let mut inner = JSObject::new();
+        inner.set_prototype(Some(Rc::clone(&node_prototype)));
+        Rc::new(RefCell::new(inner))
+    };
+    {
+        let mut constructor = JSObject::new();
+        // `__call__` makes `typeof X` report "function" and `__construct__`
+        // makes `new X(...)` work (returning an instance linked to `X.prototype`).
+        constructor.set("__call__".to_string(), JSValue::from_native_function(noop));
+        constructor.set("__construct__".to_string(), JSValue::from_native_function(noop));
+        constructor.define_property(
+            "prototype".to_string(),
+            Property::read_only(JSValue::from_object(Rc::clone(&fragment_prototype))),
+        );
+        engine.global_mut().borrow_mut().set(
+            "DocumentFragment".to_string(),
+            JSValue::from_object(Rc::new(RefCell::new(constructor))),
+        );
+    }
+    let _ = with_host_mut(engine.vm(), |host| {
+        host.fragment_prototype = Some(Rc::clone(&fragment_prototype));
+    });
 }
 
 fn html_iframe_element_has_instance(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -295,6 +476,14 @@ fn html_iframe_element_has_instance(vm: &mut VM, args: Vec<JSValue>) -> JSResult
     };
     let is_iframe = node.borrow().value.tag_name() == Some("iframe");
     Ok(JSValue::from_bool(is_iframe))
+}
+
+fn html_template_element_has_instance(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = args.get(1).and_then(|value| dom_node(vm, value)) else {
+        return Ok(JSValue::from_bool(false));
+    };
+    let is_template = node.borrow().value.tag_name() == Some("template");
+    Ok(JSValue::from_bool(is_template))
 }
 
 pub(crate) fn add_document_event_listener(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -394,6 +583,43 @@ fn document_get_elements_by_class_name(vm: &mut VM, args: Vec<JSValue>) -> JSRes
     }
     let nodes = with_host(vm, |host| host.dom.query_selector_all(&selector)).unwrap_or_default();
     Ok(expose_node_list(vm, nodes))
+}
+
+/// `document.forms` — the collection of `<form>` elements in the document.
+/// Exposed as an array-like so `document.forms[0]` and `document.forms.length`
+/// work; Reddit's challenge page relies on `document.forms[0]`.
+fn get_document_forms(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let nodes = with_host(vm, |host| host.dom.get_elements_by_tag_name("form")).unwrap_or_default();
+    Ok(expose_node_list(vm, nodes))
+}
+
+/// `new Image(width, height)` — creates an `<img>` element just like
+/// `document.createElement('img')`. Matching browsers, `Image.prototype`
+/// inherits from `HTMLElement.prototype`, so `new Image() instanceof
+/// HTMLElement` is true.
+fn image_constructor(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let node = TreeNode::new(HtmlNodeType::Element {
+        tag_name: "img".to_string(),
+        attributes: Vec::new(),
+    });
+    let value = expose_detached_node(vm, node).unwrap_or(JSValue::null());
+    if let (Some(node_id), Some(width), Some(height)) = (
+        node_dom_id(&value),
+        args.get(0).and_then(|a| a.as_number()),
+        args.get(1).and_then(|a| a.as_number()),
+    ) {
+        let _ = with_host_mut(vm, |host| {
+            if let Some(node) = host.refs.get(&node_id).and_then(|n| n.upgrade()) {
+                node.borrow_mut()
+                    .value
+                    .set_attr("width", width.to_string());
+                node.borrow_mut()
+                    .value
+                    .set_attr("height", height.to_string());
+            }
+        });
+    }
+    Ok(value)
 }
 
 pub(crate) fn create_element(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -968,10 +1194,10 @@ fn expose_node_inner(vm: &VM, node: NodeRef<HtmlNodeType>, kind: NodeKind) -> Op
 
         let is_element = matches!(kind, NodeKind::Element { .. });
 
-        let obj = match kind {
+        let obj = match &kind {
             NodeKind::Element { tag_name, id } => make_element(
-                tag_name,
-                id,
+                tag_name.clone(),
+                id.clone(),
                 dom_id,
                 Rc::clone(&host.element_prototype),
                 Rc::clone(&host.element_constructor),
@@ -980,15 +1206,31 @@ fn expose_node_inner(vm: &VM, node: NodeRef<HtmlNodeType>, kind: NodeKind) -> Op
             NodeKind::Comment => make_comment_node(dom_id),
             NodeKind::ProcessingInstruction => make_processing_instruction_node(dom_id),
             NodeKind::Fragment => make_document_fragment(dom_id),
-            NodeKind::Doctype { name } => make_doctype_node(dom_id, name),
+            NodeKind::Doctype { name } => make_doctype_node(dom_id, name.clone()),
         };
 
+        // Custom elements inherit the class prototype so their methods are
+        // reachable from `this` inside lifecycle callbacks and event handlers.
+        if let NodeKind::Element { tag_name, .. } = &kind {
+            if let Some(definition) = host.custom_elements.get(tag_name) {
+                if let Some(class_proto) = link_custom_element_prototype(&obj, definition) {
+                    obj.borrow_mut().set_prototype(Some(class_proto));
+                }
+            }
+        }
+
         // Non-element nodes are created without a prototype; wire them to
-        // Node.prototype so they inherit node methods (getRootNode, contains,
-        // dispatchEvent, …). Elements already chain Element.prototype, whose
-        // own prototype was linked to Node.prototype at install time.
-        if !is_element && let Some(node_proto) = host.node_prototype.clone() {
-            obj.borrow_mut().set_prototype(Some(node_proto));
+        // their interface prototype so they inherit node methods (getRootNode,
+        // contains, dispatchEvent, …). Fragments chain the dedicated
+        // DocumentFragment prototype; other nodes chain Node.prototype.
+        if !is_element {
+            let proto = match &kind {
+                NodeKind::Fragment => host.fragment_prototype.clone(),
+                _ => host.node_prototype.clone(),
+            };
+            if let Some(proto) = proto {
+                obj.borrow_mut().set_prototype(Some(proto));
+            }
         }
 
         host.objects.insert(dom_id, Rc::clone(&obj));

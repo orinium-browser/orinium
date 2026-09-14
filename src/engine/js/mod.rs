@@ -170,6 +170,7 @@ pub struct JsHost {
     pub(crate) element_prototype: Rc<RefCell<JSObject>>,
     pub(crate) element_constructor: Rc<RefCell<JSObject>>,
     pub(crate) node_prototype: Option<Rc<RefCell<JSObject>>>,
+    pub(crate) fragment_prototype: Option<Rc<RefCell<JSObject>>>,
     pub(crate) document: Option<Rc<RefCell<JSObject>>>,
     pub(crate) document_implementation: Option<Rc<RefCell<JSObject>>>,
     /// Independent document instances for `<iframe>` elements, keyed by the
@@ -197,6 +198,9 @@ pub struct JsHost {
     pub(crate) timers: Vec<JsTimer>,
     pub(crate) fetch_requests: Vec<JsFetchRequest>,
     pub(crate) iframe_fetch_requests: Vec<JsIframeFetchRequest>,
+    /// Top-level navigation URLs requested by scripts (e.g. `form.submit()`),
+    /// drained after each task and dispatched by the browser chrome.
+    pub(crate) navigation_requests: Vec<String>,
     /// DOM ids of iframes whose content is already queued for loading, to avoid
     /// re-queuing a fetch on every `contentDocument` access.
     pub(crate) pending_iframe_fetches: std::collections::HashSet<u64>,
@@ -274,6 +278,7 @@ impl JsRuntime {
             element_prototype,
             element_constructor,
             node_prototype: None,
+            fragment_prototype: None,
             document: None,
             document_implementation: None,
             iframe_documents: HashMap::new(),
@@ -286,6 +291,7 @@ impl JsRuntime {
             timers: Vec::new(),
             fetch_requests: Vec::new(),
             iframe_fetch_requests: Vec::new(),
+            navigation_requests: Vec::new(),
             pending_iframe_fetches: std::collections::HashSet::new(),
             dynamic_script_requests: Vec::new(),
             queued_dynamic_scripts: HashSet::new(),
@@ -334,6 +340,7 @@ impl JsRuntime {
         web_apis::observers::install_intersection_observer(&mut engine);
         web_apis::timers::install_timers(&mut engine);
         web_apis::performance::install_performance(&mut engine);
+        web_apis::message_channel::install_message_channel(&mut engine);
         runtime::microtasks::install_microtasks(&mut engine);
         web_apis::network::install_headers(&mut engine);
         web_apis::network::install_request(&mut engine);
@@ -431,9 +438,12 @@ impl JsRuntime {
                     log::info!("JS error: uncaught object ({details})");
                 }
                 log::info!(
-                    "JS error: {} (source {:?})",
+                    "JS error: {} (source {:?}, pc={:?}, fn={:?}, stack={:?})",
                     err,
-                    source.chars().take(60).collect::<String>()
+                    source.chars().take(60).collect::<String>(),
+                    self.engine.last_error_pc(),
+                    self.engine.last_error_fn(),
+                    self.engine.last_error_stack().iter().take(10).collect::<Vec<_>>(),
                 );
             }
         }
@@ -655,6 +665,15 @@ impl JsRuntime {
     pub(crate) fn take_fetch_requests(&mut self) -> Vec<JsFetchRequest> {
         with_host_mut(self.engine.vm(), |host| {
             std::mem::take(&mut host.fetch_requests)
+        })
+        .unwrap_or_default()
+    }
+
+    /// Takes top-level navigation URLs queued by scripts since the previous
+    /// call (`form.requestSubmit()` / `form.submit()` on GET forms).
+    pub fn take_navigation_requests(&mut self) -> Vec<String> {
+        with_host_mut(self.engine.vm(), |host| {
+            std::mem::take(&mut host.navigation_requests)
         })
         .unwrap_or_default()
     }
@@ -1288,39 +1307,172 @@ mod tests {
     }
 
     #[test]
-    fn wc_sd_prologue_runs_clean() {
-        let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-            .try_init();
-        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
-        let read = |path: &str| -> String {
-            std::fs::read_to_string(path).unwrap_or_default()
-        };
-        // Reproduce the page's prologue script order: web-animations,
-        // custom-elements-es5-adapter, then webcomponents-sd.
-        for path in [
-            "/tmp/opencode/yt/web-animations-next-lite.min.js",
-            "/tmp/opencode/yt/custom-elements-es5-adapter.js",
-            "/tmp/opencode/yt/wc-sd-current.js",
-        ] {
-            runtime.run_script(&read(path));
-        }
-        // wc-sd must not have aborted midway: `window.ShadyCSS` is only assigned
-        // at the very tail of the polyfill.
+    fn template_content_exposes_parsed_fragment() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<template id="t"><div id="x">hi</div></template><div id="result"></div>"#,
+        );
         runtime.run_script(
             r##"
-            if (typeof window.ShadyCSS === "object") {
-                document.getElementById("result").setAttribute("data-survived", "yes");
+            const results = [];
+            results.push("tmpl:" + typeof window.HTMLTemplateElement);
+            results.push("tmpl.proto:" + (typeof HTMLTemplateElement.prototype === "object"));
+            const t = document.getElementById("t");
+            const content = t.content;
+            results.push("content:" + (content instanceof DocumentFragment));
+            results.push("content.firstChild:" + (content.firstChild && content.firstChild.tagName === "DIV"));
+            const x = content.querySelector("#x");
+            results.push("x:" + (x && x.textContent === "hi"));
+            if (x) {
+                x.setAttribute("data-stamped", "yes");
             }
+            document.getElementById("result").setAttribute("data-template", results.join(";"));
             "##,
         );
         let node = dom.get_element_by_id("result").unwrap();
-        let survived = node
+        let data = node
             .borrow()
             .value
-            .get_attr("data-survived")
+            .get_attr("data-template")
             .unwrap_or_default()
             .to_string();
-        assert_eq!(survived, "yes");
+        assert_eq!(
+            data,
+            "tmpl:function;tmpl.proto:true;content:true;content.firstChild:true;x:true",
+            "got: {data}"
+        );
+    }
+
+    #[test]
+    fn template_inertness_and_lazy_content() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<template id="t"><div id="inner" class="c">hi</div><span>two</span></template><div id="result"></div>"#,
+        );
+        runtime.run_script(
+            r##"
+            const results = [];
+            const t = document.getElementById("t");
+
+            // Instance-of checks against the real constructors.
+            results.push("inst:" + (t instanceof HTMLTemplateElement));
+            results.push("elem:" + (t instanceof Element) + ":" + (t instanceof HTMLElement));
+
+            // `content` exposes the parsed children as a DocumentFragment and
+            // is live: repeated accesses return the same fragment.
+            const content = t.content;
+            results.push("content:" + (content instanceof DocumentFragment));
+            results.push("live:" + (t.content === content));
+            results.push("count:" + content.childNodes.length);
+            const inner = content.querySelector("#inner");
+            results.push("inner:" + (inner && inner.textContent === "hi"));
+            results.push("span:" + content.querySelectorAll("span").length);
+
+            // Inertness: template contents are unreachable from document-wide
+            // queries (matching browsers) but mutations inside `content` work.
+            results.push("qs:" + (document.querySelector("#inner") === null));
+            results.push("id:" + (document.getElementById("inner") === null));
+            results.push("btn:" + document.getElementsByTagName("span").length);
+            results.push("cls:" + document.getElementsByClassName("c").length);
+            inner.setAttribute("data-stamped", "yes");
+            results.push("stamp:" + (content.querySelector("#inner").getAttribute("data-stamped") === "yes"));
+
+            // `document.createElement("template")` gets a lazily created,
+            // usable, stable `content` fragment.
+            const t2 = document.createElement("template");
+            results.push("lazy:" + (t2.content instanceof DocumentFragment));
+            t2.content.appendChild(document.createElement("b"));
+            results.push("append:" + t2.content.childNodes.length);
+            results.push("stable:" + (t2.content === t2.content));
+
+            document.getElementById("result").setAttribute("data-template", results.join(";"));
+            "##,
+        );
+        let node = dom.get_element_by_id("result").unwrap();
+        let data = node
+            .borrow()
+            .value
+            .get_attr("data-template")
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(
+            data,
+            "inst:true;elem:true:true;content:true;live:true;count:2;inner:true;span:1;qs:true;id:true;btn:0;cls:0;stamp:true;lazy:true;append:1;stable:true",
+            "got: {data}"
+        );
+    }
+
+    #[test]
+    fn template_content_instantiation_via_import_node_and_clone_node() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<div id="host"></div><ul id="list"></ul>\
+               <template id="row"><li class="row"><b class="name"></b></li></template>\
+               <template id="nested"><div><span>deep</span><template><i>inner</i></template></div></template>\
+               <div id="result"></div>"#,
+        );
+        runtime.run_script(
+            r##"
+            const results = [];
+            const host = document.getElementById("host");
+
+            // importNode(template.content, true) deep-clones into a detached
+            // fragment without touching the original template.
+            const t = document.getElementById("row");
+            const frag = document.importNode(t.content, true);
+            results.push("frag:" + (frag instanceof DocumentFragment) + ":" + frag.childNodes.length);
+            results.push("orig-intact:" + (t.content.querySelectorAll("li").length === 1));
+
+            // Appending the fragment instantiates the cloned rows into the
+            // document, where document-wide queries can now reach them.
+            host.appendChild(frag);
+            results.push("appended:" + host.querySelectorAll("li.row").length);
+            results.push("doc-visible:" + document.querySelectorAll("li.row").length);
+            results.push("deep:" + (host.querySelector("li.row b.name") !== null));
+
+            // Instantiated copies are independent of the template: mutations
+            // on the clone never leak back into `template.content`.
+            host.querySelector("b.name").textContent = "cloned!";
+            results.push("independent:" + (t.content.querySelector("b.name").textContent === ""));
+
+            // cloneNode(true) on `content` works as an alternative.
+            const frag2 = t.content.cloneNode(true);
+            results.push("clone-frag:" + (frag2 instanceof DocumentFragment) + ":" + frag2.querySelectorAll("li").length);
+
+            // Repeated instantiation yields fresh copies each time.
+            const frag3 = document.importNode(t.content, true);
+            document.getElementById("list").appendChild(frag3);
+            results.push("repeat:" + document.querySelectorAll("li.row").length);
+
+            // Nested templates: importing the outer content keeps the inner
+            // `<template>` inert — its content stays inside its own fragment.
+            const nested = document.getElementById("nested");
+            const nfrag = document.importNode(nested.content, true);
+            host.appendChild(nfrag);
+            results.push("nested-span:" + (host.querySelector("span") !== null));
+            const innerTemplate = host.querySelector("template");
+            results.push("nested-tmpl:" + (innerTemplate !== null) + ":" + (innerTemplate && innerTemplate.content.querySelector("i") !== null));
+
+            // Shallow import clones the fragment but none of its children.
+            const shallow = document.importNode(t.content, false);
+            results.push("shallow:" + (shallow instanceof DocumentFragment) + ":" + shallow.childNodes.length);
+
+            // `importNode(node)` defaults deep to true (per spec).
+            const def = document.importNode(t.content);
+            results.push("default-deep:" + def.querySelectorAll("li").length);
+
+            document.getElementById("result").setAttribute("data-r", results.join(";"));
+            "##,
+        );
+        let node = dom.get_element_by_id("result").unwrap();
+        let data = node
+            .borrow()
+            .value
+            .get_attr("data-r")
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(
+            data,
+            "frag:true:1;orig-intact:true;appended:1;doc-visible:1;deep:true;independent:true;clone-frag:true:1;repeat:2;nested-span:true;nested-tmpl:true:true;shallow:true:0;default-deep:1",
+            "got: {data}"
+        );
     }
 
     #[test]

@@ -18,6 +18,14 @@ thread_local! {
 
 static NEXT_TEXT_ID: AtomicUsize = AtomicUsize::new(1);
 
+/// Whether a line width is a real, constrained measure. The engine uses
+/// `f32::MAX` as an "unbounded" sentinel during measure / shrink-to-fit
+/// passes; alignment against such a width would resolve to `f32::MAX / 2`
+/// and push text off-screen, and wrapping can never happen on it.
+fn is_usable_width(width: f32) -> bool {
+    width.is_finite() && width < f32::MAX / 2.0
+}
+
 /// Result of laying out a text chunk into lines.
 #[derive(Debug, Clone)]
 pub struct TextLayoutResult {
@@ -158,6 +166,13 @@ impl TextFlowLayouter {
 
         let aligned_x = |line_index: usize, x_pos: f32, line_w: f32| {
             let available = line_width(line_index);
+            // With an unbounded line width (sentinel f32::MAX from measure /
+            // shrink-to-fit passes) there is no finite box to center or
+            // right-align within: alignment must not push the text off toward
+            // f32::MAX / 2.
+            if !is_usable_width(available) {
+                return x_pos;
+            }
 
             x_pos
                 + match align {
@@ -389,11 +404,19 @@ impl Drop for TextFlowLayouter {
 
 impl CustomLayouter for TextFlowLayouter {
     fn layout(&mut self, ctx: &LayoutContext) -> LayoutBox {
-        let result = self.compute_layout(
-            ctx.available_inline_size,
-            ctx.containing_block_width.unwrap_or(f32::MAX),
-            ctx.start_pos,
-        );
+        // Subsequent line width falls back to the (finite) inline size the
+        // first line was given when the containing block width is
+        // indeterminate. An unbounded width must not reach the wrap/alignment
+        // logic: lines would never wrap (only the first line does) and
+        // center/right alignment would resolve to f32::MAX / 2, pushing text
+        // off-screen.
+        let available_inline = ctx.available_inline_size;
+        let available_space = ctx
+            .containing_block_width
+            .filter(|w| is_usable_width(*w))
+            .or_else(|| is_usable_width(available_inline).then_some(available_inline))
+            .unwrap_or(f32::MAX);
+        let result = self.compute_layout(available_inline, available_space, ctx.start_pos);
         let spans = result.spans.clone();
 
         TEXT_RESULTS.with(|cache| {
@@ -1010,5 +1033,70 @@ mod tests {
         // (aligned_x(0.0, 0.0) = (100 - 0) / 2 = 50) — no accumulation.
         assert_eq!(result.spans[1].line_pos.0, 50.0);
         assert_eq!(result.spans[2].line_pos.0, 50.0);
+    }
+
+    fn ctx_with_unbounded_containing_width(available_inline: f32) -> LayoutContext {
+        LayoutContext {
+            containing_block_width: None,
+            containing_block_height: None,
+            start_pos: (0.0, 0.0),
+            available_inline_size: available_inline,
+            line_height: 24.0,
+            viewport_width: 1200.0,
+            viewport_height: 900.0,
+        }
+    }
+
+    #[test]
+    fn centered_text_with_unbounded_containing_width_stays_in_bounds() {
+        // GitHub-style hero subheading: containing_block_width is None inside a
+        // centered flex item. Previously every wrapped line used f32::MAX as its
+        // width, so we never wrapped (line 0 only) and center alignment pushed
+        // the trailing lines to f32::MAX / 2 (off-screen, x ≈ 1.7e38).
+        let mut flow = TextFlowStyle::default();
+        flow.text_align = TextAlign::Center;
+        let clusters = vec![
+            cluster(0, 40.0, false),
+            cluster(4, 5.0, true),
+            cluster(5, 40.0, false),
+            cluster(9, 5.0, true),
+            cluster(10, 40.0, false),
+        ];
+        let mut layouter = TextFlowLayouter::new("aaaa bbbb cccc".to_string(), flow, clusters);
+        let LayoutBox::InlineBox(inline) =
+            layouter.layout(&ctx_with_unbounded_containing_width(60.0))
+        else {
+            panic!("expected InlineBox");
+        };
+
+        // Wrapped lines fall back to the finite inline size instead of f32::MAX.
+        let wrapped = inline.line_spans.iter().filter(|s| s.line_index >= 1).collect::<Vec<_>>();
+        assert!(!wrapped.is_empty(), "text must wrap on multiple lines");
+        for span in &inline.line_spans {
+            assert!(span.line_pos.0.is_finite(), "x must be finite, got {}", span.line_pos.0);
+            assert!(span.line_pos.0 < 1000.0, "x must stay on-screen, got {}", span.line_pos.0);
+            assert!(span.width() <= 60.0, "line {} too wide: {}", span.line_index, span.width());
+        }
+        // "bbbb " (line 1) is centered within 60px: (60 - 45) / 2 == 7.5.
+        assert_eq!(inline.line_spans[1].line_pos.0, 7.5);
+    }
+
+    #[test]
+    fn centered_text_with_infinite_first_line_width_keeps_position() {
+        // Measure / shrink-to-fit passes hand out an unbounded inline size.
+        // There is no finite box to center within, so alignment must not shift
+        // the text toward f32::MAX / 2.
+        let mut flow = TextFlowStyle::default();
+        flow.text_align = TextAlign::Center;
+        let clusters = vec![cluster(0, 20.0, false), cluster(2, 20.0, false)];
+        let mut layouter = TextFlowLayouter::new("aaa bbb".to_string(), flow, clusters);
+        let LayoutBox::InlineBox(inline) =
+            layouter.layout(&ctx_with_unbounded_containing_width(f32::MAX))
+        else {
+            panic!("expected InlineBox");
+        };
+
+        assert_eq!(inline.line_spans.len(), 1);
+        assert_eq!(inline.line_spans[0].line_pos.0, 0.0);
     }
 }

@@ -255,6 +255,11 @@ impl<'a> Tokenizer<'a> {
             }
             // Handle escape entities only in Data. Not in ScriptData, and StyleData states.
             '&' if self.state == TokenizerState::Data => {
+                // Reset the buffer so it holds only the entity being decoded;
+                // it may still contain the preceding text characters, whose
+                // length would otherwise trip the MAX_ENTITY_NAME_LEN check
+                // mid-entity and mangle the entity.
+                self.buffer.clear();
                 self.buffer.push('&');
                 self.state = TokenizerState::EscapeDecoding;
             }
@@ -808,6 +813,26 @@ mod tests {
         let input = "Hello &amp; goodbye";
         let tokens = collect_tokens(input);
         assert_eq!(tokens, vec![Token::Text("Hello & goodbye".to_string())]);
+    }
+
+    /// Entities must decode regardless of how much text precedes them: the
+    /// tokenizer's internal buffer also carries the preceding text, so a
+    /// MAX_ENTITY_NAME_LEN check against the unprefixed buffer used to fire
+    /// mid-entity and mangle it (e.g. `&quot;` → `&uot;`).
+    #[test]
+    fn entity_after_long_text_still_decodes() {
+        for n in [26, 27, 30, 50, 100, 400] {
+            let input = format!("{} &quot;Q&quot; and &#39;9&#39; end", "x".repeat(n));
+            let tokens = collect_tokens(&input);
+            assert_eq!(
+                tokens,
+                vec![Token::Text(format!(
+                    "{} \"Q\" and '9' end",
+                    "x".repeat(n)
+                ))],
+                "failed with {n} leading chars"
+            );
+        }
     }
 
     #[test]

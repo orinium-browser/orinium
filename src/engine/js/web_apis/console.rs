@@ -22,6 +22,50 @@ pub(crate) fn install_console(engine: &mut pixi_byte::JSEngine) {
             "error".to_string(),
             JSValue::from_native_function(console_error),
         );
+        console.set(
+            "info".to_string(),
+            JSValue::from_native_function(console_info),
+        );
+        console.set(
+            "debug".to_string(),
+            JSValue::from_native_function(console_debug),
+        );
+        console.set(
+            "trace".to_string(),
+            JSValue::from_native_function(console_trace),
+        );
+        for name in [
+            "dir", "dirxml", "group", "groupEnd", "groupCollapsed", "table", "clear",
+        ] {
+            console.set(
+                name.to_string(),
+                JSValue::from_native_function(console_noop),
+            );
+        }
+        console.set(
+            "assert".to_string(),
+            JSValue::from_native_function(console_assert),
+        );
+        console.set(
+            "count".to_string(),
+            JSValue::from_native_function(console_noop),
+        );
+        console.set(
+            "countReset".to_string(),
+            JSValue::from_native_function(console_noop),
+        );
+        console.set(
+            "time".to_string(),
+            JSValue::from_native_function(console_noop),
+        );
+        console.set(
+            "timeEnd".to_string(),
+            JSValue::from_native_function(console_time_end),
+        );
+        console.set(
+            "timeLog".to_string(),
+            JSValue::from_native_function(console_noop),
+        );
     }
     engine
         .global_mut()
@@ -381,4 +425,31 @@ fn console_warn(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 
 fn console_error(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     console_message(vm, args, log::Level::Error)
+}
+
+fn console_info(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    console_message(vm, args, log::Level::Info)
+}
+
+fn console_debug(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    console_message(vm, args, log::Level::Debug)
+}
+
+fn console_trace(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    console_message(vm, args, log::Level::Trace)
+}
+
+fn console_assert(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    if args.get(1).map(JSValue::to_boolean).unwrap_or(false) == false {
+        console_message(vm, args, log::Level::Warn)?;
+    }
+    Ok(JSValue::undefined())
+}
+
+fn console_noop(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::undefined())
+}
+
+fn console_time_end(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::undefined())
 }

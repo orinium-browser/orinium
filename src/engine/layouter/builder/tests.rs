@@ -3,6 +3,8 @@ use crate::engine::bridge::text::FallbackTextMeasurer;
 use crate::engine::css::parser::Parser as CssParser;
 use crate::engine::html::parser::Parser as HtmlParser;
 use crate::engine::layouter::css_resolver::CssResolver;
+use crate::engine::layouter::types::ClipPath;
+use crate::engine::renderer_model::generate_draw_commands;
 use std::sync::Arc;
 
 fn apply_layout_property(name: &str, value: CssValue) -> Style {
@@ -662,6 +664,50 @@ fn text_content(info: &InfoNode) -> String {
         text.push_str(&text_content(child));
     }
     text
+}
+
+#[test]
+fn clip_path_rect_zero_parses_to_empty_inset_via_full_pipeline() {
+    fn find_div(children: &[InfoNode]) -> Option<&ContainerStyle> {
+        for info in children {
+            if let NodeKind::Container { style, .. } = &info.kind {
+                if !matches!(style.clip_path, ClipPath::None) {
+                    return Some(style);
+                }
+            }
+            if let Some(found) = find_div(&info.children) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    let (_, info) = layout_and_info_for(
+        r#"<div class="sr">xy</div>"#,
+        ".sr { clip-path: rect(0 0 0 0); width: 1px; height: 1px; overflow: hidden; }",
+    );
+    let style = find_div(&info.children).expect("div style not found");
+    assert!(
+        matches!(style.clip_path, ClipPath::Inset { top, right, bottom, left }
+            if top == 0.0 && right == 1.0 && bottom == 1.0 && left == 0.0),
+        "clip_path was {:?}",
+        style.clip_path
+    );
+}
+
+#[test]
+fn sr_only_rect_zero_is_culled_in_draw_commands() {
+    let (mut layout, info) = layout_and_info_for(
+        r#"<div class="sr">Hello sr text</div>"#,
+        ".sr { position: absolute; width: 1px; height: 1px; clip-path: rect(0 0 0 0); overflow: hidden; }",
+    );
+    ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+    let mut cmds = Vec::new();
+    generate_draw_commands(&mut cmds, &layout, &info, (800.0, 600.0));
+    let texts: Vec<_> = cmds
+        .iter()
+        .filter(|c| matches!(c, crate::engine::renderer_model::DrawCommand::DrawText { .. }))
+        .collect();
+    assert!(texts.is_empty(), "sr-only text should be culled, drew {}", texts.len());
 }
 
 #[test]

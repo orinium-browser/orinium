@@ -105,7 +105,8 @@ fn custom_elements_define(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> 
         host.custom_elements.insert(name.clone(), definition);
     });
 
-    // Upgrade existing elements with this tag name.
+    // Upgrade existing elements with this tag name: link the class prototype
+    // first so `this` inside lifecycle callbacks has the element methods.
     let dom_ids: Vec<u64> = with_host(vm, |host| {
         host.refs
             .iter()
@@ -117,6 +118,19 @@ fn custom_elements_define(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> 
             .collect()
     })
     .unwrap_or_default();
+
+    with_host_mut(vm, |host| {
+        let Some(definition) = host.custom_elements.get(&name) else {
+            return;
+        };
+        if let Some(class_proto) = custom_element_class_prototype(definition) {
+            for dom_id in &dom_ids {
+                if let Some(element) = host.objects.get(dom_id) {
+                    element.borrow_mut().set_prototype(Some(Rc::clone(&class_proto)));
+                }
+            }
+        }
+    });
 
     for dom_id in &dom_ids {
         fire_lifecycle_callback(vm, *dom_id, |d| d.connected_callback.clone());
@@ -165,8 +179,9 @@ fn custom_elements_get(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 fn custom_elements_upgrade(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let root_value = args.get(1).cloned().unwrap_or(JSValue::undefined());
 
-    // Collect all DOM ids of elements that have a registered custom element
-    // tag.  If a root argument was given, restrict to descendants of that root.
+    // Collect all DOM ids + tags of elements that have a registered custom
+    // element tag.  If a root argument was given, restrict to descendants of
+    // that root.
     let dom_ids: Vec<u64> = with_host(vm, |host| {
         let root_dom_id = crate::engine::js::common::node_dom_id(&root_value);
 
@@ -206,6 +221,20 @@ fn custom_elements_upgrade(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue>
     .unwrap_or_default();
 
     for dom_id in &dom_ids {
+        with_host_mut(vm, |host| {
+            let Some(node) = host.refs.get(dom_id).and_then(|w| w.upgrade()) else {
+                return;
+            };
+            let Some(tag) = node.borrow().value.tag_name().map(str::to_ascii_lowercase) else {
+                return;
+            };
+            if let Some(definition) = host.custom_elements.get(&tag)
+                && let Some(class_proto) = custom_element_class_prototype(definition)
+                && let Some(element) = host.objects.get(dom_id)
+            {
+                element.borrow_mut().set_prototype(Some(Rc::clone(&class_proto)));
+            }
+        });
         fire_lifecycle_callback(vm, *dom_id, |d| d.connected_callback.clone());
     }
 
@@ -390,6 +419,25 @@ fn extract_string_array(value: &JSValue) -> Vec<String> {
 // ---------------------------------------------------------------------------
 // Lifecycle callback dispatch (called from element.rs)
 // ---------------------------------------------------------------------------
+
+/// Returns the class `prototype` object of a custom element constructor so the
+/// element instance can inherit its methods.
+pub(crate) fn custom_element_class_prototype(
+    definition: &CustomElementDefinition,
+) -> Option<Rc<RefCell<JSObject>>> {
+    let constructor = &definition.constructor;
+    let prototype = constructor.as_object()?.borrow().get("prototype");
+    prototype.as_object()
+}
+
+/// Links an element wrapper to its custom element class prototype, returning
+/// the class prototype on success.
+pub(crate) fn link_custom_element_prototype(
+    _element: &Rc<RefCell<JSObject>>,
+    definition: &CustomElementDefinition,
+) -> Option<Rc<RefCell<JSObject>>> {
+    custom_element_class_prototype(definition)
+}
 
 /// Dispatches `connectedCallback` on a custom element after it is connected.
 pub(crate) fn fire_connected_callback(vm: &mut VM, dom_id: u64) {

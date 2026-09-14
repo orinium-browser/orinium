@@ -360,6 +360,14 @@ struct LayoutInfo {
 }
 
 fn build_layout_info(raw_url: &str, viewport: (f32, f32)) -> Result<LayoutInfo> {
+    build_layout_info_inner(raw_url, viewport, 0)
+}
+
+fn build_layout_info_inner(
+    raw_url: &str,
+    viewport: (f32, f32),
+    depth: usize,
+) -> Result<LayoutInfo> {
     let parsed_url: url::Url = raw_url.parse()?;
 
     let net = NetworkCore::new().expect("Failed to create NetworkCore instansce");
@@ -374,8 +382,21 @@ fn build_layout_info(raw_url: &str, viewport: (f32, f32)) -> Result<LayoutInfo> 
 
     // Run inline scripts so layout dumps reflect JS mutations.
     let mut js_runtime = JsRuntime::new(Rc::clone(&dom));
+    js_runtime.set_document_url(parsed_url.as_str());
     for script in dom.collect_inline_scripts() {
         js_runtime.run_script(&script);
+    }
+    js_runtime.dispatch_dom_content_loaded();
+    // Script-initiated top-level navigations (anti-bot challenge pages):
+    // re-fetch the target URL and build the layout for the real page.
+    if let Some(navigation) = js_runtime.take_navigation_requests().first().cloned()
+        && depth < 4
+    {
+        let target = url::Url::parse(&navigation)
+            .or_else(|_| parsed_url.join(&navigation))
+            .expect("navigation URL");
+        println!("Following script navigation to {target}");
+        return build_layout_info_inner(target.as_str(), viewport, depth + 1);
     }
 
     let base_url = dom

@@ -95,6 +95,8 @@ pub struct JsTaskResult {
     pub(crate) dynamic_style_requests: Vec<JsDynamicStyleRequest>,
     /// Images created or populated while running this task.
     pub(crate) dynamic_image_requests: Vec<JsDynamicImageRequest>,
+    /// Top-level navigation URLs requested by scripts while running this task.
+    pub(crate) navigation_requests: Vec<String>,
     /// The sequence number of the task that produced this result.
     pub version: u64,
 }
@@ -173,6 +175,7 @@ impl JsProcessor {
                 let dynamic_script_requests = runtime.take_dynamic_script_requests();
                 let dynamic_style_requests = runtime.take_dynamic_style_requests();
                 let dynamic_image_requests = runtime.take_dynamic_image_requests();
+                let navigation_requests = runtime.take_navigation_requests();
                 let dom = if needs_redraw {
                     Some(runtime.snapshot())
                 } else {
@@ -196,6 +199,7 @@ impl JsProcessor {
                     dynamic_script_requests,
                     dynamic_style_requests,
                     dynamic_image_requests,
+                    navigation_requests,
                     version,
                 });
                 profile_log!(

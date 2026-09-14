@@ -27,6 +27,9 @@ struct BoxPushState {
     overflow_clip: bool,
     content: bool,
     scroll: bool,
+    /// The pushed clip-path resolves to an empty (zero-area) region, so nothing
+    /// in the subtree is visible and its painting can be skipped entirely.
+    cull: bool,
 }
 
 // --------------------------------
@@ -680,6 +683,24 @@ fn clip_path_to_path(clip: &ClipPath, w: f32, h: f32) -> Path {
     }
 }
 
+/// Whether a [`ClipPath`] resolves to an empty shape against a box of the
+/// given border-box size (so the element and every descendant are invisible).
+fn clip_path_is_empty(clip: &ClipPath, w: f32, h: f32) -> bool {
+    match clip {
+        ClipPath::None => false,
+        ClipPath::Circle { radius, .. } => *radius <= 0.0 || w <= 0.0 || h <= 0.0,
+        ClipPath::Ellipse { rx, ry, .. } => *rx <= 0.0 || *ry <= 0.0 || w <= 0.0 || h <= 0.0,
+        ClipPath::Inset {
+            top,
+            right,
+            bottom,
+            left,
+        } => (w - left * w - right * w).max(0.0) <= 0.0
+            || (h - top * h - bottom * h).max(0.0) <= 0.0,
+        ClipPath::Polygon { points } => points.len() < 3,
+    }
+}
+
 /// Push all draw commands for a single box model, returning the pop state.
 #[allow(clippy::too_many_arguments)]
 fn push_box_model(
@@ -691,6 +712,7 @@ fn push_box_model(
     is_inline: bool,
     clips_overflow: bool,
     draw_bg: bool,
+    paint: bool,
 ) -> BoxPushState {
     let border_box = box_model.border_box;
     let padding_box = box_model.padding_box;
@@ -720,6 +742,15 @@ fn push_box_model(
         && !matches!(style.clip_path, ClipPath::None)
         && border_box.width > 0.0
         && border_box.height > 0.0;
+
+    // A zero-area clip-path (e.g. GitHub's `clip-path: rect(0 0 0 0)` on
+    // `.sr-only` elements) hides the element and every descendant.
+    let clip_culls =
+        clip_path_pushed && clip_path_is_empty(&style.clip_path, border_box.width, border_box.height);
+
+    // Culled subtrees draw nothing; drop the clip-path clip as well (the
+    // zero-area rect is pure overhead).
+    let clip_path_pushed = clip_path_pushed && !clip_culls;
     if clip_path_pushed {
         let path = clip_path_to_path(&style.clip_path, border_box.width, border_box.height);
         cmd_buf.push(DrawCommand::PushClip {
@@ -728,14 +759,24 @@ fn push_box_model(
         });
     }
 
-    draw_border(cmd_buf, &border_box, &padding_box, style, ox, oy);
+    // A `visibility: hidden` element paints neither borders nor backgrounds,
+    // but still establishes its transforms/clips so explicitly visible
+    // descendants are positioned and clipped correctly.
+    if paint && !clip_culls {
+        draw_border(cmd_buf, &border_box, &padding_box, style, ox, oy);
 
-    if draw_bg {
-        draw_background(cmd_buf, &border_box, &padding_box, style, ox, oy);
+        if draw_bg {
+            draw_background(cmd_buf, &border_box, &padding_box, style, ox, oy);
+        }
     }
 
-    let overflow_clip =
-        !is_inline && clips_overflow && padding_box.width > 0.0 && padding_box.height > 0.0;
+    // Everything below is invisible when culling; drop the clip-path and
+    // overflow clips (and their pops) instead of emitting empty regions.
+    let overflow_clip = !clip_culls
+        && !is_inline
+        && clips_overflow
+        && padding_box.width > 0.0
+        && padding_box.height > 0.0;
     if overflow_clip {
         cmd_buf.push(DrawCommand::PushClip {
             path: rect_path(
@@ -757,6 +798,7 @@ fn push_box_model(
         overflow_clip,
         content,
         scroll,
+        cull: clip_culls,
     }
 }
 
@@ -954,17 +996,18 @@ fn generate_draw_commands_inner(
     popups: &mut Vec<(Vec<DrawCommand>, (f32, f32))>,
     is_root: bool,
 ) {
-    // Check visibility before pushing position-dependent transforms.
-    // Hidden elements return early, so any transform pushed above this point
-    // would otherwise leak into subsequent siblings.
-    match &info.kind {
-        NodeKind::Container { style, .. } | NodeKind::Custom { style, .. } => {
-            if matches!(style.visibility, Visibility::Hidden | Visibility::Collapse) {
-                return;
-            }
-        }
-        _ => {}
-    }
+    // CSS `visibility` semantics: a hidden element paints nothing of its own
+    // (box, borders, backgrounds, text) but still participates in layout, and
+    // descendants with an explicit `visibility: visible` computed style DO
+    // paint (computed visibility is already resolved per node by the style
+    // builder, so a hidden ancestor does not force hidden descendants here).
+    // Therefore the subtree must still be traversed; only this node's own
+    // painting is suppressed.
+    let self_hidden = matches!(
+        &info.kind,
+        NodeKind::Container { style, .. } | NodeKind::Custom { style, .. }
+            if matches!(style.visibility, Visibility::Hidden | Visibility::Collapse)
+    );
 
     let mut box_states: Vec<BoxPushState> = Vec::new();
 
@@ -1036,6 +1079,7 @@ fn generate_draw_commands_inner(
                     is_inline,
                     *scroll_x || *scroll_y,
                     true,
+                    !self_hidden,
                 ));
             }
         }
@@ -1062,6 +1106,7 @@ fn generate_draw_commands_inner(
                     false,
                     *scroll_x || *scroll_y,
                     false,
+                    !self_hidden,
                 ));
             }
 
@@ -1074,7 +1119,10 @@ fn generate_draw_commands_inner(
             }) else {
                 break 'custom;
             };
-            node.draw_sized(cmd_buf, text_style, text_flow_style, layout_style, size);
+            let culled = box_states.iter().any(|s| s.cull);
+            if !self_hidden && !culled {
+                node.draw_sized(cmd_buf, text_style, text_flow_style, layout_style, size);
+            }
             // Collect open popups so they render above every other box,
             // outside all ancestor clips and transforms.
             if let Some(popup) = node.popup(text_style, text_flow_style) {
@@ -1105,6 +1153,10 @@ fn generate_draw_commands_inner(
             }
         }
     }
+
+    // A zero-area clip-path anywhere in this node's box stack hides the whole
+    // subtree: skip painting it (transforms/clips stay balanced).
+    let subtree_culled = box_states.iter().any(|s| s.cull);
 
     // Scroll offsets of this node itself; they scroll the node's own content.
     let own_scroll = info.kind.scroll_offsets();
@@ -1171,19 +1223,26 @@ fn generate_draw_commands_inner(
                 flow_style,
                 ..
             } => {
-                draw_text(
-                    cmd_buf,
-                    style,
-                    *flow_style,
-                    *text_id,
-                    inline_block_text_offset,
-                );
+                // Text belongs to its parent box, so a hidden parent hides it.
+                if !self_hidden && !subtree_culled {
+                    draw_text(
+                        cmd_buf,
+                        style,
+                        *flow_style,
+                        *text_id,
+                        inline_block_text_offset,
+                    );
+                }
                 layout_iter.next();
             }
             NodeKind::LineBreak => {
                 layout_iter.next();
             }
             NodeKind::Container { .. } => {
+                if subtree_culled {
+                    layout_iter.next();
+                    continue;
+                }
                 if let Some(LayoutChild::Node(node)) = layout_iter.next() {
                     let child_origin = child_origin(node, origin);
                     let child_transform_origin = child_transform_origin(node, origin, transform_origin);
@@ -1227,6 +1286,10 @@ fn generate_draw_commands_inner(
                 layout_style,
                 ..
             } => {
+                if subtree_culled {
+                    layout_iter.next();
+                    continue;
+                }
                 match layout_iter.next() {
                     // Block custom element: recurse into the child layout node.
                     Some(LayoutChild::Node(node_layout)) => {
@@ -1259,7 +1322,7 @@ fn generate_draw_commands_inner(
                                 children_box: bm.children_box,
                             };
                             let state = push_box_model(
-                                cmd_buf, &rect, style, 0.0, 0.0, false, false, false,
+                                cmd_buf, &rect, style, 0.0, 0.0, false, false, false, true,
                             );
                             node.draw_sized(
                                 cmd_buf,
@@ -1404,7 +1467,7 @@ mod tests {
         };
         let style = ContainerStyle::default();
         let mut buf = Vec::new();
-        let state = push_box_model(&mut buf, &box_model, &style, 0.0, 0.0, false, true, true);
+        let state = push_box_model(&mut buf, &box_model, &style, 0.0, 0.0, false, true, true, true);
         // Scroll/content transforms are no-ops here (zero offsets); border
         // transform + clip + content are pushed while the box is open.
         assert!(buf.len() >= 2);
@@ -1432,6 +1495,7 @@ mod tests {
             0.0,
             false,
             false,
+            true,
             true,
         );
         assert!(
@@ -1463,6 +1527,7 @@ mod tests {
             false,
             true,
             true,
+            true,
         );
         let inner = push_box_model(
             &mut buf,
@@ -1471,6 +1536,7 @@ mod tests {
             0.0,
             0.0,
             false,
+            true,
             true,
             true,
         );
@@ -1495,6 +1561,115 @@ mod tests {
             children,
             dom_id: None,
         }
+    }
+
+    fn hidden_container_info(children: Vec<InfoNode>) -> InfoNode {
+        let mut style = ContainerStyle::default();
+        style.visibility = Visibility::Hidden;
+        mk_info_node(
+            NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style,
+                role: ContainerRole::Normal,
+            },
+            children,
+        )
+    }
+
+    fn visible_container_info(children: Vec<InfoNode>) -> InfoNode {
+        let mut style = ContainerStyle::default();
+        style.background = Background::Color(Color(255, 0, 0, 255));
+        mk_info_node(
+            NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style,
+                role: ContainerRole::Normal,
+            },
+            children,
+        )
+    }
+
+    /// A `visibility: hidden` ancestor must NOT prune explicitly visible
+    /// descendants: the hidden box paints nothing itself, but its visible
+    /// children still emit draw commands (CSS `visibility` is per-element,
+    /// unlike `display: none`). This is what Reddit's FOUC-guard CSS relies
+    /// on (`:not(:defined) { visibility: hidden }` plus explicit
+    /// `visibility: visible` on descendants).
+    #[test]
+    fn hidden_ancestor_does_not_prune_visible_descendants() {
+        let ui_rect = |x: f32, y: f32, w: f32, h: f32| ui_layout::Rect {
+            x,
+            y,
+            width: w,
+            height: h,
+        };
+        let mk_box = |x: f32, y: f32, w: f32, h: f32| ui_layout::BoxModel {
+            sticky_edges: None,
+            border_box: ui_rect(x, y, w, h),
+            padding_box: ui_rect(x, y, w, h),
+            content_box: ui_rect(x, y, w, h),
+            children_box: ui_rect(x, y, w, h),
+        };
+
+        // hidden ancestor (with a background) → visible child (with a background)
+        let mut hidden_root = LayoutNode::new(Style::default());
+        hidden_root.layout_box = ui_layout::LayoutBox::BlockBox(mk_box(0.0, 0.0, 100.0, 100.0));
+        let mut visible_child = LayoutNode::new(Style::default());
+        visible_child.layout_box = ui_layout::LayoutBox::BlockBox(mk_box(0.0, 0.0, 50.0, 50.0));
+        hidden_root.children = vec![LayoutChild::Node(Box::new(visible_child))];
+
+        let hidden_info = hidden_container_info(vec![visible_container_info(Vec::new())]);
+
+        let mut commands = Vec::new();
+        generate_draw_commands(&mut commands, &hidden_root, &hidden_info, (100.0, 100.0));
+
+        // The visible descendant still generates commands.
+        assert!(
+            !commands.is_empty(),
+            "visible descendants of a hidden ancestor must still draw"
+        );
+        assert!(count_balanced(&commands));
+    }
+
+    /// A fully hidden subtree (every node computed hidden) paints nothing:
+    /// no backgrounds, borders, or text.
+    #[test]
+    fn fully_hidden_subtree_paints_nothing() {
+        let ui_rect = |x: f32, y: f32, w: f32, h: f32| ui_layout::Rect {
+            x,
+            y,
+            width: w,
+            height: h,
+        };
+        let mk_box = |x: f32, y: f32, w: f32, h: f32| ui_layout::BoxModel {
+            sticky_edges: None,
+            border_box: ui_rect(x, y, w, h),
+            padding_box: ui_rect(x, y, w, h),
+            content_box: ui_rect(x, y, w, h),
+            children_box: ui_rect(x, y, w, h),
+        };
+
+        let mut hidden_root = LayoutNode::new(Style::default());
+        hidden_root.layout_box = ui_layout::LayoutBox::BlockBox(mk_box(0.0, 0.0, 100.0, 100.0));
+        let mut hidden_child = LayoutNode::new(Style::default());
+        hidden_child.layout_box = ui_layout::LayoutBox::BlockBox(mk_box(0.0, 0.0, 50.0, 50.0));
+        hidden_root.children = vec![LayoutChild::Node(Box::new(hidden_child))];
+
+        let hidden_info = hidden_container_info(vec![hidden_container_info(Vec::new())]);
+
+        let mut commands = Vec::new();
+        generate_draw_commands(&mut commands, &hidden_root, &hidden_info, (100.0, 100.0));
+
+        assert!(
+            commands.is_empty(),
+            "a fully hidden subtree must not paint, got {commands:?}"
+        );
     }
 
     /// Collect the sequence of scroll-related transforms in `commands` as

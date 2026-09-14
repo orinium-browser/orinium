@@ -176,6 +176,9 @@ impl Tab {
             return tasks;
         };
 
+        // Handle navigations after the loop: they replace the webview, which
+        // would invalidate the `wv` borrow mid-iteration.
+        let mut navigation: Option<Url> = None;
         for task in wv.tick() {
             match task {
                 WebViewTask::Fetch { url, kind } => {
@@ -185,6 +188,12 @@ impl Tab {
                         kind,
                         origin: page_origin.clone(),
                     });
+                }
+                WebViewTask::Navigate { url } => {
+                    // Script-initiated navigation (form submit): replace the
+                    // document URL and restart the load cycle.
+                    log::info!("Navigating (script): {url}");
+                    navigation = Some(url);
                 }
                 WebViewTask::AskTabHtml => {
                     tasks.push(TabTask::Fetch {
@@ -201,6 +210,13 @@ impl Tab {
 
         if wv.needs_redraw() {
             tasks.push(TabTask::NeedsRedraw);
+        }
+
+        // Apply the navigation last: it drops `wv`, so this must be after all
+        // other uses of the borrow above.
+        if let Some(url) = navigation {
+            self.navigate(url);
+            return tasks;
         }
 
         tasks

@@ -304,6 +304,12 @@ pub(crate) fn make_element(
         );
     }
     match tag_name.to_ascii_lowercase().as_str() {
+        "template" => {
+            obj.define_property(
+                "content".to_string(),
+                read_only_accessor_property(get_template_content),
+            );
+        }
         "table" => {
             obj.define_property(
                 "tBodies".to_string(),
@@ -392,6 +398,34 @@ pub(crate) fn make_element(
             obj.set(
                 "deleteCell".to_string(),
                 JSValue::from_native_function(delete_cell),
+            );
+        }
+        "form" => {
+            obj.define_property(
+                "elements".to_string(),
+                read_only_accessor_property(get_form_elements),
+            );
+            obj.define_property(
+                "action".to_string(),
+                accessor_property(get_element_action, set_element_action),
+            );
+            obj.define_property(
+                "method".to_string(),
+                accessor_property(get_element_method, set_element_method),
+            );
+            obj.set(
+                "requestSubmit".to_string(),
+                JSValue::from_native_function(form_request_submit),
+            );
+            obj.set(
+                "submit".to_string(),
+                JSValue::from_native_function(form_request_submit),
+            );
+        }
+        "input" | "select" | "textarea" | "button" => {
+            obj.define_property(
+                "name".to_string(),
+                accessor_property(get_element_name, set_element_name),
             );
         }
         _ => {}
@@ -1334,6 +1368,25 @@ pub(crate) fn clone_node(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(expose_detached_node(vm, cloned).unwrap_or(JSValue::null()))
 }
 
+/// `document.importNode(node, deep)` — adopts a copy of `node` into this
+/// document. Deep-clones by default like `cloneNode`, and is the canonical
+/// way to instantiate `<template>` content:
+/// `document.importNode(template.content, true)` returns a detached fragment
+/// whose children can be appended into the page.
+pub(crate) fn import_node(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.get(1).unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::null());
+    };
+    // Spec: `importNode(node)` defaults `deep` to true.
+    let deep = args.get(2).map(JSValue::to_boolean).unwrap_or(true);
+    let cloned = if deep {
+        deep_clone_tree(&node)
+    } else {
+        shallow_clone_node(&node)
+    };
+    Ok(expose_detached_node(vm, cloned).unwrap_or(JSValue::null()))
+}
+
 fn shallow_clone_node(node: &NodeRef<HtmlNodeType>) -> NodeRef<HtmlNodeType> {
     let value = match &node.borrow().value {
         HtmlNodeType::Document => HtmlNodeType::Element {
@@ -1353,6 +1406,154 @@ fn deep_clone_tree(node: &NodeRef<HtmlNodeType>) -> NodeRef<HtmlNodeType> {
         TreeNode::append_child(&cloned, cloned_child);
     }
     cloned
+}
+
+/// `form.elements` — the form's submittable descendants (`input`, `select`,
+/// `textarea`, `button`), as an array-like with a `namedItem(name)` method.
+fn get_form_elements(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(form) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(vm.array_from_values(Vec::new()));
+    };
+    let nodes = form_controls_of(&form);
+    let values: Vec<JSValue> = nodes
+        .into_iter()
+        .filter_map(|node| expose_node(vm, node))
+        .collect();
+    let array = vm.array_from_values(values);
+    // Attach `namedItem` so `form.elements.namedItem("name")` works
+    // (HTMLFormControlsCollection API used by Reddit's challenge page).
+    if let Some(object) = array.as_object() {
+        object.borrow_mut().set(
+            "namedItem".to_string(),
+            JSValue::from_native_function(form_elements_named_item),
+        );
+    }
+    Ok(array)
+}
+
+/// Collects the form controls that belong to `form` (its `input`, `select`,
+/// `textarea` and `button` descendants).
+fn form_controls_of(form: &NodeRef<HtmlNodeType>) -> Vec<NodeRef<HtmlNodeType>> {
+    let mut controls = Vec::new();
+    let mut stack = form.borrow().children().to_vec();
+    while let Some(child) = stack.pop() {
+        let tag = child.borrow().value.tag_name().map(str::to_ascii_lowercase);
+        match tag.as_deref() {
+            Some("input") | Some("select") | Some("textarea") | Some("button") => {
+                controls.push(Rc::clone(&child));
+            }
+            // Do not descend into nested forms (invalid HTML anyway).
+            Some("form") => {}
+            _ => stack.extend(child.borrow().children().into_iter().cloned()),
+        }
+    }
+    controls.reverse();
+    controls
+}
+
+/// `form.elements.namedItem(name)` — the first control whose `name` or `id`
+/// attribute matches, or `null`.
+fn form_elements_named_item(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(receiver) = args.first().and_then(JSValue::as_object) else {
+        return Ok(JSValue::null());
+    };
+    let Some(name) = args.get(1).and_then(JSValue::as_string) else {
+        return Ok(JSValue::null());
+    };
+    // Resolve the collection's entries by index so we reuse the exposed
+    // wrappers (and their dom ids) instead of re-exposing raw nodes.
+    let length = receiver.borrow().get("length").to_number().max(0.0) as usize;
+    for index in 0..length {
+        let entry = receiver.borrow().get(&index.to_string());
+        let matches = entry
+            .as_object()
+            .and_then(|object| {
+                let dom_id = object.borrow().get("__orinium_dom_id").to_number();
+                with_host(vm, |host| host.refs.get(&(dom_id as u64)).and_then(|w| w.upgrade()))
+                    .flatten()
+            })
+            .is_some_and(|node| {
+                let borrowed = node.borrow();
+                let name_attr = borrowed.value.get_attr("name").map(str::to_string);
+                let id_attr = borrowed.value.get_attr("id").map(str::to_string);
+                name_attr.as_deref() == Some(&name) || id_attr.as_deref() == Some(&name)
+            });
+        if matches {
+            return Ok(entry);
+        }
+    }
+    Ok(JSValue::null())
+}
+
+/// `form.requestSubmit()` / `form.submit()` — queues a top-level navigation to
+/// the form's `action` URL with its controls serialized as query parameters
+/// (GET forms). Reddit's challenge page uses this to submit its solution.
+fn form_request_submit(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(form_value) = args.first().cloned() else {
+        return Ok(JSValue::undefined());
+    };
+    let Some(form) = dom_node(vm, &form_value) else {
+        return Ok(JSValue::undefined());
+    };
+    let (action, method, query) = {
+        let borrowed = form.borrow();
+        let action = borrowed
+            .value
+            .get_attr("action")
+            .unwrap_or("")
+            .to_string();
+        let method = borrowed
+            .value
+            .get_attr("method")
+            .unwrap_or("get")
+            .to_ascii_lowercase();
+        let pairs: Vec<(String, String)> = form_controls_of(&form)
+            .iter()
+            .filter_map(|control| {
+                let borrowed = control.borrow();
+                let name = borrowed.value.get_attr("name")?.to_string();
+                let value = borrowed.value.get_attr("value").unwrap_or("").to_string();
+                Some((name, value))
+            })
+            .collect();
+        let query = if pairs.is_empty() {
+            String::new()
+        } else {
+            let encoded: Vec<String> = pairs
+                .iter()
+                .map(|(name, value)| {
+                    format!(
+                        "{}={}",
+                        crate::engine::js::web_apis::encoding::encode_query_component(name),
+                        crate::engine::js::web_apis::encoding::encode_query_component(value)
+                    )
+                })
+                .collect();
+            format!("?{}", encoded.join("&"))
+        };
+        (action, method, query)
+    };
+    if action.is_empty() {
+        return Ok(JSValue::undefined());
+    }
+    // Resolve the action against the document URL and queue the navigation.
+    let base = with_host(vm, |host| host.document_url.clone()).unwrap_or_default();
+    let target = url::Url::parse(&action)
+        .or_else(|_| url::Url::parse(&base).and_then(|base| base.join(&action)))
+        .map(|url| {
+            if method == "get" && !query.is_empty() {
+                url::Url::parse(&format!("{url}{query}")).unwrap_or(url)
+            } else {
+                url
+            }
+        });
+    if let Ok(target) = target {
+        with_host_mut(vm, |host| {
+            host.navigation_requests.push(target.to_string());
+        });
+        log::info!(target: "FormNav", "form submit -> {target}");
+    }
+    Ok(JSValue::undefined())
 }
 
 fn element_closest(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -2013,6 +2214,26 @@ pub(crate) fn get_child_nodes(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVal
     };
     let children = node.borrow().children().to_vec();
     Ok(expose_node_list(vm, children))
+}
+
+fn get_template_content(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::undefined());
+    };
+    // A parsed `<template>` keeps its inert children in a DocumentFragment
+    // child (`template.content`); runtime-created templates get one lazily so
+    // that `template.content` is never undefined.
+    let existing = {
+        let borrowed = node.borrow();
+        borrowed
+            .children()
+            .iter()
+            .find(|c| matches!(c.borrow().value, HtmlNodeType::DocumentFragment))
+            .cloned()
+    };
+    let fragment =
+        existing.unwrap_or_else(|| TreeNode::add_child_value(&node, HtmlNodeType::DocumentFragment));
+    Ok(expose_node(vm, fragment).unwrap_or(JSValue::undefined()))
 }
 
 pub(crate) fn get_first_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -3185,6 +3406,11 @@ reflected_string_accessors!(get_element_href, set_element_href, "href");
 reflected_string_accessors!(get_element_rel, set_element_rel, "rel");
 reflected_string_accessors!(get_element_type, set_element_type, "type");
 reflected_string_accessors!(get_element_charset, set_element_charset, "charset");
+// Form controls expose their `name` attribute as an IDL property
+// (`input.name`, used by `form.elements.namedItem` consumers).
+reflected_string_accessors!(get_element_name, set_element_name, "name");
+reflected_string_accessors!(get_element_action, set_element_action, "action");
+reflected_string_accessors!(get_element_method, set_element_method, "method");
 reflected_string_accessors!(
     get_element_cross_origin,
     set_element_cross_origin,

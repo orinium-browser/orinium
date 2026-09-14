@@ -78,7 +78,7 @@ pub(crate) fn make_event_constructor(custom: bool) -> Rc<RefCell<JSObject>> {
 
 /// Reads an event instance's own `field`, falling back to `default` when the
 /// field is absent (constructed events only record what the options bag set).
-fn event_field(vm: &VM, args: &[JSValue], field: &str, default: JSValue) -> JSValue {
+fn event_field(args: &[JSValue], field: &str, default: JSValue) -> JSValue {
     let Some(object) = args.first().and_then(JSValue::as_object) else {
         return default;
     };
@@ -86,44 +86,40 @@ fn event_field(vm: &VM, args: &[JSValue], field: &str, default: JSValue) -> JSVa
     if value.is_undefined() { default } else { value }
 }
 
-fn event_get_composed(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+fn event_get_composed(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(event_field(
-        vm,
         &args,
         "composed",
         JSValue::from_bool(false),
     ))
 }
 
-fn event_get_event_phase(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+fn event_get_event_phase(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(event_field(
-        vm,
         &args,
         "eventPhase",
         JSValue::from_number(0.0),
     ))
 }
 
-fn event_get_default_prevented(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+fn event_get_default_prevented(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(event_field(
-        vm,
         &args,
         "defaultPrevented",
         JSValue::from_bool(false),
     ))
 }
 
-fn event_get_target(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    Ok(event_field(vm, &args, "target", JSValue::null()))
+fn event_get_target(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(event_field(&args, "target", JSValue::null()))
 }
 
-fn event_get_current_target(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    Ok(event_field(vm, &args, "currentTarget", JSValue::null()))
+fn event_get_current_target(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(event_field(&args, "currentTarget", JSValue::null()))
 }
 
-fn event_get_timestamp(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+fn event_get_timestamp(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(event_field(
-        vm,
         &args,
         "timeStamp",
         JSValue::from_number(0.0),
@@ -131,7 +127,7 @@ fn event_get_timestamp(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 }
 
 fn event_composed_path(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let path = event_field(vm, &args, "__composedPath", JSValue::undefined());
+    let path = event_field(&args, "__composedPath", JSValue::undefined());
     let Some(object) = path.as_object() else {
         return Ok(vm.array_from_values(Vec::new()));
     };

@@ -121,6 +121,17 @@ pub(crate) fn install_browser_environment(engine: &mut pixi_byte::JSEngine) {
     let event_constructor = make_event_constructor(false);
     let custom_event_constructor = make_event_constructor(true);
     let event_target_constructor = make_event_target_constructor();
+    // Stub constructors for the remaining UI/event interfaces. YouTube
+    // feature-detects `typeof window.<X> === "function"` (notably
+    // `KeyboardEvent`, `MouseEvent`) before dispatching synthetic events;
+    // undefined ones make kevlar_base.js throw and get swallowed by
+    // `_._DumpException`. Each `.prototype` chains to `Event.prototype` so
+    // `instanceof Event` still holds.
+    let event_prototype = event_constructor
+        .try_borrow()
+        .ok()
+        .and_then(|constructor| constructor.get("prototype").as_object())
+        .unwrap_or_else(|| Rc::new(RefCell::new(JSObject::new())));
 
     let mut global = engine.global_mut().borrow_mut();
     global.set(
@@ -222,6 +233,53 @@ pub(crate) fn install_browser_environment(engine: &mut pixi_byte::JSEngine) {
         "EventTarget".to_string(),
         JSValue::from_object(event_target_constructor),
     );
+    // Stub constructors for the remaining UI/event interfaces. YouTube
+    // feature-detects `typeof window.<X> === "function"` (notably
+    // `KeyboardEvent`, `MouseEvent`) before dispatching synthetic events;
+    // undefined ones make kevlar_base.js throw and get swallowed by
+    // `_._DumpException`. Each `.prototype` chains to `Event.prototype` so
+    // `instanceof Event` still holds.
+    for name in [
+        "UIEvent",
+        "MouseEvent",
+        "KeyboardEvent",
+        "PointerEvent",
+        "FocusEvent",
+        "WheelEvent",
+        "InputEvent",
+        "TouchEvent",
+        "DragEvent",
+        "CompositionEvent",
+        "ProgressEvent",
+        "ErrorEvent",
+        "MessageEvent",
+        "AnimationEvent",
+        "TransitionEvent",
+        "DeviceMotionEvent",
+        "DeviceOrientationEvent",
+        "ClipboardEvent",
+        "BeforeUnloadEvent",
+        "HashChangeEvent",
+        "PopStateEvent",
+        "StorageEvent",
+        "SubmitEvent",
+    ] {
+        let prototype = JSObject::with_prototype(Some(Rc::clone(&event_prototype)));
+        let prototype = Rc::new(RefCell::new(prototype));
+        let mut constructor = JSObject::new();
+        // `__call__` makes `typeof X` report "function" and `__construct__`
+        // makes `new X(...)` work (returning an instance linked to `X.prototype`).
+        constructor.set("__call__".to_string(), JSValue::from_native_function(noop));
+        constructor.set("__construct__".to_string(), JSValue::from_native_function(noop));
+        constructor.define_property(
+            "prototype".to_string(),
+            Property::read_only(JSValue::from_object(Rc::clone(&prototype))),
+        );
+        global.set(
+            name.to_string(),
+            JSValue::from_object(Rc::new(RefCell::new(constructor))),
+        );
+    }
     global.set(
         "requestAnimationFrame".to_string(),
         JSValue::from_native_function(request_animation_frame),

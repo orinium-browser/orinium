@@ -45,6 +45,11 @@ pub enum WebViewTask {
         url: Url,
         kind: FetchKind,
     },
+    /// A script requested a top-level navigation (e.g. `form.submit()`);
+    /// the tab must re-fetch the page at this URL.
+    Navigate {
+        url: Url,
+    },
     /// A page asked the DevTools bridge to inspect rendered state.
     DevToolsRequest {
         id: u64,
@@ -227,6 +232,8 @@ pub struct WebView {
     pending_dynamic_styles: Vec<JsDynamicStyleRequest>,
     /// Images created or populated by scripts, awaiting network scheduling.
     pending_dynamic_images: Vec<JsDynamicImageRequest>,
+    /// Script-initiated top-level navigation URLs awaiting dispatch.
+    pending_navigations: Vec<String>,
     /// `<iframe src="...">` requests queued by JS results, awaiting fetch.
     pending_iframe_fetches: Vec<JsIframeFetchRequest>,
     /// Classic scripts in document order. Execution starts after CSS is applied.
@@ -418,6 +425,7 @@ impl WebView {
             pending_dynamic_scripts: Vec::new(),
             pending_dynamic_styles: Vec::new(),
             pending_dynamic_images: Vec::new(),
+            pending_navigations: Vec::new(),
             pending_iframe_fetches: Vec::new(),
             classic_scripts: Vec::new(),
             next_script_index: 0,
@@ -597,6 +605,7 @@ impl WebView {
         self.try_apply_js_results();
         self.schedule_js_fetches(&mut tasks);
         self.schedule_iframe_fetches(&mut tasks);
+        self.schedule_navigations(&mut tasks);
         self.schedule_dynamic_scripts(&mut tasks);
         for request in std::mem::take(&mut self.pending_devtools_requests) {
             tasks.push(WebViewTask::DevToolsRequest {
@@ -1158,6 +1167,23 @@ impl WebView {
         }
     }
 
+    /// Emits queued script-initiated top-level navigations (form submits).
+    /// Each navigation restarts the page-load cycle for the target URL.
+    fn schedule_navigations(&mut self, tasks: &mut Vec<WebViewTask>) {
+        let requests = std::mem::take(&mut self.pending_navigations);
+        for url_text in requests {
+            match self.resolve_url(&url_text) {
+                Ok(url) => {
+                    log::info!("Script navigation requested: {url}");
+                    tasks.push(WebViewTask::Navigate { url });
+                }
+                Err(error) => {
+                    log::warn!("Dropping script navigation to {url_text}: {error}");
+                }
+            }
+        }
+    }
+
     fn schedule_iframe_fetches(&mut self, tasks: &mut Vec<WebViewTask>) {
         let requests = std::mem::take(&mut self.pending_iframe_fetches);
 
@@ -1475,6 +1501,7 @@ impl WebView {
                 .extend(result.dynamic_image_requests);
             self.pending_iframe_fetches
                 .extend(result.iframe_fetch_requests);
+            self.pending_navigations.extend(result.navigation_requests);
 
             if let Some(in_flight) = self.in_flight_timer_version
                 && result.version >= in_flight
@@ -1578,6 +1605,7 @@ impl WebView {
         self.pending_css_urls.clear();
         self.pending_images.clear();
         self.pending_audio.clear();
+        self.pending_navigations.clear();
         self.loaded_css.clear();
         self.linked_css.clear();
         self.images.clear();

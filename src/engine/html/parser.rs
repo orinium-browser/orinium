@@ -140,6 +140,9 @@ impl DomTree {
                 false
             }
         })
+        .into_iter()
+        .filter(|node| !is_inside_template(node))
+        .collect()
     }
 
     /// Returns the element with the given id
@@ -154,6 +157,9 @@ impl DomTree {
             }
         })
         .into_iter()
+        // Template contents are inert: document.getElementById never finds
+        // elements inside a `<template>` (matching browsers).
+        .filter(|node| !is_inside_template(node))
         .next()
     }
 
@@ -168,6 +174,9 @@ impl DomTree {
                 false
             }
         })
+        .into_iter()
+        .filter(|node| !is_inside_template(node))
+        .collect()
     }
 
     /// Returns the concatenated text content of this node (including children).
@@ -417,11 +426,14 @@ pub(crate) fn collect_element_nodes(
     include_node: bool,
     output: &mut Vec<NodeRef<HtmlNodeType>>,
 ) {
-    let (is_element, is_shadow, children) = {
+    let (is_element, is_shadow, is_template, children) = {
         let node = node.borrow();
         (
             matches!(node.value, HtmlNodeType::Element { .. }),
             matches!(node.value, HtmlNodeType::ShadowRoot { .. }),
+            node.value
+                .tag_name()
+                .is_some_and(|t| t.eq_ignore_ascii_case("template")),
             node.children().to_vec(),
         )
     };
@@ -435,7 +447,14 @@ pub(crate) fn collect_element_nodes(
         for child in children {
             // Skip shadow root children during light DOM traversal.
             let is_child_shadow = matches!(child.borrow().value, HtmlNodeType::ShadowRoot { .. });
-            if !is_child_shadow {
+            // Skip template contents: a `<template>`'s DocumentFragment child
+            // is inert, so document-wide element queries never descend into
+            // it (matching browsers; `template.content` must be queried
+            // directly, in which case the fragment itself is the traversal
+            // root and this skip does not apply).
+            let is_child_template_content =
+                is_template && matches!(child.borrow().value, HtmlNodeType::DocumentFragment);
+            if !is_child_shadow && !is_child_template_content {
                 collect_element_nodes(&child, true, output);
             }
         }
@@ -627,6 +646,7 @@ impl<'a> Parser<'a> {
             }
         }
         self.autofill_elements();
+        apply_suspense_replacements(&self.tree);
 
         self.tree.clone()
     }
@@ -1054,9 +1074,10 @@ impl<'a> Parser<'a> {
 /// Returns true if `node` is nested inside a `<template>` element.
 ///
 /// Template contents are inert, so this excludes them from collectable
-/// things such as document classic scripts.
+/// things such as document classic scripts. The `<template>` element
+/// itself is *not* considered inside (it is a normal element).
 fn is_inside_template(node: &NodeRef<HtmlNodeType>) -> bool {
-    let mut current = Some(Rc::clone(node));
+    let mut current = node.borrow().parent();
     while let Some(n) = current {
         if n.borrow().value.tag_name() == Some("template") {
             return true;
@@ -1064,6 +1085,145 @@ fn is_inside_template(node: &NodeRef<HtmlNodeType>) -> bool {
         current = n.borrow().parent();
     }
     false
+}
+
+/// Applies Reddit-style `<suspense-replace>` streaming-SSR swaps.
+///
+/// Reddit (and other suspense-based frontends) stream pages as:
+///
+/// ```html
+/// <suspense-placeholder id="s_1">…skeleton…</suspense-placeholder>
+/// <template for="s_1">…real content (shreddit-feed, posts)…</template>
+/// <suspense-replace target="#s_1" template="template[for=s_1]"></suspense-replace>
+/// ```
+///
+/// The real content lives inside a `<template>`, which is inert per the HTML
+/// spec, and their client script swaps it into the placeholder on load. Since
+/// real posts are only reachable after that swap, the parser performs it
+/// eagerly: each placeholder is replaced by a deep clone of the matching
+/// template's fragment children, and the `<suspense-replace>` markers are
+/// dropped. Pages without this pattern are unaffected.
+fn apply_suspense_replacements(tree: &DomTree) {
+    // Collect (target_id, template_selector) from every <suspense-replace>.
+    let replacements: Vec<(String, String)> = tree
+        .find_all(|n| n.tag_name() == Some("suspense-replace"))
+        .iter()
+        .filter_map(|node| {
+            let n = node.borrow();
+            let target = n.value.get_attr("target")?.trim().to_string();
+            let template = n.value.get_attr("template")?.trim().to_string();
+            Some((target, template))
+        })
+        .collect();
+    if replacements.is_empty() {
+        return;
+    }
+
+    // The `template` attribute value is a selector of the shape
+    // `template[for=<id>]`; extract the id once per replacement.
+    for (target, template_selector) in replacements {
+        let template_id = template_selector
+            .strip_prefix("template[for=")
+            .and_then(|rest| rest.strip_suffix(']'))
+            .map(str::to_string);
+        let Some(template_id) = template_id else {
+            log::warn!(
+                target: "HtmlParser::Suspense",
+                "unsupported suspense-replace template selector: {template_selector}"
+            );
+            continue;
+        };
+
+        // Source content: the <template for=...>'s DocumentFragment child.
+        let fragment = tree
+            .find_all(|n| n.tag_name() == Some("template"))
+            .iter()
+            .find(|node| {
+                node.borrow()
+                    .value
+                    .get_attr("for")
+                    .is_some_and(|f| f == template_id)
+            })
+            .and_then(|template| {
+                template
+                    .borrow()
+                    .children()
+                    .first()
+                    .and_then(|first| {
+                        let is_fragment = matches!(
+                            &first.borrow().value,
+                            HtmlNodeType::DocumentFragment
+                        );
+                        is_fragment.then(|| Rc::clone(first))
+                    })
+            });
+        let Some(fragment) = fragment else {
+            log::warn!(
+                target: "HtmlParser::Suspense",
+                "suspense-replace target {target}: no <template for={template_id}> content"
+            );
+            continue;
+        };
+
+        // Destination: the placeholder element with the target id.
+        let Some(placeholder) = find_element_by_id(tree, target.trim_start_matches('#')) else {
+            continue;
+        };
+        let Some(placeholder_parent) = placeholder.borrow().parent() else {
+            continue;
+        };
+
+        // Insert a deep clone of every fragment child at the placeholder's
+        // position, then drop the placeholder (and its skeleton contents).
+        let fragment_children: Vec<_> = fragment.borrow().children().to_vec();
+        let mut all_inserted = true;
+        for child in fragment_children {
+            let clone = deep_clone_subtree(&child);
+            all_inserted &= TreeNode::insert_before(
+                &placeholder_parent,
+                clone,
+                &placeholder,
+            );
+        }
+        if all_inserted {
+            TreeNode::remove_child(&placeholder_parent, &placeholder);
+        }
+
+        // Remove the <suspense-replace> marker element itself.
+        let marker = tree
+            .find_all(|n| n.tag_name() == Some("suspense-replace"))
+            .into_iter()
+            .find(|node| {
+                node.borrow().value.get_attr("target")
+                    .is_some_and(|t| t.trim() == target)
+            });
+        if let Some(marker) = marker {
+            let marker_parent = marker.borrow().parent();
+            if let Some(marker_parent) = marker_parent {
+                TreeNode::remove_child(&marker_parent, &marker);
+            }
+        }
+    }
+}
+
+/// Finds an element by `id` anywhere in the tree (outside templates).
+fn find_element_by_id(tree: &DomTree, id: &str) -> Option<NodeRef<HtmlNodeType>> {
+    tree.find_all(|n| {
+        n.tag_name().is_some() && n.get_attr("id").is_some_and(|v| v == id)
+    })
+    .iter()
+    .find(|node| !is_inside_template(node))
+    .map(|node| Rc::clone(node))
+}
+
+/// Deep-clones a subtree, dropping parent links.
+fn deep_clone_subtree(node: &NodeRef<HtmlNodeType>) -> NodeRef<HtmlNodeType> {
+    let clone = TreeNode::new(node.borrow().value.clone());
+    for child in node.borrow().children() {
+        let cloned_child = deep_clone_subtree(child);
+        TreeNode::add_child(&clone, cloned_child);
+    }
+    clone
 }
 
 /// 要素が head 内にのみ置ける要素 (meta, title, link, style, script, ...) か
@@ -1188,10 +1348,13 @@ mod tests {
         assert_eq!(content.len(), 1);
         assert_eq!(tag_of(&content[0]).as_deref(), Some("div"));
 
-        // Nothing leaks to the page: <div id="x"> lives only inside the template.
-        let div = tree.query_selector("#x").unwrap();
+        // Nothing leaks to the page: <div id="x"> lives only inside the
+        // template, so document-wide queries never find it.
+        assert!(tree.query_selector("#x").is_none());
         let body = tree.query_selector("html > body").unwrap();
-        assert!(!children_of(&body).iter().any(|c| Rc::ptr_eq(c, &div)));
+        assert!(!children_of(&body)
+            .iter()
+            .any(|c| tag_of(c).as_deref() == Some("div")));
 
         let text = DomTree::inner_text(&content[0]);
         assert_eq!(text, "hi");
@@ -1212,8 +1375,10 @@ mod tests {
             r#"<template><template><b>deep</b></template><i>x</i></template>"#,
         );
 
+        // The inner template lives in inert content, so only the outer one is
+        // reachable from document-level queries (matching browsers).
         let templates = tree.get_elements_by_tag_name("template");
-        assert_eq!(templates.len(), 2);
+        assert_eq!(templates.len(), 1);
 
         let outer = templates[0].clone();
         let outer_fragment = find_first_fragment(&outer);
@@ -1236,7 +1401,8 @@ mod tests {
         let template = tree
             .query_selector("html > head > template")
             .expect("template in head stays in head");
-        assert!(tree.query_selector("title").is_some());
+        // The <title> is inert template content: unreachable from the document.
+        assert!(tree.query_selector("title").is_none());
         assert_eq!(
             DomTree::inner_text(&find_first_fragment(&template)),
             "t"

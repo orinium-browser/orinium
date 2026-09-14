@@ -671,7 +671,6 @@ mod tests {
         let mut last_dom_version = 0u64;
         let mut stable_for: u32 = 0;
         let mut layout_seen = false;
-        let mut last_report = Instant::now();
         let mut tick_iterations: u64 = 0;
 
         loop {
@@ -801,6 +800,15 @@ mod tests {
                             FetchKind::Iframe { dom_id } => {
                                 wv.on_iframe_fetch_failed(dom_id);
                             }
+                        }
+                    }
+                    WebViewTask::Navigate { url } => {
+                        // Simulate the tab's script-initiated navigation by
+                        // re-serving the fetched HTML at the new URL.
+                        if let Some(r) = fetch_ok(&core, &url) {
+                            let text = String::from_utf8_lossy(&r.body).to_string();
+                            wv.on_html_fetched(text, url);
+                            *fetch_counts.entry("nav").or_insert(0) += 1;
                         }
                     }
                 }

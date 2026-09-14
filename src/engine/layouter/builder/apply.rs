@@ -654,6 +654,48 @@ pub fn apply_declaration(
                 })
             }
 
+            // Legacy `rect(<top> <right> <bottom> <left>)` shorthand, still used
+            // by GitHub's `.sr-only` utilities (`clip-path: rect(0 0 0 0)`).
+            //
+            // Unlike `inset()`, the four numbers are offsets from the box's
+            // top-left corner: the clip rectangle spans x ∈ [left, right) and
+            // y ∈ [top, bottom). `rect(0 0 0 0)` is therefore a zero-area
+            // rectangle (unlike `inset(0 0 0 0)`, which covers the whole box).
+            CssValue::Function(func, args) if func.eq_ignore_ascii_case("rect") => {
+                let mut top = 0.0f32;
+                let mut right = 0.0f32;
+                let mut bottom = 0.0f32;
+                let mut left = 0.0f32;
+                let mut idx = 0;
+
+                for arg in args.iter().flatten() {
+                    let pct = match arg {
+                        CssValue::Length(v, Unit::Percent) => v / 100.0,
+                        CssValue::Length(v, _) => {
+                            resolve_css_len(name, std::slice::from_ref(arg), text_flow_style)
+                                .map(|l| length_to_px(&l, text_flow_style.font_size) / 100.0)
+                                .unwrap_or(*v / 100.0)
+                        }
+                        CssValue::Number(n) => *n,
+                        _ => continue,
+                    };
+                    match idx {
+                        0 => top = pct,
+                        1 => right = pct,
+                        2 => bottom = pct,
+                        3 => left = pct,
+                        _ => {}
+                    }
+                    idx += 1;
+                }
+                Some(ClipPath::Inset {
+                    top: top.clamp(0.0, 1.0),
+                    left: left.clamp(0.0, 1.0),
+                    right: (1.0 - right).clamp(0.0, 1.0),
+                    bottom: (1.0 - bottom).clamp(0.0, 1.0),
+                })
+            }
+
             CssValue::Function(func, args) if func.eq_ignore_ascii_case("polygon") => {
                 let mut points = Vec::new();
                 let mut x_opt: Option<f32> = None;
