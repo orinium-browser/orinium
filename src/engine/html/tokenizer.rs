@@ -31,12 +31,13 @@ pub enum Token {
 }
 
 /// Represents the internal state of the tokenizer
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum TokenizerState {
     Data,
     ScriptData,
     StyleData,
     EscapeDecoding,
+    AttributeEscapeDecoding,
     TagOpen,
     EndTagOpen,
     TagName,
@@ -101,6 +102,7 @@ pub struct Tokenizer<'a> {
     current_token: Option<Token>,
     current_attribute: Option<Attribute>,
     buffer: String,
+    escape_return_state: TokenizerState,
 }
 
 impl<'a> Tokenizer<'a> {
@@ -114,6 +116,7 @@ impl<'a> Tokenizer<'a> {
             current_token: None,
             current_attribute: None,
             buffer: String::new(),
+            escape_return_state: TokenizerState::Data,
         }
     }
 
@@ -187,6 +190,9 @@ impl<'a> Tokenizer<'a> {
                     self.state_data(c)
                 }
                 TokenizerState::EscapeDecoding => self.state_escape_decoding(c),
+                TokenizerState::AttributeEscapeDecoding => {
+                    self.state_attribute_escape_decoding(c)
+                }
                 _ if self.state.is_doctype() => self.state_doctype(c),
                 TokenizerState::TagOpen => self.state_tag_open(c),
                 TokenizerState::TagName => self.state_tag_name(c),
@@ -427,9 +433,7 @@ impl<'a> Tokenizer<'a> {
             }
             _ => {
                 self.state = TokenizerState::AttributeValueUnquoted;
-                if let Some(attr) = &mut self.current_attribute {
-                    attr.value.push(c);
-                }
+                self.state_attribute_value_unquoted(c);
             }
         }
     }
@@ -441,6 +445,7 @@ impl<'a> Tokenizer<'a> {
                 self.push_current_attribute();
                 self.state = TokenizerState::AfterAttributeName;
             }
+            (_, '&') => self.start_attribute_escape(),
             _ => {
                 if let Some(attr) = &mut self.current_attribute {
                     attr.value.push(c);
@@ -486,11 +491,54 @@ impl<'a> Tokenizer<'a> {
                 self.commit_token();
                 self.state = TokenizerState::Data;
             }
+            '&' => self.start_attribute_escape(),
             _ => {
                 if let Some(attr) = &mut self.current_attribute {
                     attr.value.push(c);
                 }
             }
+        }
+    }
+
+    /// Begins decoding a character reference inside an attribute value. The
+    /// entity is buffered and decoded on `;` (or flushed literally when the
+    /// following character cannot be part of an entity name), then control
+    /// returns to the attribute-value state that was active before the `&`.
+    fn start_attribute_escape(&mut self) {
+        self.buffer.clear();
+        self.buffer.push('&');
+        self.escape_return_state = self.state;
+        self.state = TokenizerState::AttributeEscapeDecoding;
+    }
+
+    fn state_attribute_escape_decoding(&mut self, c: char) {
+        if c == ';' {
+            let mut iter = self.buffer.rsplitn(2, '&');
+            let entity = iter.next().unwrap_or("");
+            let decoded = decode_entity(entity).unwrap_or_else(|| format!("&{};", entity));
+            if let Some(attr) = &mut self.current_attribute {
+                attr.value.push_str(&decoded);
+            }
+            self.buffer.clear();
+            self.state = std::mem::replace(&mut self.escape_return_state, TokenizerState::Data);
+        } else if !(c.is_ascii_alphanumeric() || matches!(c, '#' | 'x' | 'X'))
+            || self.buffer.len() > MAX_ENTITY_NAME_LEN
+            || self.input[self.pos..].starts_with('<')
+        {
+            // Not part of an entity name (or the entity ran too long): flush
+            // the literal `&…` text and reconsume this character so the
+            // active attribute-value state can handle it (closing quote, `>`,
+            // whitespace, …).
+            let mut iter = self.buffer.rsplitn(2, '&');
+            let entity = iter.next().unwrap_or("");
+            if let Some(attr) = &mut self.current_attribute {
+                attr.value.push_str(&format!("&{}", entity));
+            }
+            self.buffer.clear();
+            self.pos -= c.len_utf8();
+            self.state = std::mem::replace(&mut self.escape_return_state, TokenizerState::Data);
+        } else {
+            self.buffer.push(c);
         }
     }
 
@@ -813,6 +861,85 @@ mod tests {
         let input = "Hello &amp; goodbye";
         let tokens = collect_tokens(input);
         assert_eq!(tokens, vec![Token::Text("Hello & goodbye".to_string())]);
+    }
+
+    #[test]
+    fn attribute_values_decode_character_references() {
+        let input = r#"<img src="https://x.example/a.png?w=1&amp;h=2&amp;s=&quot;q&quot;" alt='it&#39;s &apos;x&apos;'>"#;
+        let tokens = collect_tokens(input);
+        assert_eq!(
+            tokens,
+            vec![Token::StartTag {
+                name: "img".to_string(),
+                attributes: vec![
+                    Attribute {
+                        name: "src".to_string(),
+                        value: "https://x.example/a.png?w=1&h=2&s=\"q\"".to_string(),
+                    },
+                    Attribute {
+                        name: "alt".to_string(),
+                        value: "it's 'x'".to_string(),
+                    },
+                ],
+                self_closing: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn attribute_entities_close_normally_without_a_semicolon() {
+        // `&amp` with no `;` before the closing quote must flush literally and
+        // still let the quote terminate the attribute.
+        let input = r#"<a href="?a=1&amp">link</a>"#;
+        let tokens = collect_tokens(input);
+        assert_eq!(
+            tokens[0],
+            Token::StartTag {
+                name: "a".to_string(),
+                attributes: vec![Attribute {
+                    name: "href".to_string(),
+                    value: "?a=1&amp".to_string(),
+                }],
+                self_closing: false,
+            }
+        );
+        assert_eq!(tokens[1], Token::Text("link".to_string()));
+    }
+
+    #[test]
+    fn attribute_entity_at_start_of_unquoted_value() {
+        let input = r#"<a href=&amp;x>link</a>"#;
+        let tokens = collect_tokens(input);
+        assert_eq!(
+            tokens[0],
+            Token::StartTag {
+                name: "a".to_string(),
+                attributes: vec![Attribute {
+                    name: "href".to_string(),
+                    value: "&x".to_string(),
+                }],
+                self_closing: false,
+            }
+        );
+    }
+
+    #[test]
+    fn bare_ampersand_in_attribute_is_kept_literal() {
+        // `&` that does not begin a valid reference (e.g. the separator in a
+        // query string written raw) stays as-is.
+        let input = r#"<img src="https://x.example/a.png?a=1&b=2">"#;
+        let tokens = collect_tokens(input);
+        assert_eq!(
+            tokens[0],
+            Token::StartTag {
+                name: "img".to_string(),
+                attributes: vec![Attribute {
+                    name: "src".to_string(),
+                    value: "https://x.example/a.png?a=1&b=2".to_string(),
+                }],
+                self_closing: false,
+            }
+        );
     }
 
     /// Entities must decode regardless of how much text precedes them: the
