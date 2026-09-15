@@ -880,6 +880,36 @@ fn draw_text(
 // Public entry point
 // --------------------------------
 
+/// Paints the canvas background (CSS Backgrounds 3 §2.11.1): the root
+/// element's background is propagated to the canvas and covers the entire
+/// viewport, even when the root box is shorter than the viewport. The info
+/// root is the document node, so when it is transparent the background of its
+/// first element child (html) is propagated instead. Only solid colors are
+/// propagated; the element still paints gradient/image backgrounds on its own
+/// box.
+fn emit_canvas_background(cmd_buf: &mut Vec<DrawCommand>, info: &InfoNode, viewport: (f32, f32)) {
+    let background = match info.kind.container_bg() {
+        Some(Background::Color(color)) if color.3 == 0 => info.children.iter().find_map(
+            |child| match child.kind.container_bg() {
+                Some(Background::Color(color)) if color.3 > 0 => Some(*color),
+                _ => None,
+            },
+        ),
+        Some(Background::Color(color)) => Some(*color),
+        _ => None,
+    };
+    if let Some(color) = background {
+        cmd_buf.push(DrawCommand::Fill {
+            path: rect_path(0.0, 0.0, viewport.0, viewport.1),
+            rule: FillRule::NonZero,
+            paint: Paint {
+                brush: Brush::Solid(color),
+                opacity: 1.0,
+            },
+        });
+    }
+}
+
 /// LayoutNode + InfoNode → DrawCommand
 ///
 /// `viewport` is the visible (window) size of the page area; it establishes the
@@ -890,6 +920,7 @@ pub fn generate_draw_commands(
     info: &InfoNode,
     viewport: (f32, f32),
 ) {
+    emit_canvas_background(cmd_buf, info, viewport);
     let (scroll_x, scroll_y) = info.kind.scroll_offsets();
     let root_viewport = StickyViewport {
         top_left: (-scroll_x, scroll_y),
@@ -1825,7 +1856,14 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(colors, vec![Color(0, 0, 255, 255), Color(255, 0, 0, 255)]);
+        assert_eq!(
+            colors,
+            vec![
+                Color(255, 0, 0, 255),
+                Color(0, 0, 255, 255),
+                Color(255, 0, 0, 255)
+            ]
+        );
         assert!(count_balanced(&commands));
     }
 
