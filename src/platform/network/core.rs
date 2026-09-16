@@ -3,6 +3,8 @@
 
 use super::{HostKey, HttpSender, NetworkConfig, NetworkError, NetworkRequest, SenderPool};
 
+use brotli_decompressor::Decompressor as BrotliDecompressor;
+use flate2::read::{DeflateDecoder as RawDeflateDecoder, GzDecoder, ZlibDecoder};
 use http_body_util::{BodyExt, Full};
 use hyper::{
     Method, Request, Uri,
@@ -10,10 +12,16 @@ use hyper::{
     client::conn,
     http::uri::Scheme,
 };
-use hyper_util::rt::TokioIo;
-use rustls::{ClientConfig, RootCertStore};
+use hyper_util::rt::{TokioExecutor, TokioIo};
+use rustls::{
+    ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme,
+    client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
+    crypto::CryptoProvider,
+    pki_types::{CertificateDer, ServerName, UnixTime},
+};
 use rustls_native_certs::load_native_certs;
 use serde::{Deserialize, Serialize};
+use std::io::Read as _;
 use std::sync::{Arc, RwLock};
 use tokio::{net::TcpStream, runtime::Runtime, task::LocalSet};
 use tokio_rustls::TlsConnector;
@@ -111,6 +119,7 @@ pub struct Response {
 /// on the runtime that drives it.
 pub(super) struct SharedNetState {
     tls_config: Arc<ClientConfig>,
+    insecure_tls_config: Arc<ClientConfig>,
     network_config: RwLock<Arc<NetworkConfig>>,
     cache: super::Cache,
 }
@@ -118,7 +127,8 @@ pub(super) struct SharedNetState {
 impl SharedNetState {
     pub fn new() -> Self {
         Self {
-            tls_config: Arc::new(Self::build_tls_config()),
+            tls_config: Arc::new(Self::build_tls_config(true)),
+            insecure_tls_config: Arc::new(Self::build_tls_config(false)),
             network_config: RwLock::new(Arc::new(NetworkConfig::default())),
             cache: super::Cache::new(),
         }
@@ -134,7 +144,16 @@ impl SharedNetState {
         self.cache.clear();
     }
 
-    fn build_tls_config() -> ClientConfig {
+    /// Returns the TLS configuration for the current `verify_tls` setting.
+    fn tls_config(&self) -> Arc<ClientConfig> {
+        if self.network_config.read().unwrap().verify_tls {
+            Arc::clone(&self.tls_config)
+        } else {
+            Arc::clone(&self.insecure_tls_config)
+        }
+    }
+
+    fn build_tls_config(verify_certs: bool) -> ClientConfig {
         let mut roots = RootCertStore::empty();
         let result = load_native_certs();
 
@@ -142,9 +161,22 @@ impl SharedNetState {
             let _ = roots.add(cert);
         }
 
-        ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth()
+        let mut config = if verify_certs {
+            ClientConfig::builder()
+                .with_root_certificates(roots)
+                .with_no_client_auth()
+        } else {
+            let provider = CryptoProvider::get_default()
+                .expect("rustls default crypto provider must be installed");
+            ClientConfig::builder()
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(SkipServerVerification(
+                    provider.clone(),
+                )))
+                .with_no_client_auth()
+        };
+        config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+        config
     }
 }
 
@@ -226,11 +258,37 @@ impl AsyncNetworkCore {
         let mut sender = self.get_or_create_sender(&key).await?;
 
         let user_agent = self.inner.network_config.read().unwrap().user_agent.clone();
+        let is_h2 = matches!(sender, HttpSender::Http2(_));
+        log::debug!(
+            target: "network",
+            "send via {} to {}",
+            if is_h2 { "h2" } else { "http1" },
+            uri
+        );
+        // HTTP/2 derives `:authority` from the request URI (a relative URI is
+        // rejected), while HTTP/1.1 wants an origin-form target plus a `Host`
+        // header, which hyper refuses to add for us.
+        let request_uri = if is_h2 {
+            let authority = uri
+                .authority()
+                .map(|a| a.as_str().to_string())
+                .unwrap_or_else(|| format!("{}:{}", host, port));
+            format!(
+                "{}://{}{}",
+                scheme,
+                authority,
+                uri.path_and_query().map_or("/", |p| p.as_str())
+            )
+        } else {
+            uri.path_and_query().map_or("/", |p| p.as_str()).to_string()
+        };
         let mut request = Request::builder()
             .method(method.clone())
-            .uri(uri.path_and_query().map_or("/", |p| p.as_str()))
-            .header("Host", host)
+            .uri(&request_uri)
             .header("User-Agent", user_agent);
+        if !is_h2 {
+            request = request.header("Host", host);
+        }
         if !headers
             .iter()
             .any(|(name, _)| name.eq_ignore_ascii_case("accept-language"))
@@ -239,6 +297,12 @@ impl AsyncNetworkCore {
                 "Accept-Language",
                 crate::platform::locale::accept_language_header(),
             );
+        }
+        if !headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("accept-encoding"))
+        {
+            request = request.header("Accept-Encoding", "gzip, deflate, br");
         }
         for (name, value) in headers {
             request = request.header(name, value);
@@ -252,9 +316,10 @@ impl AsyncNetworkCore {
                 .send_request(req)
                 .await
                 .map_err(|_| NetworkError::HttpRequestFailed)?,
-            _ => {
-                return Err(NetworkError::UnsupportedHttpVersion);
-            }
+            HttpSender::Http2(s) => s
+                .send_request(req)
+                .await
+                .map_err(|_| NetworkError::HttpRequestFailed)?,
         };
 
         let response = Self::collect_response(uri.to_string(), &mut res).await?;
@@ -288,6 +353,13 @@ impl AsyncNetworkCore {
             }
         }
 
+        let content_encoding = res
+            .headers()
+            .get("content-encoding")
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.to_string());
+        let body = Self::decode_content(content_encoding.as_deref(), body);
+
         Ok(Response {
             url,
             status: status.into(),
@@ -295,6 +367,50 @@ impl AsyncNetworkCore {
             headers,
             body,
         })
+    }
+
+    /// Decodes a response body according to the `Content-Encoding` header value
+    /// (e.g. `gzip`, `deflate`, `br`). Unknown or undecodable encodings leave
+    /// the body untouched.
+    fn decode_content(encoding: Option<&str>, mut body: Vec<u8>) -> Vec<u8> {
+        let Some(encoding) = encoding else {
+            return body;
+        };
+        for part in encoding.split(',').map(|s| s.trim().to_ascii_lowercase()) {
+            body = match part.as_str() {
+                "gzip" | "x-gzip" => Self::gunzip(&body).unwrap_or(body),
+                "deflate" => Self::inflate(&body).unwrap_or(body),
+                "br" => Self::brotli(&body).unwrap_or(body),
+                _ => body,
+            };
+        }
+        body
+    }
+
+    fn gunzip(body: &[u8]) -> Option<Vec<u8>> {
+        let mut output = Vec::new();
+        GzDecoder::new(body).read_to_end(&mut output).ok()?;
+        Some(output)
+    }
+
+    /// HTTP `deflate` is zlib-wrapped in practice; fall back to raw DEFLATE if
+    /// some servers omit the zlib header.
+    fn inflate(body: &[u8]) -> Option<Vec<u8>> {
+        let mut output = Vec::new();
+        if ZlibDecoder::new(body).read_to_end(&mut output).is_ok() {
+            return Some(output);
+        }
+        let mut output = Vec::new();
+        RawDeflateDecoder::new(body).read_to_end(&mut output).ok()?;
+        Some(output)
+    }
+
+    fn brotli(body: &[u8]) -> Option<Vec<u8>> {
+        let mut output = Vec::new();
+        BrotliDecompressor::new(body, 1 << 16)
+            .read_to_end(&mut output)
+            .ok()?;
+        Some(output)
     }
 
     async fn get_or_create_sender(&self, key: &HostKey) -> Result<HttpSender, NetworkError> {
@@ -312,22 +428,31 @@ impl AsyncNetworkCore {
             .map_err(|_| NetworkError::ConnectionFailed)?;
 
         if key.scheme == Scheme::HTTPS {
-            let tls = TlsConnector::from(Arc::clone(&self.inner.tls_config));
+            let tls = TlsConnector::from(self.inner.tls_config());
             let key = key.clone();
-            let domain = rustls::pki_types::ServerName::try_from(key.host.clone())
-                .map_err(|_| NetworkError::InvalidDnsName)?;
+            let domain =
+                ServerName::try_from(key.host.clone()).map_err(|_| NetworkError::InvalidDnsName)?;
 
             let stream = tls
                 .connect(domain, stream)
                 .await
                 .map_err(|_| NetworkError::TlsFailed)?;
+            let negotiated_h2 = stream.get_ref().1.alpn_protocol() == Some(b"h2");
 
-            let (sender, conn) = conn::http1::handshake(TokioIo::new(stream))
-                .await
-                .map_err(|_| NetworkError::HttpHandshakeFailed)?;
-
-            self.spawn_connection_task(conn, key);
-            Ok(HttpSender::Http1(sender))
+            let io = TokioIo::new(stream);
+            if negotiated_h2 {
+                let (sender, conn) = conn::http2::handshake(TokioExecutor::new(), io)
+                    .await
+                    .map_err(|_| NetworkError::HttpHandshakeFailed)?;
+                self.spawn_connection_task(conn, key);
+                Ok(HttpSender::Http2(sender))
+            } else {
+                let (sender, conn) = conn::http1::handshake(io)
+                    .await
+                    .map_err(|_| NetworkError::HttpHandshakeFailed)?;
+                self.spawn_connection_task(conn, key);
+                Ok(HttpSender::Http1(sender))
+            }
         } else {
             let (sender, conn) = conn::http1::handshake(TokioIo::new(stream))
                 .await
@@ -338,19 +463,55 @@ impl AsyncNetworkCore {
         }
     }
 
-    fn spawn_connection_task(
-        &self,
-        conn: conn::http1::Connection<
-            TokioIo<impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + 'static>,
-            Full<Bytes>,
-        >,
-        key: HostKey,
-    ) {
+    fn spawn_connection_task<F>(&self, conn: F, key: HostKey)
+    where
+        F: std::future::Future<Output = Result<(), hyper::Error>> + 'static,
+    {
         let pool = Arc::clone(&self.sender_pool);
         tokio::task::spawn_local(async move {
             let _ = conn.await;
             pool.write().unwrap().remove_connection(&key);
         });
+    }
+}
+
+/// A `ServerCertVerifier` that accepts any server certificate (dev/diagnostic
+/// mode, used when `verify_tls` is disabled).
+#[derive(Debug)]
+struct SkipServerVerification(Arc<CryptoProvider>);
+
+impl ServerCertVerifier for SkipServerVerification {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
     }
 }
 
