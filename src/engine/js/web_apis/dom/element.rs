@@ -1444,7 +1444,7 @@ fn form_controls_of(form: &NodeRef<HtmlNodeType>) -> Vec<NodeRef<HtmlNodeType>> 
             }
             // Do not descend into nested forms (invalid HTML anyway).
             Some("form") => {}
-            _ => stack.extend(child.borrow().children().into_iter().cloned()),
+            _ => stack.extend(child.borrow().children().iter().cloned()),
         }
     }
     controls.reverse();
@@ -1478,7 +1478,7 @@ fn form_elements_named_item(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue
                 let borrowed = node.borrow();
                 let name_attr = borrowed.value.get_attr("name").map(str::to_string);
                 let id_attr = borrowed.value.get_attr("id").map(str::to_string);
-                name_attr.as_deref() == Some(&name) || id_attr.as_deref() == Some(&name)
+                name_attr.as_deref() == Some(name) || id_attr.as_deref() == Some(name)
             });
         if matches {
             return Ok(entry);

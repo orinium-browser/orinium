@@ -157,10 +157,7 @@ impl DomTree {
             }
         })
         .into_iter()
-        // Template contents are inert: document.getElementById never finds
-        // elements inside a `<template>` (matching browsers).
-        .filter(|node| !is_inside_template(node))
-        .next()
+        .find(|node| !is_inside_template(node))
     }
 
     /// Returns all elements that have the given class
@@ -708,7 +705,7 @@ impl<'a> Parser<'a> {
                 );
                 let content = TreeNode::new(HtmlNodeType::DocumentFragment);
                 TreeNode::add_child(&template, content.clone());
-                self.tag_stack.push(name.clone());
+                self.tag_stack.push(name);
                 // Push the template element (for end-tag matching) and the
                 // fragment on top, so contents are inserted into the fragment.
                 self.stack.push(Rc::clone(&template));
@@ -1203,7 +1200,7 @@ fn find_element_by_id(tree: &DomTree, id: &str) -> Option<NodeRef<HtmlNodeType>>
     tree.find_all(|n| n.tag_name().is_some() && n.get_attr("id").is_some_and(|v| v == id))
         .iter()
         .find(|node| !is_inside_template(node))
-        .map(|node| Rc::clone(node))
+        .map(Rc::clone)
 }
 
 /// Deep-clones a subtree, dropping parent links.

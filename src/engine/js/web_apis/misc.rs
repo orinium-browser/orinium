@@ -103,7 +103,7 @@ fn object_define_properties(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue
             "Object.defineProperty is unavailable".to_string(),
         ));
     }
-    let object_ref = props.clone();
+    let object_ref = props;
     for key in object_ref.borrow().keys() {
         let descriptor = object_ref.borrow().get(&key);
         // `this` is `undefined` so `Object.defineProperty`'s receiver-stripping
@@ -688,7 +688,7 @@ fn make_parsed_document(
     );
     document.define_property(
         "documentElement".to_string(),
-        Property::read_only(document_element_value.clone()),
+        Property::read_only(document_element_value),
     );
     document.define_property("body".to_string(), Property::read_only(body_value));
     document.define_property("head".to_string(), Property::read_only(head_value));

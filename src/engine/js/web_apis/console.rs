@@ -446,7 +446,7 @@ fn console_trace(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 }
 
 fn console_assert(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    if args.get(1).map(JSValue::to_boolean).unwrap_or(false) == false {
+    if !args.get(1).map(JSValue::to_boolean).unwrap_or(false) {
         console_message(vm, args, log::Level::Warn)?;
     }
     Ok(JSValue::undefined())

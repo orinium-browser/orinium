@@ -615,7 +615,7 @@ fn image_constructor(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let value = expose_detached_node(vm, node).unwrap_or(JSValue::null());
     if let (Some(node_id), Some(width), Some(height)) = (
         node_dom_id(&value),
-        args.get(0).and_then(|a| a.as_number()),
+        args.first().and_then(|a| a.as_number()),
         args.get(1).and_then(|a| a.as_number()),
     ) {
         let _ = with_host_mut(vm, |host| {
@@ -1219,12 +1219,11 @@ fn expose_node_inner(vm: &VM, node: NodeRef<HtmlNodeType>, kind: NodeKind) -> Op
 
         // Custom elements inherit the class prototype so their methods are
         // reachable from `this` inside lifecycle callbacks and event handlers.
-        if let NodeKind::Element { tag_name, .. } = &kind {
-            if let Some(definition) = host.custom_elements.get(tag_name) {
-                if let Some(class_proto) = link_custom_element_prototype(&obj, definition) {
-                    obj.borrow_mut().set_prototype(Some(class_proto));
-                }
-            }
+        if let NodeKind::Element { tag_name, .. } = &kind
+            && let Some(definition) = host.custom_elements.get(tag_name)
+            && let Some(class_proto) = link_custom_element_prototype(&obj, definition)
+        {
+            obj.borrow_mut().set_prototype(Some(class_proto));
         }
 
         // Non-element nodes are created without a prototype; wire them to
