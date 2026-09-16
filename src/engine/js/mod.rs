@@ -443,7 +443,11 @@ impl JsRuntime {
                     source.chars().take(60).collect::<String>(),
                     self.engine.last_error_pc(),
                     self.engine.last_error_fn(),
-                    self.engine.last_error_stack().iter().take(10).collect::<Vec<_>>(),
+                    self.engine
+                        .last_error_stack()
+                        .iter()
+                        .take(10)
+                        .collect::<Vec<_>>(),
                 );
             }
         }
@@ -1336,8 +1340,7 @@ mod tests {
             .unwrap_or_default()
             .to_string();
         assert_eq!(
-            data,
-            "tmpl:function;tmpl.proto:true;content:true;content.firstChild:true;x:true",
+            data, "tmpl:function;tmpl.proto:true;content:true;content.firstChild:true;x:true",
             "got: {data}"
         );
     }

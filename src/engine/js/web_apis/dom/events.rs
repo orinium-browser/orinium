@@ -87,19 +87,11 @@ fn event_field(args: &[JSValue], field: &str, default: JSValue) -> JSValue {
 }
 
 fn event_get_composed(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    Ok(event_field(
-        &args,
-        "composed",
-        JSValue::from_bool(false),
-    ))
+    Ok(event_field(&args, "composed", JSValue::from_bool(false)))
 }
 
 fn event_get_event_phase(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    Ok(event_field(
-        &args,
-        "eventPhase",
-        JSValue::from_number(0.0),
-    ))
+    Ok(event_field(&args, "eventPhase", JSValue::from_number(0.0)))
 }
 
 fn event_get_default_prevented(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -119,11 +111,7 @@ fn event_get_current_target(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValu
 }
 
 fn event_get_timestamp(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    Ok(event_field(
-        &args,
-        "timeStamp",
-        JSValue::from_number(0.0),
-    ))
+    Ok(event_field(&args, "timeStamp", JSValue::from_number(0.0)))
 }
 
 fn event_composed_path(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {

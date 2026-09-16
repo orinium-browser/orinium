@@ -35,7 +35,13 @@ pub(crate) fn install_console(engine: &mut pixi_byte::JSEngine) {
             JSValue::from_native_function(console_trace),
         );
         for name in [
-            "dir", "dirxml", "group", "groupEnd", "groupCollapsed", "table", "clear",
+            "dir",
+            "dirxml",
+            "group",
+            "groupEnd",
+            "groupCollapsed",
+            "table",
+            "clear",
         ] {
             console.set(
                 name.to_string(),

@@ -1070,12 +1070,29 @@ mod tests {
         };
 
         // Wrapped lines fall back to the finite inline size instead of f32::MAX.
-        let wrapped = inline.line_spans.iter().filter(|s| s.line_index >= 1).collect::<Vec<_>>();
+        let wrapped = inline
+            .line_spans
+            .iter()
+            .filter(|s| s.line_index >= 1)
+            .collect::<Vec<_>>();
         assert!(!wrapped.is_empty(), "text must wrap on multiple lines");
         for span in &inline.line_spans {
-            assert!(span.line_pos.0.is_finite(), "x must be finite, got {}", span.line_pos.0);
-            assert!(span.line_pos.0 < 1000.0, "x must stay on-screen, got {}", span.line_pos.0);
-            assert!(span.width() <= 60.0, "line {} too wide: {}", span.line_index, span.width());
+            assert!(
+                span.line_pos.0.is_finite(),
+                "x must be finite, got {}",
+                span.line_pos.0
+            );
+            assert!(
+                span.line_pos.0 < 1000.0,
+                "x must stay on-screen, got {}",
+                span.line_pos.0
+            );
+            assert!(
+                span.width() <= 60.0,
+                "line {} too wide: {}",
+                span.line_index,
+                span.width()
+            );
         }
         // "bbbb " (line 1) is centered within 60px: (60 - 45) / 2 == 7.5.
         assert_eq!(inline.line_spans[1].line_pos.0, 7.5);

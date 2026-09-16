@@ -115,9 +115,7 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
         );
         document.set(
             "importNode".to_string(),
-            JSValue::from_native_function(
-                crate::engine::js::web_apis::dom::element::import_node,
-            ),
+            JSValue::from_native_function(crate::engine::js::web_apis::dom::element::import_node),
         );
         document.set(
             "createElementNS".to_string(),
@@ -221,7 +219,10 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
         // `__call__` makes `typeof X` report "function" and `__construct__`
         // makes `new X(...)` work (returning an instance linked to `X.prototype`).
         template_constructor.set("__call__".to_string(), JSValue::from_native_function(noop));
-        template_constructor.set("__construct__".to_string(), JSValue::from_native_function(noop));
+        template_constructor.set(
+            "__construct__".to_string(),
+            JSValue::from_native_function(noop),
+        );
         template_constructor.set(
             "__host_has_instance__".to_string(),
             JSValue::from_native_function(html_template_element_has_instance),
@@ -292,7 +293,10 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
             // `__call__` makes `typeof X` report "function" and `__construct__`
             // makes `new X(...)` work (returning an instance linked to `X.prototype`).
             constructor.set("__call__".to_string(), JSValue::from_native_function(noop));
-            constructor.set("__construct__".to_string(), JSValue::from_native_function(noop));
+            constructor.set(
+                "__construct__".to_string(),
+                JSValue::from_native_function(noop),
+            );
             constructor.define_property(
                 "prototype".to_string(),
                 Property::read_only(JSValue::from_object(Rc::clone(&prototype))),
@@ -351,7 +355,10 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
             // `__call__` makes `typeof X` report "function" and `__construct__`
             // makes `new X(...)` work (returning an instance linked to `X.prototype`).
             constructor.set("__call__".to_string(), JSValue::from_native_function(noop));
-            constructor.set("__construct__".to_string(), JSValue::from_native_function(noop));
+            constructor.set(
+                "__construct__".to_string(),
+                JSValue::from_native_function(noop),
+            );
             constructor.define_property(
                 "prototype".to_string(),
                 Property::read_only(JSValue::from_object(Rc::clone(&prototype))),
@@ -455,7 +462,10 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
         // `__call__` makes `typeof X` report "function" and `__construct__`
         // makes `new X(...)` work (returning an instance linked to `X.prototype`).
         constructor.set("__call__".to_string(), JSValue::from_native_function(noop));
-        constructor.set("__construct__".to_string(), JSValue::from_native_function(noop));
+        constructor.set(
+            "__construct__".to_string(),
+            JSValue::from_native_function(noop),
+        );
         constructor.define_property(
             "prototype".to_string(),
             Property::read_only(JSValue::from_object(Rc::clone(&fragment_prototype))),
@@ -610,9 +620,7 @@ fn image_constructor(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     ) {
         let _ = with_host_mut(vm, |host| {
             if let Some(node) = host.refs.get(&node_id).and_then(|n| n.upgrade()) {
-                node.borrow_mut()
-                    .value
-                    .set_attr("width", width.to_string());
+                node.borrow_mut().value.set_attr("width", width.to_string());
                 node.borrow_mut()
                     .value
                     .set_attr("height", height.to_string());

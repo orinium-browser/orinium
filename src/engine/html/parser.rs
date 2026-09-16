@@ -1145,17 +1145,11 @@ fn apply_suspense_replacements(tree: &DomTree) {
                     .is_some_and(|f| f == template_id)
             })
             .and_then(|template| {
-                template
-                    .borrow()
-                    .children()
-                    .first()
-                    .and_then(|first| {
-                        let is_fragment = matches!(
-                            &first.borrow().value,
-                            HtmlNodeType::DocumentFragment
-                        );
-                        is_fragment.then(|| Rc::clone(first))
-                    })
+                template.borrow().children().first().and_then(|first| {
+                    let is_fragment =
+                        matches!(&first.borrow().value, HtmlNodeType::DocumentFragment);
+                    is_fragment.then(|| Rc::clone(first))
+                })
             });
         let Some(fragment) = fragment else {
             log::warn!(
@@ -1179,11 +1173,7 @@ fn apply_suspense_replacements(tree: &DomTree) {
         let mut all_inserted = true;
         for child in fragment_children {
             let clone = deep_clone_subtree(&child);
-            all_inserted &= TreeNode::insert_before(
-                &placeholder_parent,
-                clone,
-                &placeholder,
-            );
+            all_inserted &= TreeNode::insert_before(&placeholder_parent, clone, &placeholder);
         }
         if all_inserted {
             TreeNode::remove_child(&placeholder_parent, &placeholder);
@@ -1194,7 +1184,9 @@ fn apply_suspense_replacements(tree: &DomTree) {
             .find_all(|n| n.tag_name() == Some("suspense-replace"))
             .into_iter()
             .find(|node| {
-                node.borrow().value.get_attr("target")
+                node.borrow()
+                    .value
+                    .get_attr("target")
                     .is_some_and(|t| t.trim() == target)
             });
         if let Some(marker) = marker {
@@ -1208,12 +1200,10 @@ fn apply_suspense_replacements(tree: &DomTree) {
 
 /// Finds an element by `id` anywhere in the tree (outside templates).
 fn find_element_by_id(tree: &DomTree, id: &str) -> Option<NodeRef<HtmlNodeType>> {
-    tree.find_all(|n| {
-        n.tag_name().is_some() && n.get_attr("id").is_some_and(|v| v == id)
-    })
-    .iter()
-    .find(|node| !is_inside_template(node))
-    .map(|node| Rc::clone(node))
+    tree.find_all(|n| n.tag_name().is_some() && n.get_attr("id").is_some_and(|v| v == id))
+        .iter()
+        .find(|node| !is_inside_template(node))
+        .map(|node| Rc::clone(node))
 }
 
 /// Deep-clones a subtree, dropping parent links.
@@ -1352,9 +1342,11 @@ mod tests {
         // template, so document-wide queries never find it.
         assert!(tree.query_selector("#x").is_none());
         let body = tree.query_selector("html > body").unwrap();
-        assert!(!children_of(&body)
-            .iter()
-            .any(|c| tag_of(c).as_deref() == Some("div")));
+        assert!(
+            !children_of(&body)
+                .iter()
+                .any(|c| tag_of(c).as_deref() == Some("div"))
+        );
 
         let text = DomTree::inner_text(&content[0]);
         assert_eq!(text, "hi");
@@ -1362,18 +1354,17 @@ mod tests {
 
     #[test]
     fn scripts_inside_template_are_inert() {
-        let tree = parse(
-            r#"<template><script>leak()</script></template><script>ok()</script>"#,
-        );
+        let tree = parse(r#"<template><script>leak()</script></template><script>ok()</script>"#);
         let scripts = tree.collect_classic_scripts();
-        assert_eq!(scripts, vec![ClassicScriptSource::Inline("ok()".to_string())]);
+        assert_eq!(
+            scripts,
+            vec![ClassicScriptSource::Inline("ok()".to_string())]
+        );
     }
 
     #[test]
     fn nested_templates_own_separate_fragments() {
-        let tree = parse(
-            r#"<template><template><b>deep</b></template><i>x</i></template>"#,
-        );
+        let tree = parse(r#"<template><template><b>deep</b></template><i>x</i></template>"#);
 
         // The inner template lives in inert content, so only the outer one is
         // reachable from document-level queries (matching browsers).
@@ -1403,9 +1394,6 @@ mod tests {
             .expect("template in head stays in head");
         // The <title> is inert template content: unreachable from the document.
         assert!(tree.query_selector("title").is_none());
-        assert_eq!(
-            DomTree::inner_text(&find_first_fragment(&template)),
-            "t"
-        );
+        assert_eq!(DomTree::inner_text(&find_first_fragment(&template)), "t");
     }
 }

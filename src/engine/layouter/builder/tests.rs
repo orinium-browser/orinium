@@ -705,9 +705,18 @@ fn sr_only_rect_zero_is_culled_in_draw_commands() {
     generate_draw_commands(&mut cmds, &layout, &info, (800.0, 600.0));
     let texts: Vec<_> = cmds
         .iter()
-        .filter(|c| matches!(c, crate::engine::renderer_model::DrawCommand::DrawText { .. }))
+        .filter(|c| {
+            matches!(
+                c,
+                crate::engine::renderer_model::DrawCommand::DrawText { .. }
+            )
+        })
         .collect();
-    assert!(texts.is_empty(), "sr-only text should be culled, drew {}", texts.len());
+    assert!(
+        texts.is_empty(),
+        "sr-only text should be culled, drew {}",
+        texts.len()
+    );
 }
 
 #[test]

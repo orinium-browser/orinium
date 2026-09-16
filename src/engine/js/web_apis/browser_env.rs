@@ -270,7 +270,10 @@ pub(crate) fn install_browser_environment(engine: &mut pixi_byte::JSEngine) {
         // `__call__` makes `typeof X` report "function" and `__construct__`
         // makes `new X(...)` work (returning an instance linked to `X.prototype`).
         constructor.set("__call__".to_string(), JSValue::from_native_function(noop));
-        constructor.set("__construct__".to_string(), JSValue::from_native_function(noop));
+        constructor.set(
+            "__construct__".to_string(),
+            JSValue::from_native_function(noop),
+        );
         constructor.define_property(
             "prototype".to_string(),
             Property::read_only(JSValue::from_object(Rc::clone(&prototype))),
@@ -475,10 +478,9 @@ pub(crate) fn window_dispatch_event(vm: &mut VM, args: Vec<JSValue>) -> JSResult
     event
         .borrow_mut()
         .set("currentTarget".to_string(), window.clone());
-    event.borrow_mut().set(
-        "eventPhase".to_string(),
-        JSValue::from_number(2.0),
-    );
+    event
+        .borrow_mut()
+        .set("eventPhase".to_string(), JSValue::from_number(2.0));
 
     let listeners = with_host(vm, |host| {
         host.document_event_listeners

@@ -22,10 +22,10 @@ pub(crate) fn install_message_channel(engine: &mut pixi_byte::JSEngine) {
         "__call__".to_string(),
         JSValue::from_native_function(message_channel_constructor),
     );
-    engine
-        .global_mut()
-        .borrow_mut()
-        .set("MessageChannel".to_string(), JSValue::from_object(Rc::new(RefCell::new(constructor))));
+    engine.global_mut().borrow_mut().set(
+        "MessageChannel".to_string(),
+        JSValue::from_object(Rc::new(RefCell::new(constructor))),
+    );
 }
 
 fn make_port() -> JSValue {

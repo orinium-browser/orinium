@@ -699,8 +699,9 @@ fn clip_path_is_empty(clip: &ClipPath, w: f32, h: f32) -> bool {
             right,
             bottom,
             left,
-        } => (w - left * w - right * w).max(0.0) <= 0.0
-            || (h - top * h - bottom * h).max(0.0) <= 0.0,
+        } => {
+            (w - left * w - right * w).max(0.0) <= 0.0 || (h - top * h - bottom * h).max(0.0) <= 0.0
+        }
         ClipPath::Polygon { points } => points.len() < 3,
     }
 }
@@ -749,8 +750,8 @@ fn push_box_model(
 
     // A zero-area clip-path (e.g. GitHub's `clip-path: rect(0 0 0 0)` on
     // `.sr-only` elements) hides the element and every descendant.
-    let clip_culls =
-        clip_path_pushed && clip_path_is_empty(&style.clip_path, border_box.width, border_box.height);
+    let clip_culls = clip_path_pushed
+        && clip_path_is_empty(&style.clip_path, border_box.width, border_box.height);
 
     // Culled subtrees draw nothing; drop the clip-path clip as well (the
     // zero-area rect is pure overhead).
@@ -893,12 +894,14 @@ fn draw_text(
 /// box.
 fn emit_canvas_background(cmd_buf: &mut Vec<DrawCommand>, info: &InfoNode, viewport: (f32, f32)) {
     let background = match info.kind.container_bg() {
-        Some(Background::Color(color)) if color.3 == 0 => info.children.iter().find_map(
-            |child| match child.kind.container_bg() {
-                Some(Background::Color(color)) if color.3 > 0 => Some(*color),
-                _ => None,
-            },
-        ),
+        Some(Background::Color(color)) if color.3 == 0 => {
+            info.children
+                .iter()
+                .find_map(|child| match child.kind.container_bg() {
+                    Some(Background::Color(color)) if color.3 > 0 => Some(*color),
+                    _ => None,
+                })
+        }
         Some(Background::Color(color)) => Some(*color),
         _ => None,
     };
@@ -1061,10 +1064,7 @@ fn generate_draw_commands_inner(
         && layout.style.display.outer() == Some(OuterDisplay::Inline)
         && layout.style.display.inner() == Some(InnerDisplay::FlowRoot)
     {
-        (
-            origin.0 - transform_origin.0,
-            origin.1 - transform_origin.1,
-        )
+        (origin.0 - transform_origin.0, origin.1 - transform_origin.1)
     } else {
         (0.0, 0.0)
     };
@@ -1149,9 +1149,7 @@ fn generate_draw_commands_inner(
 
             // The vector content belongs to the element itself (like its borders
             // and background), so a hidden node paints nothing.
-            if !self_hidden
-                && let Some(bm) = layout.layout_box.iter().next()
-            {
+            if !self_hidden && let Some(bm) = layout.layout_box.iter().next() {
                 emit_commands(
                     cmd_buf,
                     (
@@ -1196,10 +1194,15 @@ fn generate_draw_commands_inner(
             // `display: none` / `display: contents` custom elements have no
             // laid-out box (`LayoutBox::None`); render nothing rather than
             // falling back to the component's intrinsic size.
-            let Some(size) = layout.layout_box.iter().next().map(|box_model| ContentSize {
-                width: box_model.content_box.width,
-                height: box_model.content_box.height,
-            }) else {
+            let Some(size) = layout
+                .layout_box
+                .iter()
+                .next()
+                .map(|box_model| ContentSize {
+                    width: box_model.content_box.width,
+                    height: box_model.content_box.height,
+                })
+            else {
                 break 'custom;
             };
             let culled = box_states.iter().any(|s| s.cull);
@@ -1328,7 +1331,8 @@ fn generate_draw_commands_inner(
                 }
                 if let Some(LayoutChild::Node(node)) = layout_iter.next() {
                     let child_origin = child_origin(node, origin);
-                    let child_transform_origin = child_transform_origin(node, origin, transform_origin);
+                    let child_transform_origin =
+                        child_transform_origin(node, origin, transform_origin);
                     let z_index = child_info.kind.z_index();
                     if z_index > 0 {
                         let mut child_commands = Vec::new();
@@ -1550,7 +1554,9 @@ mod tests {
         };
         let style = ContainerStyle::default();
         let mut buf = Vec::new();
-        let state = push_box_model(&mut buf, &box_model, &style, 0.0, 0.0, false, true, true, true);
+        let state = push_box_model(
+            &mut buf, &box_model, &style, 0.0, 0.0, false, true, true, true,
+        );
         // Scroll/content transforms are no-ops here (zero offsets); border
         // transform + clip + content are pushed while the box is open.
         assert!(buf.len() >= 2);

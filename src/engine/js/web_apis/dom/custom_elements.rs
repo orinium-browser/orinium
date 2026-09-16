@@ -126,7 +126,9 @@ fn custom_elements_define(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> 
         if let Some(class_proto) = custom_element_class_prototype(definition) {
             for dom_id in &dom_ids {
                 if let Some(element) = host.objects.get(dom_id) {
-                    element.borrow_mut().set_prototype(Some(Rc::clone(&class_proto)));
+                    element
+                        .borrow_mut()
+                        .set_prototype(Some(Rc::clone(&class_proto)));
                 }
             }
         }
@@ -232,7 +234,9 @@ fn custom_elements_upgrade(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue>
                 && let Some(class_proto) = custom_element_class_prototype(definition)
                 && let Some(element) = host.objects.get(dom_id)
             {
-                element.borrow_mut().set_prototype(Some(Rc::clone(&class_proto)));
+                element
+                    .borrow_mut()
+                    .set_prototype(Some(Rc::clone(&class_proto)));
             }
         });
         fire_lifecycle_callback(vm, *dom_id, |d| d.connected_callback.clone());

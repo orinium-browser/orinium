@@ -1469,8 +1469,10 @@ fn form_elements_named_item(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue
             .as_object()
             .and_then(|object| {
                 let dom_id = object.borrow().get("__orinium_dom_id").to_number();
-                with_host(vm, |host| host.refs.get(&(dom_id as u64)).and_then(|w| w.upgrade()))
-                    .flatten()
+                with_host(vm, |host| {
+                    host.refs.get(&(dom_id as u64)).and_then(|w| w.upgrade())
+                })
+                .flatten()
             })
             .is_some_and(|node| {
                 let borrowed = node.borrow();
@@ -1497,11 +1499,7 @@ fn form_request_submit(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     };
     let (action, method, query) = {
         let borrowed = form.borrow();
-        let action = borrowed
-            .value
-            .get_attr("action")
-            .unwrap_or("")
-            .to_string();
+        let action = borrowed.value.get_attr("action").unwrap_or("").to_string();
         let method = borrowed
             .value
             .get_attr("method")
@@ -2065,11 +2063,11 @@ pub(crate) fn node_get_root_node(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JS
     }
     if matches!(node.borrow().value, HtmlNodeType::ShadowRoot { .. }) {
         let shadow_dom_id = with_host(vm, |host| {
-            host.refs
-                .iter()
-                .find_map(|(id, weak)| {
-                    weak.upgrade().is_some_and(|n| Rc::ptr_eq(&n, &node)).then_some(*id)
-                })
+            host.refs.iter().find_map(|(id, weak)| {
+                weak.upgrade()
+                    .is_some_and(|n| Rc::ptr_eq(&n, &node))
+                    .then_some(*id)
+            })
         })
         .flatten();
         if let Some(dom_id) = shadow_dom_id {
@@ -2231,8 +2229,8 @@ fn get_template_content(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
             .find(|c| matches!(c.borrow().value, HtmlNodeType::DocumentFragment))
             .cloned()
     };
-    let fragment =
-        existing.unwrap_or_else(|| TreeNode::add_child_value(&node, HtmlNodeType::DocumentFragment));
+    let fragment = existing
+        .unwrap_or_else(|| TreeNode::add_child_value(&node, HtmlNodeType::DocumentFragment));
     Ok(expose_node(vm, fragment).unwrap_or(JSValue::undefined()))
 }
 

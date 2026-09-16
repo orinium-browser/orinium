@@ -190,9 +190,7 @@ impl<'a> Tokenizer<'a> {
                     self.state_data(c)
                 }
                 TokenizerState::EscapeDecoding => self.state_escape_decoding(c),
-                TokenizerState::AttributeEscapeDecoding => {
-                    self.state_attribute_escape_decoding(c)
-                }
+                TokenizerState::AttributeEscapeDecoding => self.state_attribute_escape_decoding(c),
                 _ if self.state.is_doctype() => self.state_doctype(c),
                 TokenizerState::TagOpen => self.state_tag_open(c),
                 TokenizerState::TagName => self.state_tag_name(c),
@@ -953,10 +951,7 @@ mod tests {
             let tokens = collect_tokens(&input);
             assert_eq!(
                 tokens,
-                vec![Token::Text(format!(
-                    "{} \"Q\" and '9' end",
-                    "x".repeat(n)
-                ))],
+                vec![Token::Text(format!("{} \"Q\" and '9' end", "x".repeat(n)))],
                 "failed with {n} leading chars"
             );
         }

@@ -1,6 +1,6 @@
 use base64::Engine as _;
-use pixi_byte::value::jsvalue::JsValueKind;
 use pixi_byte::value::jsobject::{JSObject, Property};
+use pixi_byte::value::jsvalue::JsValueKind;
 use pixi_byte::vm::VM;
 use pixi_byte::{JSError, JSResult, JSValue};
 use std::cell::RefCell;
@@ -197,15 +197,22 @@ fn uint8_array_constructor(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue>
                     .map(|item| !matches!(item.kind(), JsValueKind::Undefined))
                     .unwrap_or(false);
                 if has_offset
-                    && buffer.is_some_and(|object| !object.borrow().get("byteLength").is_undefined())
+                    && buffer
+                        .is_some_and(|object| !object.borrow().get("byteLength").is_undefined())
                 {
-                    let offset = args.get(2).map(JSValue::to_number).unwrap_or(0.0).max(0.0) as usize;
-                    let length = args.get(3).map(JSValue::to_number).unwrap_or(0.0).max(0.0) as usize;
+                    let offset =
+                        args.get(2).map(JSValue::to_number).unwrap_or(0.0).max(0.0) as usize;
+                    let length =
+                        args.get(3).map(JSValue::to_number).unwrap_or(0.0).max(0.0) as usize;
                     let base = value_bytes(value);
                     let end = (offset + length).min(base.len());
                     let slice = base[offset.min(base.len())..end].to_vec();
                     let array = vm.array_from_values(
-                        slice.iter().copied().map(|byte| JSValue::from_number(byte as f64)).collect(),
+                        slice
+                            .iter()
+                            .copied()
+                            .map(|byte| JSValue::from_number(byte as f64))
+                            .collect(),
                     );
                     install_uint8_descriptors(&array, offset, slice.len(), value.clone(), vm);
                     return Ok(array);
@@ -227,11 +234,23 @@ fn make_uint8_array(vm: &mut VM, bytes: Vec<u8>, buffer: Option<JSValue>) -> JSV
             .map(|byte| JSValue::from_number(byte as f64))
             .collect(),
     );
-    install_uint8_descriptors(&array, 0, bytes.len(), buffer.unwrap_or_else(|| make_array_buffer(bytes.clone())), vm);
+    install_uint8_descriptors(
+        &array,
+        0,
+        bytes.len(),
+        buffer.unwrap_or_else(|| make_array_buffer(bytes.clone())),
+        vm,
+    );
     array
 }
 
-fn install_uint8_descriptors(array: &JSValue, offset: usize, length: usize, buffer: JSValue, _vm: &mut VM) {
+fn install_uint8_descriptors(
+    array: &JSValue,
+    offset: usize,
+    length: usize,
+    buffer: JSValue,
+    _vm: &mut VM,
+) {
     if let Some(object) = array.as_object() {
         object.borrow_mut().define_property(
             "byteLength".to_string(),
@@ -241,10 +260,9 @@ fn install_uint8_descriptors(array: &JSValue, offset: usize, length: usize, buff
             "byteOffset".to_string(),
             Property::read_only(JSValue::from_number(offset as f64)),
         );
-        object.borrow_mut().define_property(
-            "buffer".to_string(),
-            Property::read_only(buffer),
-        );
+        object
+            .borrow_mut()
+            .define_property("buffer".to_string(), Property::read_only(buffer));
         object.borrow_mut().set(
             "set".to_string(),
             JSValue::from_native_function(uint8_array_set),
@@ -410,22 +428,70 @@ fn data_view_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> 
         "byteLength".to_string(),
         Property::read_only(JSValue::from_number(byte_length as f64)),
     );
-    view.set("getUint8".to_string(), JSValue::from_native_function(dataview_get_u8));
-    view.set("getUint16".to_string(), JSValue::from_native_function(dataview_get_u16));
-    view.set("getUint32".to_string(), JSValue::from_native_function(dataview_get_u32));
-    view.set("getInt8".to_string(), JSValue::from_native_function(dataview_get_i8));
-    view.set("getInt16".to_string(), JSValue::from_native_function(dataview_get_i16));
-    view.set("getInt32".to_string(), JSValue::from_native_function(dataview_get_i32));
-    view.set("getFloat32".to_string(), JSValue::from_native_function(dataview_get_f32));
-    view.set("getFloat64".to_string(), JSValue::from_native_function(dataview_get_f64));
-    view.set("setUint8".to_string(), JSValue::from_native_function(dataview_set_u8));
-    view.set("setUint16".to_string(), JSValue::from_native_function(dataview_set_u16));
-    view.set("setUint32".to_string(), JSValue::from_native_function(dataview_set_u32));
-    view.set("setInt8".to_string(), JSValue::from_native_function(dataview_set_i8));
-    view.set("setInt16".to_string(), JSValue::from_native_function(dataview_set_i16));
-    view.set("setInt32".to_string(), JSValue::from_native_function(dataview_set_i32));
-    view.set("setFloat32".to_string(), JSValue::from_native_function(dataview_set_f32));
-    view.set("setFloat64".to_string(), JSValue::from_native_function(dataview_set_f64));
+    view.set(
+        "getUint8".to_string(),
+        JSValue::from_native_function(dataview_get_u8),
+    );
+    view.set(
+        "getUint16".to_string(),
+        JSValue::from_native_function(dataview_get_u16),
+    );
+    view.set(
+        "getUint32".to_string(),
+        JSValue::from_native_function(dataview_get_u32),
+    );
+    view.set(
+        "getInt8".to_string(),
+        JSValue::from_native_function(dataview_get_i8),
+    );
+    view.set(
+        "getInt16".to_string(),
+        JSValue::from_native_function(dataview_get_i16),
+    );
+    view.set(
+        "getInt32".to_string(),
+        JSValue::from_native_function(dataview_get_i32),
+    );
+    view.set(
+        "getFloat32".to_string(),
+        JSValue::from_native_function(dataview_get_f32),
+    );
+    view.set(
+        "getFloat64".to_string(),
+        JSValue::from_native_function(dataview_get_f64),
+    );
+    view.set(
+        "setUint8".to_string(),
+        JSValue::from_native_function(dataview_set_u8),
+    );
+    view.set(
+        "setUint16".to_string(),
+        JSValue::from_native_function(dataview_set_u16),
+    );
+    view.set(
+        "setUint32".to_string(),
+        JSValue::from_native_function(dataview_set_u32),
+    );
+    view.set(
+        "setInt8".to_string(),
+        JSValue::from_native_function(dataview_set_i8),
+    );
+    view.set(
+        "setInt16".to_string(),
+        JSValue::from_native_function(dataview_set_i16),
+    );
+    view.set(
+        "setInt32".to_string(),
+        JSValue::from_native_function(dataview_set_i32),
+    );
+    view.set(
+        "setFloat32".to_string(),
+        JSValue::from_native_function(dataview_set_f32),
+    );
+    view.set(
+        "setFloat64".to_string(),
+        JSValue::from_native_function(dataview_set_f64),
+    );
     Ok(JSValue::from_object(Rc::new(RefCell::new(view))))
 }
 
@@ -477,7 +543,14 @@ fn dataview_view_and_bytes(
     let little_endian = args.get(2).map(JSValue::to_number).unwrap_or(0.0) != 0.0;
     let bytes = value_bytes(&JSValue::from_object(buffer.clone()));
     // Convert the view-relative position to an absolute buffer index.
-    Ok((buffer, bytes, byte_offset + position, little_endian, byte_offset, byte_length))
+    Ok((
+        buffer,
+        bytes,
+        byte_offset + position,
+        little_endian,
+        byte_offset,
+        byte_length,
+    ))
 }
 
 fn dataview_get_u8(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -647,7 +720,14 @@ fn dataview_write_state(
     let little_endian = args.get(3).map(JSValue::to_number).unwrap_or(0.0) != 0.0;
     let bytes = value_bytes(&JSValue::from_object(buffer.clone()));
     // Convert the view-relative position to an absolute buffer index.
-    Ok((buffer, bytes, byte_offset + position, little_endian, byte_offset, byte_length))
+    Ok((
+        buffer,
+        bytes,
+        byte_offset + position,
+        little_endian,
+        byte_offset,
+        byte_length,
+    ))
 }
 
 fn read_u16(bytes: &[u8], position: usize, little_endian: bool) -> u16 {
@@ -685,7 +765,10 @@ fn write_u16(buffer: &Rc<RefCell<JSObject>>, position: usize, little_endian: boo
     };
     let mut object = buffer.borrow_mut();
     for (index, byte) in bytes.iter().copied().enumerate() {
-        object.set((position + index).to_string(), JSValue::from_number(byte as f64));
+        object.set(
+            (position + index).to_string(),
+            JSValue::from_number(byte as f64),
+        );
     }
 }
 
@@ -697,7 +780,10 @@ fn write_u32(buffer: &Rc<RefCell<JSObject>>, position: usize, little_endian: boo
     };
     let mut object = buffer.borrow_mut();
     for (index, byte) in bytes.iter().copied().enumerate() {
-        object.set((position + index).to_string(), JSValue::from_number(byte as f64));
+        object.set(
+            (position + index).to_string(),
+            JSValue::from_number(byte as f64),
+        );
     }
 }
 
@@ -709,6 +795,9 @@ fn write_u64(buffer: &Rc<RefCell<JSObject>>, position: usize, little_endian: boo
     };
     let mut object = buffer.borrow_mut();
     for (index, byte) in bytes.iter().copied().enumerate() {
-        object.set((position + index).to_string(), JSValue::from_number(byte as f64));
+        object.set(
+            (position + index).to_string(),
+            JSValue::from_number(byte as f64),
+        );
     }
 }
