@@ -41,6 +41,7 @@ use crate::engine::layouter::css_resolver::{
 use crate::engine::layouter::dom_snapshot::{DomSnapshot, NodeId};
 use crate::engine::layouter::types::WhiteSpace;
 use crate::engine::renderer_model::Image;
+use crate::engine::svg::{SvgContent, collect_svg};
 use crate::engine::tree::NodeRef;
 use crate::engine::ui::custom_node_bridge::CustomNodeBridge;
 use crate::engine::ui::registry::{ComponentRegistry, CustomNodeContext, DomWriteBack};
@@ -594,6 +595,43 @@ pub fn build_layout_and_info_from_snapshot(
                 }
             }
 
+            // ── Inline SVG ──
+            // An `<svg>` is atomic: its vector content rides on the layout
+            // node instead of being laid out as child boxes. Collect the
+            // viewBox and its single-color `<path>` subtree up front.
+            let svg_content = if html_node.tag_name() == Some("svg") {
+                collect_svg(
+                    snapshot,
+                    stack[top_idx].dom,
+                    used_color_scheme,
+                    text_style.color,
+                )
+            } else {
+                None
+            };
+
+            // Per CSS-SIZING the auto height of an atomic SVG with a definite
+            // width and an intrinsic aspect ratio (its viewBox) is the width
+            // divided by that ratio (used when only a width is specified,
+            // e.g. `svg { width: 100px }` with no height).
+            if let Some(SvgContent {
+                view_box: (_, _, vbw, vbh),
+                ..
+            }) = svg_content.as_ref()
+                && *vbw > 0.0
+                && *vbh > 0.0
+                && matches!(style.size.height, LengthOrAuto::Auto)
+                && let Some(width) = style.size.width.clone().length()
+                && let Length::Px(width_px) = width
+                && width_px > 0.0
+            {
+                style.size.height = LengthOrAuto::Length(Length::Px(width_px * *vbh / *vbw));
+            }
+
+            // An `<svg>` has no layout children; capture this early so it can
+            // survive the move of `svg_content` into the kind construction.
+            let is_svg_element = svg_content.is_some();
+
             let child = Arc::new(InheritedCss {
                 custom_props: custom_properties,
                 text_style: text_style.clone(),
@@ -660,27 +698,26 @@ pub fn build_layout_and_info_from_snapshot(
                 // inline around the element's intrinsic box.
                 let mut layout_children: Vec<LayoutChild> = Vec::new();
                 let mut info_children: Vec<InfoNode> = Vec::new();
-                let add_pseudo_slot = |pseudo: &Properties,
-                                       layout_children: &mut Vec<LayoutChild>,
-                                       info_children: &mut Vec<InfoNode>| {
-                    if let Some(ChildSlot::Inline(fragment, pseudo_info)) = build_pseudo_slot(
-                        pseudo,
-                        &child_css.custom_props,
-                        &text_style,
-                        text_flow_style,
-                        used_color_scheme,
-                        &*measurer,
-                        images,
-                    ) {
-                        layout_children.push(fragment);
-                        info_children.push(*pseudo_info);
-                    }
-                };
+                let add_pseudo_slot =
+                    |pseudo: &Properties,
+                     layout_children: &mut Vec<LayoutChild>,
+                     info_children: &mut Vec<InfoNode>| {
+                        if let Some(ChildSlot::Inline(fragment, pseudo_info)) = build_pseudo_slot(
+                            pseudo,
+                            &child_css.custom_props,
+                            &text_style,
+                            text_flow_style,
+                            used_color_scheme,
+                            &*measurer,
+                            images,
+                        ) {
+                            layout_children.push(fragment);
+                            info_children.push(*pseudo_info);
+                        }
+                    };
                 let hidden = style.display == Display::None;
-                if !hidden {
-                    if let Some(pseudo) = pseudo_candidates.get(&PseudoElement::Before) {
-                        add_pseudo_slot(pseudo, &mut layout_children, &mut info_children);
-                    }
+                if !hidden && let Some(pseudo) = pseudo_candidates.get(&PseudoElement::Before) {
+                    add_pseudo_slot(pseudo, &mut layout_children, &mut info_children);
                 }
                 layout_children.push((style.clone(), bridge).into());
                 // The intrinsic box is drawn by the custom node itself, but it
@@ -698,10 +735,8 @@ pub fn build_layout_and_info_from_snapshot(
                     children: Vec::new(),
                     dom_id: None,
                 });
-                if !hidden {
-                    if let Some(pseudo) = pseudo_candidates.get(&PseudoElement::After) {
-                        add_pseudo_slot(pseudo, &mut layout_children, &mut info_children);
-                    }
+                if !hidden && let Some(pseudo) = pseudo_candidates.get(&PseudoElement::After) {
+                    add_pseudo_slot(pseudo, &mut layout_children, &mut info_children);
                 }
 
                 let layout = LayoutNode::with_children(style.clone(), layout_children);
@@ -736,13 +771,28 @@ pub fn build_layout_and_info_from_snapshot(
                 _ => ContainerRole::Normal,
             };
 
-            let kind = NodeKind::Container {
-                scroll_x: overflow.x,
-                scroll_y: overflow.y,
-                scroll_offset_x: 0.0,
-                scroll_offset_y: 0.0,
-                style: container_style,
-                role,
+            let kind = if let Some(SvgContent {
+                view_box, shapes, ..
+            }) = svg_content
+            {
+                NodeKind::Svg {
+                    view_box,
+                    shapes,
+                    scroll_x: overflow.x,
+                    scroll_y: overflow.y,
+                    scroll_offset_x: 0.0,
+                    scroll_offset_y: 0.0,
+                    style: container_style,
+                }
+            } else {
+                NodeKind::Container {
+                    scroll_x: overflow.x,
+                    scroll_y: overflow.y,
+                    scroll_offset_x: 0.0,
+                    scroll_offset_y: 0.0,
+                    style: container_style,
+                    role,
+                }
             };
 
             // Table → flex overrides
@@ -770,10 +820,12 @@ pub fn build_layout_and_info_from_snapshot(
             let mut element_kids: Vec<NodeId> = Vec::new();
 
             perf_scope!(child_slot_build);
-            if style.display != Display::None {
+            // `<svg>` is atomic: its markup (path/text/whitespace) never forms
+            // layout boxes, so no children are slotted at all.
+            if style.display != Display::None && !is_svg_element {
                 // ── ::before generated content ──
-                if let Some(pseudo) = pseudo_candidates.get(&PseudoElement::Before) {
-                    if let Some(slot) = build_pseudo_slot(
+                if let Some(pseudo) = pseudo_candidates.get(&PseudoElement::Before)
+                    && let Some(slot) = build_pseudo_slot(
                         pseudo,
                         &child_css.custom_props,
                         &text_style,
@@ -781,12 +833,12 @@ pub fn build_layout_and_info_from_snapshot(
                         used_color_scheme,
                         &*measurer,
                         images,
-                    ) {
-                        child_slots.push(slot);
-                        #[cfg(any(feature = "profile", debug_assertions))]
-                        {
-                            node_count += 1;
-                        }
+                    )
+                {
+                    child_slots.push(slot);
+                    #[cfg(any(feature = "profile", debug_assertions))]
+                    {
+                        node_count += 1;
                     }
                 }
                 let parent_tag_name = snapshot.node(stack[top_idx].dom).kind.tag_name();
@@ -857,8 +909,8 @@ pub fn build_layout_and_info_from_snapshot(
                 }
 
                 // ── ::after generated content ──
-                if let Some(pseudo) = pseudo_candidates.get(&PseudoElement::After) {
-                    if let Some(slot) = build_pseudo_slot(
+                if let Some(pseudo) = pseudo_candidates.get(&PseudoElement::After)
+                    && let Some(slot) = build_pseudo_slot(
                         pseudo,
                         &child_css.custom_props,
                         &text_style,
@@ -866,12 +918,12 @@ pub fn build_layout_and_info_from_snapshot(
                         used_color_scheme,
                         &*measurer,
                         images,
-                    ) {
-                        child_slots.push(slot);
-                        #[cfg(any(feature = "profile", debug_assertions))]
-                        {
-                            node_count += 1;
-                        }
+                    )
+                {
+                    child_slots.push(slot);
+                    #[cfg(any(feature = "profile", debug_assertions))]
+                    {
+                        node_count += 1;
                     }
                 }
             }

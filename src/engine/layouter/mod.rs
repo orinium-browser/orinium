@@ -27,6 +27,7 @@ pub use builder::{
     correct_atomic_inline_spacing, correct_atomic_inline_spacing_with_info, normalize_whitespace,
     refresh_missing_text_layout_results,
 };
+pub use builder::resolve_css_color;
 pub use dom_snapshot::{DomSnapshot, NodeId, SnapNode};
 pub use processor::{LayoutProcessor, LayoutResult, LayoutTask};
 pub use table_layout::align_table_columns;

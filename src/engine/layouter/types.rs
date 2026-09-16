@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use crate::engine::renderer_model::Image;
+use crate::engine::svg::SvgShape;
 use crate::engine::ui::custom_node::CustomNode;
 
 use super::dom_snapshot::NodeId;
@@ -83,14 +84,31 @@ pub enum NodeKind {
         text_style: TextStyle,
         text_flow_style: TextFlowStyle,
     },
+    /// Inline SVG (`<svg viewBox>` + monochrome `<path>` fills).
+    ///
+    /// The vector content is carried directly on the layout node: a transform
+    /// maps the `viewBox` rectangle onto the element's content box and each
+    /// subpath is emitted as a solid-color `DrawCommand::Fill` (see
+    /// `crate::engine::svg::emit_commands`).
+    Svg {
+        /// `viewBox="min-x min-y width height"`.
+        view_box: (f32, f32, f32, f32),
+        /// Subpaths painted in document order.
+        shapes: Vec<SvgShape>,
+        scroll_x: bool,
+        scroll_y: bool,
+        scroll_offset_x: f32,
+        scroll_offset_y: f32,
+        style: ContainerStyle,
+    },
 }
 
 impl NodeKind {
     pub fn z_index(&self) -> i32 {
         match self {
-            NodeKind::Container { style, .. } | NodeKind::Custom { style, .. } => {
-                style.z_index.unwrap_or(0)
-            }
+            NodeKind::Container { style, .. }
+            | NodeKind::Custom { style, .. }
+            | NodeKind::Svg { style, .. } => style.z_index.unwrap_or(0),
             _ => 0,
         }
     }
@@ -124,6 +142,11 @@ impl NodeKind {
                 ..
             }
             | NodeKind::Custom {
+                scroll_offset_x,
+                scroll_offset_y,
+                ..
+            }
+            | NodeKind::Svg {
                 scroll_offset_x,
                 scroll_offset_y,
                 ..
@@ -464,7 +487,7 @@ pub struct BorderRadius {
 /// CSS `clip-path` shape, stored as normalized (0.0–1.0) percentages.
 ///
 /// The renderer resolves these against the element's border-box dimensions
-/// to produce a [`Path`] for `PushClip`.
+/// to produce a [`crate::engine::renderer_model::Path`] for `PushClip`.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum ClipPath {
     #[default]

@@ -17,6 +17,7 @@ use crate::engine::renderer_model::path::{
     Path, append_quarter_ellipse, clamp_radii, ellipse_path, offset_path, polygon_path, rect_path,
     rounded_rect_path,
 };
+use crate::engine::svg::emit_commands;
 use crate::engine::ui::ContentSize;
 
 /// Per-box-model push state for balanced pop generation.
@@ -72,6 +73,9 @@ fn is_scrollport(kind: &NodeKind) -> bool {
             scroll_x, scroll_y, ..
         }
         | NodeKind::Custom {
+            scroll_x, scroll_y, ..
+        }
+        | NodeKind::Svg {
             scroll_x, scroll_y, ..
         } => *scroll_x || *scroll_y,
         _ => false,
@@ -1036,7 +1040,9 @@ fn generate_draw_commands_inner(
     // painting is suppressed.
     let self_hidden = matches!(
         &info.kind,
-        NodeKind::Container { style, .. } | NodeKind::Custom { style, .. }
+        NodeKind::Container { style, .. }
+            | NodeKind::Custom { style, .. }
+            | NodeKind::Svg { style, .. }
             if matches!(style.visibility, Visibility::Hidden | Visibility::Collapse)
     );
 
@@ -1112,6 +1118,52 @@ fn generate_draw_commands_inner(
                     true,
                     !self_hidden,
                 ));
+            }
+        }
+
+        // An inline SVG paints its viewBox-space subpaths into the content
+        // box right after the box is established, à la `emit_canvas_background`.
+        NodeKind::Svg {
+            view_box,
+            shapes,
+            scroll_x,
+            scroll_y,
+            scroll_offset_x,
+            scroll_offset_y,
+            style,
+            ..
+        } => {
+            for box_model in &layout.layout_box {
+                box_states.push(push_box_model(
+                    cmd_buf,
+                    &box_model,
+                    style,
+                    *scroll_offset_x,
+                    *scroll_offset_y,
+                    is_inline,
+                    *scroll_x || *scroll_y,
+                    true,
+                    !self_hidden,
+                ));
+            }
+
+            // The vector content belongs to the element itself (like its borders
+            // and background), so a hidden node paints nothing.
+            if !self_hidden
+                && let Some(bm) = layout.layout_box.iter().next()
+            {
+                emit_commands(
+                    cmd_buf,
+                    (
+                        bm.content_box.x,
+                        bm.content_box.y,
+                        bm.content_box.width,
+                        bm.content_box.height,
+                    ),
+                    is_inline,
+                    *view_box,
+                    shapes,
+                );
             }
         }
 
@@ -1269,7 +1321,7 @@ fn generate_draw_commands_inner(
             NodeKind::LineBreak => {
                 layout_iter.next();
             }
-            NodeKind::Container { .. } => {
+            NodeKind::Container { .. } | NodeKind::Svg { .. } => {
                 if subtree_culled {
                     layout_iter.next();
                     continue;
@@ -1381,7 +1433,7 @@ fn generate_draw_commands_inner(
 
     if matches!(
         info.kind,
-        NodeKind::Container { .. } | NodeKind::Custom { .. }
+        NodeKind::Container { .. } | NodeKind::Custom { .. } | NodeKind::Svg { .. }
     ) {
         for state in box_states.iter().rev() {
             pop_box_model(cmd_buf, *state);

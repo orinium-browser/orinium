@@ -12,5 +12,6 @@ pub mod js;
 pub mod layouter;
 pub mod origin;
 pub mod renderer_model;
+pub mod svg;
 pub mod tree;
 pub mod ui;
