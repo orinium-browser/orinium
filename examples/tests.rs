@@ -5,7 +5,7 @@ use orinium_browser::{
         css::matcher::ElementChain,
         css::parser::Parser as CssParser,
         html::{HtmlNodeType, parser::Parser as HtmlParser},
-        js::JsRuntime,
+        js::{JsRuntime, missing_api_detector},
         layouter::{
             InheritedCss, build_layout_and_info,
             css_resolver::{CssResolver, ResolvedStyles, StyleOrigin, append_resolved_styles},
@@ -30,11 +30,11 @@ fn main() -> Result<()> {
     #[cfg(feature = "dhat-heap")]
     let _profiler = dhat::Profiler::new_heap();
 
+    env_logger::init();
+
     if let Some(handler) = ProcessHandler::current() {
         handler.handle();
     }
-
-    env_logger::init();
 
     let args: Vec<String> = env::args().collect();
     if args.len() >= 2 {
@@ -333,6 +333,13 @@ fn main() -> Result<()> {
                     eprintln!("Please provide a URL for simple rendering test.");
                 }
             }
+            "webcompat" => {
+                if args.len() == 3 {
+                    run_webcompat(&args[2])?;
+                } else {
+                    eprintln!("Please provide a URL for the webcompat report.");
+                }
+            }
             _ => {
                 eprintln!("Unknown argument: {}", args[1]);
                 let commands: Vec<&str> = get_commands().keys().copied().collect();
@@ -484,6 +491,332 @@ fn build_layout_info_inner(
     Ok(LayoutInfo { layout, info })
 }
 
+/// JS prologue that intercepts `console.*` and records `warn`/`error` messages
+/// (including the engine's own reports) so the harness can read them back.
+/// Written to avoid engine-unsupported APIs: plain loops, array literals,
+/// `push`, `join`, and `typeof` checks only.
+const WEBCOMPAT_COLLECTOR: &str = r#"(function () {
+  var errors = [];
+  var levels = ["log", "warn", "error", "info", "debug"];
+  for (var l = 0; l < levels.length; l++) {
+    (function (level) {
+      var orig = console[level];
+      console[level] = function () {
+        var msg = [];
+        for (var i = 0; i < arguments.length; i++) {
+          var a = arguments[i];
+          try {
+            if (typeof a === "string") msg.push(a);
+            else if (a && a.message !== undefined) msg.push(String(a.message));
+            else msg.push(String(a));
+          } catch (e2) { msg.push("<unprintable>"); }
+        }
+        var text = msg.join(" ");
+        if (level === "warn" || level === "error") errors.push("[" + level + "] " + text);
+        try { orig.apply(console, arguments); } catch (e3) {}
+      };
+    })(levels[l]);
+  }
+  window.__orinium_errors = errors;
+  window.__orinium_flush_errors = function () { return errors.join("\n"); };
+})();"#;
+
+struct WebcompatSubresource {
+    label: &'static str,
+    url: url::Url,
+    status: u16,
+    content_type: String,
+    bytes: usize,
+    preview: String,
+}
+
+fn record_webcompat_fetch(
+    loader: &BrowserResourceLoader,
+    label: &'static str,
+    url: url::Url,
+    out: &mut Vec<WebcompatSubresource>,
+) {
+    match loader.fetch_blocking(url.clone()) {
+        Ok(resp) => {
+            let preview = String::from_utf8_lossy(&resp.body)
+                .chars()
+                .take(48)
+                .collect::<String>()
+                .replace('\n', " ");
+            out.push(WebcompatSubresource {
+                label,
+                url,
+                status: resp.status.as_u16(),
+                content_type: resp
+                    .headers
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+                    .map(|(_, v)| v.clone())
+                    .unwrap_or_default(),
+                bytes: resp.body.len(),
+                preview,
+            });
+        }
+        Err(e) => out.push(WebcompatSubresource {
+            label,
+            url,
+            status: 0,
+            content_type: format!("ERROR: {e}"),
+            bytes: 0,
+            preview: String::new(),
+        }),
+    }
+}
+
+/// Diagnostic harness for how well this engine can load a real-world page.
+/// Fetches the HTML, parses the DOM, discovers and fetches
+/// scripts/stylesheets/fonts, runs the scripts through the JS engine
+/// while capturing console errors and missing Web Platform APIs, and finally
+/// attempts a full layout build. Used to drive the bsky.app web-tech effort.
+fn run_webcompat(raw_url: &str) -> Result<()> {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let parsed_url: url::Url = raw_url.parse()?;
+    println!(
+        "{}",
+        format!("Webcompat report for {parsed_url}")
+            .bold()
+            .underline()
+    );
+
+    // ---- Network stage ----
+    println!("\n{}", "== Network ==".bold());
+    let net = NetworkCore::new().expect("Failed to create NetworkCore instansce");
+    let loader = BrowserResourceLoader::new(Some(Rc::new(net)));
+
+    let html_resp = match loader.fetch_blocking(parsed_url.clone()) {
+        Ok(resp) => resp,
+        Err(e) => {
+            println!(
+                "{}",
+                format!("FATAL: could not fetch HTML: {e}").red().bold()
+            );
+            return Ok(());
+        }
+    };
+    println!("  status: {}", html_resp.status.as_u16());
+    println!("  status_text: {}", html_resp.status_text);
+    for (key, value) in &html_resp.headers {
+        println!("  header: {}: {}", key, value);
+    }
+    let html = String::from_utf8_lossy(&html_resp.body).to_string();
+    println!("  body bytes: {}", html_resp.body.len());
+    println!("  decoded chars: {}", html.chars().count());
+
+    // ---- DOM stage ----
+    println!("\n{}", "== DOM ==".bold());
+    let mut parser = HtmlParser::new(&html);
+    let dom = Rc::new(parser.parse());
+
+    let mut node_count = 0usize;
+    dom.traverse(&mut |_node_rc: &NodeRef<HtmlNodeType>| node_count += 1);
+    let mut top_tags: Vec<String> = dom
+        .root
+        .borrow()
+        .children()
+        .iter()
+        .filter_map(|child| child.borrow().value.tag_name().map(|tag| tag.to_string()))
+        .collect();
+    top_tags.sort();
+    top_tags.dedup();
+    println!("  DOM nodes: {}", node_count);
+    println!("  top-level tags: {}", top_tags.join(", "));
+
+    let base_url = dom
+        .find_all(|n| n.tag_name() == Some("base"))
+        .iter()
+        .filter_map(|node_ref| {
+            let html_node = &node_ref.borrow().value;
+            let href = html_node.get_attr("href")?;
+            parsed_url.join(href).ok()
+        })
+        .next()
+        .unwrap_or_else(|| parsed_url.clone());
+
+    let mut script_urls: Vec<url::Url> = Vec::new();
+    for node_ref in dom.find_all(|n| n.tag_name() == Some("script")) {
+        let html_node = &node_ref.borrow().value;
+        if let Some(src) = html_node.get_attr("src") {
+            if let Ok(url) = base_url.join(src) {
+                script_urls.push(url);
+            }
+        }
+    }
+
+    let mut style_urls: Vec<url::Url> = Vec::new();
+    let mut font_urls: Vec<url::Url> = Vec::new();
+    for node_ref in dom.find_all(|n| n.tag_name() == Some("link")) {
+        let html_node = &node_ref.borrow().value;
+        let rel = html_node.get_attr("rel").unwrap_or("");
+        let as_kind = html_node.get_attr("as").unwrap_or("");
+        let Some(href) = html_node.get_attr("href") else {
+            continue;
+        };
+        let Ok(url) = base_url.join(href) else {
+            continue;
+        };
+        match rel {
+            "stylesheet" => style_urls.push(url),
+            "preload" => match as_kind {
+                "font" => font_urls.push(url),
+                "script" => script_urls.push(url),
+                "style" => style_urls.push(url),
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    // ---- Subresource stage ----
+    println!("\n{}", "== Subresources ==".bold());
+    println!("  stylesheets: {}", style_urls.len());
+    println!("  classic scripts: {}", script_urls.len());
+    println!("  preloaded fonts: {}", font_urls.len());
+
+    let mut subresources: Vec<WebcompatSubresource> = Vec::new();
+    const SUBRESOURCE_CAP: usize = 48;
+    for (label, urls) in [
+        ("script", &script_urls[..]),
+        ("css", &style_urls[..]),
+        ("font", &font_urls[..]),
+    ] {
+        for url in urls.iter().take(SUBRESOURCE_CAP) {
+            record_webcompat_fetch(&loader, label, url.clone(), &mut subresources);
+        }
+    }
+    let mut failed = 0;
+    for s in &subresources {
+        if s.status != 200 {
+            failed += 1;
+        }
+        let status = if s.status == 200 {
+            s.status.to_string().green().to_string()
+        } else {
+            s.status.to_string().red().to_string()
+        };
+        println!(
+            "  [{:>6}] {:>4} {:>15} {:>8} bytes {}",
+            s.label, status, s.content_type, s.bytes, s.url
+        );
+        if !s.preview.is_empty() {
+            println!("           \"{}\"", s.preview);
+        }
+    }
+    println!("  subresource failures: {}", failed);
+
+    // ---- JavaScript stage ----
+    println!("\n{}", "== JavaScript ==".bold());
+    let mut js = JsRuntime::new(Rc::clone(&dom));
+    js.set_document_url(parsed_url.as_str());
+    js.set_page_origin(&format!(
+        "{}://{}",
+        parsed_url.scheme(),
+        parsed_url.host_str().unwrap_or("")
+    ));
+    js.run_script(WEBCOMPAT_COLLECTOR);
+    missing_api_detector::install_missing_api_report(&mut js);
+
+    let mut fetch_failed_scripts = 0usize;
+    let mut ran_scripts = 0usize;
+    for url in &script_urls {
+        let Ok(resp) = loader.fetch_blocking(url.clone()) else {
+            fetch_failed_scripts += 1;
+            continue;
+        };
+        let body = String::from_utf8_lossy(&resp.body).to_string();
+        ran_scripts += 1;
+        js.run_script(&format!(
+            "try {{\n{}\n}} catch (e) {{ console.error('[uncaught]', e && e.stack || String(e)); }}",
+            body
+        ));
+    }
+    for script in dom.collect_inline_scripts() {
+        ran_scripts += 1;
+        js.run_script(&format!(
+            "try {{\n{}\n}} catch (e) {{ console.error('[uncaught]', e && e.stack || String(e)); }}",
+            script
+        ));
+    }
+    js.dispatch_dom_content_loaded();
+    js.dispatch_window_load();
+    for _ in 0..3 {
+        js.run_due_timers();
+    }
+    let navigations = js.take_navigation_requests();
+    println!(
+        "  scripts ran: {} ({} failed to fetch)",
+        ran_scripts, fetch_failed_scripts
+    );
+    if navigations.is_empty() {
+        println!("  no script-initiated navigation");
+    } else {
+        println!("  script-initiated navigations: {}", navigations.join(", "));
+    }
+
+    let console_report = js
+        .eval_value(
+            "window.__orinium_flush_errors ? window.__orinium_flush_errors() : '(collector not installed)'",
+        )
+        .to_console_string();
+
+    let mut missing: Vec<String> = Vec::new();
+    for line in console_report.lines() {
+        if let Some(names) = line.strip_prefix("[warn] [missing-api] ") {
+            missing.extend(names.split(',').map(|s| s.trim().to_string()));
+        }
+    }
+    missing.sort();
+    missing.dedup();
+
+    println!("\n{}", "== Captured console ==".bold());
+    if console_report.trim().is_empty() {
+        println!("  (no console.warn/error captured)");
+    } else {
+        for line in console_report.lines().take(80) {
+            println!("  {line}");
+        }
+    }
+
+    println!(
+        "\n{}",
+        format!("== Missing Web Platform APIs ({}) ==", missing.len()).bold()
+    );
+    for name in &missing {
+        println!("  - {name}");
+    }
+
+    // ---- Layout smoke test ----
+    println!("\n{}", "== Layout ==".bold());
+    let layout_result = catch_unwind(AssertUnwindSafe(|| {
+        build_layout_info_inner(raw_url, (800.0, 600.0), 0)
+    }));
+    match layout_result {
+        Ok(Ok(ctx)) => {
+            let dump_len = format!("{:#?}", ctx.info).len();
+            println!(
+                "  layout: OK (InfoNode dump {} chars)",
+                dump_len.to_string().green()
+            );
+        }
+        Ok(Err(e)) => println!("  {} setup error: {e}", "layout:".red().bold()),
+        Err(panic) => {
+            let msg = panic
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "unknown panic".to_string());
+            println!("  layout: {} {msg}", "PANIC".red().bold());
+        }
+    }
+
+    Ok(())
+}
+
 /// Reads the optional viewport dimensions (`WIDTH HEIGHT`) from `args`,
 /// falling back to `default_w`/`default_h` when they are omitted.
 fn viewport_args(args: &[String], default_w: f32, default_h: f32) -> Result<(f32, f32)> {
@@ -594,6 +927,14 @@ fn get_commands<'a>() -> HashMap<&'a str, (&'a str, &'a str, &'a str)> {
             "Fetch HTML and CSS, build layout tree, generate draw commands, then render.",
             "URL",
             "",
+        ),
+    );
+    map.insert(
+        "webcompat",
+        (
+            "Diagnostic report of how well this engine can load a real-world URL.",
+            "URL",
+            "Fetches the HTML, parses the DOM, discovers and fetches scripts/stylesheets/fonts, runs the scripts through the JS engine while capturing console errors and missing Web Platform APIs, and attempts a full layout build.",
         ),
     );
 
