@@ -283,30 +283,10 @@ fn format_media_time(seconds: f32) -> String {
 }
 
 fn rasterize_svg(svg: &[u8]) -> anyhow::Result<Image> {
-    let options = resvg::usvg::Options::default();
-    let tree = resvg::usvg::Tree::from_data(svg, &options)?;
-    let mut pixmap = resvg::tiny_skia::Pixmap::new(ICON_RASTER_SIZE, ICON_RASTER_SIZE)
-        .ok_or_else(|| anyhow::anyhow!("failed to allocate SVG icon pixmap"))?;
-    let size = tree.size();
-    let transform = resvg::tiny_skia::Transform::from_scale(
-        ICON_RASTER_SIZE as f32 / size.width(),
-        ICON_RASTER_SIZE as f32 / size.height(),
-    );
-    resvg::render(&tree, transform, &mut pixmap.as_mut());
-
-    // tiny-skia stores premultiplied RGBA, while the renderer model accepts
-    // straight-alpha RGBA. Convert once when the static icon is initialized.
-    let mut rgba = pixmap.data().to_vec();
-    for pixel in rgba.as_chunks_mut::<4>().0 {
-        let alpha = pixel[3] as u16;
-        if alpha == 0 {
-            continue;
-        }
-        for channel in &mut pixel[..3] {
-            *channel = ((*channel as u16 * 255 + alpha / 2) / alpha).min(255) as u8;
-        }
-    }
-    Image::from_rgba(ICON_RASTER_SIZE, ICON_RASTER_SIZE, rgba)
+    let raster =
+        crate::engine::svg::rasterize_from_bytes(svg, Some((ICON_RASTER_SIZE, ICON_RASTER_SIZE)))
+            .map_err(anyhow::Error::msg)?;
+    Image::from_rgba(raster.width, raster.height, raster.rgba)
 }
 
 #[cfg(test)]

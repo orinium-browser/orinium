@@ -58,35 +58,9 @@ impl Image {
     }
 
     fn decode_svg(bytes: &[u8]) -> Result<Self> {
-        let options = resvg::usvg::Options::default();
-        let tree = resvg::usvg::Tree::from_data(bytes, &options).context("invalid SVG image")?;
-        let size = tree.size();
-        let width = size.width().ceil().max(1.0) as u32;
-        let height = size.height().ceil().max(1.0) as u32;
-        let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)
-            .context("failed to allocate SVG image pixels")?;
-        let transform = resvg::tiny_skia::Transform::from_scale(
-            width as f32 / size.width(),
-            height as f32 / size.height(),
-        );
-        resvg::render(&tree, transform, &mut pixmap.as_mut());
-
-        // tiny-skia returns premultiplied RGBA; the renderer samples
-        // straight-alpha pixels.
-        let mut rgba = pixmap.data().to_vec();
-        for pixel in rgba.as_chunks_mut::<4>().0 {
-            let alpha = pixel[3] as u16;
-            if alpha == 0 {
-                pixel[0] = 0;
-                pixel[1] = 0;
-                pixel[2] = 0;
-            } else if alpha < 255 {
-                pixel[0] = ((pixel[0] as u16 * 255 + alpha / 2) / alpha).min(255) as u8;
-                pixel[1] = ((pixel[1] as u16 * 255 + alpha / 2) / alpha).min(255) as u8;
-                pixel[2] = ((pixel[2] as u16 * 255 + alpha / 2) / alpha).min(255) as u8;
-            }
-        }
-        Self::from_rgba(width, height, rgba)
+        let raster = crate::engine::svg::rasterize_from_bytes(bytes, None)
+            .map_err(|error| anyhow::anyhow!("invalid SVG image: {error}"))?;
+        Self::from_rgba(raster.width, raster.height, raster.rgba)
     }
 
     /// Creates an image from decoded RGBA8 pixels.
