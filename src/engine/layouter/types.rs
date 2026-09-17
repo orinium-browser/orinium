@@ -519,7 +519,7 @@ pub enum ClipPath {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ContainerStyle {
     pub cursor: CursorStyle,
 
@@ -530,6 +530,9 @@ pub struct ContainerStyle {
     /// Integer stacking level. `None` represents CSS `auto`.
     pub z_index: Option<i32>,
     pub visibility: Visibility,
+    /// CSS `opacity` in `[0, 1]`. Applied multiplicatively down the paint tree
+    /// (an ancestor's opacity scales every descendant).
+    pub opacity: f32,
     pub css_float: CssFloat,
     pub border_color: BorderColor,
     pub border_style: BorderStyles,
@@ -538,6 +541,27 @@ pub struct ContainerStyle {
     pub text_align: TextAlign,
     /// CSS `clip-path` applied to the element's border box.
     pub clip_path: ClipPath,
+}
+
+impl Default for ContainerStyle {
+    fn default() -> Self {
+        Self {
+            cursor: Default::default(),
+            background: Default::default(),
+            background_repeat: Default::default(),
+            background_size: Default::default(),
+            background_position: Default::default(),
+            z_index: Default::default(),
+            visibility: Default::default(),
+            opacity: 1.0,
+            css_float: Default::default(),
+            border_color: Default::default(),
+            border_style: Default::default(),
+            border_radius: Default::default(),
+            text_align: Default::default(),
+            clip_path: Default::default(),
+        }
+    }
 }
 
 // =========================

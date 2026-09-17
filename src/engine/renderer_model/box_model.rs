@@ -321,6 +321,7 @@ fn draw_border(
     style: &ContainerStyle,
     ox: f32,
     oy: f32,
+    opacity: f32,
 ) {
     let bw_top = (padding_box.y - border_box.y).max(0.0);
     let bw_bottom =
@@ -346,7 +347,7 @@ fn draw_border(
             rule: FillRule::NonZero,
             paint: Paint {
                 brush: Brush::Solid(color),
-                opacity: 1.0,
+                opacity,
             },
         });
     };
@@ -439,6 +440,7 @@ fn draw_background(
     style: &ContainerStyle,
     ox: f32,
     oy: f32,
+    opacity: f32,
 ) {
     let x = padding_box.x - border_box.x + ox;
     let y = padding_box.y - border_box.y + oy;
@@ -474,7 +476,7 @@ fn draw_background(
                 rule: FillRule::NonZero,
                 paint: Paint {
                     brush: Brush::Solid(*c),
-                    opacity: 1.0,
+                    opacity,
                 },
             });
         }
@@ -484,7 +486,7 @@ fn draw_background(
                 rule: FillRule::NonZero,
                 paint: Paint {
                     brush: Brush::Gradient(g.clone()),
-                    opacity: 1.0,
+                    opacity,
                 },
             });
         }
@@ -495,7 +497,7 @@ fn draw_background(
                     rule: FillRule::NonZero,
                     paint: Paint {
                         brush: Brush::Solid(*color),
-                        opacity: 1.0,
+                        opacity,
                     },
                 });
             }
@@ -549,7 +551,7 @@ fn draw_background(
                                 rule: FillRule::NonZero,
                                 paint: Paint {
                                     brush: Brush::Image(image.clone()),
-                                    opacity: 1.0,
+                                    opacity,
                                 },
                             });
                         }
@@ -718,6 +720,7 @@ fn push_box_model(
     clips_overflow: bool,
     draw_bg: bool,
     paint: bool,
+    opacity: f32,
 ) -> BoxPushState {
     let border_box = box_model.border_box;
     let padding_box = box_model.padding_box;
@@ -768,10 +771,10 @@ fn push_box_model(
     // but still establishes its transforms/clips so explicitly visible
     // descendants are positioned and clipped correctly.
     if paint && !clip_culls {
-        draw_border(cmd_buf, &border_box, &padding_box, style, ox, oy);
+        draw_border(cmd_buf, &border_box, &padding_box, style, ox, oy, opacity);
 
         if draw_bg {
-            draw_background(cmd_buf, &border_box, &padding_box, style, ox, oy);
+            draw_background(cmd_buf, &border_box, &padding_box, style, ox, oy, opacity);
         }
     }
 
@@ -833,8 +836,13 @@ fn draw_text(
     flow_style: TextFlowStyle,
     text_id: usize,
     offset: (f32, f32),
+    opacity: f32,
 ) {
     if let Some(result) = TextFlowLayouter::get_result(text_id) {
+        // Text is composited directly onto the page surface, so multiplying
+        // the color alpha by `opacity` is equivalent to a real opacity layer.
+        let mut style = style.clone();
+        style.color.3 = (style.color.3 as f32 * opacity).round() as u8;
         for (i, line_text) in result.line_texts.iter().enumerate() {
             let span = &result.spans[i];
             let x = span.line_pos.0 + offset.0;
@@ -873,7 +881,7 @@ fn draw_text(
                     rule: FillRule::NonZero,
                     paint: Paint {
                         brush: Brush::Solid(style.text_decoration_color.unwrap_or(style.color)),
-                        opacity: 1.0,
+                        opacity,
                     },
                 });
             }
@@ -954,6 +962,7 @@ pub fn generate_draw_commands(
         origin,
         origin,
         &mut popups,
+        1.0,
         true,
     );
     // Top-layer popups render after every other box, outside all ancestor
@@ -1032,6 +1041,7 @@ fn generate_draw_commands_inner(
     origin: (f32, f32),
     transform_origin: (f32, f32),
     popups: &mut Vec<(Vec<DrawCommand>, (f32, f32))>,
+    opacity: f32,
     is_root: bool,
 ) {
     // CSS `visibility` semantics: a hidden element paints nothing of its own
@@ -1048,6 +1058,21 @@ fn generate_draw_commands_inner(
             | NodeKind::Svg { style, .. }
             if matches!(style.visibility, Visibility::Hidden | Visibility::Collapse)
     );
+
+    // CSS `opacity` multiplies down the tree: an element with `opacity: 0.5`
+    // renders itself and every descendant at half strength. `opacity` is the
+    // product of all ancestors' opacities; `effective_opacity` folds this
+    // node's own opacity in for its box, borders, backgrounds, text and SVG
+    // content, and is passed to children as their inherited multiplier.
+    let effective_opacity = {
+        let own = match &info.kind {
+            NodeKind::Container { style, .. }
+            | NodeKind::Custom { style, .. }
+            | NodeKind::Svg { style, .. } => style.opacity,
+            _ => 1.0,
+        };
+        opacity * own
+    };
 
     let mut box_states: Vec<BoxPushState> = Vec::new();
 
@@ -1117,6 +1142,7 @@ fn generate_draw_commands_inner(
                     *scroll_x || *scroll_y,
                     true,
                     !self_hidden,
+                    effective_opacity,
                 ));
             }
         }
@@ -1144,6 +1170,7 @@ fn generate_draw_commands_inner(
                     *scroll_x || *scroll_y,
                     true,
                     !self_hidden,
+                    effective_opacity,
                 ));
             }
 
@@ -1161,6 +1188,7 @@ fn generate_draw_commands_inner(
                     is_inline,
                     *view_box,
                     shapes,
+                    effective_opacity,
                 );
             }
         }
@@ -1188,6 +1216,7 @@ fn generate_draw_commands_inner(
                     *scroll_x || *scroll_y,
                     false,
                     !self_hidden,
+                    effective_opacity,
                 ));
             }
 
@@ -1317,6 +1346,7 @@ fn generate_draw_commands_inner(
                         *flow_style,
                         *text_id,
                         inline_block_text_offset,
+                        effective_opacity,
                     );
                 }
                 layout_iter.next();
@@ -1346,6 +1376,7 @@ fn generate_draw_commands_inner(
                             child_origin,
                             child_transform_origin,
                             popups,
+                            effective_opacity,
                             false,
                         );
                         positive_stacking_children.push((z_index, child_order, child_commands));
@@ -1360,6 +1391,7 @@ fn generate_draw_commands_inner(
                             child_origin,
                             child_transform_origin,
                             popups,
+                            effective_opacity,
                             false,
                         );
                     }
@@ -1393,6 +1425,7 @@ fn generate_draw_commands_inner(
                             child_origin,
                             child_origin,
                             popups,
+                            effective_opacity,
                             false,
                         );
                     }
@@ -1409,7 +1442,16 @@ fn generate_draw_commands_inner(
                                 children_box: bm.children_box,
                             };
                             let state = push_box_model(
-                                cmd_buf, &rect, style, 0.0, 0.0, false, false, false, true,
+                                cmd_buf,
+                                &rect,
+                                style,
+                                0.0,
+                                0.0,
+                                false,
+                                false,
+                                false,
+                                true,
+                                effective_opacity,
                             );
                             node.draw_sized(
                                 cmd_buf,
@@ -1555,7 +1597,7 @@ mod tests {
         let style = ContainerStyle::default();
         let mut buf = Vec::new();
         let state = push_box_model(
-            &mut buf, &box_model, &style, 0.0, 0.0, false, true, true, true,
+            &mut buf, &box_model, &style, 0.0, 0.0, false, true, true, true, 1.0,
         );
         // Scroll/content transforms are no-ops here (zero offsets); border
         // transform + clip + content are pushed while the box is open.
@@ -1586,6 +1628,7 @@ mod tests {
             false,
             true,
             true,
+            1.0,
         );
         assert!(
             !commands
@@ -1617,6 +1660,7 @@ mod tests {
             true,
             true,
             true,
+            1.0,
         );
         let inner = push_box_model(
             &mut buf,
@@ -1628,6 +1672,7 @@ mod tests {
             true,
             true,
             true,
+            1.0,
         );
         // Sanity: inner push generated commands (border + background + clip).
         assert!(!buf.is_empty());

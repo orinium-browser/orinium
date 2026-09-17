@@ -81,6 +81,93 @@ fn z_index_accepts_integers_and_auto() {
 }
 
 #[test]
+fn opacity_defaults_to_one() {
+    assert_eq!(ContainerStyle::default().opacity, 1.0);
+}
+
+#[test]
+fn opacity_number_clamps_into_css_range() {
+    assert_eq!(
+        apply_container_property("opacity", CssValue::Number(0.5)).opacity,
+        0.5
+    );
+    assert_eq!(
+        apply_container_property("opacity", CssValue::Number(1.5)).opacity,
+        1.0
+    );
+    assert_eq!(
+        apply_container_property("opacity", CssValue::Number(-0.2)).opacity,
+        0.0
+    );
+}
+
+#[test]
+fn opacity_percentage_maps_to_hundredths() {
+    assert_eq!(
+        apply_container_property(
+            "opacity",
+            CssValue::Length(50.0, Unit::Percent)
+        )
+        .opacity,
+        0.5
+    );
+    assert_eq!(
+        apply_container_property(
+            "opacity",
+            CssValue::Length(140.0, Unit::Percent)
+        )
+        .opacity,
+        1.0
+    );
+}
+
+#[test]
+fn opacity_initial_restores_default_inherit_carries_effective_parent() {
+    let mut parent = ContainerStyle::default();
+    parent.opacity = 0.7;
+
+    let mut container_style = ContainerStyle::default();
+    let mut style = Style::default();
+    let mut text_style = TextStyle::default();
+    let mut text_flow_style = TextFlowStyle::default();
+    let mut overflow = Overflow::default();
+
+    let parsed = apply_declaration(
+        "opacity",
+        &CssValue::Keyword("initial".into()),
+        &mut style,
+        &mut container_style,
+        &mut text_style,
+        &mut text_flow_style,
+        &Style::default(),
+        &parent,
+        &TextStyle::default(),
+        &TextFlowStyle::default(),
+        &mut overflow,
+        ColorScheme::Light,
+    );
+    assert!(parsed.is_some());
+    assert_eq!(container_style.opacity, 1.0);
+
+    let parsed = apply_declaration(
+        "opacity",
+        &CssValue::Keyword("inherit".into()),
+        &mut style,
+        &mut container_style,
+        &mut text_style,
+        &mut text_flow_style,
+        &Style::default(),
+        &parent,
+        &TextStyle::default(),
+        &TextFlowStyle::default(),
+        &mut overflow,
+        ColorScheme::Light,
+    );
+    assert!(parsed.is_some());
+    assert_eq!(container_style.opacity, 0.7);
+}
+
+#[test]
 fn float_keywords_are_preserved_for_layout_blockification() {
     assert_eq!(
         apply_container_property("float", CssValue::Keyword("left".into())).css_float,
@@ -716,6 +803,38 @@ fn sr_only_rect_zero_is_culled_in_draw_commands() {
         texts.is_empty(),
         "sr-only text should be culled, drew {}",
         texts.len()
+    );
+}
+
+#[test]
+fn opacity_multiplies_down_draw_paint() {
+    let (mut layout, info) = layout_and_info_for(
+        r#"<div class="outer"><div class="inner"></div></div>"#,
+        ".outer { position: absolute; top: 0px; left: 0px; width: 100px; height: 100px; opacity: 0.5; background: red; }
+         .inner { position: absolute; top: 0px; left: 0px; width: 50px; height: 50px; opacity: 0.5; background: green; }",
+    );
+    ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+    let mut cmds = Vec::new();
+    generate_draw_commands(&mut cmds, &layout, &info, (800.0, 600.0));
+    let fills: Vec<f32> = cmds
+        .iter()
+        .filter_map(|c| {
+            if let crate::engine::renderer_model::DrawCommand::Fill { paint, .. } = c {
+                Some(paint.opacity)
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert!(
+        fills.contains(&0.5),
+        "parent opacity paint missing: {:?}",
+        fills
+    );
+    assert!(
+        fills.contains(&0.25),
+        "nested opacity product (0.5 * 0.5) missing: {:?}",
+        fills
     );
 }
 

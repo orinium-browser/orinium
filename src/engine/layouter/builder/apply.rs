@@ -806,6 +806,26 @@ pub fn apply_declaration(
             );
         }
 
+        ("opacity", _) => {
+            // Non-inherited. `<number>` (0..=1) or `<percentage>` per CSS Color 4;
+            // out-of-range values clamp. The `initial`/`inherit` branches of
+            // `apply_property!` restore 1.0 / carry the parent's opacity.
+            let f = |v: &CssValue| match v {
+                CssValue::Number(value) => Some(value.clamp(0.0, 1.0)),
+                CssValue::Length(value, Unit::Percent) => Some((value / 100.0).clamp(0.0, 1.0)),
+                _ => None,
+            };
+
+            apply_property!(
+                opacity,
+                container_style,
+                parent_container_style,
+                DEFAULT_CONTAINER_STYLE,
+                value,
+                f(value)?
+            );
+        }
+
         ("float", _) => {
             let f = |v: &SmolStr| match v.to_ascii_lowercase().as_str() {
                 "left" => Some(CssFloat::Left),
