@@ -1,4 +1,5 @@
 use crate::engine::js::common::{is_callable, noop, with_host_mut};
+use crate::engine::js::web_apis::abort::{signal_abort_reason, signal_is_aborted};
 use crate::engine::js::web_apis::encoding::make_array_buffer_from_value;
 use crate::engine::js::{JsFetchCapability, JsFetchRequest, JsFetchResponse};
 use pixi_byte::value::JSArray;
@@ -201,6 +202,7 @@ pub(crate) struct RequestParts {
     method: String,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
+    signal: Option<JSValue>,
 }
 
 pub(crate) fn install_request(engine: &mut pixi_byte::JSEngine) {
@@ -237,6 +239,9 @@ fn make_request(parts: RequestParts) -> Rc<RefCell<JSObject>> {
         "headers".to_string(),
         Property::read_only(JSValue::from_object(make_headers(parts.headers, false))),
     );
+    if let Some(signal) = parts.signal {
+        request.define_property("signal".to_string(), Property::read_only(signal));
+    }
     request.set(
         REQUEST_BODY.to_string(),
         JSValue::from_string(String::from_utf8_lossy(&parts.body).into_owned()),
@@ -259,6 +264,10 @@ pub(crate) fn request_parts(input: &JSValue, init: Option<&JSValue>) -> RequestP
                 .as_string_owned()
                 .map(|body| body.into_bytes())
                 .unwrap_or_default(),
+            signal: request
+                .get("signal")
+                .as_object()
+                .map(|_| request.get("signal")),
         }
     } else {
         RequestParts {
@@ -266,6 +275,7 @@ pub(crate) fn request_parts(input: &JSValue, init: Option<&JSValue>) -> RequestP
             method: "GET".to_string(),
             headers: Vec::new(),
             body: Vec::new(),
+            signal: None,
         }
     };
     apply_request_init(&mut parts, init);
@@ -293,6 +303,14 @@ fn apply_request_init(parts: &mut RequestParts, init: Option<&JSValue>) {
         } else {
             parts.body = body.to_string().into_bytes();
         }
+    }
+    if init.has_own_property("signal") {
+        let signal = init.get("signal");
+        parts.signal = if signal.is_undefined() || signal.is_null() {
+            None
+        } else {
+            Some(signal)
+        };
     }
 }
 
@@ -489,6 +507,7 @@ fn xml_http_request_send(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
             method,
             headers,
             body,
+            signal: None,
         });
     })
     .ok_or_else(|| JSError::InternalError("XMLHttpRequest host is unavailable".to_string()))?;
@@ -558,6 +577,7 @@ fn fetch(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         method,
         headers,
         body,
+        signal,
     } = request_parts(&input, args.get(2));
     let promise_constructor = vm.global_object.borrow().get("Promise");
     let Some(constructor) = promise_constructor.as_object() else {
@@ -576,6 +596,17 @@ fn fetch(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         .flatten()
         .ok_or_else(|| JSError::InternalError("Failed to create fetch Promise".to_string()))?;
 
+    // A pre-aborted signal rejects the fetch without queueing a request.
+    if let Some(signal) = &signal
+        && signal_is_aborted(signal)
+    {
+        let reason = signal_abort_reason(signal);
+        if is_callable(&capability.reject) {
+            vm.call(capability.reject, JSValue::undefined(), vec![reason])?;
+        }
+        return Ok(promise);
+    }
+
     let _ = with_host_mut(vm, |host| {
         host.next_fetch_id += 1;
         let id = host.next_fetch_id;
@@ -586,6 +617,7 @@ fn fetch(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
             method,
             headers,
             body,
+            signal: signal.clone(),
         });
     });
     Ok(promise)
@@ -607,6 +639,7 @@ fn capture_fetch_capability(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue
 pub(crate) fn make_fetch_response(response: JsFetchResponse) -> Rc<RefCell<JSObject>> {
     let body_bytes = response.body.clone();
     let mut object = JSObject::new();
+    object.set(RESPONSE_MARKER.to_string(), JSValue::from_bool(true));
     object.define_property(
         "headers".to_string(),
         Property::read_only(JSValue::from_object(make_headers(response.headers, true))),
@@ -670,6 +703,131 @@ pub(crate) fn make_fetch_response(response: JsFetchResponse) -> Rc<RefCell<JSObj
         .to_object(),
     );
     Rc::new(RefCell::new(object))
+}
+
+// --- Response constructor ---
+
+const RESPONSE_MARKER: &str = "__orinium_response";
+
+/// `new Response(body?, init?)` — builds a Response from a string or Blob body
+/// with `status` / `statusText` / `headers` init fields. The instance methods
+/// (`text`, `json`, `arrayBuffer`) are the same natives the fetch-produced
+/// response objects use, attached to the instance because the VM links the
+/// returned object verbatim.
+fn response_constructor(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let body = args.get(1).cloned().unwrap_or(JSValue::undefined());
+    let init = args.get(2).and_then(JSValue::as_object);
+    let init_field = |name: &str| -> JSValue {
+        init.as_ref()
+            .map(|object| object.borrow().get(name))
+            .unwrap_or(JSValue::undefined())
+    };
+    // Per spec, a missing (or non-numeric) `status` defaults to 200; only an
+    // explicitly out-of-range number is an error.
+    let status_value = init_field("status").to_number();
+    let status = if status_value.is_nan() {
+        200
+    } else if status_value.is_finite() && (200.0..=599.0).contains(&status_value) {
+        status_value as u16
+    } else {
+        return Err(JSError::RangeError(
+            "Failed to construct 'Response': The status provided (…) is outside the range [200, 599]"
+                .to_string(),
+        ));
+    };
+    let status_text = init_field("statusText").to_string();
+    let headers = init
+        .map(|object| extract_header_entries(&JSValue::from_object(Rc::clone(&object))))
+        .unwrap_or_default();
+    let body_string = if let Some(blob) = body.as_object()
+        && blob.borrow().get("__orinium_blob").as_boolean() == Some(true)
+    {
+        blob.borrow().get("__orinium_blob_data").to_string()
+    } else if body.is_undefined() || body.is_null() {
+        String::new()
+    } else {
+        body.to_string()
+    };
+    let response = JsFetchResponse {
+        url: String::new(),
+        status,
+        status_text,
+        redirected: false,
+        body: body_string.into_bytes(),
+        headers,
+    };
+    let response_object = make_fetch_response(response);
+    let _ = vm;
+    Ok(JSValue::from_object(response_object))
+}
+
+/// Installs the `Response` global constructor.
+pub(crate) fn install_response(engine: &mut pixi_byte::JSEngine) {
+    let mut constructor = JSObject::new();
+    constructor.set(
+        "__construct__".to_string(),
+        JSValue::from_native_function(response_constructor),
+    );
+    constructor.set(
+        "error".to_string(),
+        JSValue::from_native_function(response_static_error),
+    );
+    constructor.set(
+        "redirect".to_string(),
+        JSValue::from_native_function(response_static_redirect),
+    );
+    engine.global_mut().borrow_mut().set(
+        "Response".to_string(),
+        JSValue::from_object(Rc::new(RefCell::new(constructor))),
+    );
+}
+
+/// `Response.error()` — a response whose `type` is "error".
+fn response_static_error(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let response = make_fetch_response(JsFetchResponse {
+        url: String::new(),
+        status: 0,
+        status_text: String::new(),
+        redirected: false,
+        body: Vec::new(),
+        headers: Vec::new(),
+    });
+    response
+        .borrow_mut()
+        .set("type".to_string(), JSValue::from_string("error".to_string()));
+    Ok(JSValue::from_object(response))
+}
+
+/// `Response.redirect(url, status?)` — a redirect response for `url`.
+fn response_static_redirect(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let url = args
+        .get(1)
+        .map(JSValue::to_console_string)
+        .unwrap_or_default();
+    let status = match args.get(2).map(JSValue::to_number).unwrap_or(302.0) as u16 {
+        301 | 302 | 303 | 307 | 308 => status_argument(args.get(2)),
+        _ => {
+            return Err(JSError::RangeError(
+                "Failed to construct 'Response': Invalid redirect status code".to_string(),
+            ))
+        }
+    };
+    let response = make_fetch_response(JsFetchResponse {
+        url,
+        status,
+        status_text: String::new(),
+        redirected: true,
+        body: Vec::new(),
+        headers: Vec::new(),
+    });
+    response
+        .borrow_mut()
+        .set("type".to_string(), JSValue::from_string("default".to_string()));
+    Ok(JSValue::from_object(response))
+}
+
+fn status_argument(value: Option<&JSValue>) -> u16 {
+    value.map(JSValue::to_number).unwrap_or(302.0) as u16
 }
 
 fn fetch_response_text(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {

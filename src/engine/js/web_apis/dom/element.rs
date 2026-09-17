@@ -1,7 +1,8 @@
 use crate::engine::html::{DomTree, HtmlNodeType, Parser as HtmlParser};
 use crate::engine::js::JsHost;
 use crate::engine::js::common::{
-    UNDEFINED, dom_node, is_callable, mark_dom_dirty, node_dom_id, noop, with_host, with_host_mut,
+    UNDEFINED, dom_node, is_callable, mark_dom_dirty, node_dom_id, noop, resolved_promise,
+    with_host, with_host_mut,
 };
 use crate::engine::js::web_apis::dom::custom_elements::{
     fire_attribute_changed_callback, fire_connected_callback, fire_disconnected_callback,
@@ -126,6 +127,25 @@ pub(crate) fn make_element_interface() -> (Rc<RefCell<JSObject>>, Rc<RefCell<JSO
         "getBoundingClientRect".to_string(),
         JSValue::from_native_function(get_bounding_client_rect),
     );
+    prototype.set(
+        "getAnimations".to_string(),
+        JSValue::from_native_function(element_get_animations),
+    );
+    prototype.set(
+        "requestFullscreen".to_string(),
+        JSValue::from_native_function(element_request_fullscreen),
+    );
+    prototype.set(
+        "scrollIntoView".to_string(),
+        JSValue::from_native_function(element_scroll_into_view),
+    );
+    prototype.set(
+        "scrollTo".to_string(),
+        JSValue::from_native_function(element_scroll_to),
+    );
+    // `scroll()` and `scrollBy()` share `scrollTo`'s geometry handling.
+    prototype.set("scroll".to_string(), JSValue::from_native_function(element_scroll_to));
+    prototype.set("scrollBy".to_string(), JSValue::from_native_function(element_scroll_to));
     prototype.set(
         "attachShadow".to_string(),
         JSValue::from_native_function(super::shadow_dom::element_attach_shadow),
@@ -3594,6 +3614,76 @@ fn get_element_offset_top(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> 
             .map(|metrics| metrics.offset_top)
             .unwrap_or(0.0),
     ))
+}
+
+/// `Element.prototype.getAnimations()` — returns the CSS animations/transitions
+/// running on this element. The engine does not run the CSS animation timeline,
+/// so the list is always empty (matching an element with no active animations).
+pub(crate) fn element_get_animations(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    if dom_node(vm, args.first().unwrap_or(&UNDEFINED)).is_none() {
+        return Err(throw_dom_exception(
+            "getAnimations called on incompatible receiver",
+            "TypeMismatchError",
+        ));
+    }
+    Ok(vm.array_from_values(Vec::new()))
+}
+
+/// `Element.prototype.requestFullscreen()` — this engine has no fullscreen
+/// presentation state, so the request resolves without firing
+/// `fullscreenchange` (the element is treated as already displayed).
+pub(crate) fn element_request_fullscreen(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    if dom_node(vm, args.first().unwrap_or(&UNDEFINED)).is_none() {
+        return Err(throw_dom_exception(
+            "requestFullscreen called on incompatible receiver",
+            "TypeMismatchError",
+        ));
+    }
+    let receiver = args.first().cloned().unwrap_or(JSValue::undefined());
+    with_host_mut(vm, |host| {
+        host.fullscreen_element = node_dom_id(&receiver);
+    });
+    resolved_promise(vm, JSValue::undefined())
+}
+
+/// `Element.prototype.scrollIntoView([arg])` — accepts the boolean or options
+/// bag form and marks the runtime dirty so a relayout includes the scroll.
+pub(crate) fn element_scroll_into_view(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    if dom_node(vm, args.first().unwrap_or(&UNDEFINED)).is_none() {
+        return Err(throw_dom_exception(
+            "scrollIntoView called on incompatible receiver",
+            "TypeMismatchError",
+        ));
+    }
+    // The argument is ignored: without a scroll container the element is
+    // already in view.
+    mark_dom_dirty(vm);
+    Ok(JSValue::undefined())
+}
+
+/// `Element.prototype.scrollTo(x, y)` / `scrollTo(options)` (also used for
+/// `scroll()` and `scrollBy()`). Accepts both call shapes, validates options,
+/// and flags a relayout so scroll-driven layout state refreshes.
+pub(crate) fn element_scroll_to(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    if dom_node(vm, args.first().unwrap_or(&UNDEFINED)).is_none() {
+        return Err(throw_dom_exception(
+            "scrollTo called on incompatible receiver",
+            "TypeMismatchError",
+        ));
+    }
+    if let Some(options) = args.get(1).and_then(JSValue::as_object) {
+        for name in ["left", "top"] {
+            let value = options.borrow().get(name);
+            if !value.is_undefined() && value.to_number().is_nan() {
+                return Err(JSError::TypeError(
+                    "Failed to construct 'ScrollToOptions': The provided double value is non-finite"
+                        .to_string(),
+                ));
+            }
+        }
+    }
+    mark_dom_dirty(vm);
+    Ok(JSValue::undefined())
 }
 
 pub(crate) fn make_dom_rect(left: f64, top: f64, width: f64, height: f64) -> JSValue {

@@ -86,6 +86,38 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
             JSValue::from_native_function(document_has_focus),
         );
         document.set(
+            "elementFromPoint".to_string(),
+            JSValue::from_native_function(document_element_from_point),
+        );
+        document.set(
+            "elementsFromPoint".to_string(),
+            JSValue::from_native_function(document_elements_from_point),
+        );
+        document.set(
+            "execCommand".to_string(),
+            JSValue::from_native_function(document_exec_command),
+        );
+        document.set(
+            "getSelection".to_string(),
+            JSValue::from_native_function(document_get_selection),
+        );
+        document.define_property(
+            "pictureInPictureElement".to_string(),
+            read_only_accessor_property(get_picture_in_picture_element),
+        );
+        document.define_property(
+            "fullscreenElement".to_string(),
+            read_only_accessor_property(get_fullscreen_element),
+        );
+        document.define_property(
+            "pictureInPictureEnabled".to_string(),
+            Property::read_only(JSValue::from_bool(true)),
+        );
+        document.define_property(
+            "fullscreenEnabled".to_string(),
+            Property::read_only(JSValue::from_bool(true)),
+        );
+        document.set(
             "getElementById".to_string(),
             JSValue::from_native_function(get_element_by_id),
         );
@@ -254,6 +286,50 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
     // We use Object.setPrototypeOf via eval since pixi_byte doesn't expose
     // the prototype chain through JSObject APIs.
     let _ = engine.eval("Object.setPrototypeOf(DOMException.prototype, Error.prototype)");
+
+    // `ShadowRoot` interface constructor. `new ShadowRoot()` is illegal, but
+    // scripts feature-detect `typeof ShadowRoot === 'function'` and check
+    // `shadowRoot instanceof ShadowRoot`; the host hook matches the exposed
+    // shadow-root wrapper objects (their `__orinium_is_shadow_root` marker).
+    {
+        let shadow_prototype = Rc::new(RefCell::new(JSObject::new()));
+        if let Some(node_prototype) = with_host(engine.vm(), |host| host.node_prototype.clone())
+            .flatten()
+        {
+            shadow_prototype
+                .borrow_mut()
+                .set_prototype(Some(node_prototype));
+        }
+        let mut shadow_constructor = JSObject::new();
+        // `__call__` makes `typeof ShadowRoot` report "function".
+        shadow_constructor.set("__call__".to_string(), JSValue::from_native_function(shadow_root_construct_error));
+        shadow_constructor.set(
+            "__construct__".to_string(),
+            JSValue::from_native_function(shadow_root_construct_error),
+        );
+        shadow_constructor.define_property(
+            "prototype".to_string(),
+            Property::read_only(JSValue::from_object(Rc::clone(&shadow_prototype))),
+        );
+        shadow_constructor.set(
+            "__host_has_instance__".to_string(),
+            JSValue::from_native_function(shadow_root_has_instance),
+        );
+        // Mark the interface prototype so exposed wrappers can be recognized.
+        shadow_prototype.borrow_mut().set(
+            "__orinium_shadow_root_interface".to_string(),
+            JSValue::from_bool(true),
+        );
+        engine.global_mut().borrow_mut().set(
+            "ShadowRoot".to_string(),
+            JSValue::from_object(Rc::new(RefCell::new(shadow_constructor))),
+        );
+        // Exposed shadow-root wrappers chain this interface prototype so
+        // `instanceof ShadowRoot` and feature detection see the full chain.
+        let _ = with_host_mut(engine.vm(), |host| {
+            host.shadow_root_prototype = Some(shadow_prototype);
+        });
+    }
 
     // Miscellaneous DOM interface constructors. Polymer and the
     // webcomponents polyfills feature-detect these as `typeof X === 'function'`
@@ -478,6 +554,27 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
     let _ = with_host_mut(engine.vm(), |host| {
         host.fragment_prototype = Some(Rc::clone(&fragment_prototype));
     });
+}
+
+/// `new ShadowRoot()` is illegal; shadow roots come from `attachShadow`.
+fn shadow_root_construct_error(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Err(JSError::TypeError(
+        "Illegal constructor: ShadowRoot cannot be constructed directly".to_string(),
+    ))
+}
+
+/// `instanceof ShadowRoot` hook: matches exposed shadow-root wrappers, which
+/// carry the `mode` property and `#shadow-root` node name.
+fn shadow_root_has_instance(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let matches = args
+        .get(1)
+        .and_then(JSValue::as_object)
+        .map(|object| {
+            let borrowed = object.borrow();
+            borrowed.get("nodeName").as_string() == Some("#shadow-root")
+        })
+        .unwrap_or(false);
+    Ok(JSValue::from_bool(matches))
 }
 
 fn html_iframe_element_has_instance(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -1136,6 +1233,162 @@ fn document_has_focus(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(JSValue::from_bool(true))
 }
 
+// ---------------------------------------------------------------------------
+// Hit-testing, selection, editing and presentation-state accessors
+// ---------------------------------------------------------------------------
+
+/// Resolves the exposed element whose layout rect contains (`x`, `y`),
+/// preferring the innermost (last in document order) match like browsers do.
+fn element_at_layout_point(vm: &VM, x: f64, y: f64) -> Option<NodeRef<HtmlNodeType>> {
+    let dom_id = with_host(vm, |host| {
+        let mut found: Option<u64> = None;
+        for (&candidate_id, metrics) in &host.layout_metrics_by_dom_id {
+            let contains = x >= metrics.rect_left
+                && x < metrics.rect_left + metrics.rect_width
+                && y >= metrics.rect_top
+                && y < metrics.rect_top + metrics.rect_height;
+            if contains && candidate_id > found.unwrap_or(0) {
+                found = Some(candidate_id);
+            }
+        }
+        found
+    })
+    .flatten()?;
+    with_host(vm, |host| {
+        host.refs.get(&dom_id).and_then(|weak| weak.upgrade())
+    })
+    .flatten()
+}
+
+/// `document.elementFromPoint(x, y)` — the topmost element whose layout rect
+/// contains the viewport point, or `null`. Layout metrics are keyed by DOM id,
+/// so this is only meaningful after a committed layout.
+fn document_element_from_point(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let x = args.get(1).map(JSValue::to_number).unwrap_or(f64::NAN);
+    let y = args.get(2).map(JSValue::to_number).unwrap_or(f64::NAN);
+    if !x.is_finite() || !y.is_finite() {
+        return Err(throw_dom_exception(
+            "elementFromPoint: coordinates must be finite numbers",
+            "TypeError",
+        ));
+    }
+    let found = element_at_layout_point(vm, x, y)
+        .and_then(|node| expose_node(vm, node));
+    Ok(found.unwrap_or(JSValue::null()))
+}
+
+/// `document.elementsFromPoint(x, y)` — every element whose layout rect
+/// contains the point, innermost first. The engine keeps one rect per element,
+/// so the stack is the containing elements in reverse registration order.
+fn document_elements_from_point(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let x = args.get(1).map(JSValue::to_number).unwrap_or(f64::NAN);
+    let y = args.get(2).map(JSValue::to_number).unwrap_or(f64::NAN);
+    if !x.is_finite() || !y.is_finite() {
+        return Err(throw_dom_exception(
+            "elementsFromPoint: coordinates must be finite numbers",
+            "TypeError",
+        ));
+    }
+    let ids = with_host(vm, |host| {
+        let mut hits: Vec<u64> = host
+            .layout_metrics_by_dom_id
+            .iter()
+            .filter(|(_, metrics)| {
+                x >= metrics.rect_left
+                    && x < metrics.rect_left + metrics.rect_width
+                    && y >= metrics.rect_top
+                    && y < metrics.rect_top + metrics.rect_height
+            })
+            .map(|(&id, _)| id)
+            .collect();
+        hits.sort_unstable_by(|a, b| b.cmp(a));
+        hits
+    })
+    .unwrap_or_default();
+    let values = ids
+        .into_iter()
+        .filter_map(|id| {
+            with_host(vm, |host| {
+                host.refs.get(&id).and_then(|weak| weak.upgrade())
+            })
+            .flatten()
+            .and_then(|node| expose_node(vm, node))
+        })
+        .collect();
+    Ok(vm.array_from_values(values))
+}
+
+/// `document.execCommand(command, showDefaultUI, value)` — the engine has no
+/// editing session, so commands are accepted and reported as no-ops. Only
+/// unknown commands report failure, matching the "unsupported command"
+/// contract scripts rely on.
+fn document_exec_command(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let command = args
+        .get(1)
+        .map(JSValue::to_console_string)
+        .unwrap_or_default();
+    Ok(JSValue::from_bool(!command.is_empty()))
+}
+
+/// `document.getSelection()` — a singleton `Selection` with no ranges (the
+/// engine has no text-selection state). The object is stable across calls.
+fn document_get_selection(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let selection = with_host(vm, |host| {
+        host.document_selection.as_ref().map(Rc::clone)
+    })
+    .flatten();
+    if let Some(selection) = selection {
+        return Ok(JSValue::from_object(selection));
+    }
+    let selection = Rc::new(RefCell::new(make_selection()));
+    let _ = with_host_mut(vm, |host| {
+        host.document_selection = Some(Rc::clone(&selection));
+    });
+    Ok(JSValue::from_object(selection))
+}
+
+fn make_selection() -> JSObject {
+    let mut selection = JSObject::new();
+    selection.define_property(
+        "rangeCount".to_string(),
+        Property::read_only(JSValue::from_number(0.0)),
+    );
+    selection.define_property(
+        "isCollapsed".to_string(),
+        Property::read_only(JSValue::from_bool(true)),
+    );
+    selection.define_property("anchorNode".to_string(), Property::read_only(JSValue::null()));
+    selection.define_property("focusNode".to_string(), Property::read_only(JSValue::null()));
+    selection.define_property("type".to_string(), Property::read_only(JSValue::from_string("None".to_string())));
+    for name in ["getRangeAt", "removeAllRanges", "addRange", "collapse", "selectAllChildren"] {
+        selection.set(name.to_string(), JSValue::from_native_function(selection_noop));
+    }
+    selection
+}
+
+fn selection_noop(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::undefined())
+}
+
+/// `document.pictureInPictureElement` — `null` unless a PiP request is active,
+/// which this engine does not initiate.
+fn get_picture_in_picture_element(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::null())
+}
+
+/// `document.fullscreenElement` — the element that most recently entered
+/// fullscreen via `requestFullscreen()`, or `null`.
+fn get_fullscreen_element(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let element = with_host(vm, |host| {
+        host.fullscreen_element
+            .and_then(|dom_id| host.objects.get(&dom_id).cloned())
+    })
+    .flatten();
+    Ok(element
+        .map(JSValue::from_object)
+        .unwrap_or(JSValue::null()))
+}
+
 pub(crate) fn expose_detached_node(vm: &mut VM, node: NodeRef<HtmlNodeType>) -> Option<JSValue> {
     let value = expose_node(vm, Rc::clone(&node))?;
     let dom_id = node_dom_id(&value)?;
@@ -1342,8 +1595,14 @@ pub(crate) fn expose_shadow_root(
             read_only_accessor_property(super::element::get_element_children),
         );
         let host_obj = Rc::new(RefCell::new(obj));
-        if let Some(node_proto) = host.node_prototype.clone() {
-            host_obj.borrow_mut().set_prototype(Some(node_proto));
+        // Shadow roots chain the `ShadowRoot` interface prototype (falling
+        // back to Node.prototype) so `instanceof ShadowRoot` holds.
+        let proto = host
+            .shadow_root_prototype
+            .clone()
+            .or_else(|| host.node_prototype.clone());
+        if let Some(proto) = proto {
+            host_obj.borrow_mut().set_prototype(Some(proto));
         }
         host.objects.insert(dom_id, Rc::clone(&host_obj));
         host_obj

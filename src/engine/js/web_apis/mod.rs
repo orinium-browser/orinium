@@ -6,10 +6,12 @@
 //! the remaining blockers, roughly in dependency order:
 //!
 //! 1. **Real constructors for remaining interfaces** — `Document`, `Text`,
-//!    `Comment`, `ShadowRoot`, `SVGElement`, `HTMLTemplateElement`,
-//!    `KeyboardEvent` and friends are still `undefined`, so any site that does
-//!    `instanceof` / feature-detect trips. `Node` and `Element` are done;
-//!    mirror that pattern (`make_node_interface` in `element.rs`).
+//!    `Comment`, `SVGElement`, `HTMLTemplateElement`, `KeyboardEvent` and
+//!    friends are still `undefined`, so any site that does `instanceof` /
+//!    feature-detect trips. `Node`, `Element`, `ShadowRoot`,
+//!    `CustomElementRegistry`, `Blob`, `FileReader`, `AbortController`,
+//!    `AbortSignal` and `Response` are done; mirror that pattern
+//!    (`make_node_interface` in `element.rs`).
 //! 2. **Wire node instances to `Node.prototype`** — Text/Comment/Fragment
 //!    objects are still created with a bare `JSObject` (no prototype), so
 //!    `getRootNode`/`contains`/`hasChildNodes` stay unreachable from them.
@@ -19,8 +21,9 @@
 //!    composed-path events, slotting, and the event retargeting rules are next.
 //! 5. **Event dispatch fidelity** — `initCustomEvent`, capture phase, composed
 //!    propagation. `CustomEvent` and `createEvent` shapes are in place.
-//! 6. **Missing media/network globals** — `HTMLVideoElement`, `XMLHttpRequest`,
-//!    `fetch`/`Response` stubs reported by `missing_api_detector`.
+//! 6. **Missing media globals** — `HTMLVideoElement` and `XMLHttpRequest`
+//!    shapes exist; live media playback and `fetch` abort-after-start through
+//!    the network layer remain.
 //!
 //! Run a report to enumerate the current gaps:
 //!
@@ -29,10 +32,12 @@
 //!   | rg 'missing-api'
 //! ```
 
+pub(crate) mod abort;
 pub(crate) mod browser_env;
 pub(crate) mod console;
 pub(crate) mod dom;
 pub(crate) mod encoding;
+pub(crate) mod file;
 pub(crate) mod message_channel;
 pub(crate) mod misc;
 pub mod missing_api_detector;

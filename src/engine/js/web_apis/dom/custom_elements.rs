@@ -36,7 +36,30 @@ pub(crate) fn install_custom_elements(engine: &mut pixi_byte::JSEngine) {
         CE_READ_CB.with(|cell| *cell.borrow_mut() = Some(val));
     }
 
-    let mut custom_elements = JSObject::new();
+    // `CustomElementRegistry` interface: the singleton `customElements`
+    // instance carries a `__host_has_instance__` hook so
+    // `x instanceof CustomElementRegistry` works for scripts that probe the
+    // interface before using the registry.
+    let registry_prototype = Rc::new(RefCell::new(JSObject::new()));
+    let mut registry_constructor = JSObject::new();
+    // `__call__` makes `typeof CustomElementRegistry` report "function".
+    registry_constructor.set("__call__".to_string(), JSValue::from_native_function(custom_elements_construct_error));
+    registry_constructor.set(
+        "__construct__".to_string(),
+        JSValue::from_native_function(custom_elements_construct_error),
+    );
+    registry_constructor.define_property(
+        "prototype".to_string(),
+        pixi_byte::value::jsobject::Property::read_only(JSValue::from_object(Rc::clone(
+            &registry_prototype,
+        ))),
+    );
+    registry_constructor.set(
+        "__host_has_instance__".to_string(),
+        JSValue::from_native_function(custom_elements_has_instance),
+    );
+
+    let mut custom_elements = JSObject::with_prototype(Some(registry_prototype));
     custom_elements.set(
         "define".to_string(),
         JSValue::from_native_function(custom_elements_define),
@@ -53,10 +76,38 @@ pub(crate) fn install_custom_elements(engine: &mut pixi_byte::JSEngine) {
         "whenDefined".to_string(),
         JSValue::from_native_function(custom_elements_when_defined),
     );
-    engine.global_mut().borrow_mut().set(
+    let mut global = engine.global_mut().borrow_mut();
+    global.set(
+        "CustomElementRegistry".to_string(),
+        JSValue::from_object(Rc::new(RefCell::new(registry_constructor))),
+    );
+    global.set(
         "customElements".to_string(),
         JSValue::from_object(Rc::new(RefCell::new(custom_elements))),
     );
+}
+
+/// `new CustomElementRegistry()` is forbidden: the platform exposes exactly
+/// one registry per window.
+fn custom_elements_construct_error(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Err(JSError::TypeError(
+        "Illegal constructor: CustomElementRegistry cannot be constructed directly".to_string(),
+    ))
+}
+
+/// `instanceof CustomElementRegistry` hook: true for the singleton registry.
+fn custom_elements_has_instance(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let matches = args
+        .get(1)
+        .and_then(JSValue::as_object)
+        .map(|object| {
+            let registry = vm.global_object.borrow().get("customElements");
+            registry
+                .as_object()
+                .is_some_and(|registry| std::rc::Rc::ptr_eq(&object, &registry))
+        })
+        .unwrap_or(false);
+    Ok(JSValue::from_bool(matches))
 }
 
 // ---------------------------------------------------------------------------

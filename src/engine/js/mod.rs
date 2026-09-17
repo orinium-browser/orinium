@@ -62,6 +62,9 @@ pub struct JsFetchRequest {
     pub(crate) method: String,
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) body: Vec<u8>,
+    /// `AbortSignal` registered through the fetch init, kept alive so
+    /// `controller.abort()` can reject this request before it completes.
+    pub(crate) signal: Option<JSValue>,
 }
 
 /// An `<iframe src="...">` whose content has to be fetched and parsed.
@@ -171,6 +174,9 @@ pub struct JsHost {
     pub(crate) element_constructor: Rc<RefCell<JSObject>>,
     pub(crate) node_prototype: Option<Rc<RefCell<JSObject>>>,
     pub(crate) fragment_prototype: Option<Rc<RefCell<JSObject>>>,
+    /// `ShadowRoot` interface prototype assigned to exposed shadow-root
+    /// wrappers so `instanceof ShadowRoot` holds.
+    pub(crate) shadow_root_prototype: Option<Rc<RefCell<JSObject>>>,
     pub(crate) document: Option<Rc<RefCell<JSObject>>>,
     pub(crate) document_implementation: Option<Rc<RefCell<JSObject>>>,
     /// Independent document instances for `<iframe>` elements, keyed by the
@@ -180,6 +186,8 @@ pub struct JsHost {
     /// retried automatically (only a new `src` re-queues it).
     pub(crate) failed_iframe_fetches: HashSet<u64>,
     pub(crate) document_event_listeners: HashMap<String, Vec<JSValue>>,
+    /// Stable `Selection` singleton returned by `document.getSelection()`.
+    pub(crate) document_selection: Option<Rc<RefCell<JSObject>>>,
     /// Element event listeners keyed by dom id and event type. Each entry is a
     /// `(callback, capture)` pair; the capture phase flag distinguishes
     /// capturing listeners from bubbling ones.
@@ -190,6 +198,9 @@ pub struct JsHost {
     /// bound to the runtime so dispatching never re-scans the tree.
     pub(crate) window_inline_event_handlers: HashMap<String, String>,
     pub(crate) active_element: Option<u64>,
+    /// DOM id of the element that last entered fullscreen via
+    /// `requestFullscreen()`, or `None` when the page is not fullscreen.
+    pub(crate) fullscreen_element: Option<u64>,
     /// Keeps JS-created or removed nodes alive while their wrappers exist.
     pub(crate) detached_nodes: HashMap<u64, NodeRef<HtmlNodeType>>,
     /// Detached document objects created via
@@ -279,14 +290,17 @@ impl JsRuntime {
             element_constructor,
             node_prototype: None,
             fragment_prototype: None,
+            shadow_root_prototype: None,
             document: None,
             document_implementation: None,
             iframe_documents: HashMap::new(),
             failed_iframe_fetches: HashSet::new(),
             document_event_listeners: HashMap::new(),
+            document_selection: None,
             element_event_listeners: HashMap::new(),
             window_inline_event_handlers: HashMap::new(),
             active_element: None,
+            fullscreen_element: None,
             detached_nodes: HashMap::new(),
             timers: Vec::new(),
             fetch_requests: Vec::new(),
@@ -346,6 +360,9 @@ impl JsRuntime {
         web_apis::network::install_request(&mut engine);
         web_apis::network::install_fetch(&mut engine);
         web_apis::network::install_xml_http_request(&mut engine);
+        web_apis::network::install_response(&mut engine);
+        web_apis::abort::install_abort_apis(&mut engine);
+        web_apis::file::install_blob_apis(&mut engine);
         devtools::install(&mut engine);
         web_apis::url::install_url_apis(&mut engine);
         web_apis::encoding::install_encoding_apis(&mut engine);
@@ -1125,6 +1142,13 @@ impl JsRuntime {
         }
         ran_handler
     }
+    /// Drains queued microtasks; exposed for tests and harnesses that call
+    /// native APIs directly between script evaluations.
+    #[cfg(test)]
+    pub(crate) fn perform_microtask_checkpoint_public(&mut self) {
+        self.perform_microtask_checkpoint();
+    }
+
     /// Drains queued microtasks in FIFO order, including jobs queued by jobs.
     fn perform_microtask_checkpoint(&mut self) {
         while let Err(err) = self.engine.run_jobs() {
@@ -4323,5 +4347,342 @@ mod tests {
         let r = dom.get_element_by_id("r").unwrap();
         let r = r.borrow();
         assert_eq!(r.value.get_attr("data-count"), Some("2"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Formerly missing Web Platform APIs (detector list)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn all_detector_listed_apis_are_present() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var missing = [];
+        var globals = ["AbortController", "AbortSignal", "Blob", "CustomElementRegistry",
+            "FileReader", "Response", "ShadowRoot"];
+        for (var i = 0; i < globals.length; i++) {
+            if (typeof window[globals[i]] === "undefined") missing.push("window." + globals[i]);
+        }
+        var docMethods = ["elementFromPoint", "elementsFromPoint", "execCommand", "getSelection",
+            "pictureInPictureElement"];
+        for (var j = 0; j < docMethods.length; j++) {
+            if (typeof document[docMethods[j]] === "undefined") missing.push("document." + docMethods[j]);
+        }
+        var elementMethods = ["getAnimations", "requestFullscreen", "scrollIntoView", "scrollTo"];
+        for (var k = 0; k < elementMethods.length; k++) {
+            if (typeof Element.prototype[elementMethods[k]] === "undefined")
+                missing.push("Element.prototype." + elementMethods[k]);
+        }
+        document.getElementById("r").setAttribute("data-missing", missing.join(","));
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(r.borrow().value.get_attr("data-missing"), Some(""));
+    }
+
+    #[test]
+    fn element_prototype_methods_are_callable_noops() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var el = document.getElementById("r");
+        var out = [];
+        out.push("anims:" + (el.getAnimations() instanceof Array));
+        out.push("scrollIntoView:" + el.scrollIntoView());
+        out.push("scrollTo:" + el.scrollTo(0, 10));
+        out.push("scrollToOptions:" + el.scrollTo({left: 1, top: 2}));
+        el.requestFullscreen().then(function () {
+            el.setAttribute("data-fs", "resolved:" + (document.fullscreenElement === el));
+        });
+        el.setAttribute("data-out", out.join(";"));
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        let attrs = r.borrow();
+        assert_eq!(attrs.value.get_attr("data-out"), Some("anims:true;scrollIntoView:undefined;scrollTo:undefined;scrollToOptions:undefined"));
+        assert_eq!(attrs.value.get_attr("data-fs"), Some("resolved:true"));
+    }
+
+    #[test]
+    fn document_selection_and_point_apis_behave() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var out = [];
+        var sel = document.getSelection();
+        out.push("selSingleton:" + (document.getSelection() === sel));
+        out.push("rangeCount:" + sel.rangeCount);
+        out.push("type:" + sel.type);
+        out.push("exec:" + document.execCommand("bold"));
+        out.push("execEmpty:" + document.execCommand(""));
+        out.push("pipType:" + typeof document.pictureInPictureElement);
+        out.push("pipNull:" + (document.pictureInPictureElement === null));
+        out.push("point:" + (document.elementFromPoint(5, 5) === null));
+        out.push("stack:" + document.elementsFromPoint(5, 5).length);
+        document.getElementById("r").setAttribute("data-out", out.join(";"));
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(
+            r.borrow().value.get_attr("data-out"),
+            Some("selSingleton:true;rangeCount:0;type:None;exec:true;execEmpty:false;pipType:object;pipNull:true;point:true;stack:0")
+        );
+    }
+
+    #[test]
+    fn abort_controller_and_signal_follow_platform_semantics() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var out = [];
+        var controller = new AbortController();
+        out.push("fresh:" + controller.signal.aborted);
+        var fired = 0;
+        controller.signal.addEventListener("abort", function () { fired++; });
+        controller.abort();
+        out.push("aborted:" + controller.signal.aborted);
+        out.push("reasonName:" + controller.signal.reason.name);
+        out.push("fired:" + fired);
+        var custom = new AbortController();
+        custom.abort("because");
+        out.push("customReason:" + custom.signal.reason);
+        out.push("reabort:" + (controller.abort(), controller.signal.reason.name));
+        try { controller.signal.throwIfAborted(); } catch (e) { out.push("throw:" + e.name); }
+        var staticAborted = AbortSignal.abort();
+        out.push("static:" + staticAborted.aborted + ":" + staticAborted.reason.name);
+        var any = AbortSignal.any([controller.signal, new AbortController().signal]);
+        out.push("any:" + any.aborted);
+        document.getElementById("r").setAttribute("data-out", out.join(";"));
+        "#,
+        );
+        runtime.perform_microtask_checkpoint_public();
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(
+            r.borrow().value.get_attr("data-out"),
+            Some("fresh:false;aborted:true;reasonName:AbortError;fired:1;customReason:because;reabort:AbortError;throw:AbortError;static:true:AbortError;any:true")
+        );
+    }
+
+    #[test]
+    fn fetch_with_preaborted_signal_rejects_without_request() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var controller = new AbortController();
+        controller.abort();
+        fetch("https://example.com/data", { signal: controller.signal })
+            .then(function () {
+                document.getElementById("r").setAttribute("data-result", "resolved");
+            })
+            .catch(function (error) {
+                document.getElementById("r").setAttribute("data-result", "rejected:" + error.name);
+            });
+        "#,
+        );
+        runtime.perform_microtask_checkpoint_public();
+        let requests = runtime.take_fetch_requests();
+        assert!(requests.is_empty(), "no fetch should be queued for an aborted signal");
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(r.borrow().value.get_attr("data-result"), Some("rejected:AbortError"));
+    }
+
+    #[test]
+    fn fetch_registers_signal_and_abort_rejects_pending_request() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var controller = new AbortController();
+        fetch("https://example.com/slow", { signal: controller.signal })
+            .then(function () {
+                document.getElementById("r").setAttribute("data-result", "resolved");
+            })
+            .catch(function (error) {
+                document.getElementById("r").setAttribute("data-result", "rejected:" + error.name);
+            });
+        controller.abort();
+        "#,
+        );
+        runtime.perform_microtask_checkpoint_public();
+        let requests = runtime.take_fetch_requests();
+        assert!(requests.is_empty(), "aborted fetch must be removed from the queue");
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(r.borrow().value.get_attr("data-result"), Some("rejected:AbortError"));
+    }
+
+    #[test]
+    fn blob_and_file_reader_round_trip() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var out = [];
+        var blob = new Blob(["hello", " ", "world"], { type: "text/plain" });
+        out.push("size:" + blob.size);
+        out.push("type:" + blob.type);
+        blob.text().then(function (text) { out.push("text:" + text); });
+        blob.arrayBuffer().then(function (buffer) { out.push("bytes:" + buffer.byteLength); });
+        var sliced = blob.slice(0, 5);
+        sliced.text().then(function (text) { out.push("slice:" + text); });
+        var reader = new FileReader();
+        var loaded = null;
+        reader.onload = function (event) { loaded = event.type; };
+        reader.readAsText(blob);
+        out.push("read:" + reader.result);
+        out.push("loadEvent:" + loaded);
+        document.getElementById("r").setAttribute("data-out", out.join(";"));
+        window.__blob_out = out;
+        "#,
+        );
+        runtime.perform_microtask_checkpoint_public();
+        // Re-run to capture the results produced by microtasks.
+        runtime.run_script(
+            r#"
+        document.getElementById("r").setAttribute("data-out", window.__blob_out.join(";"));
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        let observed = r.borrow().value.get_attr("data-out").unwrap_or_default().to_string();
+        assert!(observed.contains("size:11"), "got {observed}");
+        assert!(observed.contains("type:text/plain"), "got {observed}");
+        assert!(observed.contains("text:hello world"), "got {observed}");
+        assert!(observed.contains("bytes:11"), "got {observed}");
+        assert!(observed.contains("slice:hello"), "got {observed}");
+        assert!(observed.contains("read:hello world"), "got {observed}");
+        assert!(observed.contains("loadEvent:load"), "got {observed}");
+    }
+
+    #[test]
+    fn response_constructor_produces_a_working_response() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var out = [];
+        var response = new Response("body text", { status: 201, statusText: "Created" });
+        out.push("status:" + response.status);
+        out.push("statusText:" + response.statusText);
+        out.push("ok:" + response.ok);
+        response.text().then(function (text) { out.push("text:" + text); });
+        var jsonResponse = new Response("{}", { headers: { "content-type": "application/json" } });
+        jsonResponse.json().then(function (value) { out.push("json:" + (typeof value === "object")); });
+        window.__response_out = out;
+        "#,
+        );
+        runtime.perform_microtask_checkpoint_public();
+        runtime.run_script(
+            r#"
+        document.getElementById("r").setAttribute("data-out", window.__response_out.join(";"));
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        let observed = r.borrow().value.get_attr("data-out").unwrap_or_default().to_string();
+        assert!(observed.contains("status:201"), "got {observed}");
+        assert!(observed.contains("statusText:Created"), "got {observed}");
+        assert!(observed.contains("ok:true"), "got {observed}");
+        assert!(observed.contains("text:body text"), "got {observed}");
+        assert!(observed.contains("json:true"), "got {observed}");
+    }
+
+    #[test]
+    fn custom_element_registry_and_shadow_root_are_instanciable_checks() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var out = [];
+        out.push("ceType:" + typeof CustomElementRegistry);
+        out.push("instance:" + (customElements instanceof CustomElementRegistry));
+        out.push("define:" + typeof customElements.define);
+        out.push("whenDefined:" + typeof customElements.whenDefined);
+        out.push("srType:" + typeof ShadowRoot);
+        out.push("hostHook:" + typeof ShadowRoot.prototype);
+        var host = document.getElementById("r");
+        var shadow = host.attachShadow({ mode: "open" });
+        out.push("attach:" + (shadow instanceof ShadowRoot));
+        try { new ShadowRoot(); out.push("ctor:no-throw"); }
+        catch (e) { out.push("ctor:" + (e instanceof TypeError)); }
+        document.getElementById("r").setAttribute("data-out", out.join(";"));
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(
+            r.borrow().value.get_attr("data-out"),
+            Some("ceType:function;instance:true;define:function;whenDefined:function;srType:function;hostHook:object;attach:true;ctor:true")
+        );
+    }
+
+    #[test]
+    fn promise_finally_race_any_and_all_settled_compose() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        window.__out = [];
+        function log(s) { window.__out.push(s); }
+        Promise.race([new Promise(function (_, rej) { rej("early"); })])
+            .catch(function (e) { log("race:" + e); });
+        Promise.allSettled([Promise.resolve(1), Promise.reject("bad")])
+            .then(function (rs) {
+                log("settled:" + rs[0].status + ":" + rs[1].status + ":" + rs[1].reason);
+            });
+        Promise.any([Promise.reject("a"), Promise.resolve("ok")])
+            .then(function (v) { log("any:" + v); });
+        Promise.any([Promise.reject("x"), Promise.reject("y")])
+            .catch(function (e) {
+                log("anyReject:" + e.name + ":" + e.errors.length + ":" + e.errors[0]);
+            });
+        Promise.resolve("base")
+            .finally(function () { log("finally:ran"); })
+            .then(function (v) { log("finally:" + v); });
+        Promise.reject("original")
+            .finally(function () { log("finallyReject:ran"); })
+            .catch(function (e) { log("finallyReject:" + e); });
+        "#,
+        );
+        runtime.perform_microtask_checkpoint_public();
+        runtime.run_script(
+            r#"
+        document.getElementById("r").setAttribute("data-out", window.__out.join(";"));
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(
+            r.borrow().value.get_attr("data-out"),
+            Some(
+                "finally:ran;finallyReject:ran;race:early;settled:fulfilled:rejected:bad;any:ok;anyReject:AggregateError:2:x;finally:base;finallyReject:original"
+            )
+        );
+    }
+
+    #[test]
+    fn promise_rejections_and_host_errors_preserve_error_instances() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        window.__out = [];
+        function log(s) { window.__out.push(s); }
+        Promise.resolve(1)
+            .then(function () { throw new TypeError("boom"); })
+            .catch(function (e) {
+                log("thrown:" + (e instanceof TypeError) + ":" + e.name + ":" + e.message);
+            });
+        Promise.reject(new RangeError("nope"))
+            .catch(function (e) {
+                log("rejected:" + (e instanceof RangeError) + ":" + e.message);
+            });
+        try { JSON.parse("{not json"); }
+        catch (e) { log("hostSyntax:" + (e instanceof SyntaxError) + ":" + e.name); }
+        try { new ShadowRoot(); }
+        catch (e) { log("hostType:" + (e instanceof TypeError)); }
+        "#,
+        );
+        runtime.perform_microtask_checkpoint_public();
+        runtime.run_script(
+            r#"
+        document.getElementById("r").setAttribute("data-out", window.__out.join(";"));
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(
+            r.borrow().value.get_attr("data-out"),
+            Some("hostSyntax:true:SyntaxError;hostType:true;rejected:true:nope;thrown:true:TypeError:boom")
+        );
     }
 }

@@ -3,7 +3,7 @@ use crate::engine::js::JsHost;
 use crate::engine::tree::NodeRef;
 use pixi_byte::value::jsobject::Property;
 use pixi_byte::vm::VM;
-use pixi_byte::{JSResult, JSValue};
+use pixi_byte::{JSError, JSResult, JSValue};
 use std::any::Any;
 
 /// `&JSValue` sentinel for `undefined`. A `const fn` call can't be a promoted
@@ -63,6 +63,28 @@ pub(crate) fn is_callable(value: &JSValue) -> bool {
 
 pub(crate) fn noop(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(JSValue::undefined())
+}
+
+/// Creates a promise already settled with `value` via the built-in
+/// `Promise.resolve` / `Promise.reject` statics.
+///
+/// Used by host natives that must return a promise (e.g. `Blob.text()`);
+/// rejections run their handlers at the next microtask checkpoint, matching
+/// platform semantics.
+pub(crate) fn settled_promise(vm: &mut VM, rejected: bool, value: JSValue) -> JSResult<JSValue> {
+    let promise = vm.global_object.borrow().get("Promise");
+    let Some(constructor) = promise.as_object() else {
+        return Err(JSError::InternalError(
+            "Promise constructor is unavailable".to_string(),
+        ));
+    };
+    let settle = constructor.borrow().get(if rejected { "reject" } else { "resolve" });
+    vm.call(settle, promise, vec![value])
+}
+
+/// `Promise.resolve(value)`
+pub(crate) fn resolved_promise(vm: &mut VM, value: JSValue) -> JSResult<JSValue> {
+    settled_promise(vm, false, value)
 }
 
 pub(crate) fn read_only_accessor_property(getter: pixi_byte::NativeFunctionType) -> Property {
