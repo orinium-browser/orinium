@@ -4,7 +4,10 @@ use orinium_browser::{
     engine::{
         css::matcher::ElementChain,
         css::parser::Parser as CssParser,
-        html::{HtmlNodeType, parser::Parser as HtmlParser},
+        html::{
+            HtmlNodeType,
+            parser::{ClassicScriptExecution, DomTree, Parser as HtmlParser},
+        },
         js::{JsRuntime, missing_api_detector},
         layouter::{
             InheritedCss, build_layout_and_info,
@@ -491,6 +494,64 @@ fn build_layout_info_inner(
     Ok(LayoutInfo { layout, info })
 }
 
+/// Builds layout from a live (post-JS-mutation) DOM and stylesheet bodies
+/// that were already fetched by the webcompat harness, so the layout stage
+/// does not re-fetch the page or its CSS. `<style>` blocks are re-collected
+/// from the live DOM so scripts that inject styles are reflected.
+fn build_layout_for_dom(
+    dom: &Rc<DomTree>,
+    external_css: &[String],
+    viewport: (f32, f32),
+) -> Result<LayoutInfo> {
+    let mut resolved_styles = ResolvedStyles::default();
+
+    let ua_css = include_str!("../resource/user-agent.css");
+    let ua_sheet = CssParser::new(ua_css)
+        .parse()
+        .expect("Failed to parse UA CSS");
+    append_resolved_styles(
+        &mut resolved_styles,
+        CssResolver::resolve_with_origin(&ua_sheet, StyleOrigin::UserAgent),
+    );
+
+    for css in dom.collect_text_by_tag("style") {
+        if let Ok(sheet) = CssParser::new(&css).parse() {
+            append_resolved_styles(&mut resolved_styles, CssResolver::resolve(&sheet));
+        }
+    }
+    for css in external_css {
+        if let Ok(sheet) = CssParser::new(css).parse() {
+            append_resolved_styles(&mut resolved_styles, CssResolver::resolve(&sheet));
+        }
+    }
+
+    let measurer = PlatformTextMeasurer::new()
+        .expect("Failed to initialize text measurer (no system font found)");
+    let measurer = Arc::new(measurer);
+    let (layout, info) = build_layout_and_info(
+        &dom.root,
+        &resolved_styles,
+        measurer,
+        InheritedCss {
+            text_style: TextStyle::default(),
+            text_flow_style: TextFlowStyle {
+                font_size: 16.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        ElementChain::default(),
+        dark_light::detect().map(Into::into).unwrap_or_else(|e| {
+            log::error!("Failed to detect system color scheme, using default: {e}");
+            Default::default()
+        }),
+        orinium_browser::engine::html::ScriptingMode::Enabled,
+        viewport,
+    );
+
+    Ok(LayoutInfo { layout, info })
+}
+
 /// JS prologue that intercepts `console.*` and records `warn`/`error` messages
 /// (including the engine's own reports) so the harness can read them back.
 /// Written to avoid engine-unsupported APIs: plain loops, array literals,
@@ -530,6 +591,52 @@ struct WebcompatSubresource {
     preview: String,
 }
 
+/// A classic script in document order: inline text or an external URL
+/// (resolved against the page base URL), plus its parse-time scheduling
+/// attributes for diagnostics.
+struct WebcompatScript {
+    inline_source: Option<String>,
+    resolved_url: Option<url::Url>,
+    execution: ClassicScriptExecution,
+}
+
+/// True when `node` is nested inside a `<template>`; template contents are
+/// inert until the template is cloned, so the scripts they hold must not run.
+fn is_inside_template(node: &NodeRef<HtmlNodeType>) -> bool {
+    let mut current = node.borrow().parent();
+    while let Some(ancestor) = current {
+        let tag = ancestor
+            .borrow()
+            .value
+            .tag_name()
+            .map(|tag| tag.to_ascii_lowercase());
+        if tag.as_deref() == Some("template") {
+            return true;
+        }
+        current = ancestor.borrow().parent();
+    }
+    false
+}
+
+fn push_subresource(
+    label: &'static str,
+    url: url::Url,
+    status: u16,
+    content_type: String,
+    bytes: usize,
+    preview: String,
+    out: &mut Vec<WebcompatSubresource>,
+) {
+    out.push(WebcompatSubresource {
+        label,
+        url,
+        status,
+        content_type,
+        bytes,
+        preview,
+    });
+}
+
 fn record_webcompat_fetch(
     loader: &BrowserResourceLoader,
     label: &'static str,
@@ -543,28 +650,29 @@ fn record_webcompat_fetch(
                 .take(48)
                 .collect::<String>()
                 .replace('\n', " ");
-            out.push(WebcompatSubresource {
+            push_subresource(
                 label,
                 url,
-                status: resp.status.as_u16(),
-                content_type: resp
-                    .headers
+                resp.status.as_u16(),
+                resp.headers
                     .iter()
                     .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
                     .map(|(_, v)| v.clone())
                     .unwrap_or_default(),
-                bytes: resp.body.len(),
+                resp.body.len(),
                 preview,
-            });
+                out,
+            );
         }
-        Err(e) => out.push(WebcompatSubresource {
+        Err(e) => push_subresource(
             label,
             url,
-            status: 0,
-            content_type: format!("ERROR: {e}"),
-            bytes: 0,
-            preview: String::new(),
-        }),
+            0,
+            format!("ERROR: {e}"),
+            0,
+            String::new(),
+            out,
+        ),
     }
 }
 
@@ -574,6 +682,12 @@ fn record_webcompat_fetch(
 /// while capturing console errors and missing Web Platform APIs, and finally
 /// attempts a full layout build. Used to drive the bsky.app web-tech effort.
 fn run_webcompat(raw_url: &str) -> Result<()> {
+    run_webcompat_depth(raw_url, 0)
+}
+
+/// `depth` bounds how many script-initiated navigations (anti-bot challenge
+/// pages) the report will follow before giving up.
+fn run_webcompat_depth(raw_url: &str, depth: usize) -> Result<()> {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
     let parsed_url: url::Url = raw_url.parse()?;
@@ -638,18 +752,68 @@ fn run_webcompat(raw_url: &str) -> Result<()> {
         .next()
         .unwrap_or_else(|| parsed_url.clone());
 
-    let mut script_urls: Vec<url::Url> = Vec::new();
-    for node_ref in dom.find_all(|n| n.tag_name() == Some("script")) {
-        let html_node = &node_ref.borrow().value;
-        if let Some(src) = html_node.get_attr("src") {
-            if let Ok(url) = base_url.join(src) {
-                script_urls.push(url);
+    // Classic scripts in document order (external + inline interleaved), so
+    // `<script src="a.js"></script><script>…</script>` runs a.js before the
+    // inline block — not external-first as earlier harness iterations did.
+    let mut scripts: Vec<WebcompatScript> = Vec::new();
+    let mut module_scripts = 0usize;
+    let mut other_script_blocks = 0usize;
+    for node_ref in dom.get_elements_by_tag_name("script") {
+        if is_inside_template(&node_ref) {
+            continue;
+        }
+        let (src, script_type, has_async, has_defer) = {
+            let node = node_ref.borrow();
+            let value = &node.value;
+            (
+                value.get_attr("src").map(str::to_string),
+                value
+                    .get_attr("type")
+                    .unwrap_or("")
+                    .trim()
+                    .to_ascii_lowercase(),
+                value.has_attr("async"),
+                value.has_attr("defer"),
+            )
+        };
+        if script_type == "module" {
+            module_scripts += 1;
+            continue;
+        }
+        if !script_type.is_empty()
+            && script_type != "text/javascript"
+            && script_type != "application/javascript"
+        {
+            other_script_blocks += 1;
+            continue;
+        }
+        let execution = if has_async {
+            ClassicScriptExecution::Async
+        } else if has_defer {
+            ClassicScriptExecution::Defer
+        } else {
+            ClassicScriptExecution::Default
+        };
+        if let Some(src) = src.filter(|src| !src.is_empty()) {
+            if let Ok(url) = base_url.join(&src) {
+                scripts.push(WebcompatScript {
+                    inline_source: None,
+                    resolved_url: Some(url),
+                    execution,
+                });
             }
+        } else {
+            scripts.push(WebcompatScript {
+                inline_source: Some(DomTree::inner_text(&node_ref)),
+                resolved_url: None,
+                execution: ClassicScriptExecution::Default,
+            });
         }
     }
 
     let mut style_urls: Vec<url::Url> = Vec::new();
     let mut font_urls: Vec<url::Url> = Vec::new();
+    let mut preload_script_urls: Vec<url::Url> = Vec::new();
     for node_ref in dom.find_all(|n| n.tag_name() == Some("link")) {
         let html_node = &node_ref.borrow().value;
         let rel = html_node.get_attr("rel").unwrap_or("");
@@ -664,30 +828,155 @@ fn run_webcompat(raw_url: &str) -> Result<()> {
             "stylesheet" => style_urls.push(url),
             "preload" => match as_kind {
                 "font" => font_urls.push(url),
-                "script" => script_urls.push(url),
+                "script" => preload_script_urls.push(url),
                 "style" => style_urls.push(url),
                 _ => {}
             },
             _ => {}
         }
     }
+    // Preload hints may reference scripts that are not otherwise in the DOM;
+    // append them (deduped, in hint order) so they are still exercised.
+    for url in preload_script_urls {
+        if !scripts
+            .iter()
+            .any(|script| script.resolved_url.as_ref() == Some(&url))
+        {
+            scripts.push(WebcompatScript {
+                inline_source: None,
+                resolved_url: Some(url),
+                execution: ClassicScriptExecution::Default,
+            });
+        }
+    }
 
     // ---- Subresource stage ----
     println!("\n{}", "== Subresources ==".bold());
-    println!("  stylesheets: {}", style_urls.len());
-    println!("  classic scripts: {}", script_urls.len());
-    println!("  preloaded fonts: {}", font_urls.len());
-
-    let mut subresources: Vec<WebcompatSubresource> = Vec::new();
     const SUBRESOURCE_CAP: usize = 48;
-    for (label, urls) in [
-        ("script", &script_urls[..]),
-        ("css", &style_urls[..]),
-        ("font", &font_urls[..]),
-    ] {
-        for url in urls.iter().take(SUBRESOURCE_CAP) {
-            record_webcompat_fetch(&loader, label, url.clone(), &mut subresources);
+
+    let script_urls: Vec<url::Url> = scripts
+        .iter()
+        .filter_map(|script| script.resolved_url.clone())
+        .collect();
+    let tested_scripts = script_urls.len().min(SUBRESOURCE_CAP);
+    let tested_styles = style_urls.len().min(SUBRESOURCE_CAP);
+    let tested_fonts = font_urls.len().min(SUBRESOURCE_CAP);
+    println!(
+        "  stylesheets: {} discovered, {} tested",
+        style_urls.len(),
+        tested_styles
+    );
+    println!(
+        "  classic scripts: {} discovered ({} external, {} inline), {} external tested",
+        scripts.len(),
+        script_urls.len(),
+        scripts.len() - script_urls.len(),
+        tested_scripts
+    );
+    println!(
+        "  preloaded fonts: {} discovered, {} tested",
+        font_urls.len(),
+        tested_fonts
+    );
+    println!("  module scripts: {module_scripts} (not executed here)");
+    if other_script_blocks > 0 {
+        println!("  other script blocks: {other_script_blocks} (data / non-JS type)");
+    }
+    let defer_count = scripts
+        .iter()
+        .filter(|script| script.execution == ClassicScriptExecution::Defer)
+        .count();
+    let async_count = scripts
+        .iter()
+        .filter(|script| script.execution == ClassicScriptExecution::Async)
+        .count();
+    if defer_count + async_count > 0 {
+        println!(
+            "  scheduling: defer: {defer_count}, async: {async_count} (executed in document order)"
+        );
+    }
+
+    // Fetch each discovered subresource exactly once; the JavaScript and
+    // layout stages reuse these bodies instead of hammering the network.
+    let mut script_bodies: HashMap<url::Url, Result<String, String>> = HashMap::new();
+    let mut css_bodies: Vec<String> = Vec::new();
+    let mut subresources: Vec<WebcompatSubresource> = Vec::new();
+    for url in script_urls.iter().take(SUBRESOURCE_CAP).cloned() {
+        match loader.fetch_blocking(url.clone()) {
+            Ok(resp) => {
+                let preview = String::from_utf8_lossy(&resp.body)
+                    .chars()
+                    .take(48)
+                    .collect::<String>()
+                    .replace('\n', " ");
+                push_subresource(
+                    "script",
+                    url.clone(),
+                    resp.status.as_u16(),
+                    resp.headers
+                        .iter()
+                        .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+                        .map(|(_, v)| v.clone())
+                        .unwrap_or_default(),
+                    resp.body.len(),
+                    preview,
+                    &mut subresources,
+                );
+                let body = String::from_utf8_lossy(&resp.body).to_string();
+                script_bodies.insert(url, Ok(body));
+            }
+            Err(e) => {
+                push_subresource(
+                    "script",
+                    url.clone(),
+                    0,
+                    format!("ERROR: {e}"),
+                    0,
+                    String::new(),
+                    &mut subresources,
+                );
+                script_bodies.insert(url, Err(e.to_string()));
+            }
         }
+    }
+    for url in style_urls.iter().take(SUBRESOURCE_CAP).cloned() {
+        match loader.fetch_blocking(url.clone()) {
+            Ok(resp) => {
+                let preview = String::from_utf8_lossy(&resp.body)
+                    .chars()
+                    .take(48)
+                    .collect::<String>()
+                    .replace('\n', " ");
+                push_subresource(
+                    "css",
+                    url.clone(),
+                    resp.status.as_u16(),
+                    resp.headers
+                        .iter()
+                        .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+                        .map(|(_, v)| v.clone())
+                        .unwrap_or_default(),
+                    resp.body.len(),
+                    preview,
+                    &mut subresources,
+                );
+                css_bodies.push(String::from_utf8_lossy(&resp.body).to_string());
+            }
+            Err(e) => {
+                push_subresource(
+                    "css",
+                    url,
+                    0,
+                    format!("ERROR: {e}"),
+                    0,
+                    String::new(),
+                    &mut subresources,
+                );
+            }
+        }
+    }
+    for url in font_urls.iter().take(SUBRESOURCE_CAP).cloned() {
+        record_webcompat_fetch(&loader, "font", url, &mut subresources);
     }
     let mut failed = 0;
     for s in &subresources {
@@ -707,7 +996,7 @@ fn run_webcompat(raw_url: &str) -> Result<()> {
             println!("           \"{}\"", s.preview);
         }
     }
-    println!("  subresource failures: {}", failed);
+    println!("  subresource failures: {failed}");
 
     // ---- JavaScript stage ----
     println!("\n{}", "== JavaScript ==".bold());
@@ -721,25 +1010,33 @@ fn run_webcompat(raw_url: &str) -> Result<()> {
     js.run_script(WEBCOMPAT_COLLECTOR);
     missing_api_detector::install_missing_api_report(&mut js);
 
-    let mut fetch_failed_scripts = 0usize;
+    // Classic script execution follows document order: each `<script>` (inline
+    // or external) runs when its position in the source is reached, matching
+    // the browser's parse-time scheduling instead of running all externals
+    // before all inline blocks.
     let mut ran_scripts = 0usize;
-    for url in &script_urls {
-        let Ok(resp) = loader.fetch_blocking(url.clone()) else {
-            fetch_failed_scripts += 1;
-            continue;
+    let mut fetch_failed_scripts = 0usize;
+    let mut untested_scripts = 0usize;
+    for script in &scripts {
+        let source = match (&script.inline_source, &script.resolved_url) {
+            (Some(source), _) => source.clone(),
+            (None, Some(url)) => match script_bodies.get(url) {
+                Some(Ok(body)) => body.clone(),
+                Some(Err(_)) => {
+                    fetch_failed_scripts += 1;
+                    continue;
+                }
+                None => {
+                    untested_scripts += 1;
+                    continue;
+                }
+            },
+            (None, None) => continue,
         };
-        let body = String::from_utf8_lossy(&resp.body).to_string();
         ran_scripts += 1;
         js.run_script(&format!(
             "try {{\n{}\n}} catch (e) {{ console.error('[uncaught]', e && e.stack || String(e)); }}",
-            body
-        ));
-    }
-    for script in dom.collect_inline_scripts() {
-        ran_scripts += 1;
-        js.run_script(&format!(
-            "try {{\n{}\n}} catch (e) {{ console.error('[uncaught]', e && e.stack || String(e)); }}",
-            script
+            source
         ));
     }
     js.dispatch_dom_content_loaded();
@@ -749,13 +1046,25 @@ fn run_webcompat(raw_url: &str) -> Result<()> {
     }
     let navigations = js.take_navigation_requests();
     println!(
-        "  scripts ran: {} ({} failed to fetch)",
-        ran_scripts, fetch_failed_scripts
+        "  scripts ran: {} ({} failed to fetch, {} untested)",
+        ran_scripts, fetch_failed_scripts, untested_scripts
     );
     if navigations.is_empty() {
         println!("  no script-initiated navigation");
     } else {
         println!("  script-initiated navigations: {}", navigations.join(", "));
+    }
+
+    // Script-initiated top-level navigations (anti-bot challenge pages):
+    // re-fetch the target URL once and report on the real page.
+    if let Some(navigation) = navigations.first().cloned()
+        && depth < 4
+    {
+        let target = url::Url::parse(&navigation)
+            .or_else(|_| parsed_url.join(&navigation))
+            .expect("navigation URL");
+        println!("Following script navigation to {target}");
+        return run_webcompat_depth(target.as_str(), depth + 1);
     }
 
     // ---- CSS usage census (post-script live DOM) ----
@@ -853,8 +1162,10 @@ fn run_webcompat(raw_url: &str) -> Result<()> {
 
     // ---- Layout smoke test ----
     println!("\n{}", "== Layout ==".bold());
+    // Layout builds from the same live DOM (post-JS mutations) and the
+    // already-fetched stylesheet bodies — nothing is re-fetched here.
     let layout_result = catch_unwind(AssertUnwindSafe(|| {
-        build_layout_info_inner(raw_url, (800.0, 600.0), 0)
+        build_layout_for_dom(&dom, &css_bodies, (800.0, 600.0))
     }));
     match layout_result {
         Ok(Ok(ctx)) => {
