@@ -245,6 +245,14 @@ pub struct JsHost {
     pub(crate) layout_metrics: HashMap<usize, JsLayoutMetrics>,
     /// Committed layout measurements keyed by stable JS-facing DOM id.
     pub(crate) layout_metrics_by_dom_id: HashMap<u64, JsLayoutMetrics>,
+    /// Serialized computed CSS values (`name: value`) keyed by stable
+    /// JS-facing DOM id, rebuilt after each committed layout so
+    /// `getComputedStyle` reflects the resolved cascade instead of only the
+    /// inline `style` attribute.
+    pub(crate) computed_styles: HashMap<u64, Vec<(String, String)>>,
+    /// Stable read-only `CSSStyleDeclaration` wrappers backing
+    /// `getComputedStyle` results, keyed by DOM id.
+    pub(crate) computed_style_declarations: HashMap<u64, Rc<RefCell<JSObject>>>,
     pub(crate) next_fetch_id: u64,
     pub(crate) next_timer_id: u64,
     pub(crate) time_origin: Instant,
@@ -330,6 +338,8 @@ impl JsRuntime {
             viewport: (800.0, 600.0),
             layout_metrics: HashMap::new(),
             layout_metrics_by_dom_id: HashMap::new(),
+            computed_styles: HashMap::new(),
+            computed_style_declarations: HashMap::new(),
             next_fetch_id: 0,
             next_timer_id: 0,
             time_origin: Instant::now(),
@@ -403,6 +413,14 @@ impl JsRuntime {
         with_host_mut(self.engine.vm(), |host| {
             host.layout_metrics_by_dom_id = metrics
         });
+    }
+
+    /// Replaces the serialized computed CSS values using stable DOM ids.
+    pub(crate) fn set_computed_styles_by_dom_id(
+        &mut self,
+        computed_styles: HashMap<u64, Vec<(String, String)>>,
+    ) {
+        with_host_mut(self.engine.vm(), |host| host.computed_styles = computed_styles);
     }
 
     /// Updates the language preferences exposed through `navigator`.
@@ -1620,6 +1638,129 @@ mod tests {
 
         let node = dom.get_element_by_id("hello").unwrap();
         assert_eq!(node.borrow().value.get_attr("data-run"), Some("1"));
+    }
+
+    #[test]
+    fn match_media_evaluates_width_and_type_queries_against_viewport() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.set_viewport(1000.0, 600.0);
+        runtime.run_script(
+            r#"
+            const results = [];
+            results.push(matchMedia("(max-width: 1000px)").matches);
+            results.push(matchMedia("(max-width: 999px)").matches);
+            results.push(matchMedia("(min-width: 1000px)").matches);
+            results.push(matchMedia("screen").matches);
+            results.push(matchMedia("print").matches);
+            results.push(matchMedia("all").matches);
+            results.push(matchMedia("").matches);
+            results.push(matchMedia("screen and (min-width: 500px) and (max-width: 1200px)").matches);
+            results.push(matchMedia("only screen and (max-width: 600px)").matches);
+            document.getElementById("result").setAttribute("data-media", results.join(","));
+            "#,
+        );
+        let data = dom
+            .get_element_by_id("result")
+            .unwrap()
+            .borrow()
+            .value
+            .get_attr("data-media")
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(
+            data,
+            "true,false,true,true,false,true,false,true,false",
+            "got: {data}"
+        );
+    }
+
+    #[test]
+    fn computed_style_reflects_committed_layout_values() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<div id="xm" style="color: red"></div><div id="result"></div>"#,
+        );
+        runtime.run_script(
+            r#"document.getElementById("result").setAttribute("data-id", String(document.getElementById("xm").__orinium_dom_id));"#,
+        );
+        let dom_id: u64 = dom
+            .get_element_by_id("result")
+            .unwrap()
+            .borrow()
+            .value
+            .get_attr("data-id")
+            .unwrap_or_default()
+            .parse()
+            .expect("JS-facing dom id");
+        runtime.set_computed_styles_by_dom_id(std::collections::HashMap::from([(
+            dom_id,
+            vec![
+                ("display".to_string(), "flex".to_string()),
+                ("opacity".to_string(), "0.5".to_string()),
+                ("background-color".to_string(), "#3366ff".to_string()),
+                ("width".to_string(), "240px".to_string()),
+            ],
+        )]));
+        runtime.run_script(
+            r#"
+            const xm = document.getElementById("xm");
+            const cs = getComputedStyle(xm);
+            const results = [];
+            results.push(cs.opacity);
+            results.push(cs.getPropertyValue("display"));
+            results.push(cs.width);
+            results.push(cs.backgroundColor);
+            results.push(cs.getPropertyValue("color"));
+            results.push(String(cs));
+            results.push(cs.cssText);
+            results.push(String(xm.style));
+            results.push(String(cs) === cs.cssText);
+            document.getElementById("result").setAttribute("data-computed", results.join("|"));
+            "#,
+        );
+        let data = dom
+            .get_element_by_id("result")
+            .unwrap()
+            .borrow()
+            .value
+            .get_attr("data-computed")
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(
+            data,
+            "0.5|flex|240px|#3366ff|red|display: flex; opacity: 0.5; background-color: #3366ff; width: 240px;|display: flex; opacity: 0.5; background-color: #3366ff; width: 240px;|color: red|true",
+            "got: {data}"
+        );
+    }
+
+    #[test]
+    fn computed_style_writes_are_ignored_and_resolve_back_to_inline_when_unlaid_out() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<div id="xm" style="margin-left: 3px"></div><div id="result"></div>"#,
+        );
+        runtime.run_script(
+            r#"
+            const cs = getComputedStyle(document.getElementById("xm"));
+            cs.opacity = "0.99";
+            cs.cssText = "color: blue";
+            cs.setProperty("color", "green");
+            cs.removeProperty("color");
+            document.getElementById("result").setAttribute(
+                "data-inline",
+                cs.opacity + ":" + cs.getPropertyValue("margin-left") + ":" + cs.getPropertyValue("color")
+            );
+            "#,
+        );
+        let data = dom
+            .get_element_by_id("result")
+            .unwrap()
+            .borrow()
+            .value
+            .get_attr("data-inline")
+            .unwrap_or_default()
+            .to_string();
+        // The element never received a layout snapshot, so computed falls back
+        // to the inline `style` attribute; writes must be no-ops.
+        assert_eq!(data, ":3px:", "got: {data}");
     }
 
     #[test]

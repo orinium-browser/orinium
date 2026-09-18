@@ -11,7 +11,9 @@ use crate::engine::js::web_apis::console::{
 use crate::engine::js::web_apis::dom::document::{
     add_document_event_listener, remove_document_event_listener,
 };
-use crate::engine::js::web_apis::dom::element::{get_style, read_only_accessor_property};
+use crate::engine::js::web_apis::dom::element::{
+    get_computed_style_declaration, read_only_accessor_property,
+};
 use crate::engine::js::web_apis::dom::events::{
     make_event_constructor, make_event_target_constructor,
 };
@@ -376,11 +378,12 @@ fn get_computed_style(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
             "getComputedStyle requires an Element".to_string(),
         ));
     }
-    get_style(vm, vec![element])
+    get_computed_style_declaration(vm, vec![element])
 }
 
-pub(crate) fn match_media(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn match_media(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let media = args.get(1).unwrap_or(&JSValue::undefined()).to_string();
+    let matches = evaluate_match_media(&media, vm);
     let mut query = JSObject::new();
     query.define_property(
         "media".to_string(),
@@ -388,7 +391,7 @@ pub(crate) fn match_media(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue>
     );
     query.define_property(
         "matches".to_string(),
-        Property::read_only(JSValue::from_bool(false)),
+        Property::read_only(JSValue::from_bool(matches)),
     );
     query.set("onchange".to_string(), JSValue::null());
     for name in [
@@ -400,6 +403,19 @@ pub(crate) fn match_media(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue>
         query.set(name.to_string(), JSValue::from_native_function(noop));
     }
     Ok(JSValue::from_object(Rc::new(RefCell::new(query))))
+}
+
+fn evaluate_match_media(media: &str, vm: &VM) -> bool {
+    let viewport = with_host(vm, |host| host.viewport).unwrap_or((800.0, 600.0));
+    let environment = crate::engine::layouter::css_resolver::MediaEnvironment::new(
+        (viewport.0 as f32, viewport.1 as f32),
+        crate::engine::layouter::types::ColorScheme::Light,
+    );
+    crate::engine::css::parser::Parser::parse_media_query(media)
+        .map(|query| {
+            crate::engine::layouter::css_resolver::evaluate_media_query(&query, &environment)
+        })
+        .unwrap_or(false)
 }
 
 fn request_animation_frame(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {

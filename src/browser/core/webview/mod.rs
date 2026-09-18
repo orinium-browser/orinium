@@ -6,7 +6,10 @@ use std::rc::{Rc, Weak};
 use std::sync::{Arc, mpsc};
 
 use crate::engine::image_decoder::ImageDecoder;
-use crate::engine::layouter::types::{ColorScheme, TextFlowStyle};
+use crate::engine::layouter::types::{
+    Background, Color, ColorScheme, ContainerStyle, CursorStyle, FontStyle, TextAlign, TextStyle,
+    TextFlowStyle, Visibility, WhiteSpace,
+};
 use crate::engine::{
     css::{
         self,
@@ -34,7 +37,7 @@ use crate::engine::{
 };
 use crate::platform::{locale, renderer::text_measurer::PlatformTextMeasurer};
 use crate::{perf_scope, profile_log};
-use ui_layout::{LayoutChild, LayoutNode};
+use ui_layout::{Display, InnerDisplay, LayoutChild, LayoutNode, OuterDisplay, Position};
 use url::Url;
 
 const USER_AGENT_CSS: &str = include_str!("../../../../resource/user-agent.css");
@@ -1731,9 +1734,12 @@ impl WebView {
 
         let layout_metrics =
             collect_js_layout_metrics(layout, info, &self.layout_dom_refs, &self.js_dom_ids);
+        let computed_styles =
+            collect_js_computed_styles(layout, info, &self.layout_dom_refs, &self.js_dom_ids);
         if let Some(processor) = self.js_processor.as_ref() {
             processor.send(JsTask::SetLayoutMetrics {
                 metrics: layout_metrics,
+                computed_styles,
             });
             self.pending_js_tasks += 1;
         }
@@ -1889,6 +1895,262 @@ fn collect_js_layout_metrics_inner(
             }
         }
     }
+}
+
+/// Serializes each laid-out node's computed CSS values (resolved cascade
+/// result plus box geometry) for `getComputedStyle`, keyed by stable
+/// JS-facing DOM id.
+fn collect_js_computed_styles(
+    layout: &LayoutNode,
+    info: &InfoNode,
+    dom_refs: &[Weak<RefCell<TreeNode<HtmlNodeType>>>],
+    js_dom_ids: &HashMap<usize, u64>,
+) -> HashMap<u64, Vec<(String, String)>> {
+    let mut computed = HashMap::new();
+    collect_js_computed_styles_inner(layout, info, dom_refs, js_dom_ids, &mut computed);
+    computed
+}
+
+fn collect_js_computed_styles_inner(
+    layout: &LayoutNode,
+    info: &InfoNode,
+    dom_refs: &[Weak<RefCell<TreeNode<HtmlNodeType>>>],
+    js_dom_ids: &HashMap<usize, u64>,
+    computed: &mut HashMap<u64, Vec<(String, String)>>,
+) {
+    if layout.layout_box.is_empty() {
+        return;
+    }
+
+    if let Some(node) = info
+        .dom_id
+        .and_then(|id| dom_refs.get(id as usize))
+        .and_then(Weak::upgrade)
+    {
+        let node_key = Rc::as_ptr(&node) as usize;
+        if let Some(dom_id) = js_dom_ids.get(&node_key).copied() {
+            let declarations = computed_style_declarations(layout, info);
+            if !declarations.is_empty() {
+                computed.insert(dom_id, declarations);
+            }
+        }
+    }
+
+    for (child_layout, child_info) in layout.children.iter().zip(&info.children) {
+        if let Some(child_layout) = child_layout.node() {
+            collect_js_computed_styles_inner(
+                child_layout,
+                child_info,
+                dom_refs,
+                js_dom_ids,
+                computed,
+            );
+        }
+    }
+}
+
+/// Computes the `name: value` pair set for one laid-out node, merging the
+/// layout-level (`ui_layout::Style`), appearance (`ContainerStyle`) and text
+/// style results of the cascade into CSS property strings.
+fn computed_style_declarations(layout: &LayoutNode, info: &InfoNode) -> Vec<(String, String)> {
+    let mut declarations: Vec<(String, String)> = Vec::new();
+
+    let layout_style = &layout.style;
+    declarations.push(("display".into(), css_display(layout_style.display)));
+    declarations.push(("position".into(), css_position(layout_style.position.kind)));
+    if let Some(box_model) = layout.layout_box.iter().next() {
+        declarations.push(("width".into(), css_px(box_model.content_box.width)));
+        declarations.push(("height".into(), css_px(box_model.content_box.height)));
+    }
+
+    match &info.kind {
+        NodeKind::Container { style, .. }
+        | NodeKind::Custom { style, .. }
+        | NodeKind::Svg { style, .. } => {
+            push_container_computed(&mut declarations, style);
+        }
+        _ => {}
+    }
+
+    // Text-rendering values live on text nodes and custom elements.
+    let text_style = match &info.kind {
+        NodeKind::Text { style, flow_style, .. } => Some((style, flow_style)),
+        NodeKind::Custom {
+            text_style,
+            text_flow_style,
+            ..
+        } => Some((text_style, text_flow_style)),
+        _ => None,
+    };
+    if let Some((text_style, flow_style)) = text_style {
+        push_text_computed(&mut declarations, text_style, flow_style);
+    }
+
+    // Overflow flags are the layout's scroll-ability record; they cannot
+    // distinguish `hidden` from `scroll`, so report boolean width.
+    let overflow_x = container_overflow(&info.kind, true);
+    let overflow_y = container_overflow(&info.kind, false);
+    declarations.push(("overflow-x".into(), overflow_x));
+    declarations.push(("overflow-y".into(), overflow_y));
+
+    declarations
+}
+
+fn container_overflow(info: &NodeKind, horizontal: bool) -> String {
+    let scrollable = match info {
+        NodeKind::Container { scroll_x, scroll_y, .. }
+        | NodeKind::Custom { scroll_x, scroll_y, .. }
+        | NodeKind::Svg { scroll_x, scroll_y, .. } => {
+            if horizontal { *scroll_x } else { *scroll_y }
+        }
+        _ => false,
+    };
+    if scrollable {
+        "auto".to_string()
+    } else {
+        "visible".to_string()
+    }
+}
+
+fn push_container_computed(declarations: &mut Vec<(String, String)>, style: &ContainerStyle) {
+    declarations.push(("opacity".into(), css_opacity(style.opacity)));
+    declarations.push(("visibility".into(), css_visibility(style.visibility)));
+    declarations.push((
+        "z-index".into(),
+        style
+            .z_index
+            .map(|z| z.to_string())
+            .unwrap_or_else(|| "auto".to_string()),
+    ));
+    declarations.push(("cursor".into(), css_cursor(style.cursor)));
+    declarations.push(("text-align".into(), css_text_align(style.text_align)));
+    match &style.background {
+        Background::Color(color) | Background::Image { color, .. } if color.3 > 0 => {
+            declarations.push(("background-color".into(), css_color(color)));
+        }
+        _ => {}
+    }
+}
+
+fn push_text_computed(
+    declarations: &mut Vec<(String, String)>,
+    style: &TextStyle,
+    flow_style: &TextFlowStyle,
+) {
+    declarations.push(("color".into(), css_color(&style.color)));
+    declarations.push(("font-size".into(), css_px(flow_style.font_size)));
+    declarations.push(("font-weight".into(), style.font_weight.0.to_string()));
+    declarations.push(("font-style".into(), css_font_style(style.font_style)));
+    declarations.push(("text-align".into(), css_text_align(flow_style.text_align)));
+    declarations.push(("white-space".into(), css_white_space(flow_style.white_space)));
+    if !style.font_families.is_empty() {
+        declarations.push((
+            "font-family".into(),
+            style.font_families.join(", "),
+        ));
+    }
+    let line_height = match flow_style.line_height {
+        crate::engine::layouter::types::LineHeight::Normal => "normal".to_string(),
+        crate::engine::layouter::types::LineHeight::Number(n) => n.to_string(),
+        crate::engine::layouter::types::LineHeight::Px(px) => css_px(px),
+    };
+    declarations.push(("line-height".into(), line_height));
+}
+
+fn css_display(display: Display) -> String {
+    match display {
+        Display::None => "none".to_string(),
+        Display::Contents => "contents".to_string(),
+        Display::OutsideInner { outer, inner } => match (outer, inner) {
+            (OuterDisplay::Block, InnerDisplay::Flex) => "flex".to_string(),
+            (OuterDisplay::Inline, InnerDisplay::Flex) => "inline-flex".to_string(),
+            (OuterDisplay::Block, InnerDisplay::Grid) => "grid".to_string(),
+            (OuterDisplay::Inline, InnerDisplay::Grid) => "inline-grid".to_string(),
+            (OuterDisplay::Block, InnerDisplay::FlowRoot) => "flow-root".to_string(),
+            (OuterDisplay::Inline, InnerDisplay::FlowRoot) => "inline-block".to_string(),
+            (_, InnerDisplay::Flow) => match outer {
+                OuterDisplay::Inline => "inline".to_string(),
+                OuterDisplay::Block => "block".to_string(),
+            },
+        },
+    }
+}
+
+fn css_position(position: Position) -> String {
+    match position {
+        Position::Static => "static".to_string(),
+        Position::Relative => "relative".to_string(),
+        Position::Absolute => "absolute".to_string(),
+        Position::Fixed => "fixed".to_string(),
+        Position::Sticky => "sticky".to_string(),
+    }
+}
+
+fn css_opacity(opacity: f32) -> String {
+    format!("{opacity}")
+}
+
+fn css_visibility(visibility: Visibility) -> String {
+    match visibility {
+        Visibility::Visible => "visible".to_string(),
+        Visibility::Hidden => "hidden".to_string(),
+        Visibility::Collapse => "collapse".to_string(),
+    }
+}
+
+fn css_cursor(cursor: CursorStyle) -> String {
+    match cursor {
+        CursorStyle::Auto => "auto".to_string(),
+        CursorStyle::Default => "default".to_string(),
+        CursorStyle::None => "none".to_string(),
+        CursorStyle::Pointer => "pointer".to_string(),
+        CursorStyle::Text => "text".to_string(),
+        CursorStyle::Move => "move".to_string(),
+        CursorStyle::NotAllowed => "not-allowed".to_string(),
+        CursorStyle::Wait => "wait".to_string(),
+        CursorStyle::Crosshair => "crosshair".to_string(),
+        CursorStyle::Grab => "grab".to_string(),
+        CursorStyle::Grabbing => "grabbing".to_string(),
+    }
+}
+
+fn css_text_align(align: TextAlign) -> String {
+    match align {
+        TextAlign::Left => "left".to_string(),
+        TextAlign::Center => "center".to_string(),
+        TextAlign::Right => "right".to_string(),
+    }
+}
+
+fn css_white_space(white_space: WhiteSpace) -> String {
+    match white_space {
+        WhiteSpace::Normal => "normal".to_string(),
+        WhiteSpace::Nowrap => "nowrap".to_string(),
+        WhiteSpace::Pre => "pre".to_string(),
+        WhiteSpace::PreWrap => "pre-wrap".to_string(),
+        WhiteSpace::PreLine => "pre-line".to_string(),
+        WhiteSpace::BreakSpaces => "break-spaces".to_string(),
+    }
+}
+
+fn css_font_style(font_style: FontStyle) -> String {
+    match font_style {
+        FontStyle::Normal => "normal".to_string(),
+        FontStyle::Italic => "italic".to_string(),
+        FontStyle::Oblique => "oblique".to_string(),
+    }
+}
+
+fn css_color(color: &Color) -> String {
+    if color.3 == 255 {
+        format!("#{:02x}{:02x}{:02x}", color.0, color.1, color.2)
+    } else {
+        format!("rgba({}, {}, {}, {})", color.0, color.1, color.2, color.3)
+    }
+}
+
+fn css_px(value: f32) -> String {
+    format!("{value}px")
 }
 
 /// Records the nonzero scroll offsets of every scrollable node in `info`,

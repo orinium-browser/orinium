@@ -744,7 +744,7 @@ fn run_webcompat(raw_url: &str) -> Result<()> {
     }
     js.dispatch_dom_content_loaded();
     js.dispatch_window_load();
-    for _ in 0..3 {
+    for _ in 0..60 {
         js.run_due_timers();
     }
     let navigations = js.take_navigation_requests();
@@ -757,6 +757,67 @@ fn run_webcompat(raw_url: &str) -> Result<()> {
     } else {
         println!("  script-initiated navigations: {}", navigations.join(", "));
     }
+
+    // ---- CSS usage census (post-script live DOM) ----
+    println!("\n{}", "== CSS census (post-script DOM) ==".bold());
+    let css_census = js
+        .eval_value(
+            r#"
+(function () {
+    var out = {};
+    out.nodes = document.querySelectorAll('*').length;
+    out.bodyChildren = document.body ? document.body.children.length : 0;
+    out.bodyHtml = document.body ? document.body.innerHTML.slice(0, 400) : '(no body)';
+    out.rootIds = [];
+    var root = document.body && document.body.firstChild;
+    for (var r = 0; r < 5 && root; r++, root = root.nextSibling) {
+        out.rootIds.push(String(root.id || '') + ':' + (root.className || '').toString().slice(0, 40));
+    }
+    var styles = {};
+    var samples = [];
+    var els = document.querySelectorAll('*');
+    for (var i = 0; i < els.length && i < 400; i++) {
+        var st = els[i].getAttribute && els[i].getAttribute('style');
+        if (st) {
+            var parts = st.split(';');
+            for (var j = 0; j < parts.length; j++) {
+                var kv = parts[j].split(':');
+                if (kv.length == 2) {
+                    var k = kv[0].trim();
+                    styles[k] = (styles[k] || 0) + 1;
+                }
+            }
+            if (samples.length < 6) samples.push(els[i].tagName.toLowerCase() + ':' + st.slice(0, 120));
+        }
+    }
+    out.inlineStyles = styles;
+    out.inlineSamples = samples;
+    var gcs = null;
+    try {
+        var e = els[0] || document.body;
+        var cs = getComputedStyle(e);
+        gcs = {};
+        gcs.display = cs.getPropertyValue('display');
+        gcs.width = cs.getPropertyValue('width');
+        gcs.height = cs.getPropertyValue('height');
+        gcs.opacity = cs.getPropertyValue('opacity');
+        gcs.isInlineDecl = String(cs).slice(0, 40);
+    } catch (err) {
+        gcs = 'ERR:' + String(err);
+    }
+    out.computedSample = gcs;
+    try {
+        var mm = matchMedia('(max-width: 600px)');
+        out.matchMedia = { matches: mm.matches, media: mm.media };
+    } catch (err) {
+        out.matchMedia = 'ERR:' + String(err);
+    }
+    return JSON.stringify(out);
+})()
+"#,
+        )
+        .to_console_string();
+    println!("  {css_census}");
 
     let console_report = js
         .eval_value(

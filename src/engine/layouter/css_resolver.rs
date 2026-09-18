@@ -281,6 +281,13 @@ impl MediaEnvironment {
     }
 }
 
+/// Evaluates a parsed media query (as produced by
+/// [`crate::engine::css::parser::Parser::parse_media_query`]) against the
+/// current page environment, mirroring how `@media` rules are filtered.
+pub fn evaluate_media_query(query: &AtQuery, environment: &MediaEnvironment) -> bool {
+    MediaEvaluator::evaluate(query, environment)
+}
+
 /// Keeps only declarations whose enclosing media queries currently match.
 pub fn filter_media<'a>(
     styles: &'a ResolvedStyles,

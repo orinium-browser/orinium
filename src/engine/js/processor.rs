@@ -33,9 +33,10 @@ pub enum JsTask {
     SetViewport { width: f32, height: f32 },
     /// Update the language preferences exposed through `navigator`.
     SetLanguage { language: String },
-    /// Replace DOM geometry exposed by measurement APIs.
+    /// Replace DOM geometry and computed styles exposed by measurement APIs.
     SetLayoutMetrics {
         metrics: HashMap<u64, JsLayoutMetrics>,
+        computed_styles: HashMap<u64, Vec<(String, String)>>,
     },
     /// Execute a classic (blocking or deferred) script.
     RunScript { source: String },
@@ -261,8 +262,12 @@ fn run_task(runtime: &mut JsRuntime, task: JsTask) -> bool {
             runtime.set_language(&language);
             false
         }
-        JsTask::SetLayoutMetrics { metrics } => {
+        JsTask::SetLayoutMetrics {
+            metrics,
+            computed_styles,
+        } => {
             runtime.set_layout_metrics_by_dom_id(metrics);
+            runtime.set_computed_styles_by_dom_id(computed_styles);
             false
         }
         JsTask::RunScript { source } => {

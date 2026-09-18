@@ -1624,6 +1624,19 @@ impl<'a> Parser<'a> {
         Ok(result)
     }
 
+    /// Tokenizes a standalone media query list (e.g. `screen and
+    /// (max-width: 600px)`) into the same [`AtQuery`] shape `@media` preludes
+    /// produce, so it can be evaluated against a [`MediaEnvironment`].
+    pub fn parse_media_query(query: &str) -> Option<AtQuery> {
+        let mut tokenizer = crate::engine::css::tokenizer::Tokenizer::new(query);
+        let tokens: Vec<Token<'_>> = std::iter::from_fn(|| {
+            let token = tokenizer.next_token();
+            (token != Token::EOF).then_some(token)
+        })
+        .collect();
+        Self::parse_at_query(tokens).ok()
+    }
+
     pub fn parse_tokens_to_css_value(tokens: Vec<Token<'_>>) -> ParseResult<CssValue> {
         let mut values = vec![];
         let mut iter = tokens.into_iter().peekable();

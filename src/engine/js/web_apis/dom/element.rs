@@ -2842,7 +2842,7 @@ pub(crate) fn get_style(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
             return Rc::clone(style);
         }
 
-        let style = make_style_declaration(dom_id);
+        let style = make_style_declaration(dom_id, false);
         host.styles.insert(dom_id, Rc::clone(&style));
         style
     })
@@ -2850,9 +2850,38 @@ pub(crate) fn get_style(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(JSValue::from_object(style))
 }
 
-fn make_style_declaration(dom_id: u64) -> Rc<RefCell<JSObject>> {
+/// Returns (creating on demand) the read-only `CSSStyleDeclaration` backing
+/// `getComputedStyle(element)`. The object is cached on the host per DOM id so
+/// repeated reads observe refreshed values without allocating new wrappers.
+pub(crate) fn get_computed_style_declaration(
+    vm: &mut VM,
+    args: Vec<JSValue>,
+) -> JSResult<JSValue> {
+    let Some(dom_id) = node_dom_id(args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::null());
+    };
+    let style = with_host_mut(vm, |host| {
+        if let Some(style) = host.computed_style_declarations.get(&dom_id) {
+            return Rc::clone(style);
+        }
+        let style = make_style_declaration(dom_id, true);
+        host.computed_style_declarations
+            .insert(dom_id, Rc::clone(&style));
+        style
+    })
+    .ok_or_else(|| JSError::InternalError("JS host is unavailable".to_string()))?;
+    Ok(JSValue::from_object(style))
+}
+
+fn make_style_declaration(dom_id: u64, computed: bool) -> Rc<RefCell<JSObject>> {
     let mut style = JSObject::new();
     define_node_id(&mut style, dom_id);
+    if computed {
+        style.set(
+            "__orinium_computed_style".to_string(),
+            JSValue::from_bool(true),
+        );
+    }
     style.define_property(
         "cssText".to_string(),
         accessor_property(get_style_css_text, set_style_css_text),
@@ -2870,6 +2899,14 @@ fn make_style_declaration(dom_id: u64) -> Rc<RefCell<JSObject>> {
         JSValue::from_native_function(style_remove_property),
     );
     style.set(
+        "toString".to_string(),
+        JSValue::from_native_function(style_to_string),
+    );
+    style.set(
+        "valueOf".to_string(),
+        JSValue::from_native_function(style_value_of),
+    );
+    style.set(
         "__host_get_property__".to_string(),
         JSValue::from_native_function(style_host_get_property),
     );
@@ -2880,7 +2917,46 @@ fn make_style_declaration(dom_id: u64) -> Rc<RefCell<JSObject>> {
     Rc::new(RefCell::new(style))
 }
 
+/// `String(styleDeclaration)` resolves through `toString` to the serialized
+/// declaration block, matching the CSSOM `cssText` serialization.
+fn style_to_string(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    get_style_css_text(vm, args)
+}
+
+fn style_value_of(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(args.first().cloned().unwrap_or(JSValue::undefined()))
+}
+
+/// True when the receiver is a computed-style declaration, i.e. the final
+/// cascade result rather than the element's inline `style` attribute.
+fn is_computed_style_receiver(vm: &mut VM, args: &[JSValue]) -> bool {
+    let _ = vm;
+    args.first()
+        .and_then(JSValue::as_object)
+        .map(|object| {
+            object
+                .borrow()
+                .get("__orinium_computed_style")
+                .as_boolean()
+                == Some(true)
+        })
+        .unwrap_or(false)
+}
+
 fn get_style_css_text(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    if is_computed_style_receiver(vm, &args) {
+        let Some(dom_id) = node_dom_id(args.first().unwrap_or(&UNDEFINED)) else {
+            return Ok(JSValue::from_string(String::new()));
+        };
+        let css_text = with_host(vm, |host| {
+            host.computed_styles
+                .get(&dom_id)
+                .map(|declarations| serialize_style_declarations(declarations))
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+        return Ok(JSValue::from_string(css_text));
+    }
     let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
         return Ok(JSValue::from_string(String::new()));
     };
@@ -2894,6 +2970,9 @@ fn get_style_css_text(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 }
 
 fn set_style_css_text(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    if is_computed_style_receiver(vm, &args) {
+        return Ok(JSValue::undefined());
+    }
     let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
         return Ok(JSValue::undefined());
     };
@@ -2921,15 +3000,19 @@ fn style_get_property_value(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue
     let Some(name) = args.get(1).map(JSValue::to_string) else {
         return Ok(JSValue::from_string(String::new()));
     };
-    Ok(JSValue::from_string(read_style_property(vm, &args, &name)))
+    Ok(JSValue::from_string(read_style_property(
+        vm,
+        &args,
+        &style_property_name(&name),
+    )))
 }
 
 fn style_remove_property(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(name) = args.get(1).map(JSValue::to_string) else {
         return Ok(JSValue::from_string(String::new()));
     };
-    let previous = read_style_property(vm, &args, &name);
-    set_style_property(vm, &args, &name, "", "")?;
+    let previous = read_style_property(vm, &args, &style_property_name(&name));
+    set_style_property(vm, &args, &style_property_name(&name), "", "")?;
     Ok(JSValue::from_string(previous))
 }
 
@@ -2937,6 +3020,9 @@ fn style_host_get_property(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue>
     let Some(name) = args.get(1).map(JSValue::to_string) else {
         return Ok(JSValue::undefined());
     };
+    if !is_plausible_css_property_key(&name) {
+        return Ok(JSValue::undefined());
+    }
     Ok(JSValue::from_string(read_style_property(
         vm,
         &args,
@@ -2953,7 +3039,51 @@ fn style_host_set_property(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue>
     Ok(JSValue::undefined())
 }
 
+/// CSS property names are `-`-separated identifiers; engine-internal keys such
+/// as `@@toPrimitive` or `<?>` must not be treated as style properties (reads
+/// of those must answer `undefined`, not an empty string).
+fn is_plausible_css_property_key(key: &str) -> bool {
+    !key.is_empty()
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        && key
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '-')
+}
+
 fn read_style_property(vm: &mut VM, args: &[JSValue], name: &str) -> String {
+    if is_computed_style_receiver(vm, args) {
+        return read_computed_style_property(vm, args, name);
+    }
+    read_inline_style_property(vm, args, name)
+}
+
+fn read_computed_style_property(vm: &mut VM, args: &[JSValue], name: &str) -> String {
+    let Some(dom_id) = node_dom_id(args.first().unwrap_or(&UNDEFINED)) else {
+        return String::new();
+    };
+    let from_computed = with_host(vm, |host| {
+        host.computed_styles.get(&dom_id).and_then(|pairs| {
+            pairs
+                .iter()
+                .rev()
+                .find(|(property, _)| property.eq_ignore_ascii_case(name))
+                .map(|(_, value)| value.clone())
+        })
+    })
+    .and_then(|value| value);
+    if let Some(value) = from_computed {
+        return value;
+    }
+    // Property not serialized by the layout snapshot (or node was never laid
+    // out): fall back to the inline `style` attribute like the previous
+    // read-only implementation did.
+    read_inline_style_property(vm, args, name)
+}
+
+fn read_inline_style_property(vm: &mut VM, args: &[JSValue], name: &str) -> String {
     let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
         return String::new();
     };
@@ -2978,6 +3108,9 @@ fn set_style_property(
     value: &str,
     priority: &str,
 ) -> JSResult<()> {
+    if is_computed_style_receiver(vm, args) {
+        return Ok(());
+    }
     let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
         return Ok(());
     };
