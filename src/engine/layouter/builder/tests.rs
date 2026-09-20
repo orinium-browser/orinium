@@ -104,19 +104,11 @@ fn opacity_number_clamps_into_css_range() {
 #[test]
 fn opacity_percentage_maps_to_hundredths() {
     assert_eq!(
-        apply_container_property(
-            "opacity",
-            CssValue::Length(50.0, Unit::Percent)
-        )
-        .opacity,
+        apply_container_property("opacity", CssValue::Length(50.0, Unit::Percent)).opacity,
         0.5
     );
     assert_eq!(
-        apply_container_property(
-            "opacity",
-            CssValue::Length(140.0, Unit::Percent)
-        )
-        .opacity,
+        apply_container_property("opacity", CssValue::Length(140.0, Unit::Percent)).opacity,
         1.0
     );
 }
@@ -325,6 +317,89 @@ fn flat_component_slice_resolves_as_arithmetic() {
 
     // An empty slice resolves to no length.
     assert_eq!(resolve_css_len("width", &[], &text_flow_style), None);
+}
+
+#[test]
+fn calc_with_nested_parens_parses_and_resolves_via_css_resolve() {
+    // calc( 8px + (12 - 8) * ( (100vw - 400px) / ( 800 - 400) ));
+    // = 8px + 4 * ((100vw - 400px) / 400)
+    let css =
+        r#"main { margin-top: calc( 8px + (12 - 8) * ( (100vw - 400px) / ( 800 - 400) ) ); }"#;
+    let stylesheet = CssParser::new(css).parse().unwrap();
+    let declaration = stylesheet.children()[0].children()[0].node();
+    let crate::engine::css::parser::CssNodeType::Declaration { value, .. } = declaration else {
+        panic!("expected declaration");
+    };
+
+    // The parenthesized groups must survive parsing as nested (sub-)lists so
+    // operator precedence inside calc() is preserved.
+    assert_eq!(
+        value,
+        &CssValue::Function(
+            "calc".into(),
+            vec![vec![
+                CssValue::Length(8.0, Unit::Px),
+                CssValue::Keyword("+".into()),
+                CssValue::List(vec![
+                    CssValue::Number(12.0),
+                    CssValue::Keyword("-".into()),
+                    CssValue::Number(8.0),
+                ]),
+                CssValue::Keyword("*".into()),
+                CssValue::List(vec![
+                    CssValue::List(vec![
+                        CssValue::Length(100.0, Unit::Vw),
+                        CssValue::Keyword("-".into()),
+                        CssValue::Length(400.0, Unit::Px),
+                    ]),
+                    CssValue::Keyword("/".into()),
+                    CssValue::List(vec![
+                        CssValue::Number(800.0),
+                        CssValue::Keyword("-".into()),
+                        CssValue::Number(400.0),
+                    ]),
+                ]),
+            ]],
+        )
+    );
+
+    let text_flow_style = TextFlowStyle::default();
+    let resolved = resolve_css_len("margin-top", std::slice::from_ref(value), &text_flow_style);
+    assert_eq!(
+        resolved,
+        Some(Length::Add(
+            Box::new(Length::Px(8.0)),
+            Box::new(Length::Mul(
+                Box::new(Length::Div(
+                    Box::new(Length::Sub(
+                        Box::new(Length::Vw(100.0)),
+                        Box::new(Length::Px(400.0)),
+                    )),
+                    400.0,
+                )),
+                4.0,
+            )),
+        ))
+    );
+
+    // The same value must also flow through the declaration layer intact.
+    let style = apply_layout_property("margin-top", value.clone());
+    assert_eq!(
+        style.spacing.margin_top,
+        LengthOrAuto::Length(Length::Add(
+            Box::new(Length::Px(8.0)),
+            Box::new(Length::Mul(
+                Box::new(Length::Div(
+                    Box::new(Length::Sub(
+                        Box::new(Length::Vw(100.0)),
+                        Box::new(Length::Px(400.0)),
+                    )),
+                    400.0,
+                )),
+                4.0,
+            )),
+        ))
+    );
 }
 
 #[test]
