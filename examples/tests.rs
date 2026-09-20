@@ -580,6 +580,14 @@ const WEBCOMPAT_COLLECTOR: &str = r#"(function () {
   }
   window.__orinium_errors = errors;
   window.__orinium_flush_errors = function () { return errors.join("\n"); };
+  window.onerror = function (msg, src, line, col, err) {
+    errors.push("[onerror] " + String(msg || "?"));
+    return false;
+  };
+  window.onunhandledrejection = function (e) {
+    errors.push("[unhandledrejection] " + String(e && e.reason || e));
+    return false;
+  };
 })();"#;
 
 struct WebcompatSubresource {
@@ -664,15 +672,7 @@ fn record_webcompat_fetch(
                 out,
             );
         }
-        Err(e) => push_subresource(
-            label,
-            url,
-            0,
-            format!("ERROR: {e}"),
-            0,
-            String::new(),
-            out,
-        ),
+        Err(e) => push_subresource(label, url, 0, format!("ERROR: {e}"), 0, String::new(), out),
     }
 }
 
@@ -1017,6 +1017,7 @@ fn run_webcompat_depth(raw_url: &str, depth: usize) -> Result<()> {
     let mut ran_scripts = 0usize;
     let mut fetch_failed_scripts = 0usize;
     let mut untested_scripts = 0usize;
+    let mut script_errors = 0usize;
     for script in &scripts {
         let source = match (&script.inline_source, &script.resolved_url) {
             (Some(source), _) => source.clone(),
@@ -1034,20 +1035,59 @@ fn run_webcompat_depth(raw_url: &str, depth: usize) -> Result<()> {
             (None, None) => continue,
         };
         ran_scripts += 1;
-        js.run_script(&format!(
-            "try {{\n{}\n}} catch (e) {{ console.error('[uncaught]', e && e.stack || String(e)); }}",
+        let wrapped = format!(
+            "try {{\n{}\n}} catch (e) {{ console.error('[uncaught] MSG<' + (e && e.message) + '> STACK<' + String(e && e.stack) + '>'); }}",
             source
-        ));
+        );
+        // `try_run_script` surfaces compile failures (a syntax error inside the
+        // `<script>` makes even the wrapper unparseable and would otherwise be
+        // invisible to the report).
+        if let Err(err) = js.try_run_script(&wrapped) {
+            script_errors += 1;
+            let snippet: String = err.chars().take(200).collect();
+            println!("  [script error] {snippet}");
+        }
     }
     js.dispatch_dom_content_loaded();
     js.dispatch_window_load();
     for _ in 0..60 {
         js.run_due_timers();
+        js.drain_microtasks();
+    }
+    // Give React-style async work (scheduler / rAF / microtask chains) more
+    // chances to settle, then re-check whether a framework mounted into the
+    // initial DOM during the extra loop.
+    let mounted_before = js
+        .eval_value(
+            r#"(function () {
+                try {
+                    var r = document.getElementById('root');
+                    return r ? String(r.children.length) : 'no-root';
+                } catch (e) { return 'ERR:' + e; }
+            })()"#,
+        )
+        .to_console_string();
+    for _ in 0..600 {
+        js.run_due_timers();
+        js.drain_microtasks();
+    }
+    let mounted_after = js
+        .eval_value(
+            r#"(function () {
+                try {
+                    var r = document.getElementById('root');
+                    return r ? String(r.children.length) : 'no-root';
+                } catch (e) { return 'ERR:' + e; }
+            })()"#,
+        )
+        .to_console_string();
+    if mounted_before != mounted_after {
+        println!("  root children grew after settling: {mounted_before} -> {mounted_after}");
     }
     let navigations = js.take_navigation_requests();
     println!(
-        "  scripts ran: {} ({} failed to fetch, {} untested)",
-        ran_scripts, fetch_failed_scripts, untested_scripts
+        "  scripts ran: {} ({} failed to fetch, {} untested, {} script errors)",
+        ran_scripts, fetch_failed_scripts, untested_scripts, script_errors
     );
     if navigations.is_empty() {
         println!("  no script-initiated navigation");
@@ -1115,6 +1155,43 @@ fn run_webcompat_depth(raw_url: &str, depth: usize) -> Result<()> {
         gcs = 'ERR:' + String(err);
     }
     out.computedSample = gcs;
+    out.readyState = document.readyState;
+    out.onLine = navigator.onLine;
+    out.rootInfo = (function () {
+        try {
+            var r = document.getElementById('root');
+            if (!r) return 'no-root';
+            return 'children=' + r.children.length + ' html=' + r.innerHTML.length;
+        } catch (e) { return 'ERR:' + e; }
+    })();
+    out.fontsStatus = (function () {
+        try {
+            var f = document.fonts;
+            return f === undefined || f === null ? 'undefined' :
+                'status=' + (f.status || '?') + ' length=' + (f.length === undefined ? '?' : f.length);
+        } catch (e) { return 'ERR:' + e; }
+    })();
+    out.reactGlobals = Object.getOwnPropertyNames(window).filter(function (k) {
+        return /react|root|hook|hydrat|contain/i.test(k);
+    }).slice(0, 40).join('|');
+    out.globalKeys = (function () {
+        var k = Object.getOwnPropertyNames(window);
+        var interesting = k.filter(function (x) {
+            return /webpack|hook|scheduler|__REACT|__INTERNAL|globe|preload/i.test(x);
+        });
+        return "keys=" + k.length + "|" + interesting.slice(0, 40).join('|');
+    })();
+    out.platformApis = (function () {
+        var names = ['requestAnimationFrame', 'ResizeObserver', 'IntersectionObserver',
+            'MutationObserver', 'queueMicrotask', 'MessageChannel', 'matchMedia',
+            'getComputedStyle', 'FontFace', 'fetch', 'XMLHttpRequest'];
+        var out = [];
+        for (var i = 0; i < names.length; i++) {
+            try { out.push(names[i] + ':' + typeof window[names[i]]); }
+            catch (e) { out.push(names[i] + ':ERR'); }
+        }
+        return out.join(',');
+    })();
     try {
         var mm = matchMedia('(max-width: 600px)');
         out.matchMedia = { matches: mm.matches, media: mm.media };
