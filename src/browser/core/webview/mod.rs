@@ -7,8 +7,8 @@ use std::sync::{Arc, mpsc};
 
 use crate::engine::image_decoder::ImageDecoder;
 use crate::engine::layouter::types::{
-    Background, Color, ColorScheme, ContainerStyle, CursorStyle, FontStyle, TextAlign, TextStyle,
-    TextFlowStyle, Visibility, WhiteSpace,
+    Background, Color, ColorScheme, ContainerStyle, CursorStyle, FontStyle, TextAlign,
+    TextFlowStyle, TextStyle, Visibility, WhiteSpace,
 };
 use crate::engine::{
     css::{
@@ -1974,7 +1974,9 @@ fn computed_style_declarations(layout: &LayoutNode, info: &InfoNode) -> Vec<(Str
 
     // Text-rendering values live on text nodes and custom elements.
     let text_style = match &info.kind {
-        NodeKind::Text { style, flow_style, .. } => Some((style, flow_style)),
+        NodeKind::Text {
+            style, flow_style, ..
+        } => Some((style, flow_style)),
         NodeKind::Custom {
             text_style,
             text_flow_style,
@@ -1998,10 +2000,20 @@ fn computed_style_declarations(layout: &LayoutNode, info: &InfoNode) -> Vec<(Str
 
 fn container_overflow(info: &NodeKind, horizontal: bool) -> String {
     let scrollable = match info {
-        NodeKind::Container { scroll_x, scroll_y, .. }
-        | NodeKind::Custom { scroll_x, scroll_y, .. }
-        | NodeKind::Svg { scroll_x, scroll_y, .. } => {
-            if horizontal { *scroll_x } else { *scroll_y }
+        NodeKind::Container {
+            scroll_x, scroll_y, ..
+        }
+        | NodeKind::Custom {
+            scroll_x, scroll_y, ..
+        }
+        | NodeKind::Svg {
+            scroll_x, scroll_y, ..
+        } => {
+            if horizontal {
+                *scroll_x
+            } else {
+                *scroll_y
+            }
         }
         _ => false,
     };
@@ -2042,12 +2054,12 @@ fn push_text_computed(
     declarations.push(("font-weight".into(), style.font_weight.0.to_string()));
     declarations.push(("font-style".into(), css_font_style(style.font_style)));
     declarations.push(("text-align".into(), css_text_align(flow_style.text_align)));
-    declarations.push(("white-space".into(), css_white_space(flow_style.white_space)));
+    declarations.push((
+        "white-space".into(),
+        css_white_space(flow_style.white_space),
+    ));
     if !style.font_families.is_empty() {
-        declarations.push((
-            "font-family".into(),
-            style.font_families.join(", "),
-        ));
+        declarations.push(("font-family".into(), style.font_families.join(", ")));
     }
     let line_height = match flow_style.line_height {
         crate::engine::layouter::types::LineHeight::Normal => "normal".to_string(),
