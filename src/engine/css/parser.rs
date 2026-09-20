@@ -1652,8 +1652,39 @@ impl<'a> Parser<'a> {
                     continue;
                 }
 
-                Token::Delim('(') | Token::Delim(')') => {
-                    // Function の構文用なので無視
+                Token::Delim('(') => {
+                    // 括弧で囲まれたグループを入れ子の `CssValue::List` として
+                    // 保持する。calc() などの演算式中の括弧グルーピングを
+                    // 後段の解決処理(`resolve_calc_value_slice` 等)が尊重できる
+                    // ようにするため、平坦化せずに構造を保存する。
+                    let mut depth = 1;
+                    let mut group_tokens = vec![];
+                    for tok in iter.by_ref() {
+                        match &tok {
+                            Token::Delim('(') => {
+                                depth += 1;
+                                group_tokens.push(tok);
+                            }
+                            Token::Delim(')') => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                                group_tokens.push(tok);
+                            }
+                            _ => group_tokens.push(tok),
+                        }
+                    }
+
+                    let inner = Self::parse_tokens_to_css_value(group_tokens)?;
+                    values.push(match inner {
+                        CssValue::List(values) => CssValue::List(values),
+                        other => CssValue::List(vec![other]),
+                    });
+                }
+
+                Token::Delim(')') => {
+                    // 不平衡な閉じ括弧は無視する
                     continue;
                 }
 
@@ -2040,6 +2071,47 @@ mod tests {
                     vec![CssValue::Keyword("c".into())],
                     vec![CssValue::Keyword("d".into())],
                 ],
+            )
+        );
+    }
+
+    #[test]
+    fn github_calc_with_nested_parentheses_preserves_grouping() {
+        let css =
+            r#"main { font-size: calc( 8px + (12 - 8) * ( (100vw - 400px) / ( 800 - 400) ) ); }"#;
+        let stylesheet = Parser::new(css).parse().unwrap();
+        let declaration = stylesheet.children()[0].children()[0].node();
+        let CssNodeType::Declaration { value, .. } = declaration else {
+            panic!("expected declaration");
+        };
+        // 括弧グループは入れ子の List として保持され、演算の結合が失われない。
+        assert_eq!(
+            value,
+            &CssValue::Function(
+                "calc".into(),
+                vec![vec![
+                    CssValue::Length(8.0, Unit::Px),
+                    CssValue::Keyword("+".into()),
+                    CssValue::List(vec![
+                        CssValue::Number(12.0),
+                        CssValue::Keyword("-".into()),
+                        CssValue::Number(8.0),
+                    ]),
+                    CssValue::Keyword("*".into()),
+                    CssValue::List(vec![
+                        CssValue::List(vec![
+                            CssValue::Length(100.0, Unit::Vw),
+                            CssValue::Keyword("-".into()),
+                            CssValue::Length(400.0, Unit::Px),
+                        ]),
+                        CssValue::Keyword("/".into()),
+                        CssValue::List(vec![
+                            CssValue::Number(800.0),
+                            CssValue::Keyword("-".into()),
+                            CssValue::Number(400.0),
+                        ]),
+                    ]),
+                ]],
             )
         );
     }
