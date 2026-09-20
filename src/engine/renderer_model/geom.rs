@@ -2,7 +2,7 @@
 
 /// An affine transformation matrix (2D), in row-major convention with an
 /// implicit translation.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AffineTransform {
     pub m11: f32,
     pub m12: f32,
@@ -102,7 +102,7 @@ impl AffineTransform {
 }
 
 /// An axis-aligned rectangle.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rect {
     pub x: f32,
     pub y: f32,

@@ -5,18 +5,21 @@
 //! (audio icons, decoded `<img src="*.svg">`): `<svg>`, container `<g>`,
 //! `<path d>`, `<rect>`, `<circle>`, `<ellipse>`, `transform` attributes, solid
 //! `fill` colors from either a `fill` attribute or a `style=` declaration,
-//! `fill-rule`, and `opacity`/`fill-opacity` (approximated as a per-shape alpha
-//! multiplier). Strokes, gradients, masks, `<defs>`/`<use>`, and text are out
-//! of scope.
+//! `fill-rule`, and `opacity`/`fill-opacity`/`stroke-opacity` (approximated as
+//! a per-shape alpha multiplier), plus strokes (via outline expansion). Edges
+//! are anti-aliased with 4× vertical supersampling. `stroke` colors are
+//! resolved from a `stroke` attribute or a `style=` declaration, with the
+//! `stroke-width`/cap/join/miter-limit/dash parameters inherited down
+//! containers. Gradients, masks, `<defs>`/`<use>`, and text are out of scope.
 
 use std::cmp::Ordering;
 
 use crate::engine::html::xml::XmlElement;
 use crate::engine::layouter::types::{Color, ColorScheme};
-use crate::engine::renderer_model::{AffineTransform, FillRule, Path, ellipse_path, rect_path};
+use crate::engine::renderer_model::{AffineTransform, FillRule, Path};
 use crate::engine::svg::{
-    ViewBox, numeric_presentation_value, parse_view_box, path_from_d, resolve_fill_rule,
-    resolve_shape_fill, viewbox_meet_transform, with_alpha,
+    PaintState, SvgStroke, ViewBox, element_shape, numeric_presentation_value, parse_len,
+    parse_transform, parse_view_box, viewbox_meet_transform, with_alpha,
 };
 use crate::engine::tree::NodeRef;
 
@@ -68,7 +71,15 @@ pub fn rasterize(markup: &str, target: Option<(u32, u32)>) -> Result<RasterResul
     let base = viewbox_meet_transform(view_box.unwrap_or((0.0, 0.0, 0.0, 0.0)), vw, vh);
     let mut rgba = vec![0u8; width as usize * height as usize * 4];
     for child in root.children() {
-        process_element(child, base, 1.0, width, height, &mut rgba)?;
+        process_element(
+            child,
+            base,
+            1.0,
+            PaintState::new(),
+            width,
+            height,
+            &mut rgba,
+        )?;
     }
     Ok(RasterResult {
         width,
@@ -95,13 +106,17 @@ fn viewport_len(el: &XmlElement, attr: &str, view_box: Option<ViewBox>, fallback
 /// and rasterizing any shape elements it describes.
 ///
 /// `opacity` is the product of the `opacity` presentation values of this hook
-/// and its ancestors. Shapes apply it (plus their own `fill-opacity`) to the
-/// fill alpha. Group opacity is approximated by multiplying the alpha of every
-/// descendant shape rather than compositing the group as a single layer.
+/// and its ancestors. Shapes apply it (plus their own `fill-opacity` /
+/// `stroke-opacity`) to the alpha. Group opacity is approximated by
+/// multiplying the alpha of every descendant shape rather than compositing the
+/// group as a single layer. `paint` carries the inherited `fill`/`stroke`
+/// state that containers set for their descendants, mirroring the inline
+/// `collect_svg` walk.
 fn process_element(
     node: &NodeRef<XmlElement>,
     inherited: AffineTransform,
     opacity: f32,
+    mut paint: PaintState,
     width: u32,
     height: u32,
     rgba: &mut [u8],
@@ -114,210 +129,92 @@ fn process_element(
     };
     let element_opacity = numeric_presentation_value(&el.value, "opacity").unwrap_or(1.0);
     let opacity = opacity * element_opacity.clamp(0.0, 1.0);
+    paint.apply(&el.value, ColorScheme::Light, Color::default());
 
     match name.as_str() {
         "g" | "a" | "svg" | "symbol" => {
             for child in el.children() {
-                process_element(child, eff, opacity, width, height, rgba)?;
+                process_element(child, eff, opacity, paint.clone(), width, height, rgba)?;
             }
         }
-        "path" => {
-            let Some(d) = el.value.attr("d") else {
+        "path" | "rect" | "circle" | "ellipse" | "polygon" | "polyline" | "line" => {
+            let Some(path) = element_shape(&el.value) else {
                 return Ok(());
             };
-            let path = path_from_d(d);
-            let fill = resolve_fill(&el.value, opacity);
-            let rule = resolve_fill_rule(&el.value);
-            render_shape(&path, eff, fill, rule, width, height, rgba);
-        }
-        "rect" => {
-            let x = el.value.attr("x").and_then(parse_len).unwrap_or(0.0);
-            let y = el.value.attr("y").and_then(parse_len).unwrap_or(0.0);
-            let w = el.value.attr("width").and_then(parse_len).unwrap_or(0.0);
-            let h = el.value.attr("height").and_then(parse_len).unwrap_or(0.0);
-            if w > 0.0 && h > 0.0 {
-                let fill = resolve_fill(&el.value, opacity);
-                let rule = resolve_fill_rule(&el.value);
-                render_shape(&rect_path(x, y, w, h), eff, fill, rule, width, height, rgba);
+            if path.commands().is_empty() {
+                return Ok(());
             }
-        }
-        "circle" => {
-            let cx = el.value.attr("cx").and_then(parse_len).unwrap_or(0.0);
-            let cy = el.value.attr("cy").and_then(parse_len).unwrap_or(0.0);
-            let r = el.value.attr("r").and_then(parse_len).unwrap_or(0.0);
-            if r > 0.0 {
-                let fill = resolve_fill(&el.value, opacity);
-                let rule = resolve_fill_rule(&el.value);
-                render_shape(
-                    &ellipse_path(cx, cy, r, r),
-                    eff,
-                    fill,
-                    rule,
-                    width,
-                    height,
-                    rgba,
-                );
-            }
-        }
-        "ellipse" => {
-            let cx = el.value.attr("cx").and_then(parse_len).unwrap_or(0.0);
-            let cy = el.value.attr("cy").and_then(parse_len).unwrap_or(0.0);
-            let rx = el.value.attr("rx").and_then(parse_len).unwrap_or(0.0);
-            let ry = el.value.attr("ry").and_then(parse_len).unwrap_or(0.0);
-            if rx > 0.0 && ry > 0.0 {
-                let fill = resolve_fill(&el.value, opacity);
-                let rule = resolve_fill_rule(&el.value);
-                render_shape(
-                    &ellipse_path(cx, cy, rx, ry),
-                    eff,
-                    fill,
-                    rule,
-                    width,
-                    height,
-                    rgba,
-                );
-            }
+            let fill = with_alpha(
+                paint.fill.unwrap_or(Color(0, 0, 0, 255)),
+                opacity * paint.fill_opacity,
+            );
+            let stroke = paint.stroke.clone().map(|mut stroke| {
+                stroke.color = with_alpha(stroke.color, opacity * paint.stroke_opacity);
+                stroke
+            });
+            render_shape(
+                &path,
+                eff,
+                fill,
+                paint.rule,
+                stroke.as_ref(),
+                width,
+                height,
+                rgba,
+            );
         }
         _ => {}
     }
     Ok(())
 }
 
-/// Resolves the effective fill color of a shape: `fill` attribute wins over a
-/// `style`-attribute `fill:` declaration; the SVG default is black.
-/// `opacity` (inherited product) and `fill-opacity` multiply the alpha.
-fn resolve_fill(el: &XmlElement, opacity: f32) -> Color {
-    let fill = resolve_shape_fill(el, ColorScheme::Light, Color::default());
-    let fill_opacity = numeric_presentation_value(el, "fill-opacity").unwrap_or(1.0);
-    with_alpha(fill, opacity * fill_opacity)
-}
-
-/// Parses an SVG length, tolerating trailing unit suffixes (`px`, `%`, …) and
-/// scientific-notation exponents (`1.5e2`).
-fn parse_len(value: &str) -> Option<f32> {
-    let value = value.trim().trim_start_matches('+');
-    let bytes = value.as_bytes();
-    let mut i = 0;
-    if i < bytes.len() && bytes[i] == b'-' {
-        i += 1;
-    }
-    let digits_start = i;
-    while i < bytes.len() && bytes[i].is_ascii_digit() {
-        i += 1;
-    }
-    if i < bytes.len() && bytes[i] == b'.' {
-        i += 1;
-        while i < bytes.len() && bytes[i].is_ascii_digit() {
-            i += 1;
-        }
-    }
-    if i == digits_start {
-        return None;
-    }
-    if i < bytes.len() && (bytes[i] == b'e' || bytes[i] == b'E') {
-        let mut j = i + 1;
-        if j < bytes.len() && (bytes[j] == b'+' || bytes[j] == b'-') {
-            j += 1;
-        }
-        if j < bytes.len() && bytes[j].is_ascii_digit() {
-            while j < bytes.len() && bytes[j].is_ascii_digit() {
-                j += 1;
-            }
-            i = j;
-        }
-    }
-    value[..i].parse::<f32>().ok()
-}
-
-/// Parses an SVG `transform` attribute into a single affine transform.
-///
-/// Supported functions: `matrix`, `translate`, `scale`, `rotate`, `skewX`,
-/// `skewY`. Multiple functions compose left-to-right per the SVG spec.
-fn parse_transform(value: &str) -> Result<AffineTransform, String> {
-    let mut out = AffineTransform::identity();
-    let mut rest = value;
-    loop {
-        let trimmed = rest.trim_start();
-        if trimmed.is_empty() {
-            return Ok(out);
-        }
-        let open = trimmed
-            .find('(')
-            .ok_or_else(|| format!("transform: missing '(' in {value:?}"))?;
-        let function = trimmed[..open].trim();
-        let inner = &trimmed[open + 1..];
-        let close = inner
-            .find(')')
-            .ok_or_else(|| format!("transform: missing ')' after {function:?} in {value:?}"))?;
-        let args = &inner[..close];
-        let next = parse_function(function, args).ok_or_else(|| {
-            format!("transform: unsupported or malformed {function:?} in {value:?}")
-        })?;
-        out = out.then(&next);
-        rest = &inner[close + 1..];
-    }
-}
-
-fn parse_function(name: &str, args: &str) -> Option<AffineTransform> {
-    let nums = args
-        .split(|c: char| c == ',' || c.is_whitespace())
-        .filter(|token| !token.trim().is_empty())
-        .filter_map(|token| token.trim().parse::<f32>().ok())
-        .collect::<Vec<f32>>();
-    match name {
-        "matrix" if nums.len() >= 6 => Some(AffineTransform {
-            m11: nums[0],
-            m12: nums[2],
-            m21: nums[1],
-            m22: nums[3],
-            dx: nums[4],
-            dy: nums[5],
-        }),
-        "translate" if !nums.is_empty() => Some(AffineTransform::translate(
-            nums[0],
-            nums.get(1).copied().unwrap_or(0.0),
-        )),
-        "scale" if !nums.is_empty() => Some(AffineTransform::scale(
-            nums[0],
-            nums.get(1).copied().unwrap_or(nums[0]),
-        )),
-        "rotate" if !nums.is_empty() => {
-            let angle = nums[0].to_radians();
-            if nums.len() >= 3 {
-                let (cx, cy) = (nums[1], nums[2]);
-                Some(
-                    AffineTransform::identity()
-                        .then(&AffineTransform::translate(-cx, -cy))
-                        .then(&AffineTransform::rotate(angle))
-                        .then(&AffineTransform::translate(cx, cy)),
-                )
-            } else {
-                Some(AffineTransform::rotate(angle))
-            }
-        }
-        "skewX" if nums.len() == 1 => Some(AffineTransform {
-            m12: nums[0].to_radians().tan(),
-            ..AffineTransform::identity()
-        }),
-        "skewY" if nums.len() == 1 => Some(AffineTransform {
-            m21: nums[0].to_radians().tan(),
-            ..AffineTransform::identity()
-        }),
-        _ => None,
-    }
-}
-
-/// Fills the part of `path` (already expressed in viewport coordinates by
-/// `eff`) between its subpaths into `rgba`, honoring `rule` (nonzero winding
-/// or even-odd).
+/// Fills `path` (expressed in viewBox coordinates by `eff`) into `rgba`,
+/// honoring `rule`, then paints the resolved stroke outline on top the same
+/// way the inline pipeline does: expand the outline in the already-transformed
+/// space and fill it with the nonzero rule.
+#[allow(clippy::too_many_arguments)]
 fn render_shape(
     path: &Path,
     eff: AffineTransform,
     fill: Color,
     rule: FillRule,
+    stroke: Option<&SvgStroke>,
     width: u32,
     height: u32,
     rgba: &mut [u8],
+) {
+    let transformed = crate::engine::renderer_model::transform_path(path, &eff);
+    fill_path_into(rgba, width, height, &transformed, fill, rule);
+    if let Some(stroke) = stroke {
+        let outline = crate::engine::renderer_model::stroke_path(&transformed, &stroke.to_stroke());
+        fill_path_into(
+            rgba,
+            width,
+            height,
+            &outline,
+            stroke.color,
+            FillRule::NonZero,
+        );
+    }
+}
+
+/// Number of sub-scanlines sampled per output row for anti-aliasing.
+const AA_SUBSAMPLES: u32 = 4;
+
+/// Fills `path` (already in viewport pixel coordinates) into `rgba`, honoring
+/// `rule`.
+///
+/// Each output row is sampled at [`AA_SUBSAMPLES`] sub-scanlines and the
+/// covered pixel columns are tallied, so boundary pixels blend into fractional
+/// alpha instead of a hard on/off edge. Fully interior pixels keep their exact
+/// fill alpha.
+pub(crate) fn fill_path_into(
+    rgba: &mut [u8],
+    width: u32,
+    height: u32,
+    path: &Path,
+    fill: Color,
+    rule: FillRule,
 ) {
     if fill.3 == 0 || width == 0 || height == 0 {
         return;
@@ -327,8 +224,7 @@ fn render_shape(
     let rings: Vec<Vec<(f32, f32)>> = path
         .subpaths()
         .into_iter()
-        .map(|ring| ring.into_iter().map(|(x, y)| eff.apply(x, y)).collect())
-        .filter(|ring: &Vec<(f32, f32)>| ring.len() >= 3)
+        .filter(|ring| ring.len() >= 3)
         .collect();
     if rings.is_empty() {
         return;
@@ -344,68 +240,122 @@ fn render_shape(
     }
 
     let row_start = min_y.max(0.0).floor() as i64;
-    let row_end = max_y.min(height as f32).ceil() as i64;
-    let row_end = row_end.clamp(0, height_i);
+    let row_end = (max_y.min(height as f32).ceil() as i64).clamp(0, height_i);
 
     for row in row_start..row_end {
-        let yc = row as f32 + 0.5;
-        let mut edges: Vec<(f32, f32)> = Vec::new();
-        for ring in &rings {
-            let last = ring.len() - 1;
-            for i in 0..ring.len() {
-                let (x0, y0) = ring[i];
-                let (x1, y1) = ring[if i == last { 0 } else { i + 1 }];
-                let (lo, hi) = if y0 < y1 { (y0, y1) } else { (y1, y0) };
-                // Half-open along y so each edge crosses exactly once per
-                // scanline, and horizontal edges never cross.
-                if yc < lo || yc >= hi {
-                    continue;
-                }
-                let t = (yc - y0) / (y1 - y0);
-                let x = x0 + t * (x1 - x0);
-                let direction = if y1 > y0 { 1.0 } else { -1.0 };
-                edges.push((x, direction));
+        let row_offset = (row as usize) * (width as usize);
+        let mut coverage = vec![0u16; width as usize];
+        for sub in 0..AA_SUBSAMPLES {
+            let yc = (row as f32) + (sub as f32 + 0.5) / AA_SUBSAMPLES as f32;
+            for (prev_x, x) in inside_spans(&rings, yc, rule) {
+                mark_columns(&mut coverage, prev_x, x);
             }
         }
-        edges.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
-
-        match rule {
-            FillRule::NonZero => {
-                let mut winding = 0.0f32;
-                let mut prev_x = f32::NEG_INFINITY;
-                for (x, direction) in edges {
-                    if winding != 0.0 && x > prev_x {
-                        fill_columns(rgba, width, row, prev_x, x, fill);
-                    }
-                    winding += direction;
-                    prev_x = x;
-                }
+        for (column, hits) in coverage.iter().enumerate() {
+            if *hits == 0 {
+                continue;
             }
-            FillRule::EvenOdd => {
-                let mut parity = false;
-                let mut prev_x = f32::NEG_INFINITY;
-                for (x, _) in edges {
-                    if parity && x > prev_x {
-                        fill_columns(rgba, width, row, prev_x, x, fill);
-                    }
-                    parity = !parity;
-                    prev_x = x;
-                }
-            }
+            let covers = *hits as f32 / AA_SUBSAMPLES as f32;
+            let alpha = (fill.3 as f32 * covers).round() as u8;
+            blend_pixel(
+                rgba,
+                row_offset + column,
+                Color(fill.0, fill.1, fill.2, alpha),
+            );
         }
     }
 }
 
-/// Fills the pixel columns whose centers land inside the scanline span
-/// `(prev_x, x)` with `fill`.
-fn fill_columns(rgba: &mut [u8], width: u32, row: i64, prev_x: f32, x: f32, fill: Color) {
-    let width_i = width as i64;
-    let c0 = ((prev_x - 0.5).ceil().max(0.0)) as i64;
-    let c1 = ((x - 0.5).ceil()) as i64;
-    let c0 = c0.max(0);
-    let c1 = c1.min(width_i);
-    for c in c0..c1 {
-        blend_pixel(rgba, (row as usize) * (width as usize) + c as usize, fill);
+/// Returns the scanline spans of `rings` at `yc` that are inside the shape per
+/// `rule`, as `(prev_x, x)` intervals (half-open along y and x).
+fn inside_spans(
+    rings: &[Vec<(f32, f32)>],
+    yc: f32,
+    rule: FillRule,
+) -> impl Iterator<Item = (f32, f32)> + '_ {
+    let mut edges: Vec<(f32, f32)> = Vec::new();
+    for ring in rings {
+        let last = ring.len() - 1;
+        for i in 0..ring.len() {
+            let (x0, y0) = ring[i];
+            let (x1, y1) = ring[if i == last { 0 } else { i + 1 }];
+            let (lo, hi) = if y0 < y1 { (y0, y1) } else { (y1, y0) };
+            // Half-open along y so each edge crosses exactly once per
+            // scanline, and horizontal edges never cross.
+            if yc < lo || yc >= hi {
+                continue;
+            }
+            let t = (yc - y0) / (y1 - y0);
+            let x = x0 + t * (x1 - x0);
+            let direction = if y1 > y0 { 1.0 } else { -1.0 };
+            edges.push((x, direction));
+        }
+    }
+    edges.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+
+    Spans {
+        edges,
+        rule,
+        prev_x: f32::NEG_INFINITY,
+        winding: 0.0,
+        parity: false,
+    }
+}
+
+/// Lazily yields the inside intervals of the sorted edge list, carrying the
+/// winding count (non-zero rule) or parity (even-odd rule) across the whole
+/// edge list so overlapping rings accumulate correctly.
+struct Spans {
+    edges: Vec<(f32, f32)>,
+    rule: FillRule,
+    prev_x: f32,
+    winding: f32,
+    parity: bool,
+}
+
+impl Iterator for Spans {
+    type Item = (f32, f32);
+
+    fn next(&mut self) -> Option<(f32, f32)> {
+        while let Some((x, direction)) = self.edges.first().copied() {
+            self.edges.remove(0);
+            let span = match self.rule {
+                FillRule::NonZero => {
+                    let span = if self.winding != 0.0 && x > self.prev_x {
+                        Some((self.prev_x, x))
+                    } else {
+                        None
+                    };
+                    self.winding += direction;
+                    span
+                }
+                FillRule::EvenOdd => {
+                    let span = if self.parity && x > self.prev_x {
+                        Some((self.prev_x, x))
+                    } else {
+                        None
+                    };
+                    self.parity = !self.parity;
+                    span
+                }
+            };
+            self.prev_x = x;
+            if let Some(span) = span {
+                return Some(span);
+            }
+        }
+        None
+    }
+}
+
+/// Ticks the pixel columns whose centers land inside the scanline span
+/// `(prev_x, x)` in the supersample coverage tally.
+fn mark_columns(coverage: &mut [u16], prev_x: f32, x: f32) {
+    let width = coverage.len() as i64;
+    let c0 = (((prev_x - 0.5).ceil().max(0.0)) as i64).min(width);
+    let c1 = ((x - 0.5).ceil().max(0.0) as i64).min(width);
+    for c in c0.max(0)..c1 {
+        coverage[c as usize] += 1;
     }
 }
 
@@ -470,10 +420,14 @@ mod tests {
         )
         .expect("rasterizes");
         assert_eq!((result.width, result.height), (20, 10));
-        // Row 5 (center y=5.5) crosses the triangle at x=10; the top-left
-        // corner is outside it.
-        let center = result.rgba[(5 * 20 + 10) * 4..(5 * 20 + 10) * 4 + 4].to_vec();
-        assert_eq!(center, [0, 255, 0, 255]);
+        // The triangle is offset by translate(2,2): points land at
+        // (4,10), (20,7), (4,4). Pixel (10,5) sits on the slanted right edge,
+        // so anti-aliasing gives it partial coverage (191/255) rather than a
+        // hard step; (5,5) is fully interior.
+        let edge = result.rgba[(5 * 20 + 10) * 4..(5 * 20 + 10) * 4 + 4].to_vec();
+        assert_eq!(edge, [0, 255, 0, 191]);
+        let interior = result.rgba[(5 * 20 + 5) * 4..(5 * 20 + 5) * 4 + 4].to_vec();
+        assert_eq!(interior, [0, 255, 0, 255]);
         assert_eq!(&result.rgba[0..4], &[0, 0, 0, 0]);
     }
 
@@ -550,6 +504,21 @@ mod tests {
     }
 
     #[test]
+    fn anti_aliases_pixels_straddling_a_horizontal_edge() {
+        // A rectangle from y=0.5 to y=2.5 in a 3-row canvas: rows 0 and 2 are
+        // half covered (2 of 4 sub-scanlines), row 1 is fully covered.
+        let result = rasterize(
+            r##"<svg width="2" height="3"><rect x="0" y="0.5" width="2" height="2" fill="#ff0000"/></svg>"##,
+            None,
+        )
+        .expect("rasterizes");
+        let px = |row: usize| result.rgba[row * 8..row * 8 + 4].to_vec();
+        assert_eq!(px(0), [255, 0, 0, 128]);
+        assert_eq!(px(1), [255, 0, 0, 255]);
+        assert_eq!(px(2), [255, 0, 0, 128]);
+    }
+
+    #[test]
     fn opacity_attribute_multiplies_fill_alpha() {
         let result = rasterize(
             r##"<svg width="2" height="2"><rect x="0" y="0" width="2" height="2" fill="#ff0000" opacity="0.5"/></svg>"##,
@@ -588,6 +557,97 @@ mod tests {
         )
         .expect("rasterizes");
         assert_eq!(&result.rgba[0..4], &[0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn stroke_width_zero_and_stroke_none_suppress_the_line() {
+        // `stroke-width:0` and `stroke:none` (the audio icon cases) must leave
+        // the canvas untouched even when a fill paint exists.
+        let width_zero = rasterize(
+            r##"<svg width="3" height="3"><path d="M0 1.5 L3 1.5" stroke="#ff0000" stroke-width="0"/></svg>"##,
+            None,
+        )
+        .expect("rasterizes");
+        assert!(width_zero.rgba.chunks(4).all(|p| p[3] == 0));
+        let none = rasterize(
+            r##"<svg width="3" height="3"><path d="M0 1.5 L3 1.5" stroke="none" stroke-width="2"/></svg>"##,
+            None,
+        )
+        .expect("rasterizes");
+        assert!(none.rgba.chunks(4).all(|p| p[3] == 0));
+        let no_declaration = rasterize(
+            r##"<svg width="3" height="3"><path d="M0 1.5 L3 1.5"/></svg>"##,
+            None,
+        )
+        .expect("rasterizes");
+        assert!(no_declaration.rgba.chunks(4).all(|p| p[3] == 0));
+    }
+
+    #[test]
+    fn stroke_rasterizes_as_an_antialiased_band_around_the_line() {
+        let result = rasterize(
+            r##"<svg width="6" height="4"><path d="M0 1.5 L6 1.5" stroke="#ff0000" stroke-width="2" fill="none"/></svg>"##,
+            None,
+        )
+        .expect("rasterizes");
+        let px = |x: usize, y: usize| &result.rgba[(y * 6 + x) * 4..(y * 6 + x) * 4 + 4];
+        // Band spans y in [0.5, 2.5]: center row full, neighbors halves, the
+        // adjacent row empty (same AA profile as a filled rectangle).
+        assert_eq!(px(2, 1), &[255, 0, 0, 255]);
+        assert_eq!(px(2, 0), &[255, 0, 0, 128]);
+        assert_eq!(px(2, 2), &[255, 0, 0, 128]);
+        assert_eq!(px(2, 3), &[0, 0, 0, 0]);
+        // Butt caps stop at the endpoint; nothing fills the corner cells.
+        assert_eq!(px(0, 3), &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn round_cap_bulges_past_the_endpoint_where_butt_does_not() {
+        let round = rasterize(
+            r##"<svg width="8" height="5"><path d="M0.5 2.5 L3.5 2.5" stroke="#ff0000" stroke-width="4" stroke-linecap="round" fill="none"/></svg>"##,
+            None,
+        )
+        .expect("rasterizes round");
+        let butt = rasterize(
+            r##"<svg width="8" height="5"><path d="M0.5 2.5 L3.5 2.5" stroke="#ff0000" stroke-width="4" fill="none"/></svg>"##,
+            None,
+        )
+        .expect("rasterizes butt");
+        fn px_at<'a>(rgba: &'a [u8], width: usize, x: usize, y: usize) -> &'a [u8] {
+            &rgba[(y * width + x) * 4..(y * width + x) * 4 + 4]
+        }
+
+        // Right of the end at x=3.5, the radius-2 cap circle reaches column 4
+        // only for the round cap.
+        assert_eq!(px_at(&round.rgba, 8, 4, 2), &[255, 0, 0, 255]);
+        assert_eq!(px_at(&butt.rgba, 8, 4, 2), &[0, 0, 0, 0]);
+        // Two widths further out no cap reaches.
+        assert_eq!(px_at(&round.rgba, 8, 6, 2), &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn dasharray_splits_the_stroke_into_on_and_off_phases() {
+        let result = rasterize(
+            r##"<svg width="8" height="3"><path d="M0 1.5 L8 1.5" stroke="#ff0000" stroke-width="2" stroke-dasharray="3 3" fill="none"/></svg>"##,
+            None,
+        )
+        .expect("rasterizes");
+        let px = |x: usize, y: usize| &result.rgba[(y * 8 + x) * 4..(y * 8 + x) * 4 + 4];
+        assert_eq!(px(1, 1), &[255, 0, 0, 255]);
+        assert_eq!(px(4, 1), &[0, 0, 0, 0]);
+        assert_eq!(px(6, 1), &[255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn stroke_parameters_inherit_through_a_group() {
+        let result = rasterize(
+            r##"<svg width="4" height="3"><g stroke="#00ff00" stroke-width="2"><path d="M0 1.5 L4 1.5" fill="none"/></g></svg>"##,
+            None,
+        )
+        .expect("rasterizes");
+        let px = |x: usize, y: usize| &result.rgba[(y * 4 + x) * 4..(y * 4 + x) * 4 + 4];
+        assert_eq!(px(1, 1), &[0, 255, 0, 255]);
+        assert_eq!(px(1, 0), &[0, 255, 0, 128]);
     }
 
     #[test]
