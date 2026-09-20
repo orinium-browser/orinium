@@ -11,7 +11,6 @@ use crate::engine::html::{DomTree, HtmlNodeType};
 use crate::engine::js::web_apis::dom::document::IframeDocument;
 use crate::engine::layouter::dom_snapshot::DomSnapshot;
 use crate::engine::tree::NodeRef;
-use pixi_byte::value::JSArray;
 use pixi_byte::value::jsobject::JSObject;
 use pixi_byte::{JSError, JSValue};
 use std::cell::{Cell, RefCell};
@@ -420,7 +419,9 @@ impl JsRuntime {
         &mut self,
         computed_styles: HashMap<u64, Vec<(String, String)>>,
     ) {
-        with_host_mut(self.engine.vm(), |host| host.computed_styles = computed_styles);
+        with_host_mut(self.engine.vm(), |host| {
+            host.computed_styles = computed_styles
+        });
     }
 
     /// Updates the language preferences exposed through `navigator`.
@@ -451,7 +452,7 @@ impl JsRuntime {
         );
         navigator.define_property(
             "languages".to_string(),
-            host_read_only_property(JSArray::from_vec(languages).to_object()),
+            host_read_only_property(self.engine.vm().array_from_values(languages)),
         );
     }
 
@@ -487,6 +488,19 @@ impl JsRuntime {
             }
         }
         self.perform_microtask_checkpoint();
+    }
+
+    /// Evaluates a script, returning the first JS error (parse or compile
+    /// failure, or an uncaught thrown value). Diagnostic harnesses use this to
+    /// distinguish "script ran clean" from "never parsed"; runtime exceptions
+    /// that the page itself catches still surface as `Ok`.
+    pub fn try_run_script(&mut self, source: &str) -> Result<(), String> {
+        let result = self.engine.eval(source);
+        self.perform_microtask_checkpoint();
+        match result {
+            Ok(_) => Ok(()),
+            Err(err) => Err(err.to_string()),
+        }
     }
 
     /// Evaluates an expression and returns its value, or `undefined` on error.
@@ -1167,6 +1181,14 @@ impl JsRuntime {
         self.perform_microtask_checkpoint();
     }
 
+    /// Drains queued microtasks/jobs without requiring a timer to be due.
+    ///
+    /// Framework schedulers (React's `MessageChannel`-based pump) queue their
+    /// work as jobs rather than timers, so harnesses need this to settle them.
+    pub fn drain_microtasks(&mut self) {
+        self.perform_microtask_checkpoint();
+    }
+
     /// Drains queued microtasks in FIFO order, including jobs queued by jobs.
     fn perform_microtask_checkpoint(&mut self) {
         while let Err(err) = self.engine.run_jobs() {
@@ -1668,17 +1690,15 @@ mod tests {
             .unwrap_or_default()
             .to_string();
         assert_eq!(
-            data,
-            "true,false,true,true,false,true,false,true,false",
+            data, "true,false,true,true,false,true,false,true,false",
             "got: {data}"
         );
     }
 
     #[test]
     fn computed_style_reflects_committed_layout_values() {
-        let (mut runtime, dom) = runtime_from_html(
-            r#"<div id="xm" style="color: red"></div><div id="result"></div>"#,
-        );
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<div id="xm" style="color: red"></div><div id="result"></div>"#);
         runtime.run_script(
             r#"document.getElementById("result").setAttribute("data-id", String(document.getElementById("xm").__orinium_dom_id));"#,
         );
@@ -4541,7 +4561,12 @@ mod tests {
         );
         let r = dom.get_element_by_id("r").unwrap();
         let attrs = r.borrow();
-        assert_eq!(attrs.value.get_attr("data-out"), Some("anims:true;scrollIntoView:undefined;scrollTo:undefined;scrollToOptions:undefined"));
+        assert_eq!(
+            attrs.value.get_attr("data-out"),
+            Some(
+                "anims:true;scrollIntoView:undefined;scrollTo:undefined;scrollToOptions:undefined"
+            )
+        );
         assert_eq!(attrs.value.get_attr("data-fs"), Some("resolved:true"));
     }
 
@@ -4567,7 +4592,9 @@ mod tests {
         let r = dom.get_element_by_id("r").unwrap();
         assert_eq!(
             r.borrow().value.get_attr("data-out"),
-            Some("selSingleton:true;rangeCount:0;type:None;exec:true;execEmpty:false;pipType:object;pipNull:true;point:true;stack:0")
+            Some(
+                "selSingleton:true;rangeCount:0;type:None;exec:true;execEmpty:false;pipType:object;pipNull:true;point:true;stack:0"
+            )
         );
     }
 
@@ -4601,7 +4628,9 @@ mod tests {
         let r = dom.get_element_by_id("r").unwrap();
         assert_eq!(
             r.borrow().value.get_attr("data-out"),
-            Some("fresh:false;aborted:true;reasonName:AbortError;fired:1;customReason:because;reabort:AbortError;throw:AbortError;static:true:AbortError;any:true")
+            Some(
+                "fresh:false;aborted:true;reasonName:AbortError;fired:1;customReason:because;reabort:AbortError;throw:AbortError;static:true:AbortError;any:true"
+            )
         );
     }
 
@@ -4623,9 +4652,15 @@ mod tests {
         );
         runtime.perform_microtask_checkpoint_public();
         let requests = runtime.take_fetch_requests();
-        assert!(requests.is_empty(), "no fetch should be queued for an aborted signal");
+        assert!(
+            requests.is_empty(),
+            "no fetch should be queued for an aborted signal"
+        );
         let r = dom.get_element_by_id("r").unwrap();
-        assert_eq!(r.borrow().value.get_attr("data-result"), Some("rejected:AbortError"));
+        assert_eq!(
+            r.borrow().value.get_attr("data-result"),
+            Some("rejected:AbortError")
+        );
     }
 
     #[test]
@@ -4646,9 +4681,15 @@ mod tests {
         );
         runtime.perform_microtask_checkpoint_public();
         let requests = runtime.take_fetch_requests();
-        assert!(requests.is_empty(), "aborted fetch must be removed from the queue");
+        assert!(
+            requests.is_empty(),
+            "aborted fetch must be removed from the queue"
+        );
         let r = dom.get_element_by_id("r").unwrap();
-        assert_eq!(r.borrow().value.get_attr("data-result"), Some("rejected:AbortError"));
+        assert_eq!(
+            r.borrow().value.get_attr("data-result"),
+            Some("rejected:AbortError")
+        );
     }
 
     #[test]
@@ -4682,7 +4723,12 @@ mod tests {
         "#,
         );
         let r = dom.get_element_by_id("r").unwrap();
-        let observed = r.borrow().value.get_attr("data-out").unwrap_or_default().to_string();
+        let observed = r
+            .borrow()
+            .value
+            .get_attr("data-out")
+            .unwrap_or_default()
+            .to_string();
         assert!(observed.contains("size:11"), "got {observed}");
         assert!(observed.contains("type:text/plain"), "got {observed}");
         assert!(observed.contains("text:hello world"), "got {observed}");
@@ -4715,7 +4761,12 @@ mod tests {
         "#,
         );
         let r = dom.get_element_by_id("r").unwrap();
-        let observed = r.borrow().value.get_attr("data-out").unwrap_or_default().to_string();
+        let observed = r
+            .borrow()
+            .value
+            .get_attr("data-out")
+            .unwrap_or_default()
+            .to_string();
         assert!(observed.contains("status:201"), "got {observed}");
         assert!(observed.contains("statusText:Created"), "got {observed}");
         assert!(observed.contains("ok:true"), "got {observed}");
@@ -4746,7 +4797,9 @@ mod tests {
         let r = dom.get_element_by_id("r").unwrap();
         assert_eq!(
             r.borrow().value.get_attr("data-out"),
-            Some("ceType:function;instance:true;define:function;whenDefined:function;srType:function;hostHook:object;attach:true;ctor:true")
+            Some(
+                "ceType:function;instance:true;define:function;whenDefined:function;srType:function;hostHook:object;attach:true;ctor:true"
+            )
         );
     }
 
@@ -4823,7 +4876,68 @@ mod tests {
         let r = dom.get_element_by_id("r").unwrap();
         assert_eq!(
             r.borrow().value.get_attr("data-out"),
-            Some("hostSyntax:true:SyntaxError;hostType:true;rejected:true:nope;thrown:true:TypeError:boom")
+            Some(
+                "hostSyntax:true:SyntaxError;hostType:true;rejected:true:nope;thrown:true:TypeError:boom"
+            )
+        );
+    }
+
+    #[test]
+    fn try_run_script_distinguishes_parse_failures_from_clean_runs() {
+        let (mut runtime, _dom) = runtime_from_html(r#""#);
+        assert!(runtime.try_run_script("var x = 1; 1 + 1;").is_ok());
+        let err = runtime
+            .try_run_script("var x = ;")
+            .expect_err("syntax error must surface");
+        assert!(!err.is_empty(), "parse error still needs a message");
+        // A host error thrown by the script itself also surfaces.
+        runtime
+            .try_run_script("throw new TypeError('boom');")
+            .expect_err("thrown value must surface");
+    }
+
+    #[test]
+    fn drain_microtasks_settles_job_queued_callbacks() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"queueMicrotask(function () {
+                document.getElementById("r").setAttribute("data-out", "drained");
+            });"#,
+        );
+        runtime.drain_microtasks();
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(
+            r.borrow().value.get_attr("data-out"),
+            Some("drained"),
+            "queueMicrotask work must settle without a timer"
+        );
+    }
+
+    #[test]
+    fn host_constructed_encoders_and_views_pass_instanceof() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+            var results = [];
+            var enc = new TextEncoder();
+            var dec = new TextDecoder();
+            var buf = new ArrayBuffer(8);
+            var view = new Uint8Array(buf);
+            var dv = new DataView(buf);
+            results.push("enc:" + (enc instanceof TextEncoder));
+            results.push("dec:" + (dec instanceof TextDecoder));
+            results.push("decNotEnc:" + (dec instanceof TextEncoder));
+            results.push("buf:" + (buf instanceof ArrayBuffer));
+            results.push("view:" + (view instanceof Uint8Array));
+            results.push("dv:" + (dv instanceof DataView));
+            results.push("plain:" + ({} instanceof TextEncoder));
+            document.getElementById("r").setAttribute("data-out", results.join(";"));
+            "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(
+            r.borrow().value.get_attr("data-out"),
+            Some("enc:true;dec:true;decNotEnc:false;buf:true;view:true;dv:true;plain:false")
         );
     }
 }

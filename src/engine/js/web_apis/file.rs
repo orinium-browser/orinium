@@ -96,10 +96,8 @@ pub(crate) fn make_blob(data: String, mime: String) -> Rc<RefCell<JSObject>> {
 /// Installs the instance methods shared by all blobs (the VM uses the
 /// constructor's returned object verbatim, so methods live on the instance).
 fn attach_blob_methods(blob: &Rc<RefCell<JSObject>>) {
-    blob.borrow_mut().set(
-        "text".to_string(),
-        JSValue::from_native_function(blob_text),
-    );
+    blob.borrow_mut()
+        .set("text".to_string(), JSValue::from_native_function(blob_text));
     blob.borrow_mut().set(
         "arrayBuffer".to_string(),
         JSValue::from_native_function(blob_array_buffer),
@@ -148,12 +146,9 @@ fn blob_get_type(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 }
 
 fn blob_receiver(args: &[JSValue]) -> JSResult<Rc<RefCell<JSObject>>> {
-    let object = args
-        .first()
-        .and_then(JSValue::as_object)
-        .ok_or_else(|| {
-            JSError::TypeError("Blob method called on incompatible receiver".to_string())
-        })?;
+    let object = args.first().and_then(JSValue::as_object).ok_or_else(|| {
+        JSError::TypeError("Blob method called on incompatible receiver".to_string())
+    })?;
     if object.borrow().get(BLOB_MARKER).as_boolean() != Some(true) {
         return Err(JSError::TypeError(
             "Blob method called on incompatible receiver".to_string(),
@@ -242,8 +237,14 @@ fn file_reader_constructor(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValu
     type ReaderMethod = fn(&mut VM, Vec<JSValue>) -> JSResult<JSValue>;
     for (name, function) in [
         ("readAsText", file_reader_read_as_text as ReaderMethod),
-        ("readAsDataURL", file_reader_read_as_data_url as ReaderMethod),
-        ("readAsArrayBuffer", file_reader_read_as_array_buffer as ReaderMethod),
+        (
+            "readAsDataURL",
+            file_reader_read_as_data_url as ReaderMethod,
+        ),
+        (
+            "readAsArrayBuffer",
+            file_reader_read_as_array_buffer as ReaderMethod,
+        ),
         ("abort", file_reader_abort as ReaderMethod),
     ] {
         reader.set(name.to_string(), JSValue::from_native_function(function));
@@ -252,12 +253,9 @@ fn file_reader_constructor(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValu
 }
 
 fn file_reader_receiver(args: &[JSValue]) -> JSResult<Rc<RefCell<JSObject>>> {
-    let object = args
-        .first()
-        .and_then(JSValue::as_object)
-        .ok_or_else(|| {
-            JSError::TypeError("FileReader method called on incompatible receiver".to_string())
-        })?;
+    let object = args.first().and_then(JSValue::as_object).ok_or_else(|| {
+        JSError::TypeError("FileReader method called on incompatible receiver".to_string())
+    })?;
     if object.borrow().get(FILE_READER_MARKER).as_boolean() != Some(true) {
         return Err(JSError::TypeError(
             "FileReader method called on incompatible receiver".to_string(),
@@ -273,7 +271,10 @@ fn make_reader_event(event_type: &str, reader: &Rc<RefCell<JSObject>>) -> JSValu
         "type".to_string(),
         Property::read_only(JSValue::from_string(event_type.to_string())),
     );
-    event.set("target".to_string(), JSValue::from_object(Rc::clone(reader)));
+    event.set(
+        "target".to_string(),
+        JSValue::from_object(Rc::clone(reader)),
+    );
     JSValue::from_object(Rc::new(RefCell::new(event)))
 }
 
@@ -361,7 +362,7 @@ fn file_reader_read_as_data_url(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSV
         None => {
             return Err(JSError::TypeError(
                 "FileReader.readAsDataURL requires a Blob argument".to_string(),
-            ))
+            ));
         }
     };
     let data = blob.borrow().get(BLOB_DATA).to_string();

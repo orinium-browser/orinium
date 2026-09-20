@@ -19,7 +19,6 @@ use crate::engine::js::web_apis::dom::events::{
 };
 use crate::engine::js::web_apis::storage::make_storage;
 use crate::engine::js::web_apis::timers::clear_timer;
-use pixi_byte::value::JSArray;
 use pixi_byte::value::jsobject::{JSObject, Property};
 use pixi_byte::vm::VM;
 use pixi_byte::{JSError, JSResult, JSValue};
@@ -46,7 +45,9 @@ pub(crate) fn install_browser_environment(engine: &mut pixi_byte::JSEngine) {
     navigator.define_property(
         "languages".to_string(),
         host_read_only_property(
-            JSArray::from_vec(vec![JSValue::from_string("en-US".to_string())]).to_object(),
+            engine
+                .vm()
+                .array_from_values(vec![JSValue::from_string("en-US".to_string())]),
         ),
     );
     navigator.define_property(

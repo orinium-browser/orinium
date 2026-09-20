@@ -78,7 +78,9 @@ pub(crate) fn settled_promise(vm: &mut VM, rejected: bool, value: JSValue) -> JS
             "Promise constructor is unavailable".to_string(),
         ));
     };
-    let settle = constructor.borrow().get(if rejected { "reject" } else { "resolve" });
+    let settle = constructor
+        .borrow()
+        .get(if rejected { "reject" } else { "resolve" });
     vm.call(settle, promise, vec![value])
 }
 

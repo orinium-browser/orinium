@@ -293,8 +293,8 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
     // shadow-root wrapper objects (their `__orinium_is_shadow_root` marker).
     {
         let shadow_prototype = Rc::new(RefCell::new(JSObject::new()));
-        if let Some(node_prototype) = with_host(engine.vm(), |host| host.node_prototype.clone())
-            .flatten()
+        if let Some(node_prototype) =
+            with_host(engine.vm(), |host| host.node_prototype.clone()).flatten()
         {
             shadow_prototype
                 .borrow_mut()
@@ -302,7 +302,10 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
         }
         let mut shadow_constructor = JSObject::new();
         // `__call__` makes `typeof ShadowRoot` report "function".
-        shadow_constructor.set("__call__".to_string(), JSValue::from_native_function(shadow_root_construct_error));
+        shadow_constructor.set(
+            "__call__".to_string(),
+            JSValue::from_native_function(shadow_root_construct_error),
+        );
         shadow_constructor.set(
             "__construct__".to_string(),
             JSValue::from_native_function(shadow_root_construct_error),
@@ -1272,8 +1275,7 @@ fn document_element_from_point(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVa
             "TypeError",
         ));
     }
-    let found = element_at_layout_point(vm, x, y)
-        .and_then(|node| expose_node(vm, node));
+    let found = element_at_layout_point(vm, x, y).and_then(|node| expose_node(vm, node));
     Ok(found.unwrap_or(JSValue::null()))
 }
 
@@ -1333,10 +1335,7 @@ fn document_exec_command(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> 
 /// `document.getSelection()` — a singleton `Selection` with no ranges (the
 /// engine has no text-selection state). The object is stable across calls.
 fn document_get_selection(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
-    let selection = with_host(vm, |host| {
-        host.document_selection.as_ref().map(Rc::clone)
-    })
-    .flatten();
+    let selection = with_host(vm, |host| host.document_selection.as_ref().map(Rc::clone)).flatten();
     if let Some(selection) = selection {
         return Ok(JSValue::from_object(selection));
     }
@@ -1357,11 +1356,29 @@ fn make_selection() -> JSObject {
         "isCollapsed".to_string(),
         Property::read_only(JSValue::from_bool(true)),
     );
-    selection.define_property("anchorNode".to_string(), Property::read_only(JSValue::null()));
-    selection.define_property("focusNode".to_string(), Property::read_only(JSValue::null()));
-    selection.define_property("type".to_string(), Property::read_only(JSValue::from_string("None".to_string())));
-    for name in ["getRangeAt", "removeAllRanges", "addRange", "collapse", "selectAllChildren"] {
-        selection.set(name.to_string(), JSValue::from_native_function(selection_noop));
+    selection.define_property(
+        "anchorNode".to_string(),
+        Property::read_only(JSValue::null()),
+    );
+    selection.define_property(
+        "focusNode".to_string(),
+        Property::read_only(JSValue::null()),
+    );
+    selection.define_property(
+        "type".to_string(),
+        Property::read_only(JSValue::from_string("None".to_string())),
+    );
+    for name in [
+        "getRangeAt",
+        "removeAllRanges",
+        "addRange",
+        "collapse",
+        "selectAllChildren",
+    ] {
+        selection.set(
+            name.to_string(),
+            JSValue::from_native_function(selection_noop),
+        );
     }
     selection
 }
@@ -1384,9 +1401,7 @@ fn get_fullscreen_element(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue>
             .and_then(|dom_id| host.objects.get(&dom_id).cloned())
     })
     .flatten();
-    Ok(element
-        .map(JSValue::from_object)
-        .unwrap_or(JSValue::null()))
+    Ok(element.map(JSValue::from_object).unwrap_or(JSValue::null()))
 }
 
 pub(crate) fn expose_detached_node(vm: &mut VM, node: NodeRef<HtmlNodeType>) -> Option<JSValue> {

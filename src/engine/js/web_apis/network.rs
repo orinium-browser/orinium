@@ -792,9 +792,10 @@ fn response_static_error(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue>
         body: Vec::new(),
         headers: Vec::new(),
     });
-    response
-        .borrow_mut()
-        .set("type".to_string(), JSValue::from_string("error".to_string()));
+    response.borrow_mut().set(
+        "type".to_string(),
+        JSValue::from_string("error".to_string()),
+    );
     Ok(JSValue::from_object(response))
 }
 
@@ -809,7 +810,7 @@ fn response_static_redirect(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValu
         _ => {
             return Err(JSError::RangeError(
                 "Failed to construct 'Response': Invalid redirect status code".to_string(),
-            ))
+            ));
         }
     };
     let response = make_fetch_response(JsFetchResponse {
@@ -820,9 +821,10 @@ fn response_static_redirect(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValu
         body: Vec::new(),
         headers: Vec::new(),
     });
-    response
-        .borrow_mut()
-        .set("type".to_string(), JSValue::from_string("default".to_string()));
+    response.borrow_mut().set(
+        "type".to_string(),
+        JSValue::from_string("default".to_string()),
+    );
     Ok(JSValue::from_object(response))
 }
 

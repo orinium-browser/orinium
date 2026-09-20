@@ -144,8 +144,14 @@ pub(crate) fn make_element_interface() -> (Rc<RefCell<JSObject>>, Rc<RefCell<JSO
         JSValue::from_native_function(element_scroll_to),
     );
     // `scroll()` and `scrollBy()` share `scrollTo`'s geometry handling.
-    prototype.set("scroll".to_string(), JSValue::from_native_function(element_scroll_to));
-    prototype.set("scrollBy".to_string(), JSValue::from_native_function(element_scroll_to));
+    prototype.set(
+        "scroll".to_string(),
+        JSValue::from_native_function(element_scroll_to),
+    );
+    prototype.set(
+        "scrollBy".to_string(),
+        JSValue::from_native_function(element_scroll_to),
+    );
     prototype.set(
         "attachShadow".to_string(),
         JSValue::from_native_function(super::shadow_dom::element_attach_shadow),
@@ -2853,10 +2859,7 @@ pub(crate) fn get_style(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 /// Returns (creating on demand) the read-only `CSSStyleDeclaration` backing
 /// `getComputedStyle(element)`. The object is cached on the host per DOM id so
 /// repeated reads observe refreshed values without allocating new wrappers.
-pub(crate) fn get_computed_style_declaration(
-    vm: &mut VM,
-    args: Vec<JSValue>,
-) -> JSResult<JSValue> {
+pub(crate) fn get_computed_style_declaration(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(dom_id) = node_dom_id(args.first().unwrap_or(&UNDEFINED)) else {
         return Ok(JSValue::null());
     };
@@ -2933,13 +2936,7 @@ fn is_computed_style_receiver(vm: &mut VM, args: &[JSValue]) -> bool {
     let _ = vm;
     args.first()
         .and_then(JSValue::as_object)
-        .map(|object| {
-            object
-                .borrow()
-                .get("__orinium_computed_style")
-                .as_boolean()
-                == Some(true)
-        })
+        .map(|object| object.borrow().get("__orinium_computed_style").as_boolean() == Some(true))
         .unwrap_or(false)
 }
 
@@ -3044,9 +3041,7 @@ fn style_host_set_property(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue>
 /// of those must answer `undefined`, not an empty string).
 fn is_plausible_css_property_key(key: &str) -> bool {
     !key.is_empty()
-        && key
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
         && key
             .chars()
             .next()

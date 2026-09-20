@@ -135,12 +135,9 @@ fn make_signal(aborted: bool, reason: JSValue) -> Rc<RefCell<JSObject>> {
 }
 
 fn signal_receiver(args: &[JSValue]) -> JSResult<Rc<RefCell<JSObject>>> {
-    let signal = args
-        .first()
-        .and_then(JSValue::as_object)
-        .ok_or_else(|| {
-            JSError::TypeError("AbortSignal method called on incompatible receiver".to_string())
-        })?;
+    let signal = args.first().and_then(JSValue::as_object).ok_or_else(|| {
+        JSError::TypeError("AbortSignal method called on incompatible receiver".to_string())
+    })?;
     if signal.borrow().get(ABORT_SIGNAL_MARKER).as_boolean() != Some(true) {
         return Err(JSError::TypeError(
             "AbortSignal method called on incompatible receiver".to_string(),
@@ -250,7 +247,7 @@ fn controller_abort(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         None => {
             return Err(JSError::TypeError(
                 "AbortController.abort called on incompatible receiver".to_string(),
-            ))
+            ));
         }
     };
     let reason = match args.get(1) {
@@ -350,11 +347,8 @@ fn signal_static_timeout(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let signal = make_signal(false, JSValue::undefined());
     let signal_value = JSValue::from_object(Rc::clone(&signal));
     let callback = JSValue::from_native_function(timeout_abort_callback);
-    let bound = JSValue::from_bound_function(BoundFunctionData::new(
-        callback,
-        signal_value,
-        Vec::new(),
-    ));
+    let bound =
+        JSValue::from_bound_function(BoundFunctionData::new(callback, signal_value, Vec::new()));
     let set_timeout = vm.global_object.borrow().get("setTimeout");
     let _ = vm.call(
         set_timeout,
@@ -368,9 +362,7 @@ fn signal_static_timeout(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 /// `TimeoutError` reason.
 fn timeout_abort_callback(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let signal = match args.first().and_then(JSValue::as_object) {
-        Some(signal)
-            if signal.borrow().get(ABORT_SIGNAL_MARKER).as_boolean() == Some(true) =>
-        {
+        Some(signal) if signal.borrow().get(ABORT_SIGNAL_MARKER).as_boolean() == Some(true) => {
             signal
         }
         _ => return Ok(JSValue::undefined()),
@@ -382,9 +374,7 @@ fn timeout_abort_callback(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> 
     );
     error.define_property(
         "message".to_string(),
-        Property::read_only(JSValue::from_string(
-            "The operation timed out.".to_string(),
-        )),
+        Property::read_only(JSValue::from_string("The operation timed out.".to_string())),
     );
     let reason = JSValue::from_object(Rc::new(RefCell::new(error)));
     abort_signal_now(vm, &signal, reason);
@@ -412,18 +402,19 @@ fn signal_static_any(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         let aborted = input.borrow().get(ABORTED).as_boolean() == Some(true);
         if aborted {
             let reason = input.borrow().get(ABORT_REASON);
-            combined.borrow_mut().set(ABORTED.to_string(), JSValue::from_bool(true));
+            combined
+                .borrow_mut()
+                .set(ABORTED.to_string(), JSValue::from_bool(true));
             combined.borrow_mut().set(ABORT_REASON.to_string(), reason);
             return Ok(JSValue::from_object(combined));
         }
         // Register a forwarding listener on the input signal.
         let forward = JSValue::from_native_function(any_forward_callback);
-        let bound =
-            JSValue::from_bound_function(BoundFunctionData::new(
-                forward,
-                JSValue::from_object(Rc::clone(&combined)),
-                Vec::new(),
-            ));
+        let bound = JSValue::from_bound_function(BoundFunctionData::new(
+            forward,
+            JSValue::from_object(Rc::clone(&combined)),
+            Vec::new(),
+        ));
         let _ = vm.call(
             JSValue::from_native_function(signal_add_event_listener),
             JSValue::from_object(input),
@@ -480,8 +471,12 @@ fn abort_signal_now(vm: &mut VM, signal: &Rc<RefCell<JSObject>>, reason: JSValue
     if signal.borrow().get(ABORTED).as_boolean() == Some(true) {
         return;
     }
-    signal.borrow_mut().set(ABORTED.to_string(), JSValue::from_bool(true));
-    signal.borrow_mut().set(ABORT_REASON.to_string(), reason.clone());
+    signal
+        .borrow_mut()
+        .set(ABORTED.to_string(), JSValue::from_bool(true));
+    signal
+        .borrow_mut()
+        .set(ABORT_REASON.to_string(), reason.clone());
     let listeners = signal.borrow().get(ABORT_LISTENERS);
     if let Some(listeners) = listeners.as_object() {
         let keys = listeners.borrow().keys();

@@ -6,27 +6,75 @@ use pixi_byte::{JSError, JSResult, JSValue};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+const INSTANCE_TAG: &str = "__instance_tag__";
+
+fn internal_property(value: JSValue) -> Property {
+    Property {
+        value,
+        enumerable: false,
+        writable: false,
+        configurable: false,
+        getter: None,
+        setter: None,
+    }
+}
+
+fn read_instance_tag(value: &JSValue) -> Option<String> {
+    value.as_object().and_then(|object| {
+        object
+            .borrow()
+            .get(INSTANCE_TAG)
+            .as_string()
+            .map(str::to_string)
+    })
+}
+
+/// `Symbol.hasInstance` for host constructors whose instances are created from
+/// plain objects/arrays rather than by inheriting `.prototype`. The tag is
+/// stored on both the constructor and its instances so `x instanceof Ctor`
+/// resolves without a real prototype chain.
+fn host_has_instance(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let constructor_tag = args.first().and_then(read_instance_tag);
+    let value_tag = args.get(1).and_then(read_instance_tag);
+    Ok(JSValue::from_bool(
+        constructor_tag.is_some() && constructor_tag == value_tag,
+    ))
+}
+
+fn register_host_constructor(
+    global: &mut JSObject,
+    name: &str,
+    construct: pixi_byte::value::jsvalue::NativeFunctionType,
+) {
+    let mut prototype = JSObject::new();
+    prototype.define_property(
+        INSTANCE_TAG.to_string(),
+        Property::read_only(JSValue::from_string(name.to_string())),
+    );
+    let mut constructor = JSObject::new();
+    constructor.set(
+        "__construct__".to_string(),
+        JSValue::from_native_function(construct),
+    );
+    constructor.define_property(
+        "prototype".to_string(),
+        Property::read_only(JSValue::from_object(Rc::new(RefCell::new(prototype)))),
+    );
+    constructor.define_property(
+        INSTANCE_TAG.to_string(),
+        Property::read_only(JSValue::from_string(name.to_string())),
+    );
+    constructor.define_property(
+        pixi_byte::value::jsobject::HOST_HAS_INSTANCE.to_string(),
+        internal_property(JSValue::from_native_function(host_has_instance)),
+    );
+    global.set(
+        name.to_string(),
+        JSValue::from_object(Rc::new(RefCell::new(constructor))),
+    );
+}
+
 pub(crate) fn install_encoding_apis(engine: &mut pixi_byte::JSEngine) {
-    let mut encoder_constructor = JSObject::new();
-    encoder_constructor.set(
-        "__construct__".to_string(),
-        JSValue::from_native_function(text_encoder_constructor),
-    );
-    let mut decoder_constructor = JSObject::new();
-    decoder_constructor.set(
-        "__construct__".to_string(),
-        JSValue::from_native_function(text_decoder_constructor),
-    );
-    let mut array_buffer_constructor_object = JSObject::new();
-    array_buffer_constructor_object.set(
-        "__construct__".to_string(),
-        JSValue::from_native_function(array_buffer_constructor),
-    );
-    let mut uint8_array_constructor_object = JSObject::new();
-    uint8_array_constructor_object.set(
-        "__construct__".to_string(),
-        JSValue::from_native_function(uint8_array_constructor),
-    );
     let mut global = engine.global_mut().borrow_mut();
     global.set("atob".to_string(), JSValue::from_native_function(atob));
     global.set("btoa".to_string(), JSValue::from_native_function(btoa));
@@ -46,26 +94,11 @@ pub(crate) fn install_encoding_apis(engine: &mut pixi_byte::JSEngine) {
         "decodeURI".to_string(),
         JSValue::from_native_function(decode_uri),
     );
-    global.set(
-        "TextEncoder".to_string(),
-        JSValue::from_object(Rc::new(RefCell::new(encoder_constructor))),
-    );
-    global.set(
-        "TextDecoder".to_string(),
-        JSValue::from_object(Rc::new(RefCell::new(decoder_constructor))),
-    );
-    global.set(
-        "ArrayBuffer".to_string(),
-        JSValue::from_object(Rc::new(RefCell::new(array_buffer_constructor_object))),
-    );
-    global.set(
-        "Uint8Array".to_string(),
-        JSValue::from_object(Rc::new(RefCell::new(uint8_array_constructor_object))),
-    );
-    global.set(
-        "DataView".to_string(),
-        JSValue::from_object(Rc::new(RefCell::new(data_view_constructor_object()))),
-    );
+    register_host_constructor(&mut global, "TextEncoder", text_encoder_constructor);
+    register_host_constructor(&mut global, "TextDecoder", text_decoder_constructor);
+    register_host_constructor(&mut global, "ArrayBuffer", array_buffer_constructor);
+    register_host_constructor(&mut global, "Uint8Array", uint8_array_constructor);
+    register_host_constructor(&mut global, "DataView", data_view_constructor);
 }
 
 fn percent_encode(input: &str, preserve_uri_syntax: bool) -> String {
@@ -160,6 +193,10 @@ fn value_bytes(value: &JSValue) -> Vec<u8> {
 
 fn make_array_buffer(bytes: Vec<u8>) -> JSValue {
     let mut object = JSObject::new();
+    object.define_property(
+        INSTANCE_TAG.to_string(),
+        Property::read_only(JSValue::from_string("ArrayBuffer".to_string())),
+    );
     for (index, byte) in bytes.iter().copied().enumerate() {
         object.set(index.to_string(), JSValue::from_number(byte as f64));
     }
@@ -253,6 +290,10 @@ fn install_uint8_descriptors(
 ) {
     if let Some(object) = array.as_object() {
         object.borrow_mut().define_property(
+            INSTANCE_TAG.to_string(),
+            Property::read_only(JSValue::from_string("Uint8Array".to_string())),
+        );
+        object.borrow_mut().define_property(
             "byteLength".to_string(),
             Property::read_only(JSValue::from_number(length as f64)),
         );
@@ -327,6 +368,10 @@ fn atob(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 fn text_encoder_constructor(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     let mut encoder = JSObject::new();
     encoder.define_property(
+        INSTANCE_TAG.to_string(),
+        Property::read_only(JSValue::from_string("TextEncoder".to_string())),
+    );
+    encoder.define_property(
         "encoding".to_string(),
         Property::read_only(JSValue::from_string("utf-8".to_string())),
     );
@@ -365,6 +410,10 @@ fn text_decoder_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValu
     }
     let mut decoder = JSObject::new();
     decoder.define_property(
+        INSTANCE_TAG.to_string(),
+        Property::read_only(JSValue::from_string("TextDecoder".to_string())),
+    );
+    decoder.define_property(
         "encoding".to_string(),
         Property::read_only(JSValue::from_string("utf-8".to_string())),
     );
@@ -383,15 +432,6 @@ fn text_decode(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(JSValue::from_string(
         String::from_utf8_lossy(&bytes).into_owned(),
     ))
-}
-
-fn data_view_constructor_object() -> JSObject {
-    let mut constructor = JSObject::new();
-    constructor.set(
-        "__construct__".to_string(),
-        JSValue::from_native_function(data_view_constructor),
-    );
-    constructor
 }
 
 fn data_view_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -415,6 +455,10 @@ fn data_view_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> 
         full_bytes.len() - byte_offset
     };
     let mut view = JSObject::new();
+    view.define_property(
+        INSTANCE_TAG.to_string(),
+        Property::read_only(JSValue::from_string("DataView".to_string())),
+    );
     view.set("__buf".to_string(), buffer_value.clone());
     view.define_property(
         "buffer".to_string(),

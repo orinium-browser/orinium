@@ -43,7 +43,10 @@ pub(crate) fn install_custom_elements(engine: &mut pixi_byte::JSEngine) {
     let registry_prototype = Rc::new(RefCell::new(JSObject::new()));
     let mut registry_constructor = JSObject::new();
     // `__call__` makes `typeof CustomElementRegistry` report "function".
-    registry_constructor.set("__call__".to_string(), JSValue::from_native_function(custom_elements_construct_error));
+    registry_constructor.set(
+        "__call__".to_string(),
+        JSValue::from_native_function(custom_elements_construct_error),
+    );
     registry_constructor.set(
         "__construct__".to_string(),
         JSValue::from_native_function(custom_elements_construct_error),
