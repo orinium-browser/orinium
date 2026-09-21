@@ -359,6 +359,15 @@ pub enum CssFloat {
     Right,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CssClear {
+    #[default]
+    None,
+    Left,
+    Right,
+    Both,
+}
+
 /// CSS gradient definition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Gradient {
@@ -534,6 +543,7 @@ pub struct ContainerStyle {
     /// (an ancestor's opacity scales every descendant).
     pub opacity: f32,
     pub css_float: CssFloat,
+    pub css_clear: CssClear,
     pub border_color: BorderColor,
     pub border_style: BorderStyles,
     pub border_radius: BorderRadius,
@@ -555,6 +565,7 @@ impl Default for ContainerStyle {
             visibility: Default::default(),
             opacity: 1.0,
             css_float: Default::default(),
+            css_clear: Default::default(),
             border_color: Default::default(),
             border_style: Default::default(),
             border_radius: Default::default(),

@@ -9,30 +9,6 @@ use ui_layout::{
 // orinium internal helpers
 // ---------------------------------------------------------------------------
 
-/// Return the largest fixed-width (`Length::Px`) used by any descendant, or
-/// `None` if no descendant has a fixed width.
-pub fn maximum_fixed_descendant_width(children: &[LayoutChild]) -> Option<f32> {
-    children
-        .iter()
-        .filter_map(|child| match child {
-            LayoutChild::Node(node) => {
-                let own = match node.style.size.width {
-                    LengthOrAuto::Length(Length::Px(width))
-                        if width.is_finite() && width >= 0.0 =>
-                    {
-                        Some(width)
-                    }
-                    _ => None,
-                };
-                own.into_iter()
-                    .chain(maximum_fixed_descendant_width(&node.children))
-                    .max_by(f32::total_cmp)
-            }
-            _ => None,
-        })
-        .max_by(f32::total_cmp)
-}
-
 /// Returns `true` when `info` represents a whitespace-only text node that
 /// renders as a single collapsible space.
 pub fn is_collapsible_whitespace_info(info: &InfoNode) -> bool {
@@ -337,6 +313,7 @@ pub fn refresh_missing_text_layout_results(
                     containing_block_height: Some(containing.1),
                     start_pos: (box_model.border_box.x, box_model.border_box.y),
                     available_inline_size: box_model.border_box.width.max(1.0),
+                    float_space: None,
                     line_height,
                     viewport_width: viewport.0,
                     viewport_height: viewport.1,

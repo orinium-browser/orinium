@@ -4,7 +4,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ui_layout::{
-    BoxModel, CustomLayouter, InlineBox, LayoutBox, LayoutContext, LineSpan, MeasureResult, Rect,
+    BoxModel, CustomLayouter, FloatAvoider, InlineBox, LayoutBox, LayoutContext, LineSpan,
+    MeasureResult, Rect,
 };
 
 use crate::engine::bridge::text::GlyphCluster;
@@ -83,16 +84,37 @@ impl TextFlowLayouter {
         });
     }
 
+    #[cfg(test)]
     fn compute_layout(
         &self,
         available_first_line_space: f32,
         available_space: f32,
         start_pos: (f32, f32),
     ) -> TextLayoutResult {
+        self.compute_layout_inner(available_first_line_space, available_space, start_pos, None)
+    }
+
+    /// Float-aware [`Self::compute_layout`].
+    ///
+    /// `float_space`, when present, reports how much of each line the floats
+    /// surrounding the object leave free. The first line is positioned by the
+    /// engine (via `start_pos` / `available_first_line_space`); every later
+    /// line is placed at, and wrapped to, the float-free span returned for its
+    /// vertical position. Without this, only the first line of a paragraph
+    /// would clear a float and the rest would overflow it.
+    fn compute_layout_inner(
+        &self,
+        available_first_line_space: f32,
+        available_space: f32,
+        start_pos: (f32, f32),
+        float_space: Option<&FloatAvoider>,
+    ) -> TextLayoutResult {
         /*
          * `start_pos` is position of the FIRST LINE.
-         * Don't wrap to the start_pos.0 (which is x).
-         * Wrap to `0.0`.
+         * The first line starts at `start_pos.0` (which may already clear a
+         * float). Subsequent lines start at the containing block's left edge
+         * unless a float narrows them, in which case `float_space` supplies
+         * the per-line origin and width.
          */
         let lh = self.line_height();
         let text_len = self.text.len();
@@ -156,13 +178,23 @@ impl TextFlowLayouter {
         } else {
             0.0
         };
-        let line_width = |line_index: usize| {
+        // Per-line origin and usable width. The first line starts where the
+        // engine placed it (`start_pos`), which may already clear a float;
+        // later lines start at the containing block's left edge unless a float
+        // still overlaps them, in which case `float_space` supplies the origin
+        // and the width remaining beside the float.
+        let line_metrics = |line_index: usize| -> (f32, f32) {
             if line_index == 0 {
-                first_line_width
+                (start_pos.0, first_line_width)
+            } else if let Some(avoider) = float_space {
+                let (start, end) = avoider.avail_at(line_index as f32 * lh);
+                let start = start.max(0.0);
+                (start, (end.min(available_space) - start).max(0.0))
             } else {
-                available_space
+                (0.0, available_space)
             }
         };
+        let line_width = |line_index: usize| line_metrics(line_index).1;
 
         let aligned_x = |line_index: usize, x_pos: f32, line_w: f32| {
             let available = line_width(line_index);
@@ -248,9 +280,9 @@ impl TextFlowLayouter {
                 }
 
                 line_start = nl_byte + 1;
-                x_pos = 0.0;
                 y_pos += lh;
                 line_index += 1;
+                x_pos = line_metrics(line_index).0;
                 accumulated = 0.0;
                 last_breakable_cluster = None;
 
@@ -277,9 +309,9 @@ impl TextFlowLayouter {
                         emit_line!(break_byte);
 
                         line_start = break_byte;
-                        x_pos = 0.0;
                         y_pos += lh;
                         line_index += 1;
+                        x_pos = line_metrics(line_index).0;
                         last_breakable_cluster = None;
 
                         // Carry over the width of any non-breakable clusters
@@ -290,7 +322,7 @@ impl TextFlowLayouter {
                             0.0
                         };
                     }
-                } else if accumulated + frag.width <= available_space {
+                } else if accumulated + frag.width <= line_width(line_index + 1) {
                     // The current line holds a single unbreakable run and the
                     // next line is wide enough to take the whole word: move it
                     // there instead of splitting it mid-word. This keeps the
@@ -298,7 +330,7 @@ impl TextFlowLayouter {
                     // the following ones.
                     y_pos += lh;
                     line_index += 1;
-                    x_pos = 0.0;
+                    x_pos = line_metrics(line_index).0;
                     accumulated = clusters_between(line_start, clusters[i].byte_offset);
                     last_breakable_cluster = None;
                 } else if split_unbreakable {
@@ -309,9 +341,9 @@ impl TextFlowLayouter {
                         emit_line!(break_byte);
 
                         line_start = break_byte;
-                        x_pos = 0.0;
                         y_pos += lh;
                         line_index += 1;
+                        x_pos = line_metrics(line_index).0;
                         last_breakable_cluster = None;
                         accumulated = 0.0;
                     }
@@ -339,8 +371,8 @@ impl TextFlowLayouter {
             if rest.is_empty() {
                 // The text ended on a newline (e.g. "abc\n"): split('\n') still
                 // yields one trailing empty line. This line follows a break, so
-                // its coordinate origin is the box left edge (x_pos = 0).
-                x_pos = aligned_x(line_index, 0.0, 0.0);
+                // its origin is the line's (float-free) start.
+                x_pos = aligned_x(line_index, line_metrics(line_index).0, 0.0);
                 spans.push(LineSpan {
                     x_range: x_pos..x_pos,
                     line_pos: (x_pos, y_pos),
@@ -366,7 +398,7 @@ impl TextFlowLayouter {
                     line_index += 1;
                     y_pos += lh;
                     line_start = seg_end + 1; // step over the '\n'
-                    x_pos = 0.0;
+                    x_pos = line_metrics(line_index).0;
                 }
             }
         } else if line_start < text_len {
@@ -404,19 +436,28 @@ impl Drop for TextFlowLayouter {
 
 impl CustomLayouter for TextFlowLayouter {
     fn layout(&mut self, ctx: &LayoutContext) -> LayoutBox {
-        // Subsequent line width falls back to the (finite) inline size the
-        // first line was given when the containing block width is
-        // indeterminate. An unbounded width must not reach the wrap/alignment
-        // logic: lines would never wrap (only the first line does) and
-        // center/right alignment would resolve to f32::MAX / 2, pushing text
-        // off-screen.
+        // Every line resolves its own usable span at its own vertical
+        // position. The first line was already positioned and sized by the
+        // engine (`start_pos` + `available_inline_size`), so its width already
+        // accounts for floats and any inline content that shares the line.
+        // Later lines either ask `float_space` how much room the floats leave
+        // at their `y`, or use the containing block width directly. The
+        // containing block width must NEVER be approximated by the first
+        // line's remaining slice: text that started mid-line would otherwise
+        // keep wrapping inside that narrow slice forever. When the width is
+        // indeterminate (measure / shrink-to-fit passes) lines are left
+        // unwrapped and the engine re-lays out with a definite width later.
         let available_inline = ctx.available_inline_size;
         let available_space = ctx
             .containing_block_width
             .filter(|w| is_usable_width(*w))
-            .or_else(|| is_usable_width(available_inline).then_some(available_inline))
             .unwrap_or(f32::MAX);
-        let result = self.compute_layout(available_inline, available_space, ctx.start_pos);
+        let result = self.compute_layout_inner(
+            available_inline,
+            available_space,
+            ctx.start_pos,
+            ctx.float_space.as_ref(),
+        );
         let spans = result.spans.clone();
 
         TEXT_RESULTS.with(|cache| {
@@ -1041,6 +1082,7 @@ mod tests {
             containing_block_height: None,
             start_pos: (0.0, 0.0),
             available_inline_size: available_inline,
+            float_space: None,
             line_height: 24.0,
             viewport_width: 1200.0,
             viewport_height: 900.0,
@@ -1048,11 +1090,13 @@ mod tests {
     }
 
     #[test]
-    fn centered_text_with_unbounded_containing_width_stays_in_bounds() {
+    fn subsequent_lines_are_not_capped_by_the_first_line_slice() {
         // GitHub-style hero subheading: containing_block_width is None inside a
-        // centered flex item. Previously every wrapped line used f32::MAX as its
-        // width, so we never wrapped (line 0 only) and center alignment pushed
-        // the trailing lines to f32::MAX / 2 (off-screen, x ≈ 1.7e38).
+        // centered flex item, and the first line only has a 60px slice left
+        // (e.g. after a float or preceding inline content). That slice belongs
+        // to the first line alone: later lines must not be wrapped inside it
+        // forever. With an unbounded containing width they do not wrap at all,
+        // and center alignment must never resolve to f32::MAX / 2.
         let mut flow = TextFlowStyle::default();
         flow.text_align = TextAlign::Center;
         let clusters = vec![
@@ -1069,13 +1113,17 @@ mod tests {
             panic!("expected InlineBox");
         };
 
-        // Wrapped lines fall back to the finite inline size instead of f32::MAX.
-        let wrapped = inline
-            .line_spans
-            .iter()
-            .filter(|s| s.line_index >= 1)
-            .collect::<Vec<_>>();
-        assert!(!wrapped.is_empty(), "text must wrap on multiple lines");
+        // The first line wraps inside its genuine 60px slice; the next line
+        // starts fresh and is not constrained by it.
+        assert!(
+            inline.line_spans.len() >= 2,
+            "text must wrap on multiple lines"
+        );
+        assert_eq!(
+            inline.line_spans[1].width(),
+            85.0,
+            "line 1 was capped by the first line's slice"
+        );
         for span in &inline.line_spans {
             assert!(
                 span.line_pos.0.is_finite(),
@@ -1087,15 +1135,9 @@ mod tests {
                 "x must stay on-screen, got {}",
                 span.line_pos.0
             );
-            assert!(
-                span.width() <= 60.0,
-                "line {} too wide: {}",
-                span.line_index,
-                span.width()
-            );
         }
-        // "bbbb " (line 1) is centered within 60px: (60 - 45) / 2 == 7.5.
-        assert_eq!(inline.line_spans[1].line_pos.0, 7.5);
+        // Line 0 ("aaaa ", 45px wide) is centered within its 60px slice.
+        assert_eq!(inline.line_spans[0].line_pos.0, 7.5);
     }
 
     #[test]
@@ -1115,5 +1157,148 @@ mod tests {
 
         assert_eq!(inline.line_spans.len(), 1);
         assert_eq!(inline.line_spans[0].line_pos.0, 0.0);
+    }
+
+    fn float_flow() -> TextFlowStyle {
+        let mut flow = TextFlowStyle::default();
+        flow.line_height = LineHeight::Px(20.0);
+        flow
+    }
+
+    /// One cluster per word (4 bytes) plus a breakable 1-byte space between
+    /// them, matching `"aaaa bbbb ..."`.
+    fn word_clusters(words: usize, word_width: f32, space_width: f32) -> Vec<GlyphCluster> {
+        let mut clusters = Vec::new();
+        for word in 0..words {
+            let start = word * 5;
+            clusters.push(cluster(start, word_width, false));
+            if word + 1 < words {
+                clusters.push(cluster(start + 4, space_width, true));
+            }
+        }
+        clusters
+    }
+
+    fn ctx_with_float_space(
+        available_inline: f32,
+        containing_width: f32,
+        start_pos: (f32, f32),
+        float_space: FloatAvoider,
+    ) -> LayoutContext {
+        LayoutContext {
+            containing_block_width: Some(containing_width),
+            containing_block_height: Some(1000.0),
+            start_pos,
+            available_inline_size: available_inline,
+            float_space: Some(float_space),
+            line_height: 20.0,
+            viewport_width: 1200.0,
+            viewport_height: 900.0,
+        }
+    }
+
+    const FLOAT_TEXT: &str = "aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj";
+
+    #[test]
+    fn continuation_line_origin_follows_the_float() {
+        // The engine places the first line at `start_pos` (here x=100, e.g.
+        // after preceding inline content), but the float only reaches x=60.
+        // The second line must start at the float's right edge (60), not repeat
+        // the first line's x.
+        let clusters = word_clusters(4, 90.0, 10.0);
+        let avoider =
+            FloatAvoider::from_rects([(ui_layout::Float::Left, 0.0, 0.0, 60.0, 40.0)], 400.0);
+        let ctx = ctx_with_float_space(300.0, 400.0, (100.0, 0.0), avoider);
+        let mut layouter =
+            TextFlowLayouter::new("aaaa bbbb cccc dddd".to_string(), float_flow(), clusters);
+        let LayoutBox::InlineBox(inline) = layouter.layout(&ctx) else {
+            panic!("expected InlineBox");
+        };
+
+        assert_eq!(inline.line_spans[0].line_pos.0, 100.0);
+        assert!(inline.line_spans.len() >= 2, "text should wrap");
+        assert_eq!(inline.line_spans[1].line_pos.0, 60.0);
+    }
+
+    #[test]
+    fn continuation_lines_wrap_beside_a_left_float() {
+        // A 100px-wide, 40px-tall left float in a 400px box leaves 300px for
+        // the first two lines (y = 0 and 20); from y = 40 onward the full
+        // width is usable again.
+        let clusters = word_clusters(9, 90.0, 10.0);
+        let avoider =
+            FloatAvoider::from_rects([(ui_layout::Float::Left, 0.0, 0.0, 100.0, 40.0)], 400.0);
+        let ctx = ctx_with_float_space(300.0, 400.0, (100.0, 0.0), avoider);
+        let mut layouter = TextFlowLayouter::new(
+            "aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii".to_string(),
+            float_flow(),
+            clusters,
+        );
+        let LayoutBox::InlineBox(inline) = layouter.layout(&ctx) else {
+            panic!("expected InlineBox");
+        };
+
+        // Lines overlapping the 40px-tall float start after it and wrap within
+        // the 300px the float leaves.
+        for span in inline.line_spans.iter().filter(|s| s.line_index < 2) {
+            assert_eq!(
+                span.line_pos.0, 100.0,
+                "line {} must clear the float",
+                span.line_index
+            );
+            assert!(
+                span.width() <= 300.0 + 0.01,
+                "line {} wrapped too wide ({})",
+                span.line_index,
+                span.width()
+            );
+        }
+        // Past the float the line is laid out from the containing block's left
+        // edge instead of after the float.
+        let last = inline.line_spans.last().unwrap();
+        assert!(last.line_index >= 2);
+        assert_eq!(last.line_pos.0, 0.0);
+    }
+
+    #[test]
+    fn continuation_lines_wrap_beside_a_right_float() {
+        let clusters = word_clusters(10, 90.0, 10.0);
+        let avoider =
+            FloatAvoider::from_rects([(ui_layout::Float::Right, 300.0, 0.0, 100.0, 40.0)], 400.0);
+        let ctx = ctx_with_float_space(300.0, 400.0, (0.0, 0.0), avoider);
+        let mut layouter = TextFlowLayouter::new(FLOAT_TEXT.to_string(), float_flow(), clusters);
+        let LayoutBox::InlineBox(inline) = layouter.layout(&ctx) else {
+            panic!("expected InlineBox");
+        };
+
+        for span in inline.line_spans.iter().filter(|s| s.line_index < 2) {
+            assert_eq!(span.line_pos.0, 0.0);
+            assert!(
+                span.width() <= 300.0 + 0.01,
+                "line {} overlapped the right float: {}",
+                span.line_index,
+                span.width()
+            );
+        }
+        // The line past the float may use the whole 400px containing block.
+        let reclaimed = inline
+            .line_spans
+            .iter()
+            .find(|s| s.line_index >= 2)
+            .expect("a line past the float");
+        assert!(reclaimed.width() > 300.0);
+    }
+
+    #[test]
+    fn continuation_lines_start_at_the_containing_block_without_floats() {
+        let clusters = word_clusters(4, 90.0, 10.0);
+        // Narrow first line but no floats: later lines use the full width and
+        // start at the containing block's left edge.
+        let result =
+            TextFlowLayouter::new("aaaa bbbb cccc dddd".to_string(), float_flow(), clusters)
+                .compute_layout(120.0, 400.0, (100.0, 0.0));
+        assert_eq!(result.spans[0].line_pos.0, 100.0);
+        assert_eq!(result.spans[1].line_pos.0, 0.0);
+        assert!(result.spans[1].width() > 120.0);
     }
 }

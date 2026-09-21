@@ -12,8 +12,8 @@ use ui_layout::{
 
 use crate::engine::layouter::types::{
     Background, BorderRadius, BorderStyle, ClipPath, Color, ColorScheme, ContainerStyle,
-    CornerRadius, CssFloat, FontStyle, FontWeight, LineHeight, Overflow, TextAlign, TextDecoration,
-    TextFlowStyle, TextStyle, TextTransform, VerticalAlign, Visibility, WhiteSpace,
+    CornerRadius, CssClear, CssFloat, FontStyle, FontWeight, LineHeight, Overflow, TextAlign,
+    TextDecoration, TextFlowStyle, TextStyle, TextTransform, VerticalAlign, Visibility, WhiteSpace,
 };
 
 use super::{
@@ -836,6 +836,26 @@ pub fn apply_declaration(
 
             apply_property!(
                 css_float,
+                container_style,
+                parent_container_style,
+                DEFAULT_CONTAINER_STYLE,
+                value,
+                CssValue::Keyword(v),
+                f(v)?
+            );
+        }
+
+        ("clear", _) => {
+            let f = |v: &SmolStr| match v.to_ascii_lowercase().as_str() {
+                "left" => Some(CssClear::Left),
+                "right" => Some(CssClear::Right),
+                "both" => Some(CssClear::Both),
+                "none" => Some(CssClear::None),
+                _ => None,
+            };
+
+            apply_property!(
+                css_clear,
                 container_style,
                 parent_container_style,
                 DEFAULT_CONTAINER_STYLE,

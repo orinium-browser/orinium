@@ -12,7 +12,7 @@ pub use apply::{apply_declaration, blockify_out_of_flow_positioned};
 pub use layout_fix::{
     constrain_auto_grid_track_items, correct_atomic_inline_spacing,
     correct_atomic_inline_spacing_with_info, is_block_layout_child, is_collapsible_whitespace_info,
-    maximum_fixed_descendant_width, refresh_missing_text_layout_results,
+    refresh_missing_text_layout_results,
 };
 
 #[allow(unused_imports)]
@@ -51,10 +51,10 @@ use std::sync::Arc;
 
 #[allow(unused_imports)]
 use ui_layout::{
-    AlignContent, AlignItems, AutoSizeBehavior, BoxSizing, Display, FlexDirection, FlexWrap,
-    GridPlacement, GridPlacementEnd, GridRepeat, GridTrack, InnerDisplay, ItemFragment,
-    JustifyContent, JustifyItems, LayoutChild, LayoutNode, Length, LengthOrAuto, OuterDisplay,
-    Position, Style,
+    AlignContent, AlignItems, AutoSizeBehavior, BoxSizing, Clear as LayoutClear, Display,
+    FlexDirection, FlexWrap, Float as LayoutFloat, GridPlacement, GridPlacementEnd, GridRepeat,
+    GridTrack, InnerDisplay, ItemFragment, JustifyContent, JustifyItems, LayoutChild, LayoutNode,
+    Length, LengthOrAuto, OuterDisplay, Position, Style,
 };
 
 use super::css_resolver::{
@@ -65,9 +65,9 @@ use super::text_layouter::TextFlowLayouter;
 use super::types::{
     Background, BackgroundDimension, BackgroundOffset, BackgroundPosition, BackgroundPositionAxis,
     BackgroundRepeat, BackgroundSize, BorderRadius, BorderStyle, Color, ColorScheme, ColorStop,
-    ContainerRole, ContainerStyle, CornerRadius, CssFloat, FontStyle, FontWeight, Gradient,
-    GradientKind, InfoNode, LineHeight, NodeKind, Overflow, RadialShape, RadialSizeKind, TextAlign,
-    TextDecoration, TextFlowStyle, TextStyle, TextTransform,
+    ContainerRole, ContainerStyle, CornerRadius, CssClear, CssFloat, FontStyle, FontWeight,
+    Gradient, GradientKind, InfoNode, LineHeight, NodeKind, Overflow, RadialShape, RadialSizeKind,
+    TextAlign, TextDecoration, TextFlowStyle, TextStyle, TextTransform,
 };
 
 pub(crate) const DEFAULT_LINE_FACTOR: f32 = 1.2;
@@ -558,13 +558,29 @@ pub fn build_layout_and_info_from_snapshot(
                 *image = images.get(source).cloned();
             }
 
-            if container_style.css_float != CssFloat::None && !style.position.kind.is_out_of_flow()
-            {
-                style.display = Display::OutsideInner {
-                    outer: OuterDisplay::Inline,
-                    inner: InnerDisplay::FlowRoot,
+            // `float` and `clear` only apply to in-flow boxes; out-of-flow
+            // (absolutely positioned) boxes ignore both.
+            if !style.position.kind.is_out_of_flow() {
+                style.float = match container_style.css_float {
+                    CssFloat::None => LayoutFloat::None,
+                    CssFloat::Left => LayoutFloat::Left,
+                    CssFloat::Right => LayoutFloat::Right,
                 };
-                style.size.auto_behavior = AutoSizeBehavior::ShrinkToFit;
+                style.clear = match container_style.css_clear {
+                    CssClear::None => LayoutClear::None,
+                    CssClear::Left => LayoutClear::Left,
+                    CssClear::Right => LayoutClear::Right,
+                    CssClear::Both => LayoutClear::Both,
+                };
+
+                // CSS blockifies floats: the outer display becomes block-level
+                // (the inner display is preserved).
+                if style.float != LayoutFloat::None {
+                    style.display = Display::OutsideInner {
+                        outer: OuterDisplay::Block,
+                        inner: style.display.inner().unwrap_or(InnerDisplay::Flow),
+                    };
+                }
             }
 
             // Absolutely positioned boxes are blockified before layout. The
@@ -1026,7 +1042,7 @@ pub fn build_layout_and_info_from_snapshot(
 
             let frame = stack.swap_remove(top_idx);
 
-            let mut style = frame.style.as_ref().unwrap().clone();
+            let style = frame.style.as_ref().unwrap().clone();
             let kind = frame.kind.as_ref().unwrap().clone();
 
             // Collect element children results.
@@ -1120,23 +1136,6 @@ pub fn build_layout_and_info_from_snapshot(
                 .zip(keep)
                 .filter_map(|(info, keep)| keep.then_some(info))
                 .collect();
-
-            // ui_layout currently resolves an auto-width inline flow-root
-            // against all available inline space. Floats are shrink-to-fit
-            // boxes instead. When their contents expose a fixed CSS width,
-            // use that width as the float's content width so carousel slides
-            // do not each expand to the full track width.
-            if style.display
-                == (Display::OutsideInner {
-                    outer: OuterDisplay::Inline,
-                    inner: InnerDisplay::FlowRoot,
-                })
-                && style.size.auto_behavior == AutoSizeBehavior::ShrinkToFit
-                && matches!(style.size.width, LengthOrAuto::Auto)
-                && let Some(width) = maximum_fixed_descendant_width(&all_layout)
-            {
-                style.size.width = LengthOrAuto::Length(Length::Px(width));
-            }
 
             // Grid and flex items are blockified by CSS Display. Keeping an
             // inline direct child makes its text-flow coordinates remain in

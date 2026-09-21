@@ -995,10 +995,14 @@ fn child_origin(child: &LayoutNode, parent_origin: (f32, f32)) -> (f32, f32) {
 
 /// Page-space origin of the transform a child subtree will run under. A
 /// block-level container child pushes its own content transform, so its active
-/// origin is its own; an inline container child (including inline-block) pushes
-/// no transform and inherits the enclosing block's active origin. Custom
-/// elements push a box transform of their own even when laid out inline, so the
-/// caller passes `child_origin` directly for those.
+/// origin is its own; an inline container child that shares the parent's line
+/// space pushes no transform and inherits the enclosing block's active origin.
+/// A flow-root inline child (inline-block / blockified float) shares the
+/// parent's line space for Y (ui_layout bakes the line position into its box
+/// models) but owns its own box space for X, so its children run under its own
+/// origin on both axes.
+/// Custom elements push a box transform of their own even when laid out inline,
+/// so the caller passes `child_origin` directly for those.
 fn child_transform_origin(
     child: &LayoutNode,
     parent_origin: (f32, f32),
@@ -1081,17 +1085,21 @@ fn generate_draw_commands_inner(
     let is_inline = matches!(layout.layout_box, ui_layout::LayoutBox::InlineBox(_));
 
     // Inline containers that establish their own inline formatting context
-    // (display: inline-block) lay their children out relative to their own
-    // content box but push no transform (unlike plain inline boxes, whose text
-    // shares the parent's line space). Their text must therefore be offset by
-    // the box's position within the active transform space.
-    let inline_block_text_offset = if is_inline
+    // (display: inline-block, or a blockified float) nest their descendants in
+    // their own content coordinate space. ui_layout lays those descendants out
+    // relative to this box's content box on the X axis, but on the Y axis it
+    // bakes this box's own line position into them (an inline box shares the
+    // parent's line space). The content can therefore be translated by the
+    // box's X offset only; Y is already carried by the styled coordinates and
+    // must not be offset again. Plain inline boxes never translate.
+    let establishes_inline_box_space = is_inline
         && layout.style.display.outer() == Some(OuterDisplay::Inline)
-        && layout.style.display.inner() == Some(InnerDisplay::FlowRoot)
-    {
-        (origin.0 - transform_origin.0, origin.1 - transform_origin.1)
+        && layout.style.display.inner() == Some(InnerDisplay::FlowRoot);
+
+    let flow_root_inline_dx = if establishes_inline_box_space {
+        origin.0 - transform_origin.0
     } else {
-        (0.0, 0.0)
+        0.0
     };
 
     // Cancel the inherited scroll displacement for fixed-position boxes.
@@ -1327,6 +1335,12 @@ fn generate_draw_commands_inner(
         .next()
         .map_or(containing, |b| (b.content_box.width, b.content_box.height));
 
+    // A flow-root inline box (inline-block / blockified float) translates its
+    // content by its own X offset within the active transform space; the Y
+    // bake from ui_layout's line-space layout is left untouched.
+    let flow_root_inline_pushed =
+        flow_root_inline_dx != 0.0 && push_transform(cmd_buf, flow_root_inline_dx, 0.0);
+
     let mut layout_iter = layout.children.iter();
     let mut positive_stacking_children: Vec<(i32, usize, Vec<DrawCommand>)> = Vec::new();
 
@@ -1340,12 +1354,16 @@ fn generate_draw_commands_inner(
             } => {
                 // Text belongs to its parent box, so a hidden parent hides it.
                 if !self_hidden && !subtree_culled {
+                    // Content is always drawn relative to the established box
+                    // space: block and flow-root inline frames push their own
+                    // transform, and plain inline text lives in the nearest
+                    // enclosing block's line space.
                     draw_text(
                         cmd_buf,
                         style,
                         *flow_style,
                         *text_id,
-                        inline_block_text_offset,
+                        (0.0, 0.0),
                         effective_opacity,
                     );
                 }
@@ -1361,8 +1379,17 @@ fn generate_draw_commands_inner(
                 }
                 if let Some(LayoutChild::Node(node)) = layout_iter.next() {
                     let child_origin = child_origin(node, origin);
-                    let child_transform_origin =
-                        child_transform_origin(node, origin, transform_origin);
+                    // A plain inline frame pushes no transform of its own, so
+                    // its box children inherit the enclosing block's active
+                    // origin; a flow-root inline (or block) frame establishes
+                    // its own box space, so inlines it contains are relative
+                    // to its own content origin.
+                    let inherited = if establishes_inline_box_space {
+                        origin
+                    } else {
+                        transform_origin
+                    };
+                    let child_transform_origin = child_transform_origin(node, origin, inherited);
                     let z_index = child_info.kind.z_index();
                     if z_index > 0 {
                         let mut child_commands = Vec::new();
@@ -1491,6 +1518,10 @@ fn generate_draw_commands_inner(
     }
 
     if cancel_scroll {
+        cmd_buf.push(DrawCommand::PopTransform);
+    }
+
+    if flow_root_inline_pushed {
         cmd_buf.push(DrawCommand::PopTransform);
     }
 }

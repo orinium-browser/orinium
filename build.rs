@@ -45,6 +45,12 @@ const TEST_PAGE_CATALOG: &[TestPageMeta] = &[
         title: "Button Centering",
         description: "ブロック化した button を margin: 0 auto で中央寄せ",
     },
+    TestPageMeta {
+        file: "float.html",
+        group: "Layout",
+        title: "Float",
+        description: "float の左/右配置・テキスト回り込み・clear・親高さ・flow-root 分離・段組",
+    },
     // ── CSS ──
     TestPageMeta {
         file: "css_color.html",
