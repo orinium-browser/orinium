@@ -655,10 +655,32 @@ pub fn stroke_path(path: &Path, stroke: &Stroke) -> Path {
             if points.len() < 2 {
                 continue;
             }
+            // Drop consecutive duplicates so every edge keeps a well-defined
+            // tangent: a vertex is only kept when at least one coordinate
+            // differs from the previous by more than EPSILON, which guarantees
+            // a segment length above the tangent threshold. A closed chain
+            // whose final vertex repeats its start (an explicit "return home"
+            // on top of the Close command) would otherwise leave a zero-length
+            // wrap-around edge, so that closing duplicate is removed too.
+            let mut pruned: Vec<(f32, f32)> = Vec::with_capacity(points.len());
+            for &p in &points {
+                push_point(&mut pruned, p);
+            }
+            if chain.closed
+                && let Some(&first) = pruned.first()
+                && let Some(&last) = pruned.last()
+                && (first.0 - last.0).abs() <= f32::EPSILON
+                && (first.1 - last.1).abs() <= f32::EPSILON
+            {
+                pruned.pop();
+            }
+            if pruned.len() < 2 {
+                continue;
+            }
             if chain.closed {
-                stroke_closed_ring(&mut out, &points, stroke, half);
+                stroke_closed_ring(&mut out, &pruned, stroke, half);
             } else {
-                stroke_open_ring(&mut out, &points, stroke, half);
+                stroke_open_ring(&mut out, &pruned, stroke, half);
             }
         }
     }
@@ -1446,6 +1468,48 @@ mod tests {
         let starts = [x0.min(x1), x0.max(x1)];
         assert!((starts[0] - 0.0).abs() < 1e-3, "first dash starts at 0");
         assert!((starts[1] - 6.0).abs() < 1e-3, "second dash starts at 6");
+    }
+
+    #[test]
+    fn stroke_closed_chain_returning_to_start_does_not_panic() {
+        // Some SVG paths close a loop by drawing back to the start vertex on
+        // top of the Close command, leaving a zero-length wrap-around edge.
+        let mut path = Path::new();
+        path.move_to(0.0, 0.0);
+        path.line_to(10.0, 0.0);
+        path.line_to(10.0, 10.0);
+        path.line_to(0.0, 0.0);
+        path.close();
+        let stroked = stroke_path(&path, &Stroke::new(2.0));
+        let ring = &stroked.subpaths()[0];
+        assert!(
+            ring.len() >= 3,
+            "closed ring has vertices, got {}",
+            ring.len()
+        );
+        assert!(stroked.bounding_box().is_some());
+    }
+
+    #[test]
+    fn stroke_dashed_closed_chain_does_not_panic() {
+        // Dashes break the chain into sub-polylines that bypass the upstream
+        // duplicate-vertex dedup; a phase turning on exactly at a vertex can
+        // seed a zero-length dash. Nothing may panic and the output stays a
+        // closed band.
+        let mut path = Path::new();
+        path.move_to(0.0, 0.0);
+        path.line_to(20.0, 0.0);
+        path.line_to(20.0, 20.0);
+        path.line_to(0.0, 0.0);
+        path.close();
+        let dashed = stroke_path(
+            &path,
+            &Stroke {
+                dash: Some(vec![10.0, 5.0]),
+                ..Stroke::new(2.0)
+            },
+        );
+        assert!(dashed.bounding_box().is_some());
     }
 
     #[test]
