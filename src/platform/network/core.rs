@@ -917,6 +917,7 @@ mod tests {
                                     wv.on_dynamic_style_fetched(
                                         node_id,
                                         String::from_utf8_lossy(&r.body).to_string(),
+                                        &url,
                                     );
                                 }
                             }

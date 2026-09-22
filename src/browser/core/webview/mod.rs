@@ -837,8 +837,10 @@ impl WebView {
         self.dispatch_js_element_event(node_id, "error");
     }
 
-    pub fn on_dynamic_style_fetched(&mut self, node_id: u64, source: String) {
-        // TODO: Preserve the final stylesheet URL so relative url() and @import resolve correctly.
+    pub fn on_dynamic_style_fetched(&mut self, node_id: u64, source: String, stylesheet_url: &Url) {
+        // Resolve relative url() inside the dynamic sheet against the sheet's
+        // own location (not the document base), like a real browser does.
+        self.queue_css_images(&source, stylesheet_url);
         self.linked_css.push(source);
         self.rebuild_styles_and_layout();
         self.needs_redraw = true;

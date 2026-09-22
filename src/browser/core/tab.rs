@@ -253,7 +253,7 @@ impl Tab {
                 }
                 FetchKind::DynamicCss { node_id } => {
                     let source = String::from_utf8_lossy(&resp.body).to_string();
-                    self.on_fetch_succeeded_dynamic_style(node_id, source);
+                    self.on_fetch_succeeded_dynamic_style(node_id, source, &url);
                 }
                 FetchKind::Image { source } => {
                     self.on_fetch_succeeded_image(source, &resp.body);
@@ -411,9 +411,9 @@ impl Tab {
         }
     }
 
-    pub fn on_fetch_succeeded_dynamic_style(&mut self, node_id: u64, source: String) {
+    pub fn on_fetch_succeeded_dynamic_style(&mut self, node_id: u64, source: String, url: &Url) {
         if let Some(webview) = self.webview.as_mut() {
-            webview.on_dynamic_style_fetched(node_id, source);
+            webview.on_dynamic_style_fetched(node_id, source, url);
         }
     }
 
