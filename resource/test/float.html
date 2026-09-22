@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="ja">
+    <head>
+        <meta charset="UTF-8" />
+        <title>Float Layout Test</title>
+        <style>
+            body {
+                font-family: sans-serif;
+                font-size: 16px;
+                line-height: 1.6;
+                padding: 20px;
+            }
+
+            section {
+                margin-bottom: 40px;
+            }
+
+            h2 {
+                border-bottom: 2px solid #333;
+                padding-bottom: 5px;
+            }
+
+            .notice {
+                background: #fff3cd;
+                border: 1px solid #d4a017;
+                padding: 8px 12px;
+                margin-bottom: 12px;
+                font-size: 14px;
+            }
+
+            /* Shared float styling */
+            .float-box {
+                color: #fff;
+                padding: 10px;
+                text-align: center;
+            }
+
+            .float-left {
+                float: left;
+            }
+
+            .float-right {
+                float: right;
+            }
+
+            .blue {
+                background: #4a90e2;
+            }
+
+            .orange {
+                background: #e67e22;
+            }
+
+            .green {
+                background: #2ecc71;
+            }
+
+            /* Containers */
+            .wrap {
+                border: 2px solid #333;
+                padding: 10px;
+                background: #f5f5f5;
+                overflow: hidden;
+            }
+
+            .wrap-auto {
+                border: 2px solid #333;
+                background: #f5f5f5;
+            }
+
+            .sized {
+                width: 120px;
+                height: 90px;
+            }
+
+            .tall {
+                width: 120px;
+                height: 150px;
+            }
+
+            .short {
+                width: 120px;
+                height: 50px;
+            }
+
+            /* Buttons / cleared footer */
+            .below {
+                clear: both;
+                background: #333;
+                color: #fff;
+                padding: 10px;
+                text-align: center;
+            }
+
+            /* Two-column layout */
+            .col-left {
+                float: left;
+                width: 30%;
+                background: #eaf3fb;
+                border: 1px solid #4a90e2;
+                padding: 10px;
+                box-sizing: border-box;
+            }
+
+            .col-main {
+                float: left;
+                width: 70%;
+                background: #fdecea;
+                border: 1px solid #e67e22;
+                padding: 10px;
+                box-sizing: border-box;
+            }
+
+            /* Isolation */
+            .flow-root {
+                display: flow-root;
+                border: 2px dashed #9b59b6;
+                background: #f4ecf7;
+                padding: 10px;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>Float Layout Test</h1>
+
+        <section>
+            <h2>float: left with text wrapping</h2>
+            <div class="notice">
+                The line boxes wrap around the float; the following block boxes
+                overlap it (CSS behaviour).
+            </div>
+            <div class="wrap">
+                <div class="float-box blue float-left sized">float left</div>
+                Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do
+                eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut
+                enim ad minim veniam, quis nostrud exercitation ullamco laboris
+                nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor
+                in reprehenderit in voluptate velit esse cillum dolore eu fugiat
+                nulla pariatur. Excepteur sint occaecat cupidatat non proident.
+                <div class="below">clear: both</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>float: right with text wrapping</h2>
+            <div class="wrap">
+                <div class="float-box orange float-right sized">float right</div>
+                Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do
+                eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut
+                enim ad minim veniam, quis nostrud exercitation ullamco laboris
+                nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor
+                in reprehenderit in voluptate velit esse cillum dolore eu fugiat
+                nulla pariatur. Excepteur sint occaecat cupidatat non proident.
+                <div class="below">clear: both</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>Two floats side by side</h2>
+            <div class="notice">
+                The second float drops next to the first on the same line row.
+            </div>
+            <div class="wrap">
+                <div class="float-box blue float-left short">left A</div>
+                <div class="float-box green float-left short">left B</div>
+                <div class="float-box orange float-right short">right</div>
+                <div class="below">clear: both</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>float contributes to parent height</h2>
+            <div class="notice">
+                The auto-height parent grows to contain the floated box, even
+                though the float is out of the normal flow.
+            </div>
+            <div class="wrap-auto">
+                <div class="float-box blue float-left tall">tall float</div>
+                <div class="below">clear: both</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>Float with margin, border and padding</h2>
+            <div class="wrap">
+                <div
+                    class="float-box green float-left"
+                    style="
+                        width: 100px;
+                        height: 80px;
+                        margin: 12px 20px 12px 8px;
+                        border: 4px solid #145a32;
+                    "
+                >
+                    margined
+                </div>
+                The float's margin box is used when measuring how much space it
+                occupies. Text keeps clear of the margin, not just the border.
+                Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do
+                eiusmod tempor incididunt ut labore et dolore magna aliqua.
+                <div class="below">clear: both</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>clear: both moves a block below the floats</h2>
+            <div class="wrap">
+                <div class="float-box blue float-left sized">float</div>
+                <div
+                    style="
+                        clear: both;
+                        background: #2ecc71;
+                        color: #fff;
+                        padding: 10px;
+                    "
+                >
+                    This block has clear: both and starts below the float.
+                </div>
+            </div>
+        </section>
+
+        <section>
+            <h2>Nested flow wraps around an ancestor float</h2>
+            <div class="wrap">
+                <div class="float-box blue float-left sized">float</div>
+                <div>
+                    A plain flow child shares its parent's float context, so the
+                    text inside it also wraps around the float:
+                    <p>
+                        Lorem ipsum dolor sit amet, consectetur adipiscing elit,
+                        sed do eiusmod tempor incididunt ut labore et dolore
+                        magna aliqua. Ut enim ad minim veniam, quis nostrud
+                        exercitation ullamco laboris nisi ut aliquip.
+                    </p>
+                </div>
+                <div class="below">clear: both</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>flow-root isolates its contents from the float</h2>
+            <div class="notice">
+                A flow-root establishes a new formatting context, so its text
+                starts at the left edge instead of wrapping around the float.
+            </div>
+            <div class="wrap">
+                <div class="float-box blue float-left sized">float</div>
+                <div>
+                    <div class="flow-root">
+                        flow-root content starts on its own line. Lorem ipsum
+                        dolor sit amet, consectetur adipiscing elit, sed do
+                        eiusmod tempor incididunt ut labore et dolore magna
+                        aliqua.
+                    </div>
+                </div>
+                <div class="below">clear: both</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>Two-column layout</h2>
+            <div class="wrap">
+                <div class="col-left">
+                    <strong>Sidebar</strong><br />
+                    float: left; width: 30%;
+                </div>
+                <div class="col-main">
+                    <strong>Main</strong><br />
+                    float: left; width: 70%. Lorem ipsum dolor sit amet,
+                    consectetur adipiscing elit, sed do eiusmod tempor
+                    incididunt ut labore et dolore magna aliqua.
+                </div>
+                <div class="below">clear: both</div>
+            </div>
+        </section>
+    </body>
+</html>
