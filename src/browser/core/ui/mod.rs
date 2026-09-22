@@ -413,21 +413,11 @@ impl BrowserUi {
 
     /// Handles keyboard input events and returns a `BrowserCommand`.
     fn handle_keyboard_input(&mut self, event: KeyEvent) -> BrowserCommand {
-        // TODO: あとで消す
-        const KEY_NEW_WINDOW: &str = "n";
-
         if event.state != ElementState::Pressed {
             return BrowserCommand::None;
         }
 
         let ctrl = self.input.modifiers.control_key();
-
-        if ctrl
-            && let winit::keyboard::Key::Character(ch) = &event.logical_key
-            && ch.as_str().eq_ignore_ascii_case(KEY_NEW_WINDOW)
-        {
-            return BrowserCommand::OpenNewWindow;
-        }
 
         let Some(tab_id) = &self.active_tab_id() else {
             return BrowserCommand::None;
