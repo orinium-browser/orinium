@@ -461,7 +461,7 @@ pub(crate) fn signal_abort_reason(signal: &JSValue) -> JSValue {
     signal
         .as_object()
         .map(|object| object.borrow().get(ABORT_REASON))
-        .unwrap_or_else(|| abort_error_value())
+        .unwrap_or_else(abort_error_value)
 }
 
 /// Marks `signal` as aborted with `reason`, dispatches its `abort` listeners
