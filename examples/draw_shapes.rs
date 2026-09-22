@@ -12,7 +12,7 @@ mod common;
 use anyhow::Result;
 use common::{EventOutcome, ShapeWindow};
 use orinium_browser::engine::layouter::types::{
-    Color, ColorStop, Gradient, GradientKind, RadialShape, RadialSizeKind,
+    Color, ColorStop, Gradient, GradientKind, GradientSpread, RadialShape, RadialSizeKind,
 };
 use orinium_browser::engine::renderer_model::{
     Brush, DrawCommand, FillRule, Paint, Path, ellipse_path, rounded_rect_path,
@@ -39,6 +39,7 @@ fn fill(path: Path, brush: Brush) -> DrawCommand {
 
 fn gradient(positions: Vec<(Color, f32)>, kind: GradientKind) -> Brush {
     Brush::Gradient(Gradient {
+        spread: GradientSpread::default(),
         kind,
         stops: positions
             .into_iter()

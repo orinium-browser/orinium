@@ -25,11 +25,15 @@ mod rasterize;
 
 pub use rasterize::{RasterResult, rasterize_from_bytes};
 
+use std::collections::HashMap;
+
 use crate::engine::css::values::CssValue;
 use crate::engine::layouter::css_resolver::resolve_inline_value;
 use crate::engine::layouter::dom_snapshot::{DomSnapshot, NodeId};
 use crate::engine::layouter::resolve_css_color;
-use crate::engine::layouter::types::{Color, ColorScheme};
+use crate::engine::layouter::types::{
+    Color, ColorScheme, ColorStop, Gradient, GradientKind, GradientSpread,
+};
 use crate::engine::renderer_model::Path;
 use crate::engine::renderer_model::{
     AffineTransform, Brush, DrawCommand, FillRule, Paint, StrokeCap, StrokeJoin, ellipse_path,
@@ -40,22 +44,24 @@ use crate::engine::renderer_model::{
 /// An `SVG viewBox` rectangle: `(min-x, min-y, width, height)`.
 pub type ViewBox = (f32, f32, f32, f32);
 
-/// A single solid-color shape inside an inline SVG: a viewBox-space path, its
-/// paint color, and the fill rule (default nonzero). `stroke` is `None` when
-/// the shape has no stroke.
+/// A single shape inside an inline SVG: a viewBox-space path, its paint
+/// (solid color or gradient), and the fill rule (default nonzero). `stroke`
+/// is `None` when the shape has no stroke.
 #[derive(Debug, Clone)]
 pub struct SvgShape {
     pub path: Path,
-    pub fill: Color,
+    pub fill: Brush,
     pub rule: FillRule,
     pub stroke: Option<SvgStroke>,
 }
 
 /// A resolved SVG stroke: paint color plus the geometry parameters that
-/// [`stroke_path`] expands the outline with.
+/// [`stroke_path`] expands the outline with. When `gradient` is set it paints
+/// the outline instead of `color`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SvgStroke {
     pub color: Color,
+    pub gradient: Option<Gradient>,
     pub width: f32,
     pub cap: StrokeCap,
     pub join: StrokeJoin,
@@ -70,6 +76,7 @@ impl SvgStroke {
     pub(crate) fn inherited_from(inherited: Option<&SvgStroke>) -> SvgStroke {
         inherited.cloned().unwrap_or(SvgStroke {
             color: Color(0, 0, 0, 255),
+            gradient: None,
             width: 1.0,
             cap: StrokeCap::Butt,
             join: StrokeJoin::Miter,
@@ -524,8 +531,32 @@ pub(crate) fn parse_svg_fill(
         CssValue::Keyword(kw) if is_transparent_keyword(kw) => Some(Color(0, 0, 0, 0)),
         CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentColor") => Some(current_color),
         CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("inherit") => None,
+        // `url(...)` names a gradient paint server, never a solid color. Falling
+        // through to the CSS pipeline would log a spurious error and return
+        // `None` anyway, so short-circuit to keep the log clean.
+        CssValue::Function(name, _) if name.eq_ignore_ascii_case("url") => None,
         _ => resolve_css_color("fill", &css, color_scheme),
     }
+}
+
+/// Extracts the fragment `id` from a `url(#id)` paint-server reference like
+/// `fill="url(#blinearGradient971)"`. Returns `None` for any other value.
+pub(crate) fn parse_svg_url(value: &str) -> Option<String> {
+    let css = resolve_inline_value(value.trim())?;
+    let CssValue::Function(name, args) = &css else {
+        return None;
+    };
+    if !name.eq_ignore_ascii_case("url") {
+        return None;
+    }
+    // The fragment is either an unquoted identifier or a quoted string.
+    let fragment = args.first()?.as_slice().iter().find_map(|arg| match arg {
+        CssValue::Keyword(kw) => Some(kw.to_string()),
+        CssValue::String(s) => Some(s.clone()),
+        _ => None,
+    })?;
+    let fragment = fragment.strip_prefix('#').unwrap_or(&fragment);
+    (!fragment.is_empty()).then(|| fragment.to_owned())
 }
 
 fn is_transparent_keyword(keyword: &str) -> bool {
@@ -599,6 +630,7 @@ pub(crate) fn resolve_stroke(
     el: &impl SvgElement,
     color_scheme: ColorScheme,
     current_color: Color,
+    gradients: &HashMap<String, Gradient>,
     inherited: Option<&SvgStroke>,
 ) -> Option<SvgStroke> {
     let mut stroke = SvgStroke::inherited_from(inherited);
@@ -610,9 +642,16 @@ pub(crate) fn resolve_stroke(
             return None;
         }
         declared = true;
-        match parse_svg_fill(value, color_scheme, current_color) {
-            Some(color) => stroke.color = color,
-            None => stroke.color = Color(0, 0, 0, 255),
+        if let Some(id) = parse_svg_url(value) {
+            // A gradient stroke paints even when the reference resolves; an
+            // unresolved reference also paints nothing.
+            stroke.gradient = Some(gradients.get(&id).cloned()?);
+        } else {
+            stroke.gradient = None;
+            match parse_svg_fill(value, color_scheme, current_color) {
+                Some(color) => stroke.color = color,
+                None => stroke.color = Color(0, 0, 0, 255),
+            }
         }
     }
     if let Some(width) = numeric_presentation_value(el, "stroke-width") {
@@ -641,7 +680,11 @@ pub(crate) fn resolve_stroke(
     if let Some(offset) = numeric_presentation_value(el, "stroke-dashoffset") {
         stroke.dash_offset = offset;
     }
-    if !declared || stroke.width <= 0.0 || stroke.color.3 == 0 {
+    if !declared || stroke.width <= 0.0 {
+        return None;
+    }
+    let paints = stroke.gradient.is_some() || stroke.color.3 != 0;
+    if !paints {
         return None;
     }
     Some(stroke)
@@ -673,6 +716,7 @@ pub(crate) fn parse_dasharray(value: &str) -> Option<Vec<f32>> {
 #[derive(Debug, Clone)]
 pub(crate) struct PaintState {
     pub fill: Option<Color>,
+    pub fill_gradient: Option<Gradient>,
     pub fill_opacity: f32,
     pub rule: FillRule,
     pub stroke: Option<SvgStroke>,
@@ -683,6 +727,7 @@ impl PaintState {
     pub(crate) fn new() -> Self {
         PaintState {
             fill: None,
+            fill_gradient: None,
             fill_opacity: 1.0,
             rule: FillRule::NonZero,
             stroke: None,
@@ -690,16 +735,34 @@ impl PaintState {
         }
     }
 
-    /// Overlays `el`'s declarations on the incoming state.
+    /// Overlays `el`'s declarations on the incoming state. `gradients` resolves
+    /// `url(#id)` paint-server references to their gradient definitions.
     pub(crate) fn apply(
         &mut self,
         el: &impl SvgElement,
         color_scheme: ColorScheme,
         current_color: Color,
+        gradients: &HashMap<String, Gradient>,
     ) {
         if let Some(value) = presentation_value(el, "fill") {
-            self.fill =
-                parse_svg_fill(value, color_scheme, current_color).or(Some(Color(0, 0, 0, 255)));
+            match parse_svg_url(value) {
+                Some(id) => {
+                    // A gradient fill overrides any inherited solid fill; an
+                    // unresolved reference paints nothing (`none`).
+                    if let Some(gradient) = gradients.get(&id) {
+                        self.fill_gradient = Some(gradient.clone());
+                        self.fill = None;
+                    } else {
+                        self.fill_gradient = None;
+                        self.fill = Some(Color(0, 0, 0, 0));
+                    }
+                }
+                None => {
+                    self.fill_gradient = None;
+                    self.fill = parse_svg_fill(value, color_scheme, current_color)
+                        .or(Some(Color(0, 0, 0, 255)));
+                }
+            }
         }
         self.fill_opacity *= numeric_presentation_value(el, "fill-opacity")
             .unwrap_or(1.0)
@@ -714,7 +777,13 @@ impl PaintState {
         self.stroke_opacity *= numeric_presentation_value(el, "stroke-opacity")
             .unwrap_or(1.0)
             .clamp(0.0, 1.0);
-        self.stroke = resolve_stroke(el, color_scheme, current_color, self.stroke.as_ref());
+        self.stroke = resolve_stroke(
+            el,
+            color_scheme,
+            current_color,
+            gradients,
+            self.stroke.as_ref(),
+        );
     }
 }
 
@@ -775,6 +844,10 @@ pub fn collect_svg(
     if view_box.2 <= 0.0 || view_box.3 <= 0.0 {
         return None;
     }
+    let mut gradients = HashMap::new();
+    for &child in snapshot.children(svg_id) {
+        collect_gradient_defs(snapshot, child, color_scheme, text_color, &mut gradients);
+    }
     let mut shapes = Vec::new();
     for &child in snapshot.children(svg_id) {
         collect_content(
@@ -785,6 +858,7 @@ pub fn collect_svg(
             color_scheme,
             text_color,
             PaintState::new(),
+            &gradients,
             &mut shapes,
         );
     }
@@ -792,6 +866,154 @@ pub fn collect_svg(
         return None;
     }
     Some(SvgContent { view_box, shapes })
+}
+
+/// Collects the `<linearGradient>`/`<radialGradient>` definitions reachable
+/// under `id` (typically inside a `<defs>` block) into `out`, keyed by their
+/// `id` attribute.
+fn collect_gradient_defs(
+    snapshot: &DomSnapshot,
+    id: NodeId,
+    color_scheme: ColorScheme,
+    text_color: Color,
+    out: &mut HashMap<String, Gradient>,
+) {
+    let el = &snapshot.node(id).kind;
+    match el.tag_name() {
+        Some("linearGradient") => {
+            let stops = collect_stops(snapshot, id, color_scheme, text_color);
+            if let Some(gradient) = parse_linear_gradient(el, &stops, color_scheme, text_color)
+                && let Some(gid) = el.get_attr("id").filter(|id| !id.is_empty())
+            {
+                out.entry(gid.to_owned()).or_insert(gradient);
+            }
+        }
+        Some("radialGradient") => {
+            let stops = collect_stops(snapshot, id, color_scheme, text_color);
+            if let Some(gradient) = parse_radial_gradient(el, &stops, color_scheme, text_color)
+                && let Some(gid) = el.get_attr("id").filter(|id| !id.is_empty())
+            {
+                out.entry(gid.to_owned()).or_insert(gradient);
+            }
+        }
+        _ => {}
+    }
+    for &child in snapshot.children(id) {
+        collect_gradient_defs(snapshot, child, color_scheme, text_color, out);
+    }
+}
+
+/// Resolves a gradient's geometry from its attributes. Both gradient kinds share
+/// the `gradientUnits`/`spreadMethod` handling.
+fn gradient_units_and_spread(el: &impl SvgElement) -> (bool, GradientSpread) {
+    let user_space = el
+        .svg_attr("gradientUnits")
+        .map(|v| v.trim().eq_ignore_ascii_case("userSpaceOnUse"))
+        .unwrap_or(false);
+    let spread = match el
+        .svg_attr("spreadMethod")
+        .map(|v| v.trim())
+        .unwrap_or("pad")
+    {
+        v if v.eq_ignore_ascii_case("repeat") => GradientSpread::Repeat,
+        v if v.eq_ignore_ascii_case("reflect") => GradientSpread::Reflect,
+        _ => GradientSpread::Pad,
+    };
+    (user_space, spread)
+}
+
+/// Parses an `<linearGradient>` element's geometry around already-resolved
+/// color stops. The defs live in `viewBox`/bbox space, so no transform is
+/// applied here.
+fn parse_linear_gradient(
+    el: &impl SvgElement,
+    stops: &[ColorStop],
+    _color_scheme: ColorScheme,
+    _text_color: Color,
+) -> Option<Gradient> {
+    let (user_space, spread) = gradient_units_and_spread(el);
+    if stops.is_empty() {
+        return None;
+    }
+    Some(Gradient {
+        kind: GradientKind::SvgLinear {
+            x1: el.svg_attr("x1").and_then(parse_len).unwrap_or(0.0),
+            y1: el.svg_attr("y1").and_then(parse_len).unwrap_or(0.0),
+            x2: el.svg_attr("x2").and_then(parse_len).unwrap_or(1.0),
+            y2: el.svg_attr("y2").and_then(parse_len).unwrap_or(0.0),
+            user_space,
+        },
+        stops: stops.to_vec(),
+        spread,
+    })
+}
+
+/// Parses a `<radialGradient>` element's geometry. A missing focal point
+/// degrades to the center (`fx/fy` inherit `cx/cy` per the SVG spec).
+fn parse_radial_gradient(
+    el: &impl SvgElement,
+    stops: &[ColorStop],
+    _color_scheme: ColorScheme,
+    _text_color: Color,
+) -> Option<Gradient> {
+    let (user_space, spread) = gradient_units_and_spread(el);
+    let cx = el.svg_attr("cx").and_then(parse_len).unwrap_or(0.5);
+    let cy = el.svg_attr("cy").and_then(parse_len).unwrap_or(0.5);
+    if stops.is_empty() {
+        return None;
+    }
+    Some(Gradient {
+        kind: GradientKind::SvgRadial {
+            cx,
+            cy,
+            r: el.svg_attr("r").and_then(parse_len).unwrap_or(0.5),
+            fx: el.svg_attr("fx").and_then(parse_len).unwrap_or(cx),
+            fy: el.svg_attr("fy").and_then(parse_len).unwrap_or(cy),
+            fr: el.svg_attr("fr").and_then(parse_len).unwrap_or(0.0),
+            user_space,
+        },
+        stops: stops.to_vec(),
+        spread,
+    })
+}
+
+/// Resolves the direct `<stop>` children of the gradient element `id`,
+/// resolving each stop's color, opacity, and offset. Unparsable stops are
+/// skipped.
+fn collect_stops(
+    snapshot: &DomSnapshot,
+    id: NodeId,
+    color_scheme: ColorScheme,
+    text_color: Color,
+) -> Vec<ColorStop> {
+    let mut out = Vec::new();
+    for &child in snapshot.children(id) {
+        let el = &snapshot.node(child).kind;
+        if el.tag_name() != Some("stop") {
+            continue;
+        }
+        let offset = el.get_attr("offset").and_then(parse_stop_offset);
+        let color = presentation_value(el, "stop-color")
+            .and_then(|value| parse_svg_fill(value, color_scheme, text_color))
+            .unwrap_or(Color(0, 0, 0, 255));
+        let opacity = numeric_presentation_value(el, "stop-opacity")
+            .unwrap_or(1.0)
+            .clamp(0.0, 1.0);
+        out.push(ColorStop {
+            color: with_alpha(color, opacity),
+            position: offset,
+        });
+    }
+    out
+}
+
+/// Parses an SVG gradient stop `offset` (`0.5`, `50%`, …) into a 0..1 fraction.
+fn parse_stop_offset(value: &str) -> Option<f32> {
+    let value = value.trim();
+    if let Some(percent) = value.strip_suffix('%') {
+        return parse_len(percent).map(|v| (v / 100.0).clamp(0.0, 1.0));
+    }
+    parse_len(value).map(|v| v.clamp(0.0, 1.0))
 }
 
 /// Recursively gathers the paintable shapes under `id`, composing `transform`
@@ -807,6 +1029,7 @@ fn collect_content(
     color_scheme: ColorScheme,
     text_color: Color,
     mut paint: PaintState,
+    gradients: &HashMap<String, Gradient>,
     shapes: &mut Vec<SvgShape>,
 ) {
     let el = &snapshot.node(id).kind;
@@ -819,7 +1042,7 @@ fn collect_content(
     };
     let element_opacity = numeric_presentation_value(el, "opacity").unwrap_or(1.0);
     let opacity = opacity * element_opacity.clamp(0.0, 1.0);
-    paint.apply(el, color_scheme, text_color);
+    paint.apply(el, color_scheme, text_color, gradients);
 
     match el.tag_name() {
         Some("g" | "a" | "symbol") => {
@@ -832,6 +1055,7 @@ fn collect_content(
                     color_scheme,
                     text_color,
                     paint.clone(),
+                    gradients,
                     shapes,
                 );
             }
@@ -844,12 +1068,20 @@ fn collect_content(
             if path.commands().is_empty() {
                 return;
             }
-            let fill = with_alpha(
-                paint.fill.unwrap_or(Color(0, 0, 0, 255)),
-                opacity * paint.fill_opacity,
-            );
+            let fill_alpha = opacity * paint.fill_opacity;
+            let fill = match &paint.fill_gradient {
+                Some(gradient) => Brush::Gradient(with_stop_alpha(gradient.clone(), fill_alpha)),
+                None => Brush::Solid(with_alpha(
+                    paint.fill.unwrap_or(Color(0, 0, 0, 255)),
+                    fill_alpha,
+                )),
+            };
             let stroke = paint.stroke.clone().map(|mut stroke| {
-                stroke.color = with_alpha(stroke.color, opacity * paint.stroke_opacity);
+                if let Some(gradient) = &mut stroke.gradient {
+                    *gradient = with_stop_alpha(gradient.clone(), opacity * paint.stroke_opacity);
+                } else {
+                    stroke.color = with_alpha(stroke.color, opacity * paint.stroke_opacity);
+                }
                 stroke
             });
             shapes.push(SvgShape {
@@ -861,6 +1093,17 @@ fn collect_content(
         }
         _ => {}
     }
+}
+
+/// Scales every gradient stop's alpha by `alpha` (clamped). Used to fold an
+/// element's `opacity` and the fill/stroke opacity into the painted gradient,
+/// mirroring how solid paints bake those into their alpha channel.
+fn with_stop_alpha(gradient: Gradient, alpha: f32) -> Gradient {
+    let mut gradient = gradient;
+    for stop in &mut gradient.stops {
+        stop.color = with_alpha(stop.color, alpha);
+    }
+    gradient
 }
 
 /// Builds the shape-space path an element describes, or `None` when the element
@@ -987,7 +1230,7 @@ pub fn emit_commands(
         cmd_buf.push(DrawCommand::Fill {
             path: shape.path.clone(),
             paint: Paint {
-                brush: Brush::Solid(shape.fill),
+                brush: shape.fill.clone(),
                 opacity,
             },
             rule: shape.rule,
@@ -996,12 +1239,13 @@ pub fn emit_commands(
             // The stroke outline is expanded in viewBox space (the same space
             // the shape's path lives in) and filled with the nonzero rule by
             // the same pipeline as the shape fill.
+            let brush = match &stroke.gradient {
+                Some(gradient) => Brush::Gradient(gradient.clone()),
+                None => Brush::Solid(stroke.color),
+            };
             cmd_buf.push(DrawCommand::Fill {
                 path: stroke_path(&shape.path, &stroke.to_stroke()),
-                paint: Paint {
-                    brush: Brush::Solid(stroke.color),
-                    opacity,
-                },
+                paint: Paint { brush, opacity },
                 rule: FillRule::NonZero,
             });
         }
@@ -1428,6 +1672,7 @@ mod tests {
                 &element("path", &[]),
                 ColorScheme::Light,
                 Color::default(),
+                &HashMap::new(),
                 None
             ),
             None
@@ -1438,6 +1683,7 @@ mod tests {
                 &element("path", &[("stroke-width", "2")]),
                 ColorScheme::Light,
                 Color::default(),
+                &HashMap::new(),
                 None
             ),
             None
@@ -1458,8 +1704,14 @@ mod tests {
                 ("stroke-dashoffset", "1"),
             ],
         );
-        let stroke =
-            resolve_stroke(&el, ColorScheme::Light, Color::default(), None).expect("stroke");
+        let stroke = resolve_stroke(
+            &el,
+            ColorScheme::Light,
+            Color::default(),
+            &HashMap::new(),
+            None,
+        )
+        .expect("stroke");
         assert_eq!(stroke.color, Color(255, 0, 0, 255));
         assert_eq!(stroke.width, 3.0);
         assert!(matches!(stroke.cap, StrokeCap::Round));
@@ -1477,8 +1729,14 @@ mod tests {
                  stroke-linejoin:round;stroke-dasharray:none",
             )],
         );
-        let stroke =
-            resolve_stroke(&style, ColorScheme::Light, Color::default(), None).expect("stroke");
+        let stroke = resolve_stroke(
+            &style,
+            ColorScheme::Light,
+            Color::default(),
+            &HashMap::new(),
+            None,
+        )
+        .expect("stroke");
         assert_eq!(stroke.color, Color(0, 255, 0, 255));
         assert!(matches!(stroke.cap, StrokeCap::Square));
         assert!(matches!(stroke.join, StrokeJoin::Round));
@@ -1492,6 +1750,7 @@ mod tests {
                 &element("path", &[("stroke", "none")]),
                 ColorScheme::Light,
                 Color::default(),
+                &HashMap::new(),
                 None
             ),
             None
@@ -1501,6 +1760,7 @@ mod tests {
                 &element("path", &[("stroke", "red"), ("stroke-width", "0")]),
                 ColorScheme::Light,
                 Color::default(),
+                &HashMap::new(),
                 None
             ),
             None
@@ -1510,6 +1770,7 @@ mod tests {
                 &element("path", &[("stroke", "transparent")]),
                 ColorScheme::Light,
                 Color::default(),
+                &HashMap::new(),
                 None
             ),
             None
@@ -1526,13 +1787,20 @@ mod tests {
                 ("stroke-linecap", "round"),
             ],
         );
-        let inherited =
-            resolve_stroke(&parent, ColorScheme::Light, Color::default(), None).expect("stroke");
+        let inherited = resolve_stroke(
+            &parent,
+            ColorScheme::Light,
+            Color::default(),
+            &HashMap::new(),
+            None,
+        )
+        .expect("stroke");
         // A child that declares nothing keeps the inherited stroke...
         let child = resolve_stroke(
             &element("rect", &[]),
             ColorScheme::Light,
             Color::default(),
+            &HashMap::new(),
             Some(&inherited),
         )
         .expect("inherits");
@@ -1545,6 +1813,7 @@ mod tests {
                 &element("rect", &[("stroke", "none")]),
                 ColorScheme::Light,
                 Color::default(),
+                &HashMap::new(),
                 Some(&inherited)
             ),
             None
@@ -1554,6 +1823,7 @@ mod tests {
             &element("line", &[("stroke", "currentColor")]),
             ColorScheme::Light,
             Color(9, 8, 7, 255),
+            &HashMap::new(),
             None,
         )
         .expect("currentColor");
@@ -1589,7 +1859,7 @@ mod tests {
     fn emit_commands_letterboxes_and_honors_per_shape_fill_rule() {
         let shape = SvgShape {
             path: path_from_d("M0 0 L10 0 L10 10 Z"),
-            fill: Color(255, 0, 0, 255),
+            fill: Brush::Solid(Color(255, 0, 0, 255)),
             rule: FillRule::EvenOdd,
             stroke: None,
         };
@@ -1620,7 +1890,7 @@ mod tests {
     fn emit_commands_paints_inline_at_absolute_position() {
         let shape = SvgShape {
             path: path_from_d("M0 0 L10 0 L10 10 Z"),
-            fill: Color(255, 0, 0, 255),
+            fill: Brush::Solid(Color(255, 0, 0, 255)),
             rule: FillRule::NonZero,
             stroke: None,
         };
@@ -1644,7 +1914,7 @@ mod tests {
     fn emit_commands_paints_nothing_for_degenerate_box() {
         let shape = SvgShape {
             path: path_from_d("M0 0 L10 0 L10 10 Z"),
-            fill: Color(255, 0, 0, 255),
+            fill: Brush::Solid(Color(255, 0, 0, 255)),
             rule: FillRule::NonZero,
             stroke: None,
         };
@@ -1689,9 +1959,9 @@ mod tests {
 
         assert_eq!(content.view_box, (0.0, 0.0, 10.0, 10.0));
         assert_eq!(content.shapes.len(), 2);
-        assert_eq!(content.shapes[0].fill, Color(1, 2, 3, 255));
+        assert_eq!(content.shapes[0].fill, Brush::Solid(Color(1, 2, 3, 255)));
         assert!(matches!(content.shapes[0].rule, FillRule::NonZero));
-        assert_eq!(content.shapes[1].fill, Color(0, 255, 0, 128));
+        assert_eq!(content.shapes[1].fill, Brush::Solid(Color(0, 255, 0, 128)));
         assert!(matches!(content.shapes[1].rule, FillRule::EvenOdd));
     }
 
@@ -1746,7 +2016,7 @@ mod tests {
             [(3.0, 2.0), (7.0, 2.0), (5.0, 6.0)]
         );
         // 0.5 group opacity folds into the shape alpha.
-        assert_eq!(content.shapes[0].fill, Color(255, 0, 0, 128));
+        assert_eq!(content.shapes[0].fill, Brush::Solid(Color(255, 0, 0, 128)));
         // Rect corners translated into viewBox space.
         assert_eq!(
             content.shapes[1].path.subpaths()[0][..3],
@@ -1857,23 +2127,24 @@ mod tests {
         assert_eq!(inherited_stroke.color, Color(0, 255, 0, 255));
         assert_eq!(inherited_stroke.width, 2.0);
         assert!(matches!(inherited_stroke.cap, StrokeCap::Round));
-        assert_eq!(content.shapes[0].fill, Color(0, 0, 255, 255));
+        assert_eq!(content.shapes[0].fill, Brush::Solid(Color(0, 0, 255, 255)));
 
         assert_eq!(
             content.shapes[1].stroke, None,
             "stroke:none cancels inheritance"
         );
-        assert_eq!(content.shapes[1].fill, Color(0, 0, 255, 255));
+        assert_eq!(content.shapes[1].fill, Brush::Solid(Color(0, 0, 255, 255)));
     }
 
     #[test]
     fn emit_commands_paints_a_stroke_outline_after_the_fill() {
         let shape = SvgShape {
             path: path_from_d("M0 5 L10 5"),
-            fill: Color(0, 0, 0, 0),
+            fill: Brush::Solid(Color(0, 0, 0, 0)),
             rule: FillRule::NonZero,
             stroke: Some(SvgStroke {
                 color: Color(255, 0, 0, 255),
+                gradient: None,
                 width: 2.0,
                 cap: StrokeCap::Butt,
                 join: StrokeJoin::Miter,
@@ -1969,6 +2240,293 @@ mod tests {
             }
         }
         rgba
+    }
+
+    #[test]
+    fn parse_svg_fill_url_reference_is_handled_without_color_pipeline() {
+        // `url(#id)` names a gradient, not a color: it must not trip the CSS
+        // color pipeline's error log and resolves to `None` here.
+        assert_eq!(
+            parse_svg_fill(
+                "url(#blinearGradient971)",
+                ColorScheme::Light,
+                Color::default()
+            ),
+            None
+        );
+        assert_eq!(
+            parse_svg_url("url(#gradient-1)"),
+            Some("gradient-1".to_owned())
+        );
+        assert_eq!(
+            parse_svg_url("url(\"quoted-id\")"),
+            Some("quoted-id".to_owned())
+        );
+        assert_eq!(parse_svg_url("#ff0000"), None);
+        assert_eq!(parse_svg_url("red"), None);
+    }
+
+    #[test]
+    fn collect_svg_resolves_url_fill_to_gradient_brushes() {
+        let svg = TreeNode::new(element("svg", &[("viewBox", "0 0 10 10")]));
+        let defs = TreeNode::new(element("defs", &[]));
+        TreeNode::add_child(&svg, defs.clone());
+
+        let linear = TreeNode::new(element(
+            "linearGradient",
+            &[
+                ("id", "g1"),
+                ("x1", "0"),
+                ("y1", "0"),
+                ("x2", "1"),
+                ("y2", "0"),
+                ("spreadMethod", "reflect"),
+            ],
+        ));
+        TreeNode::add_child(
+            &linear,
+            TreeNode::new(element(
+                "stop",
+                &[("offset", "0"), ("stop-color", "#ff0000")],
+            )),
+        );
+        TreeNode::add_child(
+            &linear,
+            TreeNode::new(element(
+                "stop",
+                &[
+                    ("offset", "1"),
+                    ("style", "stop-color:#0000ff;stop-opacity:0.5"),
+                ],
+            )),
+        );
+        TreeNode::add_child(&defs, linear);
+
+        let radial = TreeNode::new(element(
+            "radialGradient",
+            &[
+                ("id", "g2"),
+                ("gradientUnits", "userSpaceOnUse"),
+                ("cx", "5"),
+                ("cy", "5"),
+                ("r", "5"),
+                ("fx", "4"),
+                ("fy", "4"),
+            ],
+        ));
+        TreeNode::add_child(
+            &radial,
+            TreeNode::new(element("stop", &[("offset", "0"), ("stop-color", "green")])),
+        );
+        TreeNode::add_child(
+            &radial,
+            TreeNode::new(element(
+                "stop",
+                &[("offset", "100%"), ("stop-color", "blue")],
+            )),
+        );
+        TreeNode::add_child(&defs, radial);
+
+        TreeNode::add_child(
+            &svg,
+            TreeNode::new(element(
+                "rect",
+                &[
+                    ("x", "1"),
+                    ("y", "1"),
+                    ("width", "8"),
+                    ("height", "8"),
+                    ("fill", "url(#g1)"),
+                ],
+            )),
+        );
+        TreeNode::add_child(
+            &svg,
+            TreeNode::new(element(
+                "circle",
+                &[("cx", "5"), ("cy", "5"), ("r", "4"), ("fill", "url(#g2)")],
+            )),
+        );
+
+        let (snapshot, _refs) = DomSnapshot::from_tree(&svg);
+        let content = collect_svg(&snapshot, 0, ColorScheme::Light, Color::default()).unwrap();
+        assert_eq!(content.shapes.len(), 2);
+
+        let Brush::Gradient(g1) = &content.shapes[0].fill else {
+            panic!("rect should be a gradient fill");
+        };
+        assert!(matches!(
+            g1.kind,
+            GradientKind::SvgLinear {
+                x1: 0.0,
+                y1: 0.0,
+                x2: 1.0,
+                y2: 0.0,
+                user_space: false
+            }
+        ));
+        assert_eq!(g1.spread, GradientSpread::Reflect);
+        assert_eq!(g1.stops.len(), 2);
+        assert_eq!(g1.stops[0].color, Color(255, 0, 0, 255));
+        assert_eq!(g1.stops[0].position, Some(0.0));
+        assert_eq!(g1.stops[1].color, Color(0, 0, 255, 128));
+        assert_eq!(g1.stops[1].position, Some(1.0));
+
+        let Brush::Gradient(g2) = &content.shapes[1].fill else {
+            panic!("circle should be a gradient fill");
+        };
+        assert!(matches!(
+            g2.kind,
+            GradientKind::SvgRadial {
+                cx: 5.0,
+                cy: 5.0,
+                r: 5.0,
+                fx: 4.0,
+                fy: 4.0,
+                fr: 0.0,
+                user_space: true
+            }
+        ));
+        assert_eq!(g2.spread, GradientSpread::Pad);
+        assert_eq!(g2.stops.len(), 2);
+        assert_eq!(g2.stops[0].color, Color(0, 128, 0, 255));
+        assert_eq!(g2.stops[1].position, Some(1.0));
+    }
+
+    #[test]
+    fn collect_svg_unresolved_url_fill_paints_nothing() {
+        let svg = TreeNode::new(element("svg", &[("viewBox", "0 0 10 10")]));
+        TreeNode::add_child(
+            &svg,
+            TreeNode::new(element(
+                "rect",
+                &[
+                    ("x", "1"),
+                    ("y", "1"),
+                    ("width", "8"),
+                    ("height", "8"),
+                    ("fill", "url(#missing)"),
+                ],
+            )),
+        );
+        let (snapshot, _refs) = DomSnapshot::from_tree(&svg);
+        let content = collect_svg(&snapshot, 0, ColorScheme::Light, Color::default()).unwrap();
+        assert_eq!(content.shapes[0].fill, Brush::Solid(Color(0, 0, 0, 0)));
+    }
+
+    #[test]
+    fn resolve_stroke_resolves_url_paint_servers() {
+        let mut gradients = HashMap::new();
+        gradients.insert(
+            "g".to_owned(),
+            Gradient {
+                kind: GradientKind::SvgLinear {
+                    x1: 0.0,
+                    y1: 0.0,
+                    x2: 1.0,
+                    y2: 0.0,
+                    user_space: false,
+                },
+                stops: vec![ColorStop {
+                    color: Color(255, 0, 0, 255),
+                    position: Some(0.0),
+                }],
+                spread: GradientSpread::Pad,
+            },
+        );
+        let stroke = resolve_stroke(
+            &element("path", &[("stroke", "url(#g)"), ("stroke-width", "2")]),
+            ColorScheme::Light,
+            Color::default(),
+            &gradients,
+            None,
+        )
+        .expect("gradient stroke");
+        assert!(stroke.gradient.is_some());
+        assert_eq!(stroke.width, 2.0);
+        // An unresolved reference paints nothing.
+        assert_eq!(
+            resolve_stroke(
+                &element("path", &[("stroke", "url(#nope)")]),
+                ColorScheme::Light,
+                Color::default(),
+                &HashMap::new(),
+                None,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn emit_commands_paints_gradient_brushes_for_fill_and_stroke() {
+        let shape = SvgShape {
+            path: path_from_d("M0 0 L10 0 L10 10 Z"),
+            fill: Brush::Gradient(Gradient {
+                kind: GradientKind::SvgLinear {
+                    x1: 0.0,
+                    y1: 0.0,
+                    x2: 1.0,
+                    y2: 0.0,
+                    user_space: false,
+                },
+                stops: vec![
+                    ColorStop {
+                        color: Color(255, 0, 0, 255),
+                        position: Some(0.0),
+                    },
+                    ColorStop {
+                        color: Color(0, 0, 255, 255),
+                        position: Some(1.0),
+                    },
+                ],
+                spread: GradientSpread::Pad,
+            }),
+            rule: FillRule::NonZero,
+            stroke: Some(SvgStroke {
+                color: Color(0, 0, 0, 255),
+                gradient: Some(Gradient {
+                    kind: GradientKind::SvgLinear {
+                        x1: 0.0,
+                        y1: 0.0,
+                        x2: 1.0,
+                        y2: 0.0,
+                        user_space: false,
+                    },
+                    stops: vec![ColorStop {
+                        color: Color(0, 255, 0, 255),
+                        position: Some(0.0),
+                    }],
+                    spread: GradientSpread::Pad,
+                }),
+                width: 2.0,
+                cap: StrokeCap::Butt,
+                join: StrokeJoin::Miter,
+                miter_limit: 4.0,
+                dash: None,
+                dash_offset: 0.0,
+            }),
+        };
+        let mut buf = Vec::new();
+        emit_commands(
+            &mut buf,
+            (0.0, 0.0, 10.0, 10.0),
+            false,
+            (0.0, 0.0, 10.0, 10.0),
+            std::slice::from_ref(&shape),
+            1.0,
+        );
+        let DrawCommand::Fill { paint, .. } = &buf[1] else {
+            panic!("expected fill");
+        };
+        assert!(matches!(paint.brush, Brush::Gradient(_)));
+        let DrawCommand::Fill {
+            paint: stroke_paint,
+            ..
+        } = &buf[2]
+        else {
+            panic!("expected stroke fill");
+        };
+        assert!(matches!(stroke_paint.brush, Brush::Gradient(_)));
     }
 
     #[test]

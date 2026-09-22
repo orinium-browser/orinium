@@ -13,9 +13,10 @@
 //! containers. Gradients, masks, `<defs>`/`<use>`, and text are out of scope.
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 use crate::engine::html::xml::XmlElement;
-use crate::engine::layouter::types::{Color, ColorScheme};
+use crate::engine::layouter::types::{Color, ColorScheme, Gradient};
 use crate::engine::renderer_model::{AffineTransform, FillRule, Path};
 use crate::engine::svg::{
     PaintState, SvgStroke, ViewBox, element_shape, numeric_presentation_value, parse_len,
@@ -69,6 +70,7 @@ pub fn rasterize(markup: &str, target: Option<(u32, u32)>) -> Result<RasterResul
     let height = vh.max(1.0) as u32;
 
     let base = viewbox_meet_transform(view_box.unwrap_or((0.0, 0.0, 0.0, 0.0)), vw, vh);
+    let gradients = HashMap::new();
     let mut rgba = vec![0u8; width as usize * height as usize * 4];
     for child in root.children() {
         process_element(
@@ -76,6 +78,7 @@ pub fn rasterize(markup: &str, target: Option<(u32, u32)>) -> Result<RasterResul
             base,
             1.0,
             PaintState::new(),
+            &gradients,
             width,
             height,
             &mut rgba,
@@ -112,11 +115,13 @@ fn viewport_len(el: &XmlElement, attr: &str, view_box: Option<ViewBox>, fallback
 /// group as a single layer. `paint` carries the inherited `fill`/`stroke`
 /// state that containers set for their descendants, mirroring the inline
 /// `collect_svg` walk.
+#[allow(clippy::too_many_arguments)]
 fn process_element(
     node: &NodeRef<XmlElement>,
     inherited: AffineTransform,
     opacity: f32,
     mut paint: PaintState,
+    gradients: &HashMap<String, Gradient>,
     width: u32,
     height: u32,
     rgba: &mut [u8],
@@ -129,12 +134,21 @@ fn process_element(
     };
     let element_opacity = numeric_presentation_value(&el.value, "opacity").unwrap_or(1.0);
     let opacity = opacity * element_opacity.clamp(0.0, 1.0);
-    paint.apply(&el.value, ColorScheme::Light, Color::default());
+    paint.apply(&el.value, ColorScheme::Light, Color::default(), gradients);
 
     match name.as_str() {
         "g" | "a" | "svg" | "symbol" => {
             for child in el.children() {
-                process_element(child, eff, opacity, paint.clone(), width, height, rgba)?;
+                process_element(
+                    child,
+                    eff,
+                    opacity,
+                    paint.clone(),
+                    gradients,
+                    width,
+                    height,
+                    rgba,
+                )?;
             }
         }
         "path" | "rect" | "circle" | "ellipse" | "polygon" | "polyline" | "line" => {
@@ -144,12 +158,15 @@ fn process_element(
             if path.commands().is_empty() {
                 return Ok(());
             }
-            let fill = with_alpha(
-                paint.fill.unwrap_or(Color(0, 0, 0, 255)),
-                opacity * paint.fill_opacity,
-            );
+            let fill = solid_fallback_paint(&paint, opacity);
             let stroke = paint.stroke.clone().map(|mut stroke| {
-                stroke.color = with_alpha(stroke.color, opacity * paint.stroke_opacity);
+                if stroke.gradient.is_some() {
+                    // The standalone rasterizer only paints solid strokes.
+                    stroke.gradient = None;
+                    stroke.color = with_alpha(stroke.color, opacity * paint.stroke_opacity);
+                } else {
+                    stroke.color = with_alpha(stroke.color, opacity * paint.stroke_opacity);
+                }
                 stroke
             });
             render_shape(
@@ -166,6 +183,20 @@ fn process_element(
         _ => {}
     }
     Ok(())
+}
+
+/// The standalone rasterizer renders gradients out of scope; a gradient paint
+/// falls back to its last stop's color so referenced shapes stay visible.
+fn solid_fallback_paint(paint: &PaintState, opacity: f32) -> Color {
+    if let Some(fill) = paint.fill {
+        return with_alpha(fill, opacity * paint.fill_opacity);
+    }
+    if let Some(gradient) = &paint.fill_gradient
+        && let Some(last) = gradient.stops.last()
+    {
+        return with_alpha(last.color, opacity * paint.fill_opacity);
+    }
+    Color(0, 0, 0, 255)
 }
 
 /// Fills `path` (expressed in viewBox coordinates by `eff`) into `rgba`,

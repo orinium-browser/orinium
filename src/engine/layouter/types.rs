@@ -373,6 +373,19 @@ pub enum CssClear {
 pub struct Gradient {
     pub kind: GradientKind,
     pub stops: Vec<ColorStop>,
+    /// How color stops are projected beyond the first/last offset.
+    pub spread: GradientSpread,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GradientSpread {
+    /// Colors clamp to the first/last stop (`spreadMethod: pad`).
+    #[default]
+    Pad,
+    /// The gradient repeats in both directions.
+    Repeat,
+    /// The gradient repeats mirrored.
+    Reflect,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -390,6 +403,30 @@ pub enum GradientKind {
         angle: f32,
         /// Center position as normalized (0..1) coordinates (default 0.5, 0.5).
         position: (f32, f32),
+    },
+    /// An SVG `<linearGradient>` paint server. In `objectBoundingBox` units the
+    /// coordinates are fractions of the painted shape's bounding box; in
+    /// `userSpaceOnUse` units they are absolute in the element's user space
+    /// (the viewBox space of the inline `<svg>`).
+    SvgLinear {
+        x1: f32,
+        y1: f32,
+        x2: f32,
+        y2: f32,
+        user_space: bool,
+    },
+    /// An SVG `<radialGradient>` paint server, with optional focal point
+    /// `(fx, fy)` and focal radius `fr`. Coordinates follow the same unit
+    /// convention as [`GradientKind::SvgLinear`] (the radius scales with the
+    /// larger of width/height for `objectBoundingBox`).
+    SvgRadial {
+        cx: f32,
+        cy: f32,
+        r: f32,
+        fx: f32,
+        fy: f32,
+        fr: f32,
+        user_space: bool,
     },
 }
 

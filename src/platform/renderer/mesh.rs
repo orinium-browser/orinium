@@ -11,8 +11,8 @@ use orinium_text::TextLayout;
 use smol_str::SmolStr;
 
 use crate::engine::layouter::types::{
-    Color, ColorStop, Gradient, GradientKind, LineHeight, RadialShape, RadialSizeKind,
-    TextFlowStyle, TextStyle,
+    Color, ColorStop, Gradient, GradientKind, GradientSpread, LineHeight, RadialShape,
+    RadialSizeKind, TextFlowStyle, TextStyle,
 };
 use crate::engine::renderer_model::{
     AffineTransform, Brush, DrawCommand, Image, Paint, Path, Rect,
@@ -335,12 +335,11 @@ impl MeshBuilder {
                 ];
 
                 match &gradient.kind {
-                    GradientKind::Linear { .. } => {
+                    GradientKind::Linear { .. } | GradientKind::SvgLinear { .. } => {
                         // A linear gradient is affine, so sampling it at the
                         // triangulated path's vertices is exact.
-                        let (dir_x, dir_y, min_p, max_p) =
-                            linear_gradient_extent(gradient, &logical_corners);
-                        let range = max_p - min_p;
+                        let (ax, ay, bx, by, denom) =
+                            linear_gradient_basis(gradient, &logical_corners);
                         for ring in &self.ring_scratch {
                             let count = clip_ring_to_rect(
                                 ring,
@@ -361,12 +360,12 @@ impl MeshBuilder {
                                 self.screen_width,
                                 self.screen_height,
                                 |sx, sy| {
-                                    let p = sx * dir_x + sy * dir_y;
-                                    let t = if range > 0.0 {
-                                        (p - min_p) / range
+                                    let t = if denom > 0.0 {
+                                        ((sx - ax) * bx + (sy - ay) * by) / denom
                                     } else {
                                         0.0
                                     };
+                                    let t = spread_t(gradient.spread, t);
                                     let mut c = sample_gradient_stops(&gradient.stops, t)
                                         .to_linear_f32_array();
                                     c[3] *= paint.opacity;
@@ -375,9 +374,11 @@ impl MeshBuilder {
                             );
                         }
                     }
-                    GradientKind::Radial { .. } => {
+                    GradientKind::Radial { .. } | GradientKind::SvgRadial { .. } => {
                         let (cx, cy, rx, ry) =
                             compute_radial_params(&gradient.kind, &logical_corners);
+                        let (svg_cx, svg_cy, svg_rx, svg_ry, svg_fx, svg_fy, svg_fr) =
+                            svg_radial_params(&gradient.kind, &logical_corners);
                         // Clip the path against a grid of cells covering the
                         // visible area. Interior grid vertices carry the
                         // gradient's interior colors, while cells clipped to the
@@ -412,7 +413,14 @@ impl MeshBuilder {
                                         self.screen_width,
                                         self.screen_height,
                                         |sx, sy| {
-                                            let t = color_at_point(cx, cy, rx, ry, sx, sy);
+                                            let t = match &gradient.kind {
+                                                GradientKind::SvgRadial { .. } => svg_radial_t(
+                                                    svg_cx, svg_cy, svg_rx, svg_ry, svg_fx, svg_fy,
+                                                    svg_fr, sx, sy,
+                                                ),
+                                                _ => color_at_point(cx, cy, rx, ry, sx, sy),
+                                            };
+                                            let t = spread_t(gradient.spread, t);
                                             let mut c = sample_gradient_stops(&gradient.stops, t)
                                                 .to_linear_f32_array();
                                             c[3] *= paint.opacity;
@@ -883,24 +891,170 @@ fn triangulate(poly: &[(f32, f32)], out: &mut Vec<[u32; 3]>) {
 // Gradients
 // --------------------------------
 
-/// Projection parameters of a linear gradient over the given (unclipped)
-/// corners: the gradient direction `(dir_x, dir_y)` and the min/max projection
-/// onto it. Returns zeros for non-linear gradients.
-fn linear_gradient_extent(gradient: &Gradient, corners: &[(f32, f32); 4]) -> (f32, f32, f32, f32) {
-    let GradientKind::Linear { angle } = &gradient.kind else {
-        return (0.0, 0.0, 0.0, 0.0);
-    };
-    let rad = angle.to_radians();
-    let dir_x = rad.sin();
-    let dir_y = -rad.cos();
-    let mut min_p = f32::INFINITY;
-    let mut max_p = f32::NEG_INFINITY;
-    for (cx, cy) in corners {
-        let p = cx * dir_x + cy * dir_y;
-        min_p = min_p.min(p);
-        max_p = max_p.max(p);
+/// Affine sampling basis for a linear gradient: given a vertex `(sx, sy)`, the
+/// gradient parameter is `t = ((sx - ax) * bx + (sy - ay) * by) / denom`.
+///
+/// For CSS gradients this reproduces the extent-normalized projection; for SVG
+/// gradients the basis is the explicit `(x1, y1) -> (x2, y2)` line, with
+/// `objectBoundingBox` fractions resolved against the painted shape's bbox.
+///
+/// Returns `denom = 0` for degenerate gradients (zero length or zero extent).
+fn linear_gradient_basis(
+    gradient: &Gradient,
+    corners: &[(f32, f32); 4],
+) -> (f32, f32, f32, f32, f32) {
+    let (min_x, min_y) = (corners[0].0, corners[0].1);
+    let w = corners[2].0 - corners[0].0;
+    let h = corners[1].1 - corners[0].1;
+    match &gradient.kind {
+        GradientKind::Linear { angle } => {
+            let rad = angle.to_radians();
+            let (dir_x, dir_y) = (rad.sin(), -rad.cos());
+            let mut min_p = f32::INFINITY;
+            let mut max_p = f32::NEG_INFINITY;
+            for (cx, cy) in corners {
+                let p = cx * dir_x + cy * dir_y;
+                min_p = min_p.min(p);
+                max_p = max_p.max(p);
+            }
+            let range = max_p - min_p;
+            if range > 0.0 {
+                // `a` lies on the projection axis so that dot(p - a, dir) is the
+                // signed projection; dividing by `range` normalizes to [0, 1].
+                (
+                    dir_x * min_p,
+                    dir_y * min_p,
+                    dir_x / range,
+                    dir_y / range,
+                    1.0,
+                )
+            } else {
+                (0.0, 0.0, 0.0, 0.0, 0.0)
+            }
+        }
+        GradientKind::SvgLinear {
+            x1,
+            y1,
+            x2,
+            y2,
+            user_space,
+        } => {
+            let (ax, ay) = if *user_space {
+                (*x1, *y1)
+            } else {
+                (min_x + x1 * w, min_y + y1 * h)
+            };
+            let (bx, by) = if *user_space {
+                (x2 - x1, y2 - y1)
+            } else {
+                ((x2 - x1) * w, (y2 - y1) * h)
+            };
+            let denom = bx * bx + by * by;
+            (ax, ay, bx, by, denom)
+        }
+        _ => (0.0, 0.0, 0.0, 0.0, 0.0),
     }
-    (dir_x, dir_y, min_p, max_p)
+}
+
+/// Apply a gradient's spread method to a raw parameter, producing a value in
+/// `[0, 1)` (or exactly `1.0` for the upper Pad edge).
+fn spread_t(spread: GradientSpread, t: f32) -> f32 {
+    match spread {
+        GradientSpread::Pad => t.clamp(0.0, 1.0),
+        GradientSpread::Repeat => t - t.floor(),
+        GradientSpread::Reflect => {
+            let n = t.floor();
+            let frac = t - n;
+            if (n as i64).rem_euclid(2) == 0 {
+                frac
+            } else {
+                1.0 - frac
+            }
+        }
+    }
+}
+
+/// Resolve an SVG radial gradient's geometry against the painted shape's bbox.
+/// Returns `(cx, cy, rx, ry, fx, fy, fr)` in the mesh's canvas coordinates.
+fn svg_radial_params(
+    kind: &GradientKind,
+    corners: &[(f32, f32); 4],
+) -> (f32, f32, f32, f32, f32, f32, f32) {
+    let GradientKind::SvgRadial {
+        cx,
+        cy,
+        r,
+        fx,
+        fy,
+        fr,
+        user_space,
+    } = kind
+    else {
+        return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    };
+    if *user_space {
+        (*cx, *cy, *r, *r, *fx, *fy, *fr)
+    } else {
+        let (min_x, min_y) = (corners[0].0, corners[0].1);
+        let w = corners[2].0 - corners[0].0;
+        let h = corners[1].1 - corners[0].1;
+        let scale = w.max(h);
+        (
+            min_x + cx * w,
+            min_y + cy * h,
+            r * w,
+            r * h,
+            min_x + fx * w,
+            min_y + fy * h,
+            fr * scale,
+        )
+    }
+}
+
+/// Gradient parameter `t` for an SVG radial gradient at a mesh point.
+///
+/// Concentric gradients use the exact ellipse-normalized distance. Focal
+/// offsets are approximated over a circle: `t` interpolates the ray from the
+/// focal point between the focal circle (radius `fr`) and the outer ring.
+#[allow(clippy::too_many_arguments)]
+fn svg_radial_t(
+    cx: f32,
+    cy: f32,
+    rx: f32,
+    ry: f32,
+    fx: f32,
+    fy: f32,
+    fr: f32,
+    sx: f32,
+    sy: f32,
+) -> f32 {
+    if rx <= 0.0 || ry <= 0.0 {
+        return 0.0;
+    }
+    if (fx - cx).abs() <= f32::EPSILON && (fy - cy).abs() <= f32::EPSILON {
+        let t = ((sx - cx) / rx).powi(2) + ((sy - cy) / ry).powi(2);
+        return t.max(0.0).sqrt();
+    }
+    let dx = sx - fx;
+    let dy = sy - fy;
+    let d = (dx * dx + dy * dy).sqrt();
+    if d <= f32::EPSILON {
+        return 0.0;
+    }
+    let ux = dx / d;
+    let uy = dy / d;
+    let fdx = cx - fx;
+    let fdy = cy - fy;
+    let b = ux * fdx + uy * fdy;
+    let disc = b * b + rx * rx - (fdx * fdx + fdy * fdy);
+    if disc < 0.0 {
+        return 0.0;
+    }
+    let l = b + disc.sqrt();
+    if l <= fr {
+        return 0.0;
+    }
+    ((d - fr) / (l - fr)).max(0.0)
 }
 
 /// Compute the 4 corner colors for a linear gradient rectangle.
@@ -1602,6 +1756,7 @@ mod tests {
     #[test]
     fn test_linear_gradient_extent_clipped() {
         let gradient = Gradient {
+            spread: GradientSpread::default(),
             kind: GradientKind::Linear { angle: 90.0 },
             stops: vec![
                 ColorStop {
@@ -1633,6 +1788,7 @@ mod tests {
     #[test]
     fn test_linear_gradient_extent_unclipped() {
         let gradient = Gradient {
+            spread: GradientSpread::default(),
             kind: GradientKind::Linear { angle: 90.0 },
             stops: vec![
                 ColorStop {
@@ -1796,6 +1952,7 @@ mod tests {
         let mut builder = MeshBuilder::new(800.0, 600.0, 1.0);
         let mut text: Option<&mut dyn TextLayoutSource> = Some(&mut NoText);
         let gradient = Gradient {
+            spread: GradientSpread::default(),
             kind: GradientKind::Radial {
                 shape: RadialShape::Circle,
                 size: RadialSizeKind::FarthestCorner,
@@ -1840,6 +1997,7 @@ mod tests {
         let mut builder = MeshBuilder::new(800.0, 600.0, 1.0);
         let mut text: Option<&mut dyn TextLayoutSource> = Some(&mut NoText);
         let gradient = Gradient {
+            spread: GradientSpread::default(),
             kind: GradientKind::Linear { angle: 90.0 },
             stops: vec![
                 ColorStop {
@@ -1907,6 +2065,7 @@ mod tests {
         let mut builder = MeshBuilder::new(400.0, 200.0, 1.0);
         let mut text: Option<&mut dyn TextLayoutSource> = Some(&mut NoText);
         let gradient = Gradient {
+            spread: GradientSpread::default(),
             kind: GradientKind::Linear { angle: 90.0 },
             stops: vec![
                 ColorStop {
@@ -1940,6 +2099,166 @@ mod tests {
             }
         }
         assert!(saw_left && saw_right, "expected vertices at both edges");
+    }
+
+    #[test]
+    fn test_spread_t_pad_repeat_reflect() {
+        assert_eq!(spread_t(GradientSpread::Pad, -1.0), 0.0);
+        assert_eq!(spread_t(GradientSpread::Pad, 0.5), 0.5);
+        assert_eq!(spread_t(GradientSpread::Pad, 1.5), 1.0);
+        assert!((spread_t(GradientSpread::Repeat, 1.75) - 0.75).abs() < 1e-6);
+        assert!((spread_t(GradientSpread::Repeat, -0.25) - 0.75).abs() < 1e-6);
+        assert!((spread_t(GradientSpread::Reflect, 1.25) - 0.75).abs() < 1e-6);
+        assert!((spread_t(GradientSpread::Reflect, 1.75) - 0.25).abs() < 1e-6);
+        assert!((spread_t(GradientSpread::Reflect, 2.25) - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_svg_linear_object_bounding_box_edge_colors() {
+        // An SVG linear gradient in objectBoundingBox units: x2=1 spans the
+        // full shape, so the rect's left edge is the first stop (red) and the
+        // right edge is the last stop (blue).
+        let mut builder = MeshBuilder::new(400.0, 200.0, 1.0);
+        let mut text: Option<&mut dyn TextLayoutSource> = Some(&mut NoText);
+        let gradient = Gradient {
+            spread: GradientSpread::default(),
+            kind: GradientKind::SvgLinear {
+                x1: 0.0,
+                y1: 0.5,
+                x2: 1.0,
+                y2: 0.5,
+                user_space: false,
+            },
+            stops: vec![
+                ColorStop {
+                    color: Color(255, 0, 0, 255),
+                    position: Some(0.0),
+                },
+                ColorStop {
+                    color: Color(0, 0, 255, 255),
+                    position: Some(1.0),
+                },
+            ],
+        };
+        builder.build(
+            &[gradient_fill(rect_path(0.0, 0.0, 200.0, 100.0), gradient)],
+            &mut text,
+        );
+        assert!(!builder.mesh.vertices.is_empty());
+        let mut saw_left = false;
+        let mut saw_right = false;
+        for v in builder.mesh.vertices {
+            let sx = (v.position[0] + 1.0) / 2.0 * 400.0;
+            if sx < 0.5 {
+                saw_left = true;
+                assert!(v.color[0] > 0.8, "left edge not red: {:?}", v.color);
+                assert!(v.color[2] < 0.2, "left edge has blue: {:?}", v.color);
+            }
+            if sx > 199.5 {
+                saw_right = true;
+                assert!(v.color[0] < 0.2, "right edge has red: {:?}", v.color);
+                assert!(v.color[2] > 0.8, "right edge not blue: {:?}", v.color);
+            }
+        }
+        assert!(saw_left && saw_right, "expected vertices at both edges");
+    }
+
+    #[test]
+    fn test_svg_linear_spread_repeat_cycles_through_stops() {
+        // x2 = 0.5 makes the gradient line span only the left half of an
+        // objectBoundingBox; spread Repeat then replays the same ramp across
+        // the right half, so x=100 and x=200 both land on the first stop.
+        let mut builder = MeshBuilder::new(400.0, 200.0, 1.0);
+        let mut text: Option<&mut dyn TextLayoutSource> = Some(&mut NoText);
+        let gradient = Gradient {
+            spread: GradientSpread::Repeat,
+            kind: GradientKind::SvgLinear {
+                x1: 0.0,
+                y1: 0.5,
+                x2: 0.5,
+                y2: 0.5,
+                user_space: false,
+            },
+            stops: vec![
+                ColorStop {
+                    color: Color(255, 0, 0, 255),
+                    position: Some(0.0),
+                },
+                ColorStop {
+                    color: Color(0, 0, 255, 255),
+                    position: Some(1.0),
+                },
+            ],
+        };
+        builder.build(
+            &[gradient_fill(rect_path(0.0, 0.0, 200.0, 100.0), gradient)],
+            &mut text,
+        );
+        assert!(!builder.mesh.vertices.is_empty());
+        let mut saw_left = false;
+        let mut saw_right = false;
+        for v in builder.mesh.vertices {
+            let sx = (v.position[0] + 1.0) / 2.0 * 400.0;
+            if sx < 0.5 {
+                saw_left = true;
+                assert!(v.color[0] > 0.8, "x=0 not red: {:?}", v.color);
+            }
+            if sx > 199.5 {
+                saw_right = true;
+                assert!(v.color[0] > 0.8, "x=200 not cycled to red: {:?}", v.color);
+                assert!(v.color[2] < 0.2, "x=200 leaked blue: {:?}", v.color);
+            }
+        }
+        assert!(saw_left && saw_right, "expected vertices at both edges");
+    }
+
+    #[test]
+    fn test_svg_radial_object_bounding_box_center_and_edge() {
+        // A full-radius concentric SvgRadial in objectBoundingBox units: the
+        // center carries the first stop (red) and the corners the last (blue).
+        let mut builder = MeshBuilder::new(400.0, 200.0, 1.0);
+        let mut text: Option<&mut dyn TextLayoutSource> = Some(&mut NoText);
+        let gradient = Gradient {
+            spread: GradientSpread::default(),
+            kind: GradientKind::SvgRadial {
+                cx: 0.5,
+                cy: 0.5,
+                r: 0.5,
+                fx: 0.5,
+                fy: 0.5,
+                fr: 0.0,
+                user_space: false,
+            },
+            stops: vec![
+                ColorStop {
+                    color: Color(255, 0, 0, 255),
+                    position: Some(0.0),
+                },
+                ColorStop {
+                    color: Color(0, 0, 255, 255),
+                    position: Some(1.0),
+                },
+            ],
+        };
+        builder.build(
+            &[gradient_fill(rect_path(0.0, 0.0, 200.0, 100.0), gradient)],
+            &mut text,
+        );
+        assert!(!builder.mesh.vertices.is_empty());
+        let mut saw_center = false;
+        for v in builder.mesh.vertices {
+            let sx = (v.position[0] + 1.0) / 2.0 * 400.0;
+            let sy = -(v.position[1] - 1.0) / 2.0 * 200.0;
+            let dx = sx - 100.0;
+            let dy = sy - 50.0;
+            // Grid-cell vertices nearest the center (the 8×4px cell grid does
+            // not land exactly on it) still stay close to the first stop.
+            if dx * dx + dy * dy < 25.0 {
+                saw_center = true;
+                assert!(v.color[0] > 0.5, "near center not red-ish: {:?}", v.color);
+            }
+        }
+        assert!(saw_center, "expected a center vertex");
     }
 
     #[test]

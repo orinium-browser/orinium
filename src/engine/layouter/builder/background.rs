@@ -4,7 +4,7 @@ use super::{resolve_css_color, resolve_css_len};
 use crate::engine::layouter::types::{
     Background, BackgroundDimension, BackgroundOffset, BackgroundPosition, BackgroundPositionAxis,
     BackgroundRepeat, BackgroundSize, Color, ColorScheme, ColorStop, ContainerStyle, Gradient,
-    GradientKind, RadialShape, RadialSizeKind, TextFlowStyle, TextStyle,
+    GradientKind, GradientSpread, RadialShape, RadialSizeKind, TextFlowStyle, TextStyle,
 };
 
 use ui_layout::Length;
@@ -447,6 +447,7 @@ fn parse_linear_gradient(
             angle: angle.unwrap_or(180.0),
         },
         stops,
+        spread: GradientSpread::default(),
     })
 }
 
@@ -666,6 +667,7 @@ fn parse_radial_gradient(
             position,
         },
         stops,
+        spread: GradientSpread::default(),
     })
 }
 
@@ -854,6 +856,7 @@ fn parse_conic_gradient(
     Some(Gradient {
         kind: GradientKind::Conic { angle, position },
         stops,
+        spread: GradientSpread::default(),
     })
 }
 

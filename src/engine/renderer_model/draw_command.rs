@@ -26,7 +26,7 @@ pub enum FillRule {
 }
 
 /// A fill source: a solid color or a gradient.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Brush {
     Solid(Color),
     Gradient(Gradient),
