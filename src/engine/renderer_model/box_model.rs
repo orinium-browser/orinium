@@ -53,21 +53,21 @@ fn push_transform(cmd_buf: &mut Vec<DrawCommand>, dx: f32, dy: f32) -> bool {
 /// All coordinates are expressed in the current node's parent-content space
 /// (the same space its `border_box` coordinates live in).
 #[derive(Default, Clone, Copy)]
-struct StickyViewport {
+pub struct StickyViewport {
     /// Top-left corner of the scrollport's visible region, scroll offset already
     /// applied. The renderer's scroll transform is `translate(scroll_x,
     /// -scroll_y)`, so in the scrollport's content space this is
     /// `(padding.left - scroll_x, padding.top + scroll_y)`; the value is rebased
     /// into each descendant's content space.
-    top_left: (f32, f32),
+    pub top_left: (f32, f32),
     /// Visible (padding-box) size of the nearest scrollport.
-    size: (f32, f32),
+    pub size: (f32, f32),
 }
 
 /// Whether the node scrolls its own content and thus establishes a scrollport
 /// for its subtree. The document root always does, because the UI layer scrolls
 /// it directly without necessarily setting its scroll flags.
-fn is_scrollport(kind: &NodeKind) -> bool {
+pub fn is_scrollport(kind: &NodeKind) -> bool {
     match kind {
         NodeKind::Container {
             scroll_x, scroll_y, ..
@@ -90,7 +90,7 @@ fn is_scrollport(kind: &NodeKind) -> bool {
 /// shifted inward just enough to keep each specified edge inside the
 /// scrollport's "sticky view rectangle" (the visible region, whose top-left is
 /// `viewport.top_left`), while staying within the containing block.
-fn sticky_offset(
+pub fn sticky_offset(
     edges: &EdgeOption,
     box_rect: &Rect,
     viewport: StickyViewport,

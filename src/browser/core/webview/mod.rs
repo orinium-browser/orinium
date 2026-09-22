@@ -32,7 +32,7 @@ use crate::engine::{
         types::{InfoNode, NodeKind},
     },
     origin::Origin,
-    renderer_model::Image,
+    renderer_model::{Image, StickyViewport, is_scrollport, sticky_offset},
     tree::{NodeRef, TreeNode},
 };
 use crate::platform::{locale, renderer::text_measurer::PlatformTextMeasurer};
@@ -1730,8 +1730,13 @@ impl WebView {
             return;
         };
 
-        let layout_metrics =
-            collect_js_layout_metrics(layout, info, &self.layout_dom_refs, &self.js_dom_ids);
+        let layout_metrics = collect_js_layout_metrics(
+            layout,
+            info,
+            &self.layout_dom_refs,
+            &self.js_dom_ids,
+            viewport,
+        );
         let computed_styles =
             collect_js_computed_styles(layout, info, &self.layout_dom_refs, &self.js_dom_ids);
         if let Some(processor) = self.js_processor.as_ref() {
@@ -1817,13 +1822,28 @@ impl WebView {
 
 /// Builds the geometry snapshot used by DOM measurement APIs from the same
 /// layout boxes and scroll offsets consumed by painting and hit testing.
+///
+/// Sticky-position paint offsets are applied exactly like the renderer applies
+/// them (same scrollport resolution), so `getBoundingClientRect()` agrees with
+/// what is drawn.
 fn collect_js_layout_metrics(
     layout: &LayoutNode,
     info: &InfoNode,
     dom_refs: &[Weak<RefCell<TreeNode<HtmlNodeType>>>],
     js_dom_ids: &HashMap<usize, u64>,
+    viewport: (f32, f32),
 ) -> HashMap<u64, JsLayoutMetrics> {
     let mut metrics = HashMap::new();
+    let (scroll_x, scroll_y) = info.kind.scroll_offsets();
+    let root_viewport = StickyViewport {
+        top_left: (-scroll_x, scroll_y),
+        size: viewport,
+    };
+    let containing = layout
+        .layout_box
+        .iter()
+        .next()
+        .map_or((0.0, 0.0), |b| (b.content_box.width, b.content_box.height));
     collect_js_layout_metrics_inner(
         layout,
         info,
@@ -1831,11 +1851,16 @@ fn collect_js_layout_metrics(
         js_dom_ids,
         (0.0, 0.0),
         (0.0, 0.0),
+        true,
+        root_viewport,
+        containing,
+        viewport,
         &mut metrics,
     );
     metrics
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_js_layout_metrics_inner(
     layout: &LayoutNode,
     info: &InfoNode,
@@ -1843,6 +1868,10 @@ fn collect_js_layout_metrics_inner(
     js_dom_ids: &HashMap<usize, u64>,
     parent_content_origin: (f32, f32),
     inherited_scroll: (f32, f32),
+    is_root: bool,
+    sticky_viewport: StickyViewport,
+    containing: (f32, f32),
+    viewport_size: (f32, f32),
     metrics: &mut HashMap<u64, JsLayoutMetrics>,
 ) {
     let is_fixed = layout.style.position.kind == ui_layout::Position::Fixed;
@@ -1861,15 +1890,33 @@ fn collect_js_layout_metrics_inner(
         )
     };
 
+    // Shift sticky boxes so each specified inset stays within the visible area
+    // of the nearest scrollport, matching the renderer's paint offset. Fixed
+    // boxes are positioned relative to the viewport and never stick.
+    let is_sticky = layout.style.position.kind == ui_layout::Position::Sticky;
+    let sticky_push = if is_sticky && !is_fixed {
+        layout
+            .layout_box
+            .iter()
+            .next()
+            .and_then(|bm| {
+                bm.sticky_edges
+                    .map(|edges| sticky_offset(&edges, &bm.border_box, sticky_viewport, containing))
+            })
+            .unwrap_or((0.0, 0.0))
+    } else {
+        (0.0, 0.0)
+    };
+
     let boxes: Vec<_> = layout.layout_box.iter().collect();
     if let Some(first) = boxes.first() {
-        let mut page_left = parent_content_origin.0 + first.border_box.x;
-        let mut page_top = parent_content_origin.1 + first.border_box.y;
+        let mut page_left = parent_content_origin.0 + first.border_box.x + sticky_push.0;
+        let mut page_top = parent_content_origin.1 + first.border_box.y + sticky_push.1;
         let mut page_right = page_left + first.border_box.width;
         let mut page_bottom = page_top + first.border_box.height;
         for model in boxes.iter().skip(1) {
-            let left = parent_content_origin.0 + model.border_box.x;
-            let top = parent_content_origin.1 + model.border_box.y;
+            let left = parent_content_origin.0 + model.border_box.x + sticky_push.0;
+            let top = parent_content_origin.1 + model.border_box.y + sticky_push.1;
             page_left = page_left.min(left);
             page_top = page_top.min(top);
             page_right = page_right.max(left + model.border_box.width);
@@ -1901,10 +1948,48 @@ fn collect_js_layout_metrics_inner(
             }
         }
 
-        // TODO: Apply CSS transforms and sticky-position paint offsets to DOMRect geometry.
+        // Sticky viewport state for this subtree, rebased into each child's
+        // parent-content space exactly as the renderer does: a node that
+        // scrolls its own content (or the root) becomes the scrollport for its
+        // descendants; otherwise the inherited visible region shifts by the
+        // node's content-box offset.
+        let child_viewport = if is_root || is_scrollport(&info.kind) {
+            let bm = layout.layout_box.iter().next();
+            StickyViewport {
+                top_left: bm.as_ref().map_or((0.0, 0.0), |b| {
+                    (
+                        b.padding_box.x - b.content_box.x - own_scroll.0,
+                        b.padding_box.y - b.content_box.y + own_scroll.1,
+                    )
+                }),
+                size: if is_root {
+                    viewport_size
+                } else {
+                    bm.map_or(viewport_size, |b| {
+                        (b.padding_box.width, b.padding_box.height)
+                    })
+                },
+            }
+        } else {
+            let bm = layout.layout_box.iter().next();
+            StickyViewport {
+                top_left: bm.map_or(sticky_viewport.top_left, |b| {
+                    (
+                        sticky_viewport.top_left.0 - b.content_box.x,
+                        sticky_viewport.top_left.1 - b.content_box.y,
+                    )
+                }),
+                size: sticky_viewport.size,
+            }
+        };
+        let child_containing = layout
+            .layout_box
+            .iter()
+            .next()
+            .map_or(containing, |b| (b.content_box.width, b.content_box.height));
         let child_origin = (
-            parent_content_origin.0 + first.content_box.x,
-            parent_content_origin.1 + first.content_box.y,
+            parent_content_origin.0 + first.content_box.x + sticky_push.0,
+            parent_content_origin.1 + first.content_box.y + sticky_push.1,
         );
         for (child_layout, child_info) in layout.children.iter().zip(&info.children) {
             if let Some(child_layout) = child_layout.node() {
@@ -1915,6 +2000,10 @@ fn collect_js_layout_metrics_inner(
                     js_dom_ids,
                     child_origin,
                     child_scroll,
+                    false,
+                    child_viewport,
+                    child_containing,
+                    viewport_size,
                     metrics,
                 );
             }
@@ -3037,7 +3126,8 @@ mod tests {
             .push(scrollable_info(Some(0), false, 0.0));
 
         let js_dom_ids = HashMap::from([(Rc::as_ptr(&target) as usize, 42)]);
-        let measurements = collect_js_layout_metrics(&root, &root_info, &dom_refs, &js_dom_ids);
+        let measurements =
+            collect_js_layout_metrics(&root, &root_info, &dom_refs, &js_dom_ids, (800.0, 600.0));
         assert_eq!(
             measurements.get(&42),
             Some(&JsLayoutMetrics {
@@ -3051,6 +3141,74 @@ mod tests {
                 rect_top: 53.0,
                 rect_width: 120.0,
                 rect_height: 80.0,
+            })
+        );
+    }
+
+    #[test]
+    fn dom_layout_metrics_apply_sticky_paint_offsets() {
+        let mut parser = HtmlParser::new(r#"<div id="target"></div>"#);
+        let dom = Rc::new(parser.parse());
+        let target = dom.get_element_by_id("target").unwrap();
+        let dom_refs = vec![Rc::downgrade(&target)];
+
+        // A `position: sticky; top: 10px` header whose natural position is 5px
+        // into a tall document. The renderer pushes it down to `top: 10px`
+        // relative to the root scrollport, so the DOM rect must show 10, not 5.
+        let sticky_edges = Some(ui_layout::EdgeOption {
+            top: Some(10.0),
+            ..Default::default()
+        });
+        let sticky_rect = |y| ui_layout::Rect {
+            x: 0.0,
+            y,
+            width: 60.0,
+            height: 40.0,
+        };
+        let mut sticky_layout = LayoutNode::new(ui_layout::Style {
+            position: ui_layout::PositionStyle {
+                kind: ui_layout::Position::Sticky,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        sticky_layout.layout_box = ui_layout::LayoutBox::BlockBox(ui_layout::BoxModel {
+            sticky_edges,
+            border_box: sticky_rect(5.0),
+            padding_box: sticky_rect(5.0),
+            content_box: sticky_rect(5.0),
+            children_box: sticky_rect(5.0),
+        });
+        let mut root_layout =
+            LayoutNode::with_children(ui_layout::Style::default(), [sticky_layout]);
+        root_layout.layout_box = layout_box(0.0, 3000.0, 3000.0);
+
+        let mut root_info = scrollable_info(None, true, 0.0);
+        root_info
+            .children
+            .push(scrollable_info(Some(0), false, 0.0));
+
+        let js_dom_ids = HashMap::from([(Rc::as_ptr(&target) as usize, 42)]);
+        let measurements = collect_js_layout_metrics(
+            &root_layout,
+            &root_info,
+            &dom_refs,
+            &js_dom_ids,
+            (800.0, 600.0),
+        );
+        assert_eq!(
+            measurements.get(&42),
+            Some(&JsLayoutMetrics {
+                offset_left: 0.0,
+                offset_top: 5.0,
+                offset_width: 60.0,
+                offset_height: 40.0,
+                client_width: 60.0,
+                client_height: 40.0,
+                rect_left: 0.0,
+                rect_top: 10.0,
+                rect_width: 60.0,
+                rect_height: 40.0,
             })
         );
     }

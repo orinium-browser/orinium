@@ -5,7 +5,7 @@ mod draw_command;
 mod geom;
 mod path;
 
-pub use box_model::generate_draw_commands;
+pub use box_model::{StickyViewport, generate_draw_commands, is_scrollport, sticky_offset};
 pub use draw_command::{Brush, DrawCommand, FillRule, Image, Paint, SystemUiKind};
 pub use geom::{AffineTransform, Rect};
 pub use path::{
