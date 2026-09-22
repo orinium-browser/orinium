@@ -709,12 +709,27 @@ impl Tab {
     }
 
     pub fn move_to(&mut self, href: &str) {
-        let base_url = match self.base_url.as_ref() {
-            Some(u) => u,
-            None => return,
+        let Some(base_url) = self.base_url.clone() else {
+            return;
         };
 
-        let url = super::webview::resolve_url(base_url, href).unwrap();
+        let url = super::webview::resolve_url(&base_url, href).unwrap();
+
+        // Same-document anchor navigation (`<a href="#id">`): scroll in place
+        // instead of reloading the page, and record the new URL with a history
+        // entry like a real browser does.
+        if same_document_navigation(self.document_url.as_ref(), &url) {
+            if self.document_url.as_ref() != Some(&url)
+                && let Some(previous) = self.document_url.clone()
+            {
+                self.history.push(previous);
+            }
+            self.document_url = Some(url.clone());
+            if let Some(webview) = self.webview.as_mut() {
+                webview.scroll_to_fragment(&url);
+            }
+            return;
+        }
 
         // navigate と同じ扱い
         self.navigate(url)
@@ -794,6 +809,24 @@ fn headers_allow_cors(headers: &[(String, String)], initiator: &Origin) -> bool 
         .is_some_and(|(_, value)| value == "*" || value == &serialized)
 }
 
+/// Returns whether `next` differs from `current` only in its URL fragment,
+/// i.e. navigating to `next` stays on the same already-loaded document.
+fn same_document_navigation(current: Option<&Url>, next: &Url) -> bool {
+    let Some(current) = current else {
+        return false;
+    };
+    fn identity(url: &Url) -> (String, Option<String>, Option<u16>, String, Option<String>) {
+        (
+            url.scheme().to_string(),
+            url.host_str().map(str::to_string),
+            url.port(),
+            url.path().to_string(),
+            url.query().map(str::to_string),
+        )
+    }
+    identity(next) == identity(current)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -849,6 +882,38 @@ mod tests {
             Some("https://example.test/a")
         );
         assert!(!tab.can_go_back());
+    }
+
+    #[test]
+    fn fragment_only_url_change_is_a_same_document_navigation() {
+        assert!(same_document_navigation(
+            Some(&url("https://example.test/a#one")),
+            &url("https://example.test/a#two"),
+        ));
+        assert!(same_document_navigation(
+            Some(&url("https://example.test/a?q=1#one")),
+            &url("https://example.test/a?q=1#two"),
+        ));
+        assert!(same_document_navigation(
+            Some(&url("https://example.test/a")),
+            &url("https://example.test/a"),
+        ));
+        assert!(!same_document_navigation(
+            Some(&url("https://example.test/a")),
+            &url("https://example.test/b"),
+        ));
+        assert!(!same_document_navigation(
+            Some(&url("https://www.example.test/a#one")),
+            &url("https://example.test/a#one"),
+        ));
+        assert!(!same_document_navigation(
+            Some(&url("https://example.test/a?q=1")),
+            &url("https://example.test/a?q=2#x"),
+        ));
+        assert!(!same_document_navigation(
+            None,
+            &url("https://example.test/a#x")
+        ));
     }
 
     #[test]

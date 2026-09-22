@@ -1710,27 +1710,23 @@ impl WebView {
         }
         self.position_layout_if_needed();
 
-        let fragment_target =
-            if fragment_layout_is_ready(self.fragment_ready_version, self.layout_applied_version) {
-                self.pending_fragment_scroll
-                    .as_deref()
-                    .and_then(|fragment| {
-                        find_fragment_target_dom_id(&self.layout_dom_refs, fragment)
-                    })
-            } else {
-                None
-            };
-
-        let Some((layout, info)) = self.layout_and_info.as_mut() else {
-            return;
-        };
-
-        if fragment_target
-            .is_some_and(|target| apply_fragment_scroll(layout, info, target, viewport.1))
+        if fragment_layout_is_ready(self.fragment_ready_version, self.layout_applied_version)
+            && let Some((layout, info)) = self.layout_and_info.as_mut()
+            && fragment_scroll_update(
+                layout,
+                info,
+                &self.layout_dom_refs,
+                self.pending_fragment_scroll.as_deref(),
+                viewport.1,
+            )
         {
             self.pending_fragment_scroll = None;
             self.needs_redraw = true;
         }
+
+        let Some((layout, info)) = self.layout_and_info.as_mut() else {
+            return;
+        };
 
         let layout_metrics =
             collect_js_layout_metrics(layout, info, &self.layout_dom_refs, &self.js_dom_ids);
@@ -1743,6 +1739,33 @@ impl WebView {
             });
             self.pending_js_tasks += 1;
         }
+    }
+
+    /// Scrolls the already-loaded document to the fragment in `url` without
+    /// reloading it (same-document anchor navigation, e.g. `<a href="#id">`).
+    ///
+    /// The page stays loaded and only the scroll position and URL change; an
+    /// empty fragment scrolls back to the top of the document. Fragments are
+    /// percent-decoded before matching, so `#my%20id` reaches
+    /// `<div id="my id">`.
+    ///
+    /// The current document URL is recorded so page scripts (`location.hash`,
+    /// `location.href`) and the address bar reflect the new location.
+    pub fn scroll_to_fragment(&mut self, url: &Url) {
+        if let Some(info) = self.docment_info.as_mut() {
+            info.document_url = url.clone();
+        }
+        if let Some(processor) = self.js_processor.as_ref() {
+            processor.send(JsTask::SetDocumentUrl {
+                url: url.to_string(),
+            });
+            self.pending_js_tasks += 1;
+        }
+        self.pending_fragment_scroll = Some(url.fragment().unwrap_or("").to_string());
+        // The document is already laid out; do not wait for a fresh styling
+        // pass before revealing the fragment.
+        self.fragment_ready_version = Some(self.layout_applied_version);
+        self.needs_redraw = true;
     }
 
     /// 現在描画可能な Layout / Info を返す（なければ None）
@@ -2235,75 +2258,160 @@ fn apply_fragment_scroll(
     target: NodeId,
     viewport_height: f32,
 ) -> bool {
-    let Some(target_y) = fragment_target_y(layout, info, target, 0.0) else {
-        return false;
-    };
-    set_first_vertical_scroll_offset(layout, info, target_y, viewport_height)
+    scroll_to_fragment_target(layout, info, target, viewport_height).is_some()
 }
 
-fn fragment_target_y(
+/// Scrolls the target element into view inside every scrollable ancestor on
+/// its path. Only containers that actually scroll (their `scroll_x`/`scroll_y`
+/// flags are set, e.g. a scrollable `body` or an `overflow: auto` box) move;
+/// the document root and other un-flagged boxes stay put, so the page is never
+/// force-scrolled as a whole.
+///
+/// Each container scrolls by only what its own view still needs, after the
+/// scroll applied by every scrollable container below it. The target therefore
+/// stays inside every ancestor's clip port instead of being scrolled out of
+/// view by the accumulated displacements.
+///
+/// Returns the target's border-box top in this node's content space after this
+/// node's and its descendants' scroll offsets are applied; `None` when the
+/// target is not part of this subtree.
+fn scroll_to_fragment_target(
     layout: &LayoutNode,
-    info: &InfoNode,
+    info: &mut InfoNode,
     target: NodeId,
-    parent_content_y: f32,
+    viewport_height: f32,
 ) -> Option<f32> {
     let model = layout.layout_box.iter().next();
     if info.dom_id == Some(target) {
-        return model.map(|model| parent_content_y + model.border_box.y);
+        return model.map(|model| model.border_box.y - model.content_box.y);
     }
-    let child_content_y =
-        parent_content_y + model.as_ref().map_or(0.0, |model| model.content_box.y);
-    layout
-        .children
-        .iter()
-        .zip(&info.children)
-        .find_map(|(layout_child, info_child)| {
-            let LayoutChild::Node(layout_child) = layout_child else {
-                return None;
-            };
-            fragment_target_y(layout_child, info_child, target, child_content_y)
-        })
-}
 
-fn set_first_vertical_scroll_offset(
-    layout: &LayoutNode,
-    info: &mut InfoNode,
-    target_y: f32,
-    viewport_height: f32,
-) -> bool {
-    if let Some(model) = layout.layout_box.iter().next() {
-        let offset = match &mut info.kind {
-            NodeKind::Container {
-                scroll_y: true,
-                scroll_offset_y,
-                ..
-            }
-            | NodeKind::Custom {
-                scroll_y: true,
-                scroll_offset_y,
-                ..
-            } => Some(scroll_offset_y),
-            _ => None,
+    let mut found = None;
+    for (layout_child, info_child) in layout.children.iter().zip(&mut info.children) {
+        let LayoutChild::Node(layout_child) = layout_child else {
+            continue;
         };
-        if let Some(offset) = offset {
-            let max_scroll = (model.children_box.height
-                - model.content_box.height.min(viewport_height))
-            .max(0.0);
-            *offset = target_y.clamp(0.0, max_scroll);
-            return true;
+        if let Some(child_pos) =
+            scroll_to_fragment_target(layout_child, info_child, target, viewport_height)
+        {
+            // `child_pos` is measured from the child's content origin; add the
+            // child's box offset to get the target's position in this node's
+            // content space, before this node scrolls.
+            let child_box = layout_child.layout_box.iter().next();
+            found = Some(child_box.map_or(0.0, |b| b.content_box.y) + child_pos);
+            break;
         }
     }
+    let mut target_y = found?;
 
-    layout
-        .children
-        .iter()
-        .zip(&mut info.children)
-        .any(|(layout_child, info_child)| {
-            let LayoutChild::Node(layout_child) = layout_child else {
-                return false;
-            };
-            set_first_vertical_scroll_offset(layout_child, info_child, target_y, viewport_height)
-        })
+    // Only scrollable ancestors of the target may scroll; a sibling's scroll
+    // container and un-flagged boxes (including the root) must not move.
+    let scrollable = matches!(
+        &info.kind,
+        NodeKind::Container { scroll_y: true, .. } | NodeKind::Custom { scroll_y: true, .. }
+    );
+    if scrollable && let Some(model) = model {
+        let max_scroll =
+            (model.children_box.height - model.content_box.height.min(viewport_height)).max(0.0);
+        let offset = target_y.clamp(0.0, max_scroll);
+        match &mut info.kind {
+            NodeKind::Container {
+                scroll_offset_y, ..
+            }
+            | NodeKind::Custom {
+                scroll_offset_y, ..
+            } => {
+                *scroll_offset_y = offset;
+            }
+            _ => {}
+        }
+        target_y -= offset;
+    }
+
+    Some(target_y)
+}
+
+/// Scrolls the page back to the top (an empty fragment or `#top`).
+///
+/// Every scrollable container on the page resets (most commonly the `body`,
+/// where a real browser puts the viewport scroll); other boxes already sit at
+/// offset 0, so resetting them is a no-op.
+fn scroll_page_to_top(info: &mut InfoNode) -> bool {
+    fn reset_y(kind: &mut NodeKind) -> bool {
+        match kind {
+            NodeKind::Container {
+                scroll_offset_y, ..
+            }
+            | NodeKind::Custom {
+                scroll_offset_y, ..
+            } => {
+                *scroll_offset_y = 0.0;
+                true
+            }
+            _ => false,
+        }
+    }
+    let mut reset = reset_y(&mut info.kind);
+    for child in &mut info.children {
+        reset |= scroll_page_to_top(child);
+    }
+    reset
+}
+
+/// Returns whether `pending` still needs an element lookup to be resolved.
+///
+/// An empty fragment (or the legacy `#top` anchor with no matching element)
+/// scrolls straight back to the top; otherwise the decoded fragment is looked
+/// up among the live DOM ids and its element is scrolled into view.
+fn fragment_scroll_update(
+    layout: &LayoutNode,
+    info: &mut InfoNode,
+    dom_refs: &[Weak<RefCell<TreeNode<HtmlNodeType>>>],
+    pending: Option<&str>,
+    viewport_height: f32,
+) -> bool {
+    let Some(fragment) = pending else {
+        // No fragment was requested: leave the scroll position untouched.
+        return false;
+    };
+    if fragment.is_empty() {
+        return scroll_page_to_top(info);
+    }
+    let decoded = percent_decode_fragment(fragment);
+    let Some(target) = find_fragment_target_dom_id(dom_refs, &decoded) else {
+        return fragment.eq_ignore_ascii_case("top") && scroll_page_to_top(info);
+    };
+    apply_fragment_scroll(layout, info, target, viewport_height)
+}
+
+/// Percent-decodes a URL fragment before it is matched against element `id`
+/// attributes, so `#my%20id` finds `<div id="my id">`.
+fn percent_decode_fragment(fragment: &str) -> String {
+    let bytes = fragment.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (hex_value(bytes[i + 1]), hex_value(bytes[i + 2]))
+        {
+            out.push(hi * 16 + lo);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_value(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }
 
 fn collect_css_image_sources(css: &str) -> Vec<String> {
@@ -2806,6 +2914,32 @@ mod tests {
         info.children.iter().find_map(find_scrollable_offset)
     }
 
+    /// Total vertical page scroll: the root plus every scrollable container on
+    /// the page (typically the `body`, which carries the page scroll).
+    fn page_scroll_total(info: &InfoNode) -> f32 {
+        fn sum_scrollable(info: &InfoNode, acc: &mut f32) {
+            if let NodeKind::Container {
+                scroll_y: true,
+                scroll_offset_y,
+                ..
+            }
+            | NodeKind::Custom {
+                scroll_y: true,
+                scroll_offset_y,
+                ..
+            } = &info.kind
+            {
+                *acc += *scroll_offset_y;
+            }
+            for child in &info.children {
+                sum_scrollable(child, acc);
+            }
+        }
+        let mut nested = 0.0;
+        sum_scrollable(info, &mut nested);
+        info.kind.scroll_offsets().1 + nested
+    }
+
     fn set_first_scrollable_offset(info: &mut InfoNode, offset: f32) -> bool {
         if let NodeKind::Container {
             scroll_y: true,
@@ -2947,6 +3081,192 @@ mod tests {
             600.0
         ));
         assert_eq!(root_scroll_offset(&root_info), Some(900.0));
+    }
+
+    #[test]
+    fn fragment_scroll_scrolls_each_container_only_for_its_own_view() {
+        // The layout mirrors a real page: an un-flagged document root (the
+        // `html` box) containing a scrollable wrapper (the `body`) that fills
+        // it, with a nested scroll box near the top of the page holding the
+        // target. Scrolling an ancestor by the target's *unscrolled* position
+        // (900) would carry the target past its inner clip port; each container
+        // must only scroll by what is still needed after its descendants
+        // scrolled, and un-flagged boxes must not move at all.
+        let mut target_layout = LayoutNode::new(ui_layout::Style::default());
+        target_layout.layout_box = layout_box(800.0, 100.0, 100.0);
+        let mut inner_layout =
+            LayoutNode::with_children(ui_layout::Style::default(), [target_layout]);
+        inner_layout.layout_box = layout_box(100.0, 300.0, 1000.0);
+        let mut outer_layout =
+            LayoutNode::with_children(ui_layout::Style::default(), [inner_layout]);
+        outer_layout.layout_box = layout_box(0.0, 600.0, 3000.0);
+        let mut sibling_layout = LayoutNode::new(ui_layout::Style::default());
+        sibling_layout.layout_box = layout_box(0.0, 300.0, 300.0);
+        let mut root_layout =
+            LayoutNode::with_children(ui_layout::Style::default(), [outer_layout, sibling_layout]);
+        root_layout.layout_box = layout_box(0.0, 600.0, 3000.0);
+
+        let target_info = scrollable_info(Some(7), false, 0.0);
+        let sibling_info = scrollable_info(Some(8), true, 0.0);
+        let mut inner_info = scrollable_info(Some(2), true, 0.0);
+        inner_info.children.push(target_info);
+        let mut outer_info = scrollable_info(Some(3), true, 0.0);
+        outer_info.children.push(inner_info);
+        let mut root_info = scrollable_info(Some(1), false, 0.0);
+        root_info.children.push(outer_info);
+        root_info.children.push(sibling_info);
+
+        assert!(apply_fragment_scroll(
+            &root_layout,
+            &mut root_info,
+            7,
+            600.0
+        ));
+
+        let offset = |node: &InfoNode| {
+            let NodeKind::Container {
+                scroll_offset_y, ..
+            } = &node.kind
+            else {
+                panic!("expected a container");
+            };
+            *scroll_offset_y
+        };
+        // The inner scroll box reveals its own content (700, its max) and the
+        // body-like wrapper pans by only the remaining 200 so the target reaches
+        // its top; the un-flagged root stays put.
+        assert_eq!(offset(&root_info.children[0].children[0]), 700.0);
+        assert_eq!(offset(&root_info.children[0]), 200.0);
+        assert!(offset(&root_info).abs() < f32::EPSILON);
+        // A sibling scroll container is not on the target's path: untouched.
+        assert_eq!(offset(&root_info.children[1]), 0.0);
+    }
+
+    #[test]
+    fn percent_encoded_fragment_is_decoded_for_id_lookup() {
+        assert_eq!(percent_decode_fragment("my%20target"), "my target");
+        assert_eq!(percent_decode_fragment("plain"), "plain");
+        assert_eq!(percent_decode_fragment("%E3%81%82"), "あ");
+        assert_eq!(percent_decode_fragment("100%"), "100%");
+        assert_eq!(percent_decode_fragment("a%2Fb"), "a/b");
+    }
+
+    #[test]
+    fn loaded_document_scrolls_plain_page_to_its_url_fragment() {
+        // A long page without overflow rules: the unflagged `html` root stays
+        // put and the `body` (scrolled natively) carries the page scroll, so
+        // fragment navigation must scroll that flagged container.
+        let html = r#"<html><body><div style="height: 2000px;"></div><div id="deep">deep</div></body></html>"#;
+        let mut wv = WebView::new(ColorScheme::Light, JsPolicy::default());
+        wv.tick();
+        wv.on_html_fetched(
+            html.to_string(),
+            Url::parse("https://example.test/page#deep").unwrap(),
+        );
+        for _ in 0..500 {
+            wv.tick();
+            if !wv.layout_pending && wv.layout_and_info().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+
+        wv.relayout((800.0, 600.0));
+
+        let (_, info) = wv.layout_and_info().expect("layout not ready");
+        let y = page_scroll_total(info);
+        assert!(
+            y > 1000.0,
+            "expected a deep scroll near the target, got {y}"
+        );
+    }
+
+    #[test]
+    fn percent_encoded_fragment_reaches_the_decoded_element() {
+        let html = r#"<html><body><div style="height: 2000px;"></div><div id="my target">t</div></body></html>"#;
+        let mut wv = WebView::new(ColorScheme::Light, JsPolicy::default());
+        wv.tick();
+        wv.on_html_fetched(
+            html.to_string(),
+            Url::parse("https://example.test/page#my%20target").unwrap(),
+        );
+        for _ in 0..500 {
+            wv.tick();
+            if !wv.layout_pending && wv.layout_and_info().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+
+        wv.relayout((800.0, 600.0));
+
+        let (_, info) = wv.layout_and_info().expect("layout not ready");
+        let y = page_scroll_total(info);
+        assert!(
+            y > 1000.0,
+            "expected a deep scroll near the target, got {y}"
+        );
+    }
+
+    #[test]
+    fn scroll_to_fragment_scrolls_existing_document_without_reload() {
+        let html = r#"<html><body><div style="height: 2000px;"></div><div id="another">a</div></body></html>"#;
+        let mut wv = WebView::new(ColorScheme::Light, JsPolicy::default());
+        wv.tick();
+        wv.on_html_fetched(
+            html.to_string(),
+            Url::parse("https://example.test/page").unwrap(),
+        );
+        for _ in 0..500 {
+            wv.tick();
+            if !wv.layout_pending && wv.layout_and_info().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        wv.relayout((800.0, 600.0));
+        assert_eq!(
+            root_scroll_offset(wv.layout_and_info().unwrap().1),
+            Some(0.0)
+        );
+
+        // Same-document anchor navigation: no new load, just a scroll.
+        wv.scroll_to_fragment(&Url::parse("https://example.test/page#another").unwrap());
+        wv.relayout((800.0, 600.0));
+
+        let (_, info) = wv.layout_and_info().expect("layout");
+        let y = page_scroll_total(info);
+        assert!(y > 1000.0, "expected a deep scroll, got {y}");
+        assert_eq!(
+            wv.document_url().map(Url::as_str),
+            Some("https://example.test/page#another")
+        );
+    }
+
+    #[test]
+    fn scroll_to_empty_fragment_returns_to_the_top() {
+        let html = r#"<html><body><div style="height: 2000px;"></div><div id="deep">deep</div></body></html>"#;
+        let mut wv = WebView::new(ColorScheme::Light, JsPolicy::default());
+        wv.tick();
+        wv.on_html_fetched(
+            html.to_string(),
+            Url::parse("https://example.test/page#deep").unwrap(),
+        );
+        for _ in 0..500 {
+            wv.tick();
+            if !wv.layout_pending && wv.layout_and_info().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        wv.relayout((800.0, 600.0));
+        assert!(page_scroll_total(wv.layout_and_info().unwrap().1) > 1000.0);
+
+        // `url#` scrolls back to the top of the same document.
+        wv.scroll_to_fragment(&Url::parse("https://example.test/page").unwrap());
+        wv.relayout((800.0, 600.0));
+
+        assert_eq!(page_scroll_total(wv.layout_and_info().unwrap().1), 0.0);
     }
 
     #[test]
