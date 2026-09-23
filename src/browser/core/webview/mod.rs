@@ -1,7 +1,7 @@
 //! ブラウザのwebview機能。タスクとレンダリング情報の管理を行う。
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::{Rc, Weak};
 use std::sync::{Arc, mpsc};
 
@@ -76,6 +76,12 @@ pub enum FetchKind {
     DynamicCss {
         node_id: u64,
     },
+    /// An `@import`-ed stylesheet inside another stylesheet. `target` is the
+    /// sheet URL to fetch; the import resolves relative to its own sheet, not
+    /// the document base.
+    CssImport {
+        target: Url,
+    },
     Image {
         source: String,
     },
@@ -103,6 +109,45 @@ pub enum FetchKind {
 pub enum CssApplicationStrategy {
     Batch,
     Incremental,
+}
+
+/// Where a top-level stylesheet's rules finally land once its `@import`s have
+/// all resolved.
+#[derive(Debug, Clone, Copy)]
+enum CssSink {
+    /// A ``<link rel="stylesheet">`` sheet, applied through the CSS processor.
+    External,
+    /// A JS-inserted `<link>`/`stylesheet`, applied by re-resolving styles and
+    /// firing the element's `load` event afterwards.
+    Dynamic(u64),
+}
+
+/// One `@import` statement inside a sheet, paired with the flattened text of
+/// the imported sheet once all of *its* imports have resolved.
+#[derive(Debug)]
+struct CssImportEntry {
+    url: Url,
+    text: Option<String>,
+}
+
+/// Processing state of one stylesheet unit (keyed by its URL).
+///
+/// A sheet whose `@import`s are still loading is `Deferred`; as its imports
+/// complete they become `Applied` under their own URLs and the sheet settles
+/// into a single flattened text.
+#[derive(Debug)]
+enum CssSheetState {
+    Deferred {
+        /// This sheet's own rules with every `@import` statement removed.
+        source: String,
+        entries: Vec<CssImportEntry>,
+        sink: Option<CssSink>,
+    },
+    Applied {
+        /// The fully flattened rule text (its imports first, then its own).
+        text: String,
+        sink: Option<CssSink>,
+    },
 }
 
 /// JavaScript execution policy for a page.
@@ -153,6 +198,16 @@ pub struct WebView {
     docment_info: Option<DocumentInfo>,
 
     pending_css_urls: Vec<Url>,
+    /// `@import` targets waiting to be fetched, as `(importing sheet url,
+    /// imported sheet url)` pairs.
+    pending_css_imports: Vec<(Url, Url)>,
+    /// URL → stylesheet unit currently being (or already) processed for
+    /// `@import` flattening. Keyed by the sheet's own URL so imports resolve
+    /// relative to it and cycles / duplicate imports collapse to one unit.
+    css_sheets: HashMap<Url, CssSheetState>,
+    /// Imported sheet URLs whose fetch is already in flight, to avoid
+    /// re-requesting the same sheet from multiple importers.
+    css_import_fetches: HashSet<Url>,
     pending_images: Vec<(String, Url)>,
     pending_audio: Vec<(String, Url)>,
     loaded_css: Vec<String>,
@@ -380,6 +435,9 @@ impl WebView {
             docment_info: None,
 
             pending_css_urls: Vec::new(),
+            pending_css_imports: Vec::new(),
+            css_sheets: HashMap::new(),
+            css_import_fetches: HashSet::new(),
             pending_images: Vec::new(),
             pending_audio: Vec::new(),
             loaded_css: Vec::new(),
@@ -619,6 +677,7 @@ impl WebView {
         }
         self.schedule_dynamic_styles(&mut tasks);
         self.schedule_dynamic_images(&mut tasks);
+        self.schedule_css_imports(&mut tasks);
         self.schedule_pending_images(&mut tasks);
         self.try_apply_decoded_images();
         self.run_due_js_timers();
@@ -747,22 +806,207 @@ impl WebView {
     }
 
     pub fn on_css_fetched_from(&mut self, css: String, stylesheet_url: &Url) {
-        self.queue_css_images(&css, stylesheet_url);
-        self.linked_css.push(css.clone());
-        match self.css_strategy {
-            CssApplicationStrategy::Batch => {
-                self.loaded_css.push(css);
+        // Wait out any @imports the sheet declares: its rules (with the import
+        // rules inlined before them) only reach the resolver once every import
+        // has been fetched and flattened too.
+        self.accept_stylesheet(stylesheet_url, css, Some(CssSink::External));
+    }
 
-                if self.loaded_css.len() == self.pending_css_urls.len() {
-                    let all_css = std::mem::take(&mut self.loaded_css);
-                    self.css_results_expected = 1;
-                    self.css_results_received = 0;
-                    self.css_processor.process(all_css);
-                    self.phase = PagePhase::CssProcessing;
+    /// Registers a stylesheet under its own URL, resolving any `@import`
+    /// statements it declares.
+    ///
+    /// Imports are resolved against the *sheet's* URL (not the document base),
+    /// fetched once per URL, and flattened in document order before the sheet's
+    /// own rules. `sink` describes where a top-level sheet's rules finally
+    /// land; `None` marks a sheet reachable only via `@import`, whose text is
+    /// inlined into its importers instead.
+    fn accept_stylesheet(&mut self, url: &Url, css: String, sink: Option<CssSink>) {
+        if let Some(existing) = self.css_sheets.get_mut(url) {
+            // A URL can be both linked directly and @import-ed. If the sheet
+            // was already handled as a plain import, promote it to a top-level
+            // sheet now; if it is still deferred, the application sink is
+            // recorded so its rules land once its own imports settle.
+            match existing {
+                CssSheetState::Applied {
+                    text,
+                    sink: current,
+                } if sink.is_some() => {
+                    *current = sink;
+                    if let Some(sink) = sink {
+                        let text = text.clone();
+                        self.apply_stylesheet(text, sink);
+                    }
+                }
+                CssSheetState::Deferred { sink: current, .. } if current.is_none() => {
+                    *current = sink;
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        self.queue_css_images(&css, url);
+        let (imports, body) = split_css_imports(&css);
+        if imports.is_empty() {
+            self.css_sheets.insert(
+                url.clone(),
+                CssSheetState::Applied {
+                    text: css.clone(),
+                    sink,
+                },
+            );
+            if let Some(sink) = sink {
+                self.apply_stylesheet(css, sink);
+            }
+            return;
+        }
+
+        let mut entries = Vec::new();
+        for raw in imports {
+            let Ok(target) = resolve_url(url, &raw) else {
+                continue;
+            };
+            // A sheet cannot import itself; drop the statement rather than
+            // deferring forever on a cycle back to the root.
+            if target == *url {
+                continue;
+            }
+            let text = match self.css_sheets.get(&target) {
+                // Already-flattened sheet: reuse its text directly.
+                Some(CssSheetState::Applied { text, .. }) => Some(text.clone()),
+                // A sheet still being resolved is either part of an import
+                // cycle (A -> B -> A) or otherwise already loading; waiting on
+                // it can only deadlock, so it contributes nothing here.
+                Some(CssSheetState::Deferred { .. }) => Some(String::new()),
+                _ => None,
+            };
+            if text.is_none() && self.css_import_fetches.insert(target.clone()) {
+                self.pending_css_imports.push((url.clone(), target.clone()));
+            }
+            entries.push(CssImportEntry { url: target, text });
+        }
+
+        self.css_sheets.insert(
+            url.clone(),
+            CssSheetState::Deferred {
+                source: body,
+                entries,
+                sink,
+            },
+        );
+        self.settle_css_imports();
+    }
+
+    /// Records a fetched `@import`-ed stylesheet under its own URL.
+    pub fn on_css_import_fetched(&mut self, source: String, url: &Url) {
+        self.accept_stylesheet(url, source, None);
+        self.settle_css_imports();
+    }
+
+    /// Records a failed `@import` fetch: the sheet contributes nothing, and
+    /// its importers proceed without it instead of blocking the load.
+    pub fn on_css_import_fetch_failed(&mut self, url: &Url) {
+        self.css_import_fetches.remove(url);
+        self.css_sheets.insert(
+            url.clone(),
+            CssSheetState::Applied {
+                text: String::new(),
+                sink: None,
+            },
+        );
+        self.settle_css_imports();
+    }
+
+    fn schedule_css_imports(&mut self, tasks: &mut Vec<WebViewTask>) {
+        for (_, target) in std::mem::take(&mut self.pending_css_imports) {
+            tasks.push(WebViewTask::Fetch {
+                url: target.clone(),
+                kind: FetchKind::CssImport { target },
+            });
+        }
+    }
+
+    /// Flattens every sheet whose imports have all resolved, applying top-level
+    /// sheets when they do. Iterates until no progress: settling one sheet can
+    /// unblock the parents that imported it.
+    fn settle_css_imports(&mut self) {
+        loop {
+            let mut ready: Vec<(Url, String, Option<CssSink>)> = Vec::new();
+            for (url, state) in &self.css_sheets {
+                let CssSheetState::Deferred {
+                    source,
+                    entries,
+                    sink,
+                } = state
+                else {
+                    continue;
+                };
+                let mut text = String::new();
+                let mut done = true;
+                for entry in entries {
+                    let resolved = match &entry.text {
+                        Some(text) => text.clone(),
+                        None => match self.css_sheets.get(&entry.url) {
+                            Some(CssSheetState::Applied { text, .. }) => text.clone(),
+                            _ => {
+                                done = false;
+                                break;
+                            }
+                        },
+                    };
+                    text.push_str(&resolved);
+                }
+                if done {
+                    text.push_str(source);
+                    ready.push((url.clone(), text, *sink));
                 }
             }
-            CssApplicationStrategy::Incremental => {
-                self.css_processor.process(vec![css]);
+
+            if ready.is_empty() {
+                break;
+            }
+            for (url, text, sink) in ready {
+                self.css_import_fetches.remove(&url);
+                self.css_sheets.insert(
+                    url.clone(),
+                    CssSheetState::Applied {
+                        text: text.clone(),
+                        sink,
+                    },
+                );
+                if let Some(sink) = sink {
+                    self.apply_stylesheet(text, sink);
+                }
+            }
+        }
+    }
+
+    fn apply_stylesheet(&mut self, css: String, sink: CssSink) {
+        match sink {
+            CssSink::External => {
+                self.linked_css.push(css.clone());
+                match self.css_strategy {
+                    CssApplicationStrategy::Batch => {
+                        self.loaded_css.push(css);
+
+                        if self.loaded_css.len() == self.pending_css_urls.len() {
+                            let all_css = std::mem::take(&mut self.loaded_css);
+                            self.css_results_expected = 1;
+                            self.css_results_received = 0;
+                            self.css_processor.process(all_css);
+                            self.phase = PagePhase::CssProcessing;
+                        }
+                    }
+                    CssApplicationStrategy::Incremental => {
+                        self.css_processor.process(vec![css]);
+                    }
+                }
+            }
+            CssSink::Dynamic(node_id) => {
+                self.linked_css.push(css);
+                self.rebuild_styles_and_layout();
+                self.needs_redraw = true;
+                self.dispatch_js_element_event(node_id, "load");
             }
         }
     }
@@ -840,11 +1084,7 @@ impl WebView {
     pub fn on_dynamic_style_fetched(&mut self, node_id: u64, source: String, stylesheet_url: &Url) {
         // Resolve relative url() inside the dynamic sheet against the sheet's
         // own location (not the document base), like a real browser does.
-        self.queue_css_images(&source, stylesheet_url);
-        self.linked_css.push(source);
-        self.rebuild_styles_and_layout();
-        self.needs_redraw = true;
-        self.dispatch_js_element_event(node_id, "load");
+        self.accept_stylesheet(stylesheet_url, source, Some(CssSink::Dynamic(node_id)));
     }
 
     pub fn on_dynamic_style_fetch_failed(&mut self, node_id: u64) {
@@ -1608,6 +1848,9 @@ impl WebView {
 
         self.docment_info = None;
         self.pending_css_urls.clear();
+        self.pending_css_imports.clear();
+        self.css_sheets.clear();
+        self.css_import_fetches.clear();
         self.pending_images.clear();
         self.pending_audio.clear();
         self.pending_navigations.clear();
@@ -2555,6 +2798,201 @@ fn collect_css_image_sources(css: &str) -> Vec<String> {
     let mut sources = Vec::new();
     visit(&stylesheet, &mut sources);
     sources
+}
+
+/// Splits a stylesheet into the raw URLs of its top-level `@import` statements
+/// and the remaining rule text with those statements removed.
+///
+/// Only real top-level at-rules count: `@import` inside a rule block, comment
+/// or string is left untouched. The import statement itself (up to and
+/// including its terminating `;`) is stripped from the returned body so the
+/// flattening never re-processes it.
+fn split_css_imports(css: &str) -> (Vec<String>, String) {
+    let bytes = css.as_bytes();
+    let mut imports = Vec::new();
+    let mut removed: Vec<(usize, usize)> = Vec::new();
+    let mut i = 0usize;
+    let mut depth: i32 = 0;
+    let mut quote: Option<u8> = None;
+    let mut in_comment = false;
+    let mut escaped = false;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(q) = quote {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if in_comment {
+            if b == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                in_comment = false;
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        match b {
+            b'"' | b'\'' => {
+                quote = Some(b);
+                i += 1;
+            }
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'*' => {
+                in_comment = true;
+                i += 2;
+            }
+            b'{' => {
+                depth += 1;
+                i += 1;
+            }
+            b'}' => {
+                depth = (depth - 1).max(0);
+                i += 1;
+            }
+            b'@' if depth == 0 => {
+                let tail = &bytes[i..];
+                if tail.starts_with(b"@import")
+                    && (tail.len() == 7
+                        || !tail[7].is_ascii_alphanumeric() && tail[7] != b'_' && tail[7] != b'-')
+                {
+                    let (start, end) = import_statement_bounds(bytes, i);
+                    if let Some(raw) = css_import_url(&css[start..end]) {
+                        imports.push(raw);
+                        removed.push((start, end));
+                    }
+                    i = end;
+                    continue;
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+
+    let mut body = String::with_capacity(css.len());
+    let mut prev = 0;
+    for (start, end) in removed {
+        body.push_str(&css[prev..start]);
+        prev = end;
+    }
+    body.push_str(&css[prev..]);
+    (imports, body)
+}
+
+/// Returns `(start, end)` byte bounds of the `@import` statement beginning at
+/// `at`, including its terminating `;`.
+fn import_statement_bounds(bytes: &[u8], at: usize) -> (usize, usize) {
+    let mut j = at;
+    let mut quote: Option<u8> = None;
+    let mut escaped = false;
+    let mut parens: i32 = 0;
+    while j < bytes.len() {
+        let c = bytes[j];
+        if let Some(q) = quote {
+            if escaped {
+                escaped = false;
+            } else if c == b'\\' {
+                escaped = true;
+            } else if c == q {
+                quote = None;
+            }
+            j += 1;
+            continue;
+        }
+        match c {
+            b'"' | b'\'' => {
+                quote = Some(c);
+                j += 1;
+            }
+            b'(' => {
+                parens += 1;
+                j += 1;
+            }
+            b')' => {
+                parens = (parens - 1).max(0);
+                j += 1;
+            }
+            b';' if parens <= 0 => return (at, j + 1),
+            _ => j += 1,
+        }
+    }
+    (at, bytes.len())
+}
+
+/// Extracts the URL from an `@import` statement: either a string literal or a
+/// `url(...)` function, each optionally followed by a media query list.
+fn css_import_url(stmt: &str) -> Option<String> {
+    let rest = stmt.trim_start();
+    let rest = rest.strip_prefix("@import")?;
+    let rest = rest.trim_start();
+    let bytes = rest.as_bytes();
+    match bytes.first()? {
+        b'"' | b'\'' => {
+            let quote = bytes[0];
+            let mut out = String::new();
+            let mut i = 1;
+            let mut escaped = false;
+            while i < bytes.len() {
+                let c = bytes[i];
+                if escaped {
+                    out.push(c as char);
+                    escaped = false;
+                } else if c == b'\\' {
+                    escaped = true;
+                } else if c == quote {
+                    return Some(out);
+                } else {
+                    out.push(c as char);
+                }
+                i += 1;
+            }
+            None
+        }
+        _ => {
+            let paren = rest.find('(')?;
+            let func = rest[..paren].trim_end();
+            if !func.eq_ignore_ascii_case("url") {
+                return None;
+            }
+            let inner_start = paren + 1;
+            let mut i = inner_start;
+            let mut quote: Option<u8> = None;
+            let mut escaped = false;
+            while i < bytes.len() {
+                let c = bytes[i];
+                if let Some(q) = quote {
+                    if escaped {
+                        escaped = false;
+                    } else if c == b'\\' {
+                        escaped = true;
+                    } else if c == q {
+                        quote = None;
+                    }
+                } else {
+                    match c {
+                        b'"' | b'\'' => quote = Some(c),
+                        b')' => {
+                            let inner = rest[inner_start..i]
+                                .trim()
+                                .trim_matches(['"', '\''])
+                                .to_string();
+                            return Some(inner);
+                        }
+                        _ => {}
+                    }
+                }
+                i += 1;
+            }
+            None
+        }
+    }
 }
 
 fn parse_html(html: &str, document_url: Url, scripting_mode: ScriptingMode) -> ParsedDocument {
@@ -4568,5 +5006,222 @@ mod tests {
             .get_element_by_id("probe")
             .unwrap();
         assert_eq!(probe.borrow().value.get_attr("data-ok"), Some("yes"));
+    }
+
+    #[test]
+    fn split_css_imports_extracts_top_level_imports_only() {
+        let css = r#"
+            /* keep comments: @import not allowed inside */
+            @import url("a.css") screen;
+            @import "sub/b.css";
+            @media print {
+                @import "nested.css";
+                .x { content: "@import 'not-real.sass'";  }
+            }
+            .rule { background: url("img.png"); }
+            body { color: red; }
+            @import url(c.css);
+        "#;
+
+        let (imports, body) = split_css_imports(css);
+        assert_eq!(imports, vec!["a.css", "sub/b.css", "c.css"]);
+
+        // The statements (with their terminating `;`) are stripped from the body,
+        // while nested and string occurrences are preserved.
+        assert!(!body.contains("@import url(\"a.css\")"));
+        assert!(!body.contains("@import \"sub/b.css\""));
+        assert!(!body.contains("@import url(c.css)"));
+        // Nested and string occurrences are preserved.
+        assert!(body.contains("@import \"nested.css\""));
+        assert!(body.contains("@import 'not-real.sass'"));
+        assert!(body.contains("background: url(\"img.png\");"));
+        assert!(body.contains("body { color: red; }"));
+    }
+
+    #[test]
+    fn css_import_url_recognizes_url_and_string_forms() {
+        assert_eq!(
+            css_import_url("@import url(\"fonts/webfont.woff2\") screen;").as_deref(),
+            Some("fonts/webfont.woff2")
+        );
+        assert_eq!(
+            css_import_url("@import 'style.css';").as_deref(),
+            Some("style.css")
+        );
+        assert_eq!(
+            css_import_url("@import url(plain.css);").as_deref(),
+            Some("plain.css")
+        );
+        assert_eq!(css_import_url("@import;"), None);
+        assert_eq!(css_import_url("@import url();").as_deref(), Some(""));
+    }
+
+    #[test]
+    fn split_css_imports_ignores_pseudo_import_keywords() {
+        let css = "@importurl('x.css'); .foo { color: @import-thing; } @import url(y.css);";
+        let (imports, body) = split_css_imports(css);
+        assert_eq!(imports, vec!["y.css"]);
+        assert!(body.contains("@importurl('x.css')"));
+        assert!(body.contains("@import-thing"));
+    }
+
+    #[test]
+    fn stylesheet_import_deferred_until_import_applies_and_resolves_relative() {
+        let mut wv = WebView::new(
+            crate::engine::layouter::types::ColorScheme::Light,
+            JsPolicy::Disabled,
+        );
+        let sheet_url = Url::parse("https://example.test/css/main.css").unwrap();
+
+        wv.on_css_fetched_from(
+            "@import url(\"../sub/base.css\");body { color: red; }".to_string(),
+            &sheet_url,
+        );
+        // Nothing applied yet: the import is still outstanding.
+        assert!(wv.linked_css.is_empty());
+
+        let task = pump_for_task(
+            &mut wv,
+            |task| {
+                matches!(
+                    task,
+                    WebViewTask::Fetch {
+                        url,
+                        kind: FetchKind::CssImport { target },
+                    } if url.as_str() == "https://example.test/sub/base.css"
+                        && target == url
+                )
+            },
+            "the @import to be scheduled",
+        );
+        let WebViewTask::Fetch {
+            url: fetched,
+            kind: FetchKind::CssImport { .. },
+        } = task
+        else {
+            unreachable!()
+        };
+        // The import resolved against the importing sheet's own URL.
+        assert_eq!(fetched.as_str(), "https://example.test/sub/base.css");
+
+        wv.on_css_import_fetched(
+            "div { font-weight: bold; }\n".to_string(),
+            &Url::parse("https://example.test/sub/base.css").unwrap(),
+        );
+
+        // The parent sheet now lands in linked_css with its import inlined
+        // before its own rules.
+        assert_eq!(wv.linked_css.len(), 1);
+        assert_eq!(
+            wv.linked_css[0],
+            "div { font-weight: bold; }\nbody { color: red; }"
+        );
+    }
+
+    #[test]
+    fn duplicate_import_requests_one_fetch_and_settles_without_cycle() {
+        let mut wv = WebView::new(
+            crate::engine::layouter::types::ColorScheme::Light,
+            JsPolicy::Disabled,
+        );
+        let sheet_a = Url::parse("https://example.test/css/a.css").unwrap();
+        let sheet_b = Url::parse("https://example.test/css/b.css").unwrap();
+
+        // A imports B; B imports A back.
+        wv.on_css_fetched_from(
+            "@import url(\"b.css\");a { color: a; }".to_string(),
+            &sheet_a,
+        );
+        wv.on_css_import_fetched(
+            "@import url(\"a.css\");b { color: b; }".to_string(),
+            &sheet_b,
+        );
+
+        // B's import back to A is a cycle: it contributes nothing, and both
+        // sheets settle immediately instead of deadlocking.
+        assert_eq!(wv.linked_css.len(), 1);
+        assert_eq!(wv.linked_css[0], "b { color: b; }a { color: a; }");
+
+        // Only B is ever requested for fetching; the cycle-back to A schedules
+        // nothing new.
+        let mut fetched = Vec::new();
+        for _ in 0..4 {
+            for task in wv.tick() {
+                if let WebViewTask::Fetch {
+                    url,
+                    kind: FetchKind::CssImport { .. },
+                } = task
+                {
+                    fetched.push(url.as_str().to_string());
+                }
+            }
+        }
+        assert_eq!(fetched, vec!["https://example.test/css/b.css"]);
+        assert!(wv.pending_css_imports.is_empty());
+    }
+
+    #[test]
+    fn failed_import_does_not_block_the_importing_sheet() {
+        let mut wv = WebView::new(
+            crate::engine::layouter::types::ColorScheme::Light,
+            JsPolicy::Disabled,
+        );
+        let sheet_url = Url::parse("https://example.test/css/main.css").unwrap();
+        wv.on_css_fetched_from(
+            "@import url(\"missing.css\");p { margin: 0; }".to_string(),
+            &sheet_url,
+        );
+        assert!(wv.linked_css.is_empty());
+
+        wv.on_css_import_fetch_failed(&Url::parse("https://example.test/css/missing.css").unwrap());
+        assert_eq!(wv.linked_css.len(), 1);
+        assert_eq!(wv.linked_css[0], "p { margin: 0; }");
+    }
+
+    #[test]
+    fn shared_import_is_applied_once_across_two_sheets() {
+        let mut wv = WebView::new(
+            crate::engine::layouter::types::ColorScheme::Light,
+            JsPolicy::Disabled,
+        );
+        let sheet_a = Url::parse("https://example.test/css/a.css").unwrap();
+        let sheet_b = Url::parse("https://example.test/css/b.css").unwrap();
+        let shared = Url::parse("https://example.test/css/shared.css").unwrap();
+
+        wv.on_css_fetched_from(
+            "@import url(\"shared.css\");a { color: a; }".to_string(),
+            &sheet_a,
+        );
+        wv.on_css_fetched_from(
+            "@import url(\"shared.css\");b { color: b; }".to_string(),
+            &sheet_b,
+        );
+
+        let mut import_tasks = Vec::new();
+        for _ in 0..4 {
+            let tasks = wv.tick();
+            for task in tasks {
+                if let WebViewTask::Fetch {
+                    kind: FetchKind::CssImport { .. },
+                    ..
+                } = task
+                {
+                    import_tasks.push(());
+                }
+            }
+        }
+        // The shared URL is only requested once, even though two sheets import it.
+        assert_eq!(import_tasks.len(), 1, "duplicate import fetch scheduled");
+
+        wv.on_css_import_fetched("s { color: s; }".to_string(), &shared);
+        let mut applied = wv.linked_css.clone();
+        applied.sort();
+        assert_eq!(
+            applied,
+            vec![
+                "s { color: s; }a { color: a; }",
+                "s { color: s; }b { color: b; }"
+            ]
+        );
     }
 }

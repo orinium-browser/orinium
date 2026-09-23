@@ -255,6 +255,10 @@ impl Tab {
                     let source = String::from_utf8_lossy(&resp.body).to_string();
                     self.on_fetch_succeeded_dynamic_style(node_id, source, &url);
                 }
+                FetchKind::CssImport { target } => {
+                    let source = String::from_utf8_lossy(&resp.body).to_string();
+                    self.on_fetch_succeeded_css_import(source, &target);
+                }
                 FetchKind::Image { source } => {
                     self.on_fetch_succeeded_image(source, &resp.body);
                 }
@@ -301,6 +305,10 @@ impl Tab {
                 FetchKind::DynamicCss { node_id } => {
                     log::warn!("Dynamic stylesheet fetch failed without aborting page load: {url}");
                     self.on_fetch_failed_dynamic_style(node_id);
+                }
+                FetchKind::CssImport { target } => {
+                    log::warn!("CSS import fetch failed without aborting page load: {url}");
+                    self.on_fetch_failed_css_import(&target);
                 }
                 FetchKind::JavaScript { request_id, .. } => {
                     self.on_fetch_failed_js(request_id, err.to_string());
@@ -420,6 +428,20 @@ impl Tab {
     pub fn on_fetch_failed_dynamic_style(&mut self, node_id: u64) {
         if let Some(webview) = self.webview.as_mut() {
             webview.on_dynamic_style_fetch_failed(node_id);
+        }
+    }
+
+    /// Records a fetched `@import`-ed stylesheet against its own URL.
+    pub fn on_fetch_succeeded_css_import(&mut self, source: String, url: &Url) {
+        if let Some(webview) = self.webview.as_mut() {
+            webview.on_css_import_fetched(source, url);
+        }
+    }
+
+    /// Records a failed `@import` fetch so importers settle without the sheet.
+    pub fn on_fetch_failed_css_import(&mut self, url: &Url) {
+        if let Some(webview) = self.webview.as_mut() {
+            webview.on_css_import_fetch_failed(url);
         }
     }
 

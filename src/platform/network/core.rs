@@ -881,6 +881,7 @@ mod tests {
                             FetchKind::Audio { .. } => "audio",
                             FetchKind::JavaScript { .. } => "js-fetch",
                             FetchKind::Iframe { .. } => "iframe",
+                            FetchKind::CssImport { .. } => "css-import",
                         };
                         *fetch_counts.entry(label).or_insert(0) += 1;
                         match kind {
@@ -919,6 +920,16 @@ mod tests {
                                         String::from_utf8_lossy(&r.body).to_string(),
                                         &url,
                                     );
+                                }
+                            }
+                            FetchKind::CssImport { target } => {
+                                if let Some(r) = fetch_ok(&core, &url) {
+                                    wv.on_css_import_fetched(
+                                        String::from_utf8_lossy(&r.body).to_string(),
+                                        &target,
+                                    );
+                                } else {
+                                    wv.on_css_import_fetch_failed(&target);
                                 }
                             }
                             FetchKind::Image { source } => {
