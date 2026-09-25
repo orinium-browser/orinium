@@ -198,6 +198,11 @@ enum ChildSlot {
     Element(usize),
 }
 
+/// Builds the layout and render trees for a parsed HTML document.
+///
+/// The argument set mirrors [`build_layout_and_info_with_images`]; the
+/// document-facing entry point forwards to it with no images present.
+#[allow(clippy::too_many_arguments)]
 pub fn build_layout_and_info(
     dom: &NodeRef<HtmlNodeType>,
     resolved_styles: &ResolvedStyles,
@@ -1059,11 +1064,11 @@ pub fn build_layout_and_info_from_snapshot(
             if snapshot.node(frame.dom).kind.tag_name() == Some("html") {
                 let should_inherit = final_kind.is_container_with_transparent_bg();
                 if should_inherit {
-                    for (i, &kid) in frame.element_children.iter().enumerate() {
-                        if snapshot.node(kid).kind.tag_name() == Some("body")
-                            && i < element_results.len()
+                    for (_, child_info) in &element_results {
+                        if child_info.dom_id.and_then(|id| snapshot.node(id).kind.tag_name())
+                            == Some("body")
                         {
-                            let child_bg = element_results[i].1.kind.container_bg();
+                            let child_bg = child_info.kind.container_bg();
                             if let Some(bg) = child_bg
                                 && let NodeKind::Container { ref mut style, .. } = final_kind
                             {

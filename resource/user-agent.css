@@ -8,13 +8,13 @@ html {
     font-size: 16px;
     line-height: normal;
     overflow: auto;
-    background-color: #fff;
 }
 
 /* --- Document body --- */
 body {
     display: block;
     margin: 8px;
+    background-color: #fff;
     font-family:
         system-ui,
         -apple-system,
