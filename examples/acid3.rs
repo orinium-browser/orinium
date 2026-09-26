@@ -30,7 +30,7 @@ fn main() -> Result<()> {
 fn run_acid3(raw_url: &str) -> Result<()> {
     let parsed_url: url::Url = raw_url.parse()?;
     let net = NetworkCore::new().expect("Failed to create NetworkCore instansce");
-    let loader = BrowserResourceLoader::new(Some(Rc::new(net)));
+    let loader = BrowserResourceLoader::with_network(net);
     let resp = loader
         .fetch_blocking(parsed_url.clone())
         .expect("Failed to fetch URL");

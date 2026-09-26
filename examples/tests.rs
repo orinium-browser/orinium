@@ -95,7 +95,7 @@ fn main() -> Result<()> {
                     let url = &args[2];
                     println!("Parsing DOM for URL: {}", url);
                     let net = NetworkCore::new().expect("Failed to create NetworkCore instansce");
-                    let loader = BrowserResourceLoader::new(Some(Rc::new(net)));
+                    let loader = BrowserResourceLoader::with_network(net);
                     let resp = loader
                         .fetch_blocking(url.parse()?)
                         .expect("Failed to fetch URL");
@@ -144,7 +144,7 @@ fn main() -> Result<()> {
                     let url = &args[2];
                     println!("Parsing CSSOM for URL: {}", url);
                     let net = NetworkCore::new().expect("Failed to create NetworkCore instansce");
-                    let loader = BrowserResourceLoader::new(Some(Rc::new(net)));
+                    let loader = BrowserResourceLoader::with_network(net);
                     let resp = loader
                         .fetch_blocking(url.parse()?)
                         .expect("Failed to fetch URL");
@@ -241,7 +241,7 @@ fn main() -> Result<()> {
 
                     let parsed_url: url::Url = raw_url.parse()?;
                     let net = NetworkCore::new().expect("Failed to create NetworkCore instansce");
-                    let loader = BrowserResourceLoader::new(Some(Rc::new(net)));
+                    let loader = BrowserResourceLoader::with_network(net);
                     let resp = loader
                         .fetch_blocking(parsed_url)
                         .expect("Failed to fetch URL");
@@ -381,7 +381,7 @@ fn build_layout_info_inner(
     let parsed_url: url::Url = raw_url.parse()?;
 
     let net = NetworkCore::new().expect("Failed to create NetworkCore instansce");
-    let loader = BrowserResourceLoader::new(Some(Rc::new(net)));
+    let loader = BrowserResourceLoader::with_network(net);
     let resp = loader
         .fetch_blocking(parsed_url.clone())
         .expect("Failed to fetch URL");
@@ -456,7 +456,7 @@ fn build_layout_info_inner(
     }
 
     let net = NetworkCore::new().expect("Failed to create NetworkCore instansce");
-    let css_loader = BrowserResourceLoader::new(Some(Rc::new(net)));
+    let css_loader = BrowserResourceLoader::with_network(net);
     for css_url in &style_links {
         println!("Fetching CSS: {}", css_url);
         if let Ok(css_resp) = css_loader.fetch_blocking(css_url.clone()) {
@@ -703,7 +703,7 @@ fn run_webcompat_depth(raw_url: &str, depth: usize) -> Result<()> {
     // ---- Network stage ----
     println!("\n{}", "== Network ==".bold());
     let net = NetworkCore::new().expect("Failed to create NetworkCore instansce");
-    let loader = BrowserResourceLoader::new(Some(Rc::new(net)));
+    let loader = BrowserResourceLoader::with_network(net);
 
     let html_resp = match loader.fetch_blocking(parsed_url.clone()) {
         Ok(resp) => resp,

@@ -32,7 +32,6 @@
 use anyhow::Result;
 use std::collections::{HashMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
-use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{env, io};
 use url::Url;
@@ -163,7 +162,7 @@ impl BrowserApp {
         default_window_size: (u32, u32),
         default_window_title: String,
     ) -> Result<Self, io::Error> {
-        let network = BrowserResourceLoader::new(Some(Rc::new(NetworkCore::new()?)));
+        let network = BrowserResourceLoader::with_network(NetworkCore::new()?);
 
         Ok(Self {
             windows: HashMap::new(),
@@ -506,6 +505,29 @@ fn configure_winit_backend_for_wslg() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pins the `Send` bound reached so far, and documents what still blocks
+    /// `BrowserApp` from becoming `Send`.
+    ///
+    /// Everything the resource path owns is movable now that
+    /// [`BrowserResourceLoader`] holds its `NetworkCore` outright instead of
+    /// behind an `Rc`. The remaining blockers are all page-boundary state:
+    ///
+    /// - `Box<dyn Chrome>` / `Box<dyn ContextMenu>` (UI trait objects that
+    ///   predate the layering fix)
+    /// - `ui_layout::CustomLayouter` (reached through `LayoutNode`, and today
+    ///   sidestepped by `SendableResult`'s raw pointer)
+    /// - `Rc<DomTree>` and `Weak<RefCell<TreeNode<HtmlNodeType>>>` (the live
+    ///   DOM the browser layer still mutates directly)
+    ///
+    /// Add assertions here as each group is removed, so the progress is
+    /// visible and the bound can never silently regress.
+    #[test]
+    fn resource_path_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<BrowserResourceLoader>();
+        assert_send::<super::PendingFetches>();
+    }
 
     fn js_fetch(method: &str) -> FetchKind {
         FetchKind::JavaScript {

@@ -4,10 +4,12 @@
 //! network-free `resource:///`, `data:` and `file://` schemes.
 
 use crate::engine::origin::Origin;
-use crate::platform::network::{NetworkCore, NetworkError, NetworkRequest, StatusCode};
+use crate::platform::network::{
+    NetworkConfig, NetworkCore, NetworkError, NetworkRequest, StatusCode,
+};
 use anyhow::{Context, Result, anyhow};
 use base64::Engine;
-use std::{fmt, rc::Rc};
+use std::fmt;
 use url::Url;
 
 /// Whether a document with `initiator` may load a resource addressed by `url`.
@@ -48,30 +50,35 @@ fn scheme_allowed(initiator: &Origin, url: &Url) -> bool {
 /// Example usage:
 /// ```no_run
 /// use orinium_browser::browser::core::resource_loader::BrowserResourceLoader;
-/// use std::rc::Rc;
 /// use orinium_browser::platform::network::NetworkCore;
 ///
-/// let network = Some(Rc::new(NetworkCore::new().unwrap()));
-/// let loader = BrowserResourceLoader::new(network);
-///
-/// // Typical call (pseudocode):
-/// // let body = loader.fetch(&url)?;
-/// // process body...
+/// let loader = BrowserResourceLoader::new(NetworkCore::new().ok());
 /// ```
+///
+/// The loader is `Send`: it owns its [`NetworkCore`] outright rather than
+/// sharing it through a single-threaded handle. `BrowserApp` is not `Send`
+/// yet, because it still holds per-window `BrowserUi` state; the loader is
+/// free of that so it can move once the page boundary does.
 ///
 /// Notes for contributors:
 /// - Keep the loader focused on scheme resolution, simple caching/pooling,
 ///   and delegation to `NetworkCore`. Avoid adding heavy parsing logic here.
+/// - Do not reintroduce `Rc` (or any other `!Send` handle) around
+///   `NetworkCore`; it would make this type impossible to move.
 /// - Unit tests should validate `resource:///` and `data:` resolution and HTTP
 ///   request delegation semantics (e.g. mapping of request IDs to responses).
 pub struct BrowserResourceLoader {
     /// Optional platform network core used for HTTP/HTTPS requests.
-    pub network: Option<Rc<NetworkCore>>,
+    ///
+    /// Owned directly: `NetworkCore` is already a handle to a separate
+    /// network process and every operation takes `&self`, so there is nothing
+    /// to share.
+    network: Option<NetworkCore>,
 
     /// Immediate pool / internal queue for messages produced by the loader.
     /// The concrete type `BrowserNetworkMessage` represents internal network
     /// events; see the network module for details.
-    pub immediate_pool: Vec<BrowserNetworkMessage>,
+    immediate_pool: Vec<BrowserNetworkMessage>,
 }
 
 impl BrowserResourceLoader {
@@ -80,10 +87,37 @@ impl BrowserResourceLoader {
     /// `network` is optional to allow operating in environments where the
     /// network stack is not available (tests, limited examples, or when only
     /// `resource:///` is needed).
-    pub fn new(network: Option<Rc<NetworkCore>>) -> Self {
+    pub fn new(network: Option<NetworkCore>) -> Self {
         Self {
             network,
             immediate_pool: vec![],
+        }
+    }
+
+    /// Constructs a loader backed by `network`.
+    pub fn with_network(network: NetworkCore) -> Self {
+        Self::new(Some(network))
+    }
+
+    /// Constructs a loader that performs no network I/O.
+    ///
+    /// `resource:///`, `data:` and `file://` still resolve; anything else is
+    /// dropped.
+    pub fn offline() -> Self {
+        Self::new(None)
+    }
+
+    /// Applies a new configuration to the network process, if present.
+    pub fn set_network_config(&self, config: NetworkConfig) {
+        if let Some(net) = &self.network {
+            net.set_network_config(config);
+        }
+    }
+
+    /// Drops every cached response held by the network process, if present.
+    pub fn clear_cache(&self) {
+        if let Some(net) = &self.network {
+            net.clear_cache();
         }
     }
 
@@ -341,6 +375,26 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    /// The loader owns its `NetworkCore`, so it must be movable across
+    /// threads. This is the invariant that a `!Send` handle around
+    /// `NetworkCore` would silently break, so it is asserted directly.
+    #[test]
+    fn loader_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<BrowserResourceLoader>();
+        assert_send::<BrowserNetworkMessage>();
+        assert_send::<BrowserResponse>();
+        assert_send::<BrowserNetworkError>();
+    }
+
+    /// A loader can be built and dropped without ever opening a device or a
+    /// socket, which is what makes the offline mode usable in tests.
+    #[test]
+    fn offline_loader_needs_no_network_stack() {
+        let loader = BrowserResourceLoader::offline();
+        assert!(loader.network.is_none());
+    }
+
     /// Creates a unique temporary file with `contents` and returns its path.
     /// The caller is responsible for removing the file.
     fn temp_file(contents: &[u8]) -> std::path::PathBuf {
@@ -401,7 +455,7 @@ mod tests {
 
     #[test]
     fn fetch_blocking_decodes_data_url_without_network() {
-        let loader = BrowserResourceLoader::new(None);
+        let loader = BrowserResourceLoader::offline();
         let encoded = base64::engine::general_purpose::STANDARD.encode(b"png-bytes");
         let url = Url::parse(&format!("data:image/png;base64,{encoded}")).unwrap();
 
@@ -412,7 +466,7 @@ mod tests {
 
     #[test]
     fn fetch_async_pushes_data_url_into_immediate_pool() {
-        let mut loader = BrowserResourceLoader::new(None);
+        let mut loader = BrowserResourceLoader::offline();
         let url = Url::parse("data:text/plain,hi").unwrap();
 
         loader.fetch_async(url, 7, &Origin::opaque());
@@ -425,7 +479,7 @@ mod tests {
 
     #[test]
     fn immediate_urls_reject_non_get_requests() {
-        let mut loader = BrowserResourceLoader::new(None);
+        let mut loader = BrowserResourceLoader::offline();
         loader.fetch_request_async(
             NetworkRequest {
                 url: "data:text/plain,hi".to_string(),
@@ -445,7 +499,7 @@ mod tests {
 
     #[test]
     fn network_origin_cannot_reach_resource_scheme() {
-        let mut loader = BrowserResourceLoader::new(None);
+        let mut loader = BrowserResourceLoader::offline();
         let web = Origin::from_url(&Url::parse("https://example.test/").unwrap());
 
         loader.fetch_async(
@@ -462,7 +516,7 @@ mod tests {
 
     #[test]
     fn internal_origin_can_reach_resource_scheme() {
-        let mut loader = BrowserResourceLoader::new(None);
+        let mut loader = BrowserResourceLoader::offline();
         let internal = Origin::opaque();
 
         loader.fetch_async(
@@ -479,7 +533,7 @@ mod tests {
 
     #[test]
     fn any_origin_can_reach_data_scheme() {
-        let mut loader = BrowserResourceLoader::new(None);
+        let mut loader = BrowserResourceLoader::offline();
         let web = Origin::from_url(&Url::parse("https://example.test/").unwrap());
 
         loader.fetch_async(Url::parse("data:text/plain,hi").unwrap(), 11, &web);
@@ -493,7 +547,7 @@ mod tests {
 
     #[test]
     fn fetch_blocking_rejects_data_url_without_network() {
-        let loader = BrowserResourceLoader::new(None);
+        let loader = BrowserResourceLoader::offline();
         let url = Url::parse("data:image/png;base64,@@@not-base64@@@").unwrap();
         assert!(loader.fetch_blocking(url).is_err());
     }
@@ -517,7 +571,7 @@ mod tests {
     fn fetch_async_resolves_file_url_into_immediate_pool() {
         let path = temp_file(b"file bytes");
         let url = Url::from_file_path(&path).unwrap();
-        let mut loader = BrowserResourceLoader::new(None);
+        let mut loader = BrowserResourceLoader::offline();
 
         loader.fetch_async(url, 12, &Origin::opaque());
         let msgs = loader.try_receive();
@@ -532,7 +586,7 @@ mod tests {
     fn internal_origin_can_read_local_file() {
         let path = temp_file(b"local data");
         let url = Url::from_file_path(&path).unwrap();
-        let mut loader = BrowserResourceLoader::new(None);
+        let mut loader = BrowserResourceLoader::offline();
 
         loader.fetch_async(url, 13, &Origin::opaque());
         let msgs = loader.try_receive();
@@ -547,7 +601,7 @@ mod tests {
         let path = temp_file(b"secret");
         let url = Url::from_file_path(&path).unwrap();
         let web = Origin::from_url(&Url::parse("https://example.test/").unwrap());
-        let mut loader = BrowserResourceLoader::new(None);
+        let mut loader = BrowserResourceLoader::offline();
 
         loader.fetch_async(url, 14, &web);
         let msgs = loader.try_receive();
