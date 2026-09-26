@@ -1,4 +1,5 @@
 use super::*;
+use crate::engine::bridge::audio::NullAudioSinkFactory;
 use crate::engine::bridge::text::FallbackTextMeasurer;
 use crate::engine::css::parser::Parser as CssParser;
 use crate::engine::html::parser::Parser as HtmlParser;
@@ -811,6 +812,7 @@ fn layout_and_info_for(html: &str, css: &str) -> (LayoutNode, InfoNode) {
         &dom.root,
         &resolved,
         Arc::new(FallbackTextMeasurer),
+        Arc::new(NullAudioSinkFactory),
         InheritedCss::default(),
         ElementChain::default(),
         ColorScheme::Light,
@@ -2220,6 +2222,7 @@ fn inline_image_keeps_intrinsic_dimensions_after_layout() {
         &dom.root,
         &resolved_styles,
         Arc::new(FallbackTextMeasurer),
+        Arc::new(NullAudioSinkFactory),
         InheritedCss::default(),
         ElementChain::default(),
         ColorScheme::Light,
@@ -4550,6 +4553,7 @@ fn before_pseudo_element_renders_background_image() {
         &dom.root,
         &resolved_styles,
         Arc::new(FallbackTextMeasurer),
+        Arc::new(NullAudioSinkFactory),
         InheritedCss::default(),
         ElementChain::default(),
         ColorScheme::Light,

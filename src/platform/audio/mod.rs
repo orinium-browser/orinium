@@ -1,11 +1,12 @@
 //! 音声データの管理と再生を行う
 
+use crate::engine::bridge::audio::{AudioError, AudioSink, AudioSinkFactory};
 use crate::platform::io as platform_io;
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, StreamConfig};
 use std::io::Cursor;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use symphonia::core::audio::sample::Sample;
 use symphonia::core::codecs::audio::AudioDecoderOptions;
@@ -35,14 +36,21 @@ pub struct SoundManager {
 impl SoundManager {
     /// 初期化
     pub fn init() -> Result<Arc<Mutex<Self>>> {
-        let manager = SoundManager {
+        Ok(Arc::new(Mutex::new(Self::new())))
+    }
+
+    /// .Device を開かずに、遊休状態のマネージャを構築する。
+    ///
+    /// 実際の出力ストリームは最初の再生時に [`Self::ensure_stream`] で
+    /// 確保される。
+    pub fn new() -> Self {
+        SoundManager {
             samples: Arc::new(Mutex::new(Vec::new())),
             play_pos: Arc::new(Mutex::new(0)),
             src_channels: 0,
             src_sample_rate: 0,
             stream: None,
-        };
-        Ok(Arc::new(Mutex::new(manager)))
+        }
     }
 
     /// cpalストリームを確保する
@@ -214,6 +222,104 @@ impl SoundManager {
         let samples = self.samples.lock().unwrap_or_else(|e| e.into_inner());
         self.src_channels > 0 && frame >= samples.len() / self.src_channels
     }
+}
+
+impl Default for SoundManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/* ============================
+ * Engine bridge
+ * ============================ */
+
+/// [`SoundManager`] を engine の [`AudioSink`] インターフェースへ適合させる。
+///
+/// engine 側の `<audio>` ウィジェットはこの型を知る必要がなく、
+/// `cpal` の出力デバイスも engine には露出しなくなる。
+pub struct PlatformAudioSink {
+    manager: Mutex<SoundManager>,
+}
+
+impl PlatformAudioSink {
+    /// 遊休状態の sink を作る。出力ストリームは最初の再生時に確保される。
+    pub fn new() -> Self {
+        Self {
+            manager: Mutex::new(SoundManager::new()),
+        }
+    }
+
+    /// ポイズンされたロックを握り潰して取り出す。
+    fn lock(&self) -> MutexGuard<'_, SoundManager> {
+        self.manager.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+impl Default for PlatformAudioSink {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AudioSink for PlatformAudioSink {
+    fn preload(&self, data: &[u8]) -> Result<(), AudioError> {
+        self.lock()
+            .load_from_bytes(data)
+            .map_err(|e| AudioError::Decode(format!("{e:#}")))
+    }
+
+    fn play(&self, source: &str, data: Option<&[u8]>) -> Result<(), AudioError> {
+        let mut manager = self.lock();
+        let result = match data {
+            Some(bytes) => manager.play_from_bytes(bytes),
+            // 取得済みバイトが無い場合は、platform 側で URI を解決する。
+            None => manager.play_from_local_uri(source),
+        };
+        result.map_err(|e| AudioError::Device(format!("{e:#}")))
+    }
+
+    fn pause(&self) -> Result<(), AudioError> {
+        self.lock()
+            .pause()
+            .map_err(|e| AudioError::Device(format!("{e:#}")))
+    }
+
+    fn resume(&self) -> Result<(), AudioError> {
+        self.lock()
+            .resume()
+            .map_err(|e| AudioError::Device(format!("{e:#}")))
+    }
+
+    fn current_seconds(&self) -> f32 {
+        self.lock().current_seconds()
+    }
+
+    fn duration_seconds(&self) -> f32 {
+        self.lock().duration_seconds()
+    }
+
+    fn is_finished(&self) -> bool {
+        self.lock().is_finished()
+    }
+}
+
+/// engine へ注入する [`AudioSinkFactory`]。
+///
+/// `<audio>` 要素ごとに独立した sink（= 独立した再生位置と cpal
+/// ストリーム）を作る。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PlatformAudioSinkFactory;
+
+impl AudioSinkFactory for PlatformAudioSinkFactory {
+    fn create(&self) -> Arc<dyn AudioSink> {
+        Arc::new(PlatformAudioSink::new())
+    }
+}
+
+/// engine へ注入する既定の [`AudioSinkFactory`] を返す。
+pub fn default_audio_sink_factory() -> Arc<dyn AudioSinkFactory> {
+    Arc::new(PlatformAudioSinkFactory)
 }
 
 /// 音声をデコードする

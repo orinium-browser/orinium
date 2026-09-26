@@ -10,7 +10,7 @@ pub mod sender_pool;
 pub use cache::Cache;
 pub use config::NetworkConfig;
 pub use cookie_store::CookieStore;
-pub use core::{Response, StatusCode};
+pub use core::{AsyncNetworkCore, Response, SharedNetState, StatusCode};
 pub use error::NetworkError;
 pub use hyper::http::Request;
 use ipc_channel::IpcError;
@@ -19,7 +19,6 @@ pub use sender_pool::{HttpSender, SenderPool};
 
 use serde::{Deserialize, Serialize};
 
-use core::{AsyncNetworkCore, SharedNetState};
 
 use crate::ParentChannels;
 use crate::engine::background_worker::BackgroundWorker;

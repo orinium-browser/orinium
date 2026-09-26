@@ -22,6 +22,7 @@ use orinium_browser::engine::{
 };
 use std::sync::Arc;
 
+use orinium_browser::platform::audio::default_audio_sink_factory;
 use orinium_browser::platform::renderer::text_measurer::PlatformTextMeasurer;
 use ui_layout::LayoutEngine;
 
@@ -77,6 +78,7 @@ fn main() {
         &dom.root,
         &resolved,
         measurer,
+        default_audio_sink_factory(),
         InheritedCss {
             text_flow_style: TextFlowStyle {
                 font_size: 16.0,

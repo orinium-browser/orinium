@@ -18,6 +18,7 @@ use orinium_browser::{
         tree::NodeRef,
     },
     platform::{
+        audio::default_audio_sink_factory,
         network::{NetworkConfig, NetworkCore},
         renderer::text_measurer::PlatformTextMeasurer,
     },
@@ -473,6 +474,7 @@ fn build_layout_info_inner(
         &dom.root,
         &resolved_styles,
         measurer,
+        default_audio_sink_factory(),
         InheritedCss {
             text_style: TextStyle::default(),
             text_flow_style: TextFlowStyle {
@@ -531,6 +533,7 @@ fn build_layout_for_dom(
         &dom.root,
         &resolved_styles,
         measurer,
+        default_audio_sink_factory(),
         InheritedCss {
             text_style: TextStyle::default(),
             text_flow_style: TextFlowStyle {

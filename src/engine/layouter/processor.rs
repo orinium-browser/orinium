@@ -25,6 +25,7 @@ use super::css_resolver::{MediaEnvironment, ResolvedStyles};
 use super::dom_snapshot::{DomSnapshot, NodeId};
 use super::types::InfoNode;
 use crate::engine::background_worker::BackgroundWorker;
+use crate::engine::bridge::audio::AudioSinkFactory;
 use crate::engine::bridge::text::TextMeasurer;
 use crate::engine::css::matcher::ElementChain;
 use crate::engine::html::ScriptingMode;
@@ -41,6 +42,7 @@ pub struct LayoutTask {
     pub resolved_styles: Arc<ResolvedStyles>,
     pub media_environment: MediaEnvironment,
     pub measurer: Arc<dyn TextMeasurer>,
+    pub audio_sinks: Arc<dyn AudioSinkFactory>,
     pub system_color_scheme: ColorScheme,
     pub scripting_mode: ScriptingMode,
     pub images: HashMap<String, Image>,
@@ -191,6 +193,7 @@ impl LayoutProcessor {
                         task.root,
                         &cache.rule_set,
                         task.measurer,
+                        task.audio_sinks,
                         task.parent,
                         task.chain,
                         task.system_color_scheme,
@@ -250,6 +253,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
+    use crate::engine::bridge::audio::NullAudioSinkFactory;
     use crate::engine::bridge::text::FallbackTextMeasurer;
     use crate::engine::html::parser::Parser as HtmlParser;
     use crate::engine::layouter::types::NodeKind;
@@ -267,6 +271,7 @@ mod tests {
             resolved_styles: Arc::new(ResolvedStyles::default()),
             media_environment: MediaEnvironment::new((0.0, 0.0), ColorScheme::Light),
             measurer: Arc::new(FallbackTextMeasurer),
+            audio_sinks: Arc::new(NullAudioSinkFactory),
             system_color_scheme: ColorScheme::Light,
             scripting_mode: ScriptingMode::default(),
             images: HashMap::new(),

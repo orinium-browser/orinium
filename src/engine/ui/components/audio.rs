@@ -6,10 +6,10 @@ use std::time::{Duration, Instant};
 
 use ui_layout::Style;
 
+use crate::engine::bridge::audio::AudioSink;
 use crate::engine::layouter::types::{Color, TextFlowStyle, TextStyle};
 use crate::engine::renderer_model::{Brush, DrawCommand, FillRule, Image, Paint, rect_path};
 use crate::engine::ui::custom_node::{ContentSize, CustomNode, PointerEvent};
-use crate::platform::audio::SoundManager;
 
 const PLAYER_WIDTH: f32 = 170.0;
 const PLAYER_HEIGHT: f32 = 32.0;
@@ -30,7 +30,7 @@ static STOP_ICON: LazyLock<Result<Image, String>> =
 pub struct AudioComponent {
     source: String,
     data: Option<Arc<[u8]>>,
-    sound: Arc<Mutex<SoundManager>>,
+    sink: Arc<dyn AudioSink>,
     loaded: AtomicBool,
     playing: AtomicBool,
     hovered: AtomicBool,
@@ -50,13 +50,14 @@ impl std::fmt::Debug for AudioComponent {
 }
 
 impl AudioComponent {
-    pub fn new(source: impl Into<String>, data: Option<Arc<[u8]>>) -> Self {
-        let sound = SoundManager::init().expect("SoundManager initialization cannot fail");
+    /// Builds the control around a sink obtained from the host's
+    /// [`AudioSinkFactory`](crate::engine::bridge::audio::AudioSinkFactory).
+    ///
+    /// When `data` is present it is decoded eagerly so the first click has
+    /// something to play.
+    pub fn new(source: impl Into<String>, data: Option<Arc<[u8]>>, sink: Arc<dyn AudioSink>) -> Self {
         let loaded = data.as_ref().is_some_and(|data| {
-            let result = sound
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .load_from_bytes(data);
+            let result = sink.preload(data);
             if let Err(error) = result {
                 log::error!("Failed to decode <audio> data: {error}");
                 false
@@ -67,7 +68,7 @@ impl AudioComponent {
         Self {
             source: source.into(),
             data,
-            sound,
+            sink,
             loaded: AtomicBool::new(loaded),
             playing: AtomicBool::new(false),
             hovered: AtomicBool::new(false),
@@ -83,22 +84,18 @@ impl AudioComponent {
             return;
         }
 
-        let mut sound = self.sound.lock().unwrap_or_else(|e| e.into_inner());
-        let result = if !self.loaded.load(Ordering::Relaxed) || sound.is_finished() {
-            if let Some(data) = &self.data {
-                sound.play_from_bytes(data)
-            } else {
-                sound.play_from_local_uri(&self.source)
-            }
+        let result = if !self.loaded.load(Ordering::Relaxed) || self.sink.is_finished() {
+            self.sink
+                .play(&self.source, self.data.as_deref())
         } else if self.playing.load(Ordering::Relaxed) {
-            sound.pause()
+            self.sink.pause()
         } else {
-            sound.resume()
+            self.sink.resume()
         };
 
         match result {
             Ok(()) => {
-                if !self.loaded.load(Ordering::Relaxed) || sound.is_finished() {
+                if !self.loaded.load(Ordering::Relaxed) || self.sink.is_finished() {
                     self.loaded.store(true, Ordering::Relaxed);
                 }
                 self.playing.fetch_xor(true, Ordering::Relaxed);
@@ -109,20 +106,14 @@ impl AudioComponent {
     }
 
     fn playback_times(&self) -> (f32, f32) {
-        let sound = self.sound.lock().unwrap_or_else(|e| e.into_inner());
-        (sound.current_seconds(), sound.duration_seconds())
+        (self.sink.current_seconds(), self.sink.duration_seconds())
     }
 
     fn update_finished_state(&self) {
         if !self.playing.load(Ordering::Relaxed) {
             return;
         }
-        let finished = self
-            .sound
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .is_finished();
-        if finished && self.playing.swap(false, Ordering::Relaxed) {
+        if self.sink.is_finished() && self.playing.swap(false, Ordering::Relaxed) {
             self.dirty.store(true, Ordering::Relaxed);
         }
     }
@@ -292,6 +283,11 @@ fn rasterize_svg(svg: &[u8]) -> anyhow::Result<Image> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::bridge::audio::{AudioSinkFactory, NullAudioSinkFactory};
+
+    fn component(source: &str) -> AudioComponent {
+        AudioComponent::new(source, None, NullAudioSinkFactory.create())
+    }
 
     #[test]
     fn svg_assets_decode_to_renderer_images() {
@@ -301,7 +297,7 @@ mod tests {
 
     #[test]
     fn audio_control_draws_button_icon_and_seconds() {
-        let component = AudioComponent::new("resource:///audio/birds.mp3", None);
+        let component = component("resource:///audio/birds.mp3");
         let mut commands = Vec::new();
         component.draw(
             &mut commands,
@@ -323,8 +319,17 @@ mod tests {
 
     #[test]
     fn only_left_button_accepts_pointer_down() {
-        let component = AudioComponent::new("", None);
+        let component = component("");
         assert!(!component.on_pointer_event(PointerEvent::Down { x: 80.0, y: 10.0 }));
         assert!(component.on_pointer_event(PointerEvent::Down { x: 10.0, y: 10.0 }));
+    }
+
+    #[test]
+    fn playback_without_a_source_is_refused() {
+        let component = component("");
+        component.toggle_playback();
+        // No sink call can succeed without a media source, so the widget
+        // never enters the playing state.
+        assert!(!component.playing.load(Ordering::Relaxed));
     }
 }

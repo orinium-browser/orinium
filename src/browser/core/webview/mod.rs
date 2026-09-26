@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::{Rc, Weak};
 use std::sync::{Arc, mpsc};
 
+use crate::engine::bridge::audio::AudioSinkFactory;
 use crate::engine::image_decoder::ImageDecoder;
 use crate::engine::layouter::types::{
     Background, Color, ColorScheme, ContainerStyle, CursorStyle, FontStyle, TextAlign,
@@ -35,7 +36,7 @@ use crate::engine::{
     renderer_model::{Image, StickyViewport, is_scrollport, sticky_offset},
     tree::{NodeRef, TreeNode},
 };
-use crate::platform::{locale, renderer::text_measurer::PlatformTextMeasurer};
+use crate::platform::{audio::default_audio_sink_factory, locale, renderer::text_measurer::PlatformTextMeasurer};
 use crate::{perf_scope, profile_log};
 use ui_layout::{Display, InnerDisplay, LayoutChild, LayoutNode, OuterDisplay, Position};
 use url::Url;
@@ -62,6 +63,10 @@ pub enum WebViewTask {
 }
 
 mod inspector;
+
+/// Manual, network-dependent end-to-end probes.
+#[cfg(test)]
+mod probe_tests;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FetchKind {
@@ -225,6 +230,13 @@ pub struct WebView {
     needs_redraw: bool,
 
     text_measurer: Option<Arc<PlatformTextMeasurer>>,
+
+    /// Builds one audio sink per `<audio>` element during layout.
+    ///
+    /// Held as a trait object so the layout task stays free of any concrete
+    /// platform audio type. The factory is stateless and cheap, so it is
+    /// built once per `WebView` and survives navigation resets.
+    audio_sinks: Arc<dyn AudioSinkFactory>,
 
     system_color_scheme: ColorScheme,
     viewport: (f32, f32),
@@ -453,6 +465,7 @@ impl WebView {
             needs_redraw: false,
 
             text_measurer: None,
+            audio_sinks: default_audio_sink_factory(),
 
             system_color_scheme,
             viewport: (800.0, 600.0),
@@ -1649,6 +1662,7 @@ impl WebView {
             resolved_styles: Arc::clone(&self.resolved_styles),
             media_environment,
             measurer: self.text_measurer.clone().unwrap(),
+            audio_sinks: Arc::clone(&self.audio_sinks),
             system_color_scheme: self.system_color_scheme,
             scripting_mode: self.js_policy.into(),
             images: self.images.clone(),

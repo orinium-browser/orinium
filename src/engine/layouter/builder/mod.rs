@@ -44,6 +44,7 @@ use crate::engine::renderer_model::Image;
 use crate::engine::svg::{SvgContent, collect_svg};
 use crate::engine::tree::NodeRef;
 use crate::engine::ui::custom_node_bridge::CustomNodeBridge;
+use crate::engine::bridge::audio::AudioSinkFactory;
 use crate::engine::ui::registry::{ComponentRegistry, CustomNodeContext, DomWriteBack};
 
 use std::collections::{HashMap, HashSet};
@@ -207,6 +208,7 @@ pub fn build_layout_and_info(
     dom: &NodeRef<HtmlNodeType>,
     resolved_styles: &ResolvedStyles,
     measurer: Arc<dyn text::TextMeasurer>,
+    audio_sinks: Arc<dyn AudioSinkFactory>,
     parent: InheritedCss,
     chain: ElementChain,
     system_color_scheme: ColorScheme,
@@ -217,6 +219,7 @@ pub fn build_layout_and_info(
         dom,
         resolved_styles,
         measurer,
+        audio_sinks,
         parent,
         chain,
         system_color_scheme,
@@ -235,6 +238,7 @@ pub fn build_layout_and_info_with_images(
     dom: &NodeRef<HtmlNodeType>,
     resolved_styles: &ResolvedStyles,
     measurer: Arc<dyn text::TextMeasurer>,
+    audio_sinks: Arc<dyn AudioSinkFactory>,
     parent: InheritedCss,
     chain: ElementChain,
     system_color_scheme: ColorScheme,
@@ -250,6 +254,7 @@ pub fn build_layout_and_info_with_images(
         snapshot.roots()[0],
         &rule_set,
         measurer,
+        audio_sinks,
         parent,
         chain,
         system_color_scheme,
@@ -274,6 +279,7 @@ pub fn build_layout_and_info_from_snapshot(
     root: NodeId,
     rule_set: &RuleSet,
     measurer: Arc<dyn text::TextMeasurer>,
+    audio_sinks: Arc<dyn AudioSinkFactory>,
     parent: InheritedCss,
     mut chain: ElementChain,
     system_color_scheme: ColorScheme,
@@ -690,6 +696,7 @@ pub fn build_layout_and_info_from_snapshot(
                         container_style: &container_style,
                         text_style: &text_style,
                         measurer: Arc::clone(&measurer),
+                        audio_sinks: &*audio_sinks,
                         images,
                         audio,
                         get_attr: &|name| html_node.get_attr(name).map(str::to_string),

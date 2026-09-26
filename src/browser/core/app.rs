@@ -47,6 +47,7 @@ use crate::engine::origin::Origin;
 use crate::platform::network::{NetworkCore, NetworkRequest};
 use crate::platform::renderer::gpu::GpuRenderer;
 use crate::platform::system::App;
+use crate::platform::system::shell::{BrowserHost, ShellCommand, WindowGeometry};
 
 pub struct PendingFetches {
     /// Maps (id) to (window_id, tab_id, FetchKind, Url)
@@ -174,16 +175,29 @@ impl BrowserApp {
         })
     }
 
-    /// Registers a new window with the given id, size, title, scale factor, and associated UI.
-    pub fn open_window(
+    /// Opens a window showing a caller-supplied UI.
+    ///
+    /// This is the in-process entry point used by embedders that build one UI
+    /// per window. The [`BrowserHost`] port deliberately offers no such hook:
+    /// the OS shell only knows how to describe a window, never what to put in
+    /// it.
+    pub fn open_window_with_ui(
         &mut self,
         window_id: WindowId,
-        window_size: (u32, u32),
-        window_title: String,
-        scale_factor: f64,
+        geometry: WindowGeometry,
+        root_ui: BrowserUi,
+    ) {
+        self.register_window(window_id, &geometry, root_ui);
+    }
+
+    /// Registers a window with its per-window UI.
+    fn register_window(
+        &mut self,
+        window_id: WindowId,
+        geometry: &WindowGeometry,
         mut root_ui: BrowserUi,
     ) {
-        root_ui.set_window(window_size, scale_factor, window_title);
+        root_ui.set_window(geometry.size, geometry.scale_factor, geometry.title.clone());
         self.windows.insert(window_id, root_ui);
     }
 
@@ -192,28 +206,10 @@ impl BrowserApp {
         self.windows.remove(&window_id);
     }
 
-    /// Returns the default window size for opening new windows.
-    pub fn default_window_size(&self) -> (f32, f32) {
-        (
-            self.default_window_size.0 as f32,
-            self.default_window_size.1 as f32,
-        )
-    }
-
-    /// Returns the default window title for opening new windows.
-    pub fn default_window_title(&self) -> String {
-        self.default_window_title.clone()
-    }
-
     /// Sets the UI to use when the first window opens.
     /// Must be called before `run()`.
     pub fn set_default_ui(&mut self, ui: BrowserUi) {
         self.default_ui = Some(ui);
-    }
-
-    /// Takes the default UI, or returns `None` if not set.
-    pub fn take_default_ui(&mut self) -> Option<BrowserUi> {
-        self.default_ui.take()
     }
 
     /// Handles a `winit` window event for the given window and returns a `BrowserCommand`.
@@ -367,6 +363,62 @@ impl BrowserApp {
     }
 }
 
+/// Bridges the browser core to the OS shell.
+///
+/// The trait lives in [`crate::platform::system::shell`] so the event loop can
+/// be driven by any host without naming a browser type.
+impl BrowserHost for BrowserApp {
+    fn default_window_size(&self) -> (u32, u32) {
+        self.default_window_size
+    }
+
+    fn default_window_title(&self) -> String {
+        self.default_window_title.clone()
+    }
+
+    fn open_window(&mut self, window_id: WindowId, geometry: WindowGeometry) {
+        // The first window shows the UI handed to `set_default_ui`; any later
+        // window (Ctrl+N) starts empty.
+        let root_ui = self
+            .default_ui
+            .take()
+            .unwrap_or_else(|| BrowserUi::with_tab(super::Tab::default()));
+        self.open_window_with_ui(window_id, geometry, root_ui);
+    }
+
+    fn has_pending_default_window(&self) -> bool {
+        self.default_ui.is_some()
+    }
+
+    fn close_window(&mut self, window_id: WindowId) {
+        self.windows.remove(&window_id);
+    }
+
+    fn window_title(&self, window_id: WindowId) -> String {
+        match self.windows.get(&window_id) {
+            Some(ui) => ui.window_title(),
+            None => self.default_window_title.clone(),
+        }
+    }
+
+    fn handle_window_event(
+        &mut self,
+        window_id: WindowId,
+        event: WindowEvent,
+        gpu: &mut GpuRenderer,
+    ) -> ShellCommand {
+        BrowserApp::handle_window_event(self, window_id, event, gpu)
+    }
+
+    fn apply_draw_commands(&mut self, window_id: WindowId, gpu: &mut GpuRenderer) {
+        BrowserApp::apply_draw_commands(self, window_id, gpu);
+    }
+
+    fn poll_window(&mut self, window_id: WindowId) -> bool {
+        self.poll_window(window_id)
+    }
+}
+
 /// Applies the browser-controlled `Origin` / `Referer` request headers.
 ///
 /// - Any `Origin` / `Referer` supplied by page scripts is stripped.
@@ -410,7 +462,7 @@ fn run_with_winit_backend(app: BrowserApp) -> Result<()> {
 fn run_event_loop(app: BrowserApp) -> Result<()> {
     let event_loop = winit::event_loop::EventLoop::new()?;
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
-    let mut app = App::new(app);
+    let mut app = App::new(Box::new(app));
     event_loop.run_app(&mut app)?;
     Ok(())
 }

@@ -1,13 +1,8 @@
-#[derive(Debug, Clone)]
-pub enum BrowserCommand {
-    None,
-    Exit,
-    RequestRedraw,
-    RenameWindowTitle,
-    OpenNewWindow,
-    /// Enables or disables OS IME input near the last click position.
-    SetImeAllowed {
-        allowed: bool,
-        position: (f64, f64),
-    },
-}
+//! The browser's OS-facing command vocabulary.
+//!
+//! The enum itself lives in [`platform::system::shell`] because every variant
+//! is an instruction for the OS shell, not browser state. It is re-exported
+//! here under its historical name so browser-internal code keeps reading
+//! naturally.
+
+pub use crate::platform::system::shell::ShellCommand as BrowserCommand;

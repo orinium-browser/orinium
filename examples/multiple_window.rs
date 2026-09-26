@@ -2,6 +2,8 @@ use anyhow::Result;
 use orinium_browser::ProcessHandler;
 use orinium_browser::browser::{BrowserApp, BrowserUi, Tab};
 use orinium_browser::platform::renderer::gpu::GpuRenderer;
+use orinium_browser::platform::system::BrowserHost;
+use orinium_browser::platform::system::shell::WindowGeometry;
 use std::collections::HashMap;
 use std::sync::Arc;
 use winit::application::ApplicationHandler;
@@ -94,11 +96,13 @@ impl ApplicationHandler for MultiWindowApp {
             let gpu_renderer = pollster::block_on(GpuRenderer::new(window.clone(), None))
                 .expect("failed to create GPU renderer");
 
-            self.browser.open_window(
+            self.browser.open_window_with_ui(
                 window_id,
-                spec.size,
-                spec.title.to_string(),
-                scale_factor,
+                WindowGeometry {
+                    size: spec.size,
+                    title: spec.title.to_string(),
+                    scale_factor,
+                },
                 root_ui,
             );
 
@@ -164,8 +168,8 @@ impl ApplicationHandler for MultiWindowApp {
                         .create_window(
                             Window::default_attributes()
                                 .with_inner_size(winit::dpi::PhysicalSize::new(
-                                    default_size.0 as u32,
-                                    default_size.1 as u32,
+                                    default_size.0,
+                                    default_size.1,
                                 ))
                                 .with_title(&default_title),
                         )
@@ -178,11 +182,13 @@ impl ApplicationHandler for MultiWindowApp {
 
                 let root_ui = BrowserUi::with_tab(Tab::default());
 
-                self.browser.open_window(
+                self.browser.open_window_with_ui(
                     new_id,
-                    (default_size.0 as u32, default_size.1 as u32),
-                    default_title,
-                    scale_factor,
+                    WindowGeometry {
+                        size: default_size,
+                        title: default_title,
+                        scale_factor,
+                    },
                     root_ui,
                 );
                 let mut state = WindowState {

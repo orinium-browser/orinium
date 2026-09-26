@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, mpsc};
 
+use crate::engine::bridge::audio::AudioSinkFactory;
 use crate::engine::bridge::text;
 use crate::engine::layouter::normalize_whitespace;
 use crate::engine::layouter::types::{Color, ContainerStyle, TextStyle, WhiteSpace};
@@ -38,6 +39,12 @@ pub struct CustomNodeContext<'a> {
     pub text_style: &'a TextStyle,
     /// Text measurer for text-heavy components.
     pub measurer: Arc<dyn text::TextMeasurer>,
+    /// Builds one audio sink per `<audio>` element.
+    ///
+    /// Audio widgets are constructed on the layout worker thread, which must
+    /// not touch a platform audio device itself, so the sink is created here
+    /// through the factory the host injected.
+    pub audio_sinks: &'a dyn AudioSinkFactory,
     /// Decoded images keyed by `src` URL.
     pub images: &'a HashMap<String, Image>,
     /// Encoded audio bytes keyed by `src` URL.
@@ -119,6 +126,7 @@ impl CustomNodeFactory for AudioFactory {
             ctx.media_source
                 .and_then(|source| ctx.audio.get(source))
                 .cloned(),
+            ctx.audio_sinks.create(),
         )))
     }
 }
@@ -323,6 +331,7 @@ impl CustomNodeFactory for SelectFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::bridge::audio::NullAudioSinkFactory;
     use crate::engine::bridge::text::FallbackTextMeasurer;
     use crate::engine::html::parser::DomTree;
     use crate::engine::html::parser::Parser as HtmlParser;
@@ -338,6 +347,11 @@ mod tests {
         let dom = tree("<html></html>");
         let (snapshot, _dom_refs) = DomSnapshot::from_tree(&dom.root);
         snapshot
+    }
+
+    /// Headless sink factory: these tests never touch an audio device.
+    fn audio_sinks() -> NullAudioSinkFactory {
+        NullAudioSinkFactory
     }
 
     #[test]
@@ -379,6 +393,7 @@ mod tests {
                 container_style: &container_style,
                 text_style: &text_style,
                 measurer: Arc::clone(&measurer),
+                audio_sinks: &audio_sinks(),
                 images: &images,
                 audio: &audio,
                 get_attr: &get_attr,
@@ -396,6 +411,7 @@ mod tests {
                 container_style: &container_style,
                 text_style: &text_style,
                 measurer: Arc::clone(&measurer),
+                audio_sinks: &audio_sinks(),
                 images: &images,
                 audio: &audio,
                 get_attr: &get_attr,
@@ -414,6 +430,7 @@ mod tests {
                 container_style: &container_style,
                 text_style: &text_style,
                 measurer: Arc::clone(&measurer),
+                audio_sinks: &audio_sinks(),
                 images: &images,
                 audio: &audio,
                 get_attr: &get_attr,
@@ -431,6 +448,7 @@ mod tests {
                 container_style: &container_style,
                 text_style: &text_style,
                 measurer: Arc::clone(&measurer),
+                audio_sinks: &audio_sinks(),
                 images: &images,
                 audio: &audio,
                 get_attr: &get_attr,
@@ -481,6 +499,7 @@ mod tests {
                 container_style: &container_style,
                 text_style: &text_style,
                 measurer: Arc::new(FallbackTextMeasurer),
+                audio_sinks: &audio_sinks(),
                 images: &images,
                 audio: &audio,
                 get_attr: &get_attr,
@@ -540,6 +559,7 @@ mod tests {
                 container_style: &container_style,
                 text_style: &text_style,
                 measurer: Arc::new(FallbackTextMeasurer),
+                audio_sinks: &audio_sinks(),
                 images: &images,
                 audio: &audio,
                 get_attr: &get_attr,
@@ -597,6 +617,7 @@ mod tests {
                 container_style: &container_style,
                 text_style: &text_style,
                 measurer: Arc::new(FallbackTextMeasurer),
+                audio_sinks: &audio_sinks(),
                 images: &images,
                 audio: &audio,
                 get_attr: &get_attr,
@@ -638,6 +659,7 @@ mod tests {
             container_style: &container_style,
             text_style: &text_style,
             measurer: Arc::new(FallbackTextMeasurer),
+            audio_sinks: &audio_sinks(),
             images: &images,
             audio: &audio,
             get_attr: &get_attr,
