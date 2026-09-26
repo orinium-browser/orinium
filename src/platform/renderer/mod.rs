@@ -1,5 +1,6 @@
 //! Renderer module. Text, image, and GPU rendering.
 
+pub mod draw_sink;
 pub mod gpu;
 mod image;
 pub(crate) mod mesh;

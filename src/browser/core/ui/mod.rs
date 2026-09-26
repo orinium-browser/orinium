@@ -25,7 +25,7 @@ use crate::engine::layouter::types::ColorScheme;
 use crate::engine::renderer_model::{DrawCommand, Rect};
 use crate::engine::ui::PointerEvent;
 use crate::engine::ui::input_text_types::{InputTextEvent, InputTextKey};
-use crate::platform::renderer::gpu::GpuRenderer;
+use crate::platform::renderer::draw_sink::DrawSink;
 
 use super::BrowserCommand;
 
@@ -250,15 +250,15 @@ impl BrowserUi {
         self.renderer.render_state.window_title.clone()
     }
 
-    /// Rebuilds the render tree and sends draw commands to the GPU for this window.
-    pub fn redraw(&mut self, gpu: &mut GpuRenderer) {
+    /// Rebuilds the render tree and sends draw commands to `sink`.
+    pub fn redraw(&mut self, sink: &mut dyn DrawSink) {
         let id = self.active_tab_id();
-        self.renderer.redraw(&mut self.tabs, id, gpu);
+        self.renderer.redraw(&mut self.tabs, id, sink);
     }
 
-    /// Applies the current draw commands to the GPU renderer.
-    pub fn apply_draw_commands(&self, gpu: &mut GpuRenderer) {
-        self.renderer.apply_draw_commands(gpu);
+    /// Applies the current draw commands to `sink` without presenting.
+    pub fn apply_draw_commands(&self, sink: &mut dyn DrawSink) {
+        self.renderer.apply_draw_commands(sink);
     }
 
     /// Ticks all tabs and collects fetch requests and redraw demands.
@@ -358,27 +358,27 @@ impl BrowserUi {
     pub fn handle_window_event(
         &mut self,
         event: WindowEvent,
-        gpu: &mut GpuRenderer,
+        sink: &mut dyn DrawSink,
     ) -> BrowserCommand {
         match event {
             WindowEvent::CloseRequested => BrowserCommand::Exit,
 
             WindowEvent::RedrawRequested => {
-                self.redraw(gpu);
+                self.redraw(sink);
                 BrowserCommand::RenameWindowTitle
             }
 
             WindowEvent::Resized(size) => {
                 self.renderer.render_state.window_size = (size.width, size.height);
-                gpu.resize(size);
-                self.redraw(gpu);
+                sink.resize((size.width, size.height));
+                self.redraw(sink);
                 BrowserCommand::RequestRedraw
             }
 
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                gpu.set_scale_factor(scale_factor);
+                sink.set_scale_factor(scale_factor);
                 self.renderer.render_state.scale_factor = scale_factor;
-                self.redraw(gpu);
+                self.redraw(sink);
                 BrowserCommand::RequestRedraw
             }
 
@@ -837,10 +837,132 @@ mod tests {
     use super::*;
     use crate::browser::core::webview::JsPolicy;
     use crate::engine::layouter::types::ColorScheme;
+    use crate::engine::renderer_model::DrawCommand;
 
     fn ui_with_one_tab() -> BrowserUi {
         let tab = Tab::new(ColorScheme::default(), JsPolicy::default());
         BrowserUi::with_tab(tab)
+    }
+
+    /// A sink that records frames instead of presenting them.
+    ///
+    /// Before the `DrawSink` port the whole redraw path required a real
+    /// `wgpu` surface, so none of it was reachable from a unit test. Recording
+    /// the frames is enough to assert what the browser layer produced.
+    #[derive(Default)]
+    struct RecordingSink {
+        frames: Vec<Vec<crate::engine::renderer_model::DrawCommand>>,
+        pending: Vec<crate::engine::renderer_model::DrawCommand>,
+        size: (u32, u32),
+        scale_factor: f64,
+    }
+
+    impl DrawSink for RecordingSink {
+        fn upload(&mut self, commands: &[crate::engine::renderer_model::DrawCommand]) {
+            self.pending.extend_from_slice(commands);
+        }
+
+        fn present(&mut self) -> Result<(), crate::platform::renderer::draw_sink::DrawError> {
+            self.frames.push(std::mem::take(&mut self.pending));
+            Ok(())
+        }
+
+        fn resize(&mut self, size: (u32, u32)) {
+            self.size = size;
+        }
+
+        fn set_scale_factor(&mut self, scale_factor: f64) {
+            self.scale_factor = scale_factor;
+        }
+    }
+
+    #[test]
+    fn redraw_produces_a_frame_without_a_gpu() {
+        let mut ui = ui_with_one_tab();
+        ui.set_window((800, 600), 1.0, "test".to_string());
+        let mut sink = RecordingSink::default();
+
+        ui.redraw(&mut sink);
+
+        assert_eq!(
+            sink.frames.len(),
+            1,
+            "redraw must present exactly one frame"
+        );
+        let frame = &sink.frames[0];
+        assert!(!frame.is_empty());
+        // The frame is a balanced clip/transform scope: page, then chrome, then
+        // the context menu on top.
+        assert!(matches!(frame.first(), Some(DrawCommand::PushClip { .. })));
+        assert_eq!(
+            frame
+                .iter()
+                .filter(|c| matches!(c, DrawCommand::PopClip))
+                .count(),
+            frame
+                .iter()
+                .filter(|c| matches!(c, DrawCommand::PushClip { .. }))
+                .count(),
+            "clip scopes must be balanced: {frame:?}"
+        );
+    }
+
+    #[test]
+    fn apply_draw_commands_does_not_present() {
+        let mut ui = ui_with_one_tab();
+        ui.set_window((800, 600), 1.0, "test".to_string());
+
+        // `apply_draw_commands` re-sends what is already recorded rather than
+        // rebuilding, so the buffer has to be populated first.
+        let mut priming = RecordingSink::default();
+        ui.redraw(&mut priming);
+        assert!(!priming.frames.is_empty());
+
+        let mut sink = RecordingSink::default();
+        ui.apply_draw_commands(&mut sink);
+
+        assert!(
+            sink.frames.is_empty(),
+            "apply_draw_commands records without presenting"
+        );
+        assert!(
+            !sink.pending.is_empty(),
+            "apply_draw_commands must upload the recorded frame"
+        );
+    }
+
+    #[test]
+    fn resize_reaches_the_sink_as_plain_pixels() {
+        // `WindowEvent::ScaleFactorChanged` carries a winit-internal
+        // `InnerSizeWriter` that cannot be constructed outside winit, so the
+        // scale-factor half of the forwarding is covered by
+        // `platform::renderer::draw_sink` instead.
+        let mut ui = ui_with_one_tab();
+        ui.set_window((800, 600), 1.0, "test".to_string());
+        let mut sink = RecordingSink::default();
+
+        let cmd = ui.handle_window_event(
+            WindowEvent::Resized(winit::dpi::PhysicalSize::new(1024, 768)),
+            &mut sink,
+        );
+
+        assert!(matches!(cmd, BrowserCommand::RequestRedraw));
+        // The port speaks `(u32, u32)`, not `PhysicalSize<u32>`: the browser
+        // layer stays free of winit's pixel types.
+        assert_eq!(sink.size, (1024, 768));
+        assert_eq!(sink.frames.len(), 1, "a resize repaints");
+    }
+
+    #[test]
+    fn redraw_requested_event_presents_a_frame() {
+        let mut ui = ui_with_one_tab();
+        ui.set_window((800, 600), 1.0, "test".to_string());
+        let mut sink = RecordingSink::default();
+
+        let cmd = ui.handle_window_event(WindowEvent::RedrawRequested, &mut sink);
+
+        assert!(matches!(cmd, BrowserCommand::RenameWindowTitle));
+        assert_eq!(sink.frames.len(), 1);
     }
 
     #[test]

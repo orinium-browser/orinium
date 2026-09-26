@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use crate::browser::core::ui::TabId;
 use crate::engine::renderer_model::{AffineTransform, DrawCommand, FillRule, Rect, rect_path};
-use crate::platform::renderer::gpu::GpuRenderer;
+use crate::platform::renderer::draw_sink::DrawSink;
 
 use super::{BasicChrome, BasicContextMenu, Chrome, ContextMenu, RenderState};
 use crate::browser::core::tab::Tab;
@@ -128,22 +128,25 @@ impl BrowserRenderer {
         }
     }
 
-    /// 現在の DrawCommand を GPU レンダラへ送る。
-    pub fn apply_draw_commands(&self, gpu: &mut GpuRenderer) {
-        gpu.parse_draw_commands(&self.render_state.draw_commands);
+    /// 現在の DrawCommand を描画 sink へ送る。
+    ///
+    /// `sink` は trait object なので、このレイヤは描画が wgpu 上か、どこか別の
+    /// 場所で実行されるかを知らない。
+    pub fn apply_draw_commands(&self, sink: &mut dyn DrawSink) {
+        sink.upload(&self.render_state.draw_commands);
     }
 
-    /// DrawCommand を再生成して GPU に送り、実際の描画を実行する。
+    /// DrawCommand を再生成して sink へ送り、描画を実行する。
     pub fn redraw(
         &mut self,
         tabs: &mut HashMap<TabId, Tab>,
         active_id: Option<TabId>,
-        gpu: &mut GpuRenderer,
+        sink: &mut dyn DrawSink,
     ) {
         self.rebuild(tabs, active_id);
-        self.apply_draw_commands(gpu);
-        if let Err(e) = gpu.render() {
-            log::error!(target: "BrowserRenderer::redraw", "Render error occurred: {}", e);
+        self.apply_draw_commands(sink);
+        if let Err(e) = sink.present() {
+            log::error!(target: "BrowserRenderer::redraw", "Present failed: {e}");
         }
     }
 }

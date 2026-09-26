@@ -1,6 +1,7 @@
 use anyhow::Result;
 use orinium_browser::ProcessHandler;
 use orinium_browser::browser::{BrowserApp, BrowserUi, Tab};
+use orinium_browser::platform::renderer::draw_sink::DrawSink;
 use orinium_browser::platform::renderer::gpu::GpuRenderer;
 use orinium_browser::platform::system::BrowserHost;
 use orinium_browser::platform::system::shell::WindowGeometry;
@@ -37,7 +38,9 @@ const WINDOWS: &[WindowSpec] = &[
 
 struct WindowState {
     window: Arc<Window>,
-    gpu_renderer: GpuRenderer,
+    /// Mirrors `platform::system::App`: the shell is the only place that names
+    /// a concrete renderer, and hands the browser a `dyn DrawSink`.
+    sink: Box<dyn DrawSink>,
 }
 
 struct MultiWindowApp {
@@ -108,12 +111,12 @@ impl ApplicationHandler for MultiWindowApp {
 
             let mut state = WindowState {
                 window,
-                gpu_renderer,
+                sink: Box::new(gpu_renderer),
             };
 
             // Request initial draw.
             self.browser
-                .apply_draw_commands(window_id, &mut state.gpu_renderer);
+                .apply_draw_commands(window_id, state.sink.as_mut());
             state.window.request_redraw();
 
             self.windows.insert(window_id, state);
@@ -133,7 +136,7 @@ impl ApplicationHandler for MultiWindowApp {
         let cmd = {
             let state = self.windows.get_mut(&window_id).unwrap();
             self.browser
-                .handle_window_event(window_id, event, &mut state.gpu_renderer)
+                .handle_window_event(window_id, event, state.sink.as_mut())
         };
 
         use orinium_browser::browser::BrowserCommand;
@@ -193,10 +196,10 @@ impl ApplicationHandler for MultiWindowApp {
                 );
                 let mut state = WindowState {
                     window,
-                    gpu_renderer,
+                    sink: Box::new(gpu_renderer),
                 };
                 self.browser
-                    .apply_draw_commands(new_id, &mut state.gpu_renderer);
+                    .apply_draw_commands(new_id, state.sink.as_mut());
                 state.window.request_redraw();
                 self.windows.insert(new_id, state);
             }

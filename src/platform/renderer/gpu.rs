@@ -2,6 +2,9 @@
 
 use crate::engine::renderer_model::DrawCommand;
 use anyhow::Result;
+use winit::dpi::PhysicalSize;
+
+use super::draw_sink::{DrawError, DrawSink};
 use std::env;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
@@ -441,6 +444,30 @@ impl GpuRenderer {
 
     pub fn set_scale_factor(&mut self, scale_factor: f64) {
         self.scale_factor = scale_factor;
+    }
+}
+
+/// Presents through a `wgpu` surface bound to an OS window.
+///
+/// This is the shell's default [`DrawSink`]. Callers above the seam only ever
+/// see the trait, so the fact that presentation is tied to a window surface
+/// stays contained here.
+impl DrawSink for GpuRenderer {
+    fn upload(&mut self, commands: &[DrawCommand]) {
+        self.parse_draw_commands(commands);
+    }
+
+    fn present(&mut self) -> Result<(), DrawError> {
+        self.render()
+            .map_err(|e| DrawError::Surface(format!("{e:#}")))
+    }
+
+    fn resize(&mut self, size: (u32, u32)) {
+        GpuRenderer::resize(self, PhysicalSize::new(size.0, size.1));
+    }
+
+    fn set_scale_factor(&mut self, scale_factor: f64) {
+        GpuRenderer::set_scale_factor(self, scale_factor);
     }
 }
 

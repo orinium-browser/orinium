@@ -44,7 +44,7 @@ use super::{BrowserCommand, resource_loader::BrowserResourceLoader};
 use crate::browser::core::ui::TabId;
 use crate::engine::origin::Origin;
 use crate::platform::network::{NetworkCore, NetworkRequest};
-use crate::platform::renderer::gpu::GpuRenderer;
+use crate::platform::renderer::draw_sink::DrawSink;
 use crate::platform::system::App;
 use crate::platform::system::shell::{BrowserHost, ShellCommand, WindowGeometry};
 
@@ -216,17 +216,17 @@ impl BrowserApp {
         &mut self,
         window_id: WindowId,
         event: WindowEvent,
-        gpu: &mut GpuRenderer,
+        sink: &mut dyn DrawSink,
     ) -> BrowserCommand {
         let browser_cmd = match self.windows.get_mut(&window_id) {
-            Some(ui) => ui.handle_window_event(event, gpu),
+            Some(ui) => ui.handle_window_event(event, sink),
             None => BrowserCommand::None,
         };
         let cmd_from_tick = self.tick(window_id);
         match browser_cmd {
             BrowserCommand::None => {
                 if matches!(cmd_from_tick, BrowserCommand::RequestRedraw) {
-                    self.redraw(window_id, gpu);
+                    self.redraw(window_id, sink);
                 }
                 cmd_from_tick
             }
@@ -234,7 +234,7 @@ impl BrowserApp {
                 if matches!(cmd_from_tick, BrowserCommand::RequestRedraw) {
                     // tick() が追加の処理を要求 → RequestRedraw に昇格させる。
                     // RequestRedraw のハンドラはタイトル設定も行うので情報は失われない。
-                    self.redraw(window_id, gpu);
+                    self.redraw(window_id, sink);
                     BrowserCommand::RequestRedraw
                 } else {
                     browser_cmd
@@ -242,7 +242,7 @@ impl BrowserApp {
             }
             _ => {
                 if matches!(cmd_from_tick, BrowserCommand::RequestRedraw) {
-                    self.redraw(window_id, gpu);
+                    self.redraw(window_id, sink);
                 }
                 browser_cmd
             }
@@ -250,17 +250,17 @@ impl BrowserApp {
     }
 
     /// Rebuilds the render tree and sends draw commands to the GPU for the given window.
-    pub fn redraw(&mut self, window_id: WindowId, gpu: &mut GpuRenderer) {
+    pub fn redraw(&mut self, window_id: WindowId, sink: &mut dyn DrawSink) {
         let Some(ui) = self.windows.get_mut(&window_id) else {
             return;
         };
-        ui.redraw(gpu);
+        ui.redraw(sink);
     }
 
     /// Applies the current draw commands for the given window to the GPU renderer.
-    pub fn apply_draw_commands(&self, window_id: WindowId, gpu: &mut GpuRenderer) {
+    pub fn apply_draw_commands(&self, window_id: WindowId, sink: &mut dyn DrawSink) {
         if let Some(ui) = self.windows.get(&window_id) {
-            ui.apply_draw_commands(gpu);
+            ui.apply_draw_commands(sink);
         }
     }
 
@@ -404,13 +404,13 @@ impl BrowserHost for BrowserApp {
         &mut self,
         window_id: WindowId,
         event: WindowEvent,
-        gpu: &mut GpuRenderer,
+        sink: &mut dyn DrawSink,
     ) -> ShellCommand {
-        BrowserApp::handle_window_event(self, window_id, event, gpu)
+        BrowserApp::handle_window_event(self, window_id, event, sink)
     }
 
-    fn apply_draw_commands(&mut self, window_id: WindowId, gpu: &mut GpuRenderer) {
-        BrowserApp::apply_draw_commands(self, window_id, gpu);
+    fn apply_draw_commands(&mut self, window_id: WindowId, sink: &mut dyn DrawSink) {
+        BrowserApp::apply_draw_commands(self, window_id, sink);
     }
 
     fn poll_window(&mut self, window_id: WindowId) -> bool {

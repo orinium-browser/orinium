@@ -1,9 +1,12 @@
 //! Manages the application lifecycle, including window creation and event handling.
 //!
-//! This module is the OS shell. It owns the `winit` event loop, the windows
-//! and their [`GpuRenderer`]s, and knows nothing about the browser: all
-//! browser interaction goes through the [`BrowserHost`] port declared in
-//! [`super::shell`].
+//! This module is the OS shell. It owns the `winit` event loop, the windows,
+//! and the [`DrawSink`] each one presents through, and knows nothing about the
+//! browser: all browser interaction goes through the [`BrowserHost`] port
+//! declared in [`super::shell`].
+//!
+//! This is the only place that constructs a concrete sink. Everything above it
+//! — including the whole browser layer — sees [`DrawSink`] as a trait object.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -12,12 +15,18 @@ use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowId};
 
+use crate::platform::renderer::draw_sink::DrawSink;
 use crate::platform::renderer::gpu::GpuRenderer;
 use crate::platform::system::shell::{BrowserHost, ShellCommand, WindowGeometry};
 
 pub struct WindowState {
     pub window: Arc<Window>,
-    pub gpu_renderer: GpuRenderer,
+    /// Presents this window's draw commands.
+    ///
+    /// Held as a trait object so the shell is the only layer that names a
+    /// concrete renderer. Swapping in an offscreen or remote sink is a change
+    /// to this one field.
+    pub sink: Box<dyn DrawSink>,
 }
 
 pub struct App {
@@ -67,11 +76,11 @@ impl App {
 
         let mut state = WindowState {
             window,
-            gpu_renderer,
+            sink: Box::new(gpu_renderer),
         };
 
         self.host
-            .apply_draw_commands(window_id, &mut state.gpu_renderer);
+            .apply_draw_commands(window_id, state.sink.as_mut());
         state.window.request_redraw();
 
         self.windows.insert(window_id, state);
@@ -111,7 +120,7 @@ impl ApplicationHandler for App {
         let cmd = {
             let state = self.windows.get_mut(&window_id).unwrap();
             self.host
-                .handle_window_event(window_id, event, &mut state.gpu_renderer)
+                .handle_window_event(window_id, event, state.sink.as_mut())
         };
 
         match cmd {

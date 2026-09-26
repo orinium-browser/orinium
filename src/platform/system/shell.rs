@@ -16,7 +16,7 @@
 use winit::event::WindowEvent;
 use winit::window::WindowId;
 
-use crate::platform::renderer::gpu::GpuRenderer;
+use crate::platform::renderer::draw_sink::DrawSink;
 
 /// An instruction for the OS shell, returned after handling an event.
 #[derive(Debug, Clone, PartialEq)]
@@ -81,11 +81,12 @@ pub trait BrowserHost {
         &mut self,
         window_id: WindowId,
         event: WindowEvent,
-        gpu: &mut GpuRenderer,
+        sink: &mut dyn DrawSink,
     ) -> ShellCommand;
 
-    /// Uploads the window's pending draw commands to the GPU.
-    fn apply_draw_commands(&mut self, window_id: WindowId, gpu: &mut GpuRenderer);
+    /// Uploads the window's pending draw commands to the sink, without
+    /// presenting.
+    fn apply_draw_commands(&mut self, window_id: WindowId, sink: &mut dyn DrawSink);
 
     /// Advances background page work for a window, returning whether it needs
     /// a repaint.
