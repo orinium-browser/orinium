@@ -61,9 +61,6 @@ pub struct JsFetchRequest {
     pub(crate) method: String,
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) body: Vec<u8>,
-    /// `AbortSignal` registered through the fetch init, kept alive so
-    /// `controller.abort()` can reject this request before it completes.
-    pub(crate) signal: Option<JSValue>,
 }
 
 /// An `<iframe src="...">` whose content has to be fetched and parsed.
@@ -221,6 +218,12 @@ pub struct JsHost {
     pub(crate) dynamic_image_requests: Vec<JsDynamicImageRequest>,
     pub(crate) queued_dynamic_images: HashSet<u64>,
     pub(crate) fetch_capabilities: HashMap<u64, JsFetchCapability>,
+    /// `AbortSignal` objects registered by in-flight fetches, keyed by request
+    /// id. Held here rather than on [`JsFetchRequest`] so the signal — an
+    /// `Rc<RefCell<JSObject>>` that can never leave the JS thread — never
+    /// crosses to the browser side. Entries are removed when the request
+    /// settles or aborts.
+    pub(crate) fetch_signals: HashMap<u64, Rc<RefCell<JSObject>>>,
     pub(crate) xhr_requests: HashMap<u64, Rc<RefCell<JSObject>>>,
     pub(crate) constructing_fetch_capability: Option<JsFetchCapability>,
     pub(crate) devtools_requests: Vec<JsDevToolsRequest>,
@@ -321,6 +324,7 @@ impl JsRuntime {
             dynamic_image_requests: Vec::new(),
             queued_dynamic_images: HashSet::new(),
             fetch_capabilities: HashMap::new(),
+            fetch_signals: HashMap::new(),
             xhr_requests: HashMap::new(),
             constructing_fetch_capability: None,
             devtools_requests: Vec::new(),
@@ -869,6 +873,9 @@ impl JsRuntime {
 
     /// Resolves a pending JavaScript fetch and runs its microtask checkpoint.
     pub(crate) fn resolve_fetch(&mut self, id: u64, response: JsFetchResponse) {
+        with_host_mut(self.engine.vm(), |host| {
+            host.fetch_signals.remove(&id);
+        });
         let capability =
             with_host_mut(self.engine.vm(), |host| host.fetch_capabilities.remove(&id)).flatten();
         if let Some(capability) = capability {
@@ -891,6 +898,9 @@ impl JsRuntime {
 
     /// Rejects a pending JavaScript fetch and runs its microtask checkpoint.
     pub(crate) fn reject_fetch(&mut self, id: u64, reason: String) {
+        with_host_mut(self.engine.vm(), |host| {
+            host.fetch_signals.remove(&id);
+        });
         let capability =
             with_host_mut(self.engine.vm(), |host| host.fetch_capabilities.remove(&id)).flatten();
         if let Some(capability) = capability {
@@ -1225,6 +1235,19 @@ mod tests {
         let dom = Rc::new(parser.parse());
         let runtime = JsRuntime::new(Rc::clone(&dom));
         (runtime, dom)
+    }
+
+    /// A [`JsTaskResult`] travels JS thread → UI thread through a channel, so
+    /// it must be `Send`. `JsFetchRequest` used to carry an `AbortSignal`
+    /// (`Rc<RefCell<JSObject>>`) purely to keep it alive, which silently made
+    /// every result `!Send`; the signal now stays in `JsHost::fetch_signals`.
+    /// Asserted so that field cannot come back unnoticed.
+    #[test]
+    fn task_result_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<crate::engine::js::processor::JsTaskResult>();
+        assert_send::<JsFetchRequest>();
+        assert_send::<JsFetchResponse>();
     }
 
     #[test]

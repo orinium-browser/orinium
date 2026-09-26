@@ -299,6 +299,9 @@ fn make_abort_event(reason: &JSValue) -> JSValue {
 
 /// Rejects all fetch capabilities whose request registered `signal`, removing
 /// them from the pending queue so the network layer skips them.
+///
+/// Both the queue and the signal registry live on the JS thread, so the match
+/// is done by request id here.
 fn abort_registered_fetches(vm: &mut VM, signal: &Rc<RefCell<JSObject>>) {
     let reason = signal.borrow().get(ABORT_REASON);
     let rejections: Vec<JSValue> = with_host_mut(vm, |host| {
@@ -306,12 +309,12 @@ fn abort_registered_fetches(vm: &mut VM, signal: &Rc<RefCell<JSObject>>) {
         let mut remaining = Vec::new();
         let requests = std::mem::take(&mut host.fetch_requests);
         for request in requests {
-            let registered = request
-                .signal
-                .as_ref()
-                .and_then(JSValue::as_object)
-                .is_some_and(|candidate| Rc::ptr_eq(&candidate, signal));
+            let registered = host
+                .fetch_signals
+                .get(&request.id)
+                .is_some_and(|candidate| Rc::ptr_eq(candidate, signal));
             if registered {
+                host.fetch_signals.remove(&request.id);
                 if let Some(capability) = host.fetch_capabilities.remove(&request.id) {
                     rejections.push(capability.reject);
                 }

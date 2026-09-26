@@ -507,7 +507,6 @@ fn xml_http_request_send(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
             method,
             headers,
             body,
-            signal: None,
         });
     })
     .ok_or_else(|| JSError::InternalError("XMLHttpRequest host is unavailable".to_string()))?;
@@ -611,13 +610,15 @@ fn fetch(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         host.next_fetch_id += 1;
         let id = host.next_fetch_id;
         host.fetch_capabilities.insert(id, capability);
+        if let Some(signal) = signal.as_ref().and_then(JSValue::as_object) {
+            host.fetch_signals.insert(id, signal);
+        }
         host.fetch_requests.push(JsFetchRequest {
             id,
             url,
             method,
             headers,
             body,
-            signal: signal.clone(),
         });
     });
     Ok(promise)
