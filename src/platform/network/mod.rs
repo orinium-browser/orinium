@@ -19,7 +19,6 @@ pub use sender_pool::{HttpSender, SenderPool};
 
 use serde::{Deserialize, Serialize};
 
-
 use crate::ParentChannels;
 use crate::engine::background_worker::BackgroundWorker;
 use ipc_channel::ipc::{IpcOneShotServer, IpcReceiver, IpcSender};

@@ -38,8 +38,7 @@ use crate::platform::network::{
 fn drive_youtube_with_real_fetches() {
     fn fetch_ok(core: &AsyncNetworkCore, url: &Url) -> Option<Response> {
         if url.scheme() == "data" {
-            let body =
-                crate::browser::core::resource_loader::DataURI::decode(url.as_str()).ok()?;
+            let body = crate::browser::core::resource_loader::DataURI::decode(url.as_str()).ok()?;
             return Some(Response {
                 url: url.to_string(),
                 status: StatusCode(200),
@@ -133,8 +132,7 @@ fn drive_youtube_with_real_fetches() {
                 ("Accept-Language".to_string(), "en-US,en;q=0.9".to_string()),
                 (
                     "Accept".to_string(),
-                    "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-                        .to_string(),
+                    "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8".to_string(),
                 ),
             ],
             body: Vec::new(),

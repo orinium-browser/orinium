@@ -36,7 +36,9 @@ use crate::engine::{
     renderer_model::{Image, StickyViewport, is_scrollport, sticky_offset},
     tree::{NodeRef, TreeNode},
 };
-use crate::platform::{audio::default_audio_sink_factory, locale, renderer::text_measurer::PlatformTextMeasurer};
+use crate::platform::{
+    audio::default_audio_sink_factory, locale, renderer::text_measurer::PlatformTextMeasurer,
+};
 use crate::{perf_scope, profile_log};
 use ui_layout::{Display, InnerDisplay, LayoutChild, LayoutNode, OuterDisplay, Position};
 use url::Url;

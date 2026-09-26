@@ -32,10 +32,7 @@ pub enum ShellCommand {
     /// Create an additional window.
     OpenNewWindow,
     /// Enable or disable OS IME input near the last click position.
-    SetImeAllowed {
-        allowed: bool,
-        position: (f64, f64),
-    },
+    SetImeAllowed { allowed: bool, position: (f64, f64) },
 }
 
 /// The properties the shell needs to realise a window.

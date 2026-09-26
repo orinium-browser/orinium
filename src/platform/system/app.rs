@@ -125,16 +125,12 @@ impl ApplicationHandler for App {
             ShellCommand::RequestRedraw => {
                 if let Some(state) = self.windows.get(&window_id) {
                     state.window.request_redraw();
-                    state
-                        .window
-                        .set_title(&self.host.window_title(window_id));
+                    state.window.set_title(&self.host.window_title(window_id));
                 }
             }
             ShellCommand::RenameWindowTitle => {
                 if let Some(state) = self.windows.get(&window_id) {
-                    state
-                        .window
-                        .set_title(&self.host.window_title(window_id));
+                    state.window.set_title(&self.host.window_title(window_id));
                 }
             }
             ShellCommand::OpenNewWindow => {

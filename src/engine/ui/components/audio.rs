@@ -55,7 +55,11 @@ impl AudioComponent {
     ///
     /// When `data` is present it is decoded eagerly so the first click has
     /// something to play.
-    pub fn new(source: impl Into<String>, data: Option<Arc<[u8]>>, sink: Arc<dyn AudioSink>) -> Self {
+    pub fn new(
+        source: impl Into<String>,
+        data: Option<Arc<[u8]>>,
+        sink: Arc<dyn AudioSink>,
+    ) -> Self {
         let loaded = data.as_ref().is_some_and(|data| {
             let result = sink.preload(data);
             if let Err(error) = result {
@@ -85,8 +89,7 @@ impl AudioComponent {
         }
 
         let result = if !self.loaded.load(Ordering::Relaxed) || self.sink.is_finished() {
-            self.sink
-                .play(&self.source, self.data.as_deref())
+            self.sink.play(&self.source, self.data.as_deref())
         } else if self.playing.load(Ordering::Relaxed) {
             self.sink.pause()
         } else {
