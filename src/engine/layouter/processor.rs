@@ -115,6 +115,15 @@ enum LayoutCommand {
 ///   establishes a happens-before relationship between send and receive).
 /// - The receiving (UI) thread rebuilds the `Box` exactly once, so there is
 ///   exactly one owner at any point in time.
+///
+/// This holds only because producer and consumer are threads of one process
+/// sharing an address space. The `unsafe impl Send` below asserts addressable
+/// memory, not that the payload is meaningful anywhere else, so a
+/// `LayoutResult` must never be written to a socket, a file or shared memory.
+/// Moving layout across a process boundary requires a `Serialize`/
+/// `Deserialize` representation of the tree instead of this pointer, and the
+/// `CustomLayouter` callbacks it holds would have to be addressed by id
+/// rather than by vtable.
 struct SendableResult(*mut LayoutResult);
 
 // SAFETY: the pointed-to `Box` is accessed only by the receiving side after

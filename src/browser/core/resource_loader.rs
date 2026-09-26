@@ -4,6 +4,7 @@
 //! network-free `resource:///`, `data:` and `file://` schemes.
 
 use crate::engine::origin::Origin;
+use crate::engine::port::{InProcess, Mailbox, Outbox, Transport};
 use crate::platform::network::{
     NetworkConfig, NetworkCore, NetworkError, NetworkRequest, StatusCode,
 };
@@ -40,8 +41,8 @@ fn scheme_allowed(initiator: &Origin, url: &Url) -> bool {
 ///
 /// Processing flow (overview):
 /// 1. Caller requests a URL (`resource:///...`, `data:...` or `http(s)://...`).
-/// 2. Network-free schemes (`resource`, `data`) are resolved locally and pushed
-///    to `immediate_pool` as `BrowserNetworkMessage`s.
+/// 2. Network-free schemes (`resource`, `data`) are resolved locally and posted
+///    to the internal channel as `BrowserNetworkMessage`s.
 /// 3. For HTTP/HTTPS, loader forwards the request to `NetworkCore` and manages
 ///    request ids / pending responses. When the network reply is ready, the
 ///    loader hands the response back to the browser/tab via the expected
@@ -75,10 +76,13 @@ pub struct BrowserResourceLoader {
     /// to share.
     network: Option<NetworkCore>,
 
-    /// Immediate pool / internal queue for messages produced by the loader.
-    /// The concrete type `BrowserNetworkMessage` represents internal network
-    /// events; see the network module for details.
-    immediate_pool: Vec<BrowserNetworkMessage>,
+    /// Where results of the network-free schemes are posted. A channel rather
+    /// than a `Vec` so a transport that carries these elsewhere keeps the same
+    /// call sites.
+    immediate_outbox: Outbox<BrowserNetworkMessage>,
+
+    /// The reading half of the same channel.
+    immediate_inbox: Mailbox<BrowserNetworkMessage>,
 }
 
 impl BrowserResourceLoader {
@@ -88,9 +92,21 @@ impl BrowserResourceLoader {
     /// network stack is not available (tests, limited examples, or when only
     /// `resource:///` is needed).
     pub fn new(network: Option<NetworkCore>) -> Self {
+        Self::with_transport(network, &InProcess)
+    }
+
+    /// Constructs a loader whose internal channel is carried by `transport`.
+    ///
+    /// The default [`InProcess`] hands messages over directly. Generic rather
+    /// than `&dyn Transport` because pairing the ends is generic over the
+    /// message type, which costs object safety — and the transport is only
+    /// needed here, so it does not have to be stored either.
+    pub fn with_transport<T: Transport>(network: Option<NetworkCore>, transport: &T) -> Self {
+        let (immediate_outbox, immediate_inbox) = transport.channel();
         Self {
             network,
-            immediate_pool: vec![],
+            immediate_outbox,
+            immediate_inbox,
         }
     }
 
@@ -134,7 +150,7 @@ impl BrowserResourceLoader {
     /// Fetches a request while preserving method, headers, and body for HTTP(S).
     pub fn fetch_request_async(&mut self, request: NetworkRequest, id: usize, initiator: &Origin) {
         let Ok(url) = Url::parse(&request.url) else {
-            self.immediate_pool.push(BrowserNetworkMessage {
+            self.post_immediate(BrowserNetworkMessage {
                 id,
                 response: Err(BrowserNetworkError::AnyhowError(anyhow!(
                     "Invalid request URL: {}",
@@ -149,7 +165,7 @@ impl BrowserResourceLoader {
                 url,
                 initiator.ascii_serialization()
             );
-            self.immediate_pool.push(BrowserNetworkMessage {
+            self.post_immediate(BrowserNetworkMessage {
                 id,
                 response: Err(BrowserNetworkError::AnyhowError(anyhow!(
                     "Blocked request for {url}: the requesting page is not allowed to access this scheme"
@@ -176,7 +192,17 @@ impl BrowserResourceLoader {
                 )))
             },
         };
-        self.immediate_pool.push(msg);
+        self.post_immediate(msg);
+    }
+
+    /// Queues a message for the next `try_receive`.
+    ///
+    /// A send can only fail if the reading half is gone, and this type owns
+    /// both halves, so the `expect` documents that invariant.
+    fn post_immediate(&self, message: BrowserNetworkMessage) {
+        self.immediate_outbox
+            .send(message)
+            .expect("the loader owns the reading end of its own channel");
     }
 
     pub fn fetch_blocking(&self, url: Url) -> Result<BrowserResponse> {
@@ -221,7 +247,7 @@ impl BrowserResourceLoader {
                     .collect()
             })
             .unwrap_or_default();
-        msgs.extend(std::mem::take(&mut self.immediate_pool));
+        msgs.extend(std::iter::from_fn(|| self.immediate_inbox.try_recv()));
 
         msgs
     }
@@ -373,6 +399,7 @@ fn hex_value(b: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::port::{Consume, Disconnected, Produce, Undeliverable};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// The loader owns its `NetworkCore`, so it must be movable across
@@ -608,5 +635,118 @@ mod tests {
         assert_eq!(msgs.len(), 1);
         assert!(msgs[0].response.is_err());
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// A loader must behave the same over a transport that is not the default.
+    ///
+    /// [`Buffered`] is a different implementation, not the in-process channel
+    /// wearing another name, so this fails the moment the loader reaches past
+    /// the port and depends on `InProcess` specifically.
+    #[test]
+    fn results_arrive_over_a_transport_other_than_the_default() {
+        let mut loader = BrowserResourceLoader::with_transport(None, &Buffered);
+        let url = Url::parse("data:text/plain,relayed").unwrap();
+
+        loader.fetch_async(url, 15, &Origin::opaque());
+        let msgs = loader.try_receive();
+
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].id, 15);
+        assert_eq!(msgs[0].response.as_ref().unwrap().body, b"relayed");
+    }
+
+    #[test]
+    fn draining_an_idle_loader_reports_nothing_without_blocking() {
+        let mut loader = BrowserResourceLoader::with_transport(None, &Buffered);
+        assert!(loader.try_receive().is_empty());
+    }
+
+    /// The loader's channel must not stop the loader being movable, which is
+    /// the invariant the page boundary depends on. `loader_is_send` above
+    /// asserts the bound; this moves one to check the claim.
+    #[test]
+    fn loader_can_move_between_threads() {
+        let loader = BrowserResourceLoader::offline();
+        let url = Url::parse("data:text/plain,moved").unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+
+        std::thread::spawn(move || {
+            let mut loader = loader;
+            loader.fetch_async(url, 16, &Origin::opaque());
+            for message in loader.try_receive() {
+                sender.send(message.id).expect("receiver is alive");
+            }
+        })
+        .join()
+        .expect("the loader thread finished");
+
+        assert_eq!(receiver.recv().expect("a message was posted"), 16);
+    }
+
+    /// A second [`Transport`] implementation, so the tests above cannot pass by
+    /// relying on [`InProcess`] specifically.
+    #[derive(Debug, Default, Clone, Copy)]
+    struct Buffered;
+
+    impl Transport for Buffered {
+        fn channel<T: Send + 'static>(&self) -> (Outbox<T>, Mailbox<T>) {
+            struct Queue<T> {
+                messages: std::sync::Mutex<std::collections::VecDeque<T>>,
+                arrived: std::sync::Condvar,
+            }
+
+            impl<T> Queue<T> {
+                fn push(&self, message: T) {
+                    self.messages
+                        .lock()
+                        .expect("lock poisoned")
+                        .push_back(message);
+                    self.arrived.notify_all();
+                }
+
+                fn pop(&self) -> Option<T> {
+                    self.messages.lock().expect("lock poisoned").pop_front()
+                }
+
+                fn pop_waiting(&self) -> Result<T, Disconnected> {
+                    let mut messages = self.messages.lock().expect("lock poisoned");
+                    loop {
+                        if let Some(message) = messages.pop_front() {
+                            return Ok(message);
+                        }
+                        messages = self.arrived.wait(messages).expect("lock poisoned");
+                    }
+                }
+            }
+
+            struct Enqueuer<T>(std::sync::Arc<Queue<T>>);
+            struct Dequeuer<T>(std::sync::Arc<Queue<T>>);
+
+            impl<T: Send + 'static> Produce<T> for Enqueuer<T> {
+                fn send(&self, message: T) -> Result<(), Undeliverable<T>> {
+                    self.0.push(message);
+                    Ok(())
+                }
+            }
+
+            impl<T: Send + 'static> Consume<T> for Dequeuer<T> {
+                fn recv(&self) -> Result<T, Disconnected> {
+                    self.0.pop_waiting()
+                }
+
+                fn try_recv(&self) -> Option<T> {
+                    self.0.pop()
+                }
+            }
+
+            let queue = std::sync::Arc::new(Queue {
+                messages: std::sync::Mutex::new(std::collections::VecDeque::new()),
+                arrived: std::sync::Condvar::new(),
+            });
+            (
+                Outbox::of(Enqueuer(std::sync::Arc::clone(&queue))),
+                Mailbox::of(Dequeuer(queue)),
+            )
+        }
     }
 }
