@@ -6,6 +6,9 @@ use pixi_byte::{JSError, JSResult, JSValue};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+type JsObjectRef = Rc<RefCell<JSObject>>;
+type DataViewResult = JSResult<(JsObjectRef, Vec<u8>, usize, bool, usize, usize)>;
+
 const INSTANCE_TAG: &str = "__instance_tag__";
 
 fn internal_property(value: JSValue) -> Property {
@@ -548,7 +551,7 @@ fn dataview_state(view: &JSValue) -> JSResult<(Rc<RefCell<JSObject>>, usize, usi
     })?;
     let byte_offset = object.borrow().get("byteOffset").to_number().max(0.0) as usize;
     let byte_length = object.borrow().get("byteLength").to_number().max(0.0) as usize;
-    let full_bytes = value_bytes(&JSValue::from_object(buffer.clone()));
+    let full_bytes = value_bytes(&JSValue::from_object(Rc::clone(&buffer)));
     Ok((buffer, byte_offset, byte_length, full_bytes.len()))
 }
 
@@ -576,16 +579,12 @@ fn dataview_bounds(
     Ok(())
 }
 
-fn dataview_view_and_bytes(
-    view: &JSValue,
-    args: &[JSValue],
-    width: usize,
-) -> JSResult<(Rc<RefCell<JSObject>>, Vec<u8>, usize, bool, usize, usize)> {
+fn dataview_view_and_bytes(view: &JSValue, args: &[JSValue], width: usize) -> DataViewResult {
     let (buffer, byte_offset, byte_length, full_len) = dataview_state(view)?;
     let position = args.get(1).map(JSValue::to_number).unwrap_or(0.0).max(0.0) as usize;
     dataview_bounds(byte_offset, byte_length, full_len, position, width)?;
     let little_endian = args.get(2).map(JSValue::to_number).unwrap_or(0.0) != 0.0;
-    let bytes = value_bytes(&JSValue::from_object(buffer.clone()));
+    let bytes = value_bytes(&JSValue::from_object(Rc::clone(&buffer)));
     // Convert the view-relative position to an absolute buffer index.
     Ok((
         buffer,
@@ -753,16 +752,12 @@ fn dataview_set_f64(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(JSValue::undefined())
 }
 
-fn dataview_write_state(
-    view: &JSValue,
-    args: &[JSValue],
-    width: usize,
-) -> JSResult<(Rc<RefCell<JSObject>>, Vec<u8>, usize, bool, usize, usize)> {
+fn dataview_write_state(view: &JSValue, args: &[JSValue], width: usize) -> DataViewResult {
     let (buffer, byte_offset, byte_length, full_len) = dataview_state(view)?;
     let position = args.get(1).map(JSValue::to_number).unwrap_or(0.0).max(0.0) as usize;
     dataview_bounds(byte_offset, byte_length, full_len, position, width)?;
     let little_endian = args.get(3).map(JSValue::to_number).unwrap_or(0.0) != 0.0;
-    let bytes = value_bytes(&JSValue::from_object(buffer.clone()));
+    let bytes = value_bytes(&JSValue::from_object(Rc::clone(&buffer)));
     // Convert the view-relative position to an absolute buffer index.
     Ok((
         buffer,

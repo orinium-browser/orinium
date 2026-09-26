@@ -115,8 +115,10 @@ fn opacity_percentage_maps_to_hundredths() {
 
 #[test]
 fn opacity_initial_restores_default_inherit_carries_effective_parent() {
-    let mut parent = ContainerStyle::default();
-    parent.opacity = 0.7;
+    let parent = ContainerStyle {
+        opacity: 0.7,
+        ..ContainerStyle::default()
+    };
 
     let mut container_style = ContainerStyle::default();
     let mut style = Style::default();
@@ -832,10 +834,10 @@ fn text_content(info: &InfoNode) -> String {
 fn clip_path_rect_zero_parses_to_empty_inset_via_full_pipeline() {
     fn find_div(children: &[InfoNode]) -> Option<&ContainerStyle> {
         for info in children {
-            if let NodeKind::Container { style, .. } = &info.kind {
-                if !matches!(style.clip_path, ClipPath::None) {
-                    return Some(style);
-                }
+            if let NodeKind::Container { style, .. } = &info.kind
+                && !matches!(style.clip_path, ClipPath::None)
+            {
+                return Some(style);
             }
             if let Some(found) = find_div(&info.children) {
                 return Some(found);
@@ -939,7 +941,7 @@ fn iframe_is_a_clipped_fixed_size_container_that_renders_grafted_content() {
     let (mut layout, info) = layout_and_info_for(html, "");
     ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
 
-    fn find_iframe<'a>(info: &'a InfoNode) -> Option<&'a InfoNode> {
+    fn find_iframe(info: &InfoNode) -> Option<&InfoNode> {
         if matches!(
             info.kind,
             NodeKind::Container {
@@ -952,7 +954,7 @@ fn iframe_is_a_clipped_fixed_size_container_that_renders_grafted_content() {
         }
         info.children.iter().find_map(find_iframe)
     }
-    fn find_iframe_layout<'a>(node: &'a LayoutNode) -> Option<&'a LayoutNode> {
+    fn find_iframe_layout(node: &LayoutNode) -> Option<&LayoutNode> {
         let size = &node.style.size;
         if matches!(size.width, LengthOrAuto::Length(Length::Px(w)) if (w - 300.0).abs() < 0.001)
             && matches!(size.height, LengthOrAuto::Length(Length::Px(h)) if (h - 150.0).abs() < 0.001)
@@ -1371,13 +1373,13 @@ fn atomic_inline_block_starts_below_its_top_margin() {
                 sb.border_box.x, sb.border_box.width
             );
             // Check the button inside first
-            if let Some(btn) = f.children.iter().filter_map(LayoutChild::node).next() {
-                if let Some(bm) = btn.layout_box.iter().next() {
-                    eprintln!(
-                        "PRE-CORRECT button bb: x={}, w={}",
-                        bm.border_box.x, bm.border_box.width
-                    );
-                }
+            if let Some(btn) = f.children.iter().filter_map(LayoutChild::node).next()
+                && let Some(bm) = btn.layout_box.iter().next()
+            {
+                eprintln!(
+                    "PRE-CORRECT button bb: x={}, w={}",
+                    bm.border_box.x, bm.border_box.width
+                );
             }
         }
     }
@@ -1499,13 +1501,13 @@ fn auto_flex_height_includes_child_vertical_margins() {
                 sb.border_box.x, sb.border_box.width
             );
             // Check the button inside first
-            if let Some(btn) = f.children.iter().filter_map(LayoutChild::node).next() {
-                if let Some(bm) = btn.layout_box.iter().next() {
-                    eprintln!(
-                        "PRE-CORRECT button bb: x={}, w={}",
-                        bm.border_box.x, bm.border_box.width
-                    );
-                }
+            if let Some(btn) = f.children.iter().filter_map(LayoutChild::node).next()
+                && let Some(bm) = btn.layout_box.iter().next()
+            {
+                eprintln!(
+                    "PRE-CORRECT button bb: x={}, w={}",
+                    bm.border_box.x, bm.border_box.width
+                );
             }
         }
     }
@@ -1818,13 +1820,13 @@ fn flex_navigation_blockifies_and_spaces_inline_links() {
                 sb.border_box.x, sb.border_box.width
             );
             // Check the button inside first
-            if let Some(btn) = f.children.iter().filter_map(LayoutChild::node).next() {
-                if let Some(bm) = btn.layout_box.iter().next() {
-                    eprintln!(
-                        "PRE-CORRECT button bb: x={}, w={}",
-                        bm.border_box.x, bm.border_box.width
-                    );
-                }
+            if let Some(btn) = f.children.iter().filter_map(LayoutChild::node).next()
+                && let Some(bm) = btn.layout_box.iter().next()
+            {
+                eprintln!(
+                    "PRE-CORRECT button bb: x={}, w={}",
+                    bm.border_box.x, bm.border_box.width
+                );
             }
         }
     }
@@ -1832,13 +1834,13 @@ fn flex_navigation_blockifies_and_spaces_inline_links() {
     correct_atomic_inline_spacing(&mut layout);
 
     fn navigation(layout: &LayoutNode) -> Option<&LayoutNode> {
-        let links: Vec<_> = layout
+        let links_count = layout
             .children
             .iter()
             .filter_map(LayoutChild::node)
             .filter(|child| child.style.display.outer() == Some(OuterDisplay::Block))
-            .collect();
-        if layout.style.display.inner() == Some(InnerDisplay::Flex) && links.len() == 3 {
+            .count();
+        if layout.style.display.inner() == Some(InnerDisplay::Flex) && links_count == 3 {
             return Some(layout);
         }
         layout
@@ -1901,13 +1903,13 @@ fn bottom_anchored_grid_repositions_after_min_height_growth() {
                 sb.border_box.x, sb.border_box.width
             );
             // Check the button inside first
-            if let Some(btn) = f.children.iter().filter_map(LayoutChild::node).next() {
-                if let Some(bm) = btn.layout_box.iter().next() {
-                    eprintln!(
-                        "PRE-CORRECT button bb: x={}, w={}",
-                        bm.border_box.x, bm.border_box.width
-                    );
-                }
+            if let Some(btn) = f.children.iter().filter_map(LayoutChild::node).next()
+                && let Some(bm) = btn.layout_box.iter().next()
+            {
+                eprintln!(
+                    "PRE-CORRECT button bb: x={}, w={}",
+                    bm.border_box.x, bm.border_box.width
+                );
             }
         }
     }
@@ -1995,13 +1997,13 @@ fn full_width_inline_blocks_wrap_onto_separate_lines() {
                 sb.border_box.x, sb.border_box.width
             );
             // Check the button inside first
-            if let Some(btn) = f.children.iter().filter_map(LayoutChild::node).next() {
-                if let Some(bm) = btn.layout_box.iter().next() {
-                    eprintln!(
-                        "PRE-CORRECT button bb: x={}, w={}",
-                        bm.border_box.x, bm.border_box.width
-                    );
-                }
+            if let Some(btn) = f.children.iter().filter_map(LayoutChild::node).next()
+                && let Some(bm) = btn.layout_box.iter().next()
+            {
+                eprintln!(
+                    "PRE-CORRECT button bb: x={}, w={}",
+                    bm.border_box.x, bm.border_box.width
+                );
             }
         }
     }
@@ -2080,13 +2082,13 @@ fn auto_flex_container_expands_to_corrected_inline_margin_boxes() {
                 sb.border_box.x, sb.border_box.width
             );
             // Check the button inside first
-            if let Some(btn) = f.children.iter().filter_map(LayoutChild::node).next() {
-                if let Some(bm) = btn.layout_box.iter().next() {
-                    eprintln!(
-                        "PRE-CORRECT button bb: x={}, w={}",
-                        bm.border_box.x, bm.border_box.width
-                    );
-                }
+            if let Some(btn) = f.children.iter().filter_map(LayoutChild::node).next()
+                && let Some(bm) = btn.layout_box.iter().next()
+            {
+                eprintln!(
+                    "PRE-CORRECT button bb: x={}, w={}",
+                    bm.border_box.x, bm.border_box.width
+                );
             }
         }
     }
@@ -2115,7 +2117,7 @@ fn auto_flex_container_expands_to_corrected_inline_margin_boxes() {
         .children
         .iter()
         .filter_map(LayoutChild::node)
-        .last()
+        .next_back()
         .unwrap();
     let last_box = last.layout_box.iter().next().unwrap();
     let required_right = last_box.border_box.right() + 12.0;
@@ -2250,7 +2252,7 @@ fn inline_image_keeps_intrinsic_dimensions_after_layout() {
 /// The parser auto-inserts an empty `<head>` when the document lacks one,
 /// so `<html>` holds `[head, body]`; descend past the empty head to reach
 /// the body's content.
-fn body_layout_children<'a>(mut node: &'a LayoutNode) -> &'a [LayoutChild] {
+fn body_layout_children(mut node: &LayoutNode) -> &[LayoutChild] {
     loop {
         match node.children.as_slice() {
             [LayoutChild::Node(child)] => node = child,
@@ -2275,10 +2277,10 @@ fn body_layout_children<'a>(mut node: &'a LayoutNode) -> &'a [LayoutChild] {
 /// way to assert whether a whitespace node was dropped.
 fn count_whitespace_text_info(info: &InfoNode) -> usize {
     let mut n = 0;
-    if let NodeKind::Text { text, .. } = &info.kind {
-        if text.chars().all(is_css_whitespace) {
-            n += 1;
-        }
+    if let NodeKind::Text { text, .. } = &info.kind
+        && text.chars().all(is_css_whitespace)
+    {
+        n += 1;
     }
     n + info
         .children
@@ -2986,8 +2988,10 @@ fn gradient_current_color_stop_resolves_to_text_color() {
         CssValue::Keyword("white".into()),
         CssValue::Keyword("black".into()),
     ];
-    let mut text_style = TextStyle::default();
-    text_style.color = Color(255, 0, 0, 255);
+    let text_style = TextStyle {
+        color: Color(255, 0, 0, 255),
+        ..TextStyle::default()
+    };
     let gradient = parse_gradient(
         "linear-gradient",
         &args,
@@ -4370,11 +4374,13 @@ fn color_not_inherited_by_default_in_resolver() {
     let css = "div { color: red; } span { }";
     let stylesheet = CssParser::new(css).parse().unwrap();
     let resolved = CssResolver::resolve(&stylesheet);
-    let span_decls: Vec<_> = resolved
-        .iter()
-        .filter(|d| d.selector.to_string().contains("span"))
-        .collect();
-    assert!(span_decls.is_empty(), "span should have no declarations");
+    assert!(
+        resolved
+            .iter()
+            .find(|d| d.selector.to_string().contains("span"))
+            .is_none(),
+        "span should have no declarations"
+    );
 }
 
 // ─── Display rendering of color functions (parser round-trip) ───────────────
@@ -4429,7 +4435,7 @@ fn flex_wrap_item_with_zero_height_header_stays_on_line_start() {
     let (mut layout, _) = layout_and_info_for(html, full_css);
     ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
 
-    fn find_cont<'a>(l: &'a LayoutNode) -> Option<&'a LayoutNode> {
+    fn find_cont(l: &LayoutNode) -> Option<&LayoutNode> {
         use ui_layout::InnerDisplay;
         if l.style.display.inner() == Some(InnerDisplay::Flex)
             && l.children.iter().filter(|c| c.node().is_some()).count() >= 2

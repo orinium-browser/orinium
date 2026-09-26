@@ -194,8 +194,10 @@ mod tests {
     }
 
     fn bridge(display: Display) -> CustomNodeBridge {
-        let mut style = Style::default();
-        style.display = display;
+        let style = Style {
+            display,
+            ..Style::default()
+        };
         CustomNodeBridge::new(
             std::sync::Arc::new(TestNode {
                 width: 200.0,

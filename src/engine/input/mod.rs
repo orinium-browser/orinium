@@ -1389,8 +1389,7 @@ mod tests {
     ) {
         let path = hit_test(root_layout, root_info, x, y);
         let hit = hit_custom_node(&path).unwrap();
-        let expected: Arc<dyn CustomNode> = node.clone();
-        assert!(Arc::ptr_eq(hit, &expected));
+        assert!(std::ptr::eq(hit.as_ref(), node.as_ref() as &dyn CustomNode));
     }
 
     #[test]

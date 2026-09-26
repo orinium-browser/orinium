@@ -16,6 +16,7 @@
 
 use super::tokenizer::{Attribute, Token, Tokenizer};
 use crate::engine::tree::{NodeRef, Tree, TreeNode};
+use std::rc::Rc;
 
 /// A parsed XML element: its (case-sensitive, possibly namespace-qualified)
 /// tag name and its attribute list.
@@ -59,15 +60,15 @@ pub fn parse(markup: &str) -> Result<Tree<XmlElement>, String> {
                         if self_closing {
                             TreeNode::add_child(parent, node);
                         } else {
-                            TreeNode::add_child(parent, node.clone());
-                            stack.push(node);
+                            TreeNode::add_child(parent, Rc::clone(&node));
+                            stack.push(Rc::clone(&node));
                         }
                     }
                     None => {
                         if self_closing {
                             root = Some(node);
                         } else {
-                            root = Some(node.clone());
+                            root = Some(Rc::clone(&node));
                             stack.push(node);
                         }
                     }

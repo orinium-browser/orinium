@@ -2347,12 +2347,12 @@ fn collect_table_rows(table: &NodeRef<HtmlNodeType>) -> Vec<NodeRef<HtmlNodeType
             Some(tag @ ("tbody" | "thead" | "tfoot")) => {
                 for tr in child.borrow().children() {
                     if element_tag_name(tr).as_deref() == Some("tr") {
-                        rows.push(tr.clone());
+                        rows.push(Rc::clone(tr));
                     }
                 }
                 let _ = tag;
             }
-            Some("tr") => rows.push(child.clone()),
+            Some("tr") => rows.push(Rc::clone(&child)),
             _ => {}
         }
     }

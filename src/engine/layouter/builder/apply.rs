@@ -1068,7 +1068,9 @@ pub fn apply_declaration(
                 CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("inherit") => {
                     text_style.font_style = parent_text_style.font_style;
                     text_style.font_weight = parent_text_style.font_weight;
-                    text_style.font_families = parent_text_style.font_families.clone();
+                    text_style
+                        .font_families
+                        .clone_from(&parent_text_style.font_families);
                     text_flow_style.font_size = parent_text_flow_style.font_size;
                     text_flow_style.line_height = parent_text_flow_style.line_height;
                     return Some(());
@@ -1076,7 +1078,9 @@ pub fn apply_declaration(
                 CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("initial") => {
                     text_style.font_style = DEFAULT_TEXT_STYLE.font_style;
                     text_style.font_weight = DEFAULT_TEXT_STYLE.font_weight;
-                    text_style.font_families = DEFAULT_TEXT_STYLE.font_families.clone();
+                    text_style
+                        .font_families
+                        .clone_from(&DEFAULT_TEXT_STYLE.font_families);
                     text_flow_style.font_size = DEFAULT_TEXT_FLOW_STYLE.font_size;
                     text_flow_style.line_height = DEFAULT_TEXT_FLOW_STYLE.line_height;
                     return Some(());

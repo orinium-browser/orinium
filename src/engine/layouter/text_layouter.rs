@@ -544,8 +544,10 @@ mod tests {
         line_width: f32,
         white_space: WhiteSpace,
     ) -> TextLayoutResult {
-        let mut flow = TextFlowStyle::default();
-        flow.white_space = white_space;
+        let flow = TextFlowStyle {
+            white_space,
+            ..TextFlowStyle::default()
+        };
         TextFlowLayouter::new(text.to_string(), flow, clusters).compute_layout(
             line_width,
             line_width,
@@ -582,8 +584,10 @@ mod tests {
             cluster(2, 10.0, true),
             cluster(3, 20.0, false),
         ];
-        let mut centered = TextFlowStyle::default();
-        centered.text_align = TextAlign::Center;
+        let centered = TextFlowStyle {
+            text_align: TextAlign::Center,
+            ..TextFlowStyle::default()
+        };
         let result = TextFlowLayouter::new("aa bb".to_string(), centered, clusters.clone())
             .compute_layout(40.0, 40.0, (0.0, 0.0));
         assert_eq!(result.line_texts, vec!["aa ", "bb"]);
@@ -592,8 +596,10 @@ mod tests {
         assert_eq!(result.spans[0].x_range, 5.0..35.0);
         assert_eq!(result.spans[1].x_range, 10.0..30.0);
 
-        let mut right = TextFlowStyle::default();
-        right.text_align = TextAlign::Right;
+        let right = TextFlowStyle {
+            text_align: TextAlign::Right,
+            ..TextFlowStyle::default()
+        };
         let result = TextFlowLayouter::new("aa".to_string(), right, clusters[..1].to_vec())
             .compute_layout(40.0, 40.0, (0.0, 0.0));
         assert_eq!(result.spans[0].line_pos.0, 20.0);
@@ -895,8 +901,10 @@ mod tests {
             cluster(5, 10.0, false),
             cluster(6, 10.0, false),
         ];
-        let mut flow = TextFlowStyle::default();
-        flow.white_space = WhiteSpace::PreWrap;
+        let flow = TextFlowStyle {
+            white_space: WhiteSpace::PreWrap,
+            ..TextFlowStyle::default()
+        };
         let result = TextFlowLayouter::new("abc\ndef".to_string(), flow, clusters).compute_layout(
             100.0,
             100.0,
@@ -919,8 +927,10 @@ mod tests {
             cluster(5, 10.0, false),
             cluster(6, 10.0, false),
         ];
-        let mut flow = TextFlowStyle::default();
-        flow.white_space = WhiteSpace::PreWrap;
+        let flow = TextFlowStyle {
+            white_space: WhiteSpace::PreWrap,
+            ..TextFlowStyle::default()
+        };
         let result = TextFlowLayouter::new("abc\ndef".to_string(), flow, clusters).compute_layout(
             100.0,
             100.0,
@@ -1058,9 +1068,11 @@ mod tests {
         // empty line at the same centered x. The carry-over `x_pos` must reset
         // to 0 between segments so it does not accumulate across them.
         let clusters = vec![cluster(0, 10.0, false), cluster(1, 10.0, false)];
-        let mut flow = TextFlowStyle::default();
-        flow.white_space = WhiteSpace::Pre;
-        flow.text_align = TextAlign::Center;
+        let flow = TextFlowStyle {
+            white_space: WhiteSpace::Pre,
+            text_align: TextAlign::Center,
+            ..TextFlowStyle::default()
+        };
         let result = TextFlowLayouter::new("ab\n\n".to_string(), flow, clusters).compute_layout(
             100.0,
             100.0,
@@ -1097,8 +1109,10 @@ mod tests {
         // to the first line alone: later lines must not be wrapped inside it
         // forever. With an unbounded containing width they do not wrap at all,
         // and center alignment must never resolve to f32::MAX / 2.
-        let mut flow = TextFlowStyle::default();
-        flow.text_align = TextAlign::Center;
+        let flow = TextFlowStyle {
+            text_align: TextAlign::Center,
+            ..TextFlowStyle::default()
+        };
         let clusters = vec![
             cluster(0, 40.0, false),
             cluster(4, 5.0, true),
@@ -1145,8 +1159,10 @@ mod tests {
         // Measure / shrink-to-fit passes hand out an unbounded inline size.
         // There is no finite box to center within, so alignment must not shift
         // the text toward f32::MAX / 2.
-        let mut flow = TextFlowStyle::default();
-        flow.text_align = TextAlign::Center;
+        let flow = TextFlowStyle {
+            text_align: TextAlign::Center,
+            ..TextFlowStyle::default()
+        };
         let clusters = vec![cluster(0, 20.0, false), cluster(2, 20.0, false)];
         let mut layouter = TextFlowLayouter::new("aaa bbb".to_string(), flow, clusters);
         let LayoutBox::InlineBox(inline) =
@@ -1160,9 +1176,10 @@ mod tests {
     }
 
     fn float_flow() -> TextFlowStyle {
-        let mut flow = TextFlowStyle::default();
-        flow.line_height = LineHeight::Px(20.0);
-        flow
+        TextFlowStyle {
+            line_height: LineHeight::Px(20.0),
+            ..TextFlowStyle::default()
+        }
     }
 
     /// One cluster per word (4 bytes) plus a breakable 1-byte space between

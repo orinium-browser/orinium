@@ -634,8 +634,8 @@ mod tests {
         assert!(parse_selector(":defined").matches(&chain([html.clone()])));
         assert!(!parse_selector(":defined").matches(&chain([custom.clone()])));
 
-        assert!(!parse_selector(":not(:defined)").matches(&chain([html.clone()])));
-        assert!(parse_selector(":not(:defined)").matches(&chain([custom.clone()])));
+        assert!(!parse_selector(":not(:defined)").matches(&chain([html])));
+        assert!(parse_selector(":not(:defined)").matches(&chain([custom])));
     }
 
     #[test]

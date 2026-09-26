@@ -644,7 +644,7 @@ mod tests {
             None,
         )
         .expect("rasterizes butt");
-        fn px_at<'a>(rgba: &'a [u8], width: usize, x: usize, y: usize) -> &'a [u8] {
+        fn px_at(rgba: &[u8], width: usize, x: usize, y: usize) -> &[u8] {
             &rgba[(y * width + x) * 4..(y * width + x) * 4 + 4]
         }
 

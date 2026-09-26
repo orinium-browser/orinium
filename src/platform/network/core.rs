@@ -170,9 +170,9 @@ impl SharedNetState {
                 .expect("rustls default crypto provider must be installed");
             ClientConfig::builder()
                 .dangerous()
-                .with_custom_certificate_verifier(Arc::new(SkipServerVerification(
-                    provider.clone(),
-                )))
+                .with_custom_certificate_verifier(Arc::new(SkipServerVerification(Arc::clone(
+                    provider,
+                ))))
                 .with_no_client_auth()
         };
         config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
@@ -757,21 +757,21 @@ mod tests {
         ) {
             match value {
                 serde_json::Value::Object(obj) => {
-                    if let Some(tag) = obj.get("tag") {
-                        if let Some(tag) = tag.as_str() {
-                            *counts.entry(tag.to_string()).or_insert(0) += 1;
-                        }
+                    if let Some(tag) = obj.get("tag")
+                        && let Some(tag) = tag.as_str()
+                    {
+                        *counts.entry(tag.to_string()).or_insert(0) += 1;
                     }
-                    if let Some(t) = obj.get("text") {
-                        if let Some(t) = t.as_str() {
-                            *text += t.len();
-                        }
+                    if let Some(t) = obj.get("text")
+                        && let Some(t) = t.as_str()
+                    {
+                        *text += t.len();
                     }
-                    if let Some(children) = obj.get("children") {
-                        if let Some(children) = children.as_array() {
-                            for child in children {
-                                count_tags(child, counts, text);
-                            }
+                    if let Some(children) = obj.get("children")
+                        && let Some(children) = children.as_array()
+                    {
+                        for child in children {
+                            count_tags(child, counts, text);
                         }
                     }
                 }
@@ -836,7 +836,7 @@ mod tests {
 
         loop {
             tick_iterations += 1;
-            if tick_iterations % 200 == 0 {
+            if tick_iterations.is_multiple_of(200) {
                 let mut kinds = String::new();
                 for (k, v) in &fetch_counts {
                     if !kinds.is_empty() {
@@ -933,10 +933,10 @@ mod tests {
                                 }
                             }
                             FetchKind::Image { source } => {
-                                if let Some(r) = fetch_ok(&core, &url) {
-                                    if let Err(e) = wv.on_image_fetched(source, &r.body) {
-                                        log::warn!(target: "ytprobe", "image fetch rejected: {e}");
-                                    }
+                                if let Some(r) = fetch_ok(&core, &url)
+                                    && let Err(e) = wv.on_image_fetched(source, &r.body)
+                                {
+                                    log::warn!(target: "ytprobe", "image fetch rejected: {e}");
                                 }
                             }
                             FetchKind::Audio { source } => {

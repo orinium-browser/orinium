@@ -1729,8 +1729,10 @@ mod tests {
     }
 
     fn hidden_container_info(children: Vec<InfoNode>) -> InfoNode {
-        let mut style = ContainerStyle::default();
-        style.visibility = Visibility::Hidden;
+        let style = ContainerStyle {
+            visibility: Visibility::Hidden,
+            ..ContainerStyle::default()
+        };
         mk_info_node(
             NodeKind::Container {
                 scroll_x: false,
@@ -1745,8 +1747,10 @@ mod tests {
     }
 
     fn visible_container_info(children: Vec<InfoNode>) -> InfoNode {
-        let mut style = ContainerStyle::default();
-        style.background = Background::Color(Color(255, 0, 0, 255));
+        let style = ContainerStyle {
+            background: Background::Color(Color(255, 0, 0, 255)),
+            ..ContainerStyle::default()
+        };
         mk_info_node(
             NodeKind::Container {
                 scroll_x: false,

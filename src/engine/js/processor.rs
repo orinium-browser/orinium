@@ -338,7 +338,7 @@ mod tests {
         }
     }
 
-    fn find_element<'i>(snapshot: &'i DomSnapshot, id: NodeId, tag: &str) -> Option<NodeId> {
+    fn find_element(snapshot: &DomSnapshot, id: NodeId, tag: &str) -> Option<NodeId> {
         if snapshot.node(id).kind.tag_name() == Some(tag) {
             return Some(id);
         }

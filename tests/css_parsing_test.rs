@@ -76,7 +76,7 @@ fn test_parse_all_css_syntax() {
 "#;
 
     // パーサー生成
-    let mut parser = Parser::new(&css);
+    let mut parser = Parser::new(css);
 
     // パース実行
     let result = parser.parse();

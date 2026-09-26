@@ -1065,7 +1065,9 @@ pub fn build_layout_and_info_from_snapshot(
                 let should_inherit = final_kind.is_container_with_transparent_bg();
                 if should_inherit {
                     for (_, child_info) in &element_results {
-                        if child_info.dom_id.and_then(|id| snapshot.node(id).kind.tag_name())
+                        if child_info
+                            .dom_id
+                            .and_then(|id| snapshot.node(id).kind.tag_name())
                             == Some("body")
                         {
                             let child_bg = child_info.kind.container_bg();

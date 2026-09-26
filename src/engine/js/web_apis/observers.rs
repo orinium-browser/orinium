@@ -249,7 +249,7 @@ fn intersection_observer_observe(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JS
     let intersection_area = intersection_width * intersection_height;
     let target_area = target_rect.2 * target_rect.3;
     let intersection_ratio = if target_area > 0.0 {
-        (intersection_area / target_area).min(1.0).max(0.0)
+        (intersection_area / target_area).clamp(0.0, 1.0)
     } else {
         0.0
     };

@@ -293,11 +293,7 @@ fn write_output_f32(
 ) {
     let mut p = pos.lock().unwrap();
     let buf = samples.lock().unwrap();
-    let total_frames = if src_channels > 0 {
-        buf.len() / src_channels
-    } else {
-        0
-    };
+    let total_frames = buf.len().checked_div(src_channels).unwrap_or(0);
 
     if out_channels == 0 {
         return;
@@ -334,11 +330,7 @@ fn write_output_i16(
 ) {
     let mut p = pos.lock().unwrap();
     let buf = samples.lock().unwrap();
-    let total_frames = if src_channels > 0 {
-        buf.len() / src_channels
-    } else {
-        0
-    };
+    let total_frames = buf.len().checked_div(src_channels).unwrap_or(0);
 
     if out_channels == 0 {
         return;
@@ -375,11 +367,7 @@ fn write_output_u16(
 ) {
     let mut p = pos.lock().unwrap();
     let buf = samples.lock().unwrap();
-    let total_frames = if src_channels > 0 {
-        buf.len() / src_channels
-    } else {
-        0
-    };
+    let total_frames = buf.len().checked_div(src_channels).unwrap_or(0);
 
     if out_channels == 0 {
         return;

@@ -1325,7 +1325,7 @@ mod tests {
     fn area_sum(vertices: &[Vertex]) -> f32 {
         // Reconstruct screen-space triangles and sum their signed areas.
         let mut sum = 0.0f32;
-        for tri in vertices.chunks_exact(3) {
+        for tri in vertices.as_chunks::<3>().0 {
             let p0 = (
                 (tri[0].position[0] + 1.0) / 2.0,
                 -(tri[0].position[1] - 1.0) / 2.0,

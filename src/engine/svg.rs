@@ -1371,6 +1371,7 @@ mod tests {
     use crate::engine::layouter::dom_snapshot::DomSnapshot;
     use crate::engine::renderer_model::PathCommand;
     use crate::engine::tree::TreeNode;
+    use std::rc::Rc;
 
     fn element(tag: &str, attrs: &[(&str, &str)]) -> HtmlNodeType {
         HtmlNodeType::Element {
@@ -1484,10 +1485,7 @@ mod tests {
         let sweep1 = path_from_d("M 0 0 A 5 5 0 0 1 10 0");
         let sweep0 = path_from_d("M 0 0 A 5 5 0 0 0 10 0");
         let extreme_y = |p: &Path, f: fn(f32, f32) -> f32| {
-            p.subpaths()[0]
-                .iter()
-                .map(|&(_, y)| y)
-                .fold(f32::NAN, |a, b| f(a, b))
+            p.subpaths()[0].iter().map(|&(_, y)| y).fold(f32::NAN, &f)
         };
         // sweep=1 reaches the top (most negative y); sweep=0 the bottom.
         assert!(
@@ -1983,7 +1981,7 @@ mod tests {
             "g",
             &[("transform", "translate(2 1)"), ("opacity", "0.5")],
         ));
-        TreeNode::add_child(&svg, g.clone());
+        TreeNode::add_child(&svg, Rc::clone(&g));
         TreeNode::add_child(
             &g,
             TreeNode::new(element(
@@ -2101,7 +2099,7 @@ mod tests {
                 ("stroke-linecap", "round"),
             ],
         ));
-        TreeNode::add_child(&svg, g.clone());
+        TreeNode::add_child(&svg, Rc::clone(&g));
         let inherits = TreeNode::new(element(
             "line",
             &[("x1", "0"), ("y1", "0"), ("x2", "5"), ("y2", "0")],
@@ -2116,8 +2114,8 @@ mod tests {
                 ("stroke", "none"),
             ],
         ));
-        TreeNode::add_child(&g, inherits.clone());
-        TreeNode::add_child(&g, overrides.clone());
+        TreeNode::add_child(&g, inherits);
+        TreeNode::add_child(&g, overrides);
 
         let (snapshot, _refs) = DomSnapshot::from_tree(&svg);
         let content = collect_svg(&snapshot, 0, ColorScheme::Light, Color::default()).unwrap();
@@ -2270,7 +2268,7 @@ mod tests {
     fn collect_svg_resolves_url_fill_to_gradient_brushes() {
         let svg = TreeNode::new(element("svg", &[("viewBox", "0 0 10 10")]));
         let defs = TreeNode::new(element("defs", &[]));
-        TreeNode::add_child(&svg, defs.clone());
+        TreeNode::add_child(&svg, Rc::clone(&defs));
 
         let linear = TreeNode::new(element(
             "linearGradient",
@@ -2559,7 +2557,7 @@ mod tests {
                 ("opacity", "0.8"),
             ],
         ));
-        TreeNode::add_child(&svg, g.clone());
+        TreeNode::add_child(&svg, Rc::clone(&g));
         TreeNode::add_child(
             &g,
             TreeNode::new(element(
@@ -2593,7 +2591,7 @@ mod tests {
             )),
         );
         let g2 = TreeNode::new(element("g", &[("transform", "translate(4 6)")]));
-        TreeNode::add_child(&svg, g2.clone());
+        TreeNode::add_child(&svg, Rc::clone(&g2));
         TreeNode::add_child(
             &g2,
             TreeNode::new(element(

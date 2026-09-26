@@ -704,7 +704,7 @@ impl<'a> Parser<'a> {
                     },
                 );
                 let content = TreeNode::new(HtmlNodeType::DocumentFragment);
-                TreeNode::add_child(&template, content.clone());
+                TreeNode::add_child(&template, Rc::clone(&content));
                 self.tag_stack.push(name);
                 // Push the template element (for end-tag matching) and the
                 // fragment on top, so contents are inserted into the fragment.
@@ -1233,20 +1233,19 @@ fn is_head_only_element(tag_name: &str) -> bool {
 /// ドキュメント直下 (または <html> 直下) のノード列を head 側と body 側に
 /// 振り分ける。既存の <head>/<body> 要素があればそれをそのまま返し、
 /// 無ければ None を返す (呼び出し側が新規作成する)。
-///
-/// HTML 仕様の "before head" / "after head" 挿入モードに対応し、
+type HeadBodySplit = (
+    Option<NodeRef<HtmlNodeType>>,
+    Option<NodeRef<HtmlNodeType>>,
+    Vec<NodeRef<HtmlNodeType>>,
+    Vec<NodeRef<HtmlNodeType>>,
+);
+
 /// - 既存の <head> より前の head 系要素・コメント・空白テキストは head へ
 /// - <body> が現れるまでの head 系要素は head へ
 /// - それ以降のノードはすべて body へ
-/// と振り分ける。空白のみのテキストノードは破棄する。
-fn split_head_and_body(
-    nodes: Vec<NodeRef<HtmlNodeType>>,
-) -> (
-    Option<NodeRef<HtmlNodeType>>,
-    Option<NodeRef<HtmlNodeType>>,
-    Vec<NodeRef<HtmlNodeType>>,
-    Vec<NodeRef<HtmlNodeType>>,
-) {
+///
+///   と振り分ける。空白のみのテキストノードは破棄する。
+fn split_head_and_body(nodes: Vec<NodeRef<HtmlNodeType>>) -> HeadBodySplit {
     let mut head_node: Option<NodeRef<HtmlNodeType>> = None;
     let mut body_node: Option<NodeRef<HtmlNodeType>> = None;
     let mut head_content: Vec<NodeRef<HtmlNodeType>> = Vec::new();
@@ -1368,7 +1367,7 @@ mod tests {
         let templates = tree.get_elements_by_tag_name("template");
         assert_eq!(templates.len(), 1);
 
-        let outer = templates[0].clone();
+        let outer = Rc::clone(&templates[0]);
         let outer_fragment = find_first_fragment(&outer);
         let outer_children = children_of(&outer_fragment);
         // Inner template element and the trailing <i>, in order.

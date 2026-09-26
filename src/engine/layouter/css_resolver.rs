@@ -771,6 +771,211 @@ impl MediaEvaluator {
     }
 }
 
+// ============================================================
+//  SupportsEvaluator — `@supports` condition evaluation
+// ============================================================
+
+struct SupportsEvaluator;
+
+impl SupportsEvaluator {
+    /// Dispatch on the `AtQuery` AST variant.
+    fn evaluate(query: &AtQuery) -> bool {
+        match query {
+            // `@supports (display: grid)` — a parenthesised group
+            AtQuery::Group(items) => Self::evaluate_group(items),
+            // `@supports (display: grid)` — the inner condition after unwrapping
+            AtQuery::Condition { name, value } => Self::is_supported(name, value),
+            // Media query range syntax is not a @supports condition.
+            AtQuery::Range { .. } => false,
+            // Stray keyword outside a group (malformed input)
+            AtQuery::Keyword(_) => false,
+        }
+    }
+
+    /// Evaluate a group of `@supports` items.
+    ///
+    /// The parser produces flat groups like:
+    /// - `(display: grid)` → `[Group([Condition])]`
+    /// - `(A) and (B)` → `[Group, Keyword("and"), Group]`
+    /// - `not (A)` → `[Keyword("not"), Group]`
+    /// - `(A) or (B)` → `[Group, Keyword("or"), Group]`
+    fn evaluate_group(items: &[AtQuery]) -> bool {
+        if items.is_empty() {
+            return false;
+        }
+
+        // `not (display: grid)` — negate
+        if matches!(items.first(), Some(AtQuery::Keyword(k)) if k.eq_ignore_ascii_case("not")) {
+            return items.len() > 1 && !Self::evaluate(&AtQuery::Group(items[1..].to_vec()));
+        }
+
+        // `(display: flex) and (gap: 10px)` — all operands must be supported
+        if let Some(operands) = Self::split_by_keyword(items, "and") {
+            operands.iter().all(|g| Self::evaluate(g))
+        // `(display: flex) or (display: grid)` — at least one must be supported
+        } else if let Some(operands) = Self::split_by_keyword(items, "or") {
+            operands.iter().any(|g| Self::evaluate(g))
+        // Single group — unwrap one level
+        } else if items.len() == 1 {
+            Self::evaluate(&items[0])
+        } else {
+            items.iter().all(Self::evaluate)
+        }
+    }
+
+    fn is_supported(name: &str, value: &CssValue) -> bool {
+        super::builder::apply_declaration(
+            name,
+            value,
+            &mut ui_layout::Style::default(),
+            &mut super::types::ContainerStyle::default(),
+            &mut super::types::TextStyle::default(),
+            &mut super::types::TextFlowStyle::default(),
+            &ui_layout::Style::default(),
+            &super::types::ContainerStyle::default(),
+            &super::types::TextStyle::default(),
+            &super::types::TextFlowStyle::default(),
+            &mut super::types::Overflow::default(),
+            super::types::ColorScheme::Light,
+        )
+        .is_some()
+    }
+
+    fn split_by_keyword<'a>(items: &'a [AtQuery], keyword: &str) -> Option<Vec<&'a AtQuery>> {
+        let has = items
+            .iter()
+            .any(|item| matches!(item, AtQuery::Keyword(k) if k.eq_ignore_ascii_case(keyword)));
+        if !has {
+            return None;
+        }
+        Some(
+            items
+                .iter()
+                .filter(
+                    |item| !matches!(item, AtQuery::Keyword(k) if k.eq_ignore_ascii_case(keyword)),
+                )
+                .collect(),
+        )
+    }
+}
+
+// ============================================================
+//  DeclarationResolver — `!important` extraction, `var()` resolution
+// ============================================================
+
+pub(super) struct DeclarationResolver;
+
+impl DeclarationResolver {
+    fn collect(children: &[CssNode]) -> Vec<Declaration> {
+        let mut result = Vec::new();
+
+        for child in children {
+            let CssNodeType::Declaration { name, value } = &child.node() else {
+                continue;
+            };
+
+            let (value, important) = Self::extract_important(value);
+
+            result.push(Declaration {
+                name: name.clone(),
+                value,
+                important,
+            });
+        }
+
+        result
+    }
+
+    /// Extract `!important` from a CSS value.
+    ///
+    /// `border: 1px solid black !important` is parsed as a `List` where the
+    /// last two items are `Keyword("!")` and `Keyword("important")`.
+    fn extract_important(value: &CssValue) -> (CssValue, bool) {
+        match value {
+            CssValue::List(list) if list.len() >= 2 => {
+                let len = list.len();
+                let is_important = matches!(
+                    (&list[len - 2], &list[len - 1]),
+                    (
+                        CssValue::Keyword(bang),
+                        CssValue::Keyword(ident)
+                    )
+                    if bang == "!" && ident.eq_ignore_ascii_case("important")
+                );
+
+                if is_important {
+                    let value = if len - 2 == 1 {
+                        list.iter().next().unwrap().clone()
+                    } else {
+                        CssValue::List(list[..len - 2].to_vec())
+                    };
+                    (value, true)
+                } else {
+                    (value.clone(), false)
+                }
+            }
+            _ => (value.clone(), false),
+        }
+    }
+
+    pub fn resolve_var(
+        value: &CssValue,
+        custom_props: &Properties,
+        visited: &mut HashSet<CssIdent>,
+    ) -> Option<CssValue> {
+        match value {
+            // `var(--accent)` / `var(--missing, red)` — resolve the custom property
+            CssValue::Function(name, args) if name == "var" => {
+                let var_name = match args.first().and_then(|argument| argument.first()) {
+                    Some(CssValue::Keyword(name)) => name,
+                    _ => return None,
+                };
+
+                if !visited.insert(var_name.clone()) {
+                    return None;
+                }
+
+                let result = if let Some(v) = custom_props.get(var_name.as_str()) {
+                    Self::resolve_var(&v.value, custom_props, visited)
+                } else if let Some(fallback) = args.get(1).and_then(|argument| argument.first()) {
+                    Self::resolve_var(fallback, custom_props, visited)
+                } else {
+                    None
+                };
+
+                visited.remove(var_name);
+                result
+            }
+
+            // `rgb(var(--r), var(--g), var(--b))` — resolve args independently
+            CssValue::Function(name, args) => {
+                let resolved_args = args
+                    .iter()
+                    .map(|argument| {
+                        argument
+                            .iter()
+                            .map(|v| Self::resolve_var(v, custom_props, &mut visited.clone()))
+                            .collect::<Option<Vec<_>>>()
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                Some(CssValue::Function(name.clone(), resolved_args))
+            }
+
+            // `1px solid var(--color)` — resolve each item independently
+            CssValue::List(list) => {
+                let resolved = list
+                    .iter()
+                    .map(|v| Self::resolve_var(v, custom_props, &mut visited.clone()))
+                    .collect::<Option<Vec<_>>>()?;
+                Some(CssValue::List(resolved))
+            }
+
+            // `10px` / `"hello"` / `#fff` — already concrete, pass through
+            _ => Some(value.clone()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -978,8 +1183,7 @@ mod tests {
             tag_name: "p".to_string(),
             ..Default::default()
         };
-        let groups: Vec<_> = rule_set.query_candidates(&p).collect();
-        assert_eq!(groups.len(), 1);
+        assert_eq!(rule_set.query_candidates(&p).count(), 1);
 
         // Distinct selectors stay in distinct groups.
         let padded = crate::engine::css::matcher::ElementInfo {
@@ -987,8 +1191,7 @@ mod tests {
             classes: vec!["padded".to_string()],
             ..Default::default()
         };
-        let groups: Vec<_> = rule_set.query_candidates(&padded).collect();
-        assert_eq!(groups.len(), 2);
+        assert_eq!(rule_set.query_candidates(&padded).count(), 2);
     }
 
     #[test]
@@ -1008,22 +1211,24 @@ mod tests {
             attributes: vec![("hidden".to_string(), String::new())],
             ..Default::default()
         };
-        let candidates: Vec<_> = rule_set
-            .query_candidates(&hidden)
-            .flat_map(|group| group.decls.iter())
-            .collect();
-        assert_eq!(candidates.len(), 1, "only the [hidden] group is queried");
+        assert_eq!(
+            rule_set
+                .query_candidates(&hidden)
+                .flat_map(|group| group.decls.iter())
+                .count(),
+            1,
+            "only the [hidden] group is queried"
+        );
 
         let plain = crate::engine::css::matcher::ElementInfo {
             tag_name: "div".to_string(),
             ..Default::default()
         };
-        let candidates: Vec<_> = rule_set
-            .query_candidates(&plain)
-            .flat_map(|group| group.decls.iter())
-            .collect();
         assert_eq!(
-            candidates.len(),
+            rule_set
+                .query_candidates(&plain)
+                .flat_map(|group| group.decls.iter())
+                .count(),
             0,
             "no candidates for attribute-less element"
         );
@@ -1088,210 +1293,5 @@ mod tests {
         // viewport 300px: min(800, 270) = 270, 300 > 270 => true
         let env4 = MediaEnvironment::new((300.0, 800.0), ColorScheme::Light);
         assert_eq!(filter_media(&styles, &env4).count(), 1);
-    }
-}
-
-// ============================================================
-//  SupportsEvaluator — `@supports` condition evaluation
-// ============================================================
-
-struct SupportsEvaluator;
-
-impl SupportsEvaluator {
-    /// Dispatch on the `AtQuery` AST variant.
-    fn evaluate(query: &AtQuery) -> bool {
-        match query {
-            // `@supports (display: grid)` — a parenthesised group
-            AtQuery::Group(items) => Self::evaluate_group(items),
-            // `@supports (display: grid)` — the inner condition after unwrapping
-            AtQuery::Condition { name, value } => Self::is_supported(name, value),
-            // Media query range syntax is not a @supports condition.
-            AtQuery::Range { .. } => false,
-            // Stray keyword outside a group (malformed input)
-            AtQuery::Keyword(_) => false,
-        }
-    }
-
-    /// Evaluate a group of `@supports` items.
-    ///
-    /// The parser produces flat groups like:
-    /// - `(display: grid)` → `[Group([Condition])]`
-    /// - `(A) and (B)` → `[Group, Keyword("and"), Group]`
-    /// - `not (A)` → `[Keyword("not"), Group]`
-    /// - `(A) or (B)` → `[Group, Keyword("or"), Group]`
-    fn evaluate_group(items: &[AtQuery]) -> bool {
-        if items.is_empty() {
-            return false;
-        }
-
-        // `not (display: grid)` — negate
-        if matches!(items.first(), Some(AtQuery::Keyword(k)) if k.eq_ignore_ascii_case("not")) {
-            return items.len() > 1 && !Self::evaluate(&AtQuery::Group(items[1..].to_vec()));
-        }
-
-        // `(display: flex) and (gap: 10px)` — all operands must be supported
-        if let Some(operands) = Self::split_by_keyword(items, "and") {
-            operands.iter().all(|g| Self::evaluate(g))
-        // `(display: flex) or (display: grid)` — at least one must be supported
-        } else if let Some(operands) = Self::split_by_keyword(items, "or") {
-            operands.iter().any(|g| Self::evaluate(g))
-        // Single group — unwrap one level
-        } else if items.len() == 1 {
-            Self::evaluate(&items[0])
-        } else {
-            items.iter().all(Self::evaluate)
-        }
-    }
-
-    fn is_supported(name: &str, value: &CssValue) -> bool {
-        super::builder::apply_declaration(
-            name,
-            value,
-            &mut ui_layout::Style::default(),
-            &mut super::types::ContainerStyle::default(),
-            &mut super::types::TextStyle::default(),
-            &mut super::types::TextFlowStyle::default(),
-            &ui_layout::Style::default(),
-            &super::types::ContainerStyle::default(),
-            &super::types::TextStyle::default(),
-            &super::types::TextFlowStyle::default(),
-            &mut super::types::Overflow::default(),
-            super::types::ColorScheme::Light,
-        )
-        .is_some()
-    }
-
-    fn split_by_keyword<'a>(items: &'a [AtQuery], keyword: &str) -> Option<Vec<&'a AtQuery>> {
-        let has = items
-            .iter()
-            .any(|item| matches!(item, AtQuery::Keyword(k) if k.eq_ignore_ascii_case(keyword)));
-        if !has {
-            return None;
-        }
-        Some(
-            items
-                .iter()
-                .filter(
-                    |item| !matches!(item, AtQuery::Keyword(k) if k.eq_ignore_ascii_case(keyword)),
-                )
-                .collect(),
-        )
-    }
-}
-
-// ============================================================
-//  DeclarationResolver — `!important` extraction, `var()` resolution
-// ============================================================
-
-pub(super) struct DeclarationResolver;
-
-impl DeclarationResolver {
-    fn collect(children: &[CssNode]) -> Vec<Declaration> {
-        let mut result = Vec::new();
-
-        for child in children {
-            let CssNodeType::Declaration { name, value } = &child.node() else {
-                continue;
-            };
-
-            let (value, important) = Self::extract_important(value);
-
-            result.push(Declaration {
-                name: name.clone(),
-                value,
-                important,
-            });
-        }
-
-        result
-    }
-
-    /// Extract `!important` from a CSS value.
-    ///
-    /// `border: 1px solid black !important` is parsed as a `List` where the
-    /// last two items are `Keyword("!")` and `Keyword("important")`.
-    fn extract_important(value: &CssValue) -> (CssValue, bool) {
-        match value {
-            CssValue::List(list) if list.len() >= 2 => {
-                let len = list.len();
-                let is_important = matches!(
-                    (&list[len - 2], &list[len - 1]),
-                    (
-                        CssValue::Keyword(bang),
-                        CssValue::Keyword(ident)
-                    )
-                    if bang == "!" && ident.eq_ignore_ascii_case("important")
-                );
-
-                if is_important {
-                    let value = if len - 2 == 1 {
-                        list.iter().next().unwrap().clone()
-                    } else {
-                        CssValue::List(list[..len - 2].to_vec())
-                    };
-                    (value, true)
-                } else {
-                    (value.clone(), false)
-                }
-            }
-            _ => (value.clone(), false),
-        }
-    }
-
-    pub fn resolve_var(
-        value: &CssValue,
-        custom_props: &Properties,
-        visited: &mut HashSet<CssIdent>,
-    ) -> Option<CssValue> {
-        match value {
-            // `var(--accent)` / `var(--missing, red)` — resolve the custom property
-            CssValue::Function(name, args) if name == "var" => {
-                let var_name = match args.first().and_then(|argument| argument.first()) {
-                    Some(CssValue::Keyword(name)) => name,
-                    _ => return None,
-                };
-
-                if !visited.insert(var_name.clone()) {
-                    return None;
-                }
-
-                let result = if let Some(v) = custom_props.get(var_name.as_str()) {
-                    Self::resolve_var(&v.value, custom_props, visited)
-                } else if let Some(fallback) = args.get(1).and_then(|argument| argument.first()) {
-                    Self::resolve_var(fallback, custom_props, visited)
-                } else {
-                    None
-                };
-
-                visited.remove(var_name);
-                result
-            }
-
-            // `rgb(var(--r), var(--g), var(--b))` — resolve args independently
-            CssValue::Function(name, args) => {
-                let resolved_args = args
-                    .iter()
-                    .map(|argument| {
-                        argument
-                            .iter()
-                            .map(|v| Self::resolve_var(v, custom_props, &mut visited.clone()))
-                            .collect::<Option<Vec<_>>>()
-                    })
-                    .collect::<Option<Vec<_>>>()?;
-                Some(CssValue::Function(name.clone(), resolved_args))
-            }
-
-            // `1px solid var(--color)` — resolve each item independently
-            CssValue::List(list) => {
-                let resolved = list
-                    .iter()
-                    .map(|v| Self::resolve_var(v, custom_props, &mut visited.clone()))
-                    .collect::<Option<Vec<_>>>()?;
-                Some(CssValue::List(resolved))
-            }
-
-            // `10px` / `"hello"` / `#fff` — already concrete, pass through
-            _ => Some(value.clone()),
-        }
     }
 }

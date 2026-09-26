@@ -110,7 +110,7 @@ fn main() -> Result<()> {
                             args[3].split(',').map(|s| s.to_ascii_lowercase()).collect();
 
                         let hidden_attr = if args.len() == 5 {
-                            args[4].to_ascii_lowercase() == "true"
+                            args[4].eq_ignore_ascii_case("true")
                         } else {
                             false
                         };
@@ -118,19 +118,18 @@ fn main() -> Result<()> {
                         dom.traverse(&mut |node_rc: &NodeRef<HtmlNodeType>| {
                             let mut node = node_rc.borrow_mut();
 
-                            if let Some(tag_name) = node.value.tag_name() {
-                                if hide_tag_names
+                            if let Some(tag_name) = node.value.tag_name()
+                                && hide_tag_names
                                     .iter()
                                     .any(|hide: &String| hide == &tag_name.to_ascii_lowercase())
-                                {
-                                    node.clear_children();
-                                }
+                            {
+                                node.clear_children();
                             }
 
-                            if hidden_attr {
-                                if let HtmlNodeType::Element { attributes, .. } = &mut node.value {
-                                    attributes.clear();
-                                }
+                            if hidden_attr
+                                && let HtmlNodeType::Element { attributes, .. } = &mut node.value
+                            {
+                                attributes.clear();
                             }
                         });
                     }
@@ -355,7 +354,7 @@ fn main() -> Result<()> {
     } else {
         eprintln!("No arguments provided. Use `help` for usage information.");
     }
-    print!("\n");
+    println!();
 
     Ok(())
 }
