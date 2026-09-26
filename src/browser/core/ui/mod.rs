@@ -229,9 +229,16 @@ impl BrowserUi {
         self.tabs.get_mut(id)
     }
 
-    pub fn add_tab(&mut self, mut tab: Tab) {
+    /// Adds a tab and returns its id.
+    ///
+    /// The active tab is left alone: opening a second window should not yank
+    /// focus away from the page the user is reading.
+    pub fn add_tab(&mut self, mut tab: Tab) -> TabId {
         tab.set_system_color_scheme(self.system_color_scheme);
+        let id = self.next_tab_id;
         self.next_tab_id.0 += 1;
+        self.tabs.insert(id, tab);
+        id
     }
 
     /// ウィンドウの初期サイズ・スケール・タイトルを設定する。
@@ -963,6 +970,38 @@ mod tests {
 
         assert!(matches!(cmd, BrowserCommand::RenameWindowTitle));
         assert_eq!(sink.frames.len(), 1);
+    }
+
+    /// `add_tab` used to bump the id counter and drop the tab on the floor, so
+    /// a second tab could never be reached.
+    #[test]
+    fn add_tab_inserts_without_stealing_focus() {
+        let mut ui = ui_with_one_tab();
+        let original = ui.active_tab_id().expect("the fixture has a tab");
+
+        let first = ui.add_tab(Tab::new(ColorScheme::default(), JsPolicy::default()));
+        let second = ui.add_tab(Tab::new(ColorScheme::default(), JsPolicy::default()));
+
+        assert_ne!(first, second, "each tab gets its own id");
+        assert_ne!(first, original);
+        assert_ne!(second, first);
+        assert!(ui.tab(&first).is_some(), "first tab is retrievable");
+        assert!(ui.tab(&second).is_some(), "second tab is retrievable");
+        assert_eq!(
+            ui.active_tab_id(),
+            Some(original),
+            "adding a tab must not move the active tab"
+        );
+    }
+
+    #[test]
+    fn tab_ids_are_not_reused() {
+        let mut ui = BrowserUi::with_chrome(Box::new(BasicChrome::new()));
+        let first = ui.add_tab(Tab::new(ColorScheme::default(), JsPolicy::default()));
+        let second = ui.add_tab(Tab::new(ColorScheme::default(), JsPolicy::default()));
+
+        assert_ne!(first, second);
+        assert!(ui.active_tab_id().is_none(), "no tab is active yet");
     }
 
     #[test]
