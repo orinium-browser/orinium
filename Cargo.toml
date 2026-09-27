@@ -15,7 +15,7 @@ orinium_text = { git = "https://github.com/orinium-browser/orinium_text", rev = 
 ab_glyph = "0.2"
 anyhow = "1.0"
 base64 = "0.23"
-brotli-decompressor = "4"
+brotli-decompressor = "6"
 bytemuck = { version = "1.25", features = ["derive"] }
 cpal = "0.18.1"
 dark-light = "3.0"
