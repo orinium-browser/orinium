@@ -648,6 +648,7 @@ fn sanitize_response_headers(headers: &[(String, String)]) -> Vec<(String, Strin
 
 pub(crate) fn make_fetch_response(response: JsFetchResponse) -> Rc<RefCell<JSObject>> {
     let body_bytes = response.body.clone();
+    // TODO: Filter cross-origin response headers according to Access-Control-Expose-Headers.
     let sanitized_headers = sanitize_response_headers(&response.headers);
     let mut object = JSObject::new();
     object.set(RESPONSE_MARKER.to_string(), JSValue::from_bool(true));
