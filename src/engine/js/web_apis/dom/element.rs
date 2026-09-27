@@ -457,6 +457,17 @@ pub(crate) fn make_element(
         }
         _ => {}
     }
+    if tag_name == "select" {
+        obj.set("add".to_string(), JSValue::from_native_function(select_add));
+    }
+    if tag_name == "object" {
+        // `object.data` reflects the `data` attribute as a resolved URL, so it
+        // goes through the same URL resolution as `href`/`src`.
+        obj.define_property(
+            "data".to_string(),
+            read_only_accessor_property(get_element_object_data),
+        );
+    }
     obj.define_property(
         "id".to_string(),
         accessor_property(get_element_id, set_element_id),
@@ -3559,6 +3570,56 @@ fn set_element_type(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 
 fn set_element_value(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     set_reflected_string_property(vm, &args, "value")
+}
+
+/// `HTMLSelectElement.add(item, before)`: inserts `item` among the select's
+/// children, before `before` when one is given, otherwise at the end.
+fn select_add(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(select) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::undefined());
+    };
+    let Some(item_value) = args.get(1).cloned() else {
+        return Ok(JSValue::undefined());
+    };
+    let Some(item) = dom_node(vm, &item_value) else {
+        return Ok(JSValue::undefined());
+    };
+    let before = args
+        .get(2)
+        .filter(|value| !value.is_null() && !value.is_undefined())
+        .and_then(|value| dom_node(vm, &value.clone()));
+    if let Some(before) = before.as_ref() {
+        TreeNode::insert_before(&select, Rc::clone(&item), before);
+    } else {
+        TreeNode::append_child(&select, Rc::clone(&item));
+    }
+    mark_dom_dirty(vm);
+    Ok(JSValue::undefined())
+}
+
+/// `object.data` reflects the `data` attribute as an absolute URL. An absent or
+/// empty attribute reflects as the empty string rather than the document URL.
+fn get_element_object_data(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::from_string(String::new()));
+    };
+    let raw = node
+        .borrow()
+        .value
+        .get_attr("data")
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if raw.is_empty() {
+        return Ok(JSValue::from_string(String::new()));
+    }
+    let base = with_host(vm, |host| host.document_url.clone()).unwrap_or_default();
+    let resolved = url::Url::parse(&base)
+        .ok()
+        .and_then(|base| base.join(&raw).ok())
+        .map(|url| url.to_string())
+        .unwrap_or(raw);
+    Ok(JSValue::from_string(resolved))
 }
 
 macro_rules! reflected_string_accessors {
