@@ -87,7 +87,7 @@ fn run_acid3(raw_url: &str) -> Result<()> {
                     match loader.fetch_blocking(url) {
                         Ok(resp) => {
                             let html = String::from_utf8_lossy(&resp.body).to_string();
-                            js.resolve_iframe_fetch(req.dom_id, html);
+                            js.resolve_iframe_fetch(req.dom_id, html, resp.url);
                         }
                         Err(_) => js.reject_iframe_fetch(req.dom_id),
                     }
