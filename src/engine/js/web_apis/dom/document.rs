@@ -24,190 +24,31 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
     let document_obj = Rc::new(RefCell::new(JSObject::new()));
     {
         let mut document = document_obj.borrow_mut();
-        document.define_property(
-            "nodeType".to_string(),
-            Property::read_only(JSValue::from_number(9.0)),
-        );
-        document.define_property(
-            "nodeName".to_string(),
-            Property::read_only(JSValue::from_string("#document".to_string())),
-        );
-        define_node_constants(&mut document);
-        document.define_property(
-            "documentElement".to_string(),
-            read_only_accessor_property(get_document_element),
-        );
-        document.define_property(
-            "childNodes".to_string(),
-            read_only_accessor_property(get_document_child_nodes),
-        );
-        document.define_property(
-            "firstChild".to_string(),
-            read_only_accessor_property(get_document_first_child),
-        );
-        document.define_property(
-            "lastChild".to_string(),
-            read_only_accessor_property(get_document_last_child),
-        );
-        document.define_property(
-            "body".to_string(),
-            read_only_accessor_property(get_document_body),
-        );
-        document.define_property(
-            "head".to_string(),
-            read_only_accessor_property(get_document_head),
-        );
-        document.define_property(
-            "activeElement".to_string(),
-            read_only_accessor_property(get_active_element),
-        );
-        document.define_property(
-            "defaultView".to_string(),
-            read_only_accessor_property(get_document_default_view),
-        );
-        document.define_property(
-            "readyState".to_string(),
-            read_only_accessor_property(get_document_ready_state),
-        );
-        document.define_property(
-            "origin".to_string(),
-            read_only_accessor_property(get_document_origin),
-        );
-        document.define_property(
-            "implementation".to_string(),
-            read_only_accessor_property(get_document_implementation),
-        );
-        document.define_property(
-            "cookie".to_string(),
-            accessor_property(get_document_cookie, set_document_cookie),
-        );
-        document.set(
-            "hasFocus".to_string(),
-            JSValue::from_native_function(document_has_focus),
-        );
-        document.set(
-            "elementFromPoint".to_string(),
-            JSValue::from_native_function(document_element_from_point),
-        );
-        document.set(
-            "elementsFromPoint".to_string(),
-            JSValue::from_native_function(document_elements_from_point),
-        );
-        document.set(
-            "execCommand".to_string(),
-            JSValue::from_native_function(document_exec_command),
-        );
-        document.set(
-            "getSelection".to_string(),
-            JSValue::from_native_function(document_get_selection),
-        );
-        document.define_property(
-            "pictureInPictureElement".to_string(),
-            read_only_accessor_property(get_picture_in_picture_element),
-        );
-        document.define_property(
-            "fullscreenElement".to_string(),
-            read_only_accessor_property(get_fullscreen_element),
-        );
-        document.define_property(
-            "pictureInPictureEnabled".to_string(),
-            Property::read_only(JSValue::from_bool(true)),
-        );
-        document.define_property(
-            "fullscreenEnabled".to_string(),
-            Property::read_only(JSValue::from_bool(true)),
-        );
-        document.set(
-            "getElementById".to_string(),
-            JSValue::from_native_function(get_element_by_id),
-        );
-        document.set(
-            "querySelector".to_string(),
-            JSValue::from_native_function(document_query_selector),
-        );
-        document.set(
-            "querySelectorAll".to_string(),
-            JSValue::from_native_function(document_query_selector_all),
-        );
-        document.set(
-            "getElementsByTagName".to_string(),
-            JSValue::from_native_function(document_get_elements_by_tag_name),
-        );
-        document.set(
-            "getElementsByClassName".to_string(),
-            JSValue::from_native_function(document_get_elements_by_class_name),
-        );
-        document.define_property(
-            "forms".to_string(),
-            read_only_accessor_property(get_document_forms),
-        );
-        document.set(
-            "createElement".to_string(),
-            JSValue::from_native_function(create_element),
-        );
-        document.set(
-            "importNode".to_string(),
-            JSValue::from_native_function(crate::engine::js::web_apis::dom::element::import_node),
-        );
-        document.set(
-            "createElementNS".to_string(),
-            JSValue::from_native_function(create_element_ns),
-        );
-        document.set(
-            "createNodeIterator".to_string(),
-            JSValue::from_native_function(create_node_iterator),
-        );
-        document.set(
-            "createTreeWalker".to_string(),
-            JSValue::from_native_function(create_tree_walker),
-        );
-        document.set(
-            "createTextNode".to_string(),
-            JSValue::from_native_function(create_text_node),
-        );
-        document.set(
-            "createDocumentFragment".to_string(),
-            JSValue::from_native_function(create_document_fragment),
-        );
-        document.set(
-            "createComment".to_string(),
-            JSValue::from_native_function(create_comment),
-        );
-        document.set(
-            "createProcessingInstruction".to_string(),
-            JSValue::from_native_function(create_processing_instruction),
-        );
-        document.set(
-            "createEvent".to_string(),
-            JSValue::from_native_function(super::events::make_create_event),
-        );
-        document.set(
-            "addEventListener".to_string(),
-            JSValue::from_native_function(add_document_event_listener),
-        );
-        document.set(
-            "removeEventListener".to_string(),
-            JSValue::from_native_function(remove_document_event_listener),
-        );
-        document.set(
-            "dispatchEvent".to_string(),
-            JSValue::from_native_function(window_dispatch_event),
-        );
-        document.set(
-            "write".to_string(),
-            JSValue::from_native_function(document_write),
-        );
-        document.set(
-            "writeln".to_string(),
-            JSValue::from_native_function(document_writeln),
-        );
-        document.set(
-            "close".to_string(),
-            JSValue::from_native_function(document_close),
-        );
+        define_document_interface(&mut document);
     }
+
     let _ = with_host_mut(engine.vm(), |host| {
         host.document = Some(Rc::clone(&document_obj));
+    });
+    // Register the main document node so that `this`-relative document
+    // accessors can resolve it through `dom_node`, exactly as they do for a
+    // document created by `DOMImplementation.createDocument`.
+    let _ = with_host_mut(engine.vm(), |host| {
+        let root = Rc::clone(&host.dom.root);
+        let dom_id = match host.dom_id_for_node(&root) {
+            Some(dom_id) => dom_id,
+            None => {
+                host.next_id += 1;
+                let dom_id = host.next_id;
+                host.refs.insert(dom_id, Rc::downgrade(&root));
+                dom_id
+            }
+        };
+        document_obj.borrow_mut().set(
+            "__orinium_dom_id".to_string(),
+            JSValue::from_number(dom_id as f64),
+        );
+        host.main_document_dom_id = Some(dom_id);
     });
     install_document_implementation(engine);
     engine
@@ -559,6 +400,211 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
     });
 }
 
+/// Defines the `Document` interface on `document`.
+///
+/// Shared by the top-level document and by documents produced by
+/// `DOMImplementation.createDocument`, so both expose the same surface and
+/// both resolve their accessors relative to their own tree.
+fn define_document_interface(document: &mut JSObject) {
+    document.define_property(
+        "nodeType".to_string(),
+        Property::read_only(JSValue::from_number(9.0)),
+    );
+    document.define_property(
+        "nodeName".to_string(),
+        Property::read_only(JSValue::from_string("#document".to_string())),
+    );
+    define_node_constants(document);
+    document.define_property(
+        "documentElement".to_string(),
+        read_only_accessor_property(get_document_element),
+    );
+    document.define_property(
+        "childNodes".to_string(),
+        read_only_accessor_property(get_document_child_nodes),
+    );
+    document.define_property(
+        "firstChild".to_string(),
+        read_only_accessor_property(get_document_first_child),
+    );
+    document.define_property(
+        "lastChild".to_string(),
+        read_only_accessor_property(get_document_last_child),
+    );
+    document.define_property(
+        "body".to_string(),
+        read_only_accessor_property(get_document_body),
+    );
+    document.define_property(
+        "head".to_string(),
+        read_only_accessor_property(get_document_head),
+    );
+    document.define_property(
+        "activeElement".to_string(),
+        read_only_accessor_property(get_active_element),
+    );
+    document.define_property(
+        "defaultView".to_string(),
+        read_only_accessor_property(get_document_default_view),
+    );
+    document.define_property(
+        "readyState".to_string(),
+        read_only_accessor_property(get_document_ready_state),
+    );
+    document.define_property(
+        "title".to_string(),
+        accessor_property(get_document_title, set_document_title),
+    );
+    document.define_property(
+        "origin".to_string(),
+        read_only_accessor_property(get_document_origin),
+    );
+    document.define_property(
+        "implementation".to_string(),
+        read_only_accessor_property(get_document_implementation),
+    );
+    document.define_property(
+        "cookie".to_string(),
+        accessor_property(get_document_cookie, set_document_cookie),
+    );
+    document.set(
+        "hasFocus".to_string(),
+        JSValue::from_native_function(document_has_focus),
+    );
+    document.set(
+        "elementFromPoint".to_string(),
+        JSValue::from_native_function(document_element_from_point),
+    );
+    document.set(
+        "elementsFromPoint".to_string(),
+        JSValue::from_native_function(document_elements_from_point),
+    );
+    document.set(
+        "execCommand".to_string(),
+        JSValue::from_native_function(document_exec_command),
+    );
+    document.set(
+        "getSelection".to_string(),
+        JSValue::from_native_function(document_get_selection),
+    );
+    document.define_property(
+        "pictureInPictureElement".to_string(),
+        read_only_accessor_property(get_picture_in_picture_element),
+    );
+    document.define_property(
+        "fullscreenElement".to_string(),
+        read_only_accessor_property(get_fullscreen_element),
+    );
+    document.define_property(
+        "pictureInPictureEnabled".to_string(),
+        Property::read_only(JSValue::from_bool(true)),
+    );
+    document.define_property(
+        "fullscreenEnabled".to_string(),
+        Property::read_only(JSValue::from_bool(true)),
+    );
+    document.set(
+        "getElementById".to_string(),
+        JSValue::from_native_function(get_element_by_id),
+    );
+    document.set(
+        "querySelector".to_string(),
+        JSValue::from_native_function(document_query_selector),
+    );
+    document.set(
+        "querySelectorAll".to_string(),
+        JSValue::from_native_function(document_query_selector_all),
+    );
+    document.set(
+        "getElementsByTagName".to_string(),
+        JSValue::from_native_function(document_get_elements_by_tag_name),
+    );
+    document.set(
+        "getElementsByClassName".to_string(),
+        JSValue::from_native_function(document_get_elements_by_class_name),
+    );
+    document.define_property(
+        "forms".to_string(),
+        read_only_accessor_property(get_document_forms),
+    );
+    document.set(
+        "createElement".to_string(),
+        JSValue::from_native_function(create_element),
+    );
+    document.set(
+        "importNode".to_string(),
+        JSValue::from_native_function(crate::engine::js::web_apis::dom::element::import_node),
+    );
+    document.set(
+        "createElementNS".to_string(),
+        JSValue::from_native_function(create_element_ns),
+    );
+    document.set(
+        "createNodeIterator".to_string(),
+        JSValue::from_native_function(create_node_iterator),
+    );
+    document.set(
+        "createTreeWalker".to_string(),
+        JSValue::from_native_function(create_tree_walker),
+    );
+    document.set(
+        "createTextNode".to_string(),
+        JSValue::from_native_function(create_text_node),
+    );
+    document.set(
+        "createDocumentFragment".to_string(),
+        JSValue::from_native_function(create_document_fragment),
+    );
+    document.set(
+        "createComment".to_string(),
+        JSValue::from_native_function(create_comment),
+    );
+    document.set(
+        "createProcessingInstruction".to_string(),
+        JSValue::from_native_function(create_processing_instruction),
+    );
+    document.set(
+        "createEvent".to_string(),
+        JSValue::from_native_function(super::events::make_create_event),
+    );
+    document.set(
+        "addEventListener".to_string(),
+        JSValue::from_native_function(add_document_event_listener),
+    );
+    document.set(
+        "removeEventListener".to_string(),
+        JSValue::from_native_function(remove_document_event_listener),
+    );
+    document.set(
+        "dispatchEvent".to_string(),
+        JSValue::from_native_function(window_dispatch_event),
+    );
+    document.set(
+        "write".to_string(),
+        JSValue::from_native_function(document_write),
+    );
+    document.set(
+        "writeln".to_string(),
+        JSValue::from_native_function(document_writeln),
+    );
+    document.set(
+        "close".to_string(),
+        JSValue::from_native_function(document_close),
+    );
+}
+
+/// Builds a `Document` interface object for a document node other than the
+/// top-level one, bound to `dom_id`.
+fn make_secondary_document_object(dom_id: u64) -> Rc<RefCell<JSObject>> {
+    let mut document = JSObject::new();
+    define_document_interface(&mut document);
+    document.set(
+        "__orinium_dom_id".to_string(),
+        JSValue::from_number(dom_id as f64),
+    );
+    Rc::new(RefCell::new(document))
+}
+
 /// `new ShadowRoot()` is illegal; shadow roots come from `attachShadow`.
 fn shadow_root_construct_error(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     Err(JSError::TypeError(
@@ -639,7 +685,8 @@ fn get_element_by_id(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         return Ok(JSValue::null());
     };
 
-    let Some(node) = with_host(vm, |host| host.dom.get_element_by_id(id)).flatten() else {
+    let tree = document_tree(vm, args.first().unwrap_or(&JSValue::undefined()));
+    let Some(node) = tree.get_element_by_id(id) else {
         return Ok(JSValue::null());
     };
     Ok(expose_node(vm, node).unwrap_or(JSValue::null()))
@@ -649,7 +696,8 @@ fn document_query_selector(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue>
     let Some(selector) = args.get(1).and_then(JSValue::as_string) else {
         return Ok(JSValue::null());
     };
-    let Some(node) = with_host(vm, |host| host.dom.query_selector(selector)).flatten() else {
+    let tree = document_tree(vm, args.first().unwrap_or(&JSValue::undefined()));
+    let Some(node) = tree.query_selector(selector) else {
         return Ok(JSValue::null());
     };
     Ok(expose_node(vm, node).unwrap_or(JSValue::null()))
@@ -659,21 +707,18 @@ fn document_query_selector_all(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVa
     let Some(selector) = args.get(1).and_then(JSValue::as_string) else {
         return Ok(vm.array_from_values(Vec::new()));
     };
-    let nodes = with_host(vm, |host| host.dom.query_selector_all(selector)).unwrap_or_default();
-    Ok(expose_node_list(vm, nodes))
+    let tree = document_tree(vm, args.first().unwrap_or(&JSValue::undefined()));
+    Ok(expose_node_list(vm, tree.query_selector_all(selector)))
 }
 
 fn document_get_elements_by_tag_name(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let tag_name = args.get(1).unwrap_or(&JSValue::undefined()).to_string();
-    let nodes = with_host(vm, |host| {
-        if tag_name == "*" {
-            host.dom.find_all(|node| node.tag_name().is_some())
-        } else {
-            host.dom
-                .get_elements_by_tag_name(&tag_name.to_ascii_lowercase())
-        }
-    })
-    .unwrap_or_default();
+    let tree = document_tree(vm, args.first().unwrap_or(&JSValue::undefined()));
+    let nodes = if tag_name == "*" {
+        tree.find_all(|node| node.tag_name().is_some())
+    } else {
+        tree.get_elements_by_tag_name(&tag_name.to_ascii_lowercase())
+    };
     Ok(expose_node_list(vm, nodes))
 }
 
@@ -691,16 +736,16 @@ fn document_get_elements_by_class_name(vm: &mut VM, args: Vec<JSValue>) -> JSRes
     if selector.is_empty() {
         return Ok(vm.array_from_values(Vec::new()));
     }
-    let nodes = with_host(vm, |host| host.dom.query_selector_all(&selector)).unwrap_or_default();
-    Ok(expose_node_list(vm, nodes))
+    let tree = document_tree(vm, args.first().unwrap_or(&JSValue::undefined()));
+    Ok(expose_node_list(vm, tree.query_selector_all(&selector)))
 }
 
 /// `document.forms` — the collection of `<form>` elements in the document.
 /// Exposed as an array-like so `document.forms[0]` and `document.forms.length`
 /// work; Reddit's challenge page relies on `document.forms[0]`.
-fn get_document_forms(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
-    let nodes = with_host(vm, |host| host.dom.get_elements_by_tag_name("form")).unwrap_or_default();
-    Ok(expose_node_list(vm, nodes))
+fn get_document_forms(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let tree = document_tree(vm, args.first().unwrap_or(&JSValue::undefined()));
+    Ok(expose_node_list(vm, tree.get_elements_by_tag_name("form")))
 }
 
 /// `new Image(width, height)` — creates an `<img>` element just like
@@ -730,6 +775,17 @@ fn image_constructor(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(value)
 }
 
+/// Records the creating document on a freshly created node.
+///
+/// `Node.ownerDocument` must be correct before the node is inserted anywhere,
+/// so the creator is captured at creation time rather than derived by walking
+/// the parent chain.
+fn adopt_owner_document(this: &JSValue, node: &NodeRef<HtmlNodeType>) {
+    if let Some(dom_id) = node_dom_id(this) {
+        node.borrow().set_owner_document(dom_id);
+    }
+}
+
 pub(crate) fn create_element(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(tag_name) = args.get(1).and_then(JSValue::as_string) else {
         return Err(throw_dom_exception(
@@ -748,6 +804,7 @@ pub(crate) fn create_element(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValu
         tag_name,
         attributes: Vec::new(),
     });
+    adopt_owner_document(args.first().unwrap_or(&JSValue::undefined()), &node);
     Ok(expose_detached_node(vm, node).unwrap_or(JSValue::null()))
 }
 
@@ -787,6 +844,7 @@ fn create_element_ns(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         tag_name: qualified_name,
         attributes: Vec::new(),
     });
+    adopt_owner_document(args.first().unwrap_or(&JSValue::undefined()), &node);
     let value = expose_detached_node(vm, node).unwrap_or(JSValue::null());
     if let Some(dom_id) = node_dom_id(&value) {
         let _ = with_host_mut(vm, |host| {
@@ -822,11 +880,13 @@ pub(crate) fn create_text_node(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVa
         .map(JSValue::to_console_string)
         .unwrap_or_default();
     let node = TreeNode::new(HtmlNodeType::Text(text));
+    adopt_owner_document(args.first().unwrap_or(&JSValue::undefined()), &node);
     Ok(expose_detached_node(vm, node).unwrap_or(JSValue::null()))
 }
 
-fn create_document_fragment(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+fn create_document_fragment(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let node = TreeNode::new(HtmlNodeType::DocumentFragment);
+    adopt_owner_document(args.first().unwrap_or(&JSValue::undefined()), &node);
     Ok(expose_detached_node(vm, node).unwrap_or(JSValue::null()))
 }
 
@@ -836,6 +896,7 @@ fn create_comment(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         .map(JSValue::to_console_string)
         .unwrap_or_default();
     let node = TreeNode::new(HtmlNodeType::Comment(data));
+    adopt_owner_document(args.first().unwrap_or(&JSValue::undefined()), &node);
     Ok(expose_detached_node(vm, node).unwrap_or(JSValue::null()))
 }
 
@@ -858,61 +919,142 @@ fn create_processing_instruction(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JS
     Ok(expose_detached_node(vm, node).unwrap_or(JSValue::null()))
 }
 
-fn get_document_element(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
-    let node = with_host(vm, |host| {
-        host.dom
-            .root
-            .borrow()
-            .children()
-            .iter()
-            .find(|child| matches!(child.borrow().value, HtmlNodeType::Element { .. }))
-            .cloned()
-    })
-    .flatten();
+/// Returns the tree a `Document` interface object stands for.
+///
+/// Document accessors are invoked with the document as `this`, so a document
+/// created by `DOMImplementation.createDocument` must read its own tree rather
+/// than the top-level one. Falls back to the top-level tree when `this` does
+/// not resolve to a document node.
+fn document_tree(vm: &VM, this: &JSValue) -> Rc<DomTree> {
+    match dom_node(vm, this) {
+        Some(root) => Rc::new(DomTree::from_root(root)),
+        None => Rc::clone(&with_host(vm, |host| Rc::clone(&host.dom)).unwrap()),
+    }
+}
+
+fn get_document_element(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let tree = document_tree(vm, args.first().unwrap_or(&JSValue::undefined()));
+    let node = tree
+        .root
+        .borrow()
+        .children()
+        .iter()
+        .find(|child| matches!(child.borrow().value, HtmlNodeType::Element { .. }))
+        .cloned();
     Ok(node
         .and_then(|node| expose_node(vm, node))
         .unwrap_or(JSValue::null()))
 }
 
-fn get_document_child_nodes(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
-    let children =
-        with_host(vm, |host| host.dom.root.borrow().children().to_vec()).unwrap_or_default();
+fn get_document_child_nodes(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let tree = document_tree(vm, args.first().unwrap_or(&JSValue::undefined()));
+    let children = tree.root.borrow().children().to_vec();
     Ok(expose_node_list(vm, children))
 }
 
-fn get_document_first_child(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
-    Ok(with_host(vm, |host| {
-        host.dom.root.borrow().children().first().cloned()
-    })
-    .flatten()
-    .and_then(|node| expose_node(vm, node))
-    .unwrap_or(JSValue::null()))
+fn get_document_first_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let tree = document_tree(vm, args.first().unwrap_or(&JSValue::undefined()));
+    Ok(tree
+        .root
+        .borrow()
+        .children()
+        .first()
+        .cloned()
+        .and_then(|node| expose_node(vm, node))
+        .unwrap_or(JSValue::null()))
 }
 
-fn get_document_last_child(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
-    Ok(
-        with_host(vm, |host| host.dom.root.borrow().children().last().cloned())
-            .flatten()
-            .and_then(|node| expose_node(vm, node))
-            .unwrap_or(JSValue::null()),
-    )
+fn get_document_last_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let tree = document_tree(vm, args.first().unwrap_or(&JSValue::undefined()));
+    Ok(tree
+        .root
+        .borrow()
+        .children()
+        .last()
+        .cloned()
+        .and_then(|node| expose_node(vm, node))
+        .unwrap_or(JSValue::null()))
 }
 
-fn get_document_body(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
-    let node = with_host(vm, |host| host.dom.query_selector("body")).flatten();
+fn get_document_body(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let tree = document_tree(vm, args.first().unwrap_or(&JSValue::undefined()));
+    let node = tree.query_selector("body");
     Ok(node
         .and_then(|node| expose_node(vm, node))
         .unwrap_or(JSValue::null()))
 }
 
-fn get_document_head(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
-    let node = with_host(vm, |host| host.dom.query_selector("head")).flatten();
+fn get_document_head(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let tree = document_tree(vm, args.first().unwrap_or(&JSValue::undefined()));
+    let node = tree.query_selector("head");
     Ok(node
         .and_then(|node| expose_node(vm, node))
         .unwrap_or(JSValue::null()))
 }
 
-fn get_active_element(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+/// `document.title`: the text of the `<title>` element in `<head>`, or the
+/// empty string when the document has none. Reads through the tree so that
+/// mutating `title.textContent` is reflected immediately.
+fn get_document_title(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let tree = document_tree(vm, args.first().unwrap_or(&JSValue::undefined()));
+    let title = tree.query_selector("title");
+    Ok(JSValue::from_string(
+        title.map(|node| text_content_of(&node)).unwrap_or_default(),
+    ))
+}
+
+fn set_document_title(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let this = args.first().cloned().unwrap_or(JSValue::undefined());
+    let tree = document_tree(vm, &this);
+    let value = args
+        .get(1)
+        .map(JSValue::to_console_string)
+        .unwrap_or_default();
+    let head = tree.query_selector("head");
+    // Without a `<head>` there is nowhere to put the title.
+    let Some(head) = head else {
+        return Ok(JSValue::undefined());
+    };
+    let title = match DomTree::query_selector_within(&head, "title") {
+        Some(title) => title,
+        None => {
+            let title = TreeNode::new(HtmlNodeType::Element {
+                tag_name: "title".to_string(),
+                attributes: Vec::new(),
+            });
+            TreeNode::append_child(&head, Rc::clone(&title));
+            title
+        }
+    };
+    let text = TreeNode::new(HtmlNodeType::Text(value));
+    title.borrow_mut().clear_children();
+    TreeNode::append_child(&title, text);
+    mark_dom_dirty(vm);
+    Ok(JSValue::undefined())
+}
+
+/// Concatenates the text of a node and its descendants.
+fn text_content_of(node: &NodeRef<HtmlNodeType>) -> String {
+    let mut out = String::new();
+    fn visit(node: &NodeRef<HtmlNodeType>, out: &mut String) {
+        match &node.borrow().value {
+            HtmlNodeType::Text(text) => out.push_str(text),
+            HtmlNodeType::Comment(_) | HtmlNodeType::Doctype { .. } => {}
+            HtmlNodeType::Element { .. }
+            | HtmlNodeType::Document
+            | HtmlNodeType::DocumentFragment => {
+                for child in node.borrow().children() {
+                    visit(child, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    visit(node, &mut out);
+    out
+}
+
+fn get_active_element(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let active = with_host(vm, |host| {
         host.active_element
             .and_then(|dom_id| host.objects.get(&dom_id).cloned())
@@ -921,7 +1063,7 @@ fn get_active_element(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     if let Some(active) = active {
         return Ok(JSValue::from_object(active));
     }
-    get_document_body(vm, Vec::new())
+    get_document_body(vm, args)
 }
 
 fn get_document_default_view(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -1015,6 +1157,9 @@ fn dom_implementation_create_document_type(vm: &mut VM, args: Vec<JSValue>) -> J
     Ok(expose_detached_node(vm, node).unwrap_or(JSValue::null()))
 }
 
+/// `document.implementation.createDocument(namespace, qualifiedName, doctype)`:
+/// creates a new, empty document with its own tree, so nothing created through
+/// it can reach the top-level document's nodes.
 fn dom_implementation_create_document(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let namespace = args
         .get(1)
@@ -1026,9 +1171,20 @@ fn dom_implementation_create_document(vm: &mut VM, args: Vec<JSValue>) -> JSResu
         .and_then(JSValue::as_string)
         .map(|name| name.trim().to_string())
         .unwrap_or_default();
+    // The doctype is the third argument; `createDocumentType` leaves it without
+    // an owner until a document adopts it.
+    let doctype = dom_node(vm, args.get(3).unwrap_or(&JSValue::undefined()));
 
     let node = TreeNode::new(HtmlNodeType::Document);
-    let doc = expose_detached_node(vm, node).unwrap_or(JSValue::null());
+    let doc = expose_detached_node(vm, Rc::clone(&node)).unwrap_or(JSValue::null());
+    let doc_dom_id = node_dom_id(&doc);
+
+    // A doctype passed in becomes the document's first child and, from that
+    // moment on, reports this document as its owner.
+    if let (Some(doctype), Some(doc_dom_id)) = (doctype, doc_dom_id) {
+        doctype.borrow().set_owner_document(doc_dom_id);
+        TreeNode::insert_child_at(&node, 0, doctype);
+    }
 
     if !qualified_name.is_empty() {
         let (prefix, local_name) = validate_qualified_name(&qualified_name).map_err(|code| {
@@ -1047,20 +1203,18 @@ fn dom_implementation_create_document(vm: &mut VM, args: Vec<JSValue>) -> JSResu
             tag_name: qualified_name,
             attributes: Vec::new(),
         });
-        let value = expose_detached_node(vm, element).unwrap_or(JSValue::null());
+        if let Some(doc_dom_id) = doc_dom_id {
+            element.borrow().set_owner_document(doc_dom_id);
+        }
+        let value = expose_detached_node(vm, Rc::clone(&element)).unwrap_or(JSValue::null());
         if let Some(dom_id) = node_dom_id(&value) {
             let _ = with_host_mut(vm, |host| {
                 host.namespaces.insert(dom_id, namespace);
             });
         }
-        if let Some(doc_dom_id) = node_dom_id(&doc)
-            && let Some(Some(Some(root))) =
-                with_host(vm, |host| host.refs.get(&doc_dom_id).map(|w| w.upgrade()))
-            && let Some(child) = dom_node(vm, &value)
-        {
-            TreeNode::append_child(&root, child);
-        }
+        TreeNode::append_child(&node, element);
     }
+    mark_dom_dirty(vm);
     Ok(doc)
 }
 
@@ -1431,11 +1585,7 @@ pub(crate) fn expose_node(vm: &VM, node: NodeRef<HtmlNodeType>) -> Option<JSValu
                 public_id: _,
                 system_id: _,
             } => NodeKind::Doctype { name: name.clone() },
-            HtmlNodeType::Document => {
-                return with_host(vm, |host| host.document.as_ref().cloned())
-                    .flatten()
-                    .map(JSValue::from_object);
-            }
+            HtmlNodeType::Document => NodeKind::Document,
             _ => return None,
         }
     };
@@ -1450,6 +1600,7 @@ enum NodeKind {
     ProcessingInstruction,
     Fragment,
     Doctype { name: Option<String> },
+    Document,
 }
 
 fn expose_node_inner(vm: &VM, node: NodeRef<HtmlNodeType>, kind: NodeKind) -> Option<JSValue> {
@@ -1483,6 +1634,13 @@ fn expose_node_inner(vm: &VM, node: NodeRef<HtmlNodeType>, kind: NodeKind) -> Op
             NodeKind::ProcessingInstruction => make_processing_instruction_node(dom_id),
             NodeKind::Fragment => make_document_fragment(dom_id),
             NodeKind::Doctype { name } => make_doctype_node(dom_id, name.clone()),
+            // The main document keeps its long-lived object; a document made by
+            // `DOMImplementation.createDocument` gets its own interface, which
+            // is what makes the two trees independent.
+            NodeKind::Document => match host.document.as_ref().cloned() {
+                Some(document) if host.main_document_dom_id == Some(dom_id) => document,
+                _ => make_secondary_document_object(dom_id),
+            },
         };
 
         // Custom elements inherit the class prototype so their methods are

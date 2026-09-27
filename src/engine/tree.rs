@@ -33,6 +33,14 @@ pub struct TreeNode<T> {
     /// Live form-control state, kept out of `value` so that attribute
     /// reflection and DOM cloning stay independent of it.
     form_state: Cell<FormState>,
+    /// DOM id of the document this node was created by, which is what
+    /// `Node.ownerDocument` reports.
+    ///
+    /// Walking the parent chain is not enough: a freshly created element is
+    /// not in a tree yet, yet it still has an owner document. Recording the
+    /// creator keeps `ownerDocument` correct for detached nodes and for nodes
+    /// that are later adopted into a different document.
+    owner_document: Cell<Option<u64>>,
 }
 
 impl<T> TreeNode<T> {
@@ -43,7 +51,18 @@ impl<T> TreeNode<T> {
             parent: None,
             children: Vec::new(),
             form_state: Cell::new(FormState::default()),
+            owner_document: Cell::new(None),
         }))
+    }
+
+    /// The DOM id of the document that created this node, if known.
+    pub fn owner_document(&self) -> Option<u64> {
+        self.owner_document.get()
+    }
+
+    /// Records the DOM id of the document that owns this node.
+    pub fn set_owner_document(&self, document_dom_id: u64) {
+        self.owner_document.set(Some(document_dom_id));
     }
 
     /// The node's live form-control state.
@@ -223,6 +242,9 @@ impl<T> TreeNode<T> {
             // The cloning steps for `input` copy the checkedness, and doing so
             // for every node is harmless because other types ignore it.
             form_state: Cell::new(self.form_state.get()),
+            // A clone is adopted by the document that imports it, but keeping
+            // the source's owner is the better default until then.
+            owner_document: Cell::new(self.owner_document.get()),
         }));
 
         if deep {
@@ -413,6 +435,26 @@ mod tests {
         assert!(first.borrow().children().is_empty());
         assert!(Rc::ptr_eq(&second.borrow().parent().unwrap(), &root));
         assert!(!TreeNode::append_child(&second, Rc::clone(&root)));
+    }
+
+    #[test]
+    fn owner_document_is_kept_per_node_and_across_clones() {
+        let element = TreeNode::new("element");
+        // A fresh node has no document until a factory records one.
+        assert_eq!(element.borrow().owner_document(), None);
+
+        element.borrow().set_owner_document(7);
+        assert_eq!(element.borrow().owner_document(), Some(7));
+
+        // Re-parenting does not change the owner; adopting into another
+        // document is an explicit step.
+        let other = TreeNode::new("other");
+        TreeNode::add_child(&other, Rc::clone(&element));
+        assert_eq!(element.borrow().owner_document(), Some(7));
+
+        // A clone starts out owned by the same document as its source.
+        let clone = element.borrow().clone_node(true);
+        assert_eq!(clone.borrow().owner_document(), Some(7));
     }
 
     #[test]

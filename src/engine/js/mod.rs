@@ -203,6 +203,9 @@ pub struct JsHost {
     /// Detached document objects created via
     /// `document.implementation.createHTMLDocument`, kept alive for scripts.
     pub(crate) detached_documents: Vec<Rc<RefCell<JSObject>>>,
+    /// DOM id of the main document node, so that `ownerDocument` and the
+    /// `this`-relative document accessors can recognise the top-level document.
+    pub(crate) main_document_dom_id: Option<u64>,
     pub(crate) timers: Vec<JsTimer>,
     pub(crate) fetch_requests: Vec<JsFetchRequest>,
     pub(crate) iframe_fetch_requests: Vec<JsIframeFetchRequest>,
@@ -356,6 +359,7 @@ impl JsRuntime {
             next_id: 0,
             needs_redraw: Rc::clone(&needs_redraw),
             detached_documents: Vec::new(),
+            main_document_dom_id: None,
         };
         Self::register_window_event_handlers(&mut host);
 
@@ -1569,6 +1573,73 @@ mod tests {
         assert_eq!(
             data,
             "frag:true:1;orig-intact:true;appended:1;doc-visible:1;deep:true;independent:true;clone-frag:true:1;repeat:2;nested-span:true;nested-tmpl:true:true;shallow:true:0;default-deep:1",
+            "got: {data}"
+        );
+    }
+
+    #[test]
+    fn implementation_create_document_is_independent() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const results = [];
+
+            // A created document is a distinct object with its own tree.
+            const d = document.implementation.createDocument(null, null, null);
+            results.push("distinct:" + (d !== document));
+            results.push("nodeType:" + d.nodeType);
+            results.push("children:" + d.childNodes.length);
+
+            // Appending to the document makes the element its documentElement.
+            const root = d.createElement("root");
+            d.appendChild(root);
+            results.push("documentElement:" + d.documentElement.tagName);
+            results.push("sameNode:" + (d.documentElement === root));
+
+            // ownerDocument is correct for a node that is in no tree yet, and
+            // for one that has been inserted.
+            const e1 = d.createElement("test");
+            results.push("detachedOwner:" + (e1.ownerDocument === d));
+            d.documentElement.appendChild(e1);
+            results.push("insertedOwner:" + (e1.parentNode.ownerDocument === d));
+            results.push("ownerType:" + e1.parentNode.ownerDocument.nodeType);
+
+            // The top-level document is untouched by any of the above.
+            results.push("mainDocElement:" + document.documentElement.tagName);
+            results.push("mainUntouched:" + (document.getElementById("result") !== null));
+
+            // createDocument with a qualified name builds an XHTML-ish document.
+            const x = document.implementation.createDocument(
+                "http://www.w3.org/1999/xhtml", "html", null);
+            results.push("xhtmlRoot:" + x.documentElement.tagName);
+            results.push("xhtmlTitle:" + JSON.stringify(x.title));
+            x.documentElement.appendChild(
+                x.createElementNS("http://www.w3.org/1999/xhtml", "head"));
+            x.documentElement.appendChild(
+                x.createElementNS("http://www.w3.org/1999/xhtml", "body"));
+            const title = x.createElementNS("http://www.w3.org/1999/xhtml", "title");
+            x.documentElement.firstChild.appendChild(title);
+            results.push("xhtmlBody:" + x.body.tagName);
+            results.push("xhtmlForms:" + x.forms.length);
+            title.textContent = "Sparrow";
+            results.push("xhtmlTitleSet:" + x.title);
+
+            document.getElementById("result").setAttribute("data-r", results.join(";"));
+            "##,
+        );
+        let node = dom.get_element_by_id("result").unwrap();
+        let data = node
+            .borrow()
+            .value
+            .get_attr("data-r")
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(
+            data,
+            "distinct:true;nodeType:9;children:0;documentElement:ROOT;sameNode:true;\
+             detachedOwner:true;insertedOwner:true;ownerType:9;mainDocElement:HTML;\
+             mainUntouched:true;xhtmlRoot:HTML;xhtmlTitle:\"\";xhtmlBody:BODY;xhtmlForms:0;\
+             xhtmlTitleSet:Sparrow",
             "got: {data}"
         );
     }

@@ -1040,12 +1040,15 @@ pub(crate) fn append_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue>
     let Some(parent) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
         return Ok(JSValue::null());
     };
-    if !matches!(
-        parent.borrow().value,
-        HtmlNodeType::Element { .. }
-            | HtmlNodeType::DocumentFragment
-            | HtmlNodeType::ShadowRoot { .. }
-    ) {
+    let is_document = matches!(parent.borrow().value, HtmlNodeType::Document);
+    if !is_document
+        && !matches!(
+            parent.borrow().value,
+            HtmlNodeType::Element { .. }
+                | HtmlNodeType::DocumentFragment
+                | HtmlNodeType::ShadowRoot { .. }
+        )
+    {
         return Ok(JSValue::null());
     }
     let Some(child_value) = args.get(1).cloned() else {
@@ -1065,6 +1068,15 @@ pub(crate) fn append_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue>
         ));
     }
 
+    // Per DOM spec, a document may hold an element or a doctype, but never a
+    // fragment's contents spliced in directly.
+    if is_document && matches!(child.borrow().value, HtmlNodeType::DocumentFragment) {
+        return Err(throw_dom_exception(
+            "Cannot append a DocumentFragment to a Document",
+            "HierarchyRequestError",
+        ));
+    }
+
     // Per DOM spec, appending a DocumentFragment moves its children.
     if matches!(child.borrow().value, HtmlNodeType::DocumentFragment) {
         let fragment_children: Vec<_> = child.borrow().children().to_vec();
@@ -1077,6 +1089,19 @@ pub(crate) fn append_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue>
 
     if !TreeNode::append_child(&parent, child) {
         return Ok(JSValue::null());
+    }
+
+    // Inserting into a document adopts the node, so `ownerDocument` follows the
+    // node instead of the document that happened to create it.
+    if is_document
+        && let (Some(document_dom_id), Some(child_dom_id)) = (
+            node_dom_id(args.first().unwrap_or(&UNDEFINED)),
+            node_dom_id(&child_value),
+        )
+        && let Some(adopted) = with_host(vm, |host| host.refs.get(&child_dom_id).cloned()).flatten()
+        && let Some(node) = adopted.upgrade()
+    {
+        node.borrow().set_owner_document(document_dom_id);
     }
 
     if let Some(dom_id) = node_dom_id(&child_value) {
@@ -2093,7 +2118,34 @@ pub(crate) fn get_is_connected(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVa
     }
 }
 
-pub(crate) fn get_owner_document(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+/// `Node.ownerDocument`.
+///
+/// The creating document is recorded on the node itself, so this stays correct
+/// for a node that is not in a tree yet and for a node belonging to a document
+/// made by `DOMImplementation.createDocument`. Falls back to the tree root when
+/// a node was parsed or cloned into a document without going through one of its
+/// factory methods, and to the top-level document as a last resort.
+pub(crate) fn get_owner_document(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::null());
+    };
+    let recorded = node.borrow().owner_document();
+    let mut root = Some(Rc::clone(&node));
+    while let Some(current) = root {
+        if matches!(current.borrow().value, HtmlNodeType::Document) {
+            if with_host(vm, |host| host.dom_id_for_node(&current)).is_some() {
+                return Ok(super::document::expose_node(vm, current).unwrap_or(JSValue::null()));
+            }
+            break;
+        }
+        root = current.borrow().parent();
+    }
+    if let Some(document_dom_id) = recorded
+        && let Some(document) =
+            with_host(vm, |host| host.objects.get(&document_dom_id).cloned()).flatten()
+    {
+        return Ok(JSValue::from_object(document));
+    }
     Ok(with_host(vm, |host| host.document.as_ref().cloned())
         .flatten()
         .map(JSValue::from_object)
