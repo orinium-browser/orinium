@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="ja">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Media Queries Test</title>
+        <style>
+            :root {
+                color-scheme: light dark;
+            }
+
+            body {
+                margin: 0;
+                padding: 24px;
+                background: #f3f5f7;
+                color: #20242a;
+                font-family: sans-serif;
+                line-height: 1.5;
+            }
+
+            h1 {
+                margin-top: 0;
+            }
+
+            .instructions {
+                padding: 12px;
+                border: 1px solid #9aa4af;
+                background: white;
+            }
+
+            .test {
+                margin-top: 16px;
+                padding: 16px;
+                border: 2px solid #9aa4af;
+                background: white;
+            }
+
+            .test h2 {
+                margin: 0 0 8px;
+                font-size: 20px;
+            }
+
+            .badge {
+                display: inline-block;
+                padding: 6px 10px;
+                background: #59636e;
+                color: white;
+                font-weight: bold;
+            }
+
+            .only-narrow,
+            .only-short,
+            .only-portrait,
+            .only-dark,
+            .only-or,
+            .only-not-narrow {
+                display: none;
+            }
+
+            @media screen and (max-width: 600px) {
+                .only-wide {
+                    display: none;
+                }
+
+                .only-narrow {
+                    display: inline-block;
+                }
+
+                #width-test {
+                    border-color: #16803a;
+                }
+            }
+
+            @media screen and (max-height: 500px) {
+                .only-tall {
+                    display: none;
+                }
+
+                .only-short {
+                    display: inline-block;
+                }
+
+                #height-test {
+                    border-color: #16803a;
+                }
+            }
+
+            @media (orientation: portrait) {
+                .only-landscape {
+                    display: none;
+                }
+
+                .only-portrait {
+                    display: inline-block;
+                }
+
+                #orientation-test {
+                    border-color: #16803a;
+                }
+            }
+
+            @media (prefers-color-scheme: dark) {
+                body {
+                    background: #17191d;
+                    color: #edf0f3;
+                }
+
+                .instructions,
+                .test {
+                    background: #25292f;
+                }
+
+                .only-light {
+                    display: none;
+                }
+
+                .only-dark {
+                    display: inline-block;
+                }
+
+                #color-scheme-test {
+                    border-color: #4ebd70;
+                }
+            }
+
+            @media print, screen and (max-width: 700px) {
+                .only-or {
+                    display: inline-block;
+                }
+
+                .only-no-or {
+                    display: none;
+                }
+            }
+
+            @media not screen and (max-width: 600px) {
+                .only-not-narrow {
+                    display: inline-block;
+                }
+
+                .only-not-wide {
+                    display: none;
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <h1>Media Queries Test</h1>
+        <p class="instructions">
+            ウィンドウの幅と高さを変えて、各バッジが切り替わることを確認してください。
+            OSの配色を変更するとカラースキームの項目も切り替わります。
+        </p>
+
+        <section id="width-test" class="test">
+            <h2>Viewport width</h2>
+            <span class="badge only-wide">601px以上</span>
+            <span class="badge only-narrow">600px以下</span>
+        </section>
+
+        <section id="height-test" class="test">
+            <h2>Viewport height</h2>
+            <span class="badge only-tall">501px以上</span>
+            <span class="badge only-short">500px以下</span>
+        </section>
+
+        <section id="orientation-test" class="test">
+            <h2>Orientation</h2>
+            <span class="badge only-landscape">landscape</span>
+            <span class="badge only-portrait">portrait</span>
+        </section>
+
+        <section id="color-scheme-test" class="test">
+            <h2>prefers-color-scheme</h2>
+            <span class="badge only-light">light</span>
+            <span class="badge only-dark">dark</span>
+        </section>
+
+        <section class="test">
+            <h2>Query list: print OR max-width: 700px</h2>
+            <span class="badge only-no-or">条件不一致（701px以上）</span>
+            <span class="badge only-or">条件一致（700px以下）</span>
+        </section>
+
+        <section class="test">
+            <h2>not screen and max-width: 600px</h2>
+            <span class="badge only-not-wide">条件不一致（600px以下）</span>
+            <span class="badge only-not-narrow">条件一致（601px以上）</span>
+        </section>
+    </body>
+</html>

@@ -31,29 +31,30 @@ event_loop.run_app(&mut app)?;
 
 # What we implement in Orinium
 ## `GpuRenderer`
-* ./src/engine/renderer
+* `src/platform/renderer/` (`gpu.rs`)
 Lifecycle
 ```rust
-App::resumed()
- └── State::new()
-      └── GpuRenderer::new()   ← GPU initialization
-App::set_draw_commands()
+BrowserApp::default()
+ └── BrowserApp::run()
+      └── system::App::new()
+           └── GpuRenderer::new()   ← GPU initialization
+system::App::set_draw_commands()
  └── GpuRenderer::update_draw_commands()
 EventLoop: RedrawRequested
- └── State::render()
+ └── system::App::render()
       └── GpuRenderer::render() ← per-frame rendering
 EventLoop: Resized
- └── State::resize()
+ └── system::App::resize()
       └── GpuRenderer::resize()
 App shutdown
  └── GpuRenderer is dropped and GPU resources are freed
 
 ```
 
-| Phase    | Function                 | Primary responsibilities          | When it's called                       |
-|----------|--------------------------|-----------------------------------|----------------------------------------|
-| Init     | `new()`                  | Create GPU instance and pipelines | On app startup (`resumed()`)           |
-| Update   | `update_draw_commands()` | Update vertex and text buffers    | When shapes or text change             |
-| Render   | `render()`               | Render a single frame             | Each frame or after `request_redraw()` |
-| Resize   | `resize()`               | Update buffers and font regions   | On window size changes                 |
-| Shutdown | `Drop`                   | Free GPU memory and resources     | On app exit                            |
+| Phase    | Function                 | Primary responsibilities          | When it's called                                    |
+|----------|--------------------------|-----------------------------------|-----------------------------------------------------|
+| Init     | `new()`                  | Create GPU instance and pipelines | Inside `BrowserApp::run()` → `system::App::new()`   |
+| Update   | `update_draw_commands()` | Update vertex and text buffers    | When shapes or text change                          |
+| Render   | `render()`               | Render a single frame             | Each frame or after `request_redraw()`              |
+| Resize   | `resize()`               | Update buffers and font regions   | On window size changes                              |
+| Shutdown | `Drop`                   | Free GPU memory and resources     | On app exit                                         |

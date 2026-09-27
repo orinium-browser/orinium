@@ -20,48 +20,92 @@
 //! - Tokens are produced in a **linear stream**
 //! - Function tokens only represent the function name
 //! - Matching of parentheses and function arguments is handled by the parser
+//!
+//! ## Allocation strategy
+//!
+//! Cascade stylesheets are populated with many short identifiers, and the
+//! majority of them contain no escape sequences. Because the tokenizer
+//! borrows from the input string, any such lexeme is returned as a
+//! [`Cow::Borrowed`] slice of the input and only escape-containing (or
+//! otherwise transformed) lexemes are materialized onto the heap. Numbers are
+//! parsed directly from the input slice instead of being assembled in a
+//! scratch buffer.
+
+use std::borrow::Cow;
 
 /// CSS token produced by the tokenizer.
 ///
 /// This represents *syntactic units* only.
 /// No semantic interpretation (length, color, etc.) is performed here.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Token {
+///
+/// String payloads are [`Cow`]s borrowing from the input where no escape
+/// sequence was encountered, so common identifiers, units and comments avoid
+/// heap allocation entirely.
+#[derive(Debug, Clone)]
+pub enum Token<'a> {
     /// Identifier token (e.g. `div`, `color`, `--custom`)
-    Ident(String),
+    Ident(Cow<'a, str>),
 
     /// Function token (e.g. `calc`, `var`)
-    Function(String),
+    Function(Cow<'a, str>),
+
+    /// Unquoted `url(...)` token (e.g. `url(data:image/png;base64,...)`). The
+    /// raw inner content is captured as a single lexeme, including characters
+    /// that would otherwise be tokenized further (such as `:` or `%` in a
+    /// base64 `data:` URL).
+    Url(Cow<'a, str>),
 
     /// Plain number without unit (e.g. `0`, `1.5`)
     Number(f32),
 
     /// Quoted string token (e.g. `"hello"`, `'world'`)
-    String(String),
+    String(Cow<'a, str>),
 
     /// Dimension token (e.g. `10px`, `50%`, `2em`)
     ///
     /// Percentages are also represented as a dimension
     /// with `%` as the unit.
-    Dimension(f32, String),
+    Dimension(f32, Cow<'a, str>),
 
     /// Delimiter token (single-character symbols such as `:`, `;`, `>`, `+`)
     Delim(char),
 
     /// Hash with String (e.g. `#fff`)
-    Hash(String),
+    Hash(Cow<'a, str>),
 
     /// AtKeyword (e.g. `@media`)
-    AtKeyword(String),
+    AtKeyword(Cow<'a, str>),
 
     /// One or more whitespace characters
     Whitespace,
 
     /// Comment
-    Comment(String),
+    Comment(Cow<'a, str>),
 
     /// End-of-input marker
     EOF,
+}
+
+/// Equality across token lifetimes so tokens borrowing from a live input can
+/// be compared against `'static` literals (as in tests) or vice versa.
+impl<'a, 'b> PartialEq<Token<'b>> for Token<'a> {
+    fn eq(&self, other: &Token<'b>) -> bool {
+        match (self, other) {
+            (Token::Ident(a), Token::Ident(b)) => a == b,
+            (Token::Function(a), Token::Function(b)) => a == b,
+            (Token::Url(a), Token::Url(b)) => a == b,
+            (Token::Number(a), Token::Number(b)) => a == b,
+            (Token::String(a), Token::String(b)) => a == b,
+            (Token::Dimension(av, au), Token::Dimension(bv, bu)) => av == bv && au == bu,
+            (Token::Delim(a), Token::Delim(b)) => a == b,
+            (Token::Hash(a), Token::Hash(b)) => a == b,
+            (Token::AtKeyword(a), Token::AtKeyword(b)) => a == b,
+            (Token::Whitespace, Token::Whitespace) => true,
+            (Token::Comment(a), Token::Comment(b)) => a == b,
+            (Token::EOF, Token::EOF) => true,
+            _ => false,
+        }
+    }
 }
 
 /// CSS tokenizer.
@@ -77,12 +121,16 @@ pub enum Token {
 /// - Parsing declarations or selectors
 /// - Interpreting values (length, color, etc.)
 /// - Building trees or higher-level structures
+#[derive(Clone)]
 pub struct Tokenizer<'a> {
     /// Iterator over the input characters
     chars: std::str::Chars<'a>,
 
     /// Current character under examination
     current: Option<char>,
+
+    /// The full input, used to slice borrowed token payloads
+    input: &'a str,
 }
 
 impl<'a> Tokenizer<'a> {
@@ -91,7 +139,11 @@ impl<'a> Tokenizer<'a> {
         let mut chars = input.chars();
         let current = chars.next();
 
-        Self { chars, current }
+        Self {
+            chars,
+            current,
+            input,
+        }
     }
 
     /// Advance to the next character.
@@ -111,10 +163,24 @@ impl<'a> Tokenizer<'a> {
         self.chars.clone().next()
     }
 
+    /// Byte offset of the current (unconsumed) character. This is also the
+    /// exclusive end of the last consumed lexeme, so slices of `self.input`
+    /// taken between a recorded start and this position are exact.
+    fn pos(&self) -> usize {
+        self.input.len() - self.chars.as_str().len()
+    }
+
+    /// Byte offset of the *first* byte of the current character (i.e. of the
+    /// character that `self.pos()` points just past). Used as the start of a
+    /// lexeme that begins at the current character.
+    fn cur_start(&self) -> usize {
+        self.pos() - self.current.map(char::len_utf8).unwrap_or(0)
+    }
+
     /// Consume and return the next token from the input.
     ///
     /// This is the main entry point used by the parser.
-    pub fn next_token(&mut self) -> Token {
+    pub fn next_token(&mut self) -> Token<'a> {
         let token = match self.peek() {
             Some(c) if c.is_whitespace() => self.consume_whitespace(),
             Some(c) if is_number_start(c, self.peek_next()) => self.consume_number_like(),
@@ -132,29 +198,27 @@ impl<'a> Tokenizer<'a> {
             }
             Some('#') => {
                 self.bump(); // consume '#'
-                let mut value = String::new();
+                let start = self.cur_start();
                 while let Some(c) = self.peek() {
                     if is_ident_continue(c) {
-                        value.push(c);
                         self.bump();
                     } else {
                         break;
                     }
                 }
-                Token::Hash(value)
+                Token::Hash(Cow::Borrowed(&self.input[start..self.cur_start()]))
             }
             Some('@') => {
                 self.bump();
-                let mut value = String::new();
+                let start = self.cur_start();
                 while let Some(c) = self.peek() {
                     if is_ident_continue(c) {
-                        value.push(c);
                         self.bump();
                     } else {
                         break;
                     }
                 }
-                Token::AtKeyword(value)
+                Token::AtKeyword(Cow::Borrowed(&self.input[start..self.cur_start()]))
             }
             Some(c) => {
                 self.bump();
@@ -171,7 +235,7 @@ impl<'a> Tokenizer<'a> {
     /// Consume consecutive whitespace characters.
     ///
     /// Produces a single `Token::Whitespace`.
-    fn consume_whitespace(&mut self) -> Token {
+    fn consume_whitespace(&mut self) -> Token<'a> {
         while matches!(self.current, Some(c) if c.is_whitespace()) {
             self.bump();
         }
@@ -182,50 +246,140 @@ impl<'a> Tokenizer<'a> {
     ///
     /// If an identifier is immediately followed by `(`,
     /// this method should produce a `Token::Function`.
-    fn consume_ident_like(&mut self) -> Token {
-        let mut ident = String::new();
+    ///
+    /// Identifiers without escape sequences are returned as borrowed slices
+    /// of the input; escape resolution materializes a heap buffer lazily.
+    fn consume_ident_like(&mut self) -> Token<'a> {
+        let start = self.cur_start();
+        let mut owned: Option<String> = None;
 
         while let Some(c) = self.peek() {
             if c == '\\' {
+                let buf =
+                    owned.get_or_insert_with(|| self.input[start..self.cur_start()].to_string());
                 if let Some(escaped) = self.consume_escape() {
-                    ident.push(escaped);
+                    buf.push(escaped);
                 }
             } else if is_ident_continue(c) {
-                ident.push(c);
+                if let Some(buf) = owned.as_mut() {
+                    buf.push(c);
+                }
                 self.bump();
             } else {
                 break;
             }
         }
+
+        let ident: Cow<'a, str> = match owned {
+            Some(s) => Cow::Owned(s),
+            None => Cow::Borrowed(&self.input[start..self.cur_start()]),
+        };
+
         if self.peek() == Some('(') {
-            Token::Function(ident)
+            if ident.eq_ignore_ascii_case("url") {
+                self.consume_url_after_name(ident)
+            } else {
+                Token::Function(ident)
+            }
         } else {
             Token::Ident(ident)
         }
     }
 
-    fn consume_string_like(&mut self) -> Token {
+    /// Consume the body of an unquoted `url(...)` token after the name has
+    /// already been read.
+    ///
+    /// Per the CSS Syntax spec, `url(` followed by a string delimiter is a
+    /// plain function token whose quoted string argument is handled by the
+    /// parser. Otherwise we consume the raw content up to the closing `)`,
+    /// resolving escapes, so that the URL is preserved byte-for-byte.
+    fn consume_url_after_name(&mut self, ident: Cow<'a, str>) -> Token<'a> {
+        self.bump(); // consume '('
+
+        if let Some(c) = self.peek()
+            && is_string_delimiter(c)
+        {
+            // Quoted URL (e.g. `url("foo.png")`) — behave as a function token
+            // so the parser handles the string argument.
+            return Token::Function(ident);
+        }
+
+        let start = self.cur_start();
+        let mut owned: Option<String> = None;
+        let mut end = self.input.len();
+
+        loop {
+            match self.peek() {
+                None => break, // EOF without a closing paren
+                Some(')') => {
+                    end = self.cur_start();
+                    self.bump();
+                    break;
+                }
+                Some('\\') => {
+                    let buf = owned
+                        .get_or_insert_with(|| self.input[start..self.cur_start()].to_string());
+                    if let Some(escaped) = self.consume_escape() {
+                        buf.push(escaped);
+                    } else {
+                        // A lone trailing backslash: bad URL, but keep the
+                        // eventual closing paren in sync.
+                        end = self.cur_start();
+                        self.bump();
+                        break;
+                    }
+                }
+                Some(c) => {
+                    if let Some(buf) = owned.as_mut() {
+                        buf.push(c);
+                    }
+                    self.bump();
+                }
+            }
+        }
+
+        let value: Cow<'a, str> = match owned {
+            Some(s) => Cow::Owned(s.trim().to_string()),
+            None => Cow::Borrowed(self.input[start..end].trim()),
+        };
+
+        Token::Url(value)
+    }
+
+    fn consume_string_like(&mut self) -> Token<'a> {
         let quote = self.peek().unwrap(); // '"' or '\''
         self.bump(); // consume opening quote
 
-        let mut value = String::new();
+        let start = self.cur_start();
+        let mut owned: Option<String> = None;
+        let mut end = self.input.len();
 
         while let Some(c) = self.peek() {
             if c == quote {
+                end = self.cur_start();
                 self.bump(); // consume closing quote
                 break;
             }
 
             if c == '\\' {
+                let buf =
+                    owned.get_or_insert_with(|| self.input[start..self.cur_start()].to_string());
                 if let Some(escaped) = self.consume_escape() {
-                    value.push(escaped);
+                    buf.push(escaped);
                 }
                 continue;
             }
 
-            value.push(c);
+            if let Some(buf) = owned.as_mut() {
+                buf.push(c);
+            }
             self.bump();
         }
+
+        let value: Cow<'a, str> = match owned {
+            Some(s) => Cow::Owned(s),
+            None => Cow::Borrowed(&self.input[start..end]),
+        };
 
         Token::String(value)
     }
@@ -235,11 +389,13 @@ impl<'a> Tokenizer<'a> {
     /// This may produce:
     /// - `Token::Number`
     /// - `Token::Dimension` (including `%`)
-    fn consume_number_like(&mut self) -> Token {
-        let mut buf = String::new();
+    ///
+    /// The numeric value is parsed straight from the input slice rather than
+    /// through a scratch buffer, avoiding per-token `String` churn.
+    fn consume_number_like(&mut self) -> Token<'a> {
+        let start = self.cur_start();
 
         let mut has_dot = if self.peek() == Some('.') {
-            buf.push('.');
             self.bump();
             true
         } else {
@@ -247,41 +403,55 @@ impl<'a> Tokenizer<'a> {
         };
 
         if self.peek() == Some('-') {
-            buf.push('-');
             self.bump();
         }
 
         while let Some(c) = self.peek() {
             if c.is_ascii_digit() {
-                buf.push(c);
                 self.bump();
             } else if c == '.' && !has_dot {
                 has_dot = true;
-                buf.push(c);
                 self.bump();
             } else {
                 break;
             }
         }
 
-        let value: f32 = buf.parse().unwrap_or(0.0);
+        let value: f32 = self.input[start..self.cur_start()].parse().unwrap_or(0.0);
 
         // --- unit / percentage branching ---
         match self.peek() {
             Some('%') => {
                 self.bump();
-                Token::Dimension(value, "%".to_string())
+                Token::Dimension(value, Cow::Borrowed("%"))
             }
             Some(c) if is_ident_start(c) => {
-                let mut unit = String::new();
+                let unit_start = self.cur_start();
+                let mut owned: Option<String> = None;
+
                 while let Some(c) = self.peek() {
-                    if is_ident_continue(c) {
-                        unit.push(c);
+                    if c == '\\' {
+                        let buf = owned.get_or_insert_with(|| {
+                            self.input[unit_start..self.cur_start()].to_string()
+                        });
+                        if let Some(escaped) = self.consume_escape() {
+                            buf.push(escaped);
+                        }
+                    } else if is_ident_continue(c) {
+                        if let Some(buf) = owned.as_mut() {
+                            buf.push(c);
+                        }
                         self.bump();
                     } else {
                         break;
                     }
                 }
+
+                let unit: Cow<'a, str> = match owned {
+                    Some(s) => Cow::Owned(s),
+                    None => Cow::Borrowed(&self.input[unit_start..self.cur_start()]),
+                };
+
                 Token::Dimension(value, unit)
             }
             _ => Token::Number(value),
@@ -291,8 +461,8 @@ impl<'a> Tokenizer<'a> {
     /// Consume a CSS comment.
     ///
     /// Assumes the opening `/*` has already been consumed.
-    fn consume_comment(&mut self) -> Token {
-        let mut value = String::new();
+    fn consume_comment(&mut self) -> Token<'a> {
+        let start = self.cur_start();
 
         while let Some(c) = self.peek() {
             if c == '*' && self.peek_next() == Some('/') {
@@ -300,12 +470,11 @@ impl<'a> Tokenizer<'a> {
                 self.bump(); // consume '/'
                 break;
             } else {
-                value.push(c);
                 self.bump();
             }
         }
 
-        Token::Comment(value)
+        Token::Comment(Cow::Borrowed(&self.input[start..self.cur_start()]))
     }
 
     fn consume_escape(&mut self) -> Option<char> {
@@ -328,23 +497,26 @@ impl<'a> Tokenizer<'a> {
         }
 
         // 2. Unicode escape
-        let mut hex = String::new();
+        let mut code: u32 = 0;
+        let mut hex_count = 0;
         for _ in 0..6 {
             match self.peek() {
                 Some(c) if c.is_ascii_hexdigit() => {
-                    hex.push(c);
-                    self.bump();
+                    if let Some(digit) = c.to_digit(16) {
+                        code = code * 16 + digit;
+                        hex_count += 1;
+                        self.bump();
+                    }
                 }
                 _ => break,
             }
         }
 
-        if !hex.is_empty() {
+        if hex_count > 0 {
             if matches!(self.peek(), Some(c) if c.is_whitespace()) {
                 self.bump(); // optional whitespace
             }
 
-            let code = u32::from_str_radix(&hex, 16).ok()?;
             return std::char::from_u32(code).or(Some('\u{FFFD}'));
         }
 

@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ja">
+    <head>
+        <meta charset="UTF-8" />
+        <title>CSS Selectors Test</title>
+        <style>
+            body {
+                font-family: sans-serif;
+                padding: 20px;
+                color: #222;
+            }
+
+            section {
+                border: 1px solid #aaa;
+                padding: 12px;
+                margin-bottom: 20px;
+            }
+
+            .pass {
+                padding: 8px;
+                margin: 6px 0;
+                background: #eee;
+            }
+
+            .adjacent-marker + .pass {
+                background: #b7efc5;
+            }
+
+            .general-marker ~ .pass {
+                border-left: 8px solid #2d6a4f;
+            }
+
+            .structural li {
+                padding: 6px;
+            }
+
+            .structural li:first-child {
+                background: #ffd166;
+            }
+
+            .structural li:nth-child(even) {
+                background: #bde0fe;
+            }
+
+            .structural li:last-child:not(.skip) {
+                border: 3px solid #ef476f;
+            }
+
+            article:is(.primary, .secondary) {
+                background: #b7efc5;
+            }
+
+            article:not(.muted) {
+                border-left: 8px solid #2d6a4f;
+            }
+
+            :where(.where-target) {
+                color: #00509d;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>CSS Selectors Test</h1>
+
+        <section>
+            <h2>Sibling combinators</h2>
+            <div class="adjacent-marker">Adjacent marker</div>
+            <div class="pass">Green: adjacent sibling (+)</div>
+            <div class="general-marker">General marker</div>
+            <p class="pass">Green border: general sibling (~)</p>
+            <div>Intervening element</div>
+            <p class="pass">Green border: general sibling (~)</p>
+        </section>
+
+        <section>
+            <h2>Structural pseudo-classes</h2>
+            <ol class="structural">
+                <li>Yellow: first-child</li>
+                <li>Blue: nth-child(even)</li>
+                <li>Normal odd item</li>
+                <li>Blue and red border: even + last-child + not()</li>
+            </ol>
+        </section>
+
+        <section>
+            <h2>Selector-list pseudo-classes</h2>
+            <article class="primary pass">Green with green border: is() + not()</article>
+            <article class="muted pass">Default gray: excluded by not()</article>
+            <p class="where-target">Blue text: where()</p>
+        </section>
+    </body>
+</html>

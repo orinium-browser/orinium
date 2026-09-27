@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="ja">
+    <head>
+        <meta charset="UTF-8" />
+        <title>CSS Selector Test</title>
+        <style>
+            body {
+                font-family: sans-serif;
+                padding: 20px;
+                line-height: 1.6;
+            }
+
+            section {
+                margin-bottom: 40px;
+            }
+
+            h2 {
+                border-bottom: 2px solid #333;
+                padding-bottom: 5px;
+            }
+
+            .result {
+                border: 1px solid #999;
+                padding: 8px 12px;
+                margin: 8px 0;
+                background: #f5f5f5;
+            }
+
+            /* tag selector */
+            p.tag-test {
+                color: #4a90e2;
+            }
+
+            /* class selector */
+            .class-target {
+                color: #c00;
+                font-weight: bold;
+            }
+
+            /* id selector */
+            #id-target {
+                background: #ffe082;
+                padding: 4px 8px;
+            }
+
+            /* descendant selector */
+            .descendant-parent span {
+                background: #b3e5fc;
+            }
+
+            /* multiple classes */
+            .multi-one {
+                color: #2e7d32;
+            }
+
+            .multi-two {
+                font-weight: bold;
+                text-decoration: underline;
+            }
+
+            /* tag + class combination */
+            div.combo-target {
+                border: 2px dashed #6a1b9a;
+                padding: 4px 8px;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>CSS Selector Test</h1>
+
+        <section>
+            <h2>Tag selector</h2>
+            <div class="result">
+                <p class="tag-test">p.tag-test → blue</p>
+            </div>
+        </section>
+
+        <section>
+            <h2>Class selector</h2>
+            <div class="result">
+                <span class="class-target">.class-target → red bold</span>
+            </div>
+        </section>
+
+        <section>
+            <h2>ID selector</h2>
+            <div class="result">
+                <span id="id-target">#id-target → yellow background</span>
+            </div>
+        </section>
+
+        <section>
+            <h2>Descendant selector</h2>
+            <div class="result descendant-parent">
+                <span>descendant span → light blue</span>
+            </div>
+        </section>
+
+        <section>
+            <h2>Multiple classes</h2>
+            <div class="result">
+                <span class="multi-one multi-two">
+                    .multi-one.multi-two → green bold underline
+                </span>
+            </div>
+        </section>
+
+        <section>
+            <h2>Tag + class combination</h2>
+            <div class="result">
+                <div class="combo-target">
+                    div.combo-target → dashed purple border
+                </div>
+            </div>
+        </section>
+    </body>
+</html>

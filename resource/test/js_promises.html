@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <title>JavaScript Promises Test</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 32px;
+        }
+
+        .result {
+            border: 2px solid #777;
+            margin: 12px 0 24px;
+            padding: 12px;
+        }
+
+        .result[data-complete="true"] {
+            background: #d9f7df;
+            border-color: #25813b;
+        }
+    </style>
+</head>
+<body>
+    <h1>JavaScript Promises</h1>
+
+    <h2>Fulfillment and chaining</h2>
+    <div id="chain-result" class="result">waiting</div>
+
+    <h2>Rejection and catch</h2>
+    <div id="catch-result" class="result">waiting</div>
+
+    <h2>Promise and queueMicrotask ordering</h2>
+    <div id="order-result" class="result">sync</div>
+
+    <h2>Static resolve and reject</h2>
+    <div id="static-result" class="result">waiting</div>
+
+    <h2>Promise.all</h2>
+    <div id="all-result" class="result">waiting</div>
+
+    <script>
+        const chainResult = document.querySelector("#chain-result");
+        new Promise(function (resolve) {
+            resolve(20);
+        }).then(function (value) {
+            return value + 1;
+        }).then(function (value) {
+            chainResult.textContent = "resolved value: " + value;
+            chainResult.setAttribute("data-complete", "true");
+        });
+
+        const catchResult = document.querySelector("#catch-result");
+        new Promise(function (_resolve, reject) {
+            reject("expected rejection");
+        }).catch(function (reason) {
+            catchResult.textContent = "caught: " + reason;
+            catchResult.setAttribute("data-complete", "true");
+        });
+
+        const orderResult = document.querySelector("#order-result");
+        queueMicrotask(function () {
+            orderResult.textContent = orderResult.textContent + " -> queued first";
+        });
+        new Promise(function (resolve) {
+            resolve("promise second");
+        }).then(function (value) {
+            orderResult.textContent = orderResult.textContent + " -> " + value;
+        });
+        queueMicrotask(function () {
+            orderResult.textContent = orderResult.textContent + " -> queued last";
+            orderResult.setAttribute("data-complete", "true");
+        });
+
+        const staticResult = document.querySelector("#static-result");
+        Promise.resolve("resolved").then(function (value) {
+            staticResult.textContent = value;
+            return Promise.reject("rejected");
+        }).catch(function (reason) {
+            staticResult.textContent = staticResult.textContent + " -> " + reason;
+            staticResult.setAttribute("data-complete", "true");
+        });
+
+        const allResult = document.querySelector("#all-result");
+        Promise.all([Promise.resolve("first"), "second", Promise.resolve("third")])
+            .then(function (values) {
+                allResult.textContent = values[0] + " -> " + values[1] + " -> " + values[2];
+                allResult.setAttribute("data-complete", "true");
+            });
+    </script>
+</body>
+</html>

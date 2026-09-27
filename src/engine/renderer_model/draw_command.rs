@@ -1,196 +1,191 @@
-use crate::engine::layouter::types::{Color, InfoNode, NodeKind, TextDecoration, TextStyle};
-use ui_layout::LayoutNode;
+//! Draw command model: the rendering instructions produced from layout.
+//!
+//! The geometry primitives live in [`crate::engine::renderer_model::geom`],
+//! paths in [`crate::engine::renderer_model::path`], and the layout → command
+//! generation in [`crate::engine::renderer_model::box_model`].
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use anyhow::{Context, Result};
+use smol_str::SmolStr;
+
+use crate::engine::layouter::types::{Color, Gradient, TextFlowStyle, TextStyle};
+use crate::engine::renderer_model::geom::{AffineTransform, Rect};
+use crate::engine::renderer_model::path::Path;
+
+/// Fill rule for path filling.
+///
+/// The GPU rasterizer currently only uses this to select the winding mode of
+/// the ear-clipping triangulation; a fully correct stencil-based fill for
+/// arbitrary self-intersecting paths is not implemented.
+#[derive(Debug, Clone, Copy)]
+pub enum FillRule {
+    NonZero,
+    EvenOdd,
+}
+
+/// A fill source: a solid color or a gradient.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Brush {
+    Solid(Color),
+    Gradient(Gradient),
+    /// A decoded RGBA image sampled across the fill path's bounds.
+    Image(Image),
+}
+
+/// Decoded image pixels shared between the engine and platform renderer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Image {
+    id: u64,
+    width: u32,
+    height: u32,
+    rgba: Arc<[u8]>,
+}
+
+impl Image {
+    /// Decodes encoded image bytes into RGBA8 pixels.
+    ///
+    /// Returns an error when the bytes are not a supported image format.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        if let Ok(decoded) = image::load_from_memory(bytes) {
+            let rgba = decoded.to_rgba8();
+            let (width, height) = rgba.dimensions();
+            return Self::from_rgba(width, height, rgba.into_raw());
+        }
+
+        Self::decode_svg(bytes).context("failed to decode image")
+    }
+
+    fn decode_svg(bytes: &[u8]) -> Result<Self> {
+        let raster = crate::engine::svg::rasterize_from_bytes(bytes, None)
+            .map_err(|error| anyhow::anyhow!("invalid SVG image: {error}"))?;
+        Self::from_rgba(raster.width, raster.height, raster.rgba)
+    }
+
+    /// Creates an image from decoded RGBA8 pixels.
+    ///
+    /// Returns an error when the byte length does not match the dimensions.
+    pub fn from_rgba(width: u32, height: u32, rgba: Vec<u8>) -> Result<Self> {
+        static NEXT_IMAGE_ID: AtomicU64 = AtomicU64::new(1);
+
+        let expected_len = (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .context("image dimensions exceed addressable memory")?;
+        if rgba.len() != expected_len {
+            anyhow::bail!(
+                "invalid RGBA byte length: expected {expected_len}, got {}",
+                rgba.len()
+            );
+        }
+        Ok(Self {
+            id: NEXT_IMAGE_ID.fetch_add(1, Ordering::Relaxed),
+            width,
+            height,
+            rgba: Arc::from(rgba),
+        })
+    }
+
+    /// Returns the renderer-unique image identifier.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// Returns the decoded image width in pixels.
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// Returns the decoded image height in pixels.
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// Returns the decoded RGBA8 pixel bytes.
+    pub fn rgba(&self) -> &[u8] {
+        &self.rgba
+    }
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::Image;
+
+    #[test]
+    fn image_decode_rasterizes_svg_assets() {
+        let image = Image::decode(
+            br##"<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8">
+                <rect width="12" height="8" fill="#ff0000"/>
+            </svg>"##,
+        )
+        .expect("SVG decodes");
+        assert_eq!(image.width(), 12);
+        assert_eq!(image.height(), 8);
+        assert_eq!(&image.rgba()[0..4], &[255, 0, 0, 255]);
+    }
+}
+
+/// How a path is painted: the brush plus an opacity multiplier.
+#[derive(Debug, Clone)]
+pub struct Paint {
+    pub brush: Brush,
+    pub opacity: f32,
+}
+
+/// A drawing instruction for the GPU renderer.
 #[derive(Debug, Clone)]
 pub enum DrawCommand {
+    /// Fill a path.
+    ///
+    /// The `opacity` is applied to solid color fills.
+    Fill {
+        path: Path,
+        paint: Paint,
+        rule: FillRule,
+    },
+    /// Draw a text run at `(x, y)`.
     DrawText {
         x: f32,
         y: f32,
-        text: String,
+        text: SmolStr,
         style: TextStyle,
-        max_width: f32,
+        flow_style: TextFlowStyle,
     },
-    DrawRect {
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
-        color: Color,
-    },
-    DrawPolygon {
-        points: Vec<(f32, f32)>,
-        color: Color,
-    },
-    DrawEllipse {
-        center: (f32, f32),
-        radius_x: f32,
-        radius_y: f32,
-        color: Color,
-    },
+    /// Push a clip region given by a path.
+    ///
+    /// Non-rectangular paths are approximated by their bounding box.
     PushClip {
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
+        path: Path,
+        rule: FillRule,
     },
     PopClip,
+    /// Push a coordinate transform.
     PushTransform {
-        dx: f32,
-        dy: f32,
+        transform: AffineTransform,
     },
     PopTransform,
+
+    /// Delegate rendering to a platform-native system UI element.
+    ///
+    /// The renderer composites or renders the element identified by
+    /// [`SystemUiKind`] at the given rectangle within the current
+    /// coordinate space.
+    SystemUi {
+        kind: SystemUiKind,
+        rect: Rect,
+    },
 }
 
-/// LayoutNode + InfoNode → DrawCommand
-pub fn generate_draw_commands(layout: &LayoutNode, info: &InfoNode) -> Vec<DrawCommand> {
-    let mut commands = Vec::new();
-
-    match &info.kind {
-        NodeKind::Text { text, style, .. } => {
-            for box_model in &layout.layout_boxes {
-                let rect = box_model.padding_box;
-
-                let abs_x = rect.x;
-                let abs_y = rect.y;
-
-                // テキスト
-                commands.push(DrawCommand::DrawText {
-                    x: abs_x,
-                    y: abs_y,
-                    text: text.clone(),
-                    style: *style,
-                    max_width: rect.width,
-                });
-
-                // テキストデコレーション
-                let font_size = style.font_size;
-                let line_thickness = (font_size * 0.08).max(1.0);
-
-                let (line_y, draw) = match style.text_decoration {
-                    TextDecoration::None => (0.0, false),
-                    TextDecoration::Underline => (abs_y + font_size, true),
-                    TextDecoration::LineThrough => (abs_y + font_size * 0.5, true),
-                    TextDecoration::Overline => (abs_y, true),
-                };
-
-                if draw {
-                    commands.push(DrawCommand::DrawRect {
-                        x: abs_x,
-                        y: line_y,
-                        width: rect.width,
-                        height: line_thickness,
-                        color: style.color,
-                    });
-                }
-            }
-        }
-
-        NodeKind::Container {
-            scroll_offset_x,
-            scroll_offset_y,
-            style,
-            ..
-        } => {
-            for box_model in &layout.layout_boxes {
-                let border_box = box_model.border_box;
-                let padding_box = box_model.padding_box;
-                let content_box = box_model.content_box;
-
-                // ===== border (solid only for now) =====
-                commands.push(DrawCommand::PushTransform {
-                    dx: border_box.x,
-                    dy: border_box.y,
-                });
-
-                let bc = &style.border_color;
-
-                // top
-                let border_width = (padding_box.y - border_box.y).max(0.0);
-                commands.push(DrawCommand::DrawRect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: border_box.width,
-                    height: border_width,
-                    color: bc.top,
-                });
-
-                // bottom
-                let border_width = (border_box.y + border_box.height
-                    - (padding_box.y + padding_box.height))
-                    .max(0.0);
-                commands.push(DrawCommand::DrawRect {
-                    x: 0.0,
-                    y: border_box.height - border_width,
-                    width: border_box.width,
-                    height: border_width,
-                    color: bc.bottom,
-                });
-
-                // left
-                let border_width = (padding_box.x - border_box.x).max(0.0);
-                commands.push(DrawCommand::DrawRect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: border_width,
-                    height: border_box.height,
-                    color: bc.left,
-                });
-
-                // right
-                let border_width = (border_box.x + border_box.width
-                    - (padding_box.x + padding_box.width))
-                    .max(0.0);
-                commands.push(DrawCommand::DrawRect {
-                    x: border_box.width - border_width,
-                    y: 0.0,
-                    width: border_width,
-                    height: border_box.height,
-                    color: bc.right,
-                });
-
-                // ===== clip + background + content =====
-                commands.push(DrawCommand::PushClip {
-                    x: padding_box.x - border_box.x,
-                    y: padding_box.y - border_box.y,
-                    width: padding_box.width,
-                    height: padding_box.height,
-                });
-
-                // background
-                commands.push(DrawCommand::DrawRect {
-                    x: padding_box.x - border_box.x,
-                    y: padding_box.y - border_box.y,
-                    width: padding_box.width,
-                    height: padding_box.height,
-                    color: style.background_color,
-                });
-
-                // content + scroll
-                commands.push(DrawCommand::PushTransform {
-                    dx: content_box.x - border_box.x,
-                    dy: content_box.y - border_box.y,
-                });
-                commands.push(DrawCommand::PushTransform {
-                    dx: *scroll_offset_x,
-                    dy: -*scroll_offset_y,
-                });
-            }
-        }
-    }
-
-    for (child_layout, child_info) in layout.children.iter().zip(&info.children) {
-        commands.extend(generate_draw_commands(child_layout, child_info));
-    }
-
-    // Pop commands for containers
-    if matches!(info.kind, NodeKind::Container { .. }) {
-        for _ in &layout.layout_boxes {
-            commands.push(DrawCommand::PopTransform);
-            commands.push(DrawCommand::PopTransform);
-            commands.push(DrawCommand::PopClip);
-            commands.push(DrawCommand::PopTransform);
-        }
-    }
-
-    commands
+/// Discriminator for [`DrawCommand::SystemUi`].
+/// Stub
+#[derive(Debug, Clone)]
+pub enum SystemUiKind {
+    /// Composite an external surface (WebView, iframe, …).
+    WebView { surface_id: usize },
+    /// Render a platform-native input widget.
+    Input {
+        value: SmolStr,
+        placeholder: SmolStr,
+    },
 }

@@ -30,41 +30,42 @@
 use std::fmt;
 
 /* ============================
+ * Style Type
+ * ============================ */
+
+#[derive(Debug, Clone)]
+pub struct TextAttribute {
+    pub style: TextStyle,
+    pub flow_style: TextFlowStyle,
+}
+
+/* ============================
  * Measure Request
  * ============================ */
 
 #[derive(Debug, Clone)]
-pub struct TextMeasureRequest<S> {
+pub struct TextMeasureRequest {
     /// UTF-8 text content
     pub text: String,
 
     /// Opaque, resolved text attributes provided by the caller
-    pub style: S,
-
-    /// Maximum line width (None = unconstrained)
-    pub max_width: Option<f32>,
-
-    /// Enable line wrapping
-    pub wrap: bool,
+    pub attribute: TextAttribute,
 }
 
 /* ============================
- * Measure Result
+ * Measured Result
  * ============================ */
 
+/// A measured text fragment produced by [`TextMeasurer::measure_fragments`].
+///
+/// Contains the original text segment along with its measured dimensions,
+/// so callers can both retrieve the split text and obtain fragment widths
+/// for inline layout.
 #[derive(Debug, Clone)]
-pub struct TextMetrics {
-    /// Logical width
+pub struct MeasuredFragment {
+    pub text: String,
     pub width: f32,
-
-    /// Logical height
     pub height: f32,
-
-    /// Baseline position from top
-    pub baseline: f32,
-
-    /// Number of layouted lines
-    pub line_count: usize,
 }
 
 /* ============================
@@ -77,6 +78,24 @@ pub struct GlyphMetrics {
     pub x: f32,
     pub y: f32,
     pub advance: f32,
+}
+
+/* ============================
+ * Glyph Cluster (for FlowLayouter)
+ * ============================ */
+
+/// A single glyph cluster produced by text shaping.
+///
+/// Carries the cluster's byte offset in the original text, its advance
+/// width, and whether a line break is permitted after it.
+#[derive(Debug, Clone)]
+pub struct GlyphCluster {
+    /// Byte offset of this cluster's first character in the original text.
+    pub byte_offset: usize,
+    /// Advance width in pixels.
+    pub width: f32,
+    /// Whether a line break is permitted immediately after this cluster.
+    pub break_allowed: bool,
 }
 
 /* ============================
@@ -108,8 +127,21 @@ impl std::error::Error for TextMeasureError {}
  * Trait
  * ============================ */
 
-pub trait TextMeasurer<S>: Send + Sync {
-    fn measure(&self, request: &TextMeasureRequest<S>) -> Result<TextMetrics, TextMeasureError>;
+pub trait TextMeasurer: Send + Sync {
+    /// Measure a single block of text and return its metrics.
+    fn measure(
+        &self,
+        request: &TextMeasureRequest,
+    ) -> Result<Vec<MeasuredFragment>, TextMeasureError>;
+
+    /// Shape text and return cluster-level break-opportunity data.
+    ///
+    /// Unlike [`measure`](Self::measure), this returns per-cluster
+    /// data suitable for use with [`TextFlowLayouter`].
+    fn measure_shaped(
+        &self,
+        request: &TextMeasureRequest,
+    ) -> Result<Vec<GlyphCluster>, TextMeasureError>;
 }
 
 /* ============================
@@ -118,3 +150,5 @@ pub trait TextMeasurer<S>: Send + Sync {
 
 pub mod fallback;
 pub use fallback::FallbackTextMeasurer;
+
+use crate::engine::layouter::types::{TextFlowStyle, TextStyle};

@@ -1,39 +1,202 @@
-use crate::engine::{
-    css::parser::Parser as CssParser,
-    html::parser::{DomTree, Parser as HtmlParser},
-    layouter::{
-        self,
-        types::{InfoNode, TextStyle},
-    },
+//! ブラウザのwebview機能。タスクとレンダリング情報の管理を行う。
+
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::rc::{Rc, Weak};
+use std::sync::{Arc, mpsc};
+
+use crate::engine::bridge::audio::AudioSinkFactory;
+use crate::engine::image_decoder::ImageDecoder;
+use crate::engine::layouter::types::{
+    Background, Color, ColorScheme, ContainerStyle, CursorStyle, FontStyle, TextAlign,
+    TextFlowStyle, TextStyle, Visibility, WhiteSpace,
 };
-use crate::platform::renderer::text_measurer::PlatformTextMeasurer;
-use ui_layout::LayoutNode;
+use crate::engine::{
+    css::{
+        self,
+        matcher::ElementChain,
+        parser::{CssNode, CssNodeType, Parser as CssParser},
+        values::CssValue,
+    },
+    html::HtmlNodeType,
+    html::parser::{
+        ClassicScriptExecution, ClassicScriptSource, DomTree, Parser as HtmlParser, ScriptingMode,
+    },
+    js::{
+        JsDevToolsRequest, JsDynamicImageRequest, JsDynamicScriptRequest, JsDynamicScriptSource,
+        JsDynamicStyleRequest, JsFetchRequest, JsFetchResponse, JsIframeFetchRequest,
+        JsLayoutMetrics, JsProcessor, JsTask, JsTaskResult,
+    },
+    layouter::{
+        self, InheritedCss, LayoutResult, NodeId,
+        dom_snapshot::DomSnapshot,
+        types::{InfoNode, NodeKind},
+    },
+    origin::Origin,
+    renderer_model::{Image, StickyViewport, is_scrollport, sticky_offset},
+    tree::{NodeRef, TreeNode},
+};
+use crate::platform::{
+    audio::default_audio_sink_factory, locale, renderer::text_measurer::PlatformTextMeasurer,
+};
+use crate::{perf_scope, profile_log};
+use ui_layout::{Display, InnerDisplay, LayoutChild, LayoutNode, OuterDisplay, Position};
 use url::Url;
 
 const USER_AGENT_CSS: &str = include_str!("../../../../resource/user-agent.css");
 
 pub enum WebViewTask {
     AskTabHtml,
-    Fetch { url: Url, kind: FetchKind },
+    Fetch {
+        url: Url,
+        kind: FetchKind,
+    },
+    /// A script requested a top-level navigation (e.g. `form.submit()`);
+    /// the tab must re-fetch the page at this URL.
+    Navigate {
+        url: Url,
+    },
+    /// A page asked the DevTools bridge to inspect rendered state.
+    DevToolsRequest {
+        id: u64,
+        method: String,
+        params: String,
+    },
 }
 
-/// TODO:
-/// - Root Document fetch
-/// - Image fetch
-/// - JS fetch
-/// - その他リソース fetch
+mod inspector;
+
+/// Manual, network-dependent end-to-end probes.
+#[cfg(test)]
+mod probe_tests;
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum FetchKind {
     Html,
     Css,
+    Script {
+        index: usize,
+    },
+    DynamicScript {
+        node_id: u64,
+    },
+    DynamicCss {
+        node_id: u64,
+    },
+    /// An `@import`-ed stylesheet inside another stylesheet. `target` is the
+    /// sheet URL to fetch; the import resolves relative to its own sheet, not
+    /// the document base.
+    CssImport {
+        target: Url,
+    },
+    Image {
+        source: String,
+    },
+    Audio {
+        source: String,
+    },
+    JavaScript {
+        request_id: u64,
+        method: String,
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
+    },
+    Iframe {
+        dom_id: u64,
+    },
 }
 
-#[derive(Debug, PartialEq)]
+/// CSS application strategy.
+///
+/// - `Batch`: wait for all external CSS to be fetched, then process everything
+///   at once on a background thread and apply the result.
+/// - `Incremental`: process each CSS file on a background thread as it arrives,
+///   applying results progressively.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CssApplicationStrategy {
+    Batch,
+    Incremental,
+}
+
+/// Where a top-level stylesheet's rules finally land once its `@import`s have
+/// all resolved.
+#[derive(Debug, Clone, Copy)]
+enum CssSink {
+    /// A ``<link rel="stylesheet">`` sheet, applied through the CSS processor.
+    External,
+    /// A JS-inserted `<link>`/`stylesheet`, applied by re-resolving styles and
+    /// firing the element's `load` event afterwards.
+    Dynamic(u64),
+}
+
+/// One `@import` statement inside a sheet, paired with the flattened text of
+/// the imported sheet once all of *its* imports have resolved.
+#[derive(Debug)]
+struct CssImportEntry {
+    url: Url,
+    text: Option<String>,
+}
+
+/// Processing state of one stylesheet unit (keyed by its URL).
+///
+/// A sheet whose `@import`s are still loading is `Deferred`; as its imports
+/// complete they become `Applied` under their own URLs and the sheet settles
+/// into a single flattened text.
+#[derive(Debug)]
+enum CssSheetState {
+    Deferred {
+        /// This sheet's own rules with every `@import` statement removed.
+        source: String,
+        entries: Vec<CssImportEntry>,
+        sink: Option<CssSink>,
+    },
+    Applied {
+        /// The fully flattened rule text (its imports first, then its own).
+        text: String,
+        sink: Option<CssSink>,
+    },
+}
+
+/// JavaScript execution policy for a page.
+///
+/// This drives both the HTML parser's scripting mode (so `<noscript>` fallbacks
+/// are either hidden or shown) and whether the WebView executes scripts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum JsPolicy {
+    /// Scripts run and `<noscript>` contents are kept as raw text.
+    #[default]
+    Enabled,
+    /// Scripts are never executed and `<noscript>` fallbacks are shown.
+    Disabled,
+}
+
+impl From<JsPolicy> for ScriptingMode {
+    fn from(value: JsPolicy) -> ScriptingMode {
+        match value {
+            JsPolicy::Enabled => ScriptingMode::Enabled,
+            JsPolicy::Disabled => ScriptingMode::Disabled,
+        }
+    }
+}
+
+impl From<ScriptingMode> for JsPolicy {
+    fn from(value: ScriptingMode) -> JsPolicy {
+        match value {
+            ScriptingMode::Enabled => JsPolicy::Enabled,
+            ScriptingMode::Disabled => JsPolicy::Disabled,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 enum PagePhase {
     Init,
     BeforeHtmlParsing,
     HtmlParsed,
     CssPending,
+    CssProcessing,
     CssApplied,
+    ScriptApplied,
 }
 
 pub struct WebView {
@@ -42,12 +205,194 @@ pub struct WebView {
     docment_info: Option<DocumentInfo>,
 
     pending_css_urls: Vec<Url>,
+    /// `@import` targets waiting to be fetched, as `(importing sheet url,
+    /// imported sheet url)` pairs.
+    pending_css_imports: Vec<(Url, Url)>,
+    /// URL → stylesheet unit currently being (or already) processed for
+    /// `@import` flattening. Keyed by the sheet's own URL so imports resolve
+    /// relative to it and cycles / duplicate imports collapse to one unit.
+    css_sheets: HashMap<Url, CssSheetState>,
+    /// Imported sheet URLs whose fetch is already in flight, to avoid
+    /// re-requesting the same sheet from multiple importers.
+    css_import_fetches: HashSet<Url>,
+    pending_images: Vec<(String, Url)>,
+    pending_audio: Vec<(String, Url)>,
     loaded_css: Vec<String>,
+    linked_css: Vec<String>,
+    images: HashMap<String, Image>,
+    image_decoder: ImageDecoder,
+    audio: HashMap<String, Arc<[u8]>>,
 
-    resolved_styles: layouter::css_resolver::ResolvedStyles,
+    resolved_styles: Arc<layouter::css_resolver::ResolvedStyles>,
+    /// Monotonic version of `resolved_styles`, bumped on every in-place or
+    /// wholesale mutation so the layout processor can detect stale rule sets.
+    resolved_styles_version: u64,
     layout_and_info: Option<(LayoutNode, InfoNode)>,
 
     needs_redraw: bool,
+
+    text_measurer: Option<Arc<PlatformTextMeasurer>>,
+
+    /// Builds one audio sink per `<audio>` element during layout.
+    ///
+    /// Held as a trait object so the layout task stays free of any concrete
+    /// platform audio type. The factory is stateless and cheap, so it is
+    /// built once per `WebView` and survives navigation resets.
+    audio_sinks: Arc<dyn AudioSinkFactory>,
+
+    system_color_scheme: ColorScheme,
+    viewport: (f32, f32),
+
+    css_processor: css::processor::CssProcessor,
+    css_strategy: CssApplicationStrategy,
+    css_results_expected: usize,
+    css_results_received: usize,
+
+    /// Policy controlling whether page scripts are executed and how
+    /// `<noscript>` contents are parsed.
+    js_policy: JsPolicy,
+
+    layout_processor: layouter::LayoutProcessor,
+    layout_pending: bool,
+    layout_requested_version: u64,
+    layout_applied_version: u64,
+    /// The `(layout version, viewport)` the current tree was last positioned
+    /// for. Applied background results start out unpositioned; hit-testing
+    /// must never observe them before [`WebView::position_layout_if_needed`]
+    /// has run, so this memo gate runs the positioning pass eagerly.
+    positioned_layout: Option<(u64, (f32, f32))>,
+    /// Live DOM references for the latest snapshot, used to apply write-backs.
+    layout_dom_refs: Vec<Weak<RefCell<TreeNode<HtmlNodeType>>>>,
+    /// Cached DOM snapshot, reused while the tree's mutation version is
+    /// unchanged so that CSS/image-driven relayouts skip the full clone.
+    snapshot_cache: Option<SnapshotCache>,
+    /// The most recent serialized content documents of any `<iframe>`s, keyed
+    /// by the iframe's JS-facing dom id. Used by layout to render them nested.
+    iframe_content: HashMap<u64, DomSnapshot>,
+    /// Channel on which text inputs report value write-backs (received here).
+    write_back_tx: mpsc::Sender<(u32, String)>,
+    write_back_rx: mpsc::Receiver<(u32, String)>,
+    /// JS runtime on a background thread, sharing a mirror of the current
+    /// document's DOM. Results are applied in [`WebView::try_apply_js_results`].
+    js_processor: Option<JsProcessor>,
+    /// JS-facing dom id per live node address of the committed tree.
+    ///
+    /// Rebuilt whenever a JS result is committed, so hit-tested layout
+    /// nodes and write-back serialization can be translated to JS dom ids.
+    js_dom_ids: HashMap<usize, u64>,
+    /// Ordered JS tasks sent but not yet applied. Write-backs are only synced
+    /// to the JS thread once this reaches zero, so the mirror and the real tree
+    /// cannot diverge mid-task.
+    pending_js_tasks: usize,
+    /// The real DOM diverged from the JS thread's mirror and needs syncing.
+    js_dom_dirty: bool,
+    /// Version of the newest `RunTimers` poke still in flight. Write-backs are
+    /// not synced while one is pending: a timer callback can mutate the mirror,
+    /// and a snapshot produced behind the sync would clobber it.
+    in_flight_timer_version: Option<u64>,
+    /// Whether the window `load` event has been dispatched for the current page.
+    window_load_dispatched: bool,
+    /// `fetch()` requests collected from applied JS results.
+    pending_js_fetches: Vec<JsFetchRequest>,
+    /// DevTools inspection requests collected from applied JS results.
+    pending_devtools_requests: Vec<JsDevToolsRequest>,
+    /// Stable DOM ids for the inspector, assigned lazily over the live tree.
+    inspector_ids: RefCell<inspector::DomIdRegistry>,
+    /// Dynamically inserted scripts collected from applied JS results.
+    pending_dynamic_scripts: Vec<JsDynamicScriptRequest>,
+    /// Dynamically inserted stylesheet links collected from JS results.
+    pending_dynamic_styles: Vec<JsDynamicStyleRequest>,
+    /// Images created or populated by scripts, awaiting network scheduling.
+    pending_dynamic_images: Vec<JsDynamicImageRequest>,
+    /// Script-initiated top-level navigation URLs awaiting dispatch.
+    pending_navigations: Vec<String>,
+    /// `<iframe src="...">` requests queued by JS results, awaiting fetch.
+    pending_iframe_fetches: Vec<JsIframeFetchRequest>,
+    /// Classic scripts in document order. Execution starts after CSS is applied.
+    classic_scripts: Vec<ClassicScript>,
+    next_script_index: usize,
+    pending_script_fetches: HashMap<usize, ClassicScriptExecution>,
+    non_blocking_scripts_scheduled: bool,
+    deferred_script_results: HashMap<usize, Option<String>>,
+    next_deferred_script_index: usize,
+    /// Fragment to reveal once the document has a completed layout.
+    pending_fragment_scroll: Option<String>,
+    /// Layout generation that contains every initially linked stylesheet.
+    fragment_ready_version: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum ClassicScript {
+    Inline(String),
+    External {
+        url: Url,
+        execution: ClassicScriptExecution,
+    },
+}
+
+/// A DOM snapshot paired with the tree mutation version it was built from.
+///
+/// The snapshot and its live references stay valid as long as the DOM has not
+/// mutated (`Tree::version()` unchanged). They are shared with layout tasks via
+/// `Arc` instead of being cloned per task.
+struct SnapshotCache {
+    dom_version: u64,
+    snapshot: Arc<DomSnapshot>,
+    dom_refs: Vec<Weak<RefCell<TreeNode<HtmlNodeType>>>>,
+}
+
+fn js_snapshot_from_tree(dom: &DomTree) -> (DomSnapshot, HashMap<usize, u64>) {
+    let mut dom_ids = HashMap::new();
+    let mut next_id = 1u64;
+    dom.traverse(|node| {
+        dom_ids.insert(Rc::as_ptr(node) as usize, next_id);
+        next_id += 1;
+    });
+    (DomSnapshot::from_mirror(&dom.root, &dom_ids), dom_ids)
+}
+
+/// Grafts each committed iframe's content document into its host `<iframe>`
+/// node so the normal layout/paint pipeline renders the content nested inside
+/// the host box. The JS domain keeps iframe documents in a separate tree, so we
+/// splice their `<html>` subtree under the matching host node here.
+fn graft_iframe_documents(
+    dom: &Rc<DomTree>,
+    js_dom_ids: &HashMap<usize, u64>,
+    iframes: &HashMap<u64, DomSnapshot>,
+) {
+    if iframes.is_empty() {
+        return;
+    }
+    // Build a reverse map: js_dom_id -> live node, so host lookups are O(1)
+    // per iframe instead of O(n) DOM traversals.
+    let mut node_by_dom_id: HashMap<u64, NodeRef<HtmlNodeType>> = HashMap::new();
+    dom.traverse(|node| {
+        if let Some(&dom_id) = js_dom_ids.get(&(Rc::as_ptr(node) as usize)) {
+            node_by_dom_id.insert(dom_id, Rc::clone(node));
+        }
+    });
+    for (iframe_dom_id, content) in iframes {
+        let (content_tree, _ids) = content.into_tree();
+        let Some(html) = content_tree.query_selector("html") else {
+            continue;
+        };
+        let Some(host) = node_by_dom_id.get(iframe_dom_id) else {
+            continue;
+        };
+        if host.borrow().value.tag_name() != Some("iframe") {
+            continue;
+        }
+        TreeNode::add_child(host, html);
+    }
+}
+
+impl std::fmt::Debug for SnapshotCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SnapshotCache")
+            .field("dom_version", &self.dom_version)
+            .field("snapshot", &self.snapshot)
+            .finish()
+    }
 }
 
 /// DocumentInfo holds basic information about the HTML document.
@@ -55,13 +400,16 @@ pub struct WebView {
 ///
 /// - document_url: The URL of the document.
 /// - base_url: The base URL for resolving relative URLs.
+/// - origin: The origin of the document.
 /// - title: The title of the document.
 /// - dom: The DOM tree of the document.
+#[derive(Debug)]
 pub struct DocumentInfo {
     document_url: Url,
     base_url: Url,
+    pub origin: crate::engine::origin::Origin,
     title: String,
-    pub dom: DomTree,
+    pub dom: Rc<DomTree>,
 }
 
 /// ParsedDocument holds the result of parsing an HTML document.
@@ -73,35 +421,181 @@ pub struct DocumentInfo {
 /// - title: The title of the document.
 /// - style_links: A list of URLs for linked stylesheets.
 /// - inline_styles: A list of inline CSS styles.
+/// - scripts: A list of inline script sources.
 struct ParsedDocument {
     document_url: Url,
     base_url: Url,
-    dom: DomTree,
+    dom: Rc<DomTree>,
     title: String,
     style_links: Vec<Url>,
     inline_styles: Vec<String>,
+    image_sources: Vec<(String, Url)>,
+    audio_sources: Vec<(String, Url)>,
+    scripts: Vec<ClassicScript>,
 }
 
 impl Default for WebView {
     fn default() -> Self {
-        Self::new()
+        Self::new(ColorScheme::default(), JsPolicy::default())
     }
 }
 
 impl WebView {
-    pub fn new() -> Self {
+    pub fn new(system_color_scheme: ColorScheme, js_policy: JsPolicy) -> Self {
+        let (write_back_tx, write_back_rx) = mpsc::channel();
         Self {
             phase: PagePhase::Init,
 
             docment_info: None,
 
             pending_css_urls: Vec::new(),
+            pending_css_imports: Vec::new(),
+            css_sheets: HashMap::new(),
+            css_import_fetches: HashSet::new(),
+            pending_images: Vec::new(),
+            pending_audio: Vec::new(),
             loaded_css: Vec::new(),
+            linked_css: Vec::new(),
+            images: HashMap::new(),
+            image_decoder: ImageDecoder::new(),
+            audio: HashMap::new(),
 
-            resolved_styles: layouter::css_resolver::ResolvedStyles::default(),
+            resolved_styles: Arc::new(layouter::css_resolver::ResolvedStyles::default()),
+            resolved_styles_version: 0,
             layout_and_info: None,
 
             needs_redraw: false,
+
+            text_measurer: None,
+            audio_sinks: default_audio_sink_factory(),
+
+            system_color_scheme,
+            viewport: (800.0, 600.0),
+
+            css_processor: css::processor::CssProcessor::new(),
+            css_strategy: CssApplicationStrategy::Incremental,
+            css_results_expected: 0,
+            css_results_received: 0,
+
+            js_policy,
+
+            layout_processor: layouter::LayoutProcessor::new(),
+            layout_pending: false,
+            layout_requested_version: 0,
+            layout_applied_version: 0,
+            positioned_layout: None,
+            layout_dom_refs: Vec::new(),
+            snapshot_cache: None,
+            iframe_content: HashMap::new(),
+            write_back_tx,
+            write_back_rx,
+            js_processor: None,
+            js_dom_ids: HashMap::new(),
+            pending_js_tasks: 0,
+            js_dom_dirty: false,
+            in_flight_timer_version: None,
+            window_load_dispatched: false,
+            pending_js_fetches: Vec::new(),
+            pending_devtools_requests: Vec::new(),
+            inspector_ids: RefCell::new(inspector::DomIdRegistry::default()),
+            pending_dynamic_scripts: Vec::new(),
+            pending_dynamic_styles: Vec::new(),
+            pending_dynamic_images: Vec::new(),
+            pending_navigations: Vec::new(),
+            pending_iframe_fetches: Vec::new(),
+            classic_scripts: Vec::new(),
+            next_script_index: 0,
+            pending_script_fetches: HashMap::new(),
+            non_blocking_scripts_scheduled: false,
+            deferred_script_results: HashMap::new(),
+            next_deferred_script_index: 0,
+            pending_fragment_scroll: None,
+            fragment_ready_version: None,
+        }
+    }
+
+    /// Set the CSS application strategy.
+    ///
+    /// Default is `Incremental`.
+    pub fn set_css_strategy(&mut self, strategy: CssApplicationStrategy) {
+        self.css_strategy = strategy;
+    }
+
+    /// Sets the JavaScript execution policy.
+    ///
+    /// The policy is applied to `<noscript>` parsing on the next document load
+    /// and takes effect immediately for execution: disabling it drops the JS
+    /// runtime, cancels pending script work, and stops running scripts.
+    pub fn set_js_policy(&mut self, policy: JsPolicy) {
+        if self.js_policy == policy {
+            return;
+        }
+        self.js_policy = policy;
+
+        if policy == JsPolicy::Disabled {
+            self.teardown_script_execution();
+        } else if self.js_processor.is_none()
+            && let Some(dom) = self.docment_info.as_ref().map(|info| Rc::clone(&info.dom))
+        {
+            // Re-enabling: install a processor so DOM APIs work again, without
+            // replaying scripts that were skipped while disabled.
+            let document_url = self
+                .docment_info
+                .as_ref()
+                .map(|info| info.document_url.to_string())
+                .unwrap_or_default();
+            let origin = self
+                .docment_info
+                .as_ref()
+                .map(|info| info.origin.ascii_serialization())
+                .unwrap_or_else(|| "null".to_string());
+            let (snapshot, dom_ids) = js_snapshot_from_tree(&dom);
+            let processor = JsProcessor::new(snapshot);
+            processor.send(JsTask::SetDocumentUrl { url: document_url });
+            processor.send(JsTask::SetOrigin { origin });
+            processor.send(JsTask::SetViewport {
+                width: self.viewport.0,
+                height: self.viewport.1,
+            });
+            processor.send(JsTask::SetLanguage {
+                language: locale::preferred_language(),
+            });
+            self.js_processor = Some(processor);
+            self.js_dom_ids = dom_ids;
+            self.pending_js_tasks = 4;
+        }
+    }
+
+    /// Returns the current JavaScript execution policy.
+    pub fn js_policy(&self) -> JsPolicy {
+        self.js_policy
+    }
+
+    /// Stops script execution immediately, dropping the runtime and any
+    /// pending script work.
+    fn teardown_script_execution(&mut self) {
+        self.js_processor = None;
+        self.pending_js_tasks = 0;
+        self.js_dom_dirty = false;
+        self.in_flight_timer_version = None;
+        self.pending_js_fetches.clear();
+        self.pending_devtools_requests.clear();
+        self.inspector_ids.borrow_mut().clear();
+        self.pending_dynamic_scripts.clear();
+        self.pending_dynamic_styles.clear();
+        self.pending_dynamic_images.clear();
+        self.pending_iframe_fetches.clear();
+        self.js_dom_ids.clear();
+        self.classic_scripts.clear();
+        self.next_script_index = 0;
+        self.pending_script_fetches.clear();
+        self.non_blocking_scripts_scheduled = false;
+        self.deferred_script_results.clear();
+        self.next_deferred_script_index = 0;
+
+        // Nothing will advance past CssApplied anymore.
+        if self.phase == PagePhase::CssApplied {
+            self.phase = PagePhase::ScriptApplied;
         }
     }
 
@@ -110,10 +604,15 @@ impl WebView {
 
         match self.phase {
             PagePhase::Init => {
-                self.resolved_styles
-                    .extend(layouter::css_resolver::CssResolver::resolve(
-                        &CssParser::new(USER_AGENT_CSS).parse().unwrap(),
-                    ));
+                let ua_styles = layouter::css_resolver::CssResolver::resolve_with_origin(
+                    &CssParser::new(USER_AGENT_CSS).parse().unwrap(),
+                    layouter::css_resolver::StyleOrigin::UserAgent,
+                );
+                layouter::css_resolver::append_resolved_styles(
+                    Arc::make_mut(&mut self.resolved_styles),
+                    ua_styles,
+                );
+                self.resolved_styles_version += 1;
 
                 tasks.push(WebViewTask::AskTabHtml);
 
@@ -124,29 +623,94 @@ impl WebView {
 
             PagePhase::HtmlParsed => {
                 // Phase 1: UA.css only layout
-                let measurer = PlatformTextMeasurer::new().unwrap();
+                self.ensure_text_measurer();
+                self.update_layout();
 
-                self.update_layout_and_info(measurer);
-
-                // CSS fetch を要求
-                for url in &self.pending_css_urls {
-                    log::info!("Fetch requested in WebView: url={}", url);
+                for (source, url) in std::mem::take(&mut self.pending_images) {
+                    log::info!("Image fetch requested in WebView: url={}", url);
                     tasks.push(WebViewTask::Fetch {
-                        url: url.clone(),
-                        kind: FetchKind::Css,
+                        url,
+                        kind: FetchKind::Image { source },
                     });
                 }
 
-                self.phase = PagePhase::CssPending;
+                for (source, url) in std::mem::take(&mut self.pending_audio) {
+                    log::info!("Audio fetch requested in WebView: url={}", url);
+                    tasks.push(WebViewTask::Fetch {
+                        url,
+                        kind: FetchKind::Audio { source },
+                    });
+                }
+
+                // CSS fetch を要求
+                if self.pending_css_urls.is_empty() {
+                    self.fragment_ready_version = Some(self.layout_requested_version);
+                    self.phase = PagePhase::CssApplied;
+                } else {
+                    for url in &self.pending_css_urls {
+                        log::info!("Fetch requested in WebView: url={}", url);
+                        tasks.push(WebViewTask::Fetch {
+                            url: url.clone(),
+                            kind: FetchKind::Css,
+                        });
+                    }
+
+                    self.phase = PagePhase::CssPending;
+                }
             }
 
             PagePhase::CssPending => {
-                // CSS が揃うまで待つ
+                // Poll for CSS processor results (Incremental strategy)
+                self.try_apply_css_results();
+            }
+
+            PagePhase::CssProcessing => {
+                // Poll for the single batch result (Batch strategy)
+                self.try_apply_batch_result();
             }
 
             PagePhase::CssApplied => {
+                self.advance_classic_scripts(&mut tasks);
+            }
+
+            PagePhase::ScriptApplied => {
                 // 安定状態
             }
+        }
+
+        self.try_apply_js_results();
+        self.schedule_js_fetches(&mut tasks);
+        self.schedule_iframe_fetches(&mut tasks);
+        self.schedule_navigations(&mut tasks);
+        self.schedule_dynamic_scripts(&mut tasks);
+        for request in std::mem::take(&mut self.pending_devtools_requests) {
+            tasks.push(WebViewTask::DevToolsRequest {
+                id: request.id,
+                method: request.method,
+                params: request.params,
+            });
+        }
+        self.schedule_dynamic_styles(&mut tasks);
+        self.schedule_dynamic_images(&mut tasks);
+        self.schedule_css_imports(&mut tasks);
+        self.schedule_pending_images(&mut tasks);
+        self.try_apply_decoded_images();
+        self.run_due_js_timers();
+        self.try_apply_layout_results();
+        self.drain_write_backs();
+        self.sync_dom_to_worker();
+
+        // Window `load` fires once the page is stable: after DOMContentLoaded
+        // (phase `ScriptApplied`), with no JS-visible subresource work still in
+        // flight. Reaching `ScriptApplied` guarantees the page scripts and
+        // DOMContentLoaded listeners have already been applied, so the `onload`
+        // handler is in place before we dispatch.
+        if !self.window_load_dispatched
+            && self.phase == PagePhase::ScriptApplied
+            && self.pending_js_tasks == 0
+            && !self.has_pending_subresource_work()
+        {
+            self.dispatch_window_load();
         }
 
         tasks
@@ -154,65 +718,1143 @@ impl WebView {
 
     pub fn on_html_fetched(&mut self, html: String, document_url: Url) {
         log::info!("Fetched HTML: {}", document_url);
-        let parsed = parse_html(&html, document_url);
+        self.pending_fragment_scroll = document_url.fragment().map(str::to_string);
+        self.fragment_ready_version = None;
+        perf_scope!(html_parse);
+        let parsed = parse_html(&html, document_url, self.js_policy.into());
+        #[cfg(any(feature = "profile", debug_assertions))]
+        let html_parse_time = html_parse.elapsed();
 
         self.pending_css_urls = parsed.style_links;
+        self.pending_images = parsed.image_sources;
+        self.pending_audio = parsed.audio_sources;
+        self.classic_scripts = parsed.scripts;
+        self.next_script_index = 0;
+        self.pending_script_fetches.clear();
+        self.non_blocking_scripts_scheduled = false;
+        self.deferred_script_results.clear();
+        self.next_deferred_script_index = 0;
+        self.css_results_expected = self.pending_css_urls.len();
 
+        let mut initial_js_tasks = 0;
+        let mut initial_js_dom_ids = HashMap::new();
+        #[cfg(any(feature = "profile", debug_assertions))]
+        let mut js_snapshot_time = std::time::Duration::ZERO;
+        self.js_processor = if self.js_policy == JsPolicy::Enabled {
+            perf_scope!(js_snapshot);
+            let (snapshot, dom_ids) = js_snapshot_from_tree(&parsed.dom);
+            #[cfg(any(feature = "profile", debug_assertions))]
+            {
+                js_snapshot_time = js_snapshot.elapsed();
+            }
+            initial_js_dom_ids = dom_ids;
+            let processor = JsProcessor::new(snapshot);
+            processor.send(JsTask::SetDocumentUrl {
+                url: parsed.document_url.to_string(),
+            });
+            processor.send(JsTask::SetOrigin {
+                origin: Origin::from_url(&parsed.document_url).ascii_serialization(),
+            });
+            processor.send(JsTask::SetViewport {
+                width: self.viewport.0,
+                height: self.viewport.1,
+            });
+            processor.send(JsTask::SetLanguage {
+                language: locale::preferred_language(),
+            });
+            initial_js_tasks = 4;
+            Some(processor)
+        } else {
+            None
+        };
+        self.pending_js_tasks = initial_js_tasks;
+        self.js_dom_ids = initial_js_dom_ids;
+        self.js_dom_dirty = false;
+        self.in_flight_timer_version = None;
+        self.window_load_dispatched = false;
+        self.pending_js_fetches.clear();
+        self.pending_devtools_requests.clear();
+        self.inspector_ids.borrow_mut().clear();
+        self.pending_dynamic_scripts.clear();
+        self.pending_dynamic_styles.clear();
+        self.pending_dynamic_images.clear();
+        self.pending_iframe_fetches.clear();
+        self.iframe_content.clear();
+
+        let css_base_url = parsed.base_url.clone();
         let docment_info = DocumentInfo {
+            origin: Origin::from_url(&parsed.document_url),
             document_url: parsed.document_url,
             base_url: parsed.base_url,
             dom: parsed.dom,
             title: parsed.title,
         };
         self.docment_info = Some(docment_info);
+        self.snapshot_cache = None;
 
-        self.resolved_styles
-            .extend(resolve_all_css(&parsed.inline_styles));
-
+        for inline_css in &parsed.inline_styles {
+            self.queue_css_images(inline_css, &css_base_url);
+            let sheet = CssParser::new(inline_css).parse_lossy();
+            layouter::css_resolver::append_resolved_styles(
+                Arc::make_mut(&mut self.resolved_styles),
+                layouter::css_resolver::CssResolver::resolve(&sheet),
+            );
+            self.resolved_styles_version += 1;
+        }
         self.phase = PagePhase::HtmlParsed;
+        profile_log!(
+            target: "PageLoad",
+            log::Level::Info,
+            "[HtmlParse] html_parse: {:?} | js_snapshot: {:?}",
+            html_parse_time,
+            js_snapshot_time,
+        );
     }
 
     pub fn on_css_fetched(&mut self, css: String) {
-        self.loaded_css.push(css);
+        let base_url = self
+            .docment_info
+            .as_ref()
+            .map(|info| info.base_url.clone())
+            .unwrap_or_else(|| Url::parse("about:blank").expect("valid fallback URL"));
+        self.on_css_fetched_from(css, &base_url);
+    }
 
-        if self.loaded_css.len() == self.pending_css_urls.len() {
-            print!("Apply");
-            self.apply_css_and_relayout();
-            self.phase = PagePhase::CssApplied;
-            self.needs_redraw = true;
+    pub fn on_css_fetched_from(&mut self, css: String, stylesheet_url: &Url) {
+        // Wait out any @imports the sheet declares: its rules (with the import
+        // rules inlined before them) only reach the resolver once every import
+        // has been fetched and flattened too.
+        self.accept_stylesheet(stylesheet_url, css, Some(CssSink::External));
+    }
+
+    /// Registers a stylesheet under its own URL, resolving any `@import`
+    /// statements it declares.
+    ///
+    /// Imports are resolved against the *sheet's* URL (not the document base),
+    /// fetched once per URL, and flattened in document order before the sheet's
+    /// own rules. `sink` describes where a top-level sheet's rules finally
+    /// land; `None` marks a sheet reachable only via `@import`, whose text is
+    /// inlined into its importers instead.
+    fn accept_stylesheet(&mut self, url: &Url, css: String, sink: Option<CssSink>) {
+        if let Some(existing) = self.css_sheets.get_mut(url) {
+            // A URL can be both linked directly and @import-ed. If the sheet
+            // was already handled as a plain import, promote it to a top-level
+            // sheet now; if it is still deferred, the application sink is
+            // recorded so its rules land once its own imports settle.
+            match existing {
+                CssSheetState::Applied {
+                    text,
+                    sink: current,
+                } if sink.is_some() => {
+                    *current = sink;
+                    if let Some(sink) = sink {
+                        let text = text.clone();
+                        self.apply_stylesheet(text, sink);
+                    }
+                }
+                CssSheetState::Deferred { sink: current, .. } if current.is_none() => {
+                    *current = sink;
+                }
+                _ => {}
+            }
+            return;
         }
+
+        self.queue_css_images(&css, url);
+        let (imports, body) = split_css_imports(&css);
+        if imports.is_empty() {
+            self.css_sheets.insert(
+                url.clone(),
+                CssSheetState::Applied {
+                    text: css.clone(),
+                    sink,
+                },
+            );
+            if let Some(sink) = sink {
+                self.apply_stylesheet(css, sink);
+            }
+            return;
+        }
+
+        let mut entries = Vec::new();
+        for raw in imports {
+            let Ok(target) = resolve_url(url, &raw) else {
+                continue;
+            };
+            // A sheet cannot import itself; drop the statement rather than
+            // deferring forever on a cycle back to the root.
+            if target == *url {
+                continue;
+            }
+            let text = match self.css_sheets.get(&target) {
+                // Already-flattened sheet: reuse its text directly.
+                Some(CssSheetState::Applied { text, .. }) => Some(text.clone()),
+                // A sheet still being resolved is either part of an import
+                // cycle (A -> B -> A) or otherwise already loading; waiting on
+                // it can only deadlock, so it contributes nothing here.
+                Some(CssSheetState::Deferred { .. }) => Some(String::new()),
+                _ => None,
+            };
+            if text.is_none() && self.css_import_fetches.insert(target.clone()) {
+                self.pending_css_imports.push((url.clone(), target.clone()));
+            }
+            entries.push(CssImportEntry { url: target, text });
+        }
+
+        self.css_sheets.insert(
+            url.clone(),
+            CssSheetState::Deferred {
+                source: body,
+                entries,
+                sink,
+            },
+        );
+        self.settle_css_imports();
+    }
+
+    /// Records a fetched `@import`-ed stylesheet under its own URL.
+    pub fn on_css_import_fetched(&mut self, source: String, url: &Url) {
+        self.accept_stylesheet(url, source, None);
+        self.settle_css_imports();
+    }
+
+    /// Records a failed `@import` fetch: the sheet contributes nothing, and
+    /// its importers proceed without it instead of blocking the load.
+    pub fn on_css_import_fetch_failed(&mut self, url: &Url) {
+        self.css_import_fetches.remove(url);
+        self.css_sheets.insert(
+            url.clone(),
+            CssSheetState::Applied {
+                text: String::new(),
+                sink: None,
+            },
+        );
+        self.settle_css_imports();
+    }
+
+    fn schedule_css_imports(&mut self, tasks: &mut Vec<WebViewTask>) {
+        for (_, target) in std::mem::take(&mut self.pending_css_imports) {
+            tasks.push(WebViewTask::Fetch {
+                url: target.clone(),
+                kind: FetchKind::CssImport { target },
+            });
+        }
+    }
+
+    /// Flattens every sheet whose imports have all resolved, applying top-level
+    /// sheets when they do. Iterates until no progress: settling one sheet can
+    /// unblock the parents that imported it.
+    fn settle_css_imports(&mut self) {
+        loop {
+            let mut ready: Vec<(Url, String, Option<CssSink>)> = Vec::new();
+            for (url, state) in &self.css_sheets {
+                let CssSheetState::Deferred {
+                    source,
+                    entries,
+                    sink,
+                } = state
+                else {
+                    continue;
+                };
+                let mut text = String::new();
+                let mut done = true;
+                for entry in entries {
+                    let resolved = match &entry.text {
+                        Some(text) => text.clone(),
+                        None => match self.css_sheets.get(&entry.url) {
+                            Some(CssSheetState::Applied { text, .. }) => text.clone(),
+                            _ => {
+                                done = false;
+                                break;
+                            }
+                        },
+                    };
+                    text.push_str(&resolved);
+                }
+                if done {
+                    text.push_str(source);
+                    ready.push((url.clone(), text, *sink));
+                }
+            }
+
+            if ready.is_empty() {
+                break;
+            }
+            for (url, text, sink) in ready {
+                self.css_import_fetches.remove(&url);
+                self.css_sheets.insert(
+                    url.clone(),
+                    CssSheetState::Applied {
+                        text: text.clone(),
+                        sink,
+                    },
+                );
+                if let Some(sink) = sink {
+                    self.apply_stylesheet(text, sink);
+                }
+            }
+        }
+    }
+
+    fn apply_stylesheet(&mut self, css: String, sink: CssSink) {
+        match sink {
+            CssSink::External => {
+                self.linked_css.push(css.clone());
+                match self.css_strategy {
+                    CssApplicationStrategy::Batch => {
+                        self.loaded_css.push(css);
+
+                        if self.loaded_css.len() == self.pending_css_urls.len() {
+                            let all_css = std::mem::take(&mut self.loaded_css);
+                            self.css_results_expected = 1;
+                            self.css_results_received = 0;
+                            self.css_processor.process(all_css);
+                            self.phase = PagePhase::CssProcessing;
+                        }
+                    }
+                    CssApplicationStrategy::Incremental => {
+                        self.css_processor.process(vec![css]);
+                    }
+                }
+            }
+            CssSink::Dynamic(node_id) => {
+                self.linked_css.push(css);
+                self.rebuild_styles_and_layout();
+                self.needs_redraw = true;
+                self.dispatch_js_element_event(node_id, "load");
+            }
+        }
+    }
+
+    /// Decodes a fetched image and rebuilds layout using its intrinsic size.
+    pub fn on_image_fetched(&mut self, source: String, bytes: &[u8]) -> anyhow::Result<()> {
+        self.image_decoder.decode(source, bytes.to_vec());
+        Ok(())
+    }
+
+    /// Stores fetched audio bytes for the matching `<audio>` control.
+    pub fn on_audio_fetched(&mut self, source: String, bytes: &[u8]) {
+        self.audio.insert(source, Arc::from(bytes));
+        self.update_layout();
+    }
+
+    /// Executes or queues a fetched external classic script by scheduling mode.
+    pub fn on_script_fetched(&mut self, index: usize, source: String) {
+        let Some(execution) = self.pending_script_fetches.get(&index).copied() else {
+            log::warn!("Ignoring unexpected classic script response at index {index}");
+            return;
+        };
+
+        if execution == ClassicScriptExecution::Default && self.next_script_index != index {
+            log::warn!("Ignoring out-of-order blocking script response at index {index}");
+            return;
+        }
+        self.pending_script_fetches.remove(&index);
+
+        match execution {
+            ClassicScriptExecution::Default => {
+                self.next_script_index += 1;
+                self.send_script(&source);
+            }
+            ClassicScriptExecution::Defer => {
+                self.deferred_script_results.insert(index, Some(source));
+            }
+            ClassicScriptExecution::Async => self.send_script(&source),
+        }
+    }
+
+    /// Records a failed external classic script without aborting page loading.
+    pub fn on_script_fetch_failed(&mut self, index: usize) {
+        let Some(execution) = self.pending_script_fetches.get(&index).copied() else {
+            log::warn!("Ignoring unexpected classic script failure at index {index}");
+            return;
+        };
+
+        if execution == ClassicScriptExecution::Default && self.next_script_index != index {
+            log::warn!("Ignoring out-of-order blocking script failure at index {index}");
+            return;
+        }
+        self.pending_script_fetches.remove(&index);
+
+        match execution {
+            ClassicScriptExecution::Default => self.next_script_index += 1,
+            ClassicScriptExecution::Defer => {
+                self.deferred_script_results.insert(index, None);
+            }
+            ClassicScriptExecution::Async => {}
+        }
+    }
+
+    /// Executes a fetched dynamically inserted script and dispatches `load`.
+    pub fn on_dynamic_script_fetched(&mut self, node_id: u64, source: String) {
+        self.send_script(&source);
+        self.dispatch_js_element_event(node_id, "load");
+    }
+
+    /// Dispatches `error` for a dynamically inserted script that failed to load.
+    pub fn on_dynamic_script_fetch_failed(&mut self, node_id: u64) {
+        self.dispatch_js_element_event(node_id, "error");
+    }
+
+    pub fn on_dynamic_style_fetched(&mut self, node_id: u64, source: String, stylesheet_url: &Url) {
+        // Resolve relative url() inside the dynamic sheet against the sheet's
+        // own location (not the document base), like a real browser does.
+        self.accept_stylesheet(stylesheet_url, source, Some(CssSink::Dynamic(node_id)));
+    }
+
+    pub fn on_dynamic_style_fetch_failed(&mut self, node_id: u64) {
+        self.dispatch_js_element_event(node_id, "error");
+    }
+
+    /// Resolves a JavaScript `fetch()` request with a network response.
+    pub fn on_js_fetch_succeeded(&mut self, request_id: u64, response: JsFetchResponse) {
+        if let Some(processor) = self.js_processor.as_ref() {
+            processor.send(JsTask::ResolveFetch {
+                id: request_id,
+                response,
+            });
+            self.pending_js_tasks += 1;
+        }
+    }
+
+    /// Rejects a JavaScript `fetch()` request after a network failure.
+    pub fn on_js_fetch_failed(&mut self, request_id: u64, reason: String) {
+        if let Some(processor) = self.js_processor.as_ref() {
+            processor.send(JsTask::RejectFetch {
+                id: request_id,
+                reason,
+            });
+            self.pending_js_tasks += 1;
+        }
+    }
+
+    /// Installs parsed iframe HTML as the host element's `contentDocument` and
+    /// fires its `load` event.
+    pub fn on_iframe_fetched(&mut self, dom_id: u64, html: String, final_url: Url) {
+        if let Some(processor) = self.js_processor.as_ref() {
+            processor.send(JsTask::ResolveIframe {
+                dom_id,
+                html,
+                url: final_url.to_string(),
+            });
+            self.pending_js_tasks += 1;
+        }
+    }
+
+    /// Marks an iframe load as failed so later `contentDocument` accesses do
+    /// not keep re-queuing a fetch.
+    pub fn on_iframe_fetch_failed(&mut self, dom_id: u64) {
+        if let Some(processor) = self.js_processor.as_ref() {
+            processor.send(JsTask::RejectIframe { dom_id });
+            self.pending_js_tasks += 1;
+        }
+    }
+
+    /// Settles a DevTools inspection request with its JSON envelope.
+    pub fn on_devtools_response(&mut self, id: u64, result: String) {
+        if let Some(processor) = self.js_processor.as_ref() {
+            processor.send(JsTask::ResolveDevTools { id, result });
+            self.pending_js_tasks += 1;
+        }
+    }
+
+    /// Answers a DevTools inspection query against this page's live state.
+    pub(crate) fn inspect(
+        &mut self,
+        method: &str,
+        params: &str,
+    ) -> Result<serde_json::Value, String> {
+        inspector::handle(self, method, params)
     }
 
     /// Update page (e.g. DOM changed)
     ///
     /// This is a stub method for now.
     pub fn update_page(&mut self) {
-        let measurer = PlatformTextMeasurer::new().unwrap();
-
-        self.update_layout_and_info(measurer);
+        self.ensure_text_measurer();
+        // The caller mutated the DOM (e.g. TreeNode::replace_child), which does
+        // not bump Tree::version on its own. Mark the tree dirty so the cached
+        // snapshot is rebuilt instead of reused stale.
+        if let Some(doc_info) = self.docment_info.as_mut() {
+            doc_info.dom.mark_dirty();
+        }
+        self.update_layout();
+        // The JS thread's mirror must reflect the external DOM mutation too.
+        self.js_dom_dirty = true;
     }
 
-    fn apply_css_and_relayout(&mut self) {
-        self.resolved_styles
-            .extend(resolve_all_css(&self.loaded_css));
-
-        let measurer = PlatformTextMeasurer::new().unwrap();
-
-        self.update_layout_and_info(measurer);
+    fn apply_resolved_styles_and_relayout(
+        &mut self,
+        resolved: layouter::css_resolver::ResolvedStyles,
+    ) {
+        layouter::css_resolver::append_resolved_styles(
+            Arc::make_mut(&mut self.resolved_styles),
+            resolved,
+        );
+        self.resolved_styles_version += 1;
+        self.update_layout();
     }
 
-    fn update_layout_and_info(&mut self, measurer: PlatformTextMeasurer) {
-        self.layout_and_info = Some(layouter::build_layout_and_info(
-            &self.docment_info.as_ref().unwrap().dom.root,
-            &self.resolved_styles,
-            &measurer,
-            TextStyle {
-                font_size: 16.0,
+    fn rebuild_styles_and_layout(&mut self) {
+        let Some(document) = self.docment_info.as_ref() else {
+            self.update_layout();
+            return;
+        };
+        perf_scope!(resolve_styles);
+        let mut resolved = layouter::css_resolver::CssResolver::resolve_with_origin(
+            &CssParser::new(USER_AGENT_CSS).parse().unwrap(),
+            layouter::css_resolver::StyleOrigin::UserAgent,
+        );
+        let mut stylesheet_count = 1;
+        for source in &self.linked_css {
+            let sheet = CssParser::new(source).parse_lossy();
+            layouter::css_resolver::append_resolved_styles(
+                &mut resolved,
+                layouter::css_resolver::CssResolver::resolve(&sheet),
+            );
+            stylesheet_count += 1;
+        }
+        for source in document.dom.collect_text_by_tag("style") {
+            let sheet = CssParser::new(&source).parse_lossy();
+            layouter::css_resolver::append_resolved_styles(
+                &mut resolved,
+                layouter::css_resolver::CssResolver::resolve(&sheet),
+            );
+            stylesheet_count += 1;
+        }
+        #[cfg(any(feature = "profile", debug_assertions))]
+        let resolve_styles_time = resolve_styles.elapsed();
+        profile_log!(
+            target: "PageLoad",
+            log::Level::Info,
+            "[StyleResolve] stylesheet_resolve: {:?} (sheets: {})",
+            resolve_styles_time,
+            stylesheet_count,
+        );
+        self.resolved_styles = Arc::new(resolved);
+        self.resolved_styles_version += 1;
+        self.update_layout();
+    }
+
+    fn try_apply_css_results(&mut self) {
+        while let Some(resolved) = self.css_processor.try_receive() {
+            self.css_results_received += 1;
+            self.apply_resolved_styles_and_relayout(resolved);
+            self.needs_redraw = true;
+
+            if self.css_results_received >= self.css_results_expected {
+                self.fragment_ready_version = Some(self.layout_requested_version);
+                self.phase = PagePhase::CssApplied;
+            }
+        }
+    }
+
+    fn try_apply_batch_result(&mut self) {
+        if let Some(resolved) = self.css_processor.try_receive() {
+            self.css_results_received += 1;
+            self.apply_resolved_styles_and_relayout(resolved);
+            self.needs_redraw = true;
+            self.fragment_ready_version = Some(self.layout_requested_version);
+            self.phase = PagePhase::CssApplied;
+        }
+    }
+
+    fn advance_classic_scripts(&mut self, tasks: &mut Vec<WebViewTask>) {
+        if self.js_policy == JsPolicy::Disabled {
+            self.phase = PagePhase::ScriptApplied;
+            return;
+        }
+
+        self.schedule_non_blocking_scripts(tasks);
+
+        while self.next_script_index < self.classic_scripts.len() {
+            match self.classic_scripts[self.next_script_index].clone() {
+                ClassicScript::Inline(source) => {
+                    self.next_script_index += 1;
+                    self.send_script(&source);
+                }
+                ClassicScript::External { url, execution } => {
+                    if execution != ClassicScriptExecution::Default {
+                        self.next_script_index += 1;
+                        continue;
+                    }
+
+                    let index = self.next_script_index;
+                    if let std::collections::hash_map::Entry::Vacant(entry) =
+                        self.pending_script_fetches.entry(index)
+                    {
+                        entry.insert(ClassicScriptExecution::Default);
+                        tasks.push(WebViewTask::Fetch {
+                            url,
+                            kind: FetchKind::Script { index },
+                        });
+                    }
+                    return;
+                }
+            }
+        }
+
+        self.advance_deferred_scripts();
+    }
+
+    fn schedule_non_blocking_scripts(&mut self, tasks: &mut Vec<WebViewTask>) {
+        if self.non_blocking_scripts_scheduled {
+            return;
+        }
+        self.non_blocking_scripts_scheduled = true;
+
+        for (index, script) in self.classic_scripts.iter().enumerate() {
+            let ClassicScript::External { url, execution } = script else {
+                continue;
+            };
+            if *execution == ClassicScriptExecution::Default {
+                continue;
+            }
+
+            self.pending_script_fetches.insert(index, *execution);
+            tasks.push(WebViewTask::Fetch {
+                url: url.clone(),
+                kind: FetchKind::Script { index },
+            });
+        }
+    }
+
+    fn advance_deferred_scripts(&mut self) {
+        loop {
+            let Some(index) =
+                (self.next_deferred_script_index..self.classic_scripts.len()).find(|&index| {
+                    matches!(
+                        self.classic_scripts.get(index),
+                        Some(ClassicScript::External {
+                            execution: ClassicScriptExecution::Defer,
+                            ..
+                        })
+                    )
+                })
+            else {
+                self.dispatch_dom_content_loaded();
+                self.phase = PagePhase::ScriptApplied;
+                return;
+            };
+
+            let Some(source) = self.deferred_script_results.remove(&index) else {
+                return;
+            };
+            self.next_deferred_script_index = index + 1;
+            if let Some(source) = source {
+                self.send_script(&source);
+            }
+        }
+    }
+
+    /// Sends a script to the JS thread for ordered execution.
+    fn send_script(&mut self, source: &str) {
+        if let Some(processor) = self.js_processor.as_ref() {
+            processor.send(JsTask::RunScript {
+                source: source.to_string(),
+            });
+            self.pending_js_tasks += 1;
+        }
+    }
+
+    fn dispatch_js_element_event(&mut self, dom_id: u64, event_type: &str) {
+        if let Some(processor) = self.js_processor.as_ref() {
+            processor.send(JsTask::DispatchElementEvent {
+                dom_id,
+                event_type: event_type.to_string(),
+            });
+            self.pending_js_tasks += 1;
+        }
+    }
+
+    fn dispatch_dom_content_loaded(&mut self) {
+        if let Some(processor) = self.js_processor.as_ref() {
+            processor.send(JsTask::DispatchDomContentLoaded);
+            self.pending_js_tasks += 1;
+        }
+    }
+
+    fn dispatch_window_load(&mut self) {
+        if let Some(processor) = self.js_processor.as_ref() {
+            processor.send(JsTask::DispatchWindowLoad);
+            self.pending_js_tasks += 1;
+            self.window_load_dispatched = true;
+        }
+    }
+
+    /// Whether any JS-visible subresource work still awaits its round trip
+    /// (classic/dynamic scripts, stylesheets, images, or `fetch()` requests).
+    ///
+    /// When this returns `false` the JS thread is idle, so its `mirror` DOM
+    /// matches the committed tree and the page can be considered fully loaded.
+    fn has_pending_subresource_work(&self) -> bool {
+        !self.pending_script_fetches.is_empty()
+            || !self.pending_js_fetches.is_empty()
+            || !self.pending_iframe_fetches.is_empty()
+            || !self.pending_dynamic_scripts.is_empty()
+            || !self.pending_dynamic_styles.is_empty()
+            || !self.pending_dynamic_images.is_empty()
+    }
+
+    fn run_due_js_timers(&mut self) {
+        if self.js_dom_dirty {
+            // A write-back sync is owed. Pausing pokes keeps a timer snapshot
+            // from racing the pending sync; timers resume once it completes.
+            return;
+        }
+        if let Some(processor) = self.js_processor.as_ref() {
+            // Timer pokes are coalescable: the JS thread skips this one when a
+            // newer task has already been queued. Track the newest poke so the
+            // write-back sync waits until its result has been applied.
+            let version = processor.send(JsTask::RunTimers);
+            self.in_flight_timer_version = Some(version);
+        }
+    }
+
+    fn schedule_js_fetches(&mut self, tasks: &mut Vec<WebViewTask>) {
+        let requests = std::mem::take(&mut self.pending_js_fetches);
+
+        for request in requests {
+            match self.resolve_url(&request.url) {
+                Ok(url) => tasks.push(WebViewTask::Fetch {
+                    url,
+                    kind: FetchKind::JavaScript {
+                        request_id: request.id,
+                        method: request.method,
+                        headers: request.headers,
+                        body: request.body,
+                    },
+                }),
+                Err(error) => self
+                    .on_js_fetch_failed(request.id, format!("Failed to parse fetch URL: {error}")),
+            }
+        }
+    }
+
+    /// Emits queued script-initiated top-level navigations (form submits).
+    /// Each navigation restarts the page-load cycle for the target URL.
+    fn schedule_navigations(&mut self, tasks: &mut Vec<WebViewTask>) {
+        let requests = std::mem::take(&mut self.pending_navigations);
+        for url_text in requests {
+            match self.resolve_url(&url_text) {
+                Ok(url) => {
+                    log::info!("Script navigation requested: {url}");
+                    tasks.push(WebViewTask::Navigate { url });
+                }
+                Err(error) => {
+                    log::warn!("Dropping script navigation to {url_text}: {error}");
+                }
+            }
+        }
+    }
+
+    fn schedule_iframe_fetches(&mut self, tasks: &mut Vec<WebViewTask>) {
+        let requests = std::mem::take(&mut self.pending_iframe_fetches);
+
+        for request in requests {
+            match Url::parse(&request.url) {
+                Ok(url) => {
+                    log::info!("Iframe fetch requested in WebView: url={}", url);
+                    tasks.push(WebViewTask::Fetch {
+                        url,
+                        kind: FetchKind::Iframe {
+                            dom_id: request.dom_id,
+                        },
+                    })
+                }
+                Err(error) => {
+                    log::warn!("Failed to parse iframe URL: {error}");
+                    self.on_iframe_fetch_failed(request.dom_id);
+                }
+            }
+        }
+    }
+
+    fn schedule_dynamic_scripts(&mut self, tasks: &mut Vec<WebViewTask>) {
+        let requests = std::mem::take(&mut self.pending_dynamic_scripts);
+
+        for request in requests {
+            match request.source {
+                JsDynamicScriptSource::Inline(source) => {
+                    self.send_script(&source);
+                    self.dispatch_js_element_event(request.node_id, "load");
+                }
+                JsDynamicScriptSource::External(source) => match self.resolve_url(&source) {
+                    Ok(url) => tasks.push(WebViewTask::Fetch {
+                        url,
+                        kind: FetchKind::DynamicScript {
+                            node_id: request.node_id,
+                        },
+                    }),
+                    Err(error) => {
+                        log::warn!("Failed to resolve dynamic script URL: {error}");
+                        self.on_dynamic_script_fetch_failed(request.node_id);
+                    }
+                },
+            }
+        }
+    }
+
+    fn schedule_dynamic_styles(&mut self, tasks: &mut Vec<WebViewTask>) {
+        let requests = std::mem::take(&mut self.pending_dynamic_styles);
+
+        for request in requests {
+            match self.resolve_url(&request.url) {
+                Ok(url) => tasks.push(WebViewTask::Fetch {
+                    url,
+                    kind: FetchKind::DynamicCss {
+                        node_id: request.node_id,
+                    },
+                }),
+                Err(error) => {
+                    log::warn!("Failed to resolve dynamic stylesheet URL: {error}");
+                    self.on_dynamic_style_fetch_failed(request.node_id);
+                }
+            }
+        }
+    }
+
+    fn schedule_dynamic_images(&mut self, tasks: &mut Vec<WebViewTask>) {
+        let requests = std::mem::take(&mut self.pending_dynamic_images);
+
+        for request in requests {
+            match self.resolve_url(&request.source) {
+                Ok(url) => tasks.push(WebViewTask::Fetch {
+                    url,
+                    kind: FetchKind::Image {
+                        source: request.source,
+                    },
+                }),
+                Err(error) => log::warn!("Failed to resolve dynamic image URL: {error}"),
+            }
+        }
+    }
+
+    fn queue_css_images(&mut self, css: &str, base_url: &Url) {
+        for source in collect_css_image_sources(css) {
+            if self.images.contains_key(&source)
+                || self
+                    .pending_images
+                    .iter()
+                    .any(|(pending, _)| pending == &source)
+            {
+                continue;
+            }
+            if let Ok(url) = resolve_url(base_url, &source) {
+                self.pending_images.push((source, url));
+            }
+        }
+    }
+
+    fn schedule_pending_images(&mut self, tasks: &mut Vec<WebViewTask>) {
+        for (source, url) in std::mem::take(&mut self.pending_images) {
+            tasks.push(WebViewTask::Fetch {
+                url,
+                kind: FetchKind::Image { source },
+            });
+        }
+    }
+
+    /// Dispatches a click on the given DOM snapshot node id to the page's JS.
+    ///
+    /// Resolves the live DOM node behind the snapshot id, translates it to the
+    /// JS-facing dom id and hands the click to the JS thread. Returns whether
+    /// a redraw is needed; the JS result triggers the relayout once applied.
+    pub fn on_js_click(&mut self, dom_id: u32) -> bool {
+        let Some(processor) = self.js_processor.as_ref() else {
+            return false;
+        };
+        let Some(node) = self
+            .layout_dom_refs
+            .get(dom_id as usize)
+            .and_then(|weak| weak.upgrade())
+        else {
+            return false;
+        };
+        let Some(js_dom_id) = self.js_dom_ids.get(&(Rc::as_ptr(&node) as usize)) else {
+            return false;
+        };
+        processor.send(JsTask::Click { dom_id: *js_dom_id });
+        self.pending_js_tasks += 1;
+        false
+    }
+
+    /// Dispatches a `scroll` event on the given DOM snapshot node id to the
+    /// page's JS.
+    ///
+    /// Resolves the live DOM node behind the snapshot id, translates it to the
+    /// JS-facing dom id and hands the scroll to the JS thread. Returns whether
+    /// a redraw is needed; the JS result triggers the relayout once applied.
+    pub fn on_js_scroll(&mut self, dom_id: u32) -> bool {
+        let Some(processor) = self.js_processor.as_ref() else {
+            return false;
+        };
+        let Some(node) = self
+            .layout_dom_refs
+            .get(dom_id as usize)
+            .and_then(|weak| weak.upgrade())
+        else {
+            return false;
+        };
+        let Some(js_dom_id) = self.js_dom_ids.get(&(Rc::as_ptr(&node) as usize)) else {
+            return false;
+        };
+        processor.send(JsTask::Scroll { dom_id: *js_dom_id });
+        self.pending_js_tasks += 1;
+        false
+    }
+
+    fn ensure_text_measurer(&mut self) {
+        if self.text_measurer.is_none() {
+            self.text_measurer = Some(Arc::new(PlatformTextMeasurer::new().unwrap()));
+        }
+    }
+
+    /// Builds a snapshot and hands the heavy tree construction to the background.
+    fn update_layout(&mut self) {
+        if self.docment_info.is_none() {
+            return;
+        }
+        self.ensure_text_measurer();
+
+        let doc_info = self.docment_info.as_ref().unwrap();
+        let dom_version = doc_info.dom.version();
+        // Snapshot construction happens at function scope so the profile log
+        // below can read accumulators regardless of which branch ran.
+        #[cfg(any(feature = "profile", debug_assertions))]
+        let mut snapshot_build_time = std::time::Duration::ZERO;
+        #[cfg(any(feature = "profile", debug_assertions))]
+        let mut snapshot_cached = false;
+
+        let (snapshot, dom_refs) = if let Some(cache) = &self.snapshot_cache
+            // The DOM is unchanged since the last snapshot: reuse it instead of
+            // re-cloning the whole tree (CSS/image relayouts dominate).
+            && cache.dom_version == dom_version
+        {
+            #[cfg(any(feature = "profile", debug_assertions))]
+            {
+                snapshot_cached = true;
+            }
+            (Arc::clone(&cache.snapshot), cache.dom_refs.clone())
+        } else {
+            perf_scope!(snapshot_build);
+            let (snapshot, dom_refs) = DomSnapshot::from_tree(&doc_info.dom.root);
+            #[cfg(any(feature = "profile", debug_assertions))]
+            {
+                snapshot_build_time = snapshot_build.elapsed();
+            }
+            let snapshot = Arc::new(snapshot);
+            self.snapshot_cache = Some(SnapshotCache {
+                dom_version,
+                snapshot: Arc::clone(&snapshot),
+                dom_refs: dom_refs.clone(),
+            });
+            (snapshot, dom_refs)
+        };
+        profile_log!(
+            target: "PageLoad",
+            log::Level::Info,
+            "[DomSnapshot] build: {:?} (cache hit: {})",
+            snapshot_build_time,
+            snapshot_cached,
+        );
+        let root = snapshot.roots()[0];
+
+        let media_environment =
+            layouter::css_resolver::MediaEnvironment::new(self.viewport, self.system_color_scheme);
+        let task = layouter::LayoutTask {
+            snapshot,
+            root,
+            resolved_styles: Arc::clone(&self.resolved_styles),
+            media_environment,
+            measurer: self.text_measurer.clone().unwrap(),
+            audio_sinks: Arc::clone(&self.audio_sinks),
+            system_color_scheme: self.system_color_scheme,
+            scripting_mode: self.js_policy.into(),
+            images: self.images.clone(),
+            audio: self.audio.clone(),
+            parent: InheritedCss {
+                text_flow_style: TextFlowStyle {
+                    font_size: 16.0,
+                    ..Default::default()
+                },
                 ..Default::default()
             },
-            Vec::new(),
-        ));
-        self.needs_redraw = true;
+            chain: ElementChain::default(),
+            write_back_sender: Some(self.write_back_tx.clone()),
+            styles_version: self.resolved_styles_version,
+            version: 0,
+        };
+        self.layout_dom_refs = dom_refs;
+        self.layout_requested_version = self.layout_processor.send(task);
+        self.layout_pending = true;
+    }
+
+    /// Takes decoded images from the background thread and triggers a relayout.
+    fn try_apply_decoded_images(&mut self) {
+        while let Some((source, result)) = self.image_decoder.try_receive() {
+            match result {
+                Ok(image) => {
+                    self.images.insert(source, image);
+                    self.update_layout();
+                }
+                Err(error) => {
+                    log::warn!("Image decode failed: {error:#}");
+                }
+            }
+        }
+    }
+
+    /// Takes completed layout results from the thread and makes them drawable.
+    fn try_apply_layout_results(&mut self) {
+        while let Some(result) = self.layout_processor.try_receive() {
+            let LayoutResult {
+                layout,
+                mut info,
+                version,
+            } = result;
+            if version < self.layout_requested_version {
+                continue;
+            }
+            // The builder initializes every node's scroll offset to 0, so a
+            // rebuilt tree would otherwise drop the scroll position (e.g. the
+            // viewport change on a window resize). Re-apply the offsets of the
+            // previous tree before swapping the new one in.
+            if let Some((_, old_info)) = self.layout_and_info.as_ref() {
+                let mut scroll_offsets = HashMap::new();
+                capture_scroll_offsets(old_info, &mut scroll_offsets);
+                apply_scroll_offsets(&mut info, &scroll_offsets);
+            }
+
+            self.layout_and_info = Some((layout, info));
+            self.layout_applied_version = version;
+            self.layout_pending = false;
+            self.needs_redraw = true;
+            // The fresh tree has no geometry yet (positioning normally happens
+            // during draws). Position it right away so input events arriving
+            // before the next redraw still hit-test against real boxes.
+            self.position_layout_if_needed();
+        }
+    }
+
+    /// Takes completed JS results from the thread and commits them.
+    ///
+    /// A result that mutated the DOM carries a snapshot of the thread's mirror;
+    /// committing it replaces the authoritative tree, re-registers the JS dom
+    /// id map and triggers a relayout.
+    fn try_apply_js_results(&mut self) {
+        let results: Vec<JsTaskResult> = {
+            let Some(processor) = self.js_processor.as_ref() else {
+                return;
+            };
+            let mut results = Vec::new();
+            while let Some(result) = processor.try_receive() {
+                results.push(result);
+            }
+            results
+        };
+        for result in results {
+            self.pending_js_tasks = self.pending_js_tasks.saturating_sub(1);
+            self.pending_js_fetches.extend(result.fetch_requests);
+            self.pending_devtools_requests
+                .extend(result.devtools_requests);
+            self.pending_dynamic_scripts
+                .extend(result.dynamic_script_requests);
+            self.pending_dynamic_styles
+                .extend(result.dynamic_style_requests);
+            self.pending_dynamic_images
+                .extend(result.dynamic_image_requests);
+            self.pending_iframe_fetches
+                .extend(result.iframe_fetch_requests);
+            self.pending_navigations.extend(result.navigation_requests);
+
+            if let Some(in_flight) = self.in_flight_timer_version
+                && result.version >= in_flight
+            {
+                // The newest timer poke has been processed (run or superseded),
+                // so its snapshot can no longer race the write-back sync.
+                self.in_flight_timer_version = None;
+            }
+
+            let Some(snapshot) = result.dom else {
+                continue;
+            };
+            let Some(info) = self.docment_info.as_mut() else {
+                continue;
+            };
+            // Commit the thread's mirror as the new authoritative tree. The
+            // rebuilt tree starts with a fresh version, so the cached snapshot
+            // and live layout references are stale and must be dropped.
+            let (tree, dom_ids) = snapshot.into_tree();
+            // Retain only iframe content for iframes still present; stale
+            // entries from removed iframes are dropped on the next nav anyway.
+            self.iframe_content.clear();
+            for iframe_doc in result.iframe_documents {
+                self.iframe_content
+                    .insert(iframe_doc.iframe_dom_id, iframe_doc.content);
+            }
+            info.dom = Rc::new(tree);
+            self.js_dom_ids = dom_ids;
+            // Splice committed iframe content under the host <iframe> nodes so
+            // layout/paint render it nested.
+            graft_iframe_documents(&info.dom, &self.js_dom_ids, &self.iframe_content);
+            self.snapshot_cache = None;
+            self.layout_dom_refs.clear();
+
+            self.rebuild_styles_and_layout();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Syncs UI-side DOM mutations (write-backs, `update_page`) to the JS thread.
+    ///
+    /// Only runs when no JS task is in flight: mid-task the thread's mirror
+    /// legitimately diverges from the real tree, and committing an in-flight
+    /// snapshot after this sync would clobber the thread's newer mutations.
+    /// An in-flight `RunTimers` poke counts as in flight for the same reason:
+    /// its callback may mutate the mirror and commit a stale snapshot.
+    fn sync_dom_to_worker(&mut self) {
+        if !self.js_dom_dirty
+            || self.pending_js_tasks != 0
+            || self.in_flight_timer_version.is_some()
+        {
+            return;
+        }
+        let Some(processor) = self.js_processor.as_ref() else {
+            return;
+        };
+        let Some(doc_info) = self.docment_info.as_ref() else {
+            return;
+        };
+        let snapshot = DomSnapshot::from_mirror(&doc_info.dom.root, &self.js_dom_ids);
+        processor.send(JsTask::UpdateDom { snapshot });
+        self.pending_js_tasks += 1;
+        self.js_dom_dirty = false;
+    }
+
+    /// Applies value write-backs reported by text inputs to the live DOM.
+    fn drain_write_backs(&mut self) {
+        let mut applied = false;
+        while let Ok((node_id, value)) = self.write_back_rx.try_recv() {
+            if let Some(weak) = self.layout_dom_refs.get(node_id as usize)
+                && let Some(node) = weak.upgrade()
+            {
+                node.borrow_mut().value.set_attr("value", value);
+                applied = true;
+            }
+            self.needs_redraw = true;
+        }
+
+        // The DOM mutated, so the cached snapshot is stale and must be rebuilt
+        // on the next relayout. Future JS mutations must also bump the version.
+        if applied && let Some(doc_info) = self.docment_info.as_mut() {
+            doc_info.dom.mark_dirty();
+        }
+        // The JS thread's mirror must reflect the new input value; synced once
+        // the in-flight JS tasks have all been applied.
+        if applied {
+            self.js_dom_dirty = true;
+        }
     }
 
     pub fn navigate(&mut self) {
@@ -226,23 +1868,174 @@ impl WebView {
 
         self.docment_info = None;
         self.pending_css_urls.clear();
+        self.pending_css_imports.clear();
+        self.css_sheets.clear();
+        self.css_import_fetches.clear();
+        self.pending_images.clear();
+        self.pending_audio.clear();
+        self.pending_navigations.clear();
         self.loaded_css.clear();
-        self.resolved_styles.clear();
+        self.linked_css.clear();
+        self.images.clear();
+        self.audio.clear();
+        Arc::make_mut(&mut self.resolved_styles).clear();
         self.layout_and_info = None;
 
         self.needs_redraw = false;
+
+        self.css_processor = css::processor::CssProcessor::new();
+        self.css_results_expected = 0;
+        self.css_results_received = 0;
+
+        self.layout_processor = layouter::LayoutProcessor::new();
+        self.layout_pending = false;
+        self.layout_requested_version = 0;
+        self.layout_applied_version = 0;
+        self.positioned_layout = None;
+        self.layout_dom_refs.clear();
+        self.snapshot_cache = None;
+        self.js_processor = None;
+        self.js_dom_ids.clear();
+        self.pending_js_tasks = 0;
+        self.js_dom_dirty = false;
+        self.in_flight_timer_version = None;
+        self.pending_js_fetches.clear();
+        self.pending_devtools_requests.clear();
+        self.inspector_ids.borrow_mut().clear();
+        self.pending_dynamic_scripts.clear();
+        self.pending_dynamic_styles.clear();
+        self.pending_dynamic_images.clear();
+        self.pending_iframe_fetches.clear();
+        self.iframe_content.clear();
+        self.classic_scripts.clear();
+        self.next_script_index = 0;
+        self.pending_script_fetches.clear();
+        self.non_blocking_scripts_scheduled = false;
+        self.deferred_script_results.clear();
+        self.next_deferred_script_index = 0;
+        self.pending_fragment_scroll = None;
+        self.fragment_ready_version = None;
+        let (write_back_tx, write_back_rx) = mpsc::channel();
+        self.write_back_tx = write_back_tx;
+        self.write_back_rx = write_back_rx;
+    }
+
+    pub fn set_system_color_scheme(&mut self, scheme: ColorScheme) {
+        if self.system_color_scheme == scheme {
+            return;
+        }
+        self.system_color_scheme = scheme;
+        self.update_layout();
     }
 
     pub fn title(&self) -> Option<&String> {
         self.docment_info.as_ref().map(|d| &d.title)
     }
 
-    pub fn relayout(&mut self, viewport: (f32, f32)) {
-        let Some((layout, _info)) = self.layout_and_info.as_mut() else {
+    /// Runs the box-positioning pass over the current layout tree unless it
+    /// has already been positioned for the current version + viewport.
+    ///
+    /// Background layout results arrive unpositioned (geometry is computed on
+    /// the main thread), so this must run before the tree is used for anything
+    /// geometry-sensitive — drawing, but crucially also hit-testing. Without
+    /// the eager call in [`WebView::try_apply_layout_results`], a click landing
+    /// between a result being applied and the next draw would walk boxes with
+    /// no geometry and find nothing.
+    fn position_layout_if_needed(&mut self) {
+        let viewport = self.viewport;
+        if self.positioned_layout == Some((self.layout_applied_version, viewport)) {
+            return;
+        }
+        let Some((layout, info)) = self.layout_and_info.as_mut() else {
             return;
         };
 
         ui_layout::LayoutEngine::layout(layout, viewport.0, viewport.1);
+        if layouter::constrain_auto_grid_track_items(layout) {
+            ui_layout::LayoutEngine::layout(layout, viewport.0, viewport.1);
+        }
+        layouter::correct_atomic_inline_spacing_with_info(layout, info);
+        layouter::align_table_columns(layout, info);
+        layouter::refresh_missing_text_layout_results(layout, info, viewport);
+
+        self.positioned_layout = Some((self.layout_applied_version, viewport));
+    }
+
+    pub fn relayout(&mut self, viewport: (f32, f32)) {
+        if self.viewport != viewport {
+            self.viewport = viewport;
+            if let Some(processor) = self.js_processor.as_ref() {
+                processor.send(JsTask::SetViewport {
+                    width: viewport.0,
+                    height: viewport.1,
+                });
+                self.pending_js_tasks += 1;
+            }
+            self.update_layout();
+        }
+        self.position_layout_if_needed();
+
+        if fragment_layout_is_ready(self.fragment_ready_version, self.layout_applied_version)
+            && let Some((layout, info)) = self.layout_and_info.as_mut()
+            && fragment_scroll_update(
+                layout,
+                info,
+                &self.layout_dom_refs,
+                self.pending_fragment_scroll.as_deref(),
+                viewport.1,
+            )
+        {
+            self.pending_fragment_scroll = None;
+            self.needs_redraw = true;
+        }
+
+        let Some((layout, info)) = self.layout_and_info.as_mut() else {
+            return;
+        };
+
+        let layout_metrics = collect_js_layout_metrics(
+            layout,
+            info,
+            &self.layout_dom_refs,
+            &self.js_dom_ids,
+            viewport,
+        );
+        let computed_styles =
+            collect_js_computed_styles(layout, info, &self.layout_dom_refs, &self.js_dom_ids);
+        if let Some(processor) = self.js_processor.as_ref() {
+            processor.send(JsTask::SetLayoutMetrics {
+                metrics: layout_metrics,
+                computed_styles,
+            });
+            self.pending_js_tasks += 1;
+        }
+    }
+
+    /// Scrolls the already-loaded document to the fragment in `url` without
+    /// reloading it (same-document anchor navigation, e.g. `<a href="#id">`).
+    ///
+    /// The page stays loaded and only the scroll position and URL change; an
+    /// empty fragment scrolls back to the top of the document. Fragments are
+    /// percent-decoded before matching, so `#my%20id` reaches
+    /// `<div id="my id">`.
+    ///
+    /// The current document URL is recorded so page scripts (`location.hash`,
+    /// `location.href`) and the address bar reflect the new location.
+    pub fn scroll_to_fragment(&mut self, url: &Url) {
+        if let Some(info) = self.docment_info.as_mut() {
+            info.document_url = url.clone();
+        }
+        if let Some(processor) = self.js_processor.as_ref() {
+            processor.send(JsTask::SetDocumentUrl {
+                url: url.to_string(),
+            });
+            self.pending_js_tasks += 1;
+        }
+        self.pending_fragment_scroll = Some(url.fragment().unwrap_or("").to_string());
+        // The document is already laid out; do not wait for a fresh styling
+        // pass before revealing the fragment.
+        self.fragment_ready_version = Some(self.layout_applied_version);
+        self.needs_redraw = true;
     }
 
     /// 現在描画可能な Layout / Info を返す（なければ None）
@@ -269,17 +2062,963 @@ impl WebView {
 
     pub fn needs_redraw(&self) -> bool {
         self.needs_redraw
+            || self
+                .layout_and_info
+                .as_ref()
+                .is_some_and(|(_, info)| crate::engine::input::any_custom_node_needs_repaint(info))
     }
 
     pub fn clear_redraw_flag(&mut self) {
         self.needs_redraw = false;
     }
+
+    fn resolve_url(&self, url: &str) -> Result<Url, url::ParseError> {
+        let base = self
+            .docment_info
+            .as_ref()
+            .map(|info| &info.base_url)
+            .ok_or(url::ParseError::RelativeUrlWithoutBase)?;
+
+        Url::parse(url).or_else(|_| base.join(url))
+    }
 }
 
-fn parse_html(html: &str, document_url: Url) -> ParsedDocument {
+/// Builds the geometry snapshot used by DOM measurement APIs from the same
+/// layout boxes and scroll offsets consumed by painting and hit testing.
+///
+/// Sticky-position paint offsets are applied exactly like the renderer applies
+/// them (same scrollport resolution), so `getBoundingClientRect()` agrees with
+/// what is drawn.
+fn collect_js_layout_metrics(
+    layout: &LayoutNode,
+    info: &InfoNode,
+    dom_refs: &[Weak<RefCell<TreeNode<HtmlNodeType>>>],
+    js_dom_ids: &HashMap<usize, u64>,
+    viewport: (f32, f32),
+) -> HashMap<u64, JsLayoutMetrics> {
+    let mut metrics = HashMap::new();
+    let (scroll_x, scroll_y) = info.kind.scroll_offsets();
+    let root_viewport = StickyViewport {
+        top_left: (-scroll_x, scroll_y),
+        size: viewport,
+    };
+    let containing = layout
+        .layout_box
+        .iter()
+        .next()
+        .map_or((0.0, 0.0), |b| (b.content_box.width, b.content_box.height));
+    collect_js_layout_metrics_inner(
+        layout,
+        info,
+        dom_refs,
+        js_dom_ids,
+        (0.0, 0.0),
+        (0.0, 0.0),
+        true,
+        root_viewport,
+        containing,
+        viewport,
+        &mut metrics,
+    );
+    metrics
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_js_layout_metrics_inner(
+    layout: &LayoutNode,
+    info: &InfoNode,
+    dom_refs: &[Weak<RefCell<TreeNode<HtmlNodeType>>>],
+    js_dom_ids: &HashMap<usize, u64>,
+    parent_content_origin: (f32, f32),
+    inherited_scroll: (f32, f32),
+    is_root: bool,
+    sticky_viewport: StickyViewport,
+    containing: (f32, f32),
+    viewport_size: (f32, f32),
+    metrics: &mut HashMap<u64, JsLayoutMetrics>,
+) {
+    let is_fixed = layout.style.position.kind == ui_layout::Position::Fixed;
+    let effective_scroll = if is_fixed {
+        (0.0, 0.0)
+    } else {
+        inherited_scroll
+    };
+    let own_scroll = info.kind.scroll_offsets();
+    let child_scroll = if is_fixed {
+        own_scroll
+    } else {
+        (
+            inherited_scroll.0 + own_scroll.0,
+            inherited_scroll.1 + own_scroll.1,
+        )
+    };
+
+    // Shift sticky boxes so each specified inset stays within the visible area
+    // of the nearest scrollport, matching the renderer's paint offset. Fixed
+    // boxes are positioned relative to the viewport and never stick.
+    let is_sticky = layout.style.position.kind == ui_layout::Position::Sticky;
+    let sticky_push = if is_sticky && !is_fixed {
+        layout
+            .layout_box
+            .iter()
+            .next()
+            .and_then(|bm| {
+                bm.sticky_edges
+                    .map(|edges| sticky_offset(&edges, &bm.border_box, sticky_viewport, containing))
+            })
+            .unwrap_or((0.0, 0.0))
+    } else {
+        (0.0, 0.0)
+    };
+
+    let boxes: Vec<_> = layout.layout_box.iter().collect();
+    if let Some(first) = boxes.first() {
+        let mut page_left = parent_content_origin.0 + first.border_box.x + sticky_push.0;
+        let mut page_top = parent_content_origin.1 + first.border_box.y + sticky_push.1;
+        let mut page_right = page_left + first.border_box.width;
+        let mut page_bottom = page_top + first.border_box.height;
+        for model in boxes.iter().skip(1) {
+            let left = parent_content_origin.0 + model.border_box.x + sticky_push.0;
+            let top = parent_content_origin.1 + model.border_box.y + sticky_push.1;
+            page_left = page_left.min(left);
+            page_top = page_top.min(top);
+            page_right = page_right.max(left + model.border_box.width);
+            page_bottom = page_bottom.max(top + model.border_box.height);
+        }
+
+        if let Some(node) = info
+            .dom_id
+            .and_then(|id| dom_refs.get(id as usize))
+            .and_then(Weak::upgrade)
+        {
+            let node_key = Rc::as_ptr(&node) as usize;
+            if let Some(dom_id) = js_dom_ids.get(&node_key).copied() {
+                metrics.insert(
+                    dom_id,
+                    JsLayoutMetrics {
+                        offset_left: first.border_box.x as f64,
+                        offset_top: first.border_box.y as f64,
+                        offset_width: (page_right - page_left) as f64,
+                        offset_height: (page_bottom - page_top) as f64,
+                        client_width: first.padding_box.width as f64,
+                        client_height: first.padding_box.height as f64,
+                        rect_left: (page_left - effective_scroll.0) as f64,
+                        rect_top: (page_top - effective_scroll.1) as f64,
+                        rect_width: (page_right - page_left) as f64,
+                        rect_height: (page_bottom - page_top) as f64,
+                    },
+                );
+            }
+        }
+
+        // Sticky viewport state for this subtree, rebased into each child's
+        // parent-content space exactly as the renderer does: a node that
+        // scrolls its own content (or the root) becomes the scrollport for its
+        // descendants; otherwise the inherited visible region shifts by the
+        // node's content-box offset.
+        let child_viewport = if is_root || is_scrollport(&info.kind) {
+            let bm = layout.layout_box.iter().next();
+            StickyViewport {
+                top_left: bm.as_ref().map_or((0.0, 0.0), |b| {
+                    (
+                        b.padding_box.x - b.content_box.x - own_scroll.0,
+                        b.padding_box.y - b.content_box.y + own_scroll.1,
+                    )
+                }),
+                size: if is_root {
+                    viewport_size
+                } else {
+                    bm.map_or(viewport_size, |b| {
+                        (b.padding_box.width, b.padding_box.height)
+                    })
+                },
+            }
+        } else {
+            let bm = layout.layout_box.iter().next();
+            StickyViewport {
+                top_left: bm.map_or(sticky_viewport.top_left, |b| {
+                    (
+                        sticky_viewport.top_left.0 - b.content_box.x,
+                        sticky_viewport.top_left.1 - b.content_box.y,
+                    )
+                }),
+                size: sticky_viewport.size,
+            }
+        };
+        let child_containing = layout
+            .layout_box
+            .iter()
+            .next()
+            .map_or(containing, |b| (b.content_box.width, b.content_box.height));
+        let child_origin = (
+            parent_content_origin.0 + first.content_box.x + sticky_push.0,
+            parent_content_origin.1 + first.content_box.y + sticky_push.1,
+        );
+        for (child_layout, child_info) in layout.children.iter().zip(&info.children) {
+            if let Some(child_layout) = child_layout.node() {
+                collect_js_layout_metrics_inner(
+                    child_layout,
+                    child_info,
+                    dom_refs,
+                    js_dom_ids,
+                    child_origin,
+                    child_scroll,
+                    false,
+                    child_viewport,
+                    child_containing,
+                    viewport_size,
+                    metrics,
+                );
+            }
+        }
+    }
+}
+
+/// Serializes each laid-out node's computed CSS values (resolved cascade
+/// result plus box geometry) for `getComputedStyle`, keyed by stable
+/// JS-facing DOM id.
+fn collect_js_computed_styles(
+    layout: &LayoutNode,
+    info: &InfoNode,
+    dom_refs: &[Weak<RefCell<TreeNode<HtmlNodeType>>>],
+    js_dom_ids: &HashMap<usize, u64>,
+) -> HashMap<u64, Vec<(String, String)>> {
+    let mut computed = HashMap::new();
+    collect_js_computed_styles_inner(layout, info, dom_refs, js_dom_ids, &mut computed);
+    computed
+}
+
+fn collect_js_computed_styles_inner(
+    layout: &LayoutNode,
+    info: &InfoNode,
+    dom_refs: &[Weak<RefCell<TreeNode<HtmlNodeType>>>],
+    js_dom_ids: &HashMap<usize, u64>,
+    computed: &mut HashMap<u64, Vec<(String, String)>>,
+) {
+    if layout.layout_box.is_empty() {
+        return;
+    }
+
+    if let Some(node) = info
+        .dom_id
+        .and_then(|id| dom_refs.get(id as usize))
+        .and_then(Weak::upgrade)
+    {
+        let node_key = Rc::as_ptr(&node) as usize;
+        if let Some(dom_id) = js_dom_ids.get(&node_key).copied() {
+            let declarations = computed_style_declarations(layout, info);
+            if !declarations.is_empty() {
+                computed.insert(dom_id, declarations);
+            }
+        }
+    }
+
+    for (child_layout, child_info) in layout.children.iter().zip(&info.children) {
+        if let Some(child_layout) = child_layout.node() {
+            collect_js_computed_styles_inner(
+                child_layout,
+                child_info,
+                dom_refs,
+                js_dom_ids,
+                computed,
+            );
+        }
+    }
+}
+
+/// Computes the `name: value` pair set for one laid-out node, merging the
+/// layout-level (`ui_layout::Style`), appearance (`ContainerStyle`) and text
+/// style results of the cascade into CSS property strings.
+fn computed_style_declarations(layout: &LayoutNode, info: &InfoNode) -> Vec<(String, String)> {
+    let mut declarations: Vec<(String, String)> = Vec::new();
+
+    let layout_style = &layout.style;
+    declarations.push(("display".into(), css_display(layout_style.display)));
+    declarations.push(("position".into(), css_position(layout_style.position.kind)));
+    if let Some(box_model) = layout.layout_box.iter().next() {
+        declarations.push(("width".into(), css_px(box_model.content_box.width)));
+        declarations.push(("height".into(), css_px(box_model.content_box.height)));
+    }
+
+    match &info.kind {
+        NodeKind::Container { style, .. }
+        | NodeKind::Custom { style, .. }
+        | NodeKind::Svg { style, .. } => {
+            push_container_computed(&mut declarations, style);
+        }
+        _ => {}
+    }
+
+    // Text-rendering values live on text nodes and custom elements.
+    let text_style = match &info.kind {
+        NodeKind::Text {
+            style, flow_style, ..
+        } => Some((style, flow_style)),
+        NodeKind::Custom {
+            text_style,
+            text_flow_style,
+            ..
+        } => Some((text_style, text_flow_style)),
+        _ => None,
+    };
+    if let Some((text_style, flow_style)) = text_style {
+        push_text_computed(&mut declarations, text_style, flow_style);
+    }
+
+    // Overflow flags are the layout's scroll-ability record; they cannot
+    // distinguish `hidden` from `scroll`, so report boolean width.
+    let overflow_x = container_overflow(&info.kind, true);
+    let overflow_y = container_overflow(&info.kind, false);
+    declarations.push(("overflow-x".into(), overflow_x));
+    declarations.push(("overflow-y".into(), overflow_y));
+
+    declarations
+}
+
+fn container_overflow(info: &NodeKind, horizontal: bool) -> String {
+    let scrollable = match info {
+        NodeKind::Container {
+            scroll_x, scroll_y, ..
+        }
+        | NodeKind::Custom {
+            scroll_x, scroll_y, ..
+        }
+        | NodeKind::Svg {
+            scroll_x, scroll_y, ..
+        } => {
+            if horizontal {
+                *scroll_x
+            } else {
+                *scroll_y
+            }
+        }
+        _ => false,
+    };
+    if scrollable {
+        "auto".to_string()
+    } else {
+        "visible".to_string()
+    }
+}
+
+fn push_container_computed(declarations: &mut Vec<(String, String)>, style: &ContainerStyle) {
+    declarations.push(("opacity".into(), css_opacity(style.opacity)));
+    declarations.push(("visibility".into(), css_visibility(style.visibility)));
+    declarations.push((
+        "z-index".into(),
+        style
+            .z_index
+            .map(|z| z.to_string())
+            .unwrap_or_else(|| "auto".to_string()),
+    ));
+    declarations.push(("cursor".into(), css_cursor(style.cursor)));
+    declarations.push(("text-align".into(), css_text_align(style.text_align)));
+    match &style.background {
+        Background::Color(color) | Background::Image { color, .. } if color.3 > 0 => {
+            declarations.push(("background-color".into(), css_color(color)));
+        }
+        _ => {}
+    }
+}
+
+fn push_text_computed(
+    declarations: &mut Vec<(String, String)>,
+    style: &TextStyle,
+    flow_style: &TextFlowStyle,
+) {
+    declarations.push(("color".into(), css_color(&style.color)));
+    declarations.push(("font-size".into(), css_px(flow_style.font_size)));
+    declarations.push(("font-weight".into(), style.font_weight.0.to_string()));
+    declarations.push(("font-style".into(), css_font_style(style.font_style)));
+    declarations.push(("text-align".into(), css_text_align(flow_style.text_align)));
+    declarations.push((
+        "white-space".into(),
+        css_white_space(flow_style.white_space),
+    ));
+    if !style.font_families.is_empty() {
+        declarations.push(("font-family".into(), style.font_families.join(", ")));
+    }
+    let line_height = match flow_style.line_height {
+        crate::engine::layouter::types::LineHeight::Normal => "normal".to_string(),
+        crate::engine::layouter::types::LineHeight::Number(n) => n.to_string(),
+        crate::engine::layouter::types::LineHeight::Px(px) => css_px(px),
+    };
+    declarations.push(("line-height".into(), line_height));
+}
+
+fn css_display(display: Display) -> String {
+    match display {
+        Display::None => "none".to_string(),
+        Display::Contents => "contents".to_string(),
+        Display::OutsideInner { outer, inner } => match (outer, inner) {
+            (OuterDisplay::Block, InnerDisplay::Flex) => "flex".to_string(),
+            (OuterDisplay::Inline, InnerDisplay::Flex) => "inline-flex".to_string(),
+            (OuterDisplay::Block, InnerDisplay::Grid) => "grid".to_string(),
+            (OuterDisplay::Inline, InnerDisplay::Grid) => "inline-grid".to_string(),
+            (OuterDisplay::Block, InnerDisplay::FlowRoot) => "flow-root".to_string(),
+            (OuterDisplay::Inline, InnerDisplay::FlowRoot) => "inline-block".to_string(),
+            (_, InnerDisplay::Flow) => match outer {
+                OuterDisplay::Inline => "inline".to_string(),
+                OuterDisplay::Block => "block".to_string(),
+            },
+        },
+    }
+}
+
+fn css_position(position: Position) -> String {
+    match position {
+        Position::Static => "static".to_string(),
+        Position::Relative => "relative".to_string(),
+        Position::Absolute => "absolute".to_string(),
+        Position::Fixed => "fixed".to_string(),
+        Position::Sticky => "sticky".to_string(),
+    }
+}
+
+fn css_opacity(opacity: f32) -> String {
+    format!("{opacity}")
+}
+
+fn css_visibility(visibility: Visibility) -> String {
+    match visibility {
+        Visibility::Visible => "visible".to_string(),
+        Visibility::Hidden => "hidden".to_string(),
+        Visibility::Collapse => "collapse".to_string(),
+    }
+}
+
+fn css_cursor(cursor: CursorStyle) -> String {
+    match cursor {
+        CursorStyle::Auto => "auto".to_string(),
+        CursorStyle::Default => "default".to_string(),
+        CursorStyle::None => "none".to_string(),
+        CursorStyle::Pointer => "pointer".to_string(),
+        CursorStyle::Text => "text".to_string(),
+        CursorStyle::Move => "move".to_string(),
+        CursorStyle::NotAllowed => "not-allowed".to_string(),
+        CursorStyle::Wait => "wait".to_string(),
+        CursorStyle::Crosshair => "crosshair".to_string(),
+        CursorStyle::Grab => "grab".to_string(),
+        CursorStyle::Grabbing => "grabbing".to_string(),
+    }
+}
+
+fn css_text_align(align: TextAlign) -> String {
+    match align {
+        TextAlign::Left => "left".to_string(),
+        TextAlign::Center => "center".to_string(),
+        TextAlign::Right => "right".to_string(),
+    }
+}
+
+fn css_white_space(white_space: WhiteSpace) -> String {
+    match white_space {
+        WhiteSpace::Normal => "normal".to_string(),
+        WhiteSpace::Nowrap => "nowrap".to_string(),
+        WhiteSpace::Pre => "pre".to_string(),
+        WhiteSpace::PreWrap => "pre-wrap".to_string(),
+        WhiteSpace::PreLine => "pre-line".to_string(),
+        WhiteSpace::BreakSpaces => "break-spaces".to_string(),
+    }
+}
+
+fn css_font_style(font_style: FontStyle) -> String {
+    match font_style {
+        FontStyle::Normal => "normal".to_string(),
+        FontStyle::Italic => "italic".to_string(),
+        FontStyle::Oblique => "oblique".to_string(),
+    }
+}
+
+fn css_color(color: &Color) -> String {
+    if color.3 == 255 {
+        format!("#{:02x}{:02x}{:02x}", color.0, color.1, color.2)
+    } else {
+        format!("rgba({}, {}, {}, {})", color.0, color.1, color.2, color.3)
+    }
+}
+
+fn css_px(value: f32) -> String {
+    format!("{value}px")
+}
+
+/// Records the nonzero scroll offsets of every scrollable node in `info`,
+/// keyed by the node's DOM snapshot id.
+///
+/// The layout builder initializes each node's `scroll_offset` to 0, so a
+/// rebuild would otherwise drop the scroll position (e.g. after a window
+/// resize). `dom_id` stays stable across rebuilds while the DOM is unchanged,
+/// which makes it a reliable key for restoring state onto the new tree.
+fn capture_scroll_offsets(info: &InfoNode, offsets: &mut HashMap<NodeId, (f32, f32)>) {
+    let (x, y) = info.kind.scroll_offsets();
+    if (x != 0.0 || y != 0.0)
+        && let Some(dom_id) = info.dom_id
+    {
+        offsets.insert(dom_id, (x, y));
+    }
+    for child in &info.children {
+        capture_scroll_offsets(child, offsets);
+    }
+}
+
+/// Restores scroll offsets captured by [`capture_scroll_offsets`] onto a newly
+/// built tree.
+///
+/// Offsets are copied verbatim for every matching node regardless of its
+/// `scroll_x`/`scroll_y` flags: the flags describe whether an axis *can*
+/// scroll, not whether a scroll position was captured, so gating on them here
+/// would drop positions (e.g. the viewport/page scroll carried by the root).
+fn apply_scroll_offsets(info: &mut InfoNode, offsets: &HashMap<NodeId, (f32, f32)>) {
+    if let Some((x, y)) = info.dom_id.and_then(|id| offsets.get(&id)) {
+        match &mut info.kind {
+            NodeKind::Container {
+                scroll_offset_x,
+                scroll_offset_y,
+                ..
+            }
+            | NodeKind::Custom {
+                scroll_offset_x,
+                scroll_offset_y,
+                ..
+            } => {
+                *scroll_offset_x = *x;
+                *scroll_offset_y = *y;
+            }
+            _ => {}
+        }
+    }
+    for child in &mut info.children {
+        apply_scroll_offsets(child, offsets);
+    }
+}
+
+fn fragment_layout_is_ready(ready_version: Option<u64>, applied_version: u64) -> bool {
+    ready_version.is_some_and(|ready_version| applied_version >= ready_version)
+}
+
+fn find_fragment_target_dom_id(
+    dom_refs: &[Weak<RefCell<TreeNode<HtmlNodeType>>>],
+    fragment: &str,
+) -> Option<NodeId> {
+    dom_refs.iter().enumerate().find_map(|(index, node)| {
+        let node = node.upgrade()?;
+        (node.borrow().value.get_attr("id") == Some(fragment)).then_some(index as NodeId)
+    })
+}
+
+fn apply_fragment_scroll(
+    layout: &LayoutNode,
+    info: &mut InfoNode,
+    target: NodeId,
+    viewport_height: f32,
+) -> bool {
+    scroll_to_fragment_target(layout, info, target, viewport_height).is_some()
+}
+
+/// Scrolls the target element into view inside every scrollable ancestor on
+/// its path. Only containers that actually scroll (their `scroll_x`/`scroll_y`
+/// flags are set, e.g. a scrollable `body` or an `overflow: auto` box) move;
+/// the document root and other un-flagged boxes stay put, so the page is never
+/// force-scrolled as a whole.
+///
+/// Each container scrolls by only what its own view still needs, after the
+/// scroll applied by every scrollable container below it. The target therefore
+/// stays inside every ancestor's clip port instead of being scrolled out of
+/// view by the accumulated displacements.
+///
+/// Returns the target's border-box top in this node's content space after this
+/// node's and its descendants' scroll offsets are applied; `None` when the
+/// target is not part of this subtree.
+fn scroll_to_fragment_target(
+    layout: &LayoutNode,
+    info: &mut InfoNode,
+    target: NodeId,
+    viewport_height: f32,
+) -> Option<f32> {
+    let model = layout.layout_box.iter().next();
+    if info.dom_id == Some(target) {
+        return model.map(|model| model.border_box.y - model.content_box.y);
+    }
+
+    let mut found = None;
+    for (layout_child, info_child) in layout.children.iter().zip(&mut info.children) {
+        let LayoutChild::Node(layout_child) = layout_child else {
+            continue;
+        };
+        if let Some(child_pos) =
+            scroll_to_fragment_target(layout_child, info_child, target, viewport_height)
+        {
+            // `child_pos` is measured from the child's content origin; add the
+            // child's box offset to get the target's position in this node's
+            // content space, before this node scrolls.
+            let child_box = layout_child.layout_box.iter().next();
+            found = Some(child_box.map_or(0.0, |b| b.content_box.y) + child_pos);
+            break;
+        }
+    }
+    let mut target_y = found?;
+
+    // Only scrollable ancestors of the target may scroll; a sibling's scroll
+    // container and un-flagged boxes (including the root) must not move.
+    let scrollable = matches!(
+        &info.kind,
+        NodeKind::Container { scroll_y: true, .. } | NodeKind::Custom { scroll_y: true, .. }
+    );
+    if scrollable && let Some(model) = model {
+        let max_scroll =
+            (model.children_box.height - model.content_box.height.min(viewport_height)).max(0.0);
+        let offset = target_y.clamp(0.0, max_scroll);
+        match &mut info.kind {
+            NodeKind::Container {
+                scroll_offset_y, ..
+            }
+            | NodeKind::Custom {
+                scroll_offset_y, ..
+            } => {
+                *scroll_offset_y = offset;
+            }
+            _ => {}
+        }
+        target_y -= offset;
+    }
+
+    Some(target_y)
+}
+
+/// Scrolls the page back to the top (an empty fragment or `#top`).
+///
+/// Every scrollable container on the page resets (most commonly the `body`,
+/// where a real browser puts the viewport scroll); other boxes already sit at
+/// offset 0, so resetting them is a no-op.
+fn scroll_page_to_top(info: &mut InfoNode) -> bool {
+    fn reset_y(kind: &mut NodeKind) -> bool {
+        match kind {
+            NodeKind::Container {
+                scroll_offset_y, ..
+            }
+            | NodeKind::Custom {
+                scroll_offset_y, ..
+            } => {
+                *scroll_offset_y = 0.0;
+                true
+            }
+            _ => false,
+        }
+    }
+    let mut reset = reset_y(&mut info.kind);
+    for child in &mut info.children {
+        reset |= scroll_page_to_top(child);
+    }
+    reset
+}
+
+/// Returns whether `pending` still needs an element lookup to be resolved.
+///
+/// An empty fragment (or the legacy `#top` anchor with no matching element)
+/// scrolls straight back to the top; otherwise the decoded fragment is looked
+/// up among the live DOM ids and its element is scrolled into view.
+fn fragment_scroll_update(
+    layout: &LayoutNode,
+    info: &mut InfoNode,
+    dom_refs: &[Weak<RefCell<TreeNode<HtmlNodeType>>>],
+    pending: Option<&str>,
+    viewport_height: f32,
+) -> bool {
+    let Some(fragment) = pending else {
+        // No fragment was requested: leave the scroll position untouched.
+        return false;
+    };
+    if fragment.is_empty() {
+        return scroll_page_to_top(info);
+    }
+    let decoded = percent_decode_fragment(fragment);
+    let Some(target) = find_fragment_target_dom_id(dom_refs, &decoded) else {
+        return fragment.eq_ignore_ascii_case("top") && scroll_page_to_top(info);
+    };
+    apply_fragment_scroll(layout, info, target, viewport_height)
+}
+
+/// Percent-decodes a URL fragment before it is matched against element `id`
+/// attributes, so `#my%20id` finds `<div id="my id">`.
+fn percent_decode_fragment(fragment: &str) -> String {
+    let bytes = fragment.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (hex_value(bytes[i + 1]), hex_value(bytes[i + 2]))
+        {
+            out.push(hi * 16 + lo);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_value(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn collect_css_image_sources(css: &str) -> Vec<String> {
+    fn collect_value(value: &CssValue, sources: &mut Vec<String>) {
+        match value {
+            CssValue::Function(name, arguments) if name.eq_ignore_ascii_case("url") => {
+                if let Some(source) = arguments
+                    .iter()
+                    .flatten()
+                    .find_map(|argument| match argument {
+                        CssValue::String(source) => Some(source.clone()),
+                        CssValue::Keyword(source) => Some(source.to_string()),
+                        _ => None,
+                    })
+                    && !source.is_empty()
+                    && !sources.contains(&source)
+                {
+                    sources.push(source);
+                }
+            }
+            CssValue::Function(_, arguments) => {
+                for argument in arguments.iter().flatten() {
+                    collect_value(argument, sources);
+                }
+            }
+            CssValue::List(arguments) => {
+                for argument in arguments {
+                    collect_value(argument, sources);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn visit(node: &CssNode, sources: &mut Vec<String>) {
+        if let CssNodeType::Declaration { name, value } = node.node()
+            && matches!(
+                name.to_ascii_lowercase().as_str(),
+                "background" | "background-image"
+            )
+        {
+            collect_value(value, sources);
+        }
+        for child in node.children() {
+            visit(child, sources);
+        }
+    }
+
+    let stylesheet = CssParser::new(css).parse_lossy();
+    let mut sources = Vec::new();
+    visit(&stylesheet, &mut sources);
+    sources
+}
+
+/// Splits a stylesheet into the raw URLs of its top-level `@import` statements
+/// and the remaining rule text with those statements removed.
+///
+/// Only real top-level at-rules count: `@import` inside a rule block, comment
+/// or string is left untouched. The import statement itself (up to and
+/// including its terminating `;`) is stripped from the returned body so the
+/// flattening never re-processes it.
+fn split_css_imports(css: &str) -> (Vec<String>, String) {
+    let bytes = css.as_bytes();
+    let mut imports = Vec::new();
+    let mut removed: Vec<(usize, usize)> = Vec::new();
+    let mut i = 0usize;
+    let mut depth: i32 = 0;
+    let mut quote: Option<u8> = None;
+    let mut in_comment = false;
+    let mut escaped = false;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(q) = quote {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if in_comment {
+            if b == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                in_comment = false;
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        match b {
+            b'"' | b'\'' => {
+                quote = Some(b);
+                i += 1;
+            }
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'*' => {
+                in_comment = true;
+                i += 2;
+            }
+            b'{' => {
+                depth += 1;
+                i += 1;
+            }
+            b'}' => {
+                depth = (depth - 1).max(0);
+                i += 1;
+            }
+            b'@' if depth == 0 => {
+                let tail = &bytes[i..];
+                if tail.starts_with(b"@import")
+                    && (tail.len() == 7
+                        || !tail[7].is_ascii_alphanumeric() && tail[7] != b'_' && tail[7] != b'-')
+                {
+                    let (start, end) = import_statement_bounds(bytes, i);
+                    if let Some(raw) = css_import_url(&css[start..end]) {
+                        imports.push(raw);
+                        removed.push((start, end));
+                    }
+                    i = end;
+                    continue;
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+
+    let mut body = String::with_capacity(css.len());
+    let mut prev = 0;
+    for (start, end) in removed {
+        body.push_str(&css[prev..start]);
+        prev = end;
+    }
+    body.push_str(&css[prev..]);
+    (imports, body)
+}
+
+/// Returns `(start, end)` byte bounds of the `@import` statement beginning at
+/// `at`, including its terminating `;`.
+fn import_statement_bounds(bytes: &[u8], at: usize) -> (usize, usize) {
+    let mut j = at;
+    let mut quote: Option<u8> = None;
+    let mut escaped = false;
+    let mut parens: i32 = 0;
+    while j < bytes.len() {
+        let c = bytes[j];
+        if let Some(q) = quote {
+            if escaped {
+                escaped = false;
+            } else if c == b'\\' {
+                escaped = true;
+            } else if c == q {
+                quote = None;
+            }
+            j += 1;
+            continue;
+        }
+        match c {
+            b'"' | b'\'' => {
+                quote = Some(c);
+                j += 1;
+            }
+            b'(' => {
+                parens += 1;
+                j += 1;
+            }
+            b')' => {
+                parens = (parens - 1).max(0);
+                j += 1;
+            }
+            b';' if parens <= 0 => return (at, j + 1),
+            _ => j += 1,
+        }
+    }
+    (at, bytes.len())
+}
+
+/// Extracts the URL from an `@import` statement: either a string literal or a
+/// `url(...)` function, each optionally followed by a media query list.
+fn css_import_url(stmt: &str) -> Option<String> {
+    let rest = stmt.trim_start();
+    let rest = rest.strip_prefix("@import")?;
+    let rest = rest.trim_start();
+    let bytes = rest.as_bytes();
+    match bytes.first()? {
+        b'"' | b'\'' => {
+            let quote = bytes[0];
+            let mut out = String::new();
+            let mut i = 1;
+            let mut escaped = false;
+            while i < bytes.len() {
+                let c = bytes[i];
+                if escaped {
+                    out.push(c as char);
+                    escaped = false;
+                } else if c == b'\\' {
+                    escaped = true;
+                } else if c == quote {
+                    return Some(out);
+                } else {
+                    out.push(c as char);
+                }
+                i += 1;
+            }
+            None
+        }
+        _ => {
+            let paren = rest.find('(')?;
+            let func = rest[..paren].trim_end();
+            if !func.eq_ignore_ascii_case("url") {
+                return None;
+            }
+            let inner_start = paren + 1;
+            let mut i = inner_start;
+            let mut quote: Option<u8> = None;
+            let mut escaped = false;
+            while i < bytes.len() {
+                let c = bytes[i];
+                if let Some(q) = quote {
+                    if escaped {
+                        escaped = false;
+                    } else if c == b'\\' {
+                        escaped = true;
+                    } else if c == q {
+                        quote = None;
+                    }
+                } else {
+                    match c {
+                        b'"' | b'\'' => quote = Some(c),
+                        b')' => {
+                            let inner = rest[inner_start..i]
+                                .trim()
+                                .trim_matches(['"', '\''])
+                                .to_string();
+                            return Some(inner);
+                        }
+                        _ => {}
+                    }
+                }
+                i += 1;
+            }
+            None
+        }
+    }
+}
+
+fn parse_html(html: &str, document_url: Url, scripting_mode: ScriptingMode) -> ParsedDocument {
     // --- DOM パース ---
-    let mut parser = HtmlParser::new(html);
-    let dom = parser.parse();
+    let mut parser = HtmlParser::new(html).with_scripting_mode(scripting_mode);
+    let dom = Rc::new(parser.parse());
 
     // --- base_url ---
     let base_url = dom
@@ -316,7 +3055,9 @@ fn parse_html(html: &str, document_url: Url) -> ParsedDocument {
         };
 
         if let (Some(rel), Some(href)) = (rel, href)
-            && rel == "stylesheet"
+            && rel
+                .split_ascii_whitespace()
+                .any(|token| token.eq_ignore_ascii_case("stylesheet"))
         {
             let css_url = match resolve_url(&base_url, &href) {
                 Ok(url) => url,
@@ -329,6 +3070,53 @@ fn parse_html(html: &str, document_url: Url) -> ParsedDocument {
     // --- Inline styles ---
     let inline_styles = dom.collect_text_by_tag("style");
 
+    // --- Classic scripts ---
+    let scripts = dom
+        .collect_classic_script_descriptors()
+        .into_iter()
+        .filter_map(|script| match script.source {
+            ClassicScriptSource::Inline(source) => Some(ClassicScript::Inline(source)),
+            ClassicScriptSource::External(source) => {
+                resolve_url(&base_url, &source)
+                    .ok()
+                    .map(|url| ClassicScript::External {
+                        url,
+                        execution: script.execution,
+                    })
+            }
+        })
+        .collect();
+
+    let image_sources = dom
+        .get_elements_by_tag_name("img")
+        .into_iter()
+        .filter_map(|node| {
+            let source = node.borrow().value.get_attr("src")?.to_string();
+            let url = resolve_url(&base_url, &source).ok()?;
+            Some((source, url))
+        })
+        .collect();
+
+    let audio_sources = dom
+        .get_elements_by_tag_name("audio")
+        .into_iter()
+        .filter_map(|node| {
+            let source = {
+                let audio = node.borrow();
+                audio.value.get_attr("src").map(str::to_string).or_else(|| {
+                    audio.children().iter().find_map(|child| {
+                        let child = child.borrow();
+                        (child.value.tag_name() == Some("source"))
+                            .then(|| child.value.get_attr("src").map(str::to_string))
+                            .flatten()
+                    })
+                })
+            }?;
+            let url = resolve_url(&base_url, &source).ok()?;
+            Some((source, url))
+        })
+        .collect();
+
     ParsedDocument {
         document_url,
         base_url,
@@ -336,25 +3124,10 @@ fn parse_html(html: &str, document_url: Url) -> ParsedDocument {
         title,
         style_links,
         inline_styles,
+        image_sources,
+        audio_sources,
+        scripts,
     }
-}
-
-fn resolve_all_css(css_sources: &[String]) -> layouter::css_resolver::ResolvedStyles {
-    let mut resolved = layouter::css_resolver::ResolvedStyles::default();
-
-    for css in css_sources {
-        let sheet = match CssParser::new(css).parse() {
-            Ok(sheet) => sheet,
-            Err(err) => {
-                log::error!("Failed to parse CSS: {}", err);
-                continue;
-            }
-        };
-
-        resolved.extend(layouter::css_resolver::CssResolver::resolve(&sheet));
-    }
-
-    resolved
 }
 
 pub fn resolve_url(base_url: &Url, path: &str) -> Result<Url, url::ParseError> {
@@ -365,4 +3138,2112 @@ pub fn resolve_url(base_url: &Url, path: &str) -> Result<Url, url::ParseError> {
 
     // relative URL
     base_url.join(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::layouter::types::{ContainerRole, ContainerStyle};
+    use serde_json::{Value, json};
+    use std::time::{Duration, Instant};
+    use ui_layout::{Length, LengthOrAuto};
+
+    /// Drives `tick()` until `done` holds, or panics after a timeout.
+    ///
+    /// JS runs on a background thread, so effects (DOM commits, relayouts) are
+    /// observed a few ticks after the task that produced them was sent.
+    fn pump_until(webview: &mut WebView, mut done: impl FnMut(&mut WebView) -> bool, why: &str) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !done(webview) {
+            assert!(Instant::now() < deadline, "timed out waiting for {why}");
+            webview.tick();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    /// Drives `tick()` collecting tasks until `done` accepts one, then returns it.
+    fn pump_for_task(
+        webview: &mut WebView,
+        mut done: impl FnMut(&WebViewTask) -> bool,
+        why: &str,
+    ) -> WebViewTask {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let tasks = webview.tick();
+            if let Some(task) = tasks.into_iter().find(&mut done) {
+                return task;
+            }
+            assert!(Instant::now() < deadline, "timed out waiting for {why}");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn find_json_by_attribute<'a>(value: &'a Value, name: &str, wanted: &str) -> Option<&'a Value> {
+        if value
+            .get("attributes")
+            .and_then(Value::as_array)
+            .is_some_and(|attrs| {
+                attrs
+                    .iter()
+                    .any(|attr| attr[0] == *name && attr[1] == *wanted)
+            })
+        {
+            return Some(value);
+        }
+        value
+            .get("children")
+            .and_then(Value::as_array)
+            .and_then(|children| {
+                children
+                    .iter()
+                    .find_map(|child| find_json_by_attribute(child, name, wanted))
+            })
+    }
+
+    fn styles_webview() -> WebView {
+        let mut webview = WebView::default();
+        // The Init phase injects the user-agent stylesheet into resolved_styles.
+        webview.tick();
+        webview.on_html_fetched(
+            r#"<html><head><style>
+                    p { color: red; }
+                    .box { color: blue; }
+               </style></head>
+               <body><p id="t" class="box" style="margin-top: 7px">x</p></body></html>"#
+                .to_string(),
+            Url::parse("https://example.test/").unwrap(),
+        );
+        // Resolve the inline <style> block and rebuild snapshot + layout inputs.
+        webview.rebuild_styles_and_layout();
+        webview
+    }
+
+    fn box_model_webview() -> WebView {
+        let mut webview = WebView::default();
+        webview.tick();
+        webview.on_html_fetched(
+            r#"<html><head><style>
+                    #box {
+                        width: 100px;
+                        height: 50px;
+                        padding: 10px;
+                        border: 2px solid red;
+                        margin-top: 7px;
+                    }
+               </style></head>
+               <body><div id="box">x</div></body></html>"#
+                .to_string(),
+            Url::parse("https://example.test/box").unwrap(),
+        );
+        webview.rebuild_styles_and_layout();
+        // The heavy tree build runs on the background thread; wait for it.
+        pump_until(
+            &mut webview,
+            |webview| webview.layout_and_info.is_some(),
+            "the first background layout build",
+        );
+        webview
+    }
+
+    fn dom_id_for_attribute(webview: &mut WebView, name: &str, wanted: &str) -> u64 {
+        let document = webview.inspect("getDocument", "{}").expect("document");
+        find_json_by_attribute(&document, name, wanted).map_or_else(
+            || panic!("no element with {name}={wanted}"),
+            |node| node["id"].as_u64().unwrap(),
+        )
+    }
+
+    #[test]
+    fn box_model_reports_rings_from_laid_out_geometry() {
+        let mut webview = box_model_webview();
+        let dom_id = dom_id_for_attribute(&mut webview, "id", "box");
+        let params = format!(r#"{{"domId":{dom_id}}}"#);
+
+        let model = webview.inspect("getBoxModel", &params).expect("box model")["model"].clone();
+
+        // Declared margins come through as text, auto stays readable.
+        assert_eq!(model["margin"][0], "7");
+        assert_eq!(
+            model["padding"],
+            json!([10.0, 10.0, 10.0, 10.0]),
+            "padding ring derives from padding vs content boxes"
+        );
+        assert_eq!(model["border"], json!([2.0, 2.0, 2.0, 2.0]));
+        // Default box-sizing is content-box: content keeps the declared size.
+        assert_eq!(model["content"], json!([100.0, 50.0]));
+        assert_eq!(model["size"], json!([124.0, 74.0]));
+
+        let info = webview
+            .inspect("getLayoutInfo", &params)
+            .expect("layout info")["info"]
+            .clone();
+        assert_eq!(info["width"], "100");
+        assert_eq!(info["height"], "50");
+        assert_eq!(info["scroll"], json!([0.0, 0.0]));
+    }
+
+    #[test]
+    fn box_model_rejects_ids_outside_the_current_layout() {
+        let mut webview = box_model_webview();
+        let error = webview
+            .inspect("getBoxModel", r#"{"domId":99999}"#)
+            .expect_err("unknown id must fail");
+        assert!(error.contains("unknown domId"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn applied_layout_results_are_positioned_before_any_draw() {
+        // Regression: background layout results replaced the tree unpositioned
+        // (geometry was only computed during draws), so a click landing between
+        // an application and the next redraw hit-tested against boxes without
+        // geometry and found nothing.
+        let webview = box_model_webview();
+        let (layout, info) = webview.layout_and_info().expect("layout applied");
+
+        let path = crate::engine::input::hit_test(layout, info, 50.0, 25.0);
+        assert!(
+            crate::engine::input::hit_dom_id(&path).is_some(),
+            "boxes must carry geometry as soon as a background result lands"
+        );
+    }
+
+    #[test]
+    fn matched_rules_report_winners_overrides_and_inline_styles() {
+        let mut webview = styles_webview();
+
+        let document = webview.inspect("getDocument", "{}").expect("document");
+        let paragraph = find_json_by_attribute(&document, "id", "t").expect("<p id=t>");
+        let dom_id = paragraph["id"].as_u64().unwrap();
+
+        let rules = webview
+            .inspect("getMatchedRules", &format!(r#"{{"domId":{dom_id}}}"#))
+            .expect("matched rules");
+        let rules = rules["rules"].as_array().unwrap();
+
+        let inline = rules
+            .iter()
+            .find(|rule| rule["inline"] == Value::Bool(true))
+            .expect("inline entry");
+        assert_eq!(inline["selector"], "element.style");
+        assert_eq!(inline["declarations"][0]["name"], "margin-top");
+        assert_eq!(inline["declarations"][0]["value"], "7px");
+        assert_eq!(inline["declarations"][0]["applied"], true);
+
+        let class_rule = rules
+            .iter()
+            .find(|rule| rule["selector"] == ".box")
+            .expect(".box rule");
+        assert_eq!(class_rule["origin"], "author");
+        assert_eq!(class_rule["declarations"][0]["applied"], true);
+
+        // The user-agent sheet also styles `p`; pick the author rule and
+        // check its color declaration specifically.
+        let tag_rule = rules
+            .iter()
+            .find(|rule| rule["selector"] == "p" && rule["origin"] == "author")
+            .expect("author p rule");
+        let color = tag_rule["declarations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|declaration| declaration["name"] == "color")
+            .unwrap();
+        assert_eq!(color["applied"], false, ".box must override the p color");
+
+        // User-agent rules participate in the report too.
+        assert!(
+            rules.iter().any(|rule| rule["origin"] == "user-agent"),
+            "user-agent origin rules must be reported"
+        );
+    }
+
+    #[test]
+    fn computed_style_lists_winning_declarations_sorted_by_name() {
+        let mut webview = styles_webview();
+
+        let document = webview.inspect("getDocument", "{}").expect("document");
+        let paragraph = find_json_by_attribute(&document, "id", "t").expect("<p id=t>");
+        let dom_id = paragraph["id"].as_u64().unwrap();
+
+        let computed = webview
+            .inspect("getComputedStyle", &format!(r#"{{"domId":{dom_id}}}"#))
+            .expect("computed style");
+        let properties = computed["properties"].as_array().unwrap();
+
+        let names: Vec<&str> = properties
+            .iter()
+            .map(|property| property["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, {
+            let mut sorted = names.clone();
+            sorted.sort();
+            sorted
+        });
+
+        let winner = |name: &str| {
+            properties
+                .iter()
+                .find(|property| property["name"] == *name)
+                .map(|property| property["value"].as_str().unwrap().to_string())
+        };
+        assert_eq!(winner("color").as_deref(), Some("blue"));
+        assert_eq!(winner("margin-top").as_deref(), Some("7px"));
+    }
+
+    #[test]
+    fn collects_background_images_without_treating_fonts_as_page_images() {
+        let sources = collect_css_image_sources(
+            r#"
+            @font-face { src: url("/fonts/scratch.woff2"); }
+            .logo { background: white url('/images/logo.svg') no-repeat center; }
+            .hero { background-image: url("../images/hero.png"); }
+            "#,
+        );
+        assert_eq!(
+            sources,
+            vec![
+                "/images/logo.svg".to_string(),
+                "../images/hero.png".to_string()
+            ]
+        );
+    }
+
+    fn scrollable_info(dom_id: Option<NodeId>, scroll_y: bool, offset_y: f32) -> InfoNode {
+        InfoNode {
+            kind: NodeKind::Container {
+                scroll_x: false,
+                scroll_y,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: offset_y,
+                style: ContainerStyle::default(),
+                role: ContainerRole::Normal,
+            },
+            children: Vec::new(),
+            dom_id,
+        }
+    }
+
+    fn scroll_offsets(info: &InfoNode) -> (f32, f32) {
+        info.kind.scroll_offsets()
+    }
+
+    fn set_root_scroll_offset(info: &mut InfoNode, offset: f32) {
+        match &mut info.kind {
+            NodeKind::Container {
+                scroll_offset_y, ..
+            }
+            | NodeKind::Custom {
+                scroll_offset_y, ..
+            } => *scroll_offset_y = offset,
+            _ => panic!("expected a container root"),
+        }
+    }
+
+    fn root_scroll_offset(info: &InfoNode) -> Option<f32> {
+        match &info.kind {
+            NodeKind::Container {
+                scroll_offset_y, ..
+            }
+            | NodeKind::Custom {
+                scroll_offset_y, ..
+            } => Some(*scroll_offset_y),
+            _ => None,
+        }
+    }
+
+    fn find_scrollable_offset(info: &InfoNode) -> Option<f32> {
+        if let NodeKind::Container {
+            scroll_y: true,
+            scroll_offset_y,
+            ..
+        } = &info.kind
+        {
+            return Some(*scroll_offset_y);
+        }
+        info.children.iter().find_map(find_scrollable_offset)
+    }
+
+    /// Total vertical page scroll: the root plus every scrollable container on
+    /// the page (typically the `body`, which carries the page scroll).
+    fn page_scroll_total(info: &InfoNode) -> f32 {
+        fn sum_scrollable(info: &InfoNode, acc: &mut f32) {
+            if let NodeKind::Container {
+                scroll_y: true,
+                scroll_offset_y,
+                ..
+            }
+            | NodeKind::Custom {
+                scroll_y: true,
+                scroll_offset_y,
+                ..
+            } = &info.kind
+            {
+                *acc += *scroll_offset_y;
+            }
+            for child in &info.children {
+                sum_scrollable(child, acc);
+            }
+        }
+        let mut nested = 0.0;
+        sum_scrollable(info, &mut nested);
+        info.kind.scroll_offsets().1 + nested
+    }
+
+    fn set_first_scrollable_offset(info: &mut InfoNode, offset: f32) -> bool {
+        if let NodeKind::Container {
+            scroll_y: true,
+            scroll_offset_y,
+            ..
+        } = &mut info.kind
+        {
+            *scroll_offset_y = offset;
+            return true;
+        }
+        info.children
+            .iter_mut()
+            .any(|c| set_first_scrollable_offset(c, offset))
+    }
+
+    fn layout_box(y: f32, height: f32, children_height: f32) -> ui_layout::LayoutBox {
+        let rect = |y, height| ui_layout::Rect {
+            x: 0.0,
+            y,
+            width: 800.0,
+            height,
+        };
+        ui_layout::LayoutBox::BlockBox(ui_layout::BoxModel {
+            sticky_edges: None,
+            border_box: rect(y, height),
+            padding_box: rect(y, height),
+            content_box: rect(y, height),
+            children_box: rect(y, children_height),
+        })
+    }
+
+    #[test]
+    fn dom_layout_metrics_follow_box_geometry_and_scroll_offsets() {
+        let mut parser = HtmlParser::new(r#"<div id="target"></div>"#);
+        let dom = Rc::new(parser.parse());
+        let target = dom.get_element_by_id("target").unwrap();
+        let dom_refs = vec![Rc::downgrade(&target)];
+
+        let mut child = LayoutNode::new(ui_layout::Style::default());
+        child.layout_box = ui_layout::LayoutBox::BlockBox(ui_layout::BoxModel {
+            sticky_edges: None,
+            border_box: ui_layout::Rect {
+                x: 30.0,
+                y: 40.0,
+                width: 120.0,
+                height: 80.0,
+            },
+            padding_box: ui_layout::Rect {
+                x: 32.0,
+                y: 42.0,
+                width: 116.0,
+                height: 76.0,
+            },
+            content_box: ui_layout::Rect {
+                x: 36.0,
+                y: 46.0,
+                width: 108.0,
+                height: 68.0,
+            },
+            children_box: ui_layout::Rect::default(),
+        });
+        let mut root = LayoutNode::with_children(ui_layout::Style::default(), [child]);
+        root.layout_box = ui_layout::LayoutBox::BlockBox(ui_layout::BoxModel {
+            sticky_edges: None,
+            border_box: ui_layout::Rect {
+                width: 800.0,
+                height: 600.0,
+                ..Default::default()
+            },
+            padding_box: ui_layout::Rect {
+                width: 800.0,
+                height: 600.0,
+                ..Default::default()
+            },
+            content_box: ui_layout::Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 780.0,
+                height: 580.0,
+            },
+            children_box: ui_layout::Rect::default(),
+        });
+
+        let mut root_info = scrollable_info(None, true, 7.0);
+        if let NodeKind::Container {
+            scroll_offset_x, ..
+        } = &mut root_info.kind
+        {
+            *scroll_offset_x = 5.0;
+        }
+        root_info
+            .children
+            .push(scrollable_info(Some(0), false, 0.0));
+
+        let js_dom_ids = HashMap::from([(Rc::as_ptr(&target) as usize, 42)]);
+        let measurements =
+            collect_js_layout_metrics(&root, &root_info, &dom_refs, &js_dom_ids, (800.0, 600.0));
+        assert_eq!(
+            measurements.get(&42),
+            Some(&JsLayoutMetrics {
+                offset_left: 30.0,
+                offset_top: 40.0,
+                offset_width: 120.0,
+                offset_height: 80.0,
+                client_width: 116.0,
+                client_height: 76.0,
+                rect_left: 35.0,
+                rect_top: 53.0,
+                rect_width: 120.0,
+                rect_height: 80.0,
+            })
+        );
+    }
+
+    #[test]
+    fn dom_layout_metrics_apply_sticky_paint_offsets() {
+        let mut parser = HtmlParser::new(r#"<div id="target"></div>"#);
+        let dom = Rc::new(parser.parse());
+        let target = dom.get_element_by_id("target").unwrap();
+        let dom_refs = vec![Rc::downgrade(&target)];
+
+        // A `position: sticky; top: 10px` header whose natural position is 5px
+        // into a tall document. The renderer pushes it down to `top: 10px`
+        // relative to the root scrollport, so the DOM rect must show 10, not 5.
+        let sticky_edges = Some(ui_layout::EdgeOption {
+            top: Some(10.0),
+            ..Default::default()
+        });
+        let sticky_rect = |y| ui_layout::Rect {
+            x: 0.0,
+            y,
+            width: 60.0,
+            height: 40.0,
+        };
+        let mut sticky_layout = LayoutNode::new(ui_layout::Style {
+            position: ui_layout::PositionStyle {
+                kind: ui_layout::Position::Sticky,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        sticky_layout.layout_box = ui_layout::LayoutBox::BlockBox(ui_layout::BoxModel {
+            sticky_edges,
+            border_box: sticky_rect(5.0),
+            padding_box: sticky_rect(5.0),
+            content_box: sticky_rect(5.0),
+            children_box: sticky_rect(5.0),
+        });
+        let mut root_layout =
+            LayoutNode::with_children(ui_layout::Style::default(), [sticky_layout]);
+        root_layout.layout_box = layout_box(0.0, 3000.0, 3000.0);
+
+        let mut root_info = scrollable_info(None, true, 0.0);
+        root_info
+            .children
+            .push(scrollable_info(Some(0), false, 0.0));
+
+        let js_dom_ids = HashMap::from([(Rc::as_ptr(&target) as usize, 42)]);
+        let measurements = collect_js_layout_metrics(
+            &root_layout,
+            &root_info,
+            &dom_refs,
+            &js_dom_ids,
+            (800.0, 600.0),
+        );
+        assert_eq!(
+            measurements.get(&42),
+            Some(&JsLayoutMetrics {
+                offset_left: 0.0,
+                offset_top: 5.0,
+                offset_width: 60.0,
+                offset_height: 40.0,
+                client_width: 60.0,
+                client_height: 40.0,
+                rect_left: 0.0,
+                rect_top: 10.0,
+                rect_width: 60.0,
+                rect_height: 40.0,
+            })
+        );
+    }
+
+    #[test]
+    fn fragment_waits_for_the_styled_layout_generation() {
+        assert!(!fragment_layout_is_ready(None, 5));
+        assert!(!fragment_layout_is_ready(Some(5), 4));
+        assert!(fragment_layout_is_ready(Some(5), 5));
+        assert!(fragment_layout_is_ready(Some(5), 6));
+    }
+
+    #[test]
+    fn fragment_target_scrolls_the_page_to_its_border_box() {
+        let mut target_layout = LayoutNode::new(ui_layout::Style::default());
+        target_layout.layout_box = layout_box(900.0, 100.0, 100.0);
+        let mut root_layout =
+            LayoutNode::with_children(ui_layout::Style::default(), [target_layout]);
+        root_layout.layout_box = layout_box(0.0, 600.0, 2000.0);
+
+        let mut root_info = scrollable_info(Some(1), true, 0.0);
+        root_info
+            .children
+            .push(scrollable_info(Some(7), false, 0.0));
+
+        assert!(apply_fragment_scroll(
+            &root_layout,
+            &mut root_info,
+            7,
+            600.0
+        ));
+        assert_eq!(root_scroll_offset(&root_info), Some(900.0));
+    }
+
+    #[test]
+    fn fragment_scroll_scrolls_each_container_only_for_its_own_view() {
+        // The layout mirrors a real page: an un-flagged document root (the
+        // `html` box) containing a scrollable wrapper (the `body`) that fills
+        // it, with a nested scroll box near the top of the page holding the
+        // target. Scrolling an ancestor by the target's *unscrolled* position
+        // (900) would carry the target past its inner clip port; each container
+        // must only scroll by what is still needed after its descendants
+        // scrolled, and un-flagged boxes must not move at all.
+        let mut target_layout = LayoutNode::new(ui_layout::Style::default());
+        target_layout.layout_box = layout_box(800.0, 100.0, 100.0);
+        let mut inner_layout =
+            LayoutNode::with_children(ui_layout::Style::default(), [target_layout]);
+        inner_layout.layout_box = layout_box(100.0, 300.0, 1000.0);
+        let mut outer_layout =
+            LayoutNode::with_children(ui_layout::Style::default(), [inner_layout]);
+        outer_layout.layout_box = layout_box(0.0, 600.0, 3000.0);
+        let mut sibling_layout = LayoutNode::new(ui_layout::Style::default());
+        sibling_layout.layout_box = layout_box(0.0, 300.0, 300.0);
+        let mut root_layout =
+            LayoutNode::with_children(ui_layout::Style::default(), [outer_layout, sibling_layout]);
+        root_layout.layout_box = layout_box(0.0, 600.0, 3000.0);
+
+        let target_info = scrollable_info(Some(7), false, 0.0);
+        let sibling_info = scrollable_info(Some(8), true, 0.0);
+        let mut inner_info = scrollable_info(Some(2), true, 0.0);
+        inner_info.children.push(target_info);
+        let mut outer_info = scrollable_info(Some(3), true, 0.0);
+        outer_info.children.push(inner_info);
+        let mut root_info = scrollable_info(Some(1), false, 0.0);
+        root_info.children.push(outer_info);
+        root_info.children.push(sibling_info);
+
+        assert!(apply_fragment_scroll(
+            &root_layout,
+            &mut root_info,
+            7,
+            600.0
+        ));
+
+        let offset = |node: &InfoNode| {
+            let NodeKind::Container {
+                scroll_offset_y, ..
+            } = &node.kind
+            else {
+                panic!("expected a container");
+            };
+            *scroll_offset_y
+        };
+        // The inner scroll box reveals its own content (700, its max) and the
+        // body-like wrapper pans by only the remaining 200 so the target reaches
+        // its top; the un-flagged root stays put.
+        assert_eq!(offset(&root_info.children[0].children[0]), 700.0);
+        assert_eq!(offset(&root_info.children[0]), 200.0);
+        assert!(offset(&root_info).abs() < f32::EPSILON);
+        // A sibling scroll container is not on the target's path: untouched.
+        assert_eq!(offset(&root_info.children[1]), 0.0);
+    }
+
+    #[test]
+    fn percent_encoded_fragment_is_decoded_for_id_lookup() {
+        assert_eq!(percent_decode_fragment("my%20target"), "my target");
+        assert_eq!(percent_decode_fragment("plain"), "plain");
+        assert_eq!(percent_decode_fragment("%E3%81%82"), "あ");
+        assert_eq!(percent_decode_fragment("100%"), "100%");
+        assert_eq!(percent_decode_fragment("a%2Fb"), "a/b");
+    }
+
+    #[test]
+    fn loaded_document_scrolls_plain_page_to_its_url_fragment() {
+        // A long page without overflow rules: the unflagged `html` root stays
+        // put and the `body` (scrolled natively) carries the page scroll, so
+        // fragment navigation must scroll that flagged container.
+        let html = r#"<html><body><div style="height: 2000px;"></div><div id="deep">deep</div></body></html>"#;
+        let mut wv = WebView::new(ColorScheme::Light, JsPolicy::default());
+        wv.tick();
+        wv.on_html_fetched(
+            html.to_string(),
+            Url::parse("https://example.test/page#deep").unwrap(),
+        );
+        for _ in 0..500 {
+            wv.tick();
+            if !wv.layout_pending && wv.layout_and_info().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+
+        wv.relayout((800.0, 600.0));
+
+        let (_, info) = wv.layout_and_info().expect("layout not ready");
+        let y = page_scroll_total(info);
+        assert!(
+            y > 1000.0,
+            "expected a deep scroll near the target, got {y}"
+        );
+    }
+
+    #[test]
+    fn percent_encoded_fragment_reaches_the_decoded_element() {
+        let html = r#"<html><body><div style="height: 2000px;"></div><div id="my target">t</div></body></html>"#;
+        let mut wv = WebView::new(ColorScheme::Light, JsPolicy::default());
+        wv.tick();
+        wv.on_html_fetched(
+            html.to_string(),
+            Url::parse("https://example.test/page#my%20target").unwrap(),
+        );
+        for _ in 0..500 {
+            wv.tick();
+            if !wv.layout_pending && wv.layout_and_info().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+
+        wv.relayout((800.0, 600.0));
+
+        let (_, info) = wv.layout_and_info().expect("layout not ready");
+        let y = page_scroll_total(info);
+        assert!(
+            y > 1000.0,
+            "expected a deep scroll near the target, got {y}"
+        );
+    }
+
+    #[test]
+    fn scroll_to_fragment_scrolls_existing_document_without_reload() {
+        let html = r#"<html><body><div style="height: 2000px;"></div><div id="another">a</div></body></html>"#;
+        let mut wv = WebView::new(ColorScheme::Light, JsPolicy::default());
+        wv.tick();
+        wv.on_html_fetched(
+            html.to_string(),
+            Url::parse("https://example.test/page").unwrap(),
+        );
+        for _ in 0..500 {
+            wv.tick();
+            if !wv.layout_pending && wv.layout_and_info().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        wv.relayout((800.0, 600.0));
+        assert_eq!(
+            root_scroll_offset(wv.layout_and_info().unwrap().1),
+            Some(0.0)
+        );
+
+        // Same-document anchor navigation: no new load, just a scroll.
+        wv.scroll_to_fragment(&Url::parse("https://example.test/page#another").unwrap());
+        wv.relayout((800.0, 600.0));
+
+        let (_, info) = wv.layout_and_info().expect("layout");
+        let y = page_scroll_total(info);
+        assert!(y > 1000.0, "expected a deep scroll, got {y}");
+        assert_eq!(
+            wv.document_url().map(Url::as_str),
+            Some("https://example.test/page#another")
+        );
+    }
+
+    #[test]
+    fn scroll_to_empty_fragment_returns_to_the_top() {
+        let html = r#"<html><body><div style="height: 2000px;"></div><div id="deep">deep</div></body></html>"#;
+        let mut wv = WebView::new(ColorScheme::Light, JsPolicy::default());
+        wv.tick();
+        wv.on_html_fetched(
+            html.to_string(),
+            Url::parse("https://example.test/page#deep").unwrap(),
+        );
+        for _ in 0..500 {
+            wv.tick();
+            if !wv.layout_pending && wv.layout_and_info().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        wv.relayout((800.0, 600.0));
+        assert!(page_scroll_total(wv.layout_and_info().unwrap().1) > 1000.0);
+
+        // `url#` scrolls back to the top of the same document.
+        wv.scroll_to_fragment(&Url::parse("https://example.test/page").unwrap());
+        wv.relayout((800.0, 600.0));
+
+        assert_eq!(page_scroll_total(wv.layout_and_info().unwrap().1), 0.0);
+    }
+
+    #[test]
+    fn resize_preserves_scroll_offset() {
+        // A scroll container needs a constrained height so its content_box
+        // stays smaller than children_box (auto-height boxes stretch to their
+        // content in this engine and are never scrollable).
+        let html = r#"<html><body><div style="height: 300px; overflow-y: auto;"><div style="height: 3000px;"></div></div></body></html>"#;
+        let mut wv = WebView::new(ColorScheme::Light, JsPolicy::default());
+        wv.tick();
+        wv.on_html_fetched(
+            html.to_string(),
+            Url::parse("https://example.test/").unwrap(),
+        );
+
+        for _ in 0..500 {
+            wv.tick();
+            if !wv.layout_pending && wv.layout_and_info().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        {
+            let (_, info) = wv.layout_and_info_mut().expect("layout not ready");
+            assert!(
+                set_first_scrollable_offset(info, 500.0),
+                "expected a scrollable container"
+            );
+        }
+
+        wv.relayout((1000.0, 700.0));
+
+        for _ in 0..500 {
+            wv.tick();
+            if !wv.layout_pending {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+
+        let (_, info) = wv.layout_and_info().expect("layout not ready after resize");
+        assert_eq!(find_scrollable_offset(info), Some(500.0));
+    }
+
+    #[test]
+    fn resize_preserves_page_scroll_on_root() {
+        // A plain page without overflow rules: the wheel handler stores the
+        // page scroll on the root InfoNode, which has no scroll flags set.
+        let html = r#"<html><body><div style="height: 3000px;"></div></body></html>"#;
+        let mut wv = WebView::new(ColorScheme::Light, JsPolicy::default());
+        wv.tick();
+        wv.on_html_fetched(
+            html.to_string(),
+            Url::parse("https://example.test/").unwrap(),
+        );
+
+        for _ in 0..500 {
+            wv.tick();
+            if !wv.layout_pending && wv.layout_and_info().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        {
+            let (_, info) = wv.layout_and_info_mut().expect("layout not ready");
+            set_root_scroll_offset(info, 500.0);
+        }
+
+        wv.relayout((1000.0, 700.0));
+
+        for _ in 0..500 {
+            wv.tick();
+            if !wv.layout_pending {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+
+        let (_, info) = wv.layout_and_info().expect("layout not ready after resize");
+        assert_eq!(root_scroll_offset(info), Some(500.0));
+    }
+
+    #[test]
+    fn captures_and_restores_scroll_offsets_across_rebuild() {
+        // Old tree: parent scrolled to 100, child to 50.
+        let mut old_info = scrollable_info(Some(1), true, 100.0);
+        old_info.children.push(scrollable_info(Some(2), true, 50.0));
+
+        let mut offsets = HashMap::new();
+        capture_scroll_offsets(&old_info, &mut offsets);
+        assert_eq!(
+            offsets,
+            HashMap::from([(1u32, (0.0, 100.0)), (2u32, (0.0, 50.0))])
+        );
+
+        // New tree: same DOM, offsets reset to 0 by the builder.
+        let mut new_info = scrollable_info(Some(1), true, 0.0);
+        new_info.children.push(scrollable_info(Some(2), true, 0.0));
+
+        apply_scroll_offsets(&mut new_info, &offsets);
+
+        assert_eq!(scroll_offsets(&new_info), (0.0, 100.0));
+        assert_eq!(scroll_offsets(&new_info.children[0]), (0.0, 50.0));
+    }
+
+    #[test]
+    fn offsets_are_restored_verbatim_even_on_non_scrollable_axes() {
+        // Old tree: the x axis was scrollable and scrolled to 50.
+        let old_info = InfoNode {
+            kind: NodeKind::Container {
+                scroll_x: true,
+                scroll_y: false,
+                scroll_offset_x: 50.0,
+                scroll_offset_y: 0.0,
+                style: ContainerStyle::default(),
+                role: ContainerRole::Normal,
+            },
+            children: Vec::new(),
+            dom_id: Some(3),
+        };
+
+        let mut offsets = HashMap::new();
+        capture_scroll_offsets(&old_info, &mut offsets);
+        assert_eq!(offsets, HashMap::from([(3u32, (50.0, 0.0))]));
+
+        // New tree: the x axis no longer scrolls. apply restores the captured
+        // position verbatim; range enforcement is clamp's job, so the flag
+        // change alone must not drop the offset.
+        let mut new_info = InfoNode {
+            kind: NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: ContainerStyle::default(),
+                role: ContainerRole::Normal,
+            },
+            children: Vec::new(),
+            dom_id: Some(3),
+        };
+
+        apply_scroll_offsets(&mut new_info, &offsets);
+
+        assert_eq!(scroll_offsets(&new_info), (50.0, 0.0));
+    }
+
+    #[test]
+    fn inline_styles_recover_after_an_unsupported_rule() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"<style>@media { @broken } .valid { color: green; }</style><div class="valid">ok</div>"#
+                .to_string(),
+            Url::parse("https://example.test/").unwrap(),
+        );
+
+        assert!(webview.resolved_styles.iter().any(|declaration| {
+            declaration.name == "color"
+                && declaration
+                    .selector
+                    .parts
+                    .iter()
+                    .any(|part| part.selector.classes.iter().any(|class| class == "valid"))
+        }));
+    }
+
+    #[test]
+    fn javascript_inserted_style_elements_are_resolved() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"<html><body><div class="dynamic">ok</div></body></html>"#.to_string(),
+            Url::parse("https://example.test/").unwrap(),
+        );
+        webview.send_script(
+            r#"
+            const style = document.createElement("style");
+            style.textContent = ".dynamic { color: red; }";
+            document.documentElement.appendChild(style);
+            "#,
+        );
+
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.resolved_styles.iter().any(|declaration| {
+                    declaration.name == "color"
+                        && declaration.selector.parts.iter().any(|part| {
+                            part.selector.classes.iter().any(|class| class == "dynamic")
+                        })
+                })
+            },
+            "JS-inserted style element to be resolved",
+        );
+    }
+
+    /// Concatenates every text node under an info subtree.
+    fn collect_text(info: &InfoNode) -> String {
+        let mut text = match &info.kind {
+            NodeKind::Text { text, .. } => text.clone(),
+            _ => String::new(),
+        };
+        for child in &info.children {
+            text.push_str(&collect_text(child));
+        }
+        text
+    }
+
+    /// Whether any box in the layout is sized 300×150 — the content-box size
+    /// the builder gives an `<iframe>` by default (the border box is larger
+    /// because the UA stylesheet adds a 2px border).
+    fn has_300x150_box(node: &LayoutNode) -> bool {
+        let sized = matches!(node.style.size.width, LengthOrAuto::Length(Length::Px(w)) if (w - 300.0).abs() < 0.001)
+            && matches!(node.style.size.height, LengthOrAuto::Length(Length::Px(h)) if (h - 150.0).abs() < 0.001);
+        sized
+            || node
+                .children
+                .iter()
+                .filter_map(LayoutChild::node)
+                .any(has_300x150_box)
+    }
+
+    /// Whether some dual-axis scroll container (the `<iframe>` box, or the
+    /// nested `<html>` document root grafted into it) holds only the given
+    /// nested text and none of the host page's text.
+    fn iframe_holds_grafted_content(info: &InfoNode) -> bool {
+        if matches!(
+            info.kind,
+            NodeKind::Container {
+                scroll_x: true,
+                scroll_y: true,
+                ..
+            }
+        ) {
+            let text = collect_text(info);
+            if text.contains("grafted inner paragraph") && !text.contains("host paragraph") {
+                return true;
+            }
+        }
+        info.children.iter().any(iframe_holds_grafted_content)
+    }
+
+    /// Runs the committed layout through draw-command generation and returns
+    /// the whitespace-stripped text payload of every `DrawText` command — i.e.
+    /// the text that would actually be rasterized on screen.
+    fn paint_text(webview: &WebView) -> String {
+        let Some((layout, info)) = webview.layout_and_info() else {
+            return String::new();
+        };
+        let mut commands = Vec::new();
+        crate::engine::renderer_model::generate_draw_commands(
+            &mut commands,
+            layout,
+            info,
+            (800.0, 600.0),
+        );
+        let mut text = String::new();
+        for command in &commands {
+            if let crate::engine::renderer_model::DrawCommand::DrawText { text: run, .. } = command
+            {
+                text.push_str(run);
+            }
+        }
+        text.chars().filter(|c| !c.is_whitespace()).collect()
+    }
+
+    #[test]
+    fn iframe_content_documents_are_fetched_grafted_and_laid_out() {
+        let mut webview = WebView::default();
+        webview.tick();
+        webview.on_html_fetched(
+            r#"<html><body><p>host paragraph</p></body></html>"#.to_string(),
+            Url::parse("https://example.test/inside-host.html").unwrap(),
+        );
+        // Create the iframe from JS so the src attribute is set on a live node
+        // (the same path the acid3 harness exercises).
+        webview.send_script(
+            r#"
+            const frame = document.createElement("iframe");
+            document.body.appendChild(frame);
+            frame.src = "https://example.test/inside.html";
+            "#,
+        );
+
+        // The JS thread reports the iframe's src as a fetch request.
+        let task = pump_for_task(
+            &mut webview,
+            |task| {
+                matches!(
+                    task,
+                    WebViewTask::Fetch {
+                        kind: FetchKind::Iframe { .. },
+                        ..
+                    }
+                )
+            },
+            "iframe fetch request",
+        );
+        let (url, dom_id) = match task {
+            WebViewTask::Fetch {
+                url,
+                kind: FetchKind::Iframe { dom_id },
+            } => (url, dom_id),
+            _ => unreachable!("pump_for_task only returns matching tasks"),
+        };
+        assert_eq!(url.as_str(), "https://example.test/inside.html");
+
+        // The fetched HTML is parsed on the JS thread and installed as the
+        // iframe's content document; the committed result must carry it back so
+        // the browser can graft it under the host <iframe> node.
+        webview.on_iframe_fetched(
+            dom_id,
+            r#"<html><body><p>grafted inner paragraph</p></body></html>"#.to_string(),
+            url,
+        );
+
+        pump_until(
+            &mut webview,
+            |wv| {
+                let Some((layout, info)) = wv.layout_and_info() else {
+                    return false;
+                };
+                iframe_holds_grafted_content(info)
+                    && collect_text(info).contains("host paragraph")
+                    && has_300x150_box(layout)
+            },
+            "grafted iframe content to reach the layout",
+        );
+
+        // The nested content must be reachable by the paint pass, not just the
+        // layout tree.
+        let painted = paint_text(&webview);
+        assert!(
+            painted.contains("hostparagraph"),
+            "host page text must be painted"
+        );
+        assert!(
+            painted.contains("graftedinnerparagraph"),
+            "iframe content text must be painted"
+        );
+    }
+
+    #[test]
+    fn markup_declared_iframes_load_content_without_javascript() {
+        let mut webview = WebView::default();
+        webview.tick();
+        // A plain `<iframe src>` in the parsed HTML must load like any other
+        // subresource: real pages declare frames in markup, and nothing sets
+        // their `src` property from JavaScript.
+        webview.on_html_fetched(
+            r#"<html><body><p>host paragraph</p><iframe src="https://example.test/inside.html"></iframe></body></html>"#.to_string(),
+            Url::parse("https://example.test/inside-host.html").unwrap(),
+        );
+
+        let task = pump_for_task(
+            &mut webview,
+            |task| {
+                matches!(
+                    task,
+                    WebViewTask::Fetch {
+                        kind: FetchKind::Iframe { .. },
+                        ..
+                    }
+                )
+            },
+            "fetch request for a markup-declared iframe",
+        );
+        let (url, dom_id) = match task {
+            WebViewTask::Fetch {
+                url,
+                kind: FetchKind::Iframe { dom_id },
+            } => (url, dom_id),
+            _ => unreachable!("pump_for_task only returns matching tasks"),
+        };
+        assert_eq!(url.as_str(), "https://example.test/inside.html");
+
+        webview.on_iframe_fetched(
+            dom_id,
+            r#"<html><body><p>grafted inner paragraph</p></body></html>"#.to_string(),
+            url,
+        );
+        pump_until(
+            &mut webview,
+            |wv| {
+                let Some((layout, info)) = wv.layout_and_info() else {
+                    return false;
+                };
+                iframe_holds_grafted_content(info)
+                    && collect_text(info).contains("host paragraph")
+                    && has_300x150_box(layout)
+            },
+            "markup-declared iframe content to reach the layout",
+        );
+
+        let painted = paint_text(&webview);
+        assert!(
+            painted.contains("hostparagraph"),
+            "host page text must be painted"
+        );
+        assert!(
+            painted.contains("graftedinnerparagraph"),
+            "iframe content text must be painted"
+        );
+    }
+
+    #[test]
+    fn parse_html_resolves_image_sources_against_base_url() {
+        let parsed = parse_html(
+            r#"<base href="https://cdn.example/assets/"><img src="logo.png"><img>"#,
+            Url::parse("https://example.test/page/index.html").unwrap(),
+            ScriptingMode::Enabled,
+        );
+
+        assert_eq!(parsed.image_sources.len(), 1);
+        assert_eq!(parsed.image_sources[0].0, "logo.png");
+        assert_eq!(
+            parsed.image_sources[0].1.as_str(),
+            "https://cdn.example/assets/logo.png"
+        );
+    }
+
+    #[test]
+    fn parse_html_resolves_audio_and_child_source_urls() {
+        let parsed = parse_html(
+            r#"<base href="https://cdn.example/media/"><audio src="one.mp3"></audio><audio><source src="two.ogg"></audio>"#,
+            Url::parse("https://example.test/index.html").unwrap(),
+            ScriptingMode::Enabled,
+        );
+
+        assert_eq!(
+            parsed.audio_sources,
+            [
+                (
+                    "one.mp3".to_string(),
+                    Url::parse("https://cdn.example/media/one.mp3").unwrap()
+                ),
+                (
+                    "two.ogg".to_string(),
+                    Url::parse("https://cdn.example/media/two.ogg").unwrap()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_html_resolves_external_classic_scripts_in_document_order() {
+        let parsed = parse_html(
+            r#"<base href="https://cdn.example/js/"><script>let a = 1;</script><script src="one.js"></script><script src="/two.js"></script>"#,
+            Url::parse("https://example.test/page/index.html").unwrap(),
+            ScriptingMode::Enabled,
+        );
+
+        assert_eq!(
+            parsed.scripts,
+            [
+                ClassicScript::Inline("let a = 1;".to_string()),
+                ClassicScript::External {
+                    url: Url::parse("https://cdn.example/js/one.js").unwrap(),
+                    execution: ClassicScriptExecution::Default,
+                },
+                ClassicScript::External {
+                    url: Url::parse("https://cdn.example/two.js").unwrap(),
+                    execution: ClassicScriptExecution::Default,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn external_classic_scripts_fetch_and_execute_in_document_order() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"
+                <div id="result"></div>
+                <script>let order = "a";</script>
+                <script src="one.js"></script>
+                <script>order = order + "c";</script>
+                <script src="two.js"></script>
+            "#
+            .to_string(),
+            Url::parse("https://example.test/path/index.html").unwrap(),
+        );
+
+        assert!(webview.tick().is_empty());
+        let first_tasks = webview.tick();
+        assert_eq!(first_tasks.len(), 1);
+        match &first_tasks[0] {
+            WebViewTask::Fetch {
+                url,
+                kind: FetchKind::Script { index },
+            } => {
+                assert_eq!(*index, 1);
+                assert_eq!(url.as_str(), "https://example.test/path/one.js");
+            }
+            _ => panic!("expected first external classic script fetch"),
+        }
+
+        webview.on_script_fetched(1, r#"order = order + "b";"#.to_string());
+        let second_tasks = webview.tick();
+        assert_eq!(second_tasks.len(), 1);
+        match &second_tasks[0] {
+            WebViewTask::Fetch {
+                url,
+                kind: FetchKind::Script { index },
+            } => {
+                assert_eq!(*index, 3);
+                assert_eq!(url.as_str(), "https://example.test/path/two.js");
+            }
+            _ => panic!("expected second external classic script fetch"),
+        }
+
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-order"), None);
+
+        webview.on_script_fetched(
+            3,
+            r#"document.getElementById("result").setAttribute("data-order", order + "d");"#
+                .to_string(),
+        );
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.document_info()
+                    .unwrap()
+                    .dom
+                    .get_element_by_id("result")
+                    .is_some_and(|node| node.borrow().value.get_attr("data-order").is_some())
+            },
+            "final classic script result to be committed",
+        );
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-order"), Some("abcd"));
+        assert_eq!(webview.phase, PagePhase::ScriptApplied);
+    }
+
+    #[test]
+    fn failed_external_classic_script_does_not_block_later_scripts() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"
+                <div id="result"></div>
+                <script src="missing.js"></script>
+                <script>document.getElementById("result").setAttribute("data-ran", "yes");</script>
+            "#
+            .to_string(),
+            Url::parse("https://example.test/index.html").unwrap(),
+        );
+
+        assert!(webview.tick().is_empty());
+        let tasks = webview.tick();
+        assert!(matches!(
+            tasks.as_slice(),
+            [WebViewTask::Fetch {
+                kind: FetchKind::Script { index: 0 },
+                ..
+            }]
+        ));
+
+        webview.on_script_fetch_failed(0);
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.document_info()
+                    .unwrap()
+                    .dom
+                    .get_element_by_id("result")
+                    .is_some_and(|node| node.borrow().value.get_attr("data-ran").is_some())
+            },
+            "inline script after a failed external script",
+        );
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-ran"), Some("yes"));
+    }
+
+    #[test]
+    fn dom_content_loaded_fires_after_external_classic_scripts_finish() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"
+                <div id="result"></div>
+                <script>
+                    document.addEventListener("DOMContentLoaded", function () {
+                        const result = document.getElementById("result");
+                        result.setAttribute("data-ready", result.getAttribute("data-external"));
+                    });
+                </script>
+                <script src="setup.js"></script>
+            "#
+            .to_string(),
+            Url::parse("https://example.test/index.html").unwrap(),
+        );
+
+        assert!(webview.tick().is_empty());
+        let tasks = webview.tick();
+        assert!(matches!(
+            tasks.as_slice(),
+            [WebViewTask::Fetch {
+                kind: FetchKind::Script { index: 1 },
+                ..
+            }]
+        ));
+
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-ready"), None);
+
+        webview.on_script_fetched(
+            1,
+            r#"document.getElementById("result").setAttribute("data-external", "yes");"#
+                .to_string(),
+        );
+        assert_eq!(result.borrow().value.get_attr("data-ready"), None);
+
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.document_info()
+                    .unwrap()
+                    .dom
+                    .get_element_by_id("result")
+                    .is_some_and(|node| node.borrow().value.get_attr("data-ready").is_some())
+            },
+            "DOMContentLoaded listener to run",
+        );
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-ready"), Some("yes"));
+        assert_eq!(webview.phase, PagePhase::ScriptApplied);
+    }
+
+    #[test]
+    fn window_onload_fires_after_the_page_stabilizes() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"
+                <div id="result"></div>
+                <script>
+                    window.onload = function () {
+                        document.getElementById("result").setAttribute("data-loaded", "yes");
+                    };
+                </script>
+            "#
+            .to_string(),
+            Url::parse("https://example.test/index.html").unwrap(),
+        );
+
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.document_info()
+                    .unwrap()
+                    .dom
+                    .get_element_by_id("result")
+                    .is_some_and(|node| node.borrow().value.get_attr("data-loaded").is_some())
+            },
+            "window.onload to run",
+        );
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-loaded"), Some("yes"));
+        assert_eq!(webview.phase, PagePhase::ScriptApplied);
+    }
+
+    #[test]
+    fn deferred_scripts_fetch_in_parallel_and_execute_in_document_order() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"
+                <div id="result"></div>
+                <script>let order = "inline";</script>
+                <script defer src="first.js"></script>
+                <script defer src="second.js"></script>
+                <script>
+                    document.addEventListener("DOMContentLoaded", function () {
+                        document.getElementById("result").setAttribute("data-order", order);
+                    });
+                </script>
+            "#
+            .to_string(),
+            Url::parse("https://example.test/index.html").unwrap(),
+        );
+
+        assert!(webview.tick().is_empty());
+        let tasks = webview.tick();
+        assert_eq!(tasks.len(), 2);
+        assert!(matches!(
+            tasks[0],
+            WebViewTask::Fetch {
+                kind: FetchKind::Script { index: 1 },
+                ..
+            }
+        ));
+        assert!(matches!(
+            tasks[1],
+            WebViewTask::Fetch {
+                kind: FetchKind::Script { index: 2 },
+                ..
+            }
+        ));
+
+        webview.on_script_fetched(2, r#"order = order + " > second";"#.to_string());
+        assert!(webview.tick().is_empty());
+        assert_ne!(webview.phase, PagePhase::ScriptApplied);
+
+        webview.on_script_fetched(1, r#"order = order + " > first";"#.to_string());
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.document_info()
+                    .unwrap()
+                    .dom
+                    .get_element_by_id("result")
+                    .is_some_and(|node| node.borrow().value.get_attr("data-order").is_some())
+            },
+            "deferred scripts and DOMContentLoaded to run",
+        );
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-order"),
+            Some("inline > first > second")
+        );
+        assert_eq!(webview.phase, PagePhase::ScriptApplied);
+    }
+
+    #[test]
+    fn async_script_executes_on_arrival_without_blocking_dom_content_loaded() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"
+                <div id="result"></div>
+                <script async src="async.js"></script>
+                <script>
+                    document.addEventListener("DOMContentLoaded", function () {
+                        document.getElementById("result").setAttribute("data-ready", "yes");
+                    });
+                </script>
+            "#
+            .to_string(),
+            Url::parse("https://example.test/index.html").unwrap(),
+        );
+
+        assert!(webview.tick().is_empty());
+        let tasks = webview.tick();
+        assert!(matches!(
+            tasks.as_slice(),
+            [WebViewTask::Fetch {
+                kind: FetchKind::Script { index: 0 },
+                ..
+            }]
+        ));
+
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.document_info()
+                    .unwrap()
+                    .dom
+                    .get_element_by_id("result")
+                    .is_some_and(|node| node.borrow().value.get_attr("data-ready").is_some())
+            },
+            "DOMContentLoaded before the async script arrives",
+        );
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-ready"), Some("yes"));
+        assert_eq!(result.borrow().value.get_attr("data-async"), None);
+        assert_eq!(webview.phase, PagePhase::ScriptApplied);
+
+        webview.on_script_fetched(
+            0,
+            r#"document.getElementById("result").setAttribute("data-async", "yes");"#.to_string(),
+        );
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.document_info()
+                    .unwrap()
+                    .dom
+                    .get_element_by_id("result")
+                    .is_some_and(|node| node.borrow().value.get_attr("data-async").is_some())
+            },
+            "async script to run after DOMContentLoaded",
+        );
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-async"), Some("yes"));
+    }
+
+    #[test]
+    fn javascript_fetch_uses_document_url_and_resolves_response() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"
+                <div id="result"></div>
+                <script>
+                    fetch("../message.txt")
+                        .then(response => response.text())
+                        .then(text => {
+                            document.getElementById("result").setAttribute("data-text", text);
+                        });
+                </script>
+            "#
+            .to_string(),
+            Url::parse("https://example.test/path/index.html").unwrap(),
+        );
+
+        let fetch_task = pump_for_task(
+            &mut webview,
+            |task| {
+                matches!(
+                    task,
+                    WebViewTask::Fetch {
+                        kind: FetchKind::JavaScript { .. },
+                        ..
+                    }
+                )
+            },
+            "the page's fetch() to be dispatched",
+        );
+        let request_id = match fetch_task {
+            WebViewTask::Fetch {
+                url,
+                kind: FetchKind::JavaScript { request_id, .. },
+            } => {
+                assert_eq!(url.as_str(), "https://example.test/message.txt");
+                request_id
+            }
+            _ => unreachable!("guarded by pump_for_task"),
+        };
+
+        webview.on_js_fetch_succeeded(
+            request_id,
+            JsFetchResponse {
+                url: "https://example.test/message.txt".to_string(),
+                status: 200,
+                status_text: "OK".to_string(),
+                redirected: false,
+                body: b"hello from fetch".to_vec(),
+                headers: Vec::new(),
+            },
+        );
+
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.document_info()
+                    .unwrap()
+                    .dom
+                    .get_element_by_id("result")
+                    .is_some_and(|node| node.borrow().value.get_attr("data-text").is_some())
+            },
+            "the fetch response microtask to run",
+        );
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-text"),
+            Some("hello from fetch")
+        );
+    }
+
+    #[test]
+    fn failed_javascript_fetch_rejects_without_navigating() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"
+                <div id="result"></div>
+                <script>
+                    fetch("missing.txt").catch(error => {
+                        document.getElementById("result").setAttribute("data-error", error);
+                    });
+                </script>
+            "#
+            .to_string(),
+            Url::parse("https://example.test/index.html").unwrap(),
+        );
+
+        let fetch_task = pump_for_task(
+            &mut webview,
+            |task| {
+                matches!(
+                    task,
+                    WebViewTask::Fetch {
+                        kind: FetchKind::JavaScript { .. },
+                        ..
+                    }
+                )
+            },
+            "the page's fetch() to be dispatched",
+        );
+        let request_id = match fetch_task {
+            WebViewTask::Fetch {
+                kind: FetchKind::JavaScript { request_id, .. },
+                ..
+            } => request_id,
+            _ => unreachable!("guarded by pump_for_task"),
+        };
+
+        webview.on_js_fetch_failed(request_id, "network error".to_string());
+
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.document_info()
+                    .unwrap()
+                    .dom
+                    .get_element_by_id("result")
+                    .is_some_and(|node| node.borrow().value.get_attr("data-error").is_some())
+            },
+            "the fetch rejection to run",
+        );
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-error"),
+            Some("network error")
+        );
+        assert_eq!(
+            webview.document_info().unwrap().base_url.as_str(),
+            "https://example.test/index.html"
+        );
+    }
+
+    #[test]
+    fn document_origin_is_exposed_to_page_scripts() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"
+                <div id="result"></div>
+                <script>
+                    document.getElementById("result").setAttribute(
+                        "data-origin",
+                        location.origin + ":" + window.origin + ":" + document.origin
+                    );
+                </script>
+            "#
+            .to_string(),
+            Url::parse("https://example.test/path/index.html").unwrap(),
+        );
+
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.document_info()
+                    .unwrap()
+                    .dom
+                    .get_element_by_id("result")
+                    .is_some_and(|node| node.borrow().value.get_attr("data-origin").is_some())
+            },
+            "the origin-handling script to run",
+        );
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-origin"),
+            Some("https://example.test:https://example.test:https://example.test")
+        );
+    }
+
+    #[test]
+    fn internal_document_reports_null_origin() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r#"
+                <div id="result"></div>
+                <script>
+                    document.getElementById("result").setAttribute(
+                        "data-origin",
+                        location.origin + ":" + window.origin + ":" + document.origin
+                    );
+                </script>
+            "#
+            .to_string(),
+            Url::parse("resource:///devtools/index.html").unwrap(),
+        );
+
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.document_info()
+                    .unwrap()
+                    .dom
+                    .get_element_by_id("result")
+                    .is_some_and(|node| node.borrow().value.get_attr("data-origin").is_some())
+            },
+            "the origin-handling script to run",
+        );
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-origin"),
+            Some("null:null:null")
+        );
+    }
+
+    #[test]
+    fn zero_delay_timer_runs_from_webview_tick_and_updates_dom() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r##"
+                <div id="result"></div>
+                <script>
+                    setTimeout(function () {
+                        document.querySelector("#result").setAttribute("data-timer", "ran");
+                    }, 0);
+                </script>
+            "##
+            .to_string(),
+            Url::parse("https://example.test/index.html").unwrap(),
+        );
+
+        assert!(webview.tick().is_empty());
+        assert!(webview.tick().is_empty());
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.document_info()
+                    .unwrap()
+                    .dom
+                    .get_element_by_id("result")
+                    .is_some_and(|node| node.borrow().value.get_attr("data-timer").is_some())
+            },
+            "the zero-delay timer callback to run",
+        );
+        let result = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("result")
+            .unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-timer"), Some("ran"));
+        assert!(webview.needs_redraw());
+    }
+
+    #[test]
+    fn devtools_request_round_trips_through_inspection_and_back() {
+        let mut webview = WebView::default();
+        webview.on_html_fetched(
+            r##"
+                <div id="probe"></div>
+                <script>
+                    __orinium_devtools("getVersion").then(function (json) {
+                        const envelope = JSON.parse(json);
+                        document.getElementById("probe")
+                            .setAttribute("data-ok", envelope.ok ? "yes" : "no");
+                    });
+                </script>
+            "##
+            .to_string(),
+            Url::parse("https://example.test/index.html").unwrap(),
+        );
+
+        let task = pump_for_task(
+            &mut webview,
+            |task| matches!(task, WebViewTask::DevToolsRequest { .. }),
+            "the page's DevTools inspection request",
+        );
+        let WebViewTask::DevToolsRequest { id, method, params } = task else {
+            unreachable!("pump_for_task matched this variant");
+        };
+        assert_eq!(method, "getVersion");
+        assert_eq!(params, "{}");
+
+        let data = webview
+            .inspect(&method, &params)
+            .expect("inspection answer");
+        webview.on_devtools_response(
+            id,
+            serde_json::json!({ "ok": true, "data": data }).to_string(),
+        );
+
+        pump_until(
+            &mut webview,
+            |wv| {
+                wv.document_info()
+                    .unwrap()
+                    .dom
+                    .get_element_by_id("probe")
+                    .is_some_and(|node| node.borrow().value.get_attr("data-ok").is_some())
+            },
+            "the resolved promise callback to mark the probe element",
+        );
+        let probe = webview
+            .document_info()
+            .unwrap()
+            .dom
+            .get_element_by_id("probe")
+            .unwrap();
+        assert_eq!(probe.borrow().value.get_attr("data-ok"), Some("yes"));
+    }
+
+    #[test]
+    fn split_css_imports_extracts_top_level_imports_only() {
+        let css = r#"
+            /* keep comments: @import not allowed inside */
+            @import url("a.css") screen;
+            @import "sub/b.css";
+            @media print {
+                @import "nested.css";
+                .x { content: "@import 'not-real.sass'";  }
+            }
+            .rule { background: url("img.png"); }
+            body { color: red; }
+            @import url(c.css);
+        "#;
+
+        let (imports, body) = split_css_imports(css);
+        assert_eq!(imports, vec!["a.css", "sub/b.css", "c.css"]);
+
+        // The statements (with their terminating `;`) are stripped from the body,
+        // while nested and string occurrences are preserved.
+        assert!(!body.contains("@import url(\"a.css\")"));
+        assert!(!body.contains("@import \"sub/b.css\""));
+        assert!(!body.contains("@import url(c.css)"));
+        // Nested and string occurrences are preserved.
+        assert!(body.contains("@import \"nested.css\""));
+        assert!(body.contains("@import 'not-real.sass'"));
+        assert!(body.contains("background: url(\"img.png\");"));
+        assert!(body.contains("body { color: red; }"));
+    }
+
+    #[test]
+    fn css_import_url_recognizes_url_and_string_forms() {
+        assert_eq!(
+            css_import_url("@import url(\"fonts/webfont.woff2\") screen;").as_deref(),
+            Some("fonts/webfont.woff2")
+        );
+        assert_eq!(
+            css_import_url("@import 'style.css';").as_deref(),
+            Some("style.css")
+        );
+        assert_eq!(
+            css_import_url("@import url(plain.css);").as_deref(),
+            Some("plain.css")
+        );
+        assert_eq!(css_import_url("@import;"), None);
+        assert_eq!(css_import_url("@import url();").as_deref(), Some(""));
+    }
+
+    #[test]
+    fn split_css_imports_ignores_pseudo_import_keywords() {
+        let css = "@importurl('x.css'); .foo { color: @import-thing; } @import url(y.css);";
+        let (imports, body) = split_css_imports(css);
+        assert_eq!(imports, vec!["y.css"]);
+        assert!(body.contains("@importurl('x.css')"));
+        assert!(body.contains("@import-thing"));
+    }
+
+    #[test]
+    fn stylesheet_import_deferred_until_import_applies_and_resolves_relative() {
+        let mut wv = WebView::new(
+            crate::engine::layouter::types::ColorScheme::Light,
+            JsPolicy::Disabled,
+        );
+        let sheet_url = Url::parse("https://example.test/css/main.css").unwrap();
+
+        wv.on_css_fetched_from(
+            "@import url(\"../sub/base.css\");body { color: red; }".to_string(),
+            &sheet_url,
+        );
+        // Nothing applied yet: the import is still outstanding.
+        assert!(wv.linked_css.is_empty());
+
+        let task = pump_for_task(
+            &mut wv,
+            |task| {
+                matches!(
+                    task,
+                    WebViewTask::Fetch {
+                        url,
+                        kind: FetchKind::CssImport { target },
+                    } if url.as_str() == "https://example.test/sub/base.css"
+                        && target == url
+                )
+            },
+            "the @import to be scheduled",
+        );
+        let WebViewTask::Fetch {
+            url: fetched,
+            kind: FetchKind::CssImport { .. },
+        } = task
+        else {
+            unreachable!()
+        };
+        // The import resolved against the importing sheet's own URL.
+        assert_eq!(fetched.as_str(), "https://example.test/sub/base.css");
+
+        wv.on_css_import_fetched(
+            "div { font-weight: bold; }\n".to_string(),
+            &Url::parse("https://example.test/sub/base.css").unwrap(),
+        );
+
+        // The parent sheet now lands in linked_css with its import inlined
+        // before its own rules.
+        assert_eq!(wv.linked_css.len(), 1);
+        assert_eq!(
+            wv.linked_css[0],
+            "div { font-weight: bold; }\nbody { color: red; }"
+        );
+    }
+
+    #[test]
+    fn duplicate_import_requests_one_fetch_and_settles_without_cycle() {
+        let mut wv = WebView::new(
+            crate::engine::layouter::types::ColorScheme::Light,
+            JsPolicy::Disabled,
+        );
+        let sheet_a = Url::parse("https://example.test/css/a.css").unwrap();
+        let sheet_b = Url::parse("https://example.test/css/b.css").unwrap();
+
+        // A imports B; B imports A back.
+        wv.on_css_fetched_from(
+            "@import url(\"b.css\");a { color: a; }".to_string(),
+            &sheet_a,
+        );
+        wv.on_css_import_fetched(
+            "@import url(\"a.css\");b { color: b; }".to_string(),
+            &sheet_b,
+        );
+
+        // B's import back to A is a cycle: it contributes nothing, and both
+        // sheets settle immediately instead of deadlocking.
+        assert_eq!(wv.linked_css.len(), 1);
+        assert_eq!(wv.linked_css[0], "b { color: b; }a { color: a; }");
+
+        // Only B is ever requested for fetching; the cycle-back to A schedules
+        // nothing new.
+        let mut fetched = Vec::new();
+        for _ in 0..4 {
+            for task in wv.tick() {
+                if let WebViewTask::Fetch {
+                    url,
+                    kind: FetchKind::CssImport { .. },
+                } = task
+                {
+                    fetched.push(url.as_str().to_string());
+                }
+            }
+        }
+        assert_eq!(fetched, vec!["https://example.test/css/b.css"]);
+        assert!(wv.pending_css_imports.is_empty());
+    }
+
+    #[test]
+    fn failed_import_does_not_block_the_importing_sheet() {
+        let mut wv = WebView::new(
+            crate::engine::layouter::types::ColorScheme::Light,
+            JsPolicy::Disabled,
+        );
+        let sheet_url = Url::parse("https://example.test/css/main.css").unwrap();
+        wv.on_css_fetched_from(
+            "@import url(\"missing.css\");p { margin: 0; }".to_string(),
+            &sheet_url,
+        );
+        assert!(wv.linked_css.is_empty());
+
+        wv.on_css_import_fetch_failed(&Url::parse("https://example.test/css/missing.css").unwrap());
+        assert_eq!(wv.linked_css.len(), 1);
+        assert_eq!(wv.linked_css[0], "p { margin: 0; }");
+    }
+
+    #[test]
+    fn shared_import_is_applied_once_across_two_sheets() {
+        let mut wv = WebView::new(
+            crate::engine::layouter::types::ColorScheme::Light,
+            JsPolicy::Disabled,
+        );
+        let sheet_a = Url::parse("https://example.test/css/a.css").unwrap();
+        let sheet_b = Url::parse("https://example.test/css/b.css").unwrap();
+        let shared = Url::parse("https://example.test/css/shared.css").unwrap();
+
+        wv.on_css_fetched_from(
+            "@import url(\"shared.css\");a { color: a; }".to_string(),
+            &sheet_a,
+        );
+        wv.on_css_fetched_from(
+            "@import url(\"shared.css\");b { color: b; }".to_string(),
+            &sheet_b,
+        );
+
+        let mut import_tasks = Vec::new();
+        for _ in 0..4 {
+            let tasks = wv.tick();
+            for task in tasks {
+                if let WebViewTask::Fetch {
+                    kind: FetchKind::CssImport { .. },
+                    ..
+                } = task
+                {
+                    import_tasks.push(());
+                }
+            }
+        }
+        // The shared URL is only requested once, even though two sheets import it.
+        assert_eq!(import_tasks.len(), 1, "duplicate import fetch scheduled");
+
+        wv.on_css_import_fetched("s { color: s; }".to_string(), &shared);
+        let mut applied = wv.linked_css.clone();
+        applied.sort();
+        assert_eq!(
+            applied,
+            vec![
+                "s { color: s; }a { color: a; }",
+                "s { color: s; }b { color: b; }"
+            ]
+        );
+    }
 }

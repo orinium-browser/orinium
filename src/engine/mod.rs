@@ -1,7 +1,18 @@
+//! The engine module contains the core components of the Orinium engine,
+//! including the bridge, CSS handling, HTML parsing, input processing,
+//! layout management, rendering model, and tree structure.
+
+pub mod background_worker;
 pub mod bridge;
 pub mod css;
 pub mod html;
+pub mod image_decoder;
 pub mod input;
+pub mod js;
 pub mod layouter;
+pub mod origin;
+pub mod port;
 pub mod renderer_model;
+pub mod svg;
 pub mod tree;
+pub mod ui;

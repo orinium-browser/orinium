@@ -1,5 +1,7 @@
-use super::{TextMeasureError, TextMeasureRequest, TextMeasurer, TextMetrics};
-use crate::engine::layouter::types::TextStyle;
+//! Fallback text measurer without font engine dependency.
+
+use super::{GlyphCluster, TextMeasureError, TextMeasureRequest, TextMeasurer};
+use crate::engine::bridge::text::MeasuredFragment;
 
 /// Fallback text measurer.
 ///
@@ -9,48 +11,59 @@ use crate::engine::layouter::types::TextStyle;
 #[derive(Debug, Default)]
 pub struct FallbackTextMeasurer;
 
-impl TextMeasurer<TextStyle> for FallbackTextMeasurer {
+impl TextMeasurer for FallbackTextMeasurer {
     fn measure(
         &self,
-        request: &TextMeasureRequest<TextStyle>,
-    ) -> Result<TextMetrics, TextMeasureError> {
-        let font_size = request.style.font_size.max(1.0);
+        request: &TextMeasureRequest,
+    ) -> Result<Vec<MeasuredFragment>, TextMeasureError> {
+        let font_size = request.attribute.flow_style.font_size.max(1.0);
 
         // Heuristic constants
         let char_width = font_size * 0.6;
         let line_height = font_size * 1.2;
 
-        let mut current_line_width = 0.0;
-        let mut max_line_width: f32 = 0.0;
-        let mut line_count = 1;
+        let fragments: Vec<MeasuredFragment> = request
+            .text
+            .split('\n')
+            .map(|line| {
+                let w = line.len() as f32 * char_width;
+                MeasuredFragment {
+                    text: line.to_string(),
+                    width: w,
+                    height: line_height,
+                }
+            })
+            .collect();
 
-        for ch in request.text.chars() {
-            if ch == '\n' {
-                max_line_width = max_line_width.max(current_line_width);
-                current_line_width = 0.0;
-                line_count += 1;
-                continue;
-            }
+        Ok(fragments)
+    }
 
-            current_line_width += char_width;
+    fn measure_shaped(
+        &self,
+        request: &TextMeasureRequest,
+    ) -> Result<Vec<GlyphCluster>, TextMeasureError> {
+        let font_size = request.attribute.flow_style.font_size.max(1.0);
+        let char_width = font_size * 0.6;
 
-            if request.wrap
-                && let Some(max_width) = request.max_width
-                && current_line_width > max_width
-            {
-                max_line_width = max_line_width.max(current_line_width - char_width);
-                current_line_width = char_width;
-                line_count += 1;
-            }
+        let mut clusters = Vec::new();
+        let text = &request.text;
+        let mut i = 0;
+
+        while i < text.len() {
+            let ch = text[i..].chars().next().unwrap();
+            let byte_len = ch.len_utf8();
+            let is_space = ch.is_whitespace();
+            let w = char_width;
+
+            clusters.push(GlyphCluster {
+                byte_offset: i,
+                width: w,
+                break_allowed: is_space,
+            });
+
+            i += byte_len;
         }
 
-        max_line_width = max_line_width.max(current_line_width);
-
-        Ok(TextMetrics {
-            width: max_line_width,
-            height: line_height * line_count as f32,
-            baseline: font_size,
-            line_count,
-        })
+        Ok(clusters)
     }
 }

@@ -1,4 +1,8 @@
-#[derive(Debug)]
+//! Network error types.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize, Serialize)]
 pub enum NetworkError {
     // Request / protocol
     InvalidUri,
@@ -18,6 +22,7 @@ pub enum NetworkError {
     UnsupportedHttpVersion,
 
     // Infrastructure
+    InvalidIpcStatusCode,
     Disconnected,
 }
 
@@ -39,6 +44,7 @@ impl std::fmt::Display for NetworkError {
             TooManyRedirects => "too many redirects",
             UnsupportedHttpVersion => "unsupported HTTP version",
 
+            InvalidIpcStatusCode => "invalid HTTP status received via IPC",
             Disconnected => "network subsystem disconnected",
         };
         write!(f, "{msg}")

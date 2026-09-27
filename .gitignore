@@ -1,2 +1,5 @@
 target/
-resource/.local/
+.local/
+.idea/
+dhat-heap.json
+*.log

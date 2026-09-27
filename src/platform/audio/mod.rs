@@ -1,16 +1,21 @@
+//! 音声データの管理と再生を行う
+
+use crate::engine::bridge::audio::{AudioError, AudioSink, AudioSinkFactory};
 use crate::platform::io as platform_io;
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, StreamConfig};
 use std::io::Cursor;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
-use symphonia::core::audio::{AudioBufferRef, Signal};
-use symphonia::core::codecs::DecoderOptions;
+use symphonia::core::audio::sample::Sample;
+use symphonia::core::codecs::audio::AudioDecoderOptions;
+use symphonia::core::errors::Error;
 use symphonia::core::formats::FormatOptions;
+use symphonia::core::formats::TrackType;
+use symphonia::core::formats::probe::Hint;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
 use symphonia::default::{get_codecs, get_probe};
 
 /// 音声の管理を行う構造体
@@ -31,14 +36,21 @@ pub struct SoundManager {
 impl SoundManager {
     /// 初期化
     pub fn init() -> Result<Arc<Mutex<Self>>> {
-        let manager = SoundManager {
+        Ok(Arc::new(Mutex::new(Self::new())))
+    }
+
+    /// .Device を開かずに、遊休状態のマネージャを構築する。
+    ///
+    /// 実際の出力ストリームは最初の再生時に [`Self::ensure_stream`] で
+    /// 確保される。
+    pub fn new() -> Self {
+        SoundManager {
             samples: Arc::new(Mutex::new(Vec::new())),
             play_pos: Arc::new(Mutex::new(0)),
             src_channels: 0,
             src_sample_rate: 0,
             stream: None,
-        };
-        Ok(Arc::new(Mutex::new(manager)))
+        }
     }
 
     /// cpalストリームを確保する
@@ -54,12 +66,12 @@ impl SoundManager {
         let supported_cfg = device
             .default_output_config()
             .context("Failed to get default output config")?;
-        let config: StreamConfig = supported_cfg.clone().into();
+        let config: StreamConfig = supported_cfg.into();
         let sample_format = supported_cfg.sample_format();
         let output_channels = config.channels as usize;
 
-        let samples = self.samples.clone();
-        let play_pos = self.play_pos.clone();
+        let samples = Arc::clone(&self.samples);
+        let play_pos = Arc::clone(&self.play_pos);
         let src_channels = self.src_channels;
 
         let err_fn = |err| log::error!("cpal stream error: {}", err);
@@ -68,7 +80,7 @@ impl SoundManager {
 
         let stream = match sample_format {
             SampleFormat::F32 => device.build_output_stream(
-                &config,
+                config,
                 move |data: &mut [f32], _| {
                     write_output_f32(data, src_channels, output_channels, &samples, &play_pos)
                 },
@@ -76,7 +88,7 @@ impl SoundManager {
                 latency,
             )?,
             SampleFormat::I16 => device.build_output_stream(
-                &config,
+                config,
                 move |data: &mut [i16], _| {
                     write_output_i16(data, src_channels, output_channels, &samples, &play_pos)
                 },
@@ -84,7 +96,7 @@ impl SoundManager {
                 latency,
             )?,
             SampleFormat::U16 => device.build_output_stream(
-                &config,
+                config,
                 move |data: &mut [u16], _| {
                     write_output_u16(data, src_channels, output_channels, &samples, &play_pos)
                 },
@@ -103,27 +115,28 @@ impl SoundManager {
         Ok(())
     }
 
-    /// バイト列から音声を再生する
-    pub fn play_from_bytes(&mut self, data: &[u8]) -> Result<()> {
+    /// Decodes audio bytes and resets playback to the beginning.
+    pub fn load_from_bytes(&mut self, data: &[u8]) -> Result<()> {
         let (samples, channels, sample_rate) = decode(data)?;
         // replace buffer
         {
-            let mut buf = match self.samples.lock() {
-                Ok(x) => x,
-                Err(_) => todo!(),
-            };
+            let mut buf = self.samples.lock().unwrap_or_else(|e| e.into_inner());
             *buf = samples;
         }
         // reset position
         {
-            let mut pos = match self.play_pos.lock() {
-                Ok(x) => x,
-                Err(_) => todo!(),
-            };
+            let mut pos = self.play_pos.lock().unwrap_or_else(|e| e.into_inner());
             *pos = 0;
         }
         self.src_channels = channels;
         self.src_sample_rate = sample_rate;
+
+        Ok(())
+    }
+
+    /// バイト列から音声を再生する
+    pub fn play_from_bytes(&mut self, data: &[u8]) -> Result<()> {
+        self.load_from_bytes(data)?;
 
         self.ensure_stream()?;
 
@@ -163,6 +176,150 @@ impl SoundManager {
             .with_context(|| format!("Failed to read local file: {}", uri))?;
         self.play_from_bytes(&data)
     }
+
+    /// Pauses playback while preserving the current position.
+    pub fn pause(&mut self) -> Result<()> {
+        if let Some(stream) = &self.stream {
+            stream.pause()?;
+        }
+        Ok(())
+    }
+
+    /// Resumes playback from the current position.
+    pub fn resume(&mut self) -> Result<()> {
+        if self.src_channels == 0 {
+            anyhow::bail!("Cannot resume before audio is loaded");
+        }
+        self.ensure_stream()?;
+        if let Some(stream) = &self.stream {
+            stream.play()?;
+        }
+        Ok(())
+    }
+
+    /// Returns the current playback position in seconds.
+    pub fn current_seconds(&self) -> f32 {
+        if self.src_sample_rate == 0 {
+            return 0.0;
+        }
+        let frame = *self.play_pos.lock().unwrap_or_else(|e| e.into_inner());
+        frame as f32 / self.src_sample_rate as f32
+    }
+
+    /// Returns the decoded audio duration in seconds.
+    pub fn duration_seconds(&self) -> f32 {
+        if self.src_channels == 0 || self.src_sample_rate == 0 {
+            return 0.0;
+        }
+        let samples = self.samples.lock().unwrap_or_else(|e| e.into_inner());
+        let frames = samples.len() / self.src_channels;
+        frames as f32 / self.src_sample_rate as f32
+    }
+
+    /// Returns whether the decoded audio reached its end.
+    pub fn is_finished(&self) -> bool {
+        let frame = *self.play_pos.lock().unwrap_or_else(|e| e.into_inner());
+        let samples = self.samples.lock().unwrap_or_else(|e| e.into_inner());
+        self.src_channels > 0 && frame >= samples.len() / self.src_channels
+    }
+}
+
+impl Default for SoundManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/* ============================
+ * Engine bridge
+ * ============================ */
+
+/// [`SoundManager`] を engine の [`AudioSink`] インターフェースへ適合させる。
+///
+/// engine 側の `<audio>` ウィジェットはこの型を知る必要がなく、
+/// `cpal` の出力デバイスも engine には露出しなくなる。
+pub struct PlatformAudioSink {
+    manager: Mutex<SoundManager>,
+}
+
+impl PlatformAudioSink {
+    /// 遊休状態の sink を作る。出力ストリームは最初の再生時に確保される。
+    pub fn new() -> Self {
+        Self {
+            manager: Mutex::new(SoundManager::new()),
+        }
+    }
+
+    /// ポイズンされたロックを握り潰して取り出す。
+    fn lock(&self) -> MutexGuard<'_, SoundManager> {
+        self.manager.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+impl Default for PlatformAudioSink {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AudioSink for PlatformAudioSink {
+    fn preload(&self, data: &[u8]) -> Result<(), AudioError> {
+        self.lock()
+            .load_from_bytes(data)
+            .map_err(|e| AudioError::Decode(format!("{e:#}")))
+    }
+
+    fn play(&self, source: &str, data: Option<&[u8]>) -> Result<(), AudioError> {
+        let mut manager = self.lock();
+        let result = match data {
+            Some(bytes) => manager.play_from_bytes(bytes),
+            // 取得済みバイトが無い場合は、platform 側で URI を解決する。
+            None => manager.play_from_local_uri(source),
+        };
+        result.map_err(|e| AudioError::Device(format!("{e:#}")))
+    }
+
+    fn pause(&self) -> Result<(), AudioError> {
+        self.lock()
+            .pause()
+            .map_err(|e| AudioError::Device(format!("{e:#}")))
+    }
+
+    fn resume(&self) -> Result<(), AudioError> {
+        self.lock()
+            .resume()
+            .map_err(|e| AudioError::Device(format!("{e:#}")))
+    }
+
+    fn current_seconds(&self) -> f32 {
+        self.lock().current_seconds()
+    }
+
+    fn duration_seconds(&self) -> f32 {
+        self.lock().duration_seconds()
+    }
+
+    fn is_finished(&self) -> bool {
+        self.lock().is_finished()
+    }
+}
+
+/// engine へ注入する [`AudioSinkFactory`]。
+///
+/// `<audio>` 要素ごとに独立した sink（= 独立した再生位置と cpal
+/// ストリーム）を作る。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PlatformAudioSinkFactory;
+
+impl AudioSinkFactory for PlatformAudioSinkFactory {
+    fn create(&self) -> Arc<dyn AudioSink> {
+        Arc::new(PlatformAudioSink::new())
+    }
+}
+
+/// engine へ注入する既定の [`AudioSinkFactory`] を返す。
+pub fn default_audio_sink_factory() -> Arc<dyn AudioSinkFactory> {
+    Arc::new(PlatformAudioSinkFactory)
 }
 
 /// 音声をデコードする
@@ -171,99 +328,61 @@ fn decode(data: &[u8]) -> Result<(Vec<f32>, usize, u32)> {
     let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
 
     let hint = Hint::new();
-    let probed = get_probe()
-        .format(
-            &hint,
-            mss,
-            &FormatOptions::default(),
-            &MetadataOptions::default(),
-        )
+    let fmt_opts: FormatOptions = Default::default();
+    let meta_opts: MetadataOptions = Default::default();
+    let dec_opts: AudioDecoderOptions = Default::default();
+
+    let mut format = get_probe()
+        .probe(&hint, mss, fmt_opts, meta_opts)
         .context("Failed to probe media format")?;
 
-    let mut format = probed.format;
     let track = format
-        .default_track()
+        .default_track(TrackType::Audio)
         .ok_or_else(|| anyhow::anyhow!("No default audio track found"))?;
-    let codec_params = &track.codec_params;
-    let mut decoder = get_codecs()
-        .make(codec_params, &DecoderOptions::default())
-        .context("Failed to create decoder")?;
 
-    let mut samples: Vec<f32> = Vec::new();
-    let mut channels: usize = codec_params.channels.map(|c| c.count()).unwrap_or(1);
-    let mut sample_rate: u32 = codec_params.sample_rate.unwrap_or(44100);
+    let track_id = track.id;
+
+    let audio_params = track
+        .codec_params
+        .as_ref()
+        .and_then(|p| p.audio())
+        .ok_or_else(|| anyhow::anyhow!("Default track has no audio codec parameters"))?;
+
+    let mut decoder = get_codecs()
+        .make_audio_decoder(audio_params, &dec_opts)
+        .context("Failed to create audio decoder")?;
+
+    let mut samples = Vec::<f32>::new();
+    let mut channels = audio_params.channels.as_ref().map_or(1, |c| c.count());
+
+    let mut sample_rate = audio_params.sample_rate.unwrap_or(44100);
 
     loop {
-        match format.next_packet() {
-            Ok(packet) => match decoder.decode(&packet) {
-                Ok(audio_buf) => match audio_buf {
-                    AudioBufferRef::U8(buf) => {
-                        let ab = buf.as_ref();
-                        channels = ab.spec().channels.count();
-                        sample_rate = ab.spec().rate;
-                        let frames = ab.frames();
-                        for f in 0..frames {
-                            for ch in 0..channels {
-                                let v = ab.chan(ch)[f] as f32;
-                                samples.push((v - 128.0) / 128.0);
-                            }
-                        }
-                    }
-                    AudioBufferRef::U16(buf) => {
-                        let ab = buf.as_ref();
-                        channels = ab.spec().channels.count();
-                        sample_rate = ab.spec().rate;
-                        let frames = ab.frames();
-                        for f in 0..frames {
-                            for ch in 0..channels {
-                                let v = ab.chan(ch)[f] as f32;
-                                samples.push((v - 32768.0) / 32768.0);
-                            }
-                        }
-                    }
-                    AudioBufferRef::S16(buf) => {
-                        let ab = buf.as_ref();
-                        channels = ab.spec().channels.count();
-                        sample_rate = ab.spec().rate;
-                        let frames = ab.frames();
-                        for f in 0..frames {
-                            for ch in 0..channels {
-                                let v = ab.chan(ch)[f] as f32;
-                                samples.push(v / i16::MAX as f32);
-                            }
-                        }
-                    }
-                    AudioBufferRef::F32(buf) => {
-                        let ab = buf.as_ref();
-                        channels = ab.spec().channels.count();
-                        sample_rate = ab.spec().rate;
-                        let frames = ab.frames();
-                        for f in 0..frames {
-                            for ch in 0..channels {
-                                let v = ab.chan(ch)[f];
-                                samples.push(v);
-                            }
-                        }
-                    }
-                    AudioBufferRef::F64(buf) => {
-                        let ab = buf.as_ref();
-                        channels = ab.spec().channels.count();
-                        sample_rate = ab.spec().rate;
-                        let frames = ab.frames();
-                        for f in 0..frames {
-                            for ch in 0..channels {
-                                let v = ab.chan(ch)[f];
-                                samples.push(v as f32);
-                            }
-                        }
-                    }
-                    _ => {
-                        // Unsupported format
-                    }
-                },
-                Err(_) => { /* ignore */ }
-            },
-            Err(_) => break,
+        let packet = match format.next_packet() {
+            Ok(Some(packet)) => packet,
+            Ok(None) => break,
+            Err(err) => return Err(err).context("Failed to read media packet"),
+        };
+
+        if packet.track_id != track_id {
+            continue;
+        }
+
+        match decoder.decode(&packet) {
+            Ok(audio_buf) => {
+                channels = audio_buf.spec().channels().count();
+                sample_rate = audio_buf.spec().rate();
+
+                let mut decoded = vec![f32::MID; audio_buf.samples_interleaved()];
+                audio_buf.copy_to_slice_interleaved(&mut decoded);
+                samples.extend_from_slice(&decoded);
+            }
+            Err(Error::DecodeError(_)) => {
+                continue;
+            }
+            Err(err) => {
+                return Err(err).context("Failed to decode audio packet");
+            }
         }
     }
 
@@ -280,11 +399,7 @@ fn write_output_f32(
 ) {
     let mut p = pos.lock().unwrap();
     let buf = samples.lock().unwrap();
-    let total_frames = if src_channels > 0 {
-        buf.len() / src_channels
-    } else {
-        0
-    };
+    let total_frames = buf.len().checked_div(src_channels).unwrap_or(0);
 
     if out_channels == 0 {
         return;
@@ -321,11 +436,7 @@ fn write_output_i16(
 ) {
     let mut p = pos.lock().unwrap();
     let buf = samples.lock().unwrap();
-    let total_frames = if src_channels > 0 {
-        buf.len() / src_channels
-    } else {
-        0
-    };
+    let total_frames = buf.len().checked_div(src_channels).unwrap_or(0);
 
     if out_channels == 0 {
         return;
@@ -362,11 +473,7 @@ fn write_output_u16(
 ) {
     let mut p = pos.lock().unwrap();
     let buf = samples.lock().unwrap();
-    let total_frames = if src_channels > 0 {
-        buf.len() / src_channels
-    } else {
-        0
-    };
+    let total_frames = buf.len().checked_div(src_channels).unwrap_or(0);
 
     if out_channels == 0 {
         return;

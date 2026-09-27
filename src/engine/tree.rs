@@ -4,12 +4,25 @@
 //! - `TreeNode<T>` stores a node value, parent, and children.
 //! - `Tree<T>` stores a root node and provides traversal, mapping, and searching utilities.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::rc::{Rc, Weak};
 
 /// Alias for a reference-counted tree node
 pub type NodeRef<T> = Rc<RefCell<TreeNode<T>>>;
+
+/// Per-node state that HTML keeps outside the node's attributes.
+///
+/// A form control's *live* state is deliberately distinct from the content
+/// attribute of the same name: `input.checked = false` leaves the `checked`
+/// attribute (which is `defaultChecked`) alone, and `setAttribute("checked")`
+/// does not change the live state. `None` means "never set explicitly", so
+/// readers fall back to the default from the attributes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FormState {
+    /// The live checkedness of a checkbox or radio, i.e. `input.checked`.
+    pub checked: Option<bool>,
+}
 
 /// A single tree node
 #[derive(Clone)]
@@ -17,6 +30,17 @@ pub struct TreeNode<T> {
     pub value: T,
     parent: Option<Weak<RefCell<TreeNode<T>>>>,
     children: Vec<NodeRef<T>>,
+    /// Live form-control state, kept out of `value` so that attribute
+    /// reflection and DOM cloning stay independent of it.
+    form_state: Cell<FormState>,
+    /// DOM id of the document this node was created by, which is what
+    /// `Node.ownerDocument` reports.
+    ///
+    /// Walking the parent chain is not enough: a freshly created element is
+    /// not in a tree yet, yet it still has an owner document. Recording the
+    /// creator keeps `ownerDocument` correct for detached nodes and for nodes
+    /// that are later adopted into a different document.
+    owner_document: Cell<Option<u64>>,
 }
 
 impl<T> TreeNode<T> {
@@ -26,7 +50,41 @@ impl<T> TreeNode<T> {
             value,
             parent: None,
             children: Vec::new(),
+            form_state: Cell::new(FormState::default()),
+            owner_document: Cell::new(None),
         }))
+    }
+
+    /// The DOM id of the document that created this node, if known.
+    pub fn owner_document(&self) -> Option<u64> {
+        self.owner_document.get()
+    }
+
+    /// Records the DOM id of the document that owns this node.
+    pub fn set_owner_document(&self, document_dom_id: u64) {
+        self.owner_document.set(Some(document_dom_id));
+    }
+
+    /// The node's live form-control state.
+    pub fn form_state(&self) -> FormState {
+        self.form_state.get()
+    }
+
+    /// Replaces the node's live form-control state.
+    pub fn set_form_state(&self, state: FormState) {
+        self.form_state.set(state);
+    }
+
+    /// The live checkedness, if the script has set one explicitly.
+    pub fn checkedness(&self) -> Option<bool> {
+        self.form_state.get().checked
+    }
+
+    /// Sets the live checkedness, leaving the `checked` attribute alone.
+    pub fn set_checkedness(&self, checked: bool) {
+        self.form_state.set(FormState {
+            checked: Some(checked),
+        });
     }
 
     /// Returns the parent node, if any
@@ -41,6 +99,9 @@ impl<T> TreeNode<T> {
 
     /// Remove all children of this node
     pub fn clear_children(&mut self) {
+        for child in &self.children {
+            child.borrow_mut().parent = None;
+        }
         self.children.clear();
     }
 
@@ -48,6 +109,84 @@ impl<T> TreeNode<T> {
     pub fn add_child(parent: &NodeRef<T>, child: NodeRef<T>) {
         child.borrow_mut().parent = Some(Rc::downgrade(parent));
         parent.borrow_mut().children.push(child);
+    }
+
+    /// Removes `child` from `parent`, returning the detached node when found.
+    pub fn remove_child(parent: &NodeRef<T>, child: &NodeRef<T>) -> Option<NodeRef<T>> {
+        let position = {
+            let borrowed = parent.borrow();
+            borrowed
+                .children
+                .iter()
+                .position(|candidate| Rc::ptr_eq(candidate, child))
+        }?;
+        let removed = parent.borrow_mut().children.remove(position);
+        removed.borrow_mut().parent = None;
+        Some(removed)
+    }
+
+    /// Detaches a node from its current parent.
+    pub fn detach(node: &NodeRef<T>) -> bool {
+        let Some(parent) = node.borrow().parent() else {
+            return false;
+        };
+        Self::remove_child(&parent, node).is_some()
+    }
+
+    /// Appends `child`, moving it from its current parent when necessary.
+    ///
+    /// Returns `false` when the operation would create a tree cycle.
+    pub fn append_child(parent: &NodeRef<T>, child: NodeRef<T>) -> bool {
+        if Self::is_inclusive_ancestor(&child, parent) {
+            return false;
+        }
+        Self::detach(&child);
+        Self::add_child(parent, child);
+        true
+    }
+
+    /// Inserts `child` immediately before `reference`, moving it from its
+    /// current parent when necessary.
+    pub fn insert_before(parent: &NodeRef<T>, child: NodeRef<T>, reference: &NodeRef<T>) -> bool {
+        if Rc::ptr_eq(&child, reference) {
+            return reference
+                .borrow()
+                .parent()
+                .is_some_and(|candidate| Rc::ptr_eq(&candidate, parent));
+        }
+        if Self::is_inclusive_ancestor(&child, parent) {
+            return false;
+        }
+        if !reference
+            .borrow()
+            .parent()
+            .is_some_and(|candidate| Rc::ptr_eq(&candidate, parent))
+        {
+            return false;
+        }
+
+        Self::detach(&child);
+        let Some(index) = parent
+            .borrow()
+            .children
+            .iter()
+            .position(|candidate| Rc::ptr_eq(candidate, reference))
+        else {
+            return false;
+        };
+        Self::insert_child_at(parent, index, child);
+        true
+    }
+
+    pub fn is_inclusive_ancestor(ancestor: &NodeRef<T>, node: &NodeRef<T>) -> bool {
+        let mut current = Some(Rc::clone(node));
+        while let Some(candidate) = current {
+            if Rc::ptr_eq(ancestor, &candidate) {
+                return true;
+            }
+            current = candidate.borrow().parent();
+        }
+        false
     }
 
     /// Insert a child at a given position
@@ -100,6 +239,12 @@ impl<T> TreeNode<T> {
             value: self.value.clone(),
             children: Vec::new(),
             parent: None,
+            // The cloning steps for `input` copy the checkedness, and doing so
+            // for every node is harmless because other types ignore it.
+            form_state: Cell::new(self.form_state.get()),
+            // A clone is adopted by the document that imports it, but keeping
+            // the source's owner is the better default until then.
+            owner_document: Cell::new(self.owner_document.get()),
         }));
 
         if deep {
@@ -118,6 +263,12 @@ impl<T> TreeNode<T> {
 #[derive(Clone)]
 pub struct Tree<T> {
     pub root: NodeRef<T>,
+    /// Monotonic counter bumped by [`Tree::mark_dirty`] on every mutation.
+    ///
+    /// Layout snapshots cache the DOM and are reused while the version is
+    /// unchanged, so any mutation (currently the text-input write-back, later
+    /// JS DOM manipulation) must call [`Tree::mark_dirty`] to invalidate them.
+    version: Cell<u64>,
 }
 
 impl<T: Clone> Tree<T> {
@@ -125,7 +276,29 @@ impl<T: Clone> Tree<T> {
     pub fn new(root_value: T) -> Self {
         Self {
             root: TreeNode::new(root_value),
+            version: Cell::new(0),
         }
+    }
+
+    /// Wrap an already-built root in a fresh tree.
+    ///
+    /// The version counter starts at zero, so the resulting tree is treated as
+    /// a newly parsed document.
+    pub fn from_root(root: NodeRef<T>) -> Self {
+        Self {
+            root,
+            version: Cell::new(0),
+        }
+    }
+
+    /// Records a DOM mutation by bumping the tree's version counter.
+    pub fn mark_dirty(&self) {
+        self.version.set(self.version.get() + 1);
+    }
+
+    /// The current mutation version of the tree.
+    pub fn version(&self) -> u64 {
+        self.version.get()
     }
 
     /// Recursively traverse all nodes, applying a function
@@ -167,6 +340,7 @@ impl<T: Clone> Tree<T> {
 
         Tree {
             root: map_node(&self.root, &f),
+            version: Cell::new(0),
         }
     }
 
@@ -191,6 +365,7 @@ impl<T: Clone> Tree<T> {
 
         Tree {
             root: map_node(&self.root, &f),
+            version: Cell::new(0),
         }
     }
 
@@ -241,5 +416,76 @@ impl<T: Clone + Debug> Display for Tree<T> {
 impl<T: Clone + Debug> Debug for Tree<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn append_child_reparents_and_prevents_cycles() {
+        let root = TreeNode::new("root");
+        let first = TreeNode::new("first");
+        let second = TreeNode::new("second");
+        TreeNode::add_child(&root, Rc::clone(&first));
+        TreeNode::add_child(&first, Rc::clone(&second));
+
+        assert!(TreeNode::append_child(&root, Rc::clone(&second)));
+        assert!(first.borrow().children().is_empty());
+        assert!(Rc::ptr_eq(&second.borrow().parent().unwrap(), &root));
+        assert!(!TreeNode::append_child(&second, Rc::clone(&root)));
+    }
+
+    #[test]
+    fn owner_document_is_kept_per_node_and_across_clones() {
+        let element = TreeNode::new("element");
+        // A fresh node has no document until a factory records one.
+        assert_eq!(element.borrow().owner_document(), None);
+
+        element.borrow().set_owner_document(7);
+        assert_eq!(element.borrow().owner_document(), Some(7));
+
+        // Re-parenting does not change the owner; adopting into another
+        // document is an explicit step.
+        let other = TreeNode::new("other");
+        TreeNode::add_child(&other, Rc::clone(&element));
+        assert_eq!(element.borrow().owner_document(), Some(7));
+
+        // A clone starts out owned by the same document as its source.
+        let clone = element.borrow().clone_node(true);
+        assert_eq!(clone.borrow().owner_document(), Some(7));
+    }
+
+    #[test]
+    fn detach_and_clear_children_reset_parent_links() {
+        let root = TreeNode::new("root");
+        let first = TreeNode::new("first");
+        let second = TreeNode::new("second");
+        TreeNode::add_child(&root, Rc::clone(&first));
+        TreeNode::add_child(&root, Rc::clone(&second));
+
+        assert!(TreeNode::detach(&first));
+        assert!(first.borrow().parent().is_none());
+        root.borrow_mut().clear_children();
+        assert!(second.borrow().parent().is_none());
+    }
+
+    #[test]
+    fn insert_before_moves_nodes_and_preserves_order() {
+        let root = TreeNode::new("root");
+        let first = TreeNode::new("first");
+        let second = TreeNode::new("second");
+        let moving = TreeNode::new("moving");
+        TreeNode::add_child(&root, Rc::clone(&first));
+        TreeNode::add_child(&root, Rc::clone(&second));
+        TreeNode::add_child(&first, Rc::clone(&moving));
+
+        assert!(TreeNode::insert_before(&root, Rc::clone(&moving), &second));
+        let children = root.borrow().children().to_vec();
+        assert!(Rc::ptr_eq(&children[0], &first));
+        assert!(Rc::ptr_eq(&children[1], &moving));
+        assert!(Rc::ptr_eq(&children[2], &second));
+        assert!(first.borrow().children().is_empty());
     }
 }

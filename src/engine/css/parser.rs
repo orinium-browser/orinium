@@ -18,6 +18,8 @@
 use std::collections::VecDeque;
 use std::fmt;
 
+use crate::engine::css::values::CssIdent;
+
 use super::tokenizer::{Token, Tokenizer};
 use super::values::{CssValue, Unit};
 
@@ -53,14 +55,28 @@ pub enum CssNodeType {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum AtQuery {
     Keyword(String), // screen, and, not
     Condition {
         name: String,    // max-width
         value: CssValue, // 600px
     },
+    Range {
+        left: Option<(CssValue, RangeOperator)>,
+        name: String,
+        right: Option<(RangeOperator, CssValue)>,
+    },
     Group(Vec<AtQuery>), // ( ... )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RangeOperator {
+    Less,
+    LessEqual,
+    Equal,
+    GreaterEqual,
+    Greater,
 }
 
 /// Node in the CSS syntax tree.
@@ -87,6 +103,14 @@ impl CssNode {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Selector {
+    /// Nesting selector (`&`).
+    ///
+    /// When `true` this selector represents the CSS nesting selector `&`
+    /// and will be replaced with the parent rule's selector during nesting
+    /// resolution. It may carry additional simple selectors (tag, classes,
+    /// etc.) when it appears inside a compound selector such as `&.highlight`.
+    pub is_nesting: bool,
+
     /// Type selector (e.g. `div`)
     ///
     /// `None` represents the absence of a type selector
@@ -99,20 +123,114 @@ pub struct Selector {
     /// Class selectors (e.g. `.container`)
     pub classes: Vec<String>,
 
-    /// Pseudo-class (e.g. `:hover`)
-    pub pseudo_class: Option<String>,
+    /// Attribute selectors (e.g. `[hidden]`, `[type="text"]`)
+    pub attributes: Vec<AttributeSelector>,
+
+    /// Pseudo-classes (e.g. `:hover`, `:first-child`, `:not(.hidden)`)
+    pub pseudo_classes: Vec<PseudoClass>,
 
     /// Pseudo-element (e.g. `::before`)
     pub pseudo_element: Option<String>,
 }
 
+impl Selector {
+    /// Returns `true` when this selector carries fields beyond the nesting
+    /// flag (i.e. it is a compound selector such as `&.highlight`).
+    fn is_compound(&self) -> bool {
+        self.tag.is_some()
+            || self.id.is_some()
+            || !self.classes.is_empty()
+            || !self.attributes.is_empty()
+            || !self.pseudo_classes.is_empty()
+            || self.pseudo_element.is_some()
+    }
+
+    /// Merges the non-nesting fields of `other` into this selector.
+    fn merge_from(&mut self, other: &Selector) {
+        if let Some(tag) = &other.tag {
+            self.tag = Some(tag.clone());
+        }
+        if let Some(id) = &other.id {
+            self.id = Some(id.clone());
+        }
+        self.classes.extend(other.classes.iter().cloned());
+        self.attributes.extend(other.attributes.iter().cloned());
+        self.pseudo_classes
+            .extend(other.pseudo_classes.iter().cloned());
+        if let Some(pe) = &other.pseudo_element {
+            self.pseudo_element = Some(pe.clone());
+        }
+    }
+}
+
+/// A pseudo-class attached to a simple selector.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PseudoClass {
+    /// A non-functional pseudo-class such as `:first-child`.
+    Simple(String),
+    /// A selector-list pseudo-class such as `:is()` or `:not()`.
+    SelectorList {
+        /// Lower-level function name.
+        name: String,
+        /// Parsed selector arguments.
+        selectors: Vec<ComplexSelector>,
+    },
+    /// A `:lang(<language>)` pseudo-class, which matches against the element's
+    /// own `lang` attribute or the nearest inherited one.
+    Lang(String),
+    /// A structural `An+B` pseudo-class such as `:nth-child(2n+1)`.
+    Nth {
+        /// Function name (`nth-child`, `nth-last-child`, etc.).
+        name: String,
+        /// Step coefficient in `An+B`.
+        a: i32,
+        /// Offset in `An+B`.
+        b: i32,
+    },
+}
+
+/// An attribute-presence or exact-value selector.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AttributeSelector {
+    /// Attribute name to match.
+    pub name: String,
+    /// Matching operation.
+    pub operator: AttributeSelectorOperator,
+    /// Required exact value, or `None` for a presence selector.
+    pub value: Option<String>,
+}
+
+/// An attribute selector matching operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AttributeSelectorOperator {
+    /// `[attr]`
+    Exists,
+    /// `[attr=value]`
+    Equals,
+    /// `[attr~=value]`
+    Includes,
+    /// `[attr|=value]`
+    DashMatch,
+    /// `[attr^=value]`
+    Prefix,
+    /// `[attr$=value]`
+    Suffix,
+    /// `[attr*=value]`
+    Substring,
+}
+
 /// Combinator defining the relationship between selectors.
 ///
-/// Additional combinators (`>`, `+`, `~`) may be added later.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Combinator {
     /// Descendant combinator (` `)
     Descendant,
+    /// Child combinator (`>`)
+    Child,
+    /// Next-sibling combinator (`+`)
+    NextSibling,
+    /// Subsequent-sibling combinator (`~`)
+    SubsequentSibling,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -148,7 +266,126 @@ pub struct ComplexSelector {
     pub parts: Vec<SelectorPart>,
 }
 
+impl ComplexSelector {
+    pub fn empty() -> Self {
+        Self { parts: Vec::new() }
+    }
+
+    pub fn nest(&self, child: &Self) -> Self {
+        if self.parts.is_empty() {
+            return child.clone();
+        }
+        if child.parts.is_empty() {
+            return self.clone();
+        }
+
+        let has_nesting = child.parts.iter().any(|p| p.selector.is_nesting);
+
+        if !has_nesting {
+            // No & in child – connect with a descendant combinator.
+            let mut parts = child.parts.clone();
+            parts
+                .last_mut()
+                .expect("child selector is known to be non-empty")
+                .combinator = Some(Combinator::Descendant);
+            parts.extend(self.parts.iter().cloned());
+            return Self { parts };
+        }
+
+        // Resolve & nesting selector references.
+        let mut result_parts: Vec<SelectorPart> = Vec::new();
+
+        for child_part in &child.parts {
+            if child_part.selector.is_nesting {
+                if child_part.selector.is_compound() {
+                    // Compound & (e.g. &.highlight) – merge parent subject
+                    // fields into this selector and append remaining parent
+                    // parts so the parent chain is preserved.
+                    let mut merged = self.parts[0].selector.clone();
+                    merged.merge_from(&child_part.selector);
+                    merged.is_nesting = false;
+
+                    let combinator = child_part.combinator.or(self.parts[0].combinator);
+
+                    result_parts.push(SelectorPart {
+                        selector: merged,
+                        combinator,
+                    });
+
+                    for parent_part in self.parts.iter().skip(1) {
+                        result_parts.push(parent_part.clone());
+                    }
+                } else {
+                    // Standalone & – replace with the full parent selector
+                    // chain.  The last (leftmost) parent part inherits the
+                    // combinator that & carried.
+                    let child_combinator = child_part.combinator;
+                    let parent_len = self.parts.len();
+                    for (i, parent_part) in self.parts.iter().enumerate() {
+                        let mut part = parent_part.clone();
+                        if i == parent_len - 1 {
+                            part.combinator = child_combinator;
+                        }
+                        result_parts.push(part);
+                    }
+                }
+            } else {
+                result_parts.push(child_part.clone());
+            }
+        }
+
+        Self {
+            parts: result_parts,
+        }
+    }
+}
+
+/// Parse the integer `An+B` grammar used by structural pseudo-classes.
+fn parse_an_plus_b(tokens: &[Token<'_>]) -> Option<(i32, i32)> {
+    let mut expression = String::new();
+    for token in tokens {
+        match token {
+            Token::Whitespace | Token::Comment(_) => {}
+            Token::Ident(value) => expression.push_str(&value.to_ascii_lowercase()),
+            Token::Number(value) if value.fract() == 0.0 => {
+                expression.push_str(&(*value as i32).to_string());
+            }
+            Token::Dimension(value, unit) if value.fract() == 0.0 => {
+                expression.push_str(&(*value as i32).to_string());
+                expression.push_str(&unit.to_ascii_lowercase());
+            }
+            Token::Delim(value @ ('+' | '-')) => expression.push(*value),
+            _ => return None,
+        }
+    }
+
+    match expression.as_str() {
+        "odd" => return Some((2, 1)),
+        "even" => return Some((2, 0)),
+        _ => {}
+    }
+
+    if let Some(n_index) = expression.find('n') {
+        if expression[n_index + 1..].contains('n') {
+            return None;
+        }
+        let coefficient = match &expression[..n_index] {
+            "" | "+" => 1,
+            "-" => -1,
+            value => value.parse().ok()?,
+        };
+        let offset = match &expression[n_index + 1..] {
+            "" => 0,
+            value => value.parse().ok()?,
+        };
+        Some((coefficient, offset))
+    } else {
+        Some((0, expression.parse().ok()?))
+    }
+}
+
 /// CSS parser consuming tokens and producing syntax structures.
+#[derive(Clone)]
 pub struct Parser<'a> {
     /// Source of tokens produced by the tokenizer
     tokenizer: Tokenizer<'a>,
@@ -159,7 +396,7 @@ pub struct Parser<'a> {
     /// Lookahead token (optional)
     ///
     /// Parser may need to peek the next token without consuming it.
-    lookahead: VecDeque<Token>,
+    lookahead: VecDeque<Token<'a>>,
 }
 
 /// Parser error kinds
@@ -238,17 +475,26 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn peek_next_token(&mut self, cursor_size: usize) -> &Token {
+    fn peek_next_token(&mut self, cursor_size: usize) -> &Token<'a> {
         self.ensure_lookahead(cursor_size);
         &self.lookahead[cursor_size]
     }
 
-    /// Consume and return the next token.
-    fn peek_token(&mut self) -> &Token {
+    /// Peek at the next token without consuming it.
+    fn peek_token(&mut self) -> &Token<'a> {
         self.peek_next_token(0)
     }
 
-    fn consume_token(&mut self) -> Token {
+    /// Parse a bare declaration list (e.g. the value of a `style` attribute).
+    ///
+    /// Unlike `parse()`, this does not expect selectors or a surrounding block.
+    /// It consumes declarations until EOF or `}` and returns them as
+    /// `Declaration` nodes, mirroring the body of a rule.
+    pub fn parse_declarations(&mut self) -> ParseResult<Vec<CssNode>> {
+        self.parse_declaration_and_nested_rule_list()
+    }
+
+    fn consume_token(&mut self) -> Token<'a> {
         if let Some(tok) = self.lookahead.pop_front() {
             tok
         } else {
@@ -283,14 +529,14 @@ impl<'a> Parser<'a> {
                     let node = self
                         .parse_at_rule()
                         .map_err(|e| e.with_context("parse: failed to parse at-rule"))?;
-                    log::debug!(target: "CssParser", "AtRule parsed: {:?}", &node);
+                    log::debug!(target: "CssParser", "AtRule parsed: {:?}", node);
                     stylesheet.children.push(node);
                 }
                 _ => {
                     let node = self
                         .parse_rule()
                         .map_err(|e| e.with_context("parse: failed to parse rule"))?;
-                    log::debug!(target: "CssParser", "Rule parsed: {:?}", &node);
+                    log::debug!(target: "CssParser", "Rule parsed: {:?}", node);
                     stylesheet.children.push(node);
                 }
             }
@@ -299,10 +545,96 @@ impl<'a> Parser<'a> {
         Ok(stylesheet)
     }
 
+    /// Parses a stylesheet while recovering from unsupported top-level items.
+    ///
+    /// Browser stylesheets are frequently generated and may contain selectors
+    /// or declarations that this engine does not support yet. Dropping the
+    /// entire stylesheet for one such rule would also discard all compatible
+    /// rules, so this mode skips the failing item and resumes at the next
+    /// top-level boundary. The strict [`Self::parse`] entry point remains
+    /// available for validation and unit tests.
+    pub fn parse_lossy(&mut self) -> CssNode {
+        let mut stylesheet = CssNode {
+            node: CssNodeType::Stylesheet,
+            children: vec![],
+        };
+
+        loop {
+            let token = self.peek_token().clone();
+            let checkpoint = self.clone();
+            match token {
+                Token::EOF => break,
+                Token::Whitespace | Token::Comment(_) => {
+                    self.consume_token();
+                }
+                Token::AtKeyword(_) => match self.parse_at_rule() {
+                    Ok(node) => stylesheet.children.push(node),
+                    Err(error) => {
+                        log::warn!(
+                            target: "CssParser",
+                            "Skipping unsupported at-rule: {error}"
+                        );
+                        *self = checkpoint;
+                        self.recover_top_level_item();
+                    }
+                },
+                _ => match self.parse_rule() {
+                    Ok(node) => stylesheet.children.push(node),
+                    Err(error) => {
+                        log::warn!(
+                            target: "CssParser",
+                            "Skipping unsupported CSS rule: {error}"
+                        );
+                        *self = checkpoint;
+                        self.recover_top_level_item();
+                    }
+                },
+            }
+        }
+
+        stylesheet
+    }
+
+    fn recover_top_level_item(&mut self) {
+        let mut depth = 0_usize;
+        let mut consumed_any = false;
+        loop {
+            match self.peek_token().clone() {
+                Token::EOF => break,
+                // An at-rule starts a new top-level item. Preserve it when an
+                // invalid selector prefix (for example a concatenated BOM)
+                // was the item that failed, instead of swallowing the whole
+                // following @media block during recovery.
+                Token::AtKeyword(_) if depth == 0 && consumed_any => break,
+                Token::Delim('{') => {
+                    depth += 1;
+                    self.consume_token();
+                    consumed_any = true;
+                }
+                Token::Delim('}') => {
+                    self.consume_token();
+                    if depth <= 1 {
+                        break;
+                    }
+                    depth -= 1;
+                    consumed_any = true;
+                }
+                Token::Delim(';') if depth == 0 => {
+                    self.consume_token();
+                    break;
+                }
+                _ => {
+                    self.consume_token();
+                    consumed_any = true;
+                }
+            }
+        }
+    }
+
     fn parse_at_rule(&mut self) -> ParseResult<CssNode> {
         // 1. consume '@' token
         let at_name = if let Token::AtKeyword(name) = self.consume_token() {
-            name
+            name.into_owned()
         } else {
             return Err(ParserError {
                 kind: ParserErrorKind::UnexpectedToken {
@@ -387,7 +719,7 @@ impl<'a> Parser<'a> {
                         }
 
                         let nodes = if is_declaration {
-                            self.parse_declaration_list().map_err(|e| {
+                            self.parse_declaration_and_nested_rule_list().map_err(|e| {
                                 e.with_context(
                                     "parse_at_rule: failed to parse declaration in block",
                                 )
@@ -428,13 +760,13 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_at_query(tokens: Vec<Token>) -> ParseResult<AtQuery> {
+    fn parse_at_query(tokens: Vec<Token<'_>>) -> ParseResult<AtQuery> {
         let mut cursor = 0;
         let items = Self::parse_at_query_list(&tokens, &mut cursor)?;
         Ok(AtQuery::Group(items))
     }
 
-    fn parse_at_query_list(tokens: &[Token], cursor: &mut usize) -> ParseResult<Vec<AtQuery>> {
+    fn parse_at_query_list(tokens: &[Token<'_>], cursor: &mut usize) -> ParseResult<Vec<AtQuery>> {
         let mut items = Vec::new();
 
         while *cursor < tokens.len() {
@@ -454,8 +786,13 @@ impl<'a> Parser<'a> {
                     break;
                 }
 
-                Token::Ident(_) => {
+                Token::Ident(_) | Token::Number(_) | Token::Dimension(_, _) => {
                     items.push(Self::parse_at_query_item(tokens, cursor)?);
+                }
+
+                Token::Delim(',') => {
+                    items.push(AtQuery::Keyword(",".into()));
+                    *cursor += 1;
                 }
 
                 _ => {
@@ -467,15 +804,39 @@ impl<'a> Parser<'a> {
         Ok(items)
     }
 
-    fn parse_at_query_item(tokens: &[Token], cursor: &mut usize) -> ParseResult<AtQuery> {
+    fn parse_at_query_item(tokens: &[Token<'_>], cursor: &mut usize) -> ParseResult<AtQuery> {
+        let start = *cursor;
+
+        // Try a range beginning with a media feature.
+        if let Some(range) = Self::parse_at_query_range(tokens, cursor)? {
+            return Ok(range);
+        }
+
+        *cursor = start;
+
         let name = match &tokens[*cursor] {
-            Token::Ident(s) => s.clone(),
-            _ => unreachable!(),
+            Token::Ident(s) => s.clone().into_owned(),
+            _ => {
+                return Err(ParserError {
+                    kind: ParserErrorKind::UnexpectedToken {
+                        expected: "Ident(_)",
+                        found: format!("{:?}", tokens[*cursor]),
+                    },
+                    context: vec![],
+                });
+            }
         };
         *cursor += 1;
 
-        if matches!(tokens.get(*cursor), Some(Token::Delim(':'))) {
-            *cursor += 1;
+        let mut colon = *cursor;
+        while matches!(
+            tokens.get(colon),
+            Some(Token::Whitespace | Token::Comment(_))
+        ) {
+            colon += 1;
+        }
+        if matches!(tokens.get(colon), Some(Token::Delim(':'))) {
+            *cursor = colon + 1;
             let value = Self::parse_at_query_value(tokens, cursor)?;
             Ok(AtQuery::Condition { name, value })
         } else {
@@ -483,7 +844,140 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_at_query_value(tokens: &[Token], cursor: &mut usize) -> ParseResult<CssValue> {
+    fn parse_at_query_range(
+        tokens: &[Token<'_>],
+        cursor: &mut usize,
+    ) -> ParseResult<Option<AtQuery>> {
+        let start = *cursor;
+
+        // `width <= 1044px`
+        if let Token::Ident(name) = tokens.get(*cursor).cloned().unwrap() {
+            *cursor += 1;
+            Self::skip_at_query_whitespace(tokens, cursor);
+
+            if let Some(operator) = Self::parse_range_operator(tokens, cursor) {
+                Self::skip_at_query_whitespace(tokens, cursor);
+
+                if let Some(value) = Self::try_parse_at_query_value(tokens, cursor)? {
+                    return Ok(Some(AtQuery::Range {
+                        left: None,
+                        name: name.into_owned(),
+                        right: Some((operator, value)),
+                    }));
+                }
+            }
+        }
+
+        *cursor = start;
+
+        // `600px <= width`
+        let Some(left) = Self::try_parse_at_query_value(tokens, cursor)? else {
+            return Ok(None);
+        };
+
+        Self::skip_at_query_whitespace(tokens, cursor);
+
+        let Some(left_operator) = Self::parse_range_operator(tokens, cursor) else {
+            *cursor = start;
+            return Ok(None);
+        };
+
+        Self::skip_at_query_whitespace(tokens, cursor);
+
+        let name = match tokens.get(*cursor) {
+            Some(Token::Ident(name)) => name.clone().into_owned(),
+            _ => {
+                *cursor = start;
+                return Ok(None);
+            }
+        };
+        *cursor += 1;
+
+        Self::skip_at_query_whitespace(tokens, cursor);
+
+        // Optional second range: `600px <= width <= 1044px`
+        let right = if let Some(operator) = Self::parse_range_operator(tokens, cursor) {
+            Self::skip_at_query_whitespace(tokens, cursor);
+
+            let Some(value) = Self::try_parse_at_query_value(tokens, cursor)? else {
+                *cursor = start;
+                return Ok(None);
+            };
+
+            Some((operator, value))
+        } else {
+            None
+        };
+
+        Ok(Some(AtQuery::Range {
+            left: Some((left, left_operator)),
+            name,
+            right,
+        }))
+    }
+
+    fn parse_range_operator(tokens: &[Token<'_>], cursor: &mut usize) -> Option<RangeOperator> {
+        match tokens.get(*cursor) {
+            Some(Token::Delim('<')) => {
+                if matches!(tokens.get(*cursor + 1), Some(Token::Delim('='))) {
+                    *cursor += 2;
+                    Some(RangeOperator::LessEqual)
+                } else {
+                    *cursor += 1;
+                    Some(RangeOperator::Less)
+                }
+            }
+
+            Some(Token::Delim('>')) => {
+                if matches!(tokens.get(*cursor + 1), Some(Token::Delim('='))) {
+                    *cursor += 2;
+                    Some(RangeOperator::GreaterEqual)
+                } else {
+                    *cursor += 1;
+                    Some(RangeOperator::Greater)
+                }
+            }
+
+            Some(Token::Delim('=')) => {
+                *cursor += 1;
+                Some(RangeOperator::Equal)
+            }
+
+            _ => None,
+        }
+    }
+
+    fn skip_at_query_whitespace(tokens: &[Token<'_>], cursor: &mut usize) {
+        while matches!(
+            tokens.get(*cursor),
+            Some(Token::Whitespace | Token::Comment(_))
+        ) {
+            *cursor += 1;
+        }
+    }
+
+    fn try_parse_at_query_value(
+        tokens: &[Token<'_>],
+        cursor: &mut usize,
+    ) -> ParseResult<Option<CssValue>> {
+        let start = *cursor;
+
+        match tokens.get(*cursor) {
+            Some(Token::Number(_)) | Some(Token::Dimension(_, _)) | Some(Token::Function(_)) => {
+                match Self::parse_at_query_value(tokens, cursor) {
+                    Ok(value) => Ok(Some(value)),
+                    Err(_) => {
+                        *cursor = start;
+                        Ok(None)
+                    }
+                }
+            }
+
+            _ => Ok(None),
+        }
+    }
+
+    fn parse_at_query_value(tokens: &[Token<'_>], cursor: &mut usize) -> ParseResult<CssValue> {
         let mut buf = Vec::new();
         let mut paren_depth = 0;
 
@@ -555,10 +1049,10 @@ impl<'a> Parser<'a> {
                     });
                 }
                 _ => {
-                    let mut decls = self.parse_declaration_list().map_err(|e| {
+                    let mut child = self.parse_declaration_and_nested_rule_list().map_err(|e| {
                         e.with_context("parse_rule: failed to parse declaration list")
                     })?;
-                    children.append(&mut decls);
+                    children.append(&mut child);
                 }
             }
         }
@@ -573,6 +1067,12 @@ impl<'a> Parser<'a> {
     ///
     /// Each selector is represented as a `ComplexSelector`.
     fn parse_selector_list(&mut self) -> Vec<ComplexSelector> {
+        self.parse_selector_list_until(None)
+    }
+
+    /// Parse a selector list up to a rule block or a functional pseudo-class
+    /// closing delimiter.
+    fn parse_selector_list_until(&mut self, terminator: Option<char>) -> Vec<ComplexSelector> {
         let mut selectors = vec![];
         let mut parts = vec![];
 
@@ -584,15 +1084,17 @@ impl<'a> Parser<'a> {
             match token {
                 Token::Ident(name) => {
                     let sel = current_selector.get_or_insert_with(|| Selector {
+                        is_nesting: false,
                         tag: None,
                         id: None,
                         classes: vec![],
-                        pseudo_class: None,
+                        attributes: vec![],
+                        pseudo_classes: vec![],
                         pseudo_element: None,
                     });
 
                     if sel.tag.is_none() {
-                        sel.tag = Some(name);
+                        sel.tag = Some(name.into_owned());
                     }
 
                     self.consume_token();
@@ -600,13 +1102,15 @@ impl<'a> Parser<'a> {
 
                 Token::Hash(id) => {
                     let sel = current_selector.get_or_insert_with(|| Selector {
+                        is_nesting: false,
                         tag: None,
                         id: None,
                         classes: vec![],
-                        pseudo_class: None,
+                        attributes: vec![],
+                        pseudo_classes: vec![],
                         pseudo_element: None,
                     });
-                    sel.id = Some(id);
+                    sel.id = Some(id.into_owned());
                     self.consume_token();
                 }
 
@@ -614,13 +1118,15 @@ impl<'a> Parser<'a> {
                     self.consume_token();
                     if let Token::Ident(class) = self.consume_token() {
                         let sel = current_selector.get_or_insert_with(|| Selector {
+                            is_nesting: false,
                             tag: None,
                             id: None,
                             classes: vec![],
-                            pseudo_class: None,
+                            attributes: vec![],
+                            pseudo_classes: vec![],
                             pseudo_element: None,
                         });
-                        sel.classes.push(class);
+                        sel.classes.push(class.into_owned());
                     }
                 }
 
@@ -631,23 +1137,184 @@ impl<'a> Parser<'a> {
                         self.consume_token();
                         if let Token::Ident(name) = self.consume_token() {
                             let sel = current_selector.get_or_insert_with(|| Selector {
+                                is_nesting: false,
                                 tag: None,
                                 id: None,
                                 classes: vec![],
-                                pseudo_class: None,
+                                attributes: vec![],
+                                pseudo_classes: vec![],
                                 pseudo_element: None,
                             });
-                            sel.pseudo_element = Some(name);
+                            sel.pseudo_element = Some(name.into_owned());
                         }
-                    } else if let Token::Ident(name) = self.consume_token() {
+                    } else {
+                        let pseudo_class = match self.consume_token() {
+                            Token::Ident(name)
+                                // Legacy single-colon pseudo-element syntax
+                                // (`:before`, `:after`) — normalized to the
+                                // pseudo-element field.
+                                if matches!(
+                                    name.to_ascii_lowercase().as_str(),
+                                    "before" | "after" | "first-line" | "first-letter"
+                                ) =>
+                            {
+                                let sel = current_selector.get_or_insert_with(|| Selector {
+                                    is_nesting: false,
+                                    tag: None,
+                                    id: None,
+                                    classes: vec![],
+                                    attributes: vec![],
+                                    pseudo_classes: vec![],
+                                    pseudo_element: None,
+                                });
+                                sel.pseudo_element = Some(name.into_owned());
+                                continue;
+                            }
+                            Token::Ident(name) => Some(PseudoClass::Simple(name.into_owned())),
+                            Token::Function(name) => {
+                                if self.peek_token() == &Token::Delim('(') {
+                                    self.consume_token();
+                                }
+                                let lower_name = name.to_ascii_lowercase();
+                                let pseudo = match lower_name.as_str() {
+                                    "is" | "where" | "not" => PseudoClass::SelectorList {
+                                        name: lower_name,
+                                        selectors: self.parse_selector_list_until(Some(')')),
+                                    },
+                                    "lang" => {
+                                        let mut language = String::new();
+                                        // A language tag is a single ident, but
+                                        // tolerate whitespace so
+                                        // `:lang( en )` still parses.
+                                        while let Token::Ident(part) = self.peek_token().clone() {
+                                            self.consume_token();
+                                            if !language.is_empty() {
+                                                language.push('-');
+                                            }
+                                            language.push_str(&part);
+                                        }
+                                        PseudoClass::Lang(language)
+                                    }
+                                    "nth-child" | "nth-last-child" | "nth-of-type"
+                                    | "nth-last-of-type" => {
+                                        let tokens = self.consume_until_closing_parenthesis();
+                                        let (a, b) =
+                                            parse_an_plus_b(&tokens).unwrap_or((0, i32::MIN));
+                                        PseudoClass::Nth {
+                                            name: lower_name,
+                                            a,
+                                            b,
+                                        }
+                                    }
+                                    _ => {
+                                        self.consume_until_closing_parenthesis();
+                                        PseudoClass::SelectorList {
+                                            name: lower_name,
+                                            selectors: Vec::new(),
+                                        }
+                                    }
+                                };
+                                if self.peek_token() == &Token::Delim(')') {
+                                    self.consume_token();
+                                }
+                                Some(pseudo)
+                            }
+                            _ => None,
+                        };
+                        if let Some(pseudo_class) = pseudo_class {
+                            let sel = current_selector.get_or_insert_with(|| Selector {
+                                is_nesting: false,
+                                tag: None,
+                                id: None,
+                                classes: vec![],
+                                attributes: vec![],
+                                pseudo_classes: vec![],
+                                pseudo_element: None,
+                            });
+                            sel.pseudo_classes.push(pseudo_class);
+                        }
+                    }
+                }
+
+                Token::Delim('[') => {
+                    self.consume_token();
+                    while matches!(self.peek_token(), Token::Whitespace | Token::Comment(_)) {
+                        self.consume_token();
+                    }
+
+                    let name = match self.consume_token() {
+                        Token::Ident(name) => name.into_owned(),
+                        _ => continue,
+                    };
+
+                    while matches!(self.peek_token(), Token::Whitespace | Token::Comment(_)) {
+                        self.consume_token();
+                    }
+
+                    let operator = match self.peek_token() {
+                        Token::Delim('=') => {
+                            self.consume_token();
+                            AttributeSelectorOperator::Equals
+                        }
+                        Token::Delim('~')
+                        | Token::Delim('|')
+                        | Token::Delim('^')
+                        | Token::Delim('$')
+                        | Token::Delim('*') => {
+                            let operator = match self.consume_token() {
+                                Token::Delim(c) => c,
+                                _ => unreachable!(),
+                            };
+
+                            if self.peek_token() != &Token::Delim('=') {
+                                continue;
+                            }
+                            self.consume_token();
+
+                            match operator {
+                                '~' => AttributeSelectorOperator::Includes,
+                                '|' => AttributeSelectorOperator::DashMatch,
+                                '^' => AttributeSelectorOperator::Prefix,
+                                '$' => AttributeSelectorOperator::Suffix,
+                                '*' => AttributeSelectorOperator::Substring,
+                                _ => unreachable!(),
+                            }
+                        }
+                        _ => AttributeSelectorOperator::Exists,
+                    };
+
+                    let value = if operator == AttributeSelectorOperator::Exists {
+                        None
+                    } else {
+                        while matches!(self.peek_token(), Token::Whitespace | Token::Comment(_)) {
+                            self.consume_token();
+                        }
+
+                        match self.consume_token() {
+                            Token::Ident(value) | Token::String(value) => Some(value.into_owned()),
+                            _ => continue,
+                        }
+                    };
+
+                    while matches!(self.peek_token(), Token::Whitespace | Token::Comment(_)) {
+                        self.consume_token();
+                    }
+                    if self.peek_token() == &Token::Delim(']') {
+                        self.consume_token();
                         let sel = current_selector.get_or_insert_with(|| Selector {
+                            is_nesting: false,
                             tag: None,
                             id: None,
                             classes: vec![],
-                            pseudo_class: None,
+                            attributes: vec![],
+                            pseudo_classes: vec![],
                             pseudo_element: None,
                         });
-                        sel.pseudo_class = Some(name);
+                        sel.attributes.push(AttributeSelector {
+                            name,
+                            operator,
+                            value,
+                        });
                     }
                 }
 
@@ -659,7 +1326,62 @@ impl<'a> Parser<'a> {
                             combinator: current_combinator.take(),
                         });
                     }
-                    current_combinator = Some(Combinator::Descendant);
+                    if current_combinator.is_none() {
+                        current_combinator = Some(Combinator::Descendant);
+                    }
+                    self.consume_token();
+                }
+
+                Token::Delim('>') => {
+                    if let Some(sel) = current_selector.take() {
+                        parts.push(SelectorPart {
+                            selector: sel,
+                            combinator: current_combinator.take(),
+                        });
+                    }
+                    current_combinator = Some(Combinator::Child);
+                    self.consume_token();
+                }
+
+                Token::Delim('+') | Token::Delim('~') => {
+                    if let Some(sel) = current_selector.take() {
+                        parts.push(SelectorPart {
+                            selector: sel,
+                            combinator: current_combinator.take(),
+                        });
+                    }
+                    current_combinator = Some(if token == Token::Delim('+') {
+                        Combinator::NextSibling
+                    } else {
+                        Combinator::SubsequentSibling
+                    });
+                    self.consume_token();
+                }
+
+                Token::Delim('*') => {
+                    current_selector.get_or_insert_with(|| Selector {
+                        is_nesting: false,
+                        tag: None,
+                        id: None,
+                        classes: vec![],
+                        attributes: vec![],
+                        pseudo_classes: vec![],
+                        pseudo_element: None,
+                    });
+                    self.consume_token();
+                }
+
+                Token::Delim('&') => {
+                    let sel = current_selector.get_or_insert_with(|| Selector {
+                        is_nesting: false,
+                        tag: None,
+                        id: None,
+                        classes: vec![],
+                        attributes: vec![],
+                        pseudo_classes: vec![],
+                        pseudo_element: None,
+                    });
+                    sel.is_nesting = true;
                     self.consume_token();
                 }
 
@@ -683,6 +1405,20 @@ impl<'a> Parser<'a> {
                     }
                 }
 
+                Token::Delim(')') if terminator == Some(')') => {
+                    if let Some(sel) = current_selector.take() {
+                        parts.push(SelectorPart {
+                            selector: sel,
+                            combinator: current_combinator.take(),
+                        });
+                    }
+                    if !parts.is_empty() {
+                        parts.reverse();
+                        selectors.push(ComplexSelector { parts });
+                    }
+                    break;
+                }
+
                 Token::Delim('{') | Token::EOF => {
                     if let Some(sel) = current_selector.take() {
                         parts.push(SelectorPart {
@@ -697,6 +1433,11 @@ impl<'a> Parser<'a> {
                     break;
                 }
 
+                // At-keywords cannot occur inside a qualified-rule prelude.
+                // Leave the token untouched so parse_rule reports the invalid
+                // prefix and lossy top-level recovery can resume at the at-rule.
+                Token::AtKeyword(_) => break,
+
                 _ => {
                     self.consume_token();
                 }
@@ -706,71 +1447,214 @@ impl<'a> Parser<'a> {
         selectors
     }
 
-    /// Parse declaration until `Token::Delim('}')`.
-    fn parse_declaration_list(&mut self) -> ParseResult<Vec<CssNode>> {
-        let mut declarations = vec![];
+    /// Consume tokens through the matching `)` of a functional pseudo-class.
+    fn consume_until_closing_parenthesis(&mut self) -> Vec<Token<'a>> {
+        let mut tokens = Vec::new();
+        let mut depth = 0;
+        loop {
+            match self.peek_token() {
+                Token::EOF => break,
+                Token::Delim(')') if depth == 0 => break,
+                Token::Delim('(') => {
+                    depth += 1;
+                    tokens.push(self.consume_token());
+                }
+                Token::Delim(')') => {
+                    depth -= 1;
+                    tokens.push(self.consume_token());
+                }
+                _ => tokens.push(self.consume_token()),
+            }
+        }
+        tokens
+    }
+
+    /// Parse declarations and nested rules until `Token::Delim('}')`.
+    fn parse_declaration_and_nested_rule_list(&mut self) -> ParseResult<Vec<CssNode>> {
+        let mut children = vec![];
         let mut parsing_name = true;
         let mut name = String::new();
         let mut value_tokens = vec![];
 
         loop {
-            let token = self.peek_token().clone();
-            match token {
-                Token::Delim(':') if parsing_name => {
-                    parsing_name = false;
-                    self.consume_token();
-                }
-                Token::Delim(';') if !parsing_name => {
-                    self.consume_token(); // consume ;
-                    declarations.push(CssNode {
-                        node: CssNodeType::Declaration {
-                            name: std::mem::take(&mut name),
-                            value: Self::parse_tokens_to_css_value(std::mem::take(
-                                &mut value_tokens,
-                            ))
-                            .map_err(|e| {
-                                e.with_context(
-                                    "parse_declaration: failed to parse declaration value list",
-                                )
-                            })?,
-                        },
-                        children: vec![],
-                    });
-                    parsing_name = true;
-                }
-                Token::Delim('}') | Token::EOF => {
-                    if !parsing_name && !name.is_empty() {
-                        declarations.push(CssNode {
+            let mut cursor = 0;
+
+            loop {
+                let token = self.peek_next_token(cursor);
+
+                match token {
+                    Token::Delim(':') if parsing_name => {
+                        for _ in 0..cursor {
+                            if let Token::Ident(s) = self.consume_token() {
+                                name.push_str(&s);
+                            }
+                        }
+
+                        self.consume_token(); // consume :
+                        parsing_name = false;
+                        break;
+                    }
+                    Token::Delim(';') if !parsing_name => {
+                        for _ in 0..cursor {
+                            value_tokens.push(self.consume_token());
+                        }
+
+                        self.consume_token(); // consume ;
+                        children.push(CssNode {
                             node: CssNodeType::Declaration {
                                 name: std::mem::take(&mut name),
                                 value: Self::parse_tokens_to_css_value(std::mem::take(
                                     &mut value_tokens,
-                                ))?,
+                                ))
+                                .map_err(|e| {
+                                    e.with_context(
+                                        "parse_declaration: failed to parse declaration value list",
+                                    )
+                                })?,
                             },
                             children: vec![],
                         });
-                    }
-                    break;
-                }
 
-                Token::Ident(s) if parsing_name => {
-                    name.push_str(&s);
-                    self.consume_token();
-                }
-                _ => {
-                    if !parsing_name {
-                        value_tokens.push(self.consume_token());
-                    } else {
-                        self.consume_token(); // skip unsupported token in name
+                        parsing_name = true;
+                        break;
+                    }
+                    Token::Delim('{') => {
+                        children.push(self.parse_rule()?);
+                        cursor = 0;
+                    }
+                    Token::Delim('}') | Token::EOF => {
+                        if !parsing_name && !name.is_empty() {
+                            for _ in 0..cursor {
+                                value_tokens.push(self.consume_token());
+                            }
+
+                            children.push(CssNode {
+                                node: CssNodeType::Declaration {
+                                    name: std::mem::take(&mut name),
+                                    value: Self::parse_tokens_to_css_value(std::mem::take(
+                                        &mut value_tokens,
+                                    ))?,
+                                },
+                                children: vec![],
+                            });
+                        } else {
+                            for _ in 0..cursor {
+                                // Just consume token.
+                                self.consume_token();
+                            }
+                        }
+
+                        break;
+                    }
+                    Token::Ident(s) if parsing_name => {
+                        if cursor == 0 {
+                            name.push_str(s);
+                            self.consume_token();
+                            break;
+                        }
+
+                        cursor += 1;
+                    }
+                    _ => {
+                        cursor += 1;
                     }
                 }
             }
+
+            if matches!(self.peek_next_token(0), Token::Delim('}') | Token::EOF) {
+                break;
+            }
         }
 
-        Ok(declarations)
+        Ok(children)
     }
 
-    fn parse_tokens_to_css_value(tokens: Vec<Token>) -> ParseResult<CssValue> {
+    /// Parses the contents of a `(...)` functional group (excluding the outer
+    /// parentheses) into a list of comma-separated arguments.
+    ///
+    /// The outer `Vec` holds comma-separated arguments and each inner `Vec`
+    /// holds the whitespace-separated components of that argument. Keeping
+    /// both boundaries preserves the syntactic structure so that, for example,
+    /// `minmax(100px, 1fr)` yields two arguments while `circle(50% at 50%)`
+    /// yields a single argument with several components.
+    fn parse_function_arguments(tokens: Vec<Token<'_>>) -> ParseResult<Vec<Vec<CssValue>>> {
+        // Split into comma-separated argument groups, respecting nesting.
+        let mut arguments: Vec<Vec<Token<'_>>> = Vec::new();
+        let mut current: Vec<Token<'_>> = Vec::new();
+        let mut depth = 0usize;
+
+        for token in tokens {
+            match token {
+                Token::Delim('(') => {
+                    depth += 1;
+                    current.push(token);
+                }
+                Token::Delim(')') => {
+                    depth = depth.saturating_sub(1);
+                    current.push(token);
+                }
+                Token::Delim(',') if depth == 0 => {
+                    arguments.push(std::mem::take(&mut current));
+                }
+                _ => current.push(token),
+            }
+        }
+        if !current.is_empty() || arguments.is_empty() {
+            arguments.push(current);
+        }
+
+        // Within each argument, split on top-level whitespace into components.
+        let mut result = Vec::new();
+        for argument in arguments {
+            let mut components = Vec::new();
+            let mut component_tokens: Vec<Token<'_>> = Vec::new();
+            let mut component_depth = 0usize;
+
+            for token in argument {
+                match token {
+                    Token::Whitespace if component_depth == 0 => {
+                        if !component_tokens.is_empty() {
+                            let value = Self::parse_tokens_to_css_value(std::mem::take(
+                                &mut component_tokens,
+                            ))?;
+                            components.push(value);
+                        }
+                    }
+                    Token::Delim('(') => {
+                        component_depth += 1;
+                        component_tokens.push(token);
+                    }
+                    Token::Delim(')') => {
+                        component_depth = component_depth.saturating_sub(1);
+                        component_tokens.push(token);
+                    }
+                    _ => component_tokens.push(token),
+                }
+            }
+            if !component_tokens.is_empty() {
+                let value = Self::parse_tokens_to_css_value(component_tokens)?;
+                components.push(value);
+            }
+            result.push(components);
+        }
+
+        Ok(result)
+    }
+
+    /// Tokenizes a standalone media query list (e.g. `screen and
+    /// (max-width: 600px)`) into the same [`AtQuery`] shape `@media` preludes
+    /// produce, so it can be evaluated against a [`MediaEnvironment`].
+    pub fn parse_media_query(query: &str) -> Option<AtQuery> {
+        let mut tokenizer = crate::engine::css::tokenizer::Tokenizer::new(query);
+        let tokens: Vec<Token<'_>> = std::iter::from_fn(|| {
+            let token = tokenizer.next_token();
+            (token != Token::EOF).then_some(token)
+        })
+        .collect();
+        Self::parse_at_query(tokens).ok()
+    }
+
+    pub fn parse_tokens_to_css_value(tokens: Vec<Token<'_>>) -> ParseResult<CssValue> {
         let mut values = vec![];
         let mut iter = tokens.into_iter().peekable();
 
@@ -778,43 +1662,91 @@ impl<'a> Parser<'a> {
             log::debug!(target: "CssParser", "parse_tokens_to_css_value: token={:?}", token);
 
             match token {
-                Token::Ident(s) => values.push(CssValue::Keyword(s)),
+                Token::Ident(s) => values.push(CssValue::Keyword(s.into_owned().into())),
 
                 Token::Delim(',') => {
                     // List separator
                     continue;
                 }
 
-                Token::Delim('(') | Token::Delim(')') => {
-                    // Function の構文用なので無視
+                Token::Delim('(') => {
+                    // 括弧で囲まれたグループを入れ子の `CssValue::List` として
+                    // 保持する。calc() などの演算式中の括弧グルーピングを
+                    // 後段の解決処理(`resolve_calc_value_slice` 等)が尊重できる
+                    // ようにするため、平坦化せずに構造を保存する。
+                    let mut depth = 1;
+                    let mut group_tokens = vec![];
+                    for tok in iter.by_ref() {
+                        match &tok {
+                            Token::Delim('(') => {
+                                depth += 1;
+                                group_tokens.push(tok);
+                            }
+                            Token::Delim(')') => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                                group_tokens.push(tok);
+                            }
+                            _ => group_tokens.push(tok),
+                        }
+                    }
+
+                    let inner = Self::parse_tokens_to_css_value(group_tokens)?;
+                    values.push(match inner {
+                        CssValue::List(values) => CssValue::List(values),
+                        other => CssValue::List(vec![other]),
+                    });
+                }
+
+                Token::Delim(')') => {
+                    // 不平衡な閉じ括弧は無視する
                     continue;
                 }
 
                 Token::Delim(c) => {
-                    values.push(CssValue::Keyword(c.to_string()));
+                    let mut s = [0_u8; 4];
+                    let s = c.encode_utf8(&mut s);
+
+                    values.push(CssValue::Keyword(s.into()));
                 }
 
                 Token::Number(n) => values.push(CssValue::Number(n)),
 
-                Token::String(s) => values.push(CssValue::String(s)),
+                Token::String(s) => values.push(CssValue::String(s.into_owned())),
+
+                Token::Url(raw) => values.push(CssValue::Function(
+                    "url".to_string(),
+                    vec![vec![CssValue::String(raw.into_owned())]],
+                )),
 
                 Token::Dimension(value, unit) => {
-                    let unit = match unit.as_str() {
+                    let unit = match unit.as_ref() {
                         "px" => Unit::Px,
+                        "cm" => Unit::Cm,
+                        "mm" => Unit::Mm,
+                        "in" => Unit::In,
+                        "pt" => Unit::Pt,
+                        "pc" => Unit::Pc,
                         "em" => Unit::Em,
                         "rem" => Unit::Rem,
                         "%" => Unit::Percent,
                         "vw" => Unit::Vw,
                         "vh" => Unit::Vh,
-                        _ => Unit::Px,
+                        "vmin" => Unit::Vmin,
+                        "vmax" => Unit::Vmax,
+                        "deg" => Unit::Deg,
+                        "fr" => Unit::Fr,
+                        _ => Unit::Unknown,
                     };
                     values.push(CssValue::Length(value, unit));
                 }
 
-                Token::Hash(s) => values.push(CssValue::Color(s)),
+                Token::Hash(s) => values.push(CssValue::Color(s.into_owned())),
 
                 Token::Function(name) => {
-                    // () の中をそのまま集める
+                    // () の中を、外側の括弧を除いて集める
                     let mut depth = 0;
                     let mut func_tokens = vec![];
 
@@ -822,28 +1754,25 @@ impl<'a> Parser<'a> {
                         match &tok {
                             Token::Delim('(') => {
                                 depth += 1;
-                                func_tokens.push(tok);
+                                if depth > 1 {
+                                    func_tokens.push(tok);
+                                }
                             }
                             Token::Delim(')') => {
-                                func_tokens.push(tok);
                                 depth -= 1;
                                 if depth == 0 {
                                     break;
                                 }
+                                func_tokens.push(tok);
                             }
                             _ => func_tokens.push(tok),
                         }
                     }
 
-                    let arg_value = Self::parse_tokens_to_css_value(func_tokens)
+                    let args = Self::parse_function_arguments(func_tokens)
                         .map_err(|e| e.with_context("parse function args"))?;
 
-                    let args = match arg_value {
-                        CssValue::List(list) => list,
-                        other => vec![other],
-                    };
-
-                    values.push(CssValue::Function(name, args));
+                    values.push(CssValue::Function(name.into_owned(), args));
                 }
 
                 _ => continue,
@@ -852,7 +1781,7 @@ impl<'a> Parser<'a> {
 
         // 複数値なら List、単数ならそのまま
         Ok(match values.len() {
-            0 => CssValue::Keyword(String::new()),
+            0 => CssValue::Keyword(CssIdent::new_static("")),
             1 => values.remove(0),
             _ => CssValue::List(values),
         })
@@ -897,4 +1826,535 @@ fn fmt_tree_node(
     }
 
     Ok(())
+}
+
+impl std::fmt::Display for Combinator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Combinator::Descendant => f.write_str(" "),
+            Combinator::Child => f.write_str(" > "),
+            Combinator::NextSibling => f.write_str(" + "),
+            Combinator::SubsequentSibling => f.write_str(" ~ "),
+        }
+    }
+}
+
+/// Formats the `An+B` microsyntax stored by [`PseudoClass::Nth`], e.g.
+/// `2n+1`, `odd`-style `2n`, or a bare `3`.
+fn write_an_plus_b(f: &mut std::fmt::Formatter<'_>, a: i32, b: i32) -> std::fmt::Result {
+    if a == 0 {
+        return write!(f, "{b}");
+    }
+    match a {
+        1 => f.write_str("n")?,
+        -1 => f.write_str("-n")?,
+        _ => write!(f, "{a}n")?,
+    }
+    if b > 0 {
+        write!(f, "+{b}")
+    } else if b < 0 {
+        write!(f, "{b}")
+    } else {
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for PseudoClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PseudoClass::Simple(name) => write!(f, ":{name}"),
+            PseudoClass::Lang(language) => write!(f, ":lang({language})"),
+            PseudoClass::SelectorList { name, selectors } => {
+                let arguments = selectors
+                    .iter()
+                    .map(ComplexSelector::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, ":{name}({arguments})")
+            }
+            PseudoClass::Nth { name, a, b } => {
+                write!(f, ":{name}(")?;
+                write_an_plus_b(f, *a, *b)?;
+                f.write_str(")")
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for Selector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.is_nesting {
+            f.write_str("&")?;
+        }
+        if let Some(tag) = &self.tag {
+            f.write_str(tag)?;
+        }
+        if let Some(id) = &self.id {
+            write!(f, "#{id}")?;
+        }
+        for class in &self.classes {
+            write!(f, ".{class}")?;
+        }
+        for attribute in &self.attributes {
+            f.write_str("[")?;
+            f.write_str(&attribute.name)?;
+            match (&attribute.operator, &attribute.value) {
+                (AttributeSelectorOperator::Exists, _) => {}
+                (AttributeSelectorOperator::Equals, Some(value)) => {
+                    write!(f, "=\"{value}\"")?;
+                }
+                (AttributeSelectorOperator::Includes, Some(value)) => {
+                    write!(f, "~=\"{value}\"")?;
+                }
+                (AttributeSelectorOperator::DashMatch, Some(value)) => {
+                    write!(f, "|=\"{value}\"")?;
+                }
+                (AttributeSelectorOperator::Prefix, Some(value)) => {
+                    write!(f, "^=\"{value}\"")?;
+                }
+                (AttributeSelectorOperator::Suffix, Some(value)) => {
+                    write!(f, "$=\"{value}\"")?;
+                }
+                (AttributeSelectorOperator::Substring, Some(value)) => {
+                    write!(f, "*=\"{value}\"")?;
+                }
+
+                _ => {}
+            }
+            f.write_str("]")?;
+        }
+        for pseudo_class in &self.pseudo_classes {
+            write!(f, "{pseudo_class}")?;
+        }
+        if let Some(pseudo_element) = &self.pseudo_element {
+            write!(f, "::{pseudo_element}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for ComplexSelector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Parts are stored right-to-left and each part carries the
+        // combinator linking it to the part on its left (`parts[k]` holds the
+        // relationship between `parts[k + 1]` and itself). Emitting left to
+        // right therefore reads the combinator from the *next* part.
+        for index in (0..self.parts.len()).rev() {
+            write!(f, "{}", self.parts[index].selector)?;
+            if index > 0
+                && let Some(combinator) = self.parts[index - 1].combinator
+            {
+                write!(f, "{combinator}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn complex_selector_display_renders_combinators_and_compounds() {
+        let stylesheet = Parser::new("div.a > p#x + span:hover { color: red; }")
+            .parse()
+            .unwrap();
+        let CssNodeType::Rule { selectors } = stylesheet.children()[0].node() else {
+            panic!("expected a rule");
+        };
+        assert_eq!(selectors[0].to_string(), "div.a > p#x + span:hover");
+
+        let stylesheet = Parser::new("ul li ~ a[rel=\"tag\"] { color: red; }")
+            .parse()
+            .unwrap();
+        let CssNodeType::Rule { selectors } = stylesheet.children()[0].node() else {
+            panic!("expected a rule");
+        };
+        assert_eq!(selectors[0].to_string(), "ul li ~ a[rel=\"tag\"]");
+    }
+
+    #[test]
+    fn selector_display_renders_nth_arguments() {
+        let stylesheet = Parser::new("li:nth-child(2n+1) { color: red; }")
+            .parse()
+            .unwrap();
+        let CssNodeType::Rule { selectors } = stylesheet.children()[0].node() else {
+            panic!("expected a rule");
+        };
+        assert_eq!(selectors[0].to_string(), "li:nth-child(2n+1)");
+    }
+
+    #[test]
+    fn parses_exact_attribute_selector() {
+        let stylesheet = Parser::new(r#"input[type="hidden"] { display: none; }"#)
+            .parse()
+            .unwrap();
+        let CssNodeType::Rule { selectors } = stylesheet.children()[0].node() else {
+            panic!("expected CSS rule");
+        };
+        let selector = &selectors[0].parts[0].selector;
+
+        assert_eq!(selector.tag.as_deref(), Some("input"));
+        assert_eq!(
+            selector.attributes,
+            vec![AttributeSelector {
+                name: "type".into(),
+                operator: AttributeSelectorOperator::Equals,
+                value: Some("hidden".into()),
+            }]
+        );
+    }
+
+    #[test]
+    fn preserves_fractional_grid_units() {
+        let stylesheet = Parser::new("main { grid-template-columns: 100px 2fr auto; }")
+            .parse()
+            .unwrap();
+        let declaration = stylesheet.children()[0].children()[0].node();
+        let CssNodeType::Declaration { value, .. } = declaration else {
+            panic!("expected declaration");
+        };
+        assert_eq!(
+            value,
+            &CssValue::List(vec![
+                CssValue::Length(100.0, Unit::Px),
+                CssValue::Length(2.0, Unit::Fr),
+                CssValue::Keyword("auto".into()),
+            ])
+        );
+    }
+
+    #[test]
+    fn preserves_grid_functions_and_area_strings() {
+        let stylesheet = Parser::new(
+            r#"main {
+                grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+                grid-template-areas: "header header" "sidebar main";
+            }"#,
+        )
+        .parse()
+        .unwrap();
+        let declarations = stylesheet.children()[0].children();
+        let CssNodeType::Declaration { value, .. } = declarations[0].node() else {
+            panic!("expected declaration");
+        };
+        assert_eq!(
+            value,
+            &CssValue::Function(
+                "repeat".into(),
+                vec![
+                    vec![CssValue::Keyword("auto-fit".into())],
+                    vec![CssValue::Function(
+                        "minmax".into(),
+                        vec![
+                            vec![CssValue::Length(100.0, Unit::Px)],
+                            vec![CssValue::Length(1.0, Unit::Fr)],
+                        ],
+                    )],
+                ],
+            )
+        );
+        let CssNodeType::Declaration { value, .. } = declarations[1].node() else {
+            panic!("expected declaration");
+        };
+        assert_eq!(
+            value,
+            &CssValue::List(vec![
+                CssValue::String("header header".into()),
+                CssValue::String("sidebar main".into()),
+            ])
+        );
+    }
+
+    #[test]
+    fn function_arguments_preserve_comma_and_whitespace_boundaries() {
+        let stylesheet = Parser::new("a { width: foo(a + b, c, d); }")
+            .parse()
+            .unwrap();
+        let declarations = stylesheet.children()[0].children();
+        let CssNodeType::Declaration { value, .. } = declarations[0].node() else {
+            panic!("expected declaration");
+        };
+        assert_eq!(
+            value,
+            &CssValue::Function(
+                "foo".into(),
+                vec![
+                    vec![
+                        CssValue::Keyword("a".into()),
+                        CssValue::Keyword("+".into()),
+                        CssValue::Keyword("b".into()),
+                    ],
+                    vec![CssValue::Keyword("c".into())],
+                    vec![CssValue::Keyword("d".into())],
+                ],
+            )
+        );
+    }
+
+    #[test]
+    fn github_calc_with_nested_parentheses_preserves_grouping() {
+        let css =
+            r#"main { font-size: calc( 8px + (12 - 8) * ( (100vw - 400px) / ( 800 - 400) ) ); }"#;
+        let stylesheet = Parser::new(css).parse().unwrap();
+        let declaration = stylesheet.children()[0].children()[0].node();
+        let CssNodeType::Declaration { value, .. } = declaration else {
+            panic!("expected declaration");
+        };
+        // 括弧グループは入れ子の List として保持され、演算の結合が失われない。
+        assert_eq!(
+            value,
+            &CssValue::Function(
+                "calc".into(),
+                vec![vec![
+                    CssValue::Length(8.0, Unit::Px),
+                    CssValue::Keyword("+".into()),
+                    CssValue::List(vec![
+                        CssValue::Number(12.0),
+                        CssValue::Keyword("-".into()),
+                        CssValue::Number(8.0),
+                    ]),
+                    CssValue::Keyword("*".into()),
+                    CssValue::List(vec![
+                        CssValue::List(vec![
+                            CssValue::Length(100.0, Unit::Vw),
+                            CssValue::Keyword("-".into()),
+                            CssValue::Length(400.0, Unit::Px),
+                        ]),
+                        CssValue::Keyword("/".into()),
+                        CssValue::List(vec![
+                            CssValue::Number(800.0),
+                            CssValue::Keyword("-".into()),
+                            CssValue::Number(400.0),
+                        ]),
+                    ]),
+                ]],
+            )
+        );
+    }
+
+    #[test]
+    fn malformed_function_arguments_are_structurally_distinct() {
+        let parse = |css: &str| {
+            let stylesheet = Parser::new(&format!("a {{ width: {css}; }}"))
+                .parse()
+                .unwrap();
+            let declarations = stylesheet.children()[0].children();
+            let CssNodeType::Declaration { value, .. } = declarations[0].node() else {
+                panic!("expected declaration");
+            };
+            value.clone()
+        };
+
+        // `foo(a + b, c, d)` — argument 1 is `a + b`.
+        let comma_separated = parse("foo(a + b, c, d)");
+        // `foo(a, + b c, d)` — argument 1 is `a`, argument 2 is `+ b c`.
+        let whitespace_separated = parse("foo(a, + b c, d)");
+
+        assert_ne!(comma_separated, whitespace_separated);
+    }
+
+    #[test]
+    fn lossy_parser_resumes_after_recovering_a_failed_at_rule() {
+        let mut parser = Parser::new("@media { @broken } .valid { color: green; }");
+        let stylesheet = parser.parse_lossy();
+
+        assert_eq!(stylesheet.children().len(), 1);
+        let CssNodeType::Rule { selectors } = stylesheet.children()[0].node() else {
+            panic!("expected recovered CSS rule");
+        };
+        assert_eq!(selectors[0].parts[0].selector.tag.as_deref(), None);
+        assert_eq!(
+            selectors[0].parts[0].selector.classes,
+            vec![String::from("valid")]
+        );
+    }
+
+    #[test]
+    fn nesting_without_ampersand_uses_descendant_combinator() {
+        let stylesheet = Parser::new(".parent { span { color: red; } }")
+            .parse()
+            .unwrap();
+        let CssNodeType::Rule { selectors: parent } = stylesheet.children()[0].node() else {
+            panic!("expected parent rule");
+        };
+        let CssNodeType::Rule { selectors: child } = stylesheet.children()[0].children()[0].node()
+        else {
+            panic!("expected child rule");
+        };
+
+        // Child selector should remain as-is (no & in child).
+        assert_eq!(child[0].to_string(), "span");
+
+        // Nesting at resolver level: .parent span
+        let resolved = parent[0].nest(&child[0]);
+        assert_eq!(resolved.to_string(), ".parent span");
+    }
+
+    #[test]
+    fn nesting_with_standalone_ampersand() {
+        let stylesheet = Parser::new(".parent { & { color: red; } }")
+            .parse()
+            .unwrap();
+        let CssNodeType::Rule { selectors: parent } = stylesheet.children()[0].node() else {
+            panic!("expected parent rule");
+        };
+        let CssNodeType::Rule { selectors: child } = stylesheet.children()[0].children()[0].node()
+        else {
+            panic!("expected child rule");
+        };
+
+        assert!(child[0].parts[0].selector.is_nesting);
+
+        let resolved = parent[0].nest(&child[0]);
+        assert_eq!(resolved.to_string(), ".parent");
+    }
+
+    #[test]
+    fn nesting_with_ampersand_class_compound() {
+        let stylesheet = Parser::new(".parent { &.highlight { color: red; } }")
+            .parse()
+            .unwrap();
+        let CssNodeType::Rule { selectors: parent } = stylesheet.children()[0].node() else {
+            panic!("expected parent rule");
+        };
+        let CssNodeType::Rule { selectors: child } = stylesheet.children()[0].children()[0].node()
+        else {
+            panic!("expected child rule");
+        };
+
+        assert!(child[0].parts[0].selector.is_nesting);
+        assert_eq!(child[0].parts[0].selector.classes, vec!["highlight"]);
+
+        let resolved = parent[0].nest(&child[0]);
+        assert_eq!(resolved.to_string(), ".parent.highlight");
+    }
+
+    #[test]
+    fn nesting_with_ampersand_at_end_of_compound() {
+        let stylesheet = Parser::new(".parent { .sidebar& { color: red; } }")
+            .parse()
+            .unwrap();
+        let CssNodeType::Rule { selectors: parent } = stylesheet.children()[0].node() else {
+            panic!("expected parent rule");
+        };
+        let CssNodeType::Rule { selectors: child } = stylesheet.children()[0].children()[0].node()
+        else {
+            panic!("expected child rule");
+        };
+
+        assert!(child[0].parts[0].selector.is_nesting);
+        assert_eq!(child[0].parts[0].selector.classes, vec!["sidebar"]);
+
+        let resolved = parent[0].nest(&child[0]);
+        assert_eq!(resolved.to_string(), ".parent.sidebar");
+    }
+
+    #[test]
+    fn nesting_with_ampersand_and_child_combinator() {
+        let stylesheet = Parser::new(".parent { & > span { color: red; } }")
+            .parse()
+            .unwrap();
+        let CssNodeType::Rule { selectors: parent } = stylesheet.children()[0].node() else {
+            panic!("expected parent rule");
+        };
+        let CssNodeType::Rule { selectors: child } = stylesheet.children()[0].children()[0].node()
+        else {
+            panic!("expected child rule");
+        };
+
+        let resolved = parent[0].nest(&child[0]);
+        assert_eq!(resolved.to_string(), ".parent > span");
+    }
+
+    #[test]
+    fn nesting_with_multiple_selectors_using_ampersand() {
+        let stylesheet = Parser::new(".parent { &.a, &.b { color: red; } }")
+            .parse()
+            .unwrap();
+        let CssNodeType::Rule { selectors: parent } = stylesheet.children()[0].node() else {
+            panic!("expected parent rule");
+        };
+        let CssNodeType::Rule { selectors: child } = stylesheet.children()[0].children()[0].node()
+        else {
+            panic!("expected child rule");
+        };
+
+        assert_eq!(child.len(), 2);
+        let resolved_a = parent[0].nest(&child[0]);
+        let resolved_b = parent[0].nest(&child[1]);
+        assert_eq!(resolved_a.to_string(), ".parent.a");
+        assert_eq!(resolved_b.to_string(), ".parent.b");
+    }
+
+    #[test]
+    fn nesting_with_descendant_then_ampersand() {
+        let stylesheet = Parser::new(".outer { .parent { &.highlight { color: red; } } }")
+            .parse()
+            .unwrap();
+        let CssNodeType::Rule { selectors: outer } = stylesheet.children()[0].node() else {
+            panic!("expected outer rule");
+        };
+        let CssNodeType::Rule { selectors: parent } = stylesheet.children()[0].children()[0].node()
+        else {
+            panic!("expected parent rule");
+        };
+        let CssNodeType::Rule { selectors: child } =
+            stylesheet.children()[0].children()[0].children()[0].node()
+        else {
+            panic!("expected child rule");
+        };
+
+        // First level: .outer .parent
+        let resolved_parent = outer[0].nest(&parent[0]);
+        assert_eq!(resolved_parent.to_string(), ".outer .parent");
+
+        // Second level: .outer .parent.highlight
+        let resolved_child = resolved_parent.nest(&child[0]);
+        assert_eq!(resolved_child.to_string(), ".outer .parent.highlight");
+    }
+
+    #[test]
+    fn nesting_with_multilevel_ampersand_and_combinator() {
+        let stylesheet = Parser::new("#id .parent { .a & .b > span { color: red; } }")
+            .parse()
+            .unwrap();
+        let CssNodeType::Rule { selectors: parent } = stylesheet.children()[0].node() else {
+            panic!("expected parent rule");
+        };
+        let CssNodeType::Rule { selectors: child } = stylesheet.children()[0].children()[0].node()
+        else {
+            panic!("expected child rule");
+        };
+
+        let resolved = parent[0].nest(&child[0]);
+        assert_eq!(resolved.to_string(), ".a #id .parent .b > span");
+    }
+
+    #[test]
+    fn nested_declaration_parsing() {
+        let stylesheet = Parser::new(".parent { color: red; & { font-size: 14px; } }")
+            .parse()
+            .unwrap();
+        let CssNodeType::Rule { selectors } = stylesheet.children()[0].node() else {
+            panic!("expected parent rule");
+        };
+        assert_eq!(selectors[0].to_string(), ".parent");
+
+        let children = stylesheet.children()[0].children();
+        assert_eq!(children.len(), 2);
+
+        // First child: declaration
+        let CssNodeType::Declaration { name, .. } = children[0].node() else {
+            panic!("expected declaration");
+        };
+        assert_eq!(name, "color");
+
+        // Second child: nested rule
+        let CssNodeType::Rule { selectors: nested } = children[1].node() else {
+            panic!("expected nested rule");
+        };
+        assert!(nested[0].parts[0].selector.is_nesting);
+    }
 }

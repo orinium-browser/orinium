@@ -1,136 +1,209 @@
 use crate::engine::bridge::text::{
-    TextMeasureError, TextMeasureRequest, TextMeasurer, TextMetrics,
+    GlyphCluster, MeasuredFragment, TextMeasureError, TextMeasureRequest, TextMeasurer,
 };
-use crate::engine::layouter::types::TextStyle;
+use crate::engine::layouter::types::{FontStyle, LineHeight};
+use crate::platform::renderer::text::global_font;
+use crate::platform::renderer::text::text_renderer::*;
+use crate::platform::renderer::text_cache::TextShapeCache;
+use crate::{perf_scope, profile_log};
 
-use std::env;
-use std::sync::{Arc, Mutex};
+use orinium_text::TextStyle as OriTextStyle;
+use orinium_text::{
+    BidiMode, Color as OriColor, FontStyle as OriFontStyle, FontWeight as OriFontWeight,
+    TextLayouter,
+};
 
-use glyphon::{Attrs, Buffer, Color as GlyphColor, FontSystem, Metrics, Shaping, Style, Weight};
+fn quantize_font_size(px: f32) -> f32 {
+    (px * 64.0).round() / 64.0
+}
 
-/// Platform-backed text measurer using glyphon / cosmic-text.
-///
-/// This measurer performs real text shaping and line layout,
-/// and is intended for production use.
 pub struct PlatformTextMeasurer {
-    /// Font system used for shaping and metrics
-    font_sys: Mutex<FontSystem>,
+    cache: TextShapeCache,
 }
 
 impl PlatformTextMeasurer {
-    /// Initialize using system fonts.
-    ///
-    /// TODO:
-    /// - Share font system with PlatformTextRenderer
-    /// - Support font family / fallback selection
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let mut maybe_bytes: Option<Vec<u8>> = None;
-
-        if let Ok(p) = env::var("ORINIUM_FONT")
-            && let Ok(b) = std::fs::read(&p)
-        {
-            maybe_bytes = Some(b);
+        if global_font::global_font_system_ready() {
+            Ok(Self {
+                cache: TextShapeCache::new(),
+            })
+        } else {
+            Err("no system font found".into())
         }
-
-        if maybe_bytes.is_none() {
-            for p in crate::platform::font::system_font_candidates()? {
-                if let Ok(b) = std::fs::read(p) {
-                    maybe_bytes = Some(b);
-                    break;
-                }
-            }
-        }
-
-        if let Some(bytes) = maybe_bytes {
-            let font_source = Arc::new(bytes);
-            let font = glyphon::fontdb::Source::Binary(font_source);
-            let font_sys = FontSystem::new_with_fonts(vec![font]);
-
-            return Ok(Self {
-                font_sys: Mutex::new(font_sys),
-            });
-        }
-
-        Err("no system font found".into())
     }
 
-    /// Initialize from raw font bytes.
-    pub fn from_bytes(_id: &str, bytes: Vec<u8>) -> Result<Self, Box<dyn std::error::Error>> {
-        let font_source = Arc::new(bytes);
-        let font = glyphon::fontdb::Source::Binary(font_source);
-        let font_sys = FontSystem::new_with_fonts(vec![font]);
-
+    pub fn from_bytes(_id: &str, _bytes: Vec<u8>) -> Result<Self, Box<dyn std::error::Error>> {
         Ok(Self {
-            font_sys: Mutex::new(font_sys),
+            cache: TextShapeCache::new(),
         })
     }
 }
 
-impl TextMeasurer<TextStyle> for PlatformTextMeasurer {
-    /// Measure text using real shaping and line layout.
-    ///
-    /// Notes:
-    /// - Baseline is currently approximated
-    /// - Decorations and alignment are handled at render time
-    fn measure(
-        &self,
-        req: &TextMeasureRequest<TextStyle>,
-    ) -> Result<TextMetrics, TextMeasureError> {
-        let font_size = req.style.font_size.max(1.0);
+impl TextMeasurer for PlatformTextMeasurer {
+    fn measure(&self, req: &TextMeasureRequest) -> Result<Vec<MeasuredFragment>, TextMeasureError> {
+        perf_scope!(total);
 
-        let mut fs = self
-            .font_sys
-            .lock()
-            .map_err(|e| TextMeasureError::Internal(format!("font_sys lock poisoned: {}", e)))?;
+        let style = req.attribute.style.clone();
+        let flow_style = req.attribute.flow_style;
 
-        // glyphon metrics: font size + line height
-        let metrics = Metrics::relative(font_size, 1.2);
-        let mut buffer = Buffer::new(&mut fs, metrics);
+        let font_size = quantize_font_size(flow_style.font_size.max(1.0));
 
-        // Attributes used only for shaping / layout
-        let attrs = Attrs::new()
-            .metrics(metrics)
-            .color(GlyphColor::rgba(0, 0, 0, 255))
-            .weight(Weight(req.style.font_weight.0))
-            .style(Style::from(req.style.font_style));
+        let line_height_ratio = match flow_style.line_height {
+            LineHeight::Normal => 1.2,
+            LineHeight::Number(n) => n,
+            LineHeight::Px(px) => px / font_size,
+        };
 
-        buffer.set_text(&mut fs, &req.text, &attrs, Shaping::Advanced, None);
+        let font_families = build_family_list(&style.font_families);
 
-        let mut max_width: f32 = 0.0;
-        let mut line_count: usize = 0;
+        let ori_style = OriTextStyle {
+            font_size,
+            color: OriColor(style.color.0, style.color.1, style.color.2, style.color.3),
+            font_weight: OriFontWeight(style.font_weight.0),
+            font_style: match style.font_style {
+                FontStyle::Normal => OriFontStyle::Normal,
+                FontStyle::Italic => OriFontStyle::Italic,
+                FontStyle::Oblique => OriFontStyle::Oblique,
+            },
+            line_height: line_height_ratio,
+            bidi_mode: BidiMode::Auto,
+            font_families,
+            exact_fonts: Vec::new(),
+            variant: orinium_text::FontVariant::Normal,
+        };
 
-        // Iterate over shaped lines
-        for para_i in 0..buffer.lines.len() {
-            if let Some(layout_lines) = buffer.line_layout(&mut fs, para_i) {
-                for line in layout_lines {
-                    max_width = max_width.max(line.w);
-                    line_count += 1;
-                }
-            }
-        }
+        let mut layouter = TextLayouter::new();
 
-        if line_count == 0 {
-            // Empty text
-            return Ok(TextMetrics {
-                width: 0.0,
-                height: metrics.line_height,
-                baseline: font_size * 0.8,
-                line_count: 1,
+        perf_scope!(shape);
+        let shaped = if let Some(shaped) = self.cache.get(&req.text, &ori_style) {
+            shaped
+        } else {
+            let shaped = global_font::with_global_font_system(|fs| {
+                layouter.shape_text(fs, &req.text, &ori_style)
             });
-        }
 
-        // Apply wrapping constraint
-        if let Some(max_width_limit) = req.max_width {
-            max_width = max_width.min(max_width_limit);
-        }
+            self.cache.insert(&req.text, &ori_style, shaped.clone());
+            shaped
+        };
+        #[cfg(any(feature = "profile", debug_assertions))]
+        let shape_time = shape.elapsed();
 
-        let height = metrics.line_height * line_count as f32;
+        let line_ranges: Vec<(usize, usize)> = req
+            .text
+            .split('\n')
+            .scan(0usize, |offset, line| {
+                let start = *offset;
+                *offset += line.len() + 1;
+                let end = start + line.len();
+                Some((start, end))
+            })
+            .collect();
 
-        Ok(TextMetrics {
-            width: max_width,
-            height,
-            baseline: font_size * 0.8, // TODO: precise baseline from font metrics
-            line_count,
-        })
+        perf_scope!(layout_pass);
+        let layout = global_font::with_global_font_system(|fs| {
+            layouter.layout_lines(fs, &shaped, &line_ranges, &ori_style)
+        });
+        #[cfg(any(feature = "profile", debug_assertions))]
+        let layout_time = layout_pass.elapsed();
+
+        let fragments: Vec<MeasuredFragment> = layout
+            .lines
+            .iter()
+            .enumerate()
+            .map(|(i, line)| {
+                let line_text = line_ranges[i];
+                MeasuredFragment {
+                    text: req.text[line_text.0..line_text.1].to_string(),
+                    width: line.width,
+                    height: line.height,
+                }
+            })
+            .collect();
+
+        profile_log!(
+            target: "TextMeasurer",
+            log::Level::Info,
+            "measure: text={:?} len={} font_size={}  shape={:?}  layout={:?}  total={:?}  fragments={}",
+            crate::profile::text_preview(&req.text),
+            req.text.len(),
+            font_size,
+            shape_time,
+            layout_time,
+            total.elapsed(),
+            fragments.len(),
+        );
+        Ok(fragments)
+    }
+
+    fn measure_shaped(
+        &self,
+        req: &TextMeasureRequest,
+    ) -> Result<Vec<GlyphCluster>, TextMeasureError> {
+        perf_scope!(total);
+
+        let style = req.attribute.style.clone();
+        let flow_style = req.attribute.flow_style;
+
+        let font_size = quantize_font_size(flow_style.font_size.max(1.0));
+
+        let line_height_ratio = match flow_style.line_height {
+            LineHeight::Normal => 1.2,
+            LineHeight::Number(n) => n,
+            LineHeight::Px(px) => px / font_size,
+        };
+
+        let font_families = build_family_list(&style.font_families);
+
+        let ori_style = OriTextStyle {
+            font_size,
+            color: OriColor(style.color.0, style.color.1, style.color.2, style.color.3),
+            font_weight: OriFontWeight(style.font_weight.0),
+            font_style: match style.font_style {
+                FontStyle::Normal => OriFontStyle::Normal,
+                FontStyle::Italic => OriFontStyle::Italic,
+                FontStyle::Oblique => OriFontStyle::Oblique,
+            },
+            line_height: line_height_ratio,
+            bidi_mode: BidiMode::Auto,
+            font_families,
+            exact_fonts: Vec::new(),
+            variant: orinium_text::FontVariant::Normal,
+        };
+
+        let mut layouter = TextLayouter::new();
+
+        let shaped = if let Some(shaped) = self.cache.get(&req.text, &ori_style) {
+            shaped
+        } else {
+            let shaped = global_font::with_global_font_system(|fs| {
+                layouter.shape_text(fs, &req.text, &ori_style)
+            });
+
+            self.cache.insert(&req.text, &ori_style, shaped.clone());
+            shaped
+        };
+
+        let clusters: Vec<GlyphCluster> = shaped
+            .fragments
+            .iter()
+            .map(|f| GlyphCluster {
+                byte_offset: f.cluster,
+                width: f.width,
+                break_allowed: f.break_after,
+            })
+            .collect();
+
+        profile_log!(
+            target: "TextMeasurer",
+            log::Level::Info,
+            "measure_shaped: text={:?} len={} font_size={}  total={:?}  clusters={}",
+            crate::profile::text_preview(&req.text),
+            req.text.len(),
+            font_size,
+            total.elapsed(),
+            clusters.len(),
+        );
+
+        Ok(clusters)
     }
 }
