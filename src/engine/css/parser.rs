@@ -175,6 +175,9 @@ pub enum PseudoClass {
         /// Parsed selector arguments.
         selectors: Vec<ComplexSelector>,
     },
+    /// A `:lang(<language>)` pseudo-class, which matches against the element's
+    /// own `lang` attribute or the nearest inherited one.
+    Lang(String),
     /// A structural `An+B` pseudo-class such as `:nth-child(2n+1)`.
     Nth {
         /// Function name (`nth-child`, `nth-last-child`, etc.).
@@ -1178,6 +1181,20 @@ impl<'a> Parser<'a> {
                                         name: lower_name,
                                         selectors: self.parse_selector_list_until(Some(')')),
                                     },
+                                    "lang" => {
+                                        let mut language = String::new();
+                                        // A language tag is a single ident, but
+                                        // tolerate whitespace so
+                                        // `:lang( en )` still parses.
+                                        while let Token::Ident(part) = self.peek_token().clone() {
+                                            self.consume_token();
+                                            if !language.is_empty() {
+                                                language.push('-');
+                                            }
+                                            language.push_str(&part);
+                                        }
+                                        PseudoClass::Lang(language)
+                                    }
                                     "nth-child" | "nth-last-child" | "nth-of-type"
                                     | "nth-last-of-type" => {
                                         let tokens = self.consume_until_closing_parenthesis();
@@ -1846,6 +1863,7 @@ impl std::fmt::Display for PseudoClass {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PseudoClass::Simple(name) => write!(f, ":{name}"),
+            PseudoClass::Lang(language) => write!(f, ":lang({language})"),
             PseudoClass::SelectorList { name, selectors } => {
                 let arguments = selectors
                     .iter()

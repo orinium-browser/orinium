@@ -26,6 +26,10 @@ pub struct SnapNode {
     /// scripts. Zero means the node has never been exposed. Layout only builds
     /// snapshots from the real tree and leaves this zero.
     pub dom_id: u64,
+    /// The live checkedness of a checkbox or radio, resolved when the snapshot
+    /// was taken: the explicit state if the script set one, otherwise the
+    /// `checked` content attribute (i.e. `defaultChecked`).
+    pub checked: bool,
 }
 
 /// An owned snapshot of a DOM subtree.
@@ -74,6 +78,7 @@ impl DomSnapshot {
                     .get(&(Rc::as_ptr(node) as usize))
                     .copied()
                     .unwrap_or(0),
+                checked: crate::engine::html::parser::checkedness(node),
             });
             let children: Vec<NodeId> = node
                 .borrow()
@@ -129,6 +134,7 @@ impl DomSnapshot {
             kind: node.borrow().value.clone(),
             children: Vec::new(),
             dom_id: 0,
+            checked: crate::engine::html::parser::checkedness(node),
         });
         dom_refs.push(Rc::downgrade(node));
         let children: Vec<NodeId> = node

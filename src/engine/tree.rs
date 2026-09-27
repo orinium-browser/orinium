@@ -11,12 +11,28 @@ use std::rc::{Rc, Weak};
 /// Alias for a reference-counted tree node
 pub type NodeRef<T> = Rc<RefCell<TreeNode<T>>>;
 
+/// Per-node state that HTML keeps outside the node's attributes.
+///
+/// A form control's *live* state is deliberately distinct from the content
+/// attribute of the same name: `input.checked = false` leaves the `checked`
+/// attribute (which is `defaultChecked`) alone, and `setAttribute("checked")`
+/// does not change the live state. `None` means "never set explicitly", so
+/// readers fall back to the default from the attributes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FormState {
+    /// The live checkedness of a checkbox or radio, i.e. `input.checked`.
+    pub checked: Option<bool>,
+}
+
 /// A single tree node
 #[derive(Clone)]
 pub struct TreeNode<T> {
     pub value: T,
     parent: Option<Weak<RefCell<TreeNode<T>>>>,
     children: Vec<NodeRef<T>>,
+    /// Live form-control state, kept out of `value` so that attribute
+    /// reflection and DOM cloning stay independent of it.
+    form_state: Cell<FormState>,
 }
 
 impl<T> TreeNode<T> {
@@ -26,7 +42,30 @@ impl<T> TreeNode<T> {
             value,
             parent: None,
             children: Vec::new(),
+            form_state: Cell::new(FormState::default()),
         }))
+    }
+
+    /// The node's live form-control state.
+    pub fn form_state(&self) -> FormState {
+        self.form_state.get()
+    }
+
+    /// Replaces the node's live form-control state.
+    pub fn set_form_state(&self, state: FormState) {
+        self.form_state.set(state);
+    }
+
+    /// The live checkedness, if the script has set one explicitly.
+    pub fn checkedness(&self) -> Option<bool> {
+        self.form_state.get().checked
+    }
+
+    /// Sets the live checkedness, leaving the `checked` attribute alone.
+    pub fn set_checkedness(&self, checked: bool) {
+        self.form_state.set(FormState {
+            checked: Some(checked),
+        });
     }
 
     /// Returns the parent node, if any
@@ -181,6 +220,9 @@ impl<T> TreeNode<T> {
             value: self.value.clone(),
             children: Vec::new(),
             parent: None,
+            // The cloning steps for `input` copy the checkedness, and doing so
+            // for every node is harmless because other types ignore it.
+            form_state: Cell::new(self.form_state.get()),
         }));
 
         if deep {

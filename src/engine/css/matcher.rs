@@ -25,6 +25,22 @@ pub struct ElementInfo {
     /// first. Links are shared through `Arc`, so building it per sibling is
     /// O(1).
     pub previous_siblings: ElementChain,
+    /// Whether this element has a parent element.
+    ///
+    /// The tree root is an element with no parent, and structural
+    /// pseudo-classes such as `:first-child` must not match it.
+    pub has_parent: bool,
+    /// Whether a checkbox or radio is currently checked. This is live
+    /// checkedness, not the `checked` content attribute, which is
+    /// `defaultChecked` and does not affect `:checked`.
+    pub checked: bool,
+    /// The language tag in effect for this element: its own `lang` attribute, or
+    /// failing that the nearest ancestor's. `:lang()` matches against this.
+    pub lang: Option<String>,
+    /// Whether this element is `:empty` under the Selectors 4 definition:
+    /// no element children, and no text node with non-empty data. Comments and
+    /// processing instructions do not count.
+    pub is_empty: bool,
 }
 
 /// One link of an [`ElementChain`].
@@ -164,6 +180,41 @@ struct MatchCursor<'a> {
     sibling_link: Option<&'a ChainLink>,
 }
 
+/// Whether an element is an `input` whose type makes it a checkbox or a radio,
+/// the only inputs that can ever be `:checked`.
+fn is_checkable_input(element: &ElementInfo) -> bool {
+    if !element.tag_name.eq_ignore_ascii_case("input") {
+        return false;
+    }
+    match element
+        .attributes
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("type"))
+    {
+        Some((_, value)) => {
+            let value = value.trim();
+            value.eq_ignore_ascii_case("checkbox") || value.eq_ignore_ascii_case("radio")
+        }
+        // A missing `type` attribute means `type=text`.
+        None => false,
+    }
+}
+
+/// `:lang(<language>)` matches when the element's language tag is exactly the
+/// requested one, or a subtag of it: `:lang(en)` matches `en` and `en-GB`, but
+/// not `enx`. Comparison is ASCII case-insensitive, as HTML requires.
+fn matches_lang(element: &ElementInfo, language: &str) -> bool {
+    let Some(tag) = element.lang.as_deref() else {
+        return false;
+    };
+    if tag.eq_ignore_ascii_case(language) {
+        return true;
+    }
+    tag.len() > language.len()
+        && tag[language.len()..].starts_with('-')
+        && tag[..language.len()].eq_ignore_ascii_case(language)
+}
+
 fn matches_an_plus_b(index: usize, a: i32, b: i32) -> bool {
     let index = index as i32;
     if a == 0 {
@@ -252,6 +303,7 @@ impl Selector {
     fn matches_pseudo_classes(&self, cursor: MatchCursor<'_>, is_root: bool) -> bool {
         let element = ComplexSelector::element_at(cursor);
         self.pseudo_classes.iter().all(|pseudo| match pseudo {
+            PseudoClass::Lang(language) => matches_lang(element, language),
             PseudoClass::Simple(pseudo) => {
                 let has_attribute = |name: &str| {
                     element
@@ -282,24 +334,29 @@ impl Selector {
                 } else if pseudo.eq_ignore_ascii_case("enabled") {
                     is_form_control && !has_attribute("disabled")
                 } else if pseudo.eq_ignore_ascii_case("checked") {
-                    (element.tag_name == "input" && has_attribute("checked"))
+                    // Only checkboxes and radios are ever `:checked`; the
+                    // `checked` content attribute alone does not qualify,
+                    // because it only sets the default.
+                    is_checkable_input(element) && element.checked
                         || (element.tag_name == "option" && has_attribute("selected"))
                 } else if pseudo.eq_ignore_ascii_case("required") {
                     is_form_control && has_attribute("required")
                 } else if pseudo.eq_ignore_ascii_case("optional") {
                     is_form_control && !has_attribute("required")
                 } else if pseudo.eq_ignore_ascii_case("first-child") {
-                    element.element_index == 1
+                    element.has_parent && element.element_index == 1
                 } else if pseudo.eq_ignore_ascii_case("last-child") {
-                    element.element_index == element.element_count
+                    element.has_parent && element.element_index == element.element_count
                 } else if pseudo.eq_ignore_ascii_case("only-child") {
-                    element.element_count == 1
+                    element.has_parent && element.element_count == 1
+                } else if pseudo.eq_ignore_ascii_case("empty") {
+                    element.is_empty
                 } else if pseudo.eq_ignore_ascii_case("first-of-type") {
-                    element.type_index == 1
+                    element.has_parent && element.type_index == 1
                 } else if pseudo.eq_ignore_ascii_case("last-of-type") {
-                    element.type_index == element.type_count
+                    element.has_parent && element.type_index == element.type_count
                 } else if pseudo.eq_ignore_ascii_case("only-of-type") {
-                    element.type_count == 1
+                    element.has_parent && element.type_count == 1
                 } else {
                     false
                 }
@@ -472,7 +529,9 @@ impl ComplexSelector {
             b += (sel.classes.len() + sel.attributes.len()) as u32;
             for pseudo in &sel.pseudo_classes {
                 match pseudo {
-                    PseudoClass::Simple(_) | PseudoClass::Nth { .. } => b += 1,
+                    PseudoClass::Simple(_) | PseudoClass::Nth { .. } | PseudoClass::Lang(_) => {
+                        b += 1
+                    }
                     PseudoClass::SelectorList { name, selectors } if name == "where" => {}
                     PseudoClass::SelectorList { selectors, .. } => {
                         let nested = selectors
@@ -673,6 +732,9 @@ mod tests {
             element_count,
             type_index,
             type_count,
+            // These fixtures always describe elements that sit below a parent,
+            // which is what the structural pseudo-classes require.
+            has_parent: true,
             ..ElementInfo::default()
         }
     }
@@ -776,6 +838,93 @@ mod tests {
         assert!(parse_selector("p:nth-child(-n+3)").matches(&chain([second_paragraph.clone()])));
         assert!(!parse_selector("p:first-child").matches(&chain([second_paragraph.clone()])));
         assert!(!parse_selector("p:last-of-type").matches(&chain([second_paragraph])));
+    }
+
+    fn input_element(input_type: &str, checked: bool) -> ElementInfo {
+        let mut element = element("input", &[], 1, 1, 1, 1);
+        element.checked = checked;
+        if input_type != "text" {
+            element
+                .attributes
+                .push(("type".to_string(), input_type.to_string()));
+        }
+        element
+    }
+
+    #[test]
+    fn tree_root_does_not_match_structural_pseudo_classes() {
+        // A root element has no parent *element*: the document above it does not
+        // count, so `:first-child` and friends must not match it.
+        let mut root = element("html", &[], 1, 1, 1, 1);
+        root.has_parent = false;
+
+        for selector in [
+            ":first-child",
+            ":last-child",
+            ":only-child",
+            ":first-of-type",
+            ":last-of-type",
+        ] {
+            assert!(
+                !parse_selector(selector).matches(&chain([root.clone()])),
+                "{selector} matched a parentless root"
+            );
+        }
+        let mut child = element("head", &[], 1, 1, 1, 1);
+        child.has_parent = true;
+        assert!(parse_selector(":first-child").matches(&chain([child])));
+    }
+
+    #[test]
+    fn empty_pseudo_class_ignores_comments_and_blank_text() {
+        let mut empty = element("p", &[], 1, 1, 1, 1);
+        empty.is_empty = true;
+        assert!(parse_selector(":empty").matches(&chain([empty.clone()])));
+
+        empty.is_empty = false;
+        assert!(!parse_selector(":empty").matches(&chain([empty])));
+    }
+
+    #[test]
+    fn lang_pseudo_class_matches_own_and_inherited_tags() {
+        let mut british = element("div", &[], 1, 1, 1, 1);
+        british.lang = Some("en-GB".to_string());
+        assert!(parse_selector(":lang(en)").matches(&chain([british.clone()])));
+        assert!(parse_selector(":lang(en-GB)").matches(&chain([british.clone()])));
+        assert!(!parse_selector(":lang(enx)").matches(&chain([british.clone()])));
+
+        british.lang = Some("fr".to_string());
+        assert!(!parse_selector(":lang(en)").matches(&chain([british.clone()])));
+
+        // Case-insensitive, per HTML.
+        british.lang = Some("EN-gb".to_string());
+        assert!(parse_selector(":lang(en)").matches(&chain([british])));
+
+        // A missing language never matches.
+        let mut untagged = element("div", &[], 1, 1, 1, 1);
+        untagged.lang = None;
+        assert!(!parse_selector(":lang(en)").matches(&chain([untagged])));
+    }
+
+    #[test]
+    fn checked_pseudo_class_requires_a_checkable_input() {
+        let mut checkbox = input_element("checkbox", true);
+        assert!(parse_selector(":checked").matches(&chain([checkbox.clone()])));
+
+        // Live checkedness, not the `checked` attribute, decides.
+        checkbox.checked = false;
+        checkbox.attributes = vec![("checked".to_string(), String::new())];
+        assert!(!parse_selector(":checked").matches(&chain([checkbox])));
+
+        // A text input is never `:checked`, however its state reads.
+        let mut text = input_element("text", true);
+        text.checked = true;
+        assert!(!parse_selector(":checked").matches(&chain([text])));
+
+        // A missing `type` means `type=text`.
+        let mut untyped = input_element("text", false);
+        untyped.checked = true;
+        assert!(!parse_selector(":checked").matches(&chain([untyped])));
     }
 
     #[test]

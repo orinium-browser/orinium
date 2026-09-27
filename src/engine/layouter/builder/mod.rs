@@ -109,12 +109,53 @@ pub(crate) fn element_info(html_node: &HtmlNodeType) -> Option<ElementInfo> {
         type_index: 1,
         type_count: 1,
         previous_siblings: ElementChain::default(),
+        // A lone node carries no tree context, so both are filled in by the
+        // callers that hold a snapshot. `has_parent` is optimistic here because
+        // the structural pseudo-classes only use it to reject a tree root,
+        // which a snapshot-less caller never describes.
+        has_parent: true,
+        is_empty: false,
+        lang: None,
+        checked: false,
     })
+}
+
+/// Structural pseudo-classes need a *parent element*; a document or shadow
+/// root above the tree root does not count, which is why the root element must
+/// not satisfy `:first-child`.
+pub(crate) fn is_element_node(snapshot: &DomSnapshot, id: NodeId) -> bool {
+    matches!(snapshot.node(id).kind, HtmlNodeType::Element { .. })
+}
+
+/// Read an element's own `lang` attribute, if any.
+pub(crate) fn own_lang(snapshot: &DomSnapshot, id: NodeId) -> Option<String> {
+    snapshot
+        .node(id)
+        .kind
+        .get_attr("lang")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+/// The Selectors 4 `:empty` test: no element children, and no text node whose
+/// data is non-empty. Comments and processing instructions are ignored, as are
+/// empty text nodes.
+pub(crate) fn is_empty_element(snapshot: &DomSnapshot, id: NodeId) -> bool {
+    snapshot
+        .children(id)
+        .iter()
+        .all(|&child| match &snapshot.node(child).kind {
+            HtmlNodeType::Text(text) => text.is_empty(),
+            HtmlNodeType::Element { .. } => false,
+            _ => true,
+        })
 }
 
 pub(crate) fn element_sibling_infos(
     snapshot: &DomSnapshot,
     children: &[NodeId],
+    parent_lang: Option<&str>,
 ) -> Vec<Option<ElementInfo>> {
     let mut type_counts = HashMap::<String, usize>::new();
     for &child in children {
@@ -142,6 +183,11 @@ pub(crate) fn element_sibling_infos(
             info.type_index = *seen;
             info.type_count = type_counts[&info.tag_name];
             info.previous_siblings = previous_siblings.clone();
+            info.is_empty = is_empty_element(snapshot, child);
+            info.checked = snapshot.node(child).checked;
+            // `:lang()` sees the element's own tag, or the one inherited from
+            // the nearest ancestor that declares one.
+            info.lang = own_lang(snapshot, child).or_else(|| parent_lang.map(str::to_string));
 
             let mut sibling = info.clone();
             sibling.previous_siblings = ElementChain::default();
@@ -183,6 +229,9 @@ pub(super) fn length_to_px(len: &Length, font_size: f32) -> f32 {
 
 struct StackFrame {
     dom: NodeId,
+    /// The language tag in effect for this node, so that descendants inherit
+    /// `:lang()` correctly.
+    lang: Option<String>,
     chain: ElementChain,
     child: Arc<InheritedCss>,
     kind: Option<NodeKind>,
@@ -325,7 +374,11 @@ pub fn build_layout_and_info_from_snapshot(
     /*
      * Build the initial element chain for the root node.
      */
-    if let Some(info) = element_info(&snapshot.node(root).kind) {
+    if let Some(mut info) = element_info(&snapshot.node(root).kind) {
+        // The snapshot root has no parent, so it must not satisfy
+        // `:first-child` and friends.
+        info.has_parent = false;
+        info.is_empty = is_empty_element(snapshot, root);
         chain = chain.prepend(Some(info));
     }
 
@@ -334,6 +387,7 @@ pub fn build_layout_and_info_from_snapshot(
     let mut stack: Vec<StackFrame> = Vec::new();
     stack.push(StackFrame {
         dom: root,
+        lang: own_lang(snapshot, root),
         chain,
         child: Arc::new(parent),
         kind: None,
@@ -1020,7 +1074,17 @@ pub fn build_layout_and_info_from_snapshot(
                 };
                 let child_css = Arc::clone(&stack[top_idx].child);
                 perf_scope!(sibling_info);
-                let kid_infos = element_sibling_infos(snapshot, &kids_for_push);
+                let parent_lang = stack[top_idx]
+                    .lang
+                    .clone()
+                    .or_else(|| own_lang(snapshot, stack[top_idx].dom));
+                let mut kid_infos =
+                    element_sibling_infos(snapshot, &kids_for_push, parent_lang.as_deref());
+                if !is_element_node(snapshot, stack[top_idx].dom) {
+                    for info in kid_infos.iter_mut().flatten() {
+                        info.has_parent = false;
+                    }
+                }
                 #[cfg(any(feature = "profile", debug_assertions))]
                 {
                     sibling_info_time += sibling_info.elapsed();
@@ -1028,8 +1092,10 @@ pub fn build_layout_and_info_from_snapshot(
                 let parent_style_for_children = stack[top_idx].parent_style.clone();
                 let parent_container_for_children = stack[top_idx].parent_container_style.clone();
                 for (&kid, info) in kids_for_push.iter().zip(kid_infos).rev() {
+                    let kid_lang = info.as_ref().and_then(|info| info.lang.clone());
                     stack.push(StackFrame {
                         dom: kid,
+                        lang: kid_lang,
                         chain: parent_chain.prepend(info),
                         child: Arc::clone(&child_css),
                         kind: None,

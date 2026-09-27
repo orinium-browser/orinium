@@ -98,6 +98,10 @@ pub(crate) fn make_element_interface() -> (Rc<RefCell<JSObject>>, Rc<RefCell<JSO
         accessor_property(get_element_checked, set_element_checked),
     );
     prototype.define_property(
+        "defaultChecked".to_string(),
+        accessor_property(get_element_default_checked, set_element_default_checked),
+    );
+    prototype.define_property(
         "selected".to_string(),
         accessor_property(get_element_selected, set_element_selected),
     );
@@ -1842,6 +1846,13 @@ fn element_click(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(target) = args.first().and_then(JSValue::as_object) else {
         return Ok(JSValue::undefined());
     };
+    // A checkbox or radio updates its checkedness as part of the activation
+    // behaviour, which is what makes it observable through `:checked`.
+    let clicked = dom_node(vm, args.first().unwrap_or(&JSValue::undefined()));
+    if let Some(node) = clicked {
+        run_form_control_activation(&node);
+        mark_dom_dirty(vm);
+    }
     let mut event = JSObject::new();
     event.set(
         "type".to_string(),
@@ -3592,6 +3603,132 @@ fn set_reflected_boolean_property(vm: &mut VM, args: &[JSValue], name: &str) -> 
     Ok(JSValue::undefined())
 }
 
+/// The lowercase `type` of an `input`, defaulting to `text` when unset, which
+/// is what decides whether it can be checked.
+fn input_type(node: &NodeRef<HtmlNodeType>) -> String {
+    node.borrow()
+        .value
+        .get_attr("type")
+        .unwrap_or("text")
+        .trim()
+        .to_ascii_lowercase()
+}
+
+/// The name shared by a radio group, which is scoped to the tree so that
+/// same-named radios in different documents stay independent.
+fn radio_group_name(node: &NodeRef<HtmlNodeType>) -> Option<String> {
+    let name = node.borrow().value.get_attr("name")?.to_string();
+    let root = tree_root_of(node);
+    let mut stack = vec![root];
+    let mut found = None;
+    while let Some(current) = stack.pop() {
+        let children = current.borrow().children().to_vec();
+        for child in children {
+            let is_radio = child.borrow().value.tag_name() == Some("input")
+                && input_type(&child) == "radio"
+                && child.borrow().value.get_attr("name") == Some(name.as_str());
+            if is_radio && found.is_none() {
+                found = Some(Rc::clone(&child));
+            }
+            stack.push(child);
+        }
+    }
+    found.map(|peer| {
+        peer.borrow()
+            .value
+            .get_attr("name")
+            .unwrap_or("")
+            .to_string()
+    })
+}
+
+/// Applies `input.checked = value` semantics: the live state changes while the
+/// `checked` attribute, which is `defaultChecked`, is left untouched. Checking a
+/// radio also unchecks the rest of its group.
+fn set_checked_state(node: &NodeRef<HtmlNodeType>, checked: bool) {
+    if checked && input_type(node) == "radio" {
+        let name = radio_group_name(node);
+        if let Some(name) = name {
+            let root = tree_root_of(node);
+            let mut stack = vec![root];
+            while let Some(current) = stack.pop() {
+                let children = current.borrow().children().to_vec();
+                for child in children {
+                    if child.borrow().value.tag_name() == Some("input")
+                        && input_type(&child) == "radio"
+                        && child.borrow().value.get_attr("name") == Some(name.as_str())
+                        && !Rc::ptr_eq(&child, node)
+                    {
+                        child.borrow().set_checkedness(false);
+                    }
+                    stack.push(child);
+                }
+            }
+        }
+    }
+    node.borrow().set_checkedness(checked);
+}
+
+/// The activation behaviour of a checkbox or radio when it is clicked: a
+/// checkbox toggles, a radio becomes checked and clears its group.
+fn run_form_control_activation(node: &NodeRef<HtmlNodeType>) {
+    if node.borrow().value.tag_name() != Some("input") {
+        return;
+    }
+    match input_type(node).as_str() {
+        "checkbox" => {
+            let next = !crate::engine::html::parser::checkedness(node);
+            set_checked_state(node, next);
+        }
+        "radio" => set_checked_state(node, true),
+        _ => {}
+    }
+}
+
+fn get_element_checked(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::undefined());
+    };
+    Ok(JSValue::from_bool(
+        crate::engine::html::parser::checkedness(&node),
+    ))
+}
+
+fn set_element_checked(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::undefined());
+    };
+    let checked = args.get(1).map(JSValue::to_boolean).unwrap_or(false);
+    set_checked_state(&node, checked);
+    // Checkedness is observable through `:checked`, so the tree is dirty.
+    mark_dom_dirty(vm);
+    Ok(JSValue::undefined())
+}
+
+/// `defaultChecked` is the `checked` content attribute, which only seeds the
+/// live checkedness and is never changed by clicking or by `checked = ...`.
+fn get_element_default_checked(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::undefined());
+    };
+    let present = node.borrow().value.get_attr("checked").is_some();
+    Ok(JSValue::from_bool(present))
+}
+
+fn set_element_default_checked(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::undefined());
+    };
+    let present = args.get(1).map(JSValue::to_boolean).unwrap_or(false);
+    if present {
+        node.borrow_mut().value.set_attr("checked", String::new());
+    } else {
+        node.borrow_mut().value.remove_attr("checked");
+    }
+    mark_dom_dirty(vm);
+    Ok(JSValue::undefined())
+}
+
 fn get_element_value(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     reflected_string_property(vm, &args, "value")
 }
@@ -4534,7 +4671,6 @@ macro_rules! reflected_boolean_accessors {
     };
 }
 
-reflected_boolean_accessors!(get_element_checked, set_element_checked, "checked");
 reflected_boolean_accessors!(get_element_selected, set_element_selected, "selected");
 reflected_boolean_accessors!(get_element_disabled, set_element_disabled, "disabled");
 reflected_boolean_accessors!(get_element_multiple, set_element_multiple, "multiple");

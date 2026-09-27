@@ -480,6 +480,49 @@ pub(crate) fn element_chain(node: &NodeRef<HtmlNodeType>) -> ElementChain {
     ElementChain::from_vec(chain)
 }
 
+/// The effective checkedness of a checkbox or radio: the live state when the
+/// script has set one, otherwise the presence of the `checked` content
+/// attribute, which supplies the initial value (`defaultChecked`).
+pub fn checkedness(node: &NodeRef<HtmlNodeType>) -> bool {
+    let node = node.borrow();
+    node.checkedness()
+        .unwrap_or_else(|| node.value.get_attr("checked").is_some())
+}
+
+/// The `lang` attribute in effect for a node: its own, or failing that the
+/// nearest ancestor's. `:lang()` matches against this rather than the raw
+/// attribute, so language is inherited through the tree.
+fn effective_lang(node: &NodeRef<HtmlNodeType>) -> Option<String> {
+    let mut current = Some(Rc::clone(node));
+    while let Some(candidate) = current {
+        if let Some(lang) = candidate
+            .borrow()
+            .value
+            .get_attr("lang")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Some(lang.to_string());
+        }
+        current = candidate.borrow().parent();
+    }
+    None
+}
+
+/// The Selectors 4 `:empty` test: no element children, and no text node whose
+/// data is non-empty. Comments and processing instructions are ignored, as are
+/// empty text nodes.
+fn is_empty_element(node: &NodeRef<HtmlNodeType>) -> bool {
+    node.borrow()
+        .children()
+        .iter()
+        .all(|child| match &child.borrow().value {
+            HtmlNodeType::Text(text) => text.is_empty(),
+            HtmlNodeType::Element { .. } => false,
+            _ => true,
+        })
+}
+
 fn element_info(node: &NodeRef<HtmlNodeType>) -> Option<ElementInfo> {
     let (tag_name, attributes, parent) = {
         let node = node.borrow();
@@ -493,6 +536,9 @@ fn element_info(node: &NodeRef<HtmlNodeType>) -> Option<ElementInfo> {
         (tag_name.clone(), attributes.clone(), node.parent())
     };
 
+    let has_parent = has_element_parent(node);
+    let lang = effective_lang(node);
+    let checked = checkedness(node);
     let siblings = parent
         .map(|parent| parent.borrow().children().to_vec())
         .unwrap_or_else(|| vec![Rc::clone(node)]);
@@ -546,10 +592,26 @@ fn element_info(node: &NodeRef<HtmlNodeType>) -> Option<ElementInfo> {
         type_index,
         type_count: type_counts[&tag_name],
         previous_siblings,
+        has_parent,
+        is_empty: is_empty_element(node),
+        lang,
+        checked,
     })
 }
 
+/// Whether `node` sits below a parent *element*. A document or shadow root does
+/// not count, so the root element fails `:first-child` and friends.
+fn has_element_parent(node: &NodeRef<HtmlNodeType>) -> bool {
+    node.borrow()
+        .parent()
+        .is_some_and(|parent| matches!(parent.borrow().value, HtmlNodeType::Element { .. }))
+}
+
 fn basic_element_info(node: &NodeRef<HtmlNodeType>) -> Option<ElementInfo> {
+    let has_parent = has_element_parent(node);
+    let is_empty = is_empty_element(node);
+    let lang = effective_lang(node);
+    let checked = checkedness(node);
     let node = node.borrow();
     let HtmlNodeType::Element {
         tag_name,
@@ -584,6 +646,10 @@ fn basic_element_info(node: &NodeRef<HtmlNodeType>) -> Option<ElementInfo> {
         type_index: 1,
         type_count: 1,
         previous_siblings: ElementChain::default(),
+        has_parent,
+        is_empty,
+        lang,
+        checked,
     })
 }
 
@@ -1319,6 +1385,85 @@ mod tests {
             .into_iter()
             .find(|c| matches!(c.borrow().value, HtmlNodeType::DocumentFragment))
             .expect("template must own a DocumentFragment")
+    }
+
+    #[test]
+    fn checkedness_falls_back_to_the_attribute_but_live_state_wins() {
+        let tree = parse(r#"<input id="a" checked><input id="b">"#);
+
+        // The `checked` attribute seeds the initial value.
+        let marked = tree.query_selector("#a").expect("marked input");
+        assert!(checkedness(&marked));
+
+        let plain = tree.query_selector("#b").expect("plain input");
+        assert!(!checkedness(&plain));
+
+        // The live state overrides the attribute in both directions.
+        plain.borrow().set_checkedness(true);
+        assert!(checkedness(&plain));
+        marked.borrow().set_checkedness(false);
+        assert!(!checkedness(&marked));
+        // ...and writing the live state leaves the attribute alone.
+        assert!(marked.borrow().value.get_attr("checked").is_some());
+    }
+
+    #[test]
+    fn empty_and_first_child_respect_the_tree_shape() {
+        let tree = parse("<html><head></head><body><p>hi</p><p>  </p></body></html>");
+
+        // The document above `<html>` is not a parent element, so the root
+        // element must not match the structural pseudo-classes.
+        let root = tree.query_selector("html").expect("root element");
+        assert!(DomTree::element_matches_selector(&root, "html"));
+        for selector in [
+            ":first-child",
+            ":last-child",
+            ":only-child",
+            ":first-of-type",
+            ":last-of-type",
+            ":only-of-type",
+        ] {
+            assert!(
+                !DomTree::element_matches_selector(&root, selector),
+                "{selector} matched the parentless root element"
+            );
+        }
+        // The document node itself is not an element, so nothing matches it.
+        assert!(!DomTree::element_matches_selector(
+            &tree.root,
+            ":first-child"
+        ));
+
+        // `<head>` has no children, `<body>` has elements, and a text node with
+        // data keeps an element from being `:empty`.
+        let head = tree.query_selector("head").expect("head");
+        let body = tree.query_selector("body").expect("body");
+        assert!(DomTree::element_matches_selector(&head, ":empty"));
+        assert!(!DomTree::element_matches_selector(&body, ":empty"));
+
+        let paragraphs = tree.query_selector_all("p");
+        assert_eq!(paragraphs.len(), 2);
+        assert!(!DomTree::element_matches_selector(&paragraphs[0], ":empty"));
+        // Whitespace-only text still counts, per the HTML definition of `:empty`.
+        assert!(!DomTree::element_matches_selector(&paragraphs[1], ":empty"));
+    }
+
+    #[test]
+    fn lang_pseudo_class_is_inherited_from_the_nearest_ancestor() {
+        let tree = parse(r#"<div lang="en-GB"><p><em>x</em></p></div><div lang="fr"></div>"#);
+
+        let british = tree.query_selector("div[lang]").expect("outer div");
+        let descendant = tree.query_selector("em").expect("descendant");
+        let french = tree
+            .query_selector_all("div")
+            .into_iter()
+            .nth(1)
+            .expect("second div");
+
+        assert!(DomTree::element_matches_selector(&british, ":lang(en)"));
+        assert!(DomTree::element_matches_selector(&descendant, ":lang(en)"));
+        assert!(!DomTree::element_matches_selector(&descendant, ":lang(fr)"));
+        assert!(!DomTree::element_matches_selector(&french, ":lang(en)"));
     }
 
     #[test]

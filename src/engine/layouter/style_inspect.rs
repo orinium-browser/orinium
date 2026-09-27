@@ -4,7 +4,9 @@
 
 use std::collections::HashMap;
 
-use super::builder::{element_info, element_sibling_infos};
+use super::builder::{
+    element_info, element_sibling_infos, is_element_node, is_empty_element, own_lang,
+};
 use super::css_resolver::{ResolvedDeclaration, RuleSet, StyleOrigin, resolve_inline_style};
 use super::dom_snapshot::{DomSnapshot, NodeId};
 use crate::engine::css::matcher::ElementChain;
@@ -185,14 +187,41 @@ fn chain_for_node(snapshot: &DomSnapshot, target: NodeId) -> Option<ElementChain
     let mut path = Vec::new();
     find_path(snapshot, root, target, &mut path)?;
 
+    // The nearest `lang` at or above each ancestor is what `:lang()` sees, so
+    // walk forward once and carry the value down the path.
+    let mut inherited_lang: Option<String> = None;
+    let mut langs = Vec::with_capacity(path.len());
+    for &node_id in path.iter() {
+        if let Some(lang) = own_lang(snapshot, node_id) {
+            inherited_lang = Some(lang);
+        }
+        langs.push(inherited_lang.clone());
+    }
+
     let mut elements = Vec::with_capacity(path.len());
     for (depth, &node_id) in path.iter().enumerate() {
         let info = if depth == 0 {
-            element_info(&snapshot.node(node_id).kind)
+            let mut info = element_info(&snapshot.node(node_id).kind);
+            if let Some(info) = info.as_mut() {
+                // The snapshot root has no parent, so it must not satisfy
+                // `:first-child` and friends.
+                info.has_parent = false;
+                info.is_empty = is_empty_element(snapshot, node_id);
+                info.lang.clone_from(&langs[0]);
+            }
+            info
         } else {
             let siblings = snapshot.children(path[depth - 1]);
             let position = siblings.iter().position(|&sibling| sibling == node_id)?;
-            element_sibling_infos(snapshot, siblings)[position].clone()
+            let mut info = element_sibling_infos(snapshot, siblings, langs[depth - 1].as_deref())
+                [position]
+                .clone();
+            if !is_element_node(snapshot, path[depth - 1])
+                && let Some(info) = info.as_mut()
+            {
+                info.has_parent = false;
+            }
+            info
         };
         elements.push(info);
     }
