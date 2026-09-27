@@ -1,3 +1,4 @@
+pub(crate) mod computed_style;
 pub(crate) mod custom_elements;
 pub(crate) mod document;
 pub(crate) mod dom_exception;

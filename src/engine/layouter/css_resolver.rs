@@ -279,6 +279,11 @@ impl MediaEnvironment {
             color_scheme,
         }
     }
+
+    /// The viewport this environment was built for, as `(width, height)`.
+    pub fn viewport(&self) -> (f32, f32) {
+        (self.viewport_width, self.viewport_height)
+    }
 }
 
 /// Evaluates a parsed media query (as produced by

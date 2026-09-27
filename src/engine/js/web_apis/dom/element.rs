@@ -18,6 +18,7 @@ use crate::engine::js::{
     JsDynamicImageRequest, JsDynamicScriptRequest, JsDynamicScriptSource, JsDynamicStyleRequest,
     JsIframeFetchRequest, JsLayoutMetrics,
 };
+use crate::engine::layouter::css_resolver::MediaEnvironment;
 use crate::engine::tree::{NodeRef, TreeNode};
 use pixi_byte::value::JSArray;
 use pixi_byte::value::jsobject::{JSObject, Property};
@@ -2954,16 +2955,14 @@ fn is_computed_style_receiver(vm: &mut VM, args: &[JSValue]) -> bool {
 
 fn get_style_css_text(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     if is_computed_style_receiver(vm, &args) {
-        let Some(dom_id) = node_dom_id(args.first().unwrap_or(&UNDEFINED)) else {
-            return Ok(JSValue::from_string(String::new()));
-        };
-        let css_text = with_host(vm, |host| {
-            host.computed_styles
-                .get(&dom_id)
-                .map(|declarations| serialize_style_declarations(declarations))
-                .unwrap_or_default()
-        })
-        .unwrap_or_default();
+        let node = dom_node(vm, args.first().unwrap_or(&UNDEFINED));
+        let css_text = node
+            .as_ref()
+            .map(|node| {
+                let declarations = computed_style_declarations(vm, node);
+                serialize_style_declarations(&declarations)
+            })
+            .unwrap_or_default();
         return Ok(JSValue::from_string(css_text));
     }
     let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
@@ -3067,26 +3066,80 @@ fn read_style_property(vm: &mut VM, args: &[JSValue], name: &str) -> String {
     read_inline_style_property(vm, args, name)
 }
 
+/// Walks up to the topmost ancestor, i.e. the root of the tree `node` lives
+/// in. Works for the main document and for an iframe's own tree alike.
+fn tree_root_of(node: &NodeRef<HtmlNodeType>) -> NodeRef<HtmlNodeType> {
+    let mut current = Rc::clone(node);
+    loop {
+        let parent = current.borrow().parent();
+        match parent {
+            Some(parent) => current = parent,
+            None => return current,
+        }
+    }
+}
+
+/// Computed declarations for `node`, preferring the snapshot the layouter
+/// committed and resolving the cascade on demand when there is none.
+///
+/// The on-demand path serves headless callers (and any read before the first
+/// committed layout), which have no laid-out box tree to serialize from.
+fn computed_style_declarations(vm: &mut VM, node: &NodeRef<HtmlNodeType>) -> Vec<(String, String)> {
+    let dom_id = with_host(vm, |host| host.dom_id_for_node(node)).flatten();
+    let (dom_id, committed) = match dom_id {
+        Some(dom_id) => {
+            let committed =
+                with_host(vm, |host| host.computed_styles.get(&dom_id).cloned()).flatten();
+            (Some(dom_id), committed)
+        }
+        None => (None, None),
+    };
+    if let Some(declarations) = committed {
+        return declarations;
+    }
+    // Without a dom id the element was never exposed to scripts, so nothing can
+    // have a cached cascade entry for it either.
+    let Some(dom_id) = dom_id else {
+        return Vec::new();
+    };
+
+    let (dom_version, viewport) = with_host(vm, |host| {
+        (
+            host.dom.version(),
+            (host.viewport.0 as f32, host.viewport.1 as f32),
+        )
+    })
+    .unwrap_or((0, (0.0, 0.0)));
+    let environment =
+        MediaEnvironment::new(viewport, crate::engine::layouter::types::ColorScheme::Light);
+    let root = tree_root_of(node);
+    with_host_mut(vm, |host| {
+        host.computed_style_resolver
+            .declarations(&root, node, dom_id, dom_version, &environment)
+    })
+    .unwrap_or_default()
+}
+
+/// The winning value of `name` in a serialized declaration list.
+fn lookup_declaration(declarations: &[(String, String)], name: &str) -> Option<String> {
+    declarations
+        .iter()
+        .rev()
+        .find(|(property, _)| property.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.clone())
+}
+
 fn read_computed_style_property(vm: &mut VM, args: &[JSValue], name: &str) -> String {
-    let Some(dom_id) = node_dom_id(args.first().unwrap_or(&UNDEFINED)) else {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
         return String::new();
     };
-    let from_computed = with_host(vm, |host| {
-        host.computed_styles.get(&dom_id).and_then(|pairs| {
-            pairs
-                .iter()
-                .rev()
-                .find(|(property, _)| property.eq_ignore_ascii_case(name))
-                .map(|(_, value)| value.clone())
-        })
-    })
-    .and_then(|value| value);
-    if let Some(value) = from_computed {
+    let declarations = computed_style_declarations(vm, &node);
+    if let Some(value) = lookup_declaration(&declarations, name) {
         return value;
     }
-    // Property not serialized by the layout snapshot (or node was never laid
-    // out): fall back to the inline `style` attribute like the previous
-    // read-only implementation did.
+    // Property absent from the resolved cascade (e.g. no rule sets it): fall
+    // back to the inline `style` attribute so hand-written inline values still
+    // read back.
     read_inline_style_property(vm, args, name)
 }
 

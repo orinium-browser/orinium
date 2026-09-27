@@ -8,6 +8,7 @@
 //! [`DomSnapshot`] commits. It can also be used directly on any thread.
 
 use crate::engine::html::{DomTree, HtmlNodeType};
+use crate::engine::js::web_apis::dom::computed_style;
 use crate::engine::js::web_apis::dom::document::IframeDocument;
 use crate::engine::layouter::dom_snapshot::DomSnapshot;
 use crate::engine::tree::NodeRef;
@@ -255,6 +256,9 @@ pub struct JsHost {
     /// Stable read-only `CSSStyleDeclaration` wrappers backing
     /// `getComputedStyle` results, keyed by DOM id.
     pub(crate) computed_style_declarations: HashMap<u64, Rc<RefCell<JSObject>>>,
+    /// On-demand cascade resolution used when no committed layout snapshot is
+    /// available (headless callers, and reads before the first layout).
+    pub(crate) computed_style_resolver: computed_style::Resolver,
     pub(crate) next_fetch_id: u64,
     pub(crate) next_timer_id: u64,
     pub(crate) time_origin: Instant,
@@ -343,6 +347,7 @@ impl JsRuntime {
             layout_metrics_by_dom_id: HashMap::new(),
             computed_styles: HashMap::new(),
             computed_style_declarations: HashMap::new(),
+            computed_style_resolver: computed_style::Resolver::new(),
             next_fetch_id: 0,
             next_timer_id: 0,
             time_origin: Instant::now(),
@@ -424,6 +429,9 @@ impl JsRuntime {
         computed_styles: HashMap<u64, Vec<(String, String)>>,
     ) {
         with_host_mut(self.engine.vm(), |host| {
+            // A committed snapshot is authoritative from here on, so any
+            // on-demand values resolved before it are superseded.
+            host.computed_style_resolver.invalidate();
             host.computed_styles = computed_styles
         });
     }
