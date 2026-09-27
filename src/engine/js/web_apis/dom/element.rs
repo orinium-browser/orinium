@@ -1,3 +1,4 @@
+use crate::engine::html::util::split_html_space;
 use crate::engine::html::{DomTree, HtmlNodeType, Parser as HtmlParser};
 use crate::engine::js::JsHost;
 use crate::engine::js::common::{
@@ -3276,13 +3277,13 @@ fn class_token(value: Option<&JSValue>) -> Option<&str> {
 }
 
 fn class_tokens(node: &NodeRef<HtmlNodeType>) -> Vec<String> {
-    node.borrow()
+    let value = node
+        .borrow()
         .value
         .get_attr("class")
         .unwrap_or("")
-        .split_whitespace()
-        .map(str::to_string)
-        .collect()
+        .to_string();
+    split_html_space(&value).map(str::to_string).collect()
 }
 
 fn set_class_tokens(node: &NodeRef<HtmlNodeType>, classes: &[String]) {

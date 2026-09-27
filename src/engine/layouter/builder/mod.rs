@@ -35,6 +35,7 @@ use crate::engine::css::{
     matcher::{ElementChain, ElementInfo},
     values::{CssValue, Unit},
 };
+use crate::engine::html::util::split_html_space;
 use crate::engine::html::{HtmlNodeType, ScriptingMode};
 use crate::engine::layouter::css_resolver::{
     DeclarationResolver, Properties, PseudoElement, resolve_inline_value,
@@ -94,9 +95,7 @@ pub(crate) fn element_info(html_node: &HtmlNodeType) -> Option<ElementInfo> {
             .iter()
             .find(|attribute| attribute.name == "class")
             .map(|attribute| {
-                attribute
-                    .value
-                    .split_whitespace()
+                split_html_space(&attribute.value)
                     .map(str::to_string)
                     .collect()
             })
