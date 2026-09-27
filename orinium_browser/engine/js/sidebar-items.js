@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["devtools","processor"],"struct":["IframeContentSnapshot","JsFetchRequest","JsFetchResponse","JsHost","JsIframeFetchRequest","JsLayoutMetrics","JsRuntime"]};
+window.SIDEBAR_ITEMS = {"mod":["devtools","missing_api_detector","processor"],"struct":["IframeContentSnapshot","JsFetchRequest","JsFetchResponse","JsHost","JsIframeFetchRequest","JsLayoutMetrics","JsRuntime"]};

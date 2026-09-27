@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["collect_svg","emit_commands","parse_view_box","path_from_d","rasterize_from_bytes","viewbox_meet_transform"],"struct":["RasterResult","SvgContent","SvgShape","SvgStroke"],"type":["ViewBox"]};

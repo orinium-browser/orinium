@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["NetworkCommand"],"fn":["network_main"],"mod":["cache","config","cookie_store","error","sender_pool"],"struct":["NetworkCore","NetworkMessage","NetworkRequest","Request","Response","StatusCode"]};
+window.SIDEBAR_ITEMS = {"enum":["NetworkCommand"],"fn":["network_main"],"mod":["cache","config","cookie_store","error","sender_pool"],"struct":["AsyncNetworkCore","NetworkCore","NetworkMessage","NetworkRequest","Request","Response","SharedNetState","StatusCode"]};

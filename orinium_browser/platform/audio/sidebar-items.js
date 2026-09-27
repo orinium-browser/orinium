@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["SoundManager"]};
+window.SIDEBAR_ITEMS = {"fn":["default_audio_sink_factory"],"struct":["PlatformAudioSink","PlatformAudioSinkFactory","SoundManager"]};

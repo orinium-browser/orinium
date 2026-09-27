@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `src/engine/input/mod.rs`."><title>mod.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-1ed95124.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="orinium_browser" data-themes="" data-resource-suffix="" data-rustdoc-version="1.98.0 (88d9e12ae 2026-08-18)" data-channel="1.98.0" data-search-js="search-9944d736.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../../static.files/storage-41dd4d93.js"></script><script defer src="../../../../static.files/src-script-813739b1.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">orinium_browser/engine/input/</div>mod.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="doccomment">//! 入力処理とヒットテスト。クリック位置の要素判定を行う。
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `src/engine/input/mod.rs`."><title>mod.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-1ed95124.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="orinium_browser" data-themes="" data-resource-suffix="" data-rustdoc-version="1.98.1 (48a229cea 2026-09-01)" data-channel="1.98.1" data-search-js="search-9944d736.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../../static.files/storage-41dd4d93.js"></script><script defer src="../../../../static.files/src-script-813739b1.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">orinium_browser/engine/input/</div>mod.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="doccomment">//! 入力処理とヒットテスト。クリック位置の要素判定を行う。
 <a href=#2 id=2 data-nosnippet>2</a>
 <a href=#3 id=3 data-nosnippet>3</a></span><span class="kw">use </span>std::sync::Arc;
 <a href=#4 id=4 data-nosnippet>4</a>
@@ -1389,214 +1389,213 @@
 <a href=#1389 id=1389 data-nosnippet>1389</a>    ) {
 <a href=#1390 id=1390 data-nosnippet>1390</a>        <span class="kw">let </span>path = hit_test(root_layout, root_info, x, y);
 <a href=#1391 id=1391 data-nosnippet>1391</a>        <span class="kw">let </span>hit = hit_custom_node(<span class="kw-2">&amp;</span>path).unwrap();
-<a href=#1392 id=1392 data-nosnippet>1392</a>        <span class="kw">let </span>expected: Arc&lt;<span class="kw">dyn </span>CustomNode&gt; = node.clone();
-<a href=#1393 id=1393 data-nosnippet>1393</a>        <span class="macro">assert!</span>(Arc::ptr_eq(hit, <span class="kw-2">&amp;</span>expected));
-<a href=#1394 id=1394 data-nosnippet>1394</a>    }
-<a href=#1395 id=1395 data-nosnippet>1395</a>
-<a href=#1396 id=1396 data-nosnippet>1396</a>    <span class="attr">#[test]
-<a href=#1397 id=1397 data-nosnippet>1397</a>    </span><span class="kw">fn </span>hit_test_finds_open_popup() {
-<a href=#1398 id=1398 data-nosnippet>1398</a>        <span class="kw">let </span>(root_layout, root_info, node) = make_tree(<span class="number">0.0</span>);
-<a href=#1399 id=1399 data-nosnippet>1399</a>        <span class="comment">// Custom page origin (15,20); popup page rect (15,48)-(135,132).
-<a href=#1400 id=1400 data-nosnippet>1400</a>        // Global (20,60) → local (5,40), inside the popup (y in 28..112).
-<a href=#1401 id=1401 data-nosnippet>1401</a>        </span>popup_hit_assert(<span class="kw-2">&amp;</span>root_layout, <span class="kw-2">&amp;</span>root_info, <span class="kw-2">&amp;</span>node, <span class="number">20.0</span>, <span class="number">60.0</span>);
-<a href=#1402 id=1402 data-nosnippet>1402</a>    }
-<a href=#1403 id=1403 data-nosnippet>1403</a>
-<a href=#1404 id=1404 data-nosnippet>1404</a>    <span class="attr">#[test]
-<a href=#1405 id=1405 data-nosnippet>1405</a>    </span><span class="kw">fn </span>hit_test_ignores_closed_popup() {
-<a href=#1406 id=1406 data-nosnippet>1406</a>        <span class="kw">let </span>(root_layout, root_info, node) = make_tree(<span class="number">0.0</span>);
-<a href=#1407 id=1407 data-nosnippet>1407</a>        node.popup_open.store(<span class="bool-val">false</span>, Ordering::Relaxed);
-<a href=#1408 id=1408 data-nosnippet>1408</a>        <span class="comment">// Local (5,40) is below the custom box (y in 0..28); with the popup
-<a href=#1409 id=1409 data-nosnippet>1409</a>        // closed the click lands on the container instead.
-<a href=#1410 id=1410 data-nosnippet>1410</a>        </span><span class="kw">let </span>path = hit_test(<span class="kw-2">&amp;</span>root_layout, <span class="kw-2">&amp;</span>root_info, <span class="number">20.0</span>, <span class="number">60.0</span>);
-<a href=#1411 id=1411 data-nosnippet>1411</a>        <span class="macro">assert_eq!</span>(path.len(), <span class="number">2</span>);
-<a href=#1412 id=1412 data-nosnippet>1412</a>        <span class="macro">assert!</span>(hit_custom_node(<span class="kw-2">&amp;</span>path).is_none());
-<a href=#1413 id=1413 data-nosnippet>1413</a>    }
-<a href=#1414 id=1414 data-nosnippet>1414</a>
-<a href=#1415 id=1415 data-nosnippet>1415</a>    <span class="attr">#[test]
-<a href=#1416 id=1416 data-nosnippet>1416</a>    </span><span class="kw">fn </span>hit_test_finds_popup_escaping_ancestor_box() {
-<a href=#1417 id=1417 data-nosnippet>1417</a>        <span class="kw">let </span>(root_layout, root_info, node) = make_tree(<span class="number">0.0</span>);
-<a href=#1418 id=1418 data-nosnippet>1418</a>        <span class="comment">// The container box ends at y=120 but the popup reaches y=132. A click
-<a href=#1419 id=1419 data-nosnippet>1419</a>        // past the container is still a popup hit because popups render above
-<a href=#1420 id=1420 data-nosnippet>1420</a>        // ancestor boxes and clips.
-<a href=#1421 id=1421 data-nosnippet>1421</a>        </span>popup_hit_assert(<span class="kw-2">&amp;</span>root_layout, <span class="kw-2">&amp;</span>root_info, <span class="kw-2">&amp;</span>node, <span class="number">20.0</span>, <span class="number">125.0</span>);
-<a href=#1422 id=1422 data-nosnippet>1422</a>    }
-<a href=#1423 id=1423 data-nosnippet>1423</a>
-<a href=#1424 id=1424 data-nosnippet>1424</a>    <span class="attr">#[test]
-<a href=#1425 id=1425 data-nosnippet>1425</a>    </span><span class="kw">fn </span>hit_test_folds_scroll_into_popup_hit() {
-<a href=#1426 id=1426 data-nosnippet>1426</a>        <span class="kw">let </span>(root_layout, root_info, node) = make_tree(<span class="number">50.0</span>);
-<a href=#1427 id=1427 data-nosnippet>1427</a>        <span class="comment">// With the 50px ancestor scroll, a click at page y=25 maps to local
-<a href=#1428 id=1428 data-nosnippet>1428</a>        // (5,55), inside the popup (y in 28..112).
-<a href=#1429 id=1429 data-nosnippet>1429</a>        </span>popup_hit_assert(<span class="kw-2">&amp;</span>root_layout, <span class="kw-2">&amp;</span>root_info, <span class="kw-2">&amp;</span>node, <span class="number">20.0</span>, <span class="number">25.0</span>);
-<a href=#1430 id=1430 data-nosnippet>1430</a>    }
-<a href=#1431 id=1431 data-nosnippet>1431</a>
-<a href=#1432 id=1432 data-nosnippet>1432</a>    <span class="attr">#[test]
-<a href=#1433 id=1433 data-nosnippet>1433</a>    </span><span class="kw">fn </span>dismiss_open_popups_closes_popup_on_outside_press() {
-<a href=#1434 id=1434 data-nosnippet>1434</a>        <span class="kw">let </span>(root_layout, root_info, node) = make_tree(<span class="number">0.0</span>);
-<a href=#1435 id=1435 data-nosnippet>1435</a>        <span class="comment">// (10,25) lands on the container, outside the custom box and popup.
-<a href=#1436 id=1436 data-nosnippet>1436</a>        </span><span class="kw">let </span>path = hit_test(<span class="kw-2">&amp;</span>root_layout, <span class="kw-2">&amp;</span>root_info, <span class="number">10.0</span>, <span class="number">25.0</span>);
-<a href=#1437 id=1437 data-nosnippet>1437</a>        <span class="macro">assert!</span>(dismiss_open_popups(<span class="kw-2">&amp;</span>root_info, <span class="kw-2">&amp;</span>path));
-<a href=#1438 id=1438 data-nosnippet>1438</a>        <span class="macro">assert!</span>(node.dismissed.load(Ordering::Relaxed));
-<a href=#1439 id=1439 data-nosnippet>1439</a>    }
-<a href=#1440 id=1440 data-nosnippet>1440</a>
-<a href=#1441 id=1441 data-nosnippet>1441</a>    <span class="attr">#[test]
-<a href=#1442 id=1442 data-nosnippet>1442</a>    </span><span class="kw">fn </span>dismiss_open_popups_keeps_popup_under_press() {
-<a href=#1443 id=1443 data-nosnippet>1443</a>        <span class="kw">let </span>(root_layout, root_info, node) = make_tree(<span class="number">0.0</span>);
-<a href=#1444 id=1444 data-nosnippet>1444</a>        <span class="comment">// Press on the open popup itself.
-<a href=#1445 id=1445 data-nosnippet>1445</a>        </span><span class="kw">let </span>path = hit_test(<span class="kw-2">&amp;</span>root_layout, <span class="kw-2">&amp;</span>root_info, <span class="number">20.0</span>, <span class="number">60.0</span>);
-<a href=#1446 id=1446 data-nosnippet>1446</a>        <span class="macro">assert!</span>(!dismiss_open_popups(<span class="kw-2">&amp;</span>root_info, <span class="kw-2">&amp;</span>path));
-<a href=#1447 id=1447 data-nosnippet>1447</a>        <span class="macro">assert!</span>(!node.dismissed.load(Ordering::Relaxed));
-<a href=#1448 id=1448 data-nosnippet>1448</a>    }
-<a href=#1449 id=1449 data-nosnippet>1449</a>
-<a href=#1450 id=1450 data-nosnippet>1450</a>    <span class="attr">#[test]
-<a href=#1451 id=1451 data-nosnippet>1451</a>    </span><span class="kw">fn </span>dismiss_open_popups_keeps_popup_when_press_on_owner_box() {
-<a href=#1452 id=1452 data-nosnippet>1452</a>        <span class="kw">let </span>(root_layout, root_info, node) = make_tree(<span class="number">0.0</span>);
-<a href=#1453 id=1453 data-nosnippet>1453</a>        <span class="comment">// Press on the owning box (not the popup): the owner closes it itself,
-<a href=#1454 id=1454 data-nosnippet>1454</a>        // so no separate dismissal happens.
-<a href=#1455 id=1455 data-nosnippet>1455</a>        </span><span class="kw">let </span>path = hit_test(<span class="kw-2">&amp;</span>root_layout, <span class="kw-2">&amp;</span>root_info, <span class="number">20.0</span>, <span class="number">30.0</span>);
-<a href=#1456 id=1456 data-nosnippet>1456</a>        <span class="macro">assert!</span>(!dismiss_open_popups(<span class="kw-2">&amp;</span>root_info, <span class="kw-2">&amp;</span>path));
-<a href=#1457 id=1457 data-nosnippet>1457</a>        <span class="macro">assert!</span>(!node.dismissed.load(Ordering::Relaxed));
-<a href=#1458 id=1458 data-nosnippet>1458</a>    }
-<a href=#1459 id=1459 data-nosnippet>1459</a>
-<a href=#1460 id=1460 data-nosnippet>1460</a>    <span class="attr">#[test]
-<a href=#1461 id=1461 data-nosnippet>1461</a>    </span><span class="kw">fn </span>dismiss_open_popups_ignores_closed_popup() {
-<a href=#1462 id=1462 data-nosnippet>1462</a>        <span class="kw">let </span>(root_layout, root_info, node) = make_tree(<span class="number">0.0</span>);
-<a href=#1463 id=1463 data-nosnippet>1463</a>        node.popup_open.store(<span class="bool-val">false</span>, Ordering::Relaxed);
-<a href=#1464 id=1464 data-nosnippet>1464</a>        <span class="kw">let </span>path = hit_test(<span class="kw-2">&amp;</span>root_layout, <span class="kw-2">&amp;</span>root_info, <span class="number">10.0</span>, <span class="number">25.0</span>);
-<a href=#1465 id=1465 data-nosnippet>1465</a>        <span class="macro">assert!</span>(!dismiss_open_popups(<span class="kw-2">&amp;</span>root_info, <span class="kw-2">&amp;</span>path));
-<a href=#1466 id=1466 data-nosnippet>1466</a>        <span class="macro">assert!</span>(!node.dismissed.load(Ordering::Relaxed));
-<a href=#1467 id=1467 data-nosnippet>1467</a>    }
-<a href=#1468 id=1468 data-nosnippet>1468</a>
-<a href=#1469 id=1469 data-nosnippet>1469</a>    <span class="doccomment">/// Tree: block `b` (0,0,300,100) → inline `i` (line box 10,10,200,20) →
-<a href=#1470 id=1470 data-nosnippet>1470</a>    /// block child `c` (30,10,50,20). Inline content shares the block's
-<a href=#1471 id=1471 data-nosnippet>1471</a>    /// content space, so `c` sits at absolute (30,10) inside `b`.
-<a href=#1472 id=1472 data-nosnippet>1472</a>    </span><span class="kw">fn </span>make_inline_tree() -&gt; (LayoutNode, InfoNode) {
-<a href=#1473 id=1473 data-nosnippet>1473</a>        <span class="kw">let </span><span class="kw-2">mut </span>c = LayoutNode::new(ui_layout::Style::default());
-<a href=#1474 id=1474 data-nosnippet>1474</a>        c.layout_box =
-<a href=#1475 id=1475 data-nosnippet>1475</a>            ui_layout::LayoutBox::BlockBox(box_model(<span class="number">30.0</span>, <span class="number">10.0</span>, <span class="number">50.0</span>, <span class="number">20.0</span>, <span class="number">50.0</span>, <span class="number">20.0</span>));
-<a href=#1476 id=1476 data-nosnippet>1476</a>        <span class="kw">let </span><span class="kw-2">mut </span>b =
-<a href=#1477 id=1477 data-nosnippet>1477</a>            LayoutNode::with_children(ui_layout::Style::default(), [inline_node(<span class="macro">vec!</span>[c.into()])]);
-<a href=#1478 id=1478 data-nosnippet>1478</a>        b.layout_box =
-<a href=#1479 id=1479 data-nosnippet>1479</a>            ui_layout::LayoutBox::BlockBox(box_model(<span class="number">0.0</span>, <span class="number">0.0</span>, <span class="number">300.0</span>, <span class="number">100.0</span>, <span class="number">300.0</span>, <span class="number">100.0</span>));
-<a href=#1480 id=1480 data-nosnippet>1480</a>
-<a href=#1481 id=1481 data-nosnippet>1481</a>        <span class="kw">let </span>c_info = container_info(<span class="bool-val">false</span>, <span class="prelude-val">Some</span>(<span class="number">7</span>));
-<a href=#1482 id=1482 data-nosnippet>1482</a>        <span class="kw">let </span><span class="kw-2">mut </span>i_info = container_info(<span class="bool-val">false</span>, <span class="prelude-val">None</span>);
-<a href=#1483 id=1483 data-nosnippet>1483</a>        i_info.children.push(c_info);
-<a href=#1484 id=1484 data-nosnippet>1484</a>        <span class="kw">let </span><span class="kw-2">mut </span>b_info = container_info(<span class="bool-val">false</span>, <span class="prelude-val">None</span>);
-<a href=#1485 id=1485 data-nosnippet>1485</a>        b_info.children.push(i_info);
-<a href=#1486 id=1486 data-nosnippet>1486</a>
-<a href=#1487 id=1487 data-nosnippet>1487</a>        (b, b_info)
-<a href=#1488 id=1488 data-nosnippet>1488</a>    }
-<a href=#1489 id=1489 data-nosnippet>1489</a>
-<a href=#1490 id=1490 data-nosnippet>1490</a>    <span class="attr">#[test]
-<a href=#1491 id=1491 data-nosnippet>1491</a>    </span><span class="kw">fn </span>hit_test_inside_inline_keeps_parent_coords() {
-<a href=#1492 id=1492 data-nosnippet>1492</a>        <span class="kw">let </span>(b, b_info) = make_inline_tree();
-<a href=#1493 id=1493 data-nosnippet>1493</a>        <span class="comment">// Inline boxes push no transform, so the child's coordinates are
-<a href=#1494 id=1494 data-nosnippet>1494</a>        // resolved in the block's content space: (40,15) falls inside `c` at
-<a href=#1495 id=1495 data-nosnippet>1495</a>        // (30,10,50,20) even though `i`'s content origin is (10,10).
-<a href=#1496 id=1496 data-nosnippet>1496</a>        </span><span class="kw">let </span>path = hit_test(<span class="kw-2">&amp;</span>b, <span class="kw-2">&amp;</span>b_info, <span class="number">40.0</span>, <span class="number">15.0</span>);
-<a href=#1497 id=1497 data-nosnippet>1497</a>        <span class="macro">assert_eq!</span>(hit_dom_id(<span class="kw-2">&amp;</span>path), <span class="prelude-val">Some</span>(<span class="number">7</span>));
-<a href=#1498 id=1498 data-nosnippet>1498</a>        <span class="macro">assert_eq!</span>(path.len(), <span class="number">3</span>);
-<a href=#1499 id=1499 data-nosnippet>1499</a>    }
-<a href=#1500 id=1500 data-nosnippet>1500</a>
-<a href=#1501 id=1501 data-nosnippet>1501</a>    <span class="attr">#[test]
-<a href=#1502 id=1502 data-nosnippet>1502</a>    </span><span class="kw">fn </span>hit_test_inside_inline_but_outside_child_hits_inline() {
-<a href=#1503 id=1503 data-nosnippet>1503</a>        <span class="kw">let </span>(b, b_info) = make_inline_tree();
-<a href=#1504 id=1504 data-nosnippet>1504</a>        <span class="comment">// (12,12) is inside `i`'s line box but left of `c`; the inline
-<a href=#1505 id=1505 data-nosnippet>1505</a>        // container itself is hit instead.
-<a href=#1506 id=1506 data-nosnippet>1506</a>        </span><span class="kw">let </span>path = hit_test(<span class="kw-2">&amp;</span>b, <span class="kw-2">&amp;</span>b_info, <span class="number">12.0</span>, <span class="number">12.0</span>);
-<a href=#1507 id=1507 data-nosnippet>1507</a>        <span class="macro">assert_eq!</span>(path.len(), <span class="number">2</span>);
-<a href=#1508 id=1508 data-nosnippet>1508</a>        <span class="macro">assert_eq!</span>(hit_dom_id(<span class="kw-2">&amp;</span>path), <span class="prelude-val">None</span>);
-<a href=#1509 id=1509 data-nosnippet>1509</a>    }
-<a href=#1510 id=1510 data-nosnippet>1510</a>
-<a href=#1511 id=1511 data-nosnippet>1511</a>    <span class="attr">#[test]
-<a href=#1512 id=1512 data-nosnippet>1512</a>    </span><span class="kw">fn </span>hit_test_outside_inline_line_boxes_falls_back_to_parent() {
-<a href=#1513 id=1513 data-nosnippet>1513</a>        <span class="kw">let </span>(b, b_info) = make_inline_tree();
-<a href=#1514 id=1514 data-nosnippet>1514</a>        <span class="comment">// (40,50) is inside `b` but below `i`'s line box (10..30).
-<a href=#1515 id=1515 data-nosnippet>1515</a>        </span><span class="kw">let </span>path = hit_test(<span class="kw-2">&amp;</span>b, <span class="kw-2">&amp;</span>b_info, <span class="number">40.0</span>, <span class="number">50.0</span>);
-<a href=#1516 id=1516 data-nosnippet>1516</a>        <span class="macro">assert_eq!</span>(path.len(), <span class="number">1</span>);
-<a href=#1517 id=1517 data-nosnippet>1517</a>        <span class="macro">assert_eq!</span>(hit_dom_id(<span class="kw-2">&amp;</span>path), <span class="prelude-val">None</span>);
-<a href=#1518 id=1518 data-nosnippet>1518</a>    }
-<a href=#1519 id=1519 data-nosnippet>1519</a>
-<a href=#1520 id=1520 data-nosnippet>1520</a>    <span class="attr">#[test]
-<a href=#1521 id=1521 data-nosnippet>1521</a>    </span><span class="kw">fn </span>dispatch_pointer_to_inline_custom_keeps_parent_content_coords() {
-<a href=#1522 id=1522 data-nosnippet>1522</a>        <span class="kw">let </span>node: Arc&lt;RecordingNode&gt; = Arc::new(RecordingNode::new(Rect {
-<a href=#1523 id=1523 data-nosnippet>1523</a>            x: <span class="number">0.0</span>,
-<a href=#1524 id=1524 data-nosnippet>1524</a>            y: <span class="number">28.0</span>,
-<a href=#1525 id=1525 data-nosnippet>1525</a>            width: <span class="number">120.0</span>,
-<a href=#1526 id=1526 data-nosnippet>1526</a>            height: <span class="number">84.0</span>,
-<a href=#1527 id=1527 data-nosnippet>1527</a>        }));
-<a href=#1528 id=1528 data-nosnippet>1528</a>        <span class="kw">let </span>custom_info = input_info(Arc::clone(<span class="kw-2">&amp;</span>node) <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>CustomNode&gt;);
-<a href=#1529 id=1529 data-nosnippet>1529</a>
-<a href=#1530 id=1530 data-nosnippet>1530</a>        <span class="kw">let </span><span class="kw-2">mut </span>inline_layout = LayoutNode::new(ui_layout::Style::default());
-<a href=#1531 id=1531 data-nosnippet>1531</a>        inline_layout.layout_box = ui_layout::LayoutBox::InlineBox(ui_layout::InlineBox {
-<a href=#1532 id=1532 data-nosnippet>1532</a>            box_model: box_model(<span class="number">10.0</span>, <span class="number">20.0</span>, <span class="number">160.0</span>, <span class="number">100.0</span>, <span class="number">160.0</span>, <span class="number">100.0</span>),
-<a href=#1533 id=1533 data-nosnippet>1533</a>            line_spans: <span class="macro">vec!</span>[ui_layout::LineSpan {
-<a href=#1534 id=1534 data-nosnippet>1534</a>                x_range: <span class="number">0.0</span>..<span class="number">160.0</span>,
-<a href=#1535 id=1535 data-nosnippet>1535</a>                line_pos: (<span class="number">10.0</span>, <span class="number">20.0</span>),
-<a href=#1536 id=1536 data-nosnippet>1536</a>                line_index: <span class="number">0</span>,
-<a href=#1537 id=1537 data-nosnippet>1537</a>            }],
-<a href=#1538 id=1538 data-nosnippet>1538</a>        });
-<a href=#1539 id=1539 data-nosnippet>1539</a>        <span class="kw">let </span><span class="kw-2">mut </span>block_layout = LayoutNode::new(ui_layout::Style::default());
-<a href=#1540 id=1540 data-nosnippet>1540</a>        block_layout.layout_box =
-<a href=#1541 id=1541 data-nosnippet>1541</a>            ui_layout::LayoutBox::BlockBox(box_model(<span class="number">0.0</span>, <span class="number">0.0</span>, <span class="number">200.0</span>, <span class="number">200.0</span>, <span class="number">200.0</span>, <span class="number">200.0</span>));
-<a href=#1542 id=1542 data-nosnippet>1542</a>
-<a href=#1543 id=1543 data-nosnippet>1543</a>        <span class="kw">let </span>inline_info = container_info(<span class="bool-val">false</span>, <span class="prelude-val">None</span>);
-<a href=#1544 id=1544 data-nosnippet>1544</a>        <span class="kw">let </span>root_info = container_info(<span class="bool-val">false</span>, <span class="prelude-val">None</span>);
-<a href=#1545 id=1545 data-nosnippet>1545</a>
-<a href=#1546 id=1546 data-nosnippet>1546</a>        node.popup_open.store(<span class="bool-val">false</span>, Ordering::Relaxed);
-<a href=#1547 id=1547 data-nosnippet>1547</a>        <span class="kw">let </span>path = <span class="macro">vec!</span>[
-<a href=#1548 id=1548 data-nosnippet>1548</a>            HitItem {
-<a href=#1549 id=1549 data-nosnippet>1549</a>                layout: <span class="kw-2">&amp;</span>inline_layout,
-<a href=#1550 id=1550 data-nosnippet>1550</a>                info: <span class="kw-2">&amp;</span>custom_info,
-<a href=#1551 id=1551 data-nosnippet>1551</a>            },
-<a href=#1552 id=1552 data-nosnippet>1552</a>            HitItem {
-<a href=#1553 id=1553 data-nosnippet>1553</a>                layout: <span class="kw-2">&amp;</span>inline_layout,
-<a href=#1554 id=1554 data-nosnippet>1554</a>                info: <span class="kw-2">&amp;</span>inline_info,
-<a href=#1555 id=1555 data-nosnippet>1555</a>            },
-<a href=#1556 id=1556 data-nosnippet>1556</a>            HitItem {
-<a href=#1557 id=1557 data-nosnippet>1557</a>                layout: <span class="kw-2">&amp;</span>block_layout,
-<a href=#1558 id=1558 data-nosnippet>1558</a>                info: <span class="kw-2">&amp;</span>root_info,
-<a href=#1559 id=1559 data-nosnippet>1559</a>            },
-<a href=#1560 id=1560 data-nosnippet>1560</a>        ];
-<a href=#1561 id=1561 data-nosnippet>1561</a>
-<a href=#1562 id=1562 data-nosnippet>1562</a>        <span class="comment">// Inline boxes contribute no content-origin offset, so the event is
-<a href=#1563 id=1563 data-nosnippet>1563</a>        // delivered in the block's content space, not shifted by `i`'s (10,20)
-<a href=#1564 id=1564 data-nosnippet>1564</a>        // content origin.
-<a href=#1565 id=1565 data-nosnippet>1565</a>        </span>dispatch_pointer(<span class="kw-2">&amp;</span>path, PointerEvent::Down { x: <span class="number">30.0</span>, y: <span class="number">35.0 </span>});
-<a href=#1566 id=1566 data-nosnippet>1566</a>        <span class="macro">assert_eq!</span>(node.events(), <span class="macro">vec!</span>[PointerEvent::Down { x: <span class="number">30.0</span>, y: <span class="number">35.0 </span>}]);
-<a href=#1567 id=1567 data-nosnippet>1567</a>    }
-<a href=#1568 id=1568 data-nosnippet>1568</a>
-<a href=#1569 id=1569 data-nosnippet>1569</a>    <span class="attr">#[test]
-<a href=#1570 id=1570 data-nosnippet>1570</a>    </span><span class="kw">fn </span>scroll_at_inside_inline_scrolls_child_in_parent_coords() {
-<a href=#1571 id=1571 data-nosnippet>1571</a>        <span class="kw">let </span><span class="kw-2">mut </span>c = LayoutNode::new(ui_layout::Style::default());
-<a href=#1572 id=1572 data-nosnippet>1572</a>        c.layout_box =
-<a href=#1573 id=1573 data-nosnippet>1573</a>            ui_layout::LayoutBox::BlockBox(box_model(<span class="number">30.0</span>, <span class="number">10.0</span>, <span class="number">50.0</span>, <span class="number">80.0</span>, <span class="number">50.0</span>, <span class="number">240.0</span>));
-<a href=#1574 id=1574 data-nosnippet>1574</a>        <span class="kw">let </span><span class="kw-2">mut </span>b =
-<a href=#1575 id=1575 data-nosnippet>1575</a>            LayoutNode::with_children(ui_layout::Style::default(), [inline_node(<span class="macro">vec!</span>[c.into()])]);
-<a href=#1576 id=1576 data-nosnippet>1576</a>        b.layout_box =
-<a href=#1577 id=1577 data-nosnippet>1577</a>            ui_layout::LayoutBox::BlockBox(box_model(<span class="number">0.0</span>, <span class="number">0.0</span>, <span class="number">200.0</span>, <span class="number">100.0</span>, <span class="number">200.0</span>, <span class="number">300.0</span>));
-<a href=#1578 id=1578 data-nosnippet>1578</a>
-<a href=#1579 id=1579 data-nosnippet>1579</a>        <span class="kw">let </span>c_info = container_info(<span class="bool-val">true</span>, <span class="prelude-val">None</span>);
-<a href=#1580 id=1580 data-nosnippet>1580</a>        <span class="kw">let </span><span class="kw-2">mut </span>i_info = container_info(<span class="bool-val">false</span>, <span class="prelude-val">None</span>);
-<a href=#1581 id=1581 data-nosnippet>1581</a>        i_info.children.push(c_info);
-<a href=#1582 id=1582 data-nosnippet>1582</a>        <span class="kw">let </span><span class="kw-2">mut </span>b_info = scrollable_info();
-<a href=#1583 id=1583 data-nosnippet>1583</a>        b_info.children.push(i_info);
-<a href=#1584 id=1584 data-nosnippet>1584</a>
-<a href=#1585 id=1585 data-nosnippet>1585</a>        <span class="macro">assert!</span>(
-<a href=#1586 id=1586 data-nosnippet>1586</a>            scroll_at(
-<a href=#1587 id=1587 data-nosnippet>1587</a>                <span class="kw-2">&amp;</span>b,
-<a href=#1588 id=1588 data-nosnippet>1588</a>                <span class="kw-2">&amp;mut </span>b_info,
-<a href=#1589 id=1589 data-nosnippet>1589</a>                (VIEWPORT_WIDTH, VIEWPORT_HEIGHT),
-<a href=#1590 id=1590 data-nosnippet>1590</a>                <span class="number">40.0</span>,
-<a href=#1591 id=1591 data-nosnippet>1591</a>                <span class="number">15.0</span>,
-<a href=#1592 id=1592 data-nosnippet>1592</a>                <span class="number">0.0</span>,
-<a href=#1593 id=1593 data-nosnippet>1593</a>                <span class="number">10.0
-<a href=#1594 id=1594 data-nosnippet>1594</a>            </span>)
-<a href=#1595 id=1595 data-nosnippet>1595</a>            .is_some()
-<a href=#1596 id=1596 data-nosnippet>1596</a>        );
-<a href=#1597 id=1597 data-nosnippet>1597</a>        <span class="comment">// The child under the cursor scrolls; the block parent does not.
-<a href=#1598 id=1598 data-nosnippet>1598</a>        </span><span class="macro">assert_eq!</span>(scroll_offset_y_of(<span class="kw-2">&amp;</span>b_info.children[<span class="number">0</span>].children[<span class="number">0</span>]), <span class="number">10.0</span>);
-<a href=#1599 id=1599 data-nosnippet>1599</a>        <span class="macro">assert_eq!</span>(scroll_offset_y_of(<span class="kw-2">&amp;</span>b_info), <span class="number">0.0</span>);
-<a href=#1600 id=1600 data-nosnippet>1600</a>    }
-<a href=#1601 id=1601 data-nosnippet>1601</a>}
+<a href=#1392 id=1392 data-nosnippet>1392</a>        <span class="macro">assert!</span>(std::ptr::eq(hit.as_ref(), node.as_ref() <span class="kw">as </span><span class="kw-2">&amp;</span><span class="kw">dyn </span>CustomNode));
+<a href=#1393 id=1393 data-nosnippet>1393</a>    }
+<a href=#1394 id=1394 data-nosnippet>1394</a>
+<a href=#1395 id=1395 data-nosnippet>1395</a>    <span class="attr">#[test]
+<a href=#1396 id=1396 data-nosnippet>1396</a>    </span><span class="kw">fn </span>hit_test_finds_open_popup() {
+<a href=#1397 id=1397 data-nosnippet>1397</a>        <span class="kw">let </span>(root_layout, root_info, node) = make_tree(<span class="number">0.0</span>);
+<a href=#1398 id=1398 data-nosnippet>1398</a>        <span class="comment">// Custom page origin (15,20); popup page rect (15,48)-(135,132).
+<a href=#1399 id=1399 data-nosnippet>1399</a>        // Global (20,60) → local (5,40), inside the popup (y in 28..112).
+<a href=#1400 id=1400 data-nosnippet>1400</a>        </span>popup_hit_assert(<span class="kw-2">&amp;</span>root_layout, <span class="kw-2">&amp;</span>root_info, <span class="kw-2">&amp;</span>node, <span class="number">20.0</span>, <span class="number">60.0</span>);
+<a href=#1401 id=1401 data-nosnippet>1401</a>    }
+<a href=#1402 id=1402 data-nosnippet>1402</a>
+<a href=#1403 id=1403 data-nosnippet>1403</a>    <span class="attr">#[test]
+<a href=#1404 id=1404 data-nosnippet>1404</a>    </span><span class="kw">fn </span>hit_test_ignores_closed_popup() {
+<a href=#1405 id=1405 data-nosnippet>1405</a>        <span class="kw">let </span>(root_layout, root_info, node) = make_tree(<span class="number">0.0</span>);
+<a href=#1406 id=1406 data-nosnippet>1406</a>        node.popup_open.store(<span class="bool-val">false</span>, Ordering::Relaxed);
+<a href=#1407 id=1407 data-nosnippet>1407</a>        <span class="comment">// Local (5,40) is below the custom box (y in 0..28); with the popup
+<a href=#1408 id=1408 data-nosnippet>1408</a>        // closed the click lands on the container instead.
+<a href=#1409 id=1409 data-nosnippet>1409</a>        </span><span class="kw">let </span>path = hit_test(<span class="kw-2">&amp;</span>root_layout, <span class="kw-2">&amp;</span>root_info, <span class="number">20.0</span>, <span class="number">60.0</span>);
+<a href=#1410 id=1410 data-nosnippet>1410</a>        <span class="macro">assert_eq!</span>(path.len(), <span class="number">2</span>);
+<a href=#1411 id=1411 data-nosnippet>1411</a>        <span class="macro">assert!</span>(hit_custom_node(<span class="kw-2">&amp;</span>path).is_none());
+<a href=#1412 id=1412 data-nosnippet>1412</a>    }
+<a href=#1413 id=1413 data-nosnippet>1413</a>
+<a href=#1414 id=1414 data-nosnippet>1414</a>    <span class="attr">#[test]
+<a href=#1415 id=1415 data-nosnippet>1415</a>    </span><span class="kw">fn </span>hit_test_finds_popup_escaping_ancestor_box() {
+<a href=#1416 id=1416 data-nosnippet>1416</a>        <span class="kw">let </span>(root_layout, root_info, node) = make_tree(<span class="number">0.0</span>);
+<a href=#1417 id=1417 data-nosnippet>1417</a>        <span class="comment">// The container box ends at y=120 but the popup reaches y=132. A click
+<a href=#1418 id=1418 data-nosnippet>1418</a>        // past the container is still a popup hit because popups render above
+<a href=#1419 id=1419 data-nosnippet>1419</a>        // ancestor boxes and clips.
+<a href=#1420 id=1420 data-nosnippet>1420</a>        </span>popup_hit_assert(<span class="kw-2">&amp;</span>root_layout, <span class="kw-2">&amp;</span>root_info, <span class="kw-2">&amp;</span>node, <span class="number">20.0</span>, <span class="number">125.0</span>);
+<a href=#1421 id=1421 data-nosnippet>1421</a>    }
+<a href=#1422 id=1422 data-nosnippet>1422</a>
+<a href=#1423 id=1423 data-nosnippet>1423</a>    <span class="attr">#[test]
+<a href=#1424 id=1424 data-nosnippet>1424</a>    </span><span class="kw">fn </span>hit_test_folds_scroll_into_popup_hit() {
+<a href=#1425 id=1425 data-nosnippet>1425</a>        <span class="kw">let </span>(root_layout, root_info, node) = make_tree(<span class="number">50.0</span>);
+<a href=#1426 id=1426 data-nosnippet>1426</a>        <span class="comment">// With the 50px ancestor scroll, a click at page y=25 maps to local
+<a href=#1427 id=1427 data-nosnippet>1427</a>        // (5,55), inside the popup (y in 28..112).
+<a href=#1428 id=1428 data-nosnippet>1428</a>        </span>popup_hit_assert(<span class="kw-2">&amp;</span>root_layout, <span class="kw-2">&amp;</span>root_info, <span class="kw-2">&amp;</span>node, <span class="number">20.0</span>, <span class="number">25.0</span>);
+<a href=#1429 id=1429 data-nosnippet>1429</a>    }
+<a href=#1430 id=1430 data-nosnippet>1430</a>
+<a href=#1431 id=1431 data-nosnippet>1431</a>    <span class="attr">#[test]
+<a href=#1432 id=1432 data-nosnippet>1432</a>    </span><span class="kw">fn </span>dismiss_open_popups_closes_popup_on_outside_press() {
+<a href=#1433 id=1433 data-nosnippet>1433</a>        <span class="kw">let </span>(root_layout, root_info, node) = make_tree(<span class="number">0.0</span>);
+<a href=#1434 id=1434 data-nosnippet>1434</a>        <span class="comment">// (10,25) lands on the container, outside the custom box and popup.
+<a href=#1435 id=1435 data-nosnippet>1435</a>        </span><span class="kw">let </span>path = hit_test(<span class="kw-2">&amp;</span>root_layout, <span class="kw-2">&amp;</span>root_info, <span class="number">10.0</span>, <span class="number">25.0</span>);
+<a href=#1436 id=1436 data-nosnippet>1436</a>        <span class="macro">assert!</span>(dismiss_open_popups(<span class="kw-2">&amp;</span>root_info, <span class="kw-2">&amp;</span>path));
+<a href=#1437 id=1437 data-nosnippet>1437</a>        <span class="macro">assert!</span>(node.dismissed.load(Ordering::Relaxed));
+<a href=#1438 id=1438 data-nosnippet>1438</a>    }
+<a href=#1439 id=1439 data-nosnippet>1439</a>
+<a href=#1440 id=1440 data-nosnippet>1440</a>    <span class="attr">#[test]
+<a href=#1441 id=1441 data-nosnippet>1441</a>    </span><span class="kw">fn </span>dismiss_open_popups_keeps_popup_under_press() {
+<a href=#1442 id=1442 data-nosnippet>1442</a>        <span class="kw">let </span>(root_layout, root_info, node) = make_tree(<span class="number">0.0</span>);
+<a href=#1443 id=1443 data-nosnippet>1443</a>        <span class="comment">// Press on the open popup itself.
+<a href=#1444 id=1444 data-nosnippet>1444</a>        </span><span class="kw">let </span>path = hit_test(<span class="kw-2">&amp;</span>root_layout, <span class="kw-2">&amp;</span>root_info, <span class="number">20.0</span>, <span class="number">60.0</span>);
+<a href=#1445 id=1445 data-nosnippet>1445</a>        <span class="macro">assert!</span>(!dismiss_open_popups(<span class="kw-2">&amp;</span>root_info, <span class="kw-2">&amp;</span>path));
+<a href=#1446 id=1446 data-nosnippet>1446</a>        <span class="macro">assert!</span>(!node.dismissed.load(Ordering::Relaxed));
+<a href=#1447 id=1447 data-nosnippet>1447</a>    }
+<a href=#1448 id=1448 data-nosnippet>1448</a>
+<a href=#1449 id=1449 data-nosnippet>1449</a>    <span class="attr">#[test]
+<a href=#1450 id=1450 data-nosnippet>1450</a>    </span><span class="kw">fn </span>dismiss_open_popups_keeps_popup_when_press_on_owner_box() {
+<a href=#1451 id=1451 data-nosnippet>1451</a>        <span class="kw">let </span>(root_layout, root_info, node) = make_tree(<span class="number">0.0</span>);
+<a href=#1452 id=1452 data-nosnippet>1452</a>        <span class="comment">// Press on the owning box (not the popup): the owner closes it itself,
+<a href=#1453 id=1453 data-nosnippet>1453</a>        // so no separate dismissal happens.
+<a href=#1454 id=1454 data-nosnippet>1454</a>        </span><span class="kw">let </span>path = hit_test(<span class="kw-2">&amp;</span>root_layout, <span class="kw-2">&amp;</span>root_info, <span class="number">20.0</span>, <span class="number">30.0</span>);
+<a href=#1455 id=1455 data-nosnippet>1455</a>        <span class="macro">assert!</span>(!dismiss_open_popups(<span class="kw-2">&amp;</span>root_info, <span class="kw-2">&amp;</span>path));
+<a href=#1456 id=1456 data-nosnippet>1456</a>        <span class="macro">assert!</span>(!node.dismissed.load(Ordering::Relaxed));
+<a href=#1457 id=1457 data-nosnippet>1457</a>    }
+<a href=#1458 id=1458 data-nosnippet>1458</a>
+<a href=#1459 id=1459 data-nosnippet>1459</a>    <span class="attr">#[test]
+<a href=#1460 id=1460 data-nosnippet>1460</a>    </span><span class="kw">fn </span>dismiss_open_popups_ignores_closed_popup() {
+<a href=#1461 id=1461 data-nosnippet>1461</a>        <span class="kw">let </span>(root_layout, root_info, node) = make_tree(<span class="number">0.0</span>);
+<a href=#1462 id=1462 data-nosnippet>1462</a>        node.popup_open.store(<span class="bool-val">false</span>, Ordering::Relaxed);
+<a href=#1463 id=1463 data-nosnippet>1463</a>        <span class="kw">let </span>path = hit_test(<span class="kw-2">&amp;</span>root_layout, <span class="kw-2">&amp;</span>root_info, <span class="number">10.0</span>, <span class="number">25.0</span>);
+<a href=#1464 id=1464 data-nosnippet>1464</a>        <span class="macro">assert!</span>(!dismiss_open_popups(<span class="kw-2">&amp;</span>root_info, <span class="kw-2">&amp;</span>path));
+<a href=#1465 id=1465 data-nosnippet>1465</a>        <span class="macro">assert!</span>(!node.dismissed.load(Ordering::Relaxed));
+<a href=#1466 id=1466 data-nosnippet>1466</a>    }
+<a href=#1467 id=1467 data-nosnippet>1467</a>
+<a href=#1468 id=1468 data-nosnippet>1468</a>    <span class="doccomment">/// Tree: block `b` (0,0,300,100) → inline `i` (line box 10,10,200,20) →
+<a href=#1469 id=1469 data-nosnippet>1469</a>    /// block child `c` (30,10,50,20). Inline content shares the block's
+<a href=#1470 id=1470 data-nosnippet>1470</a>    /// content space, so `c` sits at absolute (30,10) inside `b`.
+<a href=#1471 id=1471 data-nosnippet>1471</a>    </span><span class="kw">fn </span>make_inline_tree() -&gt; (LayoutNode, InfoNode) {
+<a href=#1472 id=1472 data-nosnippet>1472</a>        <span class="kw">let </span><span class="kw-2">mut </span>c = LayoutNode::new(ui_layout::Style::default());
+<a href=#1473 id=1473 data-nosnippet>1473</a>        c.layout_box =
+<a href=#1474 id=1474 data-nosnippet>1474</a>            ui_layout::LayoutBox::BlockBox(box_model(<span class="number">30.0</span>, <span class="number">10.0</span>, <span class="number">50.0</span>, <span class="number">20.0</span>, <span class="number">50.0</span>, <span class="number">20.0</span>));
+<a href=#1475 id=1475 data-nosnippet>1475</a>        <span class="kw">let </span><span class="kw-2">mut </span>b =
+<a href=#1476 id=1476 data-nosnippet>1476</a>            LayoutNode::with_children(ui_layout::Style::default(), [inline_node(<span class="macro">vec!</span>[c.into()])]);
+<a href=#1477 id=1477 data-nosnippet>1477</a>        b.layout_box =
+<a href=#1478 id=1478 data-nosnippet>1478</a>            ui_layout::LayoutBox::BlockBox(box_model(<span class="number">0.0</span>, <span class="number">0.0</span>, <span class="number">300.0</span>, <span class="number">100.0</span>, <span class="number">300.0</span>, <span class="number">100.0</span>));
+<a href=#1479 id=1479 data-nosnippet>1479</a>
+<a href=#1480 id=1480 data-nosnippet>1480</a>        <span class="kw">let </span>c_info = container_info(<span class="bool-val">false</span>, <span class="prelude-val">Some</span>(<span class="number">7</span>));
+<a href=#1481 id=1481 data-nosnippet>1481</a>        <span class="kw">let </span><span class="kw-2">mut </span>i_info = container_info(<span class="bool-val">false</span>, <span class="prelude-val">None</span>);
+<a href=#1482 id=1482 data-nosnippet>1482</a>        i_info.children.push(c_info);
+<a href=#1483 id=1483 data-nosnippet>1483</a>        <span class="kw">let </span><span class="kw-2">mut </span>b_info = container_info(<span class="bool-val">false</span>, <span class="prelude-val">None</span>);
+<a href=#1484 id=1484 data-nosnippet>1484</a>        b_info.children.push(i_info);
+<a href=#1485 id=1485 data-nosnippet>1485</a>
+<a href=#1486 id=1486 data-nosnippet>1486</a>        (b, b_info)
+<a href=#1487 id=1487 data-nosnippet>1487</a>    }
+<a href=#1488 id=1488 data-nosnippet>1488</a>
+<a href=#1489 id=1489 data-nosnippet>1489</a>    <span class="attr">#[test]
+<a href=#1490 id=1490 data-nosnippet>1490</a>    </span><span class="kw">fn </span>hit_test_inside_inline_keeps_parent_coords() {
+<a href=#1491 id=1491 data-nosnippet>1491</a>        <span class="kw">let </span>(b, b_info) = make_inline_tree();
+<a href=#1492 id=1492 data-nosnippet>1492</a>        <span class="comment">// Inline boxes push no transform, so the child's coordinates are
+<a href=#1493 id=1493 data-nosnippet>1493</a>        // resolved in the block's content space: (40,15) falls inside `c` at
+<a href=#1494 id=1494 data-nosnippet>1494</a>        // (30,10,50,20) even though `i`'s content origin is (10,10).
+<a href=#1495 id=1495 data-nosnippet>1495</a>        </span><span class="kw">let </span>path = hit_test(<span class="kw-2">&amp;</span>b, <span class="kw-2">&amp;</span>b_info, <span class="number">40.0</span>, <span class="number">15.0</span>);
+<a href=#1496 id=1496 data-nosnippet>1496</a>        <span class="macro">assert_eq!</span>(hit_dom_id(<span class="kw-2">&amp;</span>path), <span class="prelude-val">Some</span>(<span class="number">7</span>));
+<a href=#1497 id=1497 data-nosnippet>1497</a>        <span class="macro">assert_eq!</span>(path.len(), <span class="number">3</span>);
+<a href=#1498 id=1498 data-nosnippet>1498</a>    }
+<a href=#1499 id=1499 data-nosnippet>1499</a>
+<a href=#1500 id=1500 data-nosnippet>1500</a>    <span class="attr">#[test]
+<a href=#1501 id=1501 data-nosnippet>1501</a>    </span><span class="kw">fn </span>hit_test_inside_inline_but_outside_child_hits_inline() {
+<a href=#1502 id=1502 data-nosnippet>1502</a>        <span class="kw">let </span>(b, b_info) = make_inline_tree();
+<a href=#1503 id=1503 data-nosnippet>1503</a>        <span class="comment">// (12,12) is inside `i`'s line box but left of `c`; the inline
+<a href=#1504 id=1504 data-nosnippet>1504</a>        // container itself is hit instead.
+<a href=#1505 id=1505 data-nosnippet>1505</a>        </span><span class="kw">let </span>path = hit_test(<span class="kw-2">&amp;</span>b, <span class="kw-2">&amp;</span>b_info, <span class="number">12.0</span>, <span class="number">12.0</span>);
+<a href=#1506 id=1506 data-nosnippet>1506</a>        <span class="macro">assert_eq!</span>(path.len(), <span class="number">2</span>);
+<a href=#1507 id=1507 data-nosnippet>1507</a>        <span class="macro">assert_eq!</span>(hit_dom_id(<span class="kw-2">&amp;</span>path), <span class="prelude-val">None</span>);
+<a href=#1508 id=1508 data-nosnippet>1508</a>    }
+<a href=#1509 id=1509 data-nosnippet>1509</a>
+<a href=#1510 id=1510 data-nosnippet>1510</a>    <span class="attr">#[test]
+<a href=#1511 id=1511 data-nosnippet>1511</a>    </span><span class="kw">fn </span>hit_test_outside_inline_line_boxes_falls_back_to_parent() {
+<a href=#1512 id=1512 data-nosnippet>1512</a>        <span class="kw">let </span>(b, b_info) = make_inline_tree();
+<a href=#1513 id=1513 data-nosnippet>1513</a>        <span class="comment">// (40,50) is inside `b` but below `i`'s line box (10..30).
+<a href=#1514 id=1514 data-nosnippet>1514</a>        </span><span class="kw">let </span>path = hit_test(<span class="kw-2">&amp;</span>b, <span class="kw-2">&amp;</span>b_info, <span class="number">40.0</span>, <span class="number">50.0</span>);
+<a href=#1515 id=1515 data-nosnippet>1515</a>        <span class="macro">assert_eq!</span>(path.len(), <span class="number">1</span>);
+<a href=#1516 id=1516 data-nosnippet>1516</a>        <span class="macro">assert_eq!</span>(hit_dom_id(<span class="kw-2">&amp;</span>path), <span class="prelude-val">None</span>);
+<a href=#1517 id=1517 data-nosnippet>1517</a>    }
+<a href=#1518 id=1518 data-nosnippet>1518</a>
+<a href=#1519 id=1519 data-nosnippet>1519</a>    <span class="attr">#[test]
+<a href=#1520 id=1520 data-nosnippet>1520</a>    </span><span class="kw">fn </span>dispatch_pointer_to_inline_custom_keeps_parent_content_coords() {
+<a href=#1521 id=1521 data-nosnippet>1521</a>        <span class="kw">let </span>node: Arc&lt;RecordingNode&gt; = Arc::new(RecordingNode::new(Rect {
+<a href=#1522 id=1522 data-nosnippet>1522</a>            x: <span class="number">0.0</span>,
+<a href=#1523 id=1523 data-nosnippet>1523</a>            y: <span class="number">28.0</span>,
+<a href=#1524 id=1524 data-nosnippet>1524</a>            width: <span class="number">120.0</span>,
+<a href=#1525 id=1525 data-nosnippet>1525</a>            height: <span class="number">84.0</span>,
+<a href=#1526 id=1526 data-nosnippet>1526</a>        }));
+<a href=#1527 id=1527 data-nosnippet>1527</a>        <span class="kw">let </span>custom_info = input_info(Arc::clone(<span class="kw-2">&amp;</span>node) <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>CustomNode&gt;);
+<a href=#1528 id=1528 data-nosnippet>1528</a>
+<a href=#1529 id=1529 data-nosnippet>1529</a>        <span class="kw">let </span><span class="kw-2">mut </span>inline_layout = LayoutNode::new(ui_layout::Style::default());
+<a href=#1530 id=1530 data-nosnippet>1530</a>        inline_layout.layout_box = ui_layout::LayoutBox::InlineBox(ui_layout::InlineBox {
+<a href=#1531 id=1531 data-nosnippet>1531</a>            box_model: box_model(<span class="number">10.0</span>, <span class="number">20.0</span>, <span class="number">160.0</span>, <span class="number">100.0</span>, <span class="number">160.0</span>, <span class="number">100.0</span>),
+<a href=#1532 id=1532 data-nosnippet>1532</a>            line_spans: <span class="macro">vec!</span>[ui_layout::LineSpan {
+<a href=#1533 id=1533 data-nosnippet>1533</a>                x_range: <span class="number">0.0</span>..<span class="number">160.0</span>,
+<a href=#1534 id=1534 data-nosnippet>1534</a>                line_pos: (<span class="number">10.0</span>, <span class="number">20.0</span>),
+<a href=#1535 id=1535 data-nosnippet>1535</a>                line_index: <span class="number">0</span>,
+<a href=#1536 id=1536 data-nosnippet>1536</a>            }],
+<a href=#1537 id=1537 data-nosnippet>1537</a>        });
+<a href=#1538 id=1538 data-nosnippet>1538</a>        <span class="kw">let </span><span class="kw-2">mut </span>block_layout = LayoutNode::new(ui_layout::Style::default());
+<a href=#1539 id=1539 data-nosnippet>1539</a>        block_layout.layout_box =
+<a href=#1540 id=1540 data-nosnippet>1540</a>            ui_layout::LayoutBox::BlockBox(box_model(<span class="number">0.0</span>, <span class="number">0.0</span>, <span class="number">200.0</span>, <span class="number">200.0</span>, <span class="number">200.0</span>, <span class="number">200.0</span>));
+<a href=#1541 id=1541 data-nosnippet>1541</a>
+<a href=#1542 id=1542 data-nosnippet>1542</a>        <span class="kw">let </span>inline_info = container_info(<span class="bool-val">false</span>, <span class="prelude-val">None</span>);
+<a href=#1543 id=1543 data-nosnippet>1543</a>        <span class="kw">let </span>root_info = container_info(<span class="bool-val">false</span>, <span class="prelude-val">None</span>);
+<a href=#1544 id=1544 data-nosnippet>1544</a>
+<a href=#1545 id=1545 data-nosnippet>1545</a>        node.popup_open.store(<span class="bool-val">false</span>, Ordering::Relaxed);
+<a href=#1546 id=1546 data-nosnippet>1546</a>        <span class="kw">let </span>path = <span class="macro">vec!</span>[
+<a href=#1547 id=1547 data-nosnippet>1547</a>            HitItem {
+<a href=#1548 id=1548 data-nosnippet>1548</a>                layout: <span class="kw-2">&amp;</span>inline_layout,
+<a href=#1549 id=1549 data-nosnippet>1549</a>                info: <span class="kw-2">&amp;</span>custom_info,
+<a href=#1550 id=1550 data-nosnippet>1550</a>            },
+<a href=#1551 id=1551 data-nosnippet>1551</a>            HitItem {
+<a href=#1552 id=1552 data-nosnippet>1552</a>                layout: <span class="kw-2">&amp;</span>inline_layout,
+<a href=#1553 id=1553 data-nosnippet>1553</a>                info: <span class="kw-2">&amp;</span>inline_info,
+<a href=#1554 id=1554 data-nosnippet>1554</a>            },
+<a href=#1555 id=1555 data-nosnippet>1555</a>            HitItem {
+<a href=#1556 id=1556 data-nosnippet>1556</a>                layout: <span class="kw-2">&amp;</span>block_layout,
+<a href=#1557 id=1557 data-nosnippet>1557</a>                info: <span class="kw-2">&amp;</span>root_info,
+<a href=#1558 id=1558 data-nosnippet>1558</a>            },
+<a href=#1559 id=1559 data-nosnippet>1559</a>        ];
+<a href=#1560 id=1560 data-nosnippet>1560</a>
+<a href=#1561 id=1561 data-nosnippet>1561</a>        <span class="comment">// Inline boxes contribute no content-origin offset, so the event is
+<a href=#1562 id=1562 data-nosnippet>1562</a>        // delivered in the block's content space, not shifted by `i`'s (10,20)
+<a href=#1563 id=1563 data-nosnippet>1563</a>        // content origin.
+<a href=#1564 id=1564 data-nosnippet>1564</a>        </span>dispatch_pointer(<span class="kw-2">&amp;</span>path, PointerEvent::Down { x: <span class="number">30.0</span>, y: <span class="number">35.0 </span>});
+<a href=#1565 id=1565 data-nosnippet>1565</a>        <span class="macro">assert_eq!</span>(node.events(), <span class="macro">vec!</span>[PointerEvent::Down { x: <span class="number">30.0</span>, y: <span class="number">35.0 </span>}]);
+<a href=#1566 id=1566 data-nosnippet>1566</a>    }
+<a href=#1567 id=1567 data-nosnippet>1567</a>
+<a href=#1568 id=1568 data-nosnippet>1568</a>    <span class="attr">#[test]
+<a href=#1569 id=1569 data-nosnippet>1569</a>    </span><span class="kw">fn </span>scroll_at_inside_inline_scrolls_child_in_parent_coords() {
+<a href=#1570 id=1570 data-nosnippet>1570</a>        <span class="kw">let </span><span class="kw-2">mut </span>c = LayoutNode::new(ui_layout::Style::default());
+<a href=#1571 id=1571 data-nosnippet>1571</a>        c.layout_box =
+<a href=#1572 id=1572 data-nosnippet>1572</a>            ui_layout::LayoutBox::BlockBox(box_model(<span class="number">30.0</span>, <span class="number">10.0</span>, <span class="number">50.0</span>, <span class="number">80.0</span>, <span class="number">50.0</span>, <span class="number">240.0</span>));
+<a href=#1573 id=1573 data-nosnippet>1573</a>        <span class="kw">let </span><span class="kw-2">mut </span>b =
+<a href=#1574 id=1574 data-nosnippet>1574</a>            LayoutNode::with_children(ui_layout::Style::default(), [inline_node(<span class="macro">vec!</span>[c.into()])]);
+<a href=#1575 id=1575 data-nosnippet>1575</a>        b.layout_box =
+<a href=#1576 id=1576 data-nosnippet>1576</a>            ui_layout::LayoutBox::BlockBox(box_model(<span class="number">0.0</span>, <span class="number">0.0</span>, <span class="number">200.0</span>, <span class="number">100.0</span>, <span class="number">200.0</span>, <span class="number">300.0</span>));
+<a href=#1577 id=1577 data-nosnippet>1577</a>
+<a href=#1578 id=1578 data-nosnippet>1578</a>        <span class="kw">let </span>c_info = container_info(<span class="bool-val">true</span>, <span class="prelude-val">None</span>);
+<a href=#1579 id=1579 data-nosnippet>1579</a>        <span class="kw">let </span><span class="kw-2">mut </span>i_info = container_info(<span class="bool-val">false</span>, <span class="prelude-val">None</span>);
+<a href=#1580 id=1580 data-nosnippet>1580</a>        i_info.children.push(c_info);
+<a href=#1581 id=1581 data-nosnippet>1581</a>        <span class="kw">let </span><span class="kw-2">mut </span>b_info = scrollable_info();
+<a href=#1582 id=1582 data-nosnippet>1582</a>        b_info.children.push(i_info);
+<a href=#1583 id=1583 data-nosnippet>1583</a>
+<a href=#1584 id=1584 data-nosnippet>1584</a>        <span class="macro">assert!</span>(
+<a href=#1585 id=1585 data-nosnippet>1585</a>            scroll_at(
+<a href=#1586 id=1586 data-nosnippet>1586</a>                <span class="kw-2">&amp;</span>b,
+<a href=#1587 id=1587 data-nosnippet>1587</a>                <span class="kw-2">&amp;mut </span>b_info,
+<a href=#1588 id=1588 data-nosnippet>1588</a>                (VIEWPORT_WIDTH, VIEWPORT_HEIGHT),
+<a href=#1589 id=1589 data-nosnippet>1589</a>                <span class="number">40.0</span>,
+<a href=#1590 id=1590 data-nosnippet>1590</a>                <span class="number">15.0</span>,
+<a href=#1591 id=1591 data-nosnippet>1591</a>                <span class="number">0.0</span>,
+<a href=#1592 id=1592 data-nosnippet>1592</a>                <span class="number">10.0
+<a href=#1593 id=1593 data-nosnippet>1593</a>            </span>)
+<a href=#1594 id=1594 data-nosnippet>1594</a>            .is_some()
+<a href=#1595 id=1595 data-nosnippet>1595</a>        );
+<a href=#1596 id=1596 data-nosnippet>1596</a>        <span class="comment">// The child under the cursor scrolls; the block parent does not.
+<a href=#1597 id=1597 data-nosnippet>1597</a>        </span><span class="macro">assert_eq!</span>(scroll_offset_y_of(<span class="kw-2">&amp;</span>b_info.children[<span class="number">0</span>].children[<span class="number">0</span>]), <span class="number">10.0</span>);
+<a href=#1598 id=1598 data-nosnippet>1598</a>        <span class="macro">assert_eq!</span>(scroll_offset_y_of(<span class="kw-2">&amp;</span>b_info), <span class="number">0.0</span>);
+<a href=#1599 id=1599 data-nosnippet>1599</a>    }
+<a href=#1600 id=1600 data-nosnippet>1600</a>}
 </code></pre></div></section></main></body></html>

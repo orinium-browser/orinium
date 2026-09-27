@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["gpu","text_measurer"]};
+window.SIDEBAR_ITEMS = {"mod":["draw_sink","gpu","text_measurer"]};

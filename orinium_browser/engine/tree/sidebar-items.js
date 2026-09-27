@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["Tree","TreeNode"],"type":["NodeRef"]};
+window.SIDEBAR_ITEMS = {"struct":["FormState","Tree","TreeNode"],"type":["NodeRef"]};

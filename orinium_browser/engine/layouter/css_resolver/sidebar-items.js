@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["StyleOrigin"],"fn":["append_resolved_styles","filter_media","resolve_inline_style","resolve_inline_value"],"struct":["CssResolver","MediaEnvironment","ResolvedDeclaration","RuleSet","SelectorGroup"],"type":["ResolvedStyles"]};
+window.SIDEBAR_ITEMS = {"enum":["PseudoElement","StyleOrigin"],"fn":["append_resolved_styles","evaluate_media_query","filter_media","resolve_inline_style","resolve_inline_value"],"struct":["CssResolver","MediaEnvironment","ResolvedDeclaration","RuleSet","SelectorGroup"],"type":["ResolvedStyles"]};

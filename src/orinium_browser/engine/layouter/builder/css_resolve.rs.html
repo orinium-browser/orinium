@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `src/engine/layouter/builder/css_resolve.rs`."><title>css_resolve.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../../static.files/rustdoc-1ed95124.css"><meta name="rustdoc-vars" data-root-path="../../../../../" data-static-root-path="../../../../../static.files/" data-current-crate="orinium_browser" data-themes="" data-resource-suffix="" data-rustdoc-version="1.98.0 (88d9e12ae 2026-08-18)" data-channel="1.98.0" data-search-js="search-9944d736.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../../../static.files/storage-41dd4d93.js"></script><script defer src="../../../../../static.files/src-script-813739b1.js"></script><script defer src="../../../../../src-files.js"></script><script defer src="../../../../../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../../../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">orinium_browser/engine/layouter/builder/</div>css_resolve.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span><span class="kw">crate</span>::engine::css::values::{CssValue, Unit};
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `src/engine/layouter/builder/css_resolve.rs`."><title>css_resolve.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../../static.files/rustdoc-1ed95124.css"><meta name="rustdoc-vars" data-root-path="../../../../../" data-static-root-path="../../../../../static.files/" data-current-crate="orinium_browser" data-themes="" data-resource-suffix="" data-rustdoc-version="1.98.1 (48a229cea 2026-09-01)" data-channel="1.98.1" data-search-js="search-9944d736.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../../../static.files/storage-41dd4d93.js"></script><script defer src="../../../../../static.files/src-script-813739b1.js"></script><script defer src="../../../../../src-files.js"></script><script defer src="../../../../../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../../../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">orinium_browser/engine/layouter/builder/</div>css_resolve.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span><span class="kw">crate</span>::engine::css::values::{CssValue, Unit};
 <a href=#2 id=2 data-nosnippet>2</a><span class="kw">use </span><span class="kw">crate</span>::engine::layouter::types::TextFlowStyle;
 <a href=#3 id=3 data-nosnippet>3</a><span class="kw">use </span>ui_layout::{GridPlacement, GridPlacementEnd, GridRepeat, GridTrack, Length, LengthOrAuto};
 <a href=#4 id=4 data-nosnippet>4</a>
@@ -519,164 +519,197 @@
 <a href=#519 id=519 data-nosnippet>519</a>    <span class="kw">let </span>(start_values, end_values) = slash.map_or((values.as_slice(), <span class="kw-2">&amp;</span>[][..]), |slash| {
 <a href=#520 id=520 data-nosnippet>520</a>        (<span class="kw-2">&amp;</span>values[..slash], <span class="kw-2">&amp;</span>values[slash + <span class="number">1</span>..])
 <a href=#521 id=521 data-nosnippet>521</a>    });
-<a href=#522 id=522 data-nosnippet>522</a>    <span class="kw">let </span>start = parse_positive_grid_line(start_values)<span class="question-mark">?</span>;
+<a href=#522 id=522 data-nosnippet>522</a>    <span class="kw">let </span>start = parse_positive_grid_line(start_values);
 <a href=#523 id=523 data-nosnippet>523</a>    <span class="kw">if </span>end_values.is_empty() {
-<a href=#524 id=524 data-nosnippet>524</a>        <span class="kw">return </span><span class="prelude-val">Some</span>(GridPlacement {
-<a href=#525 id=525 data-nosnippet>525</a>            start: <span class="prelude-val">Some</span>(start),
-<a href=#526 id=526 data-nosnippet>526</a>            end: GridPlacementEnd::Span(<span class="number">1</span>),
-<a href=#527 id=527 data-nosnippet>527</a>        });
-<a href=#528 id=528 data-nosnippet>528</a>    }
-<a href=#529 id=529 data-nosnippet>529</a>    <span class="kw">if </span><span class="macro">matches!</span>(end_values, [CssValue::Number(end)] <span class="kw">if </span><span class="kw-2">*</span>end &lt; <span class="number">0.0</span>) {
-<a href=#530 id=530 data-nosnippet>530</a>        <span class="kw">let </span>[CssValue::Number(end)] = end_values <span class="kw">else </span>{
-<a href=#531 id=531 data-nosnippet>531</a>            <span class="macro">unreachable!</span>();
-<a href=#532 id=532 data-nosnippet>532</a>        };
-<a href=#533 id=533 data-nosnippet>533</a>        <span class="kw">if </span>end.fract().abs() &gt;= f32::EPSILON {
-<a href=#534 id=534 data-nosnippet>534</a>            <span class="kw">return </span><span class="prelude-val">None</span>;
-<a href=#535 id=535 data-nosnippet>535</a>        }
-<a href=#536 id=536 data-nosnippet>536</a>
-<a href=#537 id=537 data-nosnippet>537</a>        <span class="kw">return </span><span class="prelude-val">Some</span>(GridPlacement {
-<a href=#538 id=538 data-nosnippet>538</a>            start: <span class="prelude-val">Some</span>(start),
-<a href=#539 id=539 data-nosnippet>539</a>            end: GridPlacementEnd::NegativeLine((-<span class="kw-2">*</span>end) <span class="kw">as </span>usize),
-<a href=#540 id=540 data-nosnippet>540</a>        });
-<a href=#541 id=541 data-nosnippet>541</a>    }
-<a href=#542 id=542 data-nosnippet>542</a>    <span class="kw">let </span>end = parse_positive_grid_line(end_values)<span class="question-mark">?</span>;
-<a href=#543 id=543 data-nosnippet>543</a>    (end &gt; start).then_some(GridPlacement {
-<a href=#544 id=544 data-nosnippet>544</a>        start: <span class="prelude-val">Some</span>(start),
-<a href=#545 id=545 data-nosnippet>545</a>        end: GridPlacementEnd::Line(end),
-<a href=#546 id=546 data-nosnippet>546</a>    })
-<a href=#547 id=547 data-nosnippet>547</a>}
-<a href=#548 id=548 data-nosnippet>548</a>
-<a href=#549 id=549 data-nosnippet>549</a><span class="kw">fn </span>parse_positive_grid_line(values: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>CssValue]) -&gt; <span class="prelude-ty">Option</span>&lt;usize&gt; {
-<a href=#550 id=550 data-nosnippet>550</a>    <span class="kw">let </span>[CssValue::Number(line)] = values <span class="kw">else </span>{
-<a href=#551 id=551 data-nosnippet>551</a>        <span class="kw">return </span><span class="prelude-val">None</span>;
-<a href=#552 id=552 data-nosnippet>552</a>    };
-<a href=#553 id=553 data-nosnippet>553</a>    (<span class="kw-2">*</span>line &gt;= <span class="number">1.0 </span>&amp;&amp; line.fract().abs() &lt; f32::EPSILON).then_some(<span class="kw-2">*</span>line <span class="kw">as </span>usize)
-<a href=#554 id=554 data-nosnippet>554</a>}
-<a href=#555 id=555 data-nosnippet>555</a>
-<a href=#556 id=556 data-nosnippet>556</a><span class="kw">fn </span>parse_grid_track(
-<a href=#557 id=557 data-nosnippet>557</a>    name: <span class="kw-2">&amp;</span>str,
-<a href=#558 id=558 data-nosnippet>558</a>    value: <span class="kw-2">&amp;</span>CssValue,
-<a href=#559 id=559 data-nosnippet>559</a>    text_flow_style: <span class="kw-2">&amp;</span>TextFlowStyle,
-<a href=#560 id=560 data-nosnippet>560</a>) -&gt; <span class="prelude-ty">Option</span>&lt;GridTrack&gt; {
-<a href=#561 id=561 data-nosnippet>561</a>    <span class="kw">match </span>value {
-<a href=#562 id=562 data-nosnippet>562</a>        CssValue::Keyword(keyword) <span class="kw">if </span>keyword == <span class="string">"auto" </span>=&gt; {
-<a href=#563 id=563 data-nosnippet>563</a>            <span class="prelude-val">Some</span>(GridTrack::Breadth(LengthOrAuto::Auto))
-<a href=#564 id=564 data-nosnippet>564</a>        }
-<a href=#565 id=565 data-nosnippet>565</a>        CssValue::Length(factor, Unit::Fr) <span class="kw">if </span><span class="kw-2">*</span>factor &gt;= <span class="number">0.0 </span>=&gt; <span class="prelude-val">Some</span>(GridTrack::Flex(<span class="kw-2">*</span>factor)),
-<a href=#566 id=566 data-nosnippet>566</a>        CssValue::Function(function, args) <span class="kw">if </span>function == <span class="string">"minmax" </span>=&gt; {
-<a href=#567 id=567 data-nosnippet>567</a>            <span class="kw">let </span>[minimum, maximum] = args.as_slice() <span class="kw">else </span>{
-<a href=#568 id=568 data-nosnippet>568</a>                <span class="kw">return </span><span class="prelude-val">None</span>;
-<a href=#569 id=569 data-nosnippet>569</a>            };
-<a href=#570 id=570 data-nosnippet>570</a>            <span class="kw">let </span>minimum = minimum.first()<span class="question-mark">?</span>;
-<a href=#571 id=571 data-nosnippet>571</a>            <span class="kw">let </span>maximum = maximum.first()<span class="question-mark">?</span>;
-<a href=#572 id=572 data-nosnippet>572</a>            <span class="prelude-val">Some</span>(GridTrack::MinMax(
-<a href=#573 id=573 data-nosnippet>573</a>                Box::new(parse_grid_track(name, minimum, text_flow_style)<span class="question-mark">?</span>),
-<a href=#574 id=574 data-nosnippet>574</a>                Box::new(parse_grid_track(name, maximum, text_flow_style)<span class="question-mark">?</span>),
-<a href=#575 id=575 data-nosnippet>575</a>            ))
-<a href=#576 id=576 data-nosnippet>576</a>        }
-<a href=#577 id=577 data-nosnippet>577</a>        CssValue::Function(function, args) <span class="kw">if </span>function == <span class="string">"repeat" </span>=&gt; {
-<a href=#578 id=578 data-nosnippet>578</a>            <span class="kw">let </span>(repeat, pattern) = args.split_first()<span class="question-mark">?</span>;
-<a href=#579 id=579 data-nosnippet>579</a>            <span class="kw">let </span>repeat = <span class="kw">match </span>repeat.first() {
-<a href=#580 id=580 data-nosnippet>580</a>                <span class="prelude-val">Some</span>(CssValue::Number(count))
-<a href=#581 id=581 data-nosnippet>581</a>                    <span class="kw">if </span><span class="kw-2">*</span>count &gt;= <span class="number">1.0 </span>&amp;&amp; count.fract().abs() &lt; f32::EPSILON =&gt;
-<a href=#582 id=582 data-nosnippet>582</a>                {
-<a href=#583 id=583 data-nosnippet>583</a>                    GridRepeat::Count(<span class="kw-2">*</span>count <span class="kw">as </span>usize)
-<a href=#584 id=584 data-nosnippet>584</a>                }
-<a href=#585 id=585 data-nosnippet>585</a>                <span class="prelude-val">Some</span>(CssValue::Keyword(keyword)) <span class="kw">if </span>keyword == <span class="string">"auto-fit" </span>=&gt; GridRepeat::AutoFit,
-<a href=#586 id=586 data-nosnippet>586</a>                <span class="prelude-val">Some</span>(CssValue::Keyword(keyword)) <span class="kw">if </span>keyword == <span class="string">"auto-fill" </span>=&gt; GridRepeat::AutoFill,
-<a href=#587 id=587 data-nosnippet>587</a>                <span class="kw">_ </span>=&gt; <span class="kw">return </span><span class="prelude-val">None</span>,
-<a href=#588 id=588 data-nosnippet>588</a>            };
-<a href=#589 id=589 data-nosnippet>589</a>            <span class="kw">let </span>pattern = pattern
-<a href=#590 id=590 data-nosnippet>590</a>                .iter()
-<a href=#591 id=591 data-nosnippet>591</a>                .flatten()
-<a href=#592 id=592 data-nosnippet>592</a>                .map(|value| parse_grid_track(name, value, text_flow_style))
-<a href=#593 id=593 data-nosnippet>593</a>                .collect::&lt;<span class="prelude-ty">Option</span>&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
-<a href=#594 id=594 data-nosnippet>594</a>            (!pattern.is_empty()).then_some(GridTrack::Repeat(repeat, pattern))
-<a href=#595 id=595 data-nosnippet>595</a>        }
-<a href=#596 id=596 data-nosnippet>596</a>        <span class="kw">_ </span>=&gt; resolve_css_len(name, std::slice::from_ref(value), text_flow_style)
-<a href=#597 id=597 data-nosnippet>597</a>            .map(LengthOrAuto::Length)
-<a href=#598 id=598 data-nosnippet>598</a>            .map(GridTrack::Breadth),
-<a href=#599 id=599 data-nosnippet>599</a>    }
-<a href=#600 id=600 data-nosnippet>600</a>}
-<a href=#601 id=601 data-nosnippet>601</a>
-<a href=#602 id=602 data-nosnippet>602</a><span class="kw">pub fn </span>parse_grid_template_areas(value: <span class="kw-2">&amp;</span>CssValue) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;Vec&lt;String&gt;&gt;&gt; {
-<a href=#603 id=603 data-nosnippet>603</a>    <span class="kw">if </span><span class="macro">matches!</span>(value, CssValue::Keyword(keyword) <span class="kw">if </span>keyword == <span class="string">"none"</span>) {
-<a href=#604 id=604 data-nosnippet>604</a>        <span class="kw">return </span><span class="prelude-val">Some</span>(Vec::new());
-<a href=#605 id=605 data-nosnippet>605</a>    }
-<a href=#606 id=606 data-nosnippet>606</a>    <span class="kw">let </span>rows: Vec&lt;<span class="kw-2">&amp;</span>str&gt; = <span class="kw">match </span>value {
-<a href=#607 id=607 data-nosnippet>607</a>        CssValue::String(row) =&gt; <span class="macro">vec!</span>[row],
-<a href=#608 id=608 data-nosnippet>608</a>        CssValue::List(values) =&gt; values
-<a href=#609 id=609 data-nosnippet>609</a>            .iter()
-<a href=#610 id=610 data-nosnippet>610</a>            .map(|value| <span class="kw">match </span>value {
-<a href=#611 id=611 data-nosnippet>611</a>                CssValue::String(row) =&gt; <span class="prelude-val">Some</span>(row.as_str()),
-<a href=#612 id=612 data-nosnippet>612</a>                <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
-<a href=#613 id=613 data-nosnippet>613</a>            })
-<a href=#614 id=614 data-nosnippet>614</a>            .collect::&lt;<span class="prelude-ty">Option</span>&lt;<span class="kw">_</span>&gt;&gt;()<span class="question-mark">?</span>,
-<a href=#615 id=615 data-nosnippet>615</a>        <span class="kw">_ </span>=&gt; <span class="kw">return </span><span class="prelude-val">None</span>,
-<a href=#616 id=616 data-nosnippet>616</a>    };
-<a href=#617 id=617 data-nosnippet>617</a>    <span class="kw">let </span>areas: Vec&lt;Vec&lt;String&gt;&gt; = rows
-<a href=#618 id=618 data-nosnippet>618</a>        .into_iter()
-<a href=#619 id=619 data-nosnippet>619</a>        .map(|row| {
-<a href=#620 id=620 data-nosnippet>620</a>            row.split_whitespace()
-<a href=#621 id=621 data-nosnippet>621</a>                .map(|name| {
-<a href=#622 id=622 data-nosnippet>622</a>                    <span class="kw">if </span>name.chars().all(|character| character == <span class="string">'.'</span>) {
-<a href=#623 id=623 data-nosnippet>623</a>                        <span class="string">"."</span>.to_string()
-<a href=#624 id=624 data-nosnippet>624</a>                    } <span class="kw">else </span>{
-<a href=#625 id=625 data-nosnippet>625</a>                        name.to_string()
-<a href=#626 id=626 data-nosnippet>626</a>                    }
-<a href=#627 id=627 data-nosnippet>627</a>                })
-<a href=#628 id=628 data-nosnippet>628</a>                .collect()
-<a href=#629 id=629 data-nosnippet>629</a>        })
-<a href=#630 id=630 data-nosnippet>630</a>        .collect();
-<a href=#631 id=631 data-nosnippet>631</a>    <span class="kw">let </span>width = areas.first()<span class="question-mark">?</span>.len();
-<a href=#632 id=632 data-nosnippet>632</a>    <span class="kw">if </span>width == <span class="number">0 </span>|| areas.iter().any(|row| row.len() != width) {
-<a href=#633 id=633 data-nosnippet>633</a>        <span class="kw">return </span><span class="prelude-val">None</span>;
-<a href=#634 id=634 data-nosnippet>634</a>    }
-<a href=#635 id=635 data-nosnippet>635</a>    <span class="kw">for </span>name <span class="kw">in </span>areas.iter().flatten().filter(|name| name.as_str() != <span class="string">"."</span>) {
-<a href=#636 id=636 data-nosnippet>636</a>        <span class="kw">let </span>cells: Vec&lt;<span class="kw">_</span>&gt; = areas
-<a href=#637 id=637 data-nosnippet>637</a>            .iter()
-<a href=#638 id=638 data-nosnippet>638</a>            .enumerate()
-<a href=#639 id=639 data-nosnippet>639</a>            .flat_map(|(row, areas)| {
-<a href=#640 id=640 data-nosnippet>640</a>                areas
-<a href=#641 id=641 data-nosnippet>641</a>                    .iter()
-<a href=#642 id=642 data-nosnippet>642</a>                    .enumerate()
-<a href=#643 id=643 data-nosnippet>643</a>                    .filter(|(<span class="kw">_</span>, area)| <span class="kw-2">*</span>area == name)
-<a href=#644 id=644 data-nosnippet>644</a>                    .map(<span class="kw">move </span>|(column, <span class="kw">_</span>)| (row, column))
-<a href=#645 id=645 data-nosnippet>645</a>            })
-<a href=#646 id=646 data-nosnippet>646</a>            .collect();
-<a href=#647 id=647 data-nosnippet>647</a>        <span class="kw">let </span>min_row = cells.iter().map(|(row, <span class="kw">_</span>)| <span class="kw-2">*</span>row).min()<span class="question-mark">?</span>;
-<a href=#648 id=648 data-nosnippet>648</a>        <span class="kw">let </span>max_row = cells.iter().map(|(row, <span class="kw">_</span>)| <span class="kw-2">*</span>row).max()<span class="question-mark">?</span>;
-<a href=#649 id=649 data-nosnippet>649</a>        <span class="kw">let </span>min_column = cells.iter().map(|(<span class="kw">_</span>, column)| <span class="kw-2">*</span>column).min()<span class="question-mark">?</span>;
-<a href=#650 id=650 data-nosnippet>650</a>        <span class="kw">let </span>max_column = cells.iter().map(|(<span class="kw">_</span>, column)| <span class="kw-2">*</span>column).max()<span class="question-mark">?</span>;
-<a href=#651 id=651 data-nosnippet>651</a>        <span class="kw">if </span>(min_row..=max_row)
-<a href=#652 id=652 data-nosnippet>652</a>            .any(|row| (min_column..=max_column).any(|column| areas[row][column] != <span class="kw-2">*</span>name))
-<a href=#653 id=653 data-nosnippet>653</a>        {
-<a href=#654 id=654 data-nosnippet>654</a>            <span class="kw">return </span><span class="prelude-val">None</span>;
-<a href=#655 id=655 data-nosnippet>655</a>        }
-<a href=#656 id=656 data-nosnippet>656</a>    }
-<a href=#657 id=657 data-nosnippet>657</a>    <span class="prelude-val">Some</span>(areas)
-<a href=#658 id=658 data-nosnippet>658</a>}
-<a href=#659 id=659 data-nosnippet>659</a>
-<a href=#660 id=660 data-nosnippet>660</a><span class="kw">pub fn </span>parse_grid_line(value: <span class="kw-2">&amp;</span>CssValue) -&gt; <span class="prelude-ty">Option</span>&lt;usize&gt; {
-<a href=#661 id=661 data-nosnippet>661</a>    <span class="kw">match </span>value {
-<a href=#662 id=662 data-nosnippet>662</a>        CssValue::Number(n) <span class="kw">if </span><span class="kw-2">*</span>n &gt;= <span class="number">1.0 </span>&amp;&amp; n.fract() == <span class="number">0.0 </span>=&gt; <span class="prelude-val">Some</span>(<span class="kw-2">*</span>n <span class="kw">as </span>usize),
-<a href=#663 id=663 data-nosnippet>663</a>        <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
-<a href=#664 id=664 data-nosnippet>664</a>    }
-<a href=#665 id=665 data-nosnippet>665</a>}
-<a href=#666 id=666 data-nosnippet>666</a>
-<a href=#667 id=667 data-nosnippet>667</a><span class="kw">pub fn </span>parse_grid_line_end(value: <span class="kw-2">&amp;</span>CssValue) -&gt; <span class="prelude-ty">Option</span>&lt;GridPlacementEnd&gt; {
-<a href=#668 id=668 data-nosnippet>668</a>    <span class="kw">let </span>CssValue::Number(n) = value <span class="kw">else </span>{
-<a href=#669 id=669 data-nosnippet>669</a>        <span class="kw">return </span><span class="prelude-val">None</span>;
-<a href=#670 id=670 data-nosnippet>670</a>    };
-<a href=#671 id=671 data-nosnippet>671</a>
-<a href=#672 id=672 data-nosnippet>672</a>    <span class="kw">if </span>n.fract().abs() &gt;= f32::EPSILON {
-<a href=#673 id=673 data-nosnippet>673</a>        <span class="kw">return </span><span class="prelude-val">None</span>;
-<a href=#674 id=674 data-nosnippet>674</a>    }
+<a href=#524 id=524 data-nosnippet>524</a>        <span class="kw">let </span>span = parse_span(start_values).unwrap_or(<span class="number">1</span>);
+<a href=#525 id=525 data-nosnippet>525</a>        <span class="kw">return </span><span class="prelude-val">Some</span>(GridPlacement {
+<a href=#526 id=526 data-nosnippet>526</a>            start,
+<a href=#527 id=527 data-nosnippet>527</a>            end: GridPlacementEnd::Span(span),
+<a href=#528 id=528 data-nosnippet>528</a>        });
+<a href=#529 id=529 data-nosnippet>529</a>    }
+<a href=#530 id=530 data-nosnippet>530</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(span) = parse_span(end_values) {
+<a href=#531 id=531 data-nosnippet>531</a>        <span class="kw">return </span><span class="prelude-val">Some</span>(GridPlacement {
+<a href=#532 id=532 data-nosnippet>532</a>            start,
+<a href=#533 id=533 data-nosnippet>533</a>            end: GridPlacementEnd::Span(span),
+<a href=#534 id=534 data-nosnippet>534</a>        });
+<a href=#535 id=535 data-nosnippet>535</a>    }
+<a href=#536 id=536 data-nosnippet>536</a>    <span class="kw">if </span><span class="macro">matches!</span>(end_values, [CssValue::Number(end)] <span class="kw">if </span><span class="kw-2">*</span>end &lt; <span class="number">0.0</span>) {
+<a href=#537 id=537 data-nosnippet>537</a>        <span class="kw">let </span>[CssValue::Number(end)] = end_values <span class="kw">else </span>{
+<a href=#538 id=538 data-nosnippet>538</a>            <span class="macro">unreachable!</span>();
+<a href=#539 id=539 data-nosnippet>539</a>        };
+<a href=#540 id=540 data-nosnippet>540</a>        <span class="kw">if </span>end.fract().abs() &gt;= f32::EPSILON {
+<a href=#541 id=541 data-nosnippet>541</a>            <span class="kw">return </span><span class="prelude-val">None</span>;
+<a href=#542 id=542 data-nosnippet>542</a>        }
+<a href=#543 id=543 data-nosnippet>543</a>
+<a href=#544 id=544 data-nosnippet>544</a>        <span class="kw">return </span><span class="prelude-val">Some</span>(GridPlacement {
+<a href=#545 id=545 data-nosnippet>545</a>            start,
+<a href=#546 id=546 data-nosnippet>546</a>            end: GridPlacementEnd::NegativeLine((-<span class="kw-2">*</span>end) <span class="kw">as </span>usize),
+<a href=#547 id=547 data-nosnippet>547</a>        });
+<a href=#548 id=548 data-nosnippet>548</a>    }
+<a href=#549 id=549 data-nosnippet>549</a>    <span class="kw">let </span>end = parse_positive_grid_line(end_values)<span class="question-mark">?</span>;
+<a href=#550 id=550 data-nosnippet>550</a>    <span class="kw">let </span>start = start<span class="question-mark">?</span>;
+<a href=#551 id=551 data-nosnippet>551</a>    (end &gt; start).then_some(GridPlacement {
+<a href=#552 id=552 data-nosnippet>552</a>        start: <span class="prelude-val">Some</span>(start),
+<a href=#553 id=553 data-nosnippet>553</a>        end: GridPlacementEnd::Line(end),
+<a href=#554 id=554 data-nosnippet>554</a>    })
+<a href=#555 id=555 data-nosnippet>555</a>}
+<a href=#556 id=556 data-nosnippet>556</a>
+<a href=#557 id=557 data-nosnippet>557</a><span class="kw">fn </span>parse_positive_grid_line(values: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>CssValue]) -&gt; <span class="prelude-ty">Option</span>&lt;usize&gt; {
+<a href=#558 id=558 data-nosnippet>558</a>    <span class="kw">let </span>[CssValue::Number(line)] = values <span class="kw">else </span>{
+<a href=#559 id=559 data-nosnippet>559</a>        <span class="kw">return </span><span class="prelude-val">None</span>;
+<a href=#560 id=560 data-nosnippet>560</a>    };
+<a href=#561 id=561 data-nosnippet>561</a>    (<span class="kw-2">*</span>line &gt;= <span class="number">1.0 </span>&amp;&amp; line.fract().abs() &lt; f32::EPSILON).then_some(<span class="kw-2">*</span>line <span class="kw">as </span>usize)
+<a href=#562 id=562 data-nosnippet>562</a>}
+<a href=#563 id=563 data-nosnippet>563</a>
+<a href=#564 id=564 data-nosnippet>564</a><span class="kw">fn </span>parse_span(values: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>CssValue]) -&gt; <span class="prelude-ty">Option</span>&lt;usize&gt; {
+<a href=#565 id=565 data-nosnippet>565</a>    <span class="kw">let </span>[CssValue::Keyword(keyword), CssValue::Number(span)] = values <span class="kw">else </span>{
+<a href=#566 id=566 data-nosnippet>566</a>        <span class="kw">return </span><span class="prelude-val">None</span>;
+<a href=#567 id=567 data-nosnippet>567</a>    };
+<a href=#568 id=568 data-nosnippet>568</a>    (keyword == <span class="string">"span" </span>&amp;&amp; <span class="kw-2">*</span>span &gt;= <span class="number">1.0 </span>&amp;&amp; span.fract().abs() &lt; f32::EPSILON)
+<a href=#569 id=569 data-nosnippet>569</a>        .then_some(<span class="kw-2">*</span>span <span class="kw">as </span>usize)
+<a href=#570 id=570 data-nosnippet>570</a>}
+<a href=#571 id=571 data-nosnippet>571</a>
+<a href=#572 id=572 data-nosnippet>572</a><span class="kw">fn </span>parse_grid_track(
+<a href=#573 id=573 data-nosnippet>573</a>    name: <span class="kw-2">&amp;</span>str,
+<a href=#574 id=574 data-nosnippet>574</a>    value: <span class="kw-2">&amp;</span>CssValue,
+<a href=#575 id=575 data-nosnippet>575</a>    text_flow_style: <span class="kw-2">&amp;</span>TextFlowStyle,
+<a href=#576 id=576 data-nosnippet>576</a>) -&gt; <span class="prelude-ty">Option</span>&lt;GridTrack&gt; {
+<a href=#577 id=577 data-nosnippet>577</a>    <span class="kw">match </span>value {
+<a href=#578 id=578 data-nosnippet>578</a>        CssValue::Keyword(keyword) <span class="kw">if </span>keyword == <span class="string">"auto" </span>=&gt; {
+<a href=#579 id=579 data-nosnippet>579</a>            <span class="prelude-val">Some</span>(GridTrack::Breadth(LengthOrAuto::Auto))
+<a href=#580 id=580 data-nosnippet>580</a>        }
+<a href=#581 id=581 data-nosnippet>581</a>        CssValue::Length(factor, Unit::Fr) <span class="kw">if </span><span class="kw-2">*</span>factor &gt;= <span class="number">0.0 </span>=&gt; <span class="prelude-val">Some</span>(GridTrack::Flex(<span class="kw-2">*</span>factor)),
+<a href=#582 id=582 data-nosnippet>582</a>        CssValue::Function(function, args) <span class="kw">if </span>function == <span class="string">"minmax" </span>=&gt; {
+<a href=#583 id=583 data-nosnippet>583</a>            <span class="kw">let </span>[minimum, maximum] = args.as_slice() <span class="kw">else </span>{
+<a href=#584 id=584 data-nosnippet>584</a>                <span class="kw">return </span><span class="prelude-val">None</span>;
+<a href=#585 id=585 data-nosnippet>585</a>            };
+<a href=#586 id=586 data-nosnippet>586</a>            <span class="kw">let </span>minimum = minimum.first()<span class="question-mark">?</span>;
+<a href=#587 id=587 data-nosnippet>587</a>            <span class="kw">let </span>maximum = maximum.first()<span class="question-mark">?</span>;
+<a href=#588 id=588 data-nosnippet>588</a>            <span class="prelude-val">Some</span>(GridTrack::MinMax(
+<a href=#589 id=589 data-nosnippet>589</a>                Box::new(parse_grid_track(name, minimum, text_flow_style)<span class="question-mark">?</span>),
+<a href=#590 id=590 data-nosnippet>590</a>                Box::new(parse_grid_track(name, maximum, text_flow_style)<span class="question-mark">?</span>),
+<a href=#591 id=591 data-nosnippet>591</a>            ))
+<a href=#592 id=592 data-nosnippet>592</a>        }
+<a href=#593 id=593 data-nosnippet>593</a>        CssValue::Function(function, args) <span class="kw">if </span>function == <span class="string">"repeat" </span>=&gt; {
+<a href=#594 id=594 data-nosnippet>594</a>            <span class="kw">let </span>(repeat, pattern) = args.split_first()<span class="question-mark">?</span>;
+<a href=#595 id=595 data-nosnippet>595</a>            <span class="kw">let </span>repeat = <span class="kw">match </span>repeat.first() {
+<a href=#596 id=596 data-nosnippet>596</a>                <span class="prelude-val">Some</span>(CssValue::Number(count))
+<a href=#597 id=597 data-nosnippet>597</a>                    <span class="kw">if </span><span class="kw-2">*</span>count &gt;= <span class="number">1.0 </span>&amp;&amp; count.fract().abs() &lt; f32::EPSILON =&gt;
+<a href=#598 id=598 data-nosnippet>598</a>                {
+<a href=#599 id=599 data-nosnippet>599</a>                    GridRepeat::Count(<span class="kw-2">*</span>count <span class="kw">as </span>usize)
+<a href=#600 id=600 data-nosnippet>600</a>                }
+<a href=#601 id=601 data-nosnippet>601</a>                <span class="prelude-val">Some</span>(CssValue::Keyword(keyword)) <span class="kw">if </span>keyword == <span class="string">"auto-fit" </span>=&gt; GridRepeat::AutoFit,
+<a href=#602 id=602 data-nosnippet>602</a>                <span class="prelude-val">Some</span>(CssValue::Keyword(keyword)) <span class="kw">if </span>keyword == <span class="string">"auto-fill" </span>=&gt; GridRepeat::AutoFill,
+<a href=#603 id=603 data-nosnippet>603</a>                <span class="kw">_ </span>=&gt; <span class="kw">return </span><span class="prelude-val">None</span>,
+<a href=#604 id=604 data-nosnippet>604</a>            };
+<a href=#605 id=605 data-nosnippet>605</a>            <span class="kw">let </span>pattern = pattern
+<a href=#606 id=606 data-nosnippet>606</a>                .iter()
+<a href=#607 id=607 data-nosnippet>607</a>                .flatten()
+<a href=#608 id=608 data-nosnippet>608</a>                .map(|value| parse_grid_track(name, value, text_flow_style))
+<a href=#609 id=609 data-nosnippet>609</a>                .collect::&lt;<span class="prelude-ty">Option</span>&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
+<a href=#610 id=610 data-nosnippet>610</a>            (!pattern.is_empty()).then_some(GridTrack::Repeat(repeat, pattern))
+<a href=#611 id=611 data-nosnippet>611</a>        }
+<a href=#612 id=612 data-nosnippet>612</a>        <span class="kw">_ </span>=&gt; resolve_css_len(name, std::slice::from_ref(value), text_flow_style)
+<a href=#613 id=613 data-nosnippet>613</a>            .map(LengthOrAuto::Length)
+<a href=#614 id=614 data-nosnippet>614</a>            .map(GridTrack::Breadth),
+<a href=#615 id=615 data-nosnippet>615</a>    }
+<a href=#616 id=616 data-nosnippet>616</a>}
+<a href=#617 id=617 data-nosnippet>617</a>
+<a href=#618 id=618 data-nosnippet>618</a><span class="kw">pub fn </span>parse_grid_template_areas(value: <span class="kw-2">&amp;</span>CssValue) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;Vec&lt;String&gt;&gt;&gt; {
+<a href=#619 id=619 data-nosnippet>619</a>    <span class="kw">if </span><span class="macro">matches!</span>(value, CssValue::Keyword(keyword) <span class="kw">if </span>keyword == <span class="string">"none"</span>) {
+<a href=#620 id=620 data-nosnippet>620</a>        <span class="kw">return </span><span class="prelude-val">Some</span>(Vec::new());
+<a href=#621 id=621 data-nosnippet>621</a>    }
+<a href=#622 id=622 data-nosnippet>622</a>    <span class="kw">let </span>rows: Vec&lt;<span class="kw-2">&amp;</span>str&gt; = <span class="kw">match </span>value {
+<a href=#623 id=623 data-nosnippet>623</a>        CssValue::String(row) =&gt; <span class="macro">vec!</span>[row],
+<a href=#624 id=624 data-nosnippet>624</a>        CssValue::List(values) =&gt; values
+<a href=#625 id=625 data-nosnippet>625</a>            .iter()
+<a href=#626 id=626 data-nosnippet>626</a>            .map(|value| <span class="kw">match </span>value {
+<a href=#627 id=627 data-nosnippet>627</a>                CssValue::String(row) =&gt; <span class="prelude-val">Some</span>(row.as_str()),
+<a href=#628 id=628 data-nosnippet>628</a>                <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
+<a href=#629 id=629 data-nosnippet>629</a>            })
+<a href=#630 id=630 data-nosnippet>630</a>            .collect::&lt;<span class="prelude-ty">Option</span>&lt;<span class="kw">_</span>&gt;&gt;()<span class="question-mark">?</span>,
+<a href=#631 id=631 data-nosnippet>631</a>        <span class="kw">_ </span>=&gt; <span class="kw">return </span><span class="prelude-val">None</span>,
+<a href=#632 id=632 data-nosnippet>632</a>    };
+<a href=#633 id=633 data-nosnippet>633</a>    <span class="kw">let </span>areas: Vec&lt;Vec&lt;String&gt;&gt; = rows
+<a href=#634 id=634 data-nosnippet>634</a>        .into_iter()
+<a href=#635 id=635 data-nosnippet>635</a>        .map(|row| {
+<a href=#636 id=636 data-nosnippet>636</a>            row.split_whitespace()
+<a href=#637 id=637 data-nosnippet>637</a>                .map(|name| {
+<a href=#638 id=638 data-nosnippet>638</a>                    <span class="kw">if </span>name.chars().all(|character| character == <span class="string">'.'</span>) {
+<a href=#639 id=639 data-nosnippet>639</a>                        <span class="string">"."</span>.to_string()
+<a href=#640 id=640 data-nosnippet>640</a>                    } <span class="kw">else </span>{
+<a href=#641 id=641 data-nosnippet>641</a>                        name.to_string()
+<a href=#642 id=642 data-nosnippet>642</a>                    }
+<a href=#643 id=643 data-nosnippet>643</a>                })
+<a href=#644 id=644 data-nosnippet>644</a>                .collect()
+<a href=#645 id=645 data-nosnippet>645</a>        })
+<a href=#646 id=646 data-nosnippet>646</a>        .collect();
+<a href=#647 id=647 data-nosnippet>647</a>    <span class="kw">let </span>width = areas.first()<span class="question-mark">?</span>.len();
+<a href=#648 id=648 data-nosnippet>648</a>    <span class="kw">if </span>width == <span class="number">0 </span>|| areas.iter().any(|row| row.len() != width) {
+<a href=#649 id=649 data-nosnippet>649</a>        <span class="kw">return </span><span class="prelude-val">None</span>;
+<a href=#650 id=650 data-nosnippet>650</a>    }
+<a href=#651 id=651 data-nosnippet>651</a>    <span class="kw">for </span>name <span class="kw">in </span>areas.iter().flatten().filter(|name| name.as_str() != <span class="string">"."</span>) {
+<a href=#652 id=652 data-nosnippet>652</a>        <span class="kw">let </span>cells: Vec&lt;<span class="kw">_</span>&gt; = areas
+<a href=#653 id=653 data-nosnippet>653</a>            .iter()
+<a href=#654 id=654 data-nosnippet>654</a>            .enumerate()
+<a href=#655 id=655 data-nosnippet>655</a>            .flat_map(|(row, areas)| {
+<a href=#656 id=656 data-nosnippet>656</a>                areas
+<a href=#657 id=657 data-nosnippet>657</a>                    .iter()
+<a href=#658 id=658 data-nosnippet>658</a>                    .enumerate()
+<a href=#659 id=659 data-nosnippet>659</a>                    .filter(|(<span class="kw">_</span>, area)| <span class="kw-2">*</span>area == name)
+<a href=#660 id=660 data-nosnippet>660</a>                    .map(<span class="kw">move </span>|(column, <span class="kw">_</span>)| (row, column))
+<a href=#661 id=661 data-nosnippet>661</a>            })
+<a href=#662 id=662 data-nosnippet>662</a>            .collect();
+<a href=#663 id=663 data-nosnippet>663</a>        <span class="kw">let </span>min_row = cells.iter().map(|(row, <span class="kw">_</span>)| <span class="kw-2">*</span>row).min()<span class="question-mark">?</span>;
+<a href=#664 id=664 data-nosnippet>664</a>        <span class="kw">let </span>max_row = cells.iter().map(|(row, <span class="kw">_</span>)| <span class="kw-2">*</span>row).max()<span class="question-mark">?</span>;
+<a href=#665 id=665 data-nosnippet>665</a>        <span class="kw">let </span>min_column = cells.iter().map(|(<span class="kw">_</span>, column)| <span class="kw-2">*</span>column).min()<span class="question-mark">?</span>;
+<a href=#666 id=666 data-nosnippet>666</a>        <span class="kw">let </span>max_column = cells.iter().map(|(<span class="kw">_</span>, column)| <span class="kw-2">*</span>column).max()<span class="question-mark">?</span>;
+<a href=#667 id=667 data-nosnippet>667</a>        <span class="kw">if </span>(min_row..=max_row)
+<a href=#668 id=668 data-nosnippet>668</a>            .any(|row| (min_column..=max_column).any(|column| areas[row][column] != <span class="kw-2">*</span>name))
+<a href=#669 id=669 data-nosnippet>669</a>        {
+<a href=#670 id=670 data-nosnippet>670</a>            <span class="kw">return </span><span class="prelude-val">None</span>;
+<a href=#671 id=671 data-nosnippet>671</a>        }
+<a href=#672 id=672 data-nosnippet>672</a>    }
+<a href=#673 id=673 data-nosnippet>673</a>    <span class="prelude-val">Some</span>(areas)
+<a href=#674 id=674 data-nosnippet>674</a>}
 <a href=#675 id=675 data-nosnippet>675</a>
-<a href=#676 id=676 data-nosnippet>676</a>    <span class="kw">match </span><span class="kw-2">*</span>n {
-<a href=#677 id=677 data-nosnippet>677</a>        n <span class="kw">if </span>n &gt;= <span class="number">1.0 </span>=&gt; <span class="prelude-val">Some</span>(GridPlacementEnd::Line(n <span class="kw">as </span>usize)),
-<a href=#678 id=678 data-nosnippet>678</a>        n <span class="kw">if </span>n &lt;= -<span class="number">1.0 </span>=&gt; <span class="prelude-val">Some</span>(GridPlacementEnd::NegativeLine(-n <span class="kw">as </span>usize)),
+<a href=#676 id=676 data-nosnippet>676</a><span class="kw">pub fn </span>parse_grid_line(value: <span class="kw-2">&amp;</span>CssValue) -&gt; <span class="prelude-ty">Option</span>&lt;usize&gt; {
+<a href=#677 id=677 data-nosnippet>677</a>    <span class="kw">match </span>value {
+<a href=#678 id=678 data-nosnippet>678</a>        CssValue::Number(n) <span class="kw">if </span><span class="kw-2">*</span>n &gt;= <span class="number">1.0 </span>&amp;&amp; n.fract() == <span class="number">0.0 </span>=&gt; <span class="prelude-val">Some</span>(<span class="kw-2">*</span>n <span class="kw">as </span>usize),
 <a href=#679 id=679 data-nosnippet>679</a>        <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
 <a href=#680 id=680 data-nosnippet>680</a>    }
 <a href=#681 id=681 data-nosnippet>681</a>}
+<a href=#682 id=682 data-nosnippet>682</a>
+<a href=#683 id=683 data-nosnippet>683</a><span class="kw">pub fn </span>parse_grid_line_end(value: <span class="kw-2">&amp;</span>CssValue) -&gt; <span class="prelude-ty">Option</span>&lt;GridPlacementEnd&gt; {
+<a href=#684 id=684 data-nosnippet>684</a>    <span class="kw">match </span>value {
+<a href=#685 id=685 data-nosnippet>685</a>        CssValue::List(values) =&gt; {
+<a href=#686 id=686 data-nosnippet>686</a>            <span class="kw">let </span>refs: Vec&lt;<span class="kw-2">&amp;</span>CssValue&gt; = values.iter().collect();
+<a href=#687 id=687 data-nosnippet>687</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(span) = parse_span(<span class="kw-2">&amp;</span>refs) {
+<a href=#688 id=688 data-nosnippet>688</a>                <span class="kw">return </span><span class="prelude-val">Some</span>(GridPlacementEnd::Span(span));
+<a href=#689 id=689 data-nosnippet>689</a>            }
+<a href=#690 id=690 data-nosnippet>690</a>            <span class="kw">let </span>[CssValue::Number(n)] = refs.as_slice() <span class="kw">else </span>{
+<a href=#691 id=691 data-nosnippet>691</a>                <span class="kw">return </span><span class="prelude-val">None</span>;
+<a href=#692 id=692 data-nosnippet>692</a>            };
+<a href=#693 id=693 data-nosnippet>693</a>            resolve_grid_line_end_number(<span class="kw-2">*</span>n)
+<a href=#694 id=694 data-nosnippet>694</a>        }
+<a href=#695 id=695 data-nosnippet>695</a>        value =&gt; {
+<a href=#696 id=696 data-nosnippet>696</a>            <span class="kw">let </span>CssValue::Number(n) = value <span class="kw">else </span>{
+<a href=#697 id=697 data-nosnippet>697</a>                <span class="kw">return </span><span class="prelude-val">None</span>;
+<a href=#698 id=698 data-nosnippet>698</a>            };
+<a href=#699 id=699 data-nosnippet>699</a>            resolve_grid_line_end_number(<span class="kw-2">*</span>n)
+<a href=#700 id=700 data-nosnippet>700</a>        }
+<a href=#701 id=701 data-nosnippet>701</a>    }
+<a href=#702 id=702 data-nosnippet>702</a>}
+<a href=#703 id=703 data-nosnippet>703</a>
+<a href=#704 id=704 data-nosnippet>704</a><span class="kw">fn </span>resolve_grid_line_end_number(n: f32) -&gt; <span class="prelude-ty">Option</span>&lt;GridPlacementEnd&gt; {
+<a href=#705 id=705 data-nosnippet>705</a>    <span class="kw">if </span>n.fract().abs() &gt;= f32::EPSILON {
+<a href=#706 id=706 data-nosnippet>706</a>        <span class="kw">return </span><span class="prelude-val">None</span>;
+<a href=#707 id=707 data-nosnippet>707</a>    }
+<a href=#708 id=708 data-nosnippet>708</a>
+<a href=#709 id=709 data-nosnippet>709</a>    <span class="kw">match </span>n {
+<a href=#710 id=710 data-nosnippet>710</a>        n <span class="kw">if </span>n &gt;= <span class="number">1.0 </span>=&gt; <span class="prelude-val">Some</span>(GridPlacementEnd::Line(n <span class="kw">as </span>usize)),
+<a href=#711 id=711 data-nosnippet>711</a>        n <span class="kw">if </span>n &lt;= -<span class="number">1.0 </span>=&gt; <span class="prelude-val">Some</span>(GridPlacementEnd::NegativeLine(-n <span class="kw">as </span>usize)),
+<a href=#712 id=712 data-nosnippet>712</a>        <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
+<a href=#713 id=713 data-nosnippet>713</a>    }
+<a href=#714 id=714 data-nosnippet>714</a>}
 </code></pre></div></section></main></body></html>

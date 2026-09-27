@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["BrowserCommand"],"mod":["resource_loader","tab","ui","webview"],"struct":["BrowserApp"]};
+window.SIDEBAR_ITEMS = {"mod":["resource_loader","tab","ui","webview"],"struct":["BrowserApp"]};

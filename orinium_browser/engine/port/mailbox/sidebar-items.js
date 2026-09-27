@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["Disconnected","Mailbox","Outbox","Undeliverable"],"trait":["Consume","Produce"]};

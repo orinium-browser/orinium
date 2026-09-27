@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["parser","tokenizer","util"]};
+window.SIDEBAR_ITEMS = {"mod":["parser","tokenizer","util","xml"]};

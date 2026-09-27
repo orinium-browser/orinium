@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["app"]};
+window.SIDEBAR_ITEMS = {"mod":["app","shell"]};

@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["ClassicScriptExecution","ClassicScriptSource","HtmlNodeType","ScriptingMode","ShadowRootMode"],"struct":["ClassicScriptDescriptor","Parser"],"type":["DomTree"]};
+window.SIDEBAR_ITEMS = {"enum":["ClassicScriptExecution","ClassicScriptSource","HtmlNodeType","ScriptingMode","ShadowRootMode"],"fn":["checkedness"],"struct":["ClassicScriptDescriptor","Parser"],"type":["DomTree"]};

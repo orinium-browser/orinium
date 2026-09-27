@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["MAX_ENTITY_NAME_LEN"],"fn":["decode_entity","element_category","is_block_level_element","is_inline_element"]};
+window.SIDEBAR_ITEMS = {"constant":["MAX_ENTITY_NAME_LEN"],"fn":["decode_entity","element_category","is_block_level_element","is_html_space","is_inline_element","split_html_space"]};
