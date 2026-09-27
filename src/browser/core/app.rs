@@ -51,7 +51,7 @@ use crate::platform::system::shell::{BrowserHost, ShellCommand, WindowGeometry};
 pub struct PendingFetches {
     /// Maps (id) to (window_id, tab_id, FetchKind, Url)
     /// Id is used to track pending fetch requests.
-    map: HashMap<usize, (WindowId, TabId, FetchKind, Url)>,
+    map: HashMap<usize, (WindowId, TabId, FetchKind, Url, u64)>,
     counter: usize,
 }
 
@@ -70,12 +70,13 @@ impl PendingFetches {
         tab_id: TabId,
         kind: FetchKind,
         url: Url,
+        generation: u64,
     ) -> usize {
         self.counter += 1;
 
         let id = self.generate_id(&url);
 
-        self.map.insert(id, (window_id, tab_id, kind, url));
+        self.map.insert(id, (window_id, tab_id, kind, url, generation));
         id
     }
 
@@ -95,7 +96,7 @@ impl PendingFetches {
         now ^ self.counter ^ url_hash
     }
 
-    pub fn remove(&mut self, id: usize) -> Option<(WindowId, TabId, FetchKind, Url)> {
+    pub fn remove(&mut self, id: usize) -> Option<(WindowId, TabId, FetchKind, Url, u64)> {
         self.map.remove(&id)
     }
 }
@@ -326,10 +327,16 @@ impl BrowserApp {
             // page script supplied, so internal resource URLs never leak to
             // external servers.
             apply_fetch_headers(&mut request, &initiator, &kind);
-            let id = self
-                .pending_fetches
-                .insert(window_id, fetch.tab_id, kind, url);
+            let id = self.pending_fetches.insert(
+                window_id,
+                fetch.tab_id,
+                kind,
+                url,
+                fetch.request.generation,
+            );
             // The initiator gates access to internal schemes inside the loader.
+            // We also track the originating document generation so stale results
+            // from an earlier navigation are dropped when they arrive.
             self.network.fetch_request_async(request, id, &initiator);
         }
 
@@ -347,16 +354,31 @@ impl BrowserApp {
             log::info!("Network message received in App for fetch_id={}", msg.id);
 
             // pending_fetches から fetch 情報を取得
-            let Some((window_id, tab_id, kind, url)) = self.pending_fetches.remove(msg.id) else {
+            let Some((window_id, tab_id, kind, url, generation)) = self.pending_fetches.remove(msg.id) else {
                 log::warn!("No pending fetch found for fetch_id={}", msg.id);
                 continue;
             };
 
-            // 該当ウィンドウの UI へ配送
             let Some(ui) = self.windows.get_mut(&window_id) else {
                 log::warn!("There is no window called id={:?}", window_id);
                 continue;
             };
+            if tab_id.0 != 0 {
+                let Some(tab) = ui.tab(&tab_id) else {
+                    log::warn!("Tab was closed before fetch completed: tab_id={}", tab_id);
+                    continue;
+                };
+                let current_generation = tab.document_generation();
+                if current_generation != generation {
+                    log::info!(
+                        "Dropping stale fetch result for tab_id={} generation={} (current={})",
+                        tab_id,
+                        generation,
+                        current_generation
+                    );
+                    continue;
+                }
+            }
             ui.deliver_fetch(&tab_id, kind, url, msg.response);
         }
     }

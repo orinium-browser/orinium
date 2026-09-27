@@ -18,13 +18,26 @@ use url::{Origin as UrlOrigin, Url};
 /// whose equality ignores default ports. Everything else (`resource:`, `data:`,
 /// `about:`, `file:`, custom schemes) is opaque: it serializes as `"null"` in
 /// JavaScript and never compares equal to another origin.
+/// An origin may also carry internal/privileged status. Only internal origins
+/// (`resource:` scheme or browser-created origins) are allowed to access internal
+/// schemes like `resource:` and `file:`. Other opaque origins (such as `data:`
+/// documents or sandboxed contexts) do not have internal access.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Origin(UrlOrigin);
+pub struct Origin {
+    inner: UrlOrigin,
+    is_internal: bool,
+}
 
 impl Origin {
     /// Computes the origin of a parsed URL.
+    ///
+    /// URLs with the `resource` scheme are marked as internal.
     pub fn from_url(url: &Url) -> Self {
-        Self(url.origin())
+        let is_internal = url.scheme() == "resource";
+        Self {
+            inner: url.origin(),
+            is_internal,
+        }
     }
 
     /// Computes the origin of a URL string, falling back to a fresh opaque
@@ -36,29 +49,45 @@ impl Origin {
         }
     }
 
-    /// A fresh opaque origin (internal schemes, parse failures, ...).
+    /// A fresh internal privileged origin (for browser-internal components).
+    pub fn internal() -> Self {
+        Self {
+            inner: UrlOrigin::new_opaque(),
+            is_internal: true,
+        }
+    }
+
+    /// A fresh opaque origin (sandboxed contexts, parse failures, unprivileged opaque origins).
     pub fn opaque() -> Self {
-        Self(UrlOrigin::new_opaque())
+        Self {
+            inner: UrlOrigin::new_opaque(),
+            is_internal: false,
+        }
     }
 
     /// Serialization exposed to JavaScript: `scheme://host[:port]` or `"null"`.
     pub fn ascii_serialization(&self) -> String {
-        self.0.ascii_serialization()
+        self.inner.ascii_serialization()
     }
 
     /// Whether this is an `http(s)://` tuple origin that proxies a real web page.
     pub fn is_network(&self) -> bool {
-        self.0.is_tuple()
+        self.inner.is_tuple()
     }
 
-    /// Whether this is an opaque origin backed by an internal scheme.
+    /// Whether this is an opaque origin (not a network tuple origin).
     pub fn is_opaque(&self) -> bool {
-        !self.0.is_tuple()
+        !self.inner.is_tuple()
+    }
+
+    /// Whether this origin is internal and holds browser privileges (access to `resource:`, `file:`).
+    pub fn is_internal(&self) -> bool {
+        self.is_internal
     }
 
     /// Same-origin check. Opaque origins are never equal to any other origin.
     pub fn same_origin(&self, other: &Self) -> bool {
-        self.0 == other.0
+        self.inner == other.inner
     }
 }
 
@@ -123,6 +152,37 @@ mod tests {
     fn unparsable_url_strings_fall_back_to_opaque() {
         let origin = Origin::from_url_string("::not a url::");
         assert!(origin.is_opaque());
+        assert!(!origin.is_internal());
         assert_eq!(origin.ascii_serialization(), "null");
+    }
+
+    #[test]
+    fn resource_url_is_internal_and_opaque() {
+        let origin = Origin::from_url(&url("resource:///test/index.html"));
+        assert!(origin.is_internal());
+        assert!(origin.is_opaque());
+        assert!(!origin.is_network());
+        assert_eq!(origin.ascii_serialization(), "null");
+    }
+
+    #[test]
+    fn data_and_about_urls_are_opaque_but_not_internal() {
+        for raw in ["data:text/plain,hello", "about:blank"] {
+            let origin = Origin::from_url(&url(raw));
+            assert!(origin.is_opaque(), "{} should be opaque", raw);
+            assert!(!origin.is_internal(), "{} should not be internal", raw);
+            assert!(!origin.is_network(), "{} should not be network", raw);
+        }
+    }
+
+    #[test]
+    fn internal_and_opaque_constructors() {
+        let internal = Origin::internal();
+        assert!(internal.is_internal());
+        assert!(internal.is_opaque());
+
+        let opaque = Origin::opaque();
+        assert!(!opaque.is_internal());
+        assert!(opaque.is_opaque());
     }
 }

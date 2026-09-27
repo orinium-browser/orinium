@@ -2181,21 +2181,34 @@ pub(crate) fn node_get_root_node(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JS
     Ok(expose_node(vm, node).unwrap_or(JSValue::null()))
 }
 
+fn is_iframe_same_origin(document_url: &str, src: &str) -> bool {
+    let trimmed = src.trim();
+    if trimmed.is_empty() || trimmed == "about:blank" {
+        return true;
+    }
+    let resolved =
+        resolved_iframe_url(document_url, trimmed).unwrap_or_else(|| trimmed.to_string());
+    let Ok(iframe_url) = url::Url::parse(&resolved) else {
+        return false;
+    };
+    if iframe_url.scheme() == "about" {
+        return true;
+    }
+    let Ok(doc_url) = url::Url::parse(document_url) else {
+        return false;
+    };
+    match (doc_url.scheme(), iframe_url.scheme()) {
+        ("http" | "https", "http" | "https") => doc_url.origin() == iframe_url.origin(),
+        ("resource", "resource") | ("file", "file") => true,
+        _ => false,
+    }
+}
+
 fn get_iframe_content_document(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let this = args.first().unwrap_or(&UNDEFINED);
     let Some(dom_id) = node_dom_id(this) else {
         return Ok(JSValue::null());
     };
-    // If the document was created already, return it.
-    let existing = with_host(vm, |host| {
-        host.iframe_documents
-            .get(&dom_id)
-            .map(|doc| Rc::clone(&doc.borrow().document))
-    })
-    .flatten();
-    if let Some(existing) = existing {
-        return Ok(JSValue::from_object(existing));
-    }
 
     let Some(node) = dom_node(vm, this) else {
         return Ok(JSValue::null());
@@ -2206,10 +2219,22 @@ fn get_iframe_content_document(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVa
         .get_attr("src")
         .unwrap_or("")
         .to_string();
-    // Request the real content when a non-empty src is present. The relative
-    // URL is resolved against the document URL, and a fetch is queued for the
-    // network layer to drain. Until it resolves, an empty placeholder document
-    // is returned so accessors never block.
+    let is_same_origin =
+        with_host(vm, |host| is_iframe_same_origin(&host.document_url, &src)).unwrap_or(false);
+    if !is_same_origin {
+        return Ok(JSValue::null());
+    }
+
+    let existing = with_host(vm, |host| {
+        host.iframe_documents
+            .get(&dom_id)
+            .map(|doc| Rc::clone(&doc.borrow().document))
+    })
+    .flatten();
+    if let Some(existing) = existing {
+        return Ok(JSValue::from_object(existing));
+    }
+
     let _ = with_host_mut(vm, |host| {
         queue_iframe_fetch_if_needed(host, dom_id, &src);
     });
@@ -2229,6 +2254,21 @@ fn get_iframe_content_window(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValu
     let Some(dom_id) = node_dom_id(this) else {
         return Ok(JSValue::null());
     };
+    let Some(node) = dom_node(vm, this) else {
+        return Ok(JSValue::null());
+    };
+    let src = node
+        .borrow()
+        .value
+        .get_attr("src")
+        .unwrap_or("")
+        .to_string();
+    let is_same_origin =
+        with_host(vm, |host| is_iframe_same_origin(&host.document_url, &src)).unwrap_or(false);
+    if !is_same_origin {
+        return Ok(JSValue::null());
+    }
+
     let existing = with_host(vm, |host| {
         host.iframe_documents
             .get(&dom_id)

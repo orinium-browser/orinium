@@ -531,11 +531,6 @@ pub(crate) fn resolve_xml_http_request(
     response: JsFetchResponse,
 ) {
     let body = String::from_utf8_lossy(&response.body).into_owned();
-    let headers = response
-        .headers
-        .iter()
-        .map(|(name, value)| format!("{name}: {value}\r\n"))
-        .collect::<String>();
     {
         let mut xhr = xhr.borrow_mut();
         xhr.set("readyState".to_string(), JSValue::from_number(4.0));
@@ -556,9 +551,13 @@ pub(crate) fn resolve_xml_http_request(
             JSValue::from_string(body.clone()),
         );
         xhr.set("response".to_string(), JSValue::from_string(body));
+        let sanitized = sanitize_response_headers(&response.headers)
+            .iter()
+            .map(|(name, value)| format!("{name}: {value}\r\n"))
+            .collect::<String>();
         xhr.set(
             "__orinium_xhr_response_headers".to_string(),
-            JSValue::from_string(headers),
+            JSValue::from_string(sanitized),
         );
     }
     for name in ["onreadystatechange", "onload"] {
@@ -637,13 +636,24 @@ fn capture_fetch_capability(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue
     Ok(JSValue::undefined())
 }
 
+fn sanitize_response_headers(headers: &[(String, String)]) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter(|(name, _)| {
+            !name.eq_ignore_ascii_case("set-cookie") && !name.eq_ignore_ascii_case("set-cookie2")
+        })
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect()
+}
+
 pub(crate) fn make_fetch_response(response: JsFetchResponse) -> Rc<RefCell<JSObject>> {
     let body_bytes = response.body.clone();
+    let sanitized_headers = sanitize_response_headers(&response.headers);
     let mut object = JSObject::new();
     object.set(RESPONSE_MARKER.to_string(), JSValue::from_bool(true));
     object.define_property(
         "headers".to_string(),
-        Property::read_only(JSValue::from_object(make_headers(response.headers, true))),
+        Property::read_only(JSValue::from_object(make_headers(sanitized_headers, true))),
     );
     object.define_property(
         "ok".to_string(),

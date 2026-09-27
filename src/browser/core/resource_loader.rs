@@ -15,13 +15,16 @@ use url::Url;
 
 /// Whether a document with `initiator` may load a resource addressed by `url`.
 ///
-/// Web (network) origins may only reach external schemes and `data:`; every
-/// other custom scheme (`resource:`, `file:`, `about:`, unknown schemes)
-/// requires an opaque origin, i.e. a page that is itself internal.
+/// Web (network) origins and unprivileged opaque origins (like `data:`) may only
+/// reach external schemes and `data:`; internal schemes (`resource:`, `file:`)
+/// require an internal origin.
+///
+/// TODO(security): Review `file:` access; local files could read the entire home directory.
 fn scheme_allowed(initiator: &Origin, url: &Url) -> bool {
     match url.scheme() {
         "http" | "https" | "data" => true,
-        _ => initiator.is_opaque(),
+        "resource" | "file" => initiator.is_internal(),
+        _ => false,
     }
 }
 
@@ -544,7 +547,7 @@ mod tests {
     #[test]
     fn internal_origin_can_reach_resource_scheme() {
         let mut loader = BrowserResourceLoader::offline();
-        let internal = Origin::opaque();
+        let internal = Origin::internal();
 
         loader.fetch_async(
             Url::parse("resource:///devtools/index.html").unwrap(),
@@ -600,7 +603,7 @@ mod tests {
         let url = Url::from_file_path(&path).unwrap();
         let mut loader = BrowserResourceLoader::offline();
 
-        loader.fetch_async(url, 12, &Origin::opaque());
+        loader.fetch_async(url, 12, &Origin::internal());
         let msgs = loader.try_receive();
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].id, 12);
@@ -615,7 +618,7 @@ mod tests {
         let url = Url::from_file_path(&path).unwrap();
         let mut loader = BrowserResourceLoader::offline();
 
-        loader.fetch_async(url, 13, &Origin::opaque());
+        loader.fetch_async(url, 13, &Origin::internal());
         let msgs = loader.try_receive();
         assert_eq!(msgs.len(), 1);
         let resp = msgs[0].response.as_ref().unwrap();
@@ -634,6 +637,60 @@ mod tests {
         let msgs = loader.try_receive();
         assert_eq!(msgs.len(), 1);
         assert!(msgs[0].response.is_err());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn data_origin_cannot_reach_resource_scheme() {
+        let mut loader = BrowserResourceLoader::offline();
+        let data_origin = Origin::from_url(&Url::parse("data:text/html,evil").unwrap());
+
+        loader.fetch_async(
+            Url::parse("resource:///devtools/index.html").unwrap(),
+            20,
+            &data_origin,
+        );
+
+        let messages = loader.try_receive();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].id, 20);
+        assert!(messages[0].response.is_err());
+    }
+
+    #[test]
+    fn data_origin_cannot_reach_file_scheme() {
+        let path = temp_file(b"secret");
+        let url = Url::from_file_path(&path).unwrap();
+        let data_origin = Origin::from_url(&Url::parse("data:text/html,evil").unwrap());
+        let mut loader = BrowserResourceLoader::offline();
+
+        loader.fetch_async(url, 21, &data_origin);
+        let msgs = loader.try_receive();
+        assert_eq!(msgs.len(), 1);
+        assert!(msgs[0].response.is_err());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn opaque_origin_cannot_reach_resource_or_file() {
+        let opaque = Origin::opaque();
+        let mut loader = BrowserResourceLoader::offline();
+
+        loader.fetch_async(
+            Url::parse("resource:///devtools/index.html").unwrap(),
+            22,
+            &opaque,
+        );
+        let messages = loader.try_receive();
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].response.is_err());
+
+        let path = temp_file(b"secret");
+        let file_url = Url::from_file_path(&path).unwrap();
+        loader.fetch_async(file_url, 23, &opaque);
+        let messages = loader.try_receive();
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].response.is_err());
         let _ = std::fs::remove_file(&path);
     }
 

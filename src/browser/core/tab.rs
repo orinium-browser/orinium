@@ -33,6 +33,8 @@ pub enum TabTask {
         kind: FetchKind,
         /// The origin of the document that requested this resource.
         origin: Origin,
+        /// Monotonic generation of the document that issued the fetch.
+        generation: u64,
     },
     NeedsRedraw,
     /// A page asked the DevTools bridge to inspect rendered state.
@@ -76,6 +78,8 @@ pub struct Tab {
     js_policy: JsPolicy,
 
     state: TabState,
+    /// Monotonically increasing generation for the current document.
+    document_generation: u64,
     /// Previously visited URLs, most recent last. Used by the back button.
     history: Vec<Url>,
 
@@ -121,6 +125,7 @@ impl Tab {
             js_policy,
 
             state: TabState::Loading,
+            document_generation: 0,
             history: Vec::new(),
 
             hovered: None,
@@ -130,30 +135,33 @@ impl Tab {
 
     /// The tab's current page origin, derived from the loaded document URL.
     ///
-    /// Opaque until a document has been fetched, so pages backed by internal
-    /// schemes (e.g. the DevTools page) are treated as non-network origins.
+    /// Internal until a document has been fetched, so pages backed by internal
+    /// schemes (e.g. the DevTools page) or the browser shell itself hold
+    /// internal privileges.
     fn page_origin(&self) -> Origin {
         self.document_url
             .as_ref()
             .map(Origin::from_url)
-            .unwrap_or_else(Origin::opaque)
+            .unwrap_or_else(Origin::internal)
+    }
+
+    pub(crate) fn document_generation(&self) -> u64 {
+        self.document_generation
     }
 
     /// Whether a `fetch()`/`XMLHttpRequest` response may be read by the given
     /// initiator.
     ///
-    /// Internal (opaque) initiators may always read responses; web origins are
-    /// restricted to same-origin responses and cross-origin responses that opt
-    /// in via `Access-Control-Allow-Origin`. Responses targeted at internal
-    /// schemes are exempt here because the resource loader already prevented
-    /// web origins from ever receiving them.
+    /// Internal initiators may always read responses; web origins and unprivileged
+    /// opaque origins (like `data:`) are restricted to same-origin responses and
+    /// cross-origin responses that opt in via `Access-Control-Allow-Origin`.
     fn may_read_fetch_response(
         &self,
         initiator: &Origin,
         url: &Url,
         headers: &[(String, String)],
     ) -> bool {
-        if !initiator.is_network() {
+        if initiator.is_internal() {
             return true;
         }
         match url.scheme() {
@@ -161,7 +169,8 @@ impl Tab {
                 let response_origin = Origin::from_url_string(url.as_str());
                 initiator.same_origin(&response_origin) || headers_allow_cors(headers, initiator)
             }
-            _ => true,
+            "data" => true,
+            _ => false,
         }
     }
 
@@ -187,6 +196,7 @@ impl Tab {
                         url,
                         kind,
                         origin: page_origin.clone(),
+                        generation: self.document_generation,
                     });
                 }
                 WebViewTask::Navigate { url } => {
@@ -200,6 +210,7 @@ impl Tab {
                         url: self.document_url.as_ref().unwrap().clone(),
                         kind: FetchKind::Html,
                         origin: page_origin.clone(),
+                        generation: self.document_generation,
                     });
                 }
                 WebViewTask::DevToolsRequest { id, method, params } => {
@@ -721,6 +732,7 @@ impl Tab {
         {
             self.history.push(previous);
         }
+        self.document_generation = self.document_generation.saturating_add(1);
         self.document_url = Some(url);
         let mut webview = WebView::new(self.system_color_scheme, self.js_policy);
         webview.navigate();
@@ -1008,9 +1020,29 @@ mod tests {
     #[test]
     fn internal_page_reads_any_response_without_cors() {
         let tab = Tab::default();
-        let internal = Origin::opaque();
+        let internal = Origin::internal();
         let url = Url::parse("https://other.test/api").unwrap();
         assert!(tab.may_read_fetch_response(&internal, &url, &[]));
+    }
+
+    #[test]
+    fn data_page_cannot_read_internal_scheme_responses() {
+        let tab = Tab::default();
+        let data_origin = Origin::from_url(&Url::parse("data:text/html,test").unwrap());
+        let resource_url = Url::parse("resource:///devtools/index.html").unwrap();
+        assert!(!tab.may_read_fetch_response(&data_origin, &resource_url, &[]));
+        let file_url = Url::parse("file:///etc/passwd").unwrap();
+        assert!(!tab.may_read_fetch_response(&data_origin, &file_url, &[]));
+    }
+
+    #[test]
+    fn opaque_origin_cannot_read_internal_scheme_responses() {
+        let tab = Tab::default();
+        let opaque = Origin::opaque();
+        let resource_url = Url::parse("resource:///devtools/index.html").unwrap();
+        assert!(!tab.may_read_fetch_response(&opaque, &resource_url, &[]));
+        let file_url = Url::parse("file:///etc/passwd").unwrap();
+        assert!(!tab.may_read_fetch_response(&opaque, &file_url, &[]));
     }
 
     #[test]
