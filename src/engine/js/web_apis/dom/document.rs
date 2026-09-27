@@ -1834,6 +1834,13 @@ fn build_iframe_document_object(host_dom_id: u64, _tree: &Rc<DomTree>) -> Rc<Ref
         "head".to_string(),
         read_only_accessor_property(iframe_document_head),
     );
+    // Acid3's selector tests reach for `iframe.contentDocument.defaultView`
+    // to call `getComputedStyle`; a secondary document belongs to the same
+    // window as the top-level one, so the global object is the right answer.
+    document.define_property(
+        "defaultView".to_string(),
+        read_only_accessor_property(get_document_default_view),
+    );
     document.set(
         "getElementById".to_string(),
         JSValue::from_native_function(iframe_get_element_by_id),
@@ -1905,6 +1912,10 @@ fn build_iframe_document_object(host_dom_id: u64, _tree: &Rc<DomTree>) -> Rc<Ref
     document.set(
         "write".to_string(),
         JSValue::from_native_function(iframe_document_write),
+    );
+    document.set(
+        "open".to_string(),
+        JSValue::from_native_function(iframe_document_open),
     );
     document.set(
         "close".to_string(),
@@ -2028,6 +2039,22 @@ fn iframe_get_elements_by_class_name(vm: &mut VM, args: Vec<JSValue>) -> JSResul
     Ok(expose_node_list(vm, nodes))
 }
 
+/// `document.open()` on a secondary document: drops the current content so the
+/// following [`iframe_document_write`] calls build a document from scratch.
+fn iframe_document_open(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(root) = iframe_document_root(vm, &args) else {
+        return Ok(JSValue::undefined());
+    };
+    root.borrow_mut().clear_children();
+    mark_dom_dirty(vm);
+    Ok(JSValue::undefined())
+}
+
+/// `document.write()` on a secondary document.
+///
+/// An opened document is under construction, so the written markup is parsed
+/// as a whole document and its doctype / `<html>` land on the document node.
+/// Otherwise the write is a fragment and goes into the existing `<body>`.
 fn iframe_document_write(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(tree) = iframe_receiver_tree(vm, &args) else {
         return Ok(JSValue::undefined());
@@ -2036,16 +2063,27 @@ fn iframe_document_write(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         .get(1)
         .map(JSValue::to_console_string)
         .unwrap_or_default();
+    if text.is_empty() {
+        return Ok(JSValue::undefined());
+    }
     let parsed = HtmlParser::new(&text).parse();
-    let source = parsed
-        .query_selector("body")
-        .unwrap_or_else(|| Rc::clone(&parsed.root));
-    let children: Vec<_> = source.borrow().children().to_vec();
-    let target = tree.query_selector("body");
-    if let Some(target) = target {
-        for child in children {
-            TreeNode::append_child(&target, Rc::clone(&child));
-        }
+    let root = Rc::clone(&tree.root);
+    let constructing = root.borrow().children().is_empty();
+    let (target, children) = if constructing {
+        let children: Vec<NodeRef<HtmlNodeType>> = parsed.root.borrow().children().to_vec();
+        (root, children)
+    } else {
+        let Some(body) = tree.query_selector("body") else {
+            return Ok(JSValue::undefined());
+        };
+        let source = parsed
+            .query_selector("body")
+            .unwrap_or_else(|| Rc::clone(&parsed.root));
+        let children: Vec<NodeRef<HtmlNodeType>> = source.borrow().children().to_vec();
+        (body, children)
+    };
+    for child in children {
+        TreeNode::append_child(&target, Rc::clone(&child));
     }
     mark_dom_dirty(vm);
     Ok(JSValue::undefined())
