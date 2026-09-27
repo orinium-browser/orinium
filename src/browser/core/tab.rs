@@ -278,16 +278,29 @@ impl Tab {
                 }
                 FetchKind::Iframe { dom_id } => {
                     let html = String::from_utf8_lossy(&resp.body).to_string();
-                    self.on_fetch_succeeded_iframe(dom_id, html);
+                    match Url::parse(&resp.url) {
+                        Ok(final_url) => self.on_fetch_succeeded_iframe(dom_id, html, final_url),
+                        Err(error) => {
+                            log::warn!(
+                                "Iframe response has invalid final URL {}: {error}",
+                                resp.url
+                            );
+                            self.on_fetch_failed_iframe(dom_id);
+                        }
+                    }
                 }
                 FetchKind::JavaScript { request_id, .. } => {
                     let initiator = self.page_origin();
-                    if self.may_read_fetch_response(&initiator, &url, &resp.headers) {
+                    let response_url = Url::parse(&resp.url);
+                    if response_url.as_ref().is_ok_and(|response_url| {
+                        self.may_read_fetch_response(&initiator, response_url, &resp.headers)
+                    }) {
                         let redirected = resp.url != url.as_str();
                         self.on_fetch_succeeded_js(request_id, resp, redirected);
                     } else {
                         log::warn!(
-                            "Blocked CORS read of {url} from {}",
+                            "Blocked CORS read of {} from {}",
+                            resp.url,
                             initiator.ascii_serialization()
                         );
                         self.on_fetch_failed_js(
@@ -457,9 +470,9 @@ impl Tab {
     }
 
     /// Installs fetched HTML as an `<iframe>` element's `contentDocument`.
-    pub fn on_fetch_succeeded_iframe(&mut self, dom_id: u64, html: String) {
+    pub fn on_fetch_succeeded_iframe(&mut self, dom_id: u64, html: String, final_url: Url) {
         if let Some(webview) = self.webview.as_mut() {
-            webview.on_iframe_fetched(dom_id, html);
+            webview.on_iframe_fetched(dom_id, html, final_url);
         }
     }
 

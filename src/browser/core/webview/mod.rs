@@ -1130,9 +1130,13 @@ impl WebView {
 
     /// Installs parsed iframe HTML as the host element's `contentDocument` and
     /// fires its `load` event.
-    pub fn on_iframe_fetched(&mut self, dom_id: u64, html: String) {
+    pub fn on_iframe_fetched(&mut self, dom_id: u64, html: String, final_url: Url) {
         if let Some(processor) = self.js_processor.as_ref() {
-            processor.send(JsTask::ResolveIframe { dom_id, html });
+            processor.send(JsTask::ResolveIframe {
+                dom_id,
+                html,
+                url: final_url.to_string(),
+            });
             self.pending_js_tasks += 1;
         }
     }
@@ -4192,6 +4196,7 @@ mod tests {
         webview.on_iframe_fetched(
             dom_id,
             r#"<html><body><p>grafted inner paragraph</p></body></html>"#.to_string(),
+            url,
         );
 
         pump_until(
@@ -4257,6 +4262,7 @@ mod tests {
         webview.on_iframe_fetched(
             dom_id,
             r#"<html><body><p>grafted inner paragraph</p></body></html>"#.to_string(),
+            url,
         );
         pump_until(
             &mut webview,

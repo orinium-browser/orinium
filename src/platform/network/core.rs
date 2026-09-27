@@ -192,18 +192,24 @@ impl AsyncNetworkCore {
         let mut method = Method::from_bytes(request.method.as_bytes())
             .map_err(|_| NetworkError::HttpRequestFailed)?;
         let mut body = request.body.clone();
+        let mut headers = request.headers.clone();
+        let user_agent = self.inner.network_config.read().unwrap().user_agent.clone();
         let mut redirects = 0usize;
 
         loop {
+            let cache_headers = effective_cache_headers(&headers, &user_agent);
             if method == Method::GET
-                && let Some(cached) = self.inner.cache.get(&current.to_string())
+                && let Some(cached) = self
+                    .inner
+                    .cache
+                    .get_for_request(&current.to_string(), &cache_headers)
             {
                 log::info!("NetworkCache: hit for url={}", current);
                 return Ok(cached);
             }
 
             let resp = self
-                .send_request(&current, &method, &request.headers, &body)
+                .send_request(&current, &method, &headers, &body)
                 .await?;
 
             if self.inner.network_config.read().unwrap().follow_redirects
@@ -221,7 +227,13 @@ impl AsyncNetworkCore {
                     .find(|(k, _)| k.eq_ignore_ascii_case("location"))
                     .map(|(_, v)| v)
                 {
-                    current = resolve_redirect(&current, loc)?;
+                    let next = resolve_redirect(&current, loc)?;
+                    strip_origin_bound_headers_on_cross_origin_redirect(
+                        &current,
+                        &next,
+                        &mut headers,
+                    );
+                    current = next;
                     if resp.status.as_u16() == 303
                         || ((resp.status.as_u16() == 301 || resp.status.as_u16() == 302)
                             && method == Method::POST)
@@ -235,7 +247,9 @@ impl AsyncNetworkCore {
             }
 
             if method == Method::GET && resp.status.is_success() {
-                self.inner.cache.set(&current.to_string(), &resp);
+                self.inner
+                    .cache
+                    .set_for_request(&current.to_string(), &resp, &cache_headers);
             }
 
             return Ok(resp);
@@ -263,7 +277,6 @@ impl AsyncNetworkCore {
 
         let mut sender = self.get_or_create_sender(&key).await?;
 
-        let user_agent = self.inner.network_config.read().unwrap().user_agent.clone();
         let is_h2 = matches!(sender, HttpSender::Http2(_));
         log::debug!(
             target: "network",
@@ -291,7 +304,10 @@ impl AsyncNetworkCore {
         let mut request = Request::builder()
             .method(method.clone())
             .uri(&request_uri)
-            .header("User-Agent", user_agent);
+            .header(
+                "User-Agent",
+                self.inner.network_config.read().unwrap().user_agent.clone(),
+            );
         if !is_h2 {
             request = request.header("Host", host);
         }
@@ -542,6 +558,60 @@ fn resolve_redirect(base: &Uri, location: &str) -> Result<Uri, NetworkError> {
     next.parse().map_err(|_| NetworkError::InvalidUri)
 }
 
+fn uri_origin(uri: &Uri) -> Option<String> {
+    let url = url::Url::parse(&uri.to_string()).ok()?;
+    Some(url.origin().ascii_serialization())
+}
+
+fn is_origin_bound_header(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "authorization" | "proxy-authorization" | "cookie" | "cookie2" | "host"
+    )
+}
+
+fn strip_origin_bound_headers(headers: &mut Vec<(String, String)>) {
+    headers.retain(|(name, _)| !is_origin_bound_header(name));
+}
+
+fn strip_origin_bound_headers_on_cross_origin_redirect(
+    current: &Uri,
+    next: &Uri,
+    headers: &mut Vec<(String, String)>,
+) {
+    let origins_match = matches!(
+        (uri_origin(current), uri_origin(next)),
+        (Some(current), Some(next)) if current == next
+    );
+    if !origins_match {
+        strip_origin_bound_headers(headers);
+    }
+}
+
+fn effective_cache_headers(
+    request_headers: &[(String, String)],
+    user_agent: &str,
+) -> Vec<(String, String)> {
+    let mut headers = request_headers.to_vec();
+    let defaults = [
+        ("user-agent", user_agent.to_string()),
+        (
+            "accept-language",
+            crate::platform::locale::accept_language_header(),
+        ),
+        ("accept-encoding", "gzip, deflate, br".to_string()),
+    ];
+    for (name, value) in defaults {
+        if !headers
+            .iter()
+            .any(|(header, _)| header.eq_ignore_ascii_case(name))
+        {
+            headers.push((name.to_string(), value));
+        }
+    }
+    headers
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -562,6 +632,23 @@ mod tests {
             }
         });
         address
+    }
+
+    #[test]
+    fn redirect_strips_credentials_only_when_origin_changes() {
+        let current: Uri = "https://example.test/start".parse().unwrap();
+        let same_origin: Uri = "https://example.test:443/next".parse().unwrap();
+        let cross_origin: Uri = "https://other.test/next".parse().unwrap();
+        let mut headers = vec![
+            ("Authorization".to_string(), "Bearer secret".to_string()),
+            ("Cookie".to_string(), "session=secret".to_string()),
+            ("X-Request".to_string(), "keep".to_string()),
+        ];
+
+        strip_origin_bound_headers_on_cross_origin_redirect(&current, &same_origin, &mut headers);
+        assert_eq!(headers.len(), 3);
+        strip_origin_bound_headers_on_cross_origin_redirect(&current, &cross_origin, &mut headers);
+        assert_eq!(headers, [("X-Request".to_string(), "keep".to_string())]);
     }
 
     fn serve_keep_alive_connection(mut stream: std::net::TcpStream) {

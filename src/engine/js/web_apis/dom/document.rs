@@ -1907,13 +1907,18 @@ fn document_close(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
 pub(crate) struct IframeDocument {
     pub(crate) tree: Rc<DomTree>,
     pub(crate) document: Rc<RefCell<JSObject>>,
+    /// Effective URL after redirects; used to enforce iframe same-origin access.
+    pub(crate) document_url: String,
     /// The exposed `<html>` element node of this iframe document.
     pub(crate) document_element: NodeRef<HtmlNodeType>,
 }
 
 /// Builds an `iframe.contentDocument`-compatible object: an empty document
 /// with its own DOM tree whose `documentElement` is `<html>`.
-pub(crate) fn make_iframe_document(host_dom_id: u64) -> Rc<RefCell<IframeDocument>> {
+pub(crate) fn make_iframe_document(
+    host_dom_id: u64,
+    document_url: String,
+) -> Rc<RefCell<IframeDocument>> {
     let document = TreeNode::new(HtmlNodeType::Document);
     let html = TreeNode::new(HtmlNodeType::Element {
         tag_name: "html".to_string(),
@@ -1937,6 +1942,7 @@ pub(crate) fn make_iframe_document(host_dom_id: u64) -> Rc<RefCell<IframeDocumen
     Rc::new(RefCell::new(IframeDocument {
         tree,
         document: document_obj,
+        document_url,
         document_element: html,
     }))
 }
@@ -1947,6 +1953,7 @@ pub(crate) fn install_parsed_iframe_document(
     host: &mut JsHost,
     iframe_dom_id: u64,
     html: &str,
+    document_url: &str,
 ) -> bool {
     let tree = Rc::new(HtmlParser::new(html).parse());
     let document_element = tree
@@ -1956,6 +1963,7 @@ pub(crate) fn install_parsed_iframe_document(
     let iframe_doc = Rc::new(RefCell::new(IframeDocument {
         tree,
         document: document_obj,
+        document_url: document_url.to_string(),
         document_element,
     }));
     host.iframe_documents.insert(iframe_dom_id, iframe_doc);

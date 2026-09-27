@@ -2181,8 +2181,8 @@ pub(crate) fn node_get_root_node(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JS
     Ok(expose_node(vm, node).unwrap_or(JSValue::null()))
 }
 
-fn is_iframe_same_origin(document_url: &str, src: &str) -> bool {
-    let trimmed = src.trim();
+fn is_iframe_same_origin(document_url: &str, iframe_url: &str) -> bool {
+    let trimmed = iframe_url.trim();
     if trimmed.is_empty() || trimmed == "about:blank" {
         return true;
     }
@@ -2191,17 +2191,13 @@ fn is_iframe_same_origin(document_url: &str, src: &str) -> bool {
     let Ok(iframe_url) = url::Url::parse(&resolved) else {
         return false;
     };
-    if iframe_url.scheme() == "about" {
+    if iframe_url.as_str() == "about:blank" {
         return true;
     }
     let Ok(doc_url) = url::Url::parse(document_url) else {
         return false;
     };
-    match (doc_url.scheme(), iframe_url.scheme()) {
-        ("http" | "https", "http" | "https") => doc_url.origin() == iframe_url.origin(),
-        ("resource", "resource") | ("file", "file") => true,
-        _ => false,
-    }
+    doc_url.origin() == iframe_url.origin()
 }
 
 fn get_iframe_content_document(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -2219,8 +2215,15 @@ fn get_iframe_content_document(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVa
         .get_attr("src")
         .unwrap_or("")
         .to_string();
-    let is_same_origin =
-        with_host(vm, |host| is_iframe_same_origin(&host.document_url, &src)).unwrap_or(false);
+    let is_same_origin = with_host(vm, |host| {
+        let url = host
+            .iframe_documents
+            .get(&dom_id)
+            .map(|doc| doc.borrow().document_url.clone())
+            .unwrap_or_else(|| src.clone());
+        is_iframe_same_origin(&host.document_url, &url)
+    })
+    .unwrap_or(false);
     if !is_same_origin {
         return Ok(JSValue::null());
     }
@@ -2238,7 +2241,8 @@ fn get_iframe_content_document(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVa
     let _ = with_host_mut(vm, |host| {
         queue_iframe_fetch_if_needed(host, dom_id, &src);
     });
-    let iframe_doc = make_iframe_document(dom_id);
+    let document_url = with_host(vm, |host| host.document_url.clone()).unwrap_or_default();
+    let iframe_doc = make_iframe_document(dom_id, document_url);
     let document = Rc::clone(&iframe_doc.borrow().document);
     let _ = with_host_mut(vm, |host| {
         host.iframe_documents.insert(dom_id, iframe_doc);
@@ -2263,8 +2267,15 @@ fn get_iframe_content_window(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValu
         .get_attr("src")
         .unwrap_or("")
         .to_string();
-    let is_same_origin =
-        with_host(vm, |host| is_iframe_same_origin(&host.document_url, &src)).unwrap_or(false);
+    let is_same_origin = with_host(vm, |host| {
+        let url = host
+            .iframe_documents
+            .get(&dom_id)
+            .map(|doc| doc.borrow().document_url.clone())
+            .unwrap_or_else(|| src.clone());
+        is_iframe_same_origin(&host.document_url, &url)
+    })
+    .unwrap_or(false);
     if !is_same_origin {
         return Ok(JSValue::null());
     }

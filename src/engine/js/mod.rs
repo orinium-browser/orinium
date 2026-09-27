@@ -758,11 +758,11 @@ impl JsRuntime {
 
     /// Parses fetched iframe HTML, installs it as the iframe's `contentDocument`
     /// and fires the iframe's `load` event.
-    pub fn resolve_iframe_fetch(&mut self, dom_id: u64, html: String) {
+    pub fn resolve_iframe_fetch(&mut self, dom_id: u64, html: String, url: String) {
         let installed = with_host_mut(self.engine.vm(), |host| {
             host.pending_iframe_fetches.remove(&dom_id);
             host.failed_iframe_fetches.remove(&dom_id);
-            web_apis::dom::document::install_parsed_iframe_document(host, dom_id, &html)
+            web_apis::dom::document::install_parsed_iframe_document(host, dom_id, &html, &url)
         });
         if installed.unwrap_or(false) {
             self.dispatch_element_event(dom_id, "load");
@@ -3313,6 +3313,7 @@ mod tests {
         runtime.resolve_iframe_fetch(
             frame_a,
             r#"<html><body><p>frame content</p></body></html>"#.to_string(),
+            "https://example.test/frame-a.html".to_string(),
         );
         assert_eq!(runtime.queue_markup_iframe_loads(), 0);
         assert!(runtime.take_iframe_fetch_requests().is_empty());

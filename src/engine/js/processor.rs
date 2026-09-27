@@ -59,8 +59,12 @@ pub enum JsTask {
     /// Settle a pending DevTools inspection request with its JSON envelope.
     ResolveDevTools { id: u64, result: String },
     /// Parse fetched iframe HTML and install it as the host element's
-    /// `contentDocument`, then fire its `load` event.
-    ResolveIframe { dom_id: u64, html: String },
+    /// `contentDocument`, recording the effective URL, then fire its `load` event.
+    ResolveIframe {
+        dom_id: u64,
+        html: String,
+        url: String,
+    },
     /// Mark an iframe load as failed so later `contentDocument` accesses do not
     /// keep re-queuing a fetch.
     RejectIframe { dom_id: u64 },
@@ -295,8 +299,8 @@ fn run_task(runtime: &mut JsRuntime, task: JsTask) -> bool {
             runtime.resolve_devtools(id, result);
             true
         }
-        JsTask::ResolveIframe { dom_id, html } => {
-            runtime.resolve_iframe_fetch(dom_id, html);
+        JsTask::ResolveIframe { dom_id, html, url } => {
+            runtime.resolve_iframe_fetch(dom_id, html, url);
             true
         }
         JsTask::RejectIframe { dom_id } => {

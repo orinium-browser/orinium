@@ -22,6 +22,7 @@ pub struct Cache {
 struct CachedResponse {
     response: Response,
     expires_at: Option<SystemTime>,
+    request_headers: Vec<(String, String)>,
 }
 
 impl Default for Cache {
@@ -54,8 +55,16 @@ impl Cache {
         self.enabled.load(Ordering::Relaxed)
     }
 
-    /// Returns a cached response for `url` if present and not expired.
+    /// Returns a cached response only when the request headers still match.
     pub fn get(&self, url: &str) -> Option<Response> {
+        self.get_for_request(url, &[])
+    }
+
+    pub fn get_for_request(
+        &self,
+        url: &str,
+        request_headers: &[(String, String)],
+    ) -> Option<Response> {
         if !self.is_enabled() {
             return None;
         }
@@ -67,15 +76,32 @@ impl Cache {
             store.pop(url);
             return None;
         }
+        if normalized_headers(request_headers) != entry.request_headers {
+            return None;
+        }
         Some(entry.response.clone())
     }
 
-    /// Caches a response unless its headers forbid it.
+    /// Caches a response unless its headers forbid it or contain `Vary: *`.
     pub fn set(&self, url: &str, response: &Response) {
+        self.set_for_request(url, response, &[]);
+    }
+
+    pub fn set_for_request(
+        &self,
+        url: &str,
+        response: &Response,
+        request_headers: &[(String, String)],
+    ) {
         if !self.is_enabled() {
             return;
         }
         if forbids_caching(&response.headers) {
+            self.remove(url);
+            return;
+        }
+        if has_vary_star(&response.headers) {
+            self.remove(url);
             return;
         }
         if let Ok(mut store) = self.store.lock() {
@@ -84,6 +110,7 @@ impl Cache {
                 CachedResponse {
                     response: response.clone(),
                     expires_at: expiry_from_headers(&response.headers),
+                    request_headers: normalized_headers(request_headers),
                 },
             );
         }
@@ -103,6 +130,28 @@ impl Cache {
             store.clear();
         }
     }
+
+    fn remove(&self, url: &str) {
+        if let Ok(mut store) = self.store.lock() {
+            store.pop(url);
+        }
+    }
+}
+
+fn has_vary_star(response_headers: &[(String, String)]) -> bool {
+    response_headers.iter().any(|(name, value)| {
+        if !name.eq_ignore_ascii_case("vary") {
+            return false;
+        }
+        value.split(',').map(str::trim).any(|field| field == "*")
+    })
+}
+
+fn normalized_headers(headers: &[(String, String)]) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .map(|(name, value)| (name.to_ascii_lowercase(), value.trim().to_string()))
+        .collect()
 }
 
 /// Returns whether `Cache-Control` forbids reusing the response.
@@ -239,5 +288,31 @@ mod tests {
         cache.clear();
         assert!(cache.is_empty());
         assert!(cache.get("https://example.test/a").is_none());
+    }
+
+    #[test]
+    fn same_url_cache_entry_requires_matching_request_headers() {
+        let cache = Cache::with_capacity(16);
+        let url = "https://example.test/language";
+        let request = vec![("Accept-Language".to_string(), "ja".to_string())];
+        cache.set_for_request(
+            url,
+            &response(
+                b"Japanese",
+                vec![("Vary".to_string(), "Accept-Language".to_string())],
+            ),
+            &request,
+        );
+
+        assert_eq!(
+            cache.get_for_request(url, &request).unwrap().body,
+            b"Japanese"
+        );
+        assert!(
+            cache
+                .get_for_request(url, &[("Accept-Language".to_string(), "en".to_string())])
+                .is_none()
+        );
+        assert!(cache.get(url).is_none());
     }
 }
