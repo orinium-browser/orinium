@@ -3532,6 +3532,31 @@ fn get_element_value(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     reflected_string_property(vm, &args, "value")
 }
 
+/// `type` is an enumerated attribute, so the IDL property reports the canonical
+/// keyword rather than the raw attribute text: `<input type=HIDDEN>` keeps
+/// `getAttribute("type") === "HIDDEN"` but reports `type === "hidden"`. An
+/// absent attribute reports the tag's default state instead of `""`.
+fn get_element_type(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::from_string(String::new()));
+    };
+    let node = node.borrow();
+    let raw = node.value.get_attr("type").unwrap_or("").trim();
+    if !raw.is_empty() {
+        return Ok(JSValue::from_string(raw.to_ascii_lowercase()));
+    }
+    let default = match node.value.tag_name() {
+        Some("button") => "submit",
+        Some("input") => "text",
+        _ => "",
+    };
+    Ok(JSValue::from_string(default.to_string()))
+}
+
+fn set_element_type(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    set_reflected_string_property(vm, &args, "type")
+}
+
 fn set_element_value(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     set_reflected_string_property(vm, &args, "value")
 }
@@ -3551,7 +3576,6 @@ macro_rules! reflected_string_accessors {
 reflected_string_accessors!(get_element_src, set_element_src, "src");
 reflected_string_accessors!(get_element_href, set_element_href, "href");
 reflected_string_accessors!(get_element_rel, set_element_rel, "rel");
-reflected_string_accessors!(get_element_type, set_element_type, "type");
 reflected_string_accessors!(get_element_charset, set_element_charset, "charset");
 // Form controls expose their `name` attribute as an IDL property
 // (`input.name`, used by `form.elements.namedItem` consumers).
