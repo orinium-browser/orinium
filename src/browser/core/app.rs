@@ -1,42 +1,57 @@
+//! Browser core: application entry and lifecycle manager.
+//!
+//! Responsibilities:
+//! - Manage the window collection and each window's [`BrowserUi`].
+//! - Forward winit window events to the owning window's UI.
+//! - Coordinate network/resource loading and route responses to the owning window.
+//!
+//! Tab state, input handling, and rendering are delegated to [`BrowserUi`] /
+//! [`BrowserRenderer`]; this type stays a thin orchestrator.
+//!
+//! Processing flow (high-level):
+//! 1. Initialize platform components (system window, GPU renderer, network core).
+//! 2. Create and register `BrowserUi` instances and navigate to initial URLs.
+//! 3. Enter event loop: forward events -> delegate to `BrowserUi` -> route fetches.
+//!
+//! Example (for contributors / local testing):
+//! ```no_run
+//! use orinium_browser::browser::{BrowserApp, BrowserUi, Tab};
+//!
+//! let mut tab = Tab::default();
+//! tab.navigate("resource:///test/test.html".parse().unwrap());
+//! let mut app = BrowserApp::default();
+//! app.set_default_ui(BrowserUi::with_tab(tab));
+//! app.run().unwrap();
+//! ```
+//!
+//! Developer notes:
+//! - For parsing and layout details see `engine::html`, `engine::css`, and `engine::layouter`.
+//! - For platform integration see `platform::{network, renderer, system}`.
+//! - Keep public API small and document invariants for Tab lifecycle and fetch handling.
+
 use anyhow::Result;
 use std::collections::{HashMap, hash_map::DefaultHasher};
-use std::env;
 use std::hash::{Hash, Hasher};
-use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::{env, io};
 use url::Url;
 use winit::event::WindowEvent;
+use winit::window::WindowId;
 
-use super::tab::{FetchKind, Tab, TabTask};
-// use super::ui::init_browser_ui;
+use super::tab::FetchKind;
+use super::ui::BrowserUi;
 use super::{BrowserCommand, resource_loader::BrowserResourceLoader};
-use crate::engine::layouter;
-use crate::engine::renderer_model::{self, DrawCommand};
-use crate::platform::network::NetworkCore;
-use crate::platform::renderer::gpu::GpuRenderer;
-use crate::system::App;
-
-/// Stores rendering-related state for the browser window.
-pub struct RenderState {
-    /// List of draw commands generated from the layout engine.
-    pub draw_commands: Vec<DrawCommand>,
-    /// Current window size in pixels (width, height).
-    pub window_size: (u32, u32),
-    /// Current scale factor (for HiDPI displays).
-    pub scale_factor: f64,
-}
-
-/// Stores input-related state for the browser window.
-#[derive(Default)]
-pub struct InputState {
-    /// Current mouse position in window coordinates.
-    pub mouse_position: (f64, f64),
-}
+use crate::browser::core::ui::TabId;
+use crate::engine::origin::Origin;
+use crate::platform::network::{NetworkCore, NetworkRequest};
+use crate::platform::renderer::draw_sink::DrawSink;
+use crate::platform::system::App;
+use crate::platform::system::shell::{BrowserHost, ShellCommand, WindowGeometry};
 
 pub struct PendingFetches {
-    /// Maps (id) to (tab_id, FetchKind)
+    /// Maps (id) to (window_id, tab_id, FetchKind, Url)
     /// Id is used to track pending fetch requests.
-    map: HashMap<usize, (usize, FetchKind, Url)>,
+    map: HashMap<usize, (WindowId, TabId, FetchKind, Url, u64)>,
     counter: usize,
 }
 
@@ -49,13 +64,20 @@ impl PendingFetches {
     }
 
     /// URLとFetchKindを受け取り、一意IDを生成して登録
-    pub fn insert(&mut self, tab_id: usize, kind: FetchKind, url: Url) -> usize {
+    pub fn insert(
+        &mut self,
+        window_id: WindowId,
+        tab_id: TabId,
+        kind: FetchKind,
+        url: Url,
+        generation: u64,
+    ) -> usize {
         self.counter += 1;
 
         let id = self.generate_id(&url);
 
-        self.map.insert(id, (tab_id, kind, url));
-        dbg!(id)
+        self.map.insert(id, (window_id, tab_id, kind, url, generation));
+        id
     }
 
     fn generate_id(&self, url: &Url) -> usize {
@@ -74,77 +96,255 @@ impl PendingFetches {
         now ^ self.counter ^ url_hash
     }
 
-    pub fn remove(&mut self, id: usize) -> Option<(usize, FetchKind, Url)> {
+    pub fn remove(&mut self, id: usize) -> Option<(WindowId, TabId, FetchKind, Url, u64)> {
         self.map.remove(&id)
     }
 }
 
 /// Main browser application struct.
-/// Holds tabs, rendering state, input state, and network resources.
+///
+/// Responsibilities:
+/// - Manage the window collection and per-window [`BrowserUi`] instances.
+/// - Forward winit window events to each window's UI.
+/// - Coordinate resource loading and route fetched results to the owning window.
+///
+/// Tab state, input handling, and rendering are delegated to [`BrowserUi`] /
+/// [`BrowserRenderer`].
+///
+/// Typical lifecycle:
+/// 1. Construct `BrowserApp::new(...)`, which wires platform components (network, system).
+/// 2. Create `Tab` objects, wrap them in a `BrowserUi`, and call `set_default_ui`.
+/// 3. Call `run()` to start the event loop. Each loop iteration:
+///    - Forward winit events to the owning window's `BrowserUi`.
+///    - Tick the UI, forward fetch requests to the network, and route responses back.
+///
+/// Example usage:
+/// ```no_run
+/// use orinium_browser::browser::{BrowserApp, BrowserUi, Tab};
+///
+/// let mut tab = Tab::default();
+/// tab.navigate("resource:///test/test.html".parse().unwrap());
+/// let mut app = BrowserApp::default();
+/// app.set_default_ui(BrowserUi::with_tab(tab));
+/// app.run().unwrap();
+/// ```
 pub struct BrowserApp {
-    tabs: Vec<Tab>,
-    active_tab: usize,
-    render: RenderState,
-    window_title: String,
-    input: InputState,
+    /// Maps each window to its UI (tabs, input state, renderer).
+    windows: HashMap<WindowId, BrowserUi>,
+    /// Default window size used when opening a new window.
+    default_window_size: (u32, u32),
+    /// Default window title used when opening a new window.
+    default_window_title: String,
     network: BrowserResourceLoader,
     pending_fetches: PendingFetches,
+    /// UI used when the first window opens (if set before `run()`).
+    default_ui: Option<BrowserUi>,
 }
 
 impl Default for BrowserApp {
     fn default() -> Self {
-        Self::new((800, 600), "Orinium Browser".to_string())
+        Self::new((1280, 800), "Orinium Browser".to_string()).unwrap()
     }
 }
 
 impl BrowserApp {
     /// Starts the main browser event loop asynchronously.
+    /// Returns an error if no default UI was set via `set_default_ui`.
     pub fn run(self) -> Result<()> {
+        if self.default_ui.is_none() {
+            anyhow::bail!("set_default_ui must be called before run()");
+        }
         run_with_winit_backend(self)
     }
 
-    /// Creates a new browser instance with the given window size and title.
-    pub fn new(window_size: (u32, u32), window_title: String) -> Self {
-        let network = BrowserResourceLoader::new(Some(Rc::new(NetworkCore::new())));
+    /// Creates a new browser instance with the given default window size and title.
+    /// Windows are registered later via `open_window`.
+    pub fn new(
+        default_window_size: (u32, u32),
+        default_window_title: String,
+    ) -> Result<Self, io::Error> {
+        let network = BrowserResourceLoader::with_network(NetworkCore::new()?);
 
-        Self {
-            tabs: vec![],
-            active_tab: 0,
-            render: RenderState {
-                draw_commands: vec![],
-                window_size,
-                scale_factor: 1.0,
-            },
-            window_title,
-            input: InputState::default(),
+        Ok(Self {
+            windows: HashMap::new(),
+            default_window_size,
+            default_window_title,
             network,
             pending_fetches: PendingFetches::new(),
+            default_ui: None,
+        })
+    }
+
+    /// Opens a window showing a caller-supplied UI.
+    ///
+    /// This is the in-process entry point used by embedders that build one UI
+    /// per window. The [`BrowserHost`] port deliberately offers no such hook:
+    /// the OS shell only knows how to describe a window, never what to put in
+    /// it.
+    pub fn open_window_with_ui(
+        &mut self,
+        window_id: WindowId,
+        geometry: WindowGeometry,
+        root_ui: BrowserUi,
+    ) {
+        self.register_window(window_id, &geometry, root_ui);
+    }
+
+    /// Registers a window with its per-window UI.
+    fn register_window(
+        &mut self,
+        window_id: WindowId,
+        geometry: &WindowGeometry,
+        mut root_ui: BrowserUi,
+    ) {
+        root_ui.set_window(geometry.size, geometry.scale_factor, geometry.title.clone());
+        self.windows.insert(window_id, root_ui);
+    }
+
+    /// Removes a window's state when the window is closed.
+    pub fn close_window(&mut self, window_id: WindowId) {
+        self.windows.remove(&window_id);
+    }
+
+    /// Sets the UI to use when the first window opens.
+    /// Must be called before `run()`.
+    pub fn set_default_ui(&mut self, ui: BrowserUi) {
+        self.default_ui = Some(ui);
+    }
+
+    /// Handles a `winit` window event for the given window and returns a `BrowserCommand`.
+    pub fn handle_window_event(
+        &mut self,
+        window_id: WindowId,
+        event: WindowEvent,
+        sink: &mut dyn DrawSink,
+    ) -> BrowserCommand {
+        let browser_cmd = match self.windows.get_mut(&window_id) {
+            Some(ui) => ui.handle_window_event(event, sink),
+            None => BrowserCommand::None,
+        };
+        let cmd_from_tick = self.tick(window_id);
+        match browser_cmd {
+            BrowserCommand::None => {
+                if matches!(cmd_from_tick, BrowserCommand::RequestRedraw) {
+                    self.redraw(window_id, sink);
+                }
+                cmd_from_tick
+            }
+            BrowserCommand::RenameWindowTitle => {
+                if matches!(cmd_from_tick, BrowserCommand::RequestRedraw) {
+                    // tick() が追加の処理を要求 → RequestRedraw に昇格させる。
+                    // RequestRedraw のハンドラはタイトル設定も行うので情報は失われない。
+                    self.redraw(window_id, sink);
+                    BrowserCommand::RequestRedraw
+                } else {
+                    browser_cmd
+                }
+            }
+            _ => {
+                if matches!(cmd_from_tick, BrowserCommand::RequestRedraw) {
+                    self.redraw(window_id, sink);
+                }
+                browser_cmd
+            }
         }
     }
 
-    pub fn tick(&mut self) -> BrowserCommand {
-        let tab_id = self.active_tab;
+    /// Rebuilds the render tree and sends draw commands to the GPU for the given window.
+    pub fn redraw(&mut self, window_id: WindowId, sink: &mut dyn DrawSink) {
+        let Some(ui) = self.windows.get_mut(&window_id) else {
+            return;
+        };
+        ui.redraw(sink);
+    }
 
+    /// Applies the current draw commands for the given window to the GPU renderer.
+    pub fn apply_draw_commands(&self, window_id: WindowId, sink: &mut dyn DrawSink) {
+        if let Some(ui) = self.windows.get(&window_id) {
+            ui.apply_draw_commands(sink);
+        }
+    }
+
+    /// Advances background page work for a window between OS events.
+    ///
+    /// This keeps animated custom controls, such as an active audio timer,
+    /// repainting even when the user is not moving the pointer.
+    pub(crate) fn poll_window(&mut self, window_id: WindowId) -> bool {
+        matches!(self.tick(window_id), BrowserCommand::RequestRedraw)
+    }
+
+    /// Returns the current window size for the given window as `(width, height)` in floating-point pixels.
+    pub fn window_size(&self, window_id: WindowId) -> (f32, f32) {
+        match self.windows.get(&window_id) {
+            Some(ui) => {
+                let (width, height) = ui.window_size();
+                (width as f32, height as f32)
+            }
+            None => (
+                self.default_window_size.0 as f32,
+                self.default_window_size.1 as f32,
+            ),
+        }
+    }
+
+    /// Returns the window title for the given window.
+    pub fn window_title(&self, window_id: WindowId) -> String {
+        match self.windows.get(&window_id) {
+            Some(ui) => ui.window_title(),
+            None => self.default_window_title.clone(),
+        }
+    }
+
+    /// Ticks the given window's UI and forwards its fetch requests to the network.
+    fn tick(&mut self, window_id: WindowId) -> BrowserCommand {
         self.handle_network_messages();
 
-        let Some(tab) = self.tabs.get_mut(tab_id) else {
+        let Some(ui) = self.windows.get_mut(&window_id) else {
             return BrowserCommand::None;
         };
+        let outcome = ui.tick();
 
-        for task in tab.tick() {
-            match task {
-                TabTask::Fetch { url, kind } => {
-                    log::info!("Fetch requested in App: url={}", url);
-                    let id = self.pending_fetches.insert(tab_id, kind, url.clone());
-                    self.network.fetch_async(url, id);
-                }
-                TabTask::NeedsRedraw => {
-                    return BrowserCommand::RequestRedraw;
-                }
-            }
+        for fetch in outcome.fetches {
+            let url = fetch.request.url;
+            let kind = fetch.request.kind;
+            let initiator = fetch.request.origin;
+            log::info!("Fetch requested in App: url={}", url);
+            let mut request = match &kind {
+                FetchKind::JavaScript {
+                    method,
+                    headers,
+                    body,
+                    ..
+                } => NetworkRequest {
+                    url: url.to_string(),
+                    method: method.clone(),
+                    headers: headers.clone(),
+                    body: body.clone(),
+                },
+                _ => NetworkRequest::get(url.to_string()),
+            };
+            // Add browser-controlled Origin / Referer headers and strip any the
+            // page script supplied, so internal resource URLs never leak to
+            // external servers.
+            apply_fetch_headers(&mut request, &initiator, &kind);
+            let id = self.pending_fetches.insert(
+                window_id,
+                fetch.tab_id,
+                kind,
+                url,
+                fetch.request.generation,
+            );
+            // The initiator gates access to internal schemes inside the loader.
+            // We also track the originating document generation so stale results
+            // from an earlier navigation are dropped when they arrive.
+            self.network.fetch_request_async(request, id, &initiator);
         }
 
-        BrowserCommand::None
+        if outcome.needs_redraw {
+            BrowserCommand::RequestRedraw
+        } else {
+            BrowserCommand::None
+        }
     }
 
     fn handle_network_messages(&mut self) {
@@ -154,246 +354,120 @@ impl BrowserApp {
             log::info!("Network message received in App for fetch_id={}", msg.id);
 
             // pending_fetches から fetch 情報を取得
-            let Some((tab_id, kind, url)) = self.pending_fetches.remove(msg.id) else {
+            let Some((window_id, tab_id, kind, url, generation)) = self.pending_fetches.remove(msg.id) else {
                 log::warn!("No pending fetch found for fetch_id={}", msg.id);
                 continue;
             };
 
-            // Tab を取得
-            let Some(tab) = self.tabs.get_mut(tab_id) else {
-                log::warn!("There is no Tab called id={}", tab_id);
+            let Some(ui) = self.windows.get_mut(&window_id) else {
+                log::warn!("There is no window called id={:?}", window_id);
                 continue;
             };
-
-            match msg.response {
-                Ok(resp) => {
-                    log::info!("Fetch Done in App for tab_id={}", tab_id);
-
-                    match kind {
-                        FetchKind::Html => {
-                            let html = String::from_utf8_lossy(&resp.body).to_string();
-                            tab.on_fetch_succeeded_html(html);
-                        }
-                        FetchKind::Css => {
-                            let css = String::from_utf8_lossy(&resp.body).to_string();
-                            tab.on_fetch_succeeded_css(css);
-                        }
-                    }
-                }
-                Err(err) => {
-                    log::error!("NetworkError: {}", err);
-                    tab.on_fetch_failed(err, url);
+            if tab_id.0 != 0 {
+                let Some(tab) = ui.tab(&tab_id) else {
+                    log::warn!("Tab was closed before fetch completed: tab_id={}", tab_id);
+                    continue;
+                };
+                let current_generation = tab.document_generation();
+                if current_generation != generation {
+                    log::info!(
+                        "Dropping stale fetch result for tab_id={} generation={} (current={})",
+                        tab_id,
+                        generation,
+                        current_generation
+                    );
+                    continue;
                 }
             }
+            ui.deliver_fetch(&tab_id, kind, url, msg.response);
+        }
+    }
+}
+
+/// Bridges the browser core to the OS shell.
+///
+/// The trait lives in [`crate::platform::system::shell`] so the event loop can
+/// be driven by any host without naming a browser type.
+impl BrowserHost for BrowserApp {
+    fn default_window_size(&self) -> (u32, u32) {
+        self.default_window_size
+    }
+
+    fn default_window_title(&self) -> String {
+        self.default_window_title.clone()
+    }
+
+    fn open_window(&mut self, window_id: WindowId, geometry: WindowGeometry) {
+        // The first window shows the UI handed to `set_default_ui`; any later
+        // window (Ctrl+N) starts empty.
+        let root_ui = self
+            .default_ui
+            .take()
+            .unwrap_or_else(|| BrowserUi::with_tab(super::Tab::default()));
+        self.open_window_with_ui(window_id, geometry, root_ui);
+    }
+
+    fn has_pending_default_window(&self) -> bool {
+        self.default_ui.is_some()
+    }
+
+    fn close_window(&mut self, window_id: WindowId) {
+        self.windows.remove(&window_id);
+    }
+
+    fn window_title(&self, window_id: WindowId) -> String {
+        match self.windows.get(&window_id) {
+            Some(ui) => ui.window_title(),
+            None => self.default_window_title.clone(),
         }
     }
 
-    /// Returns a mutable reference to the currently active tab, if any.
-    fn active_tab_mut(&mut self) -> Option<&mut Tab> {
-        self.tabs.get_mut(self.active_tab)
-    }
-
-    /// Rebuilds the render tree for the active tab and generates draw commands.
-    fn rebuild_render_tree(&mut self) {
-        let (title, draw_commands) = {
-            let sf = self.render.scale_factor as f32;
-            let viewport = (
-                self.render.window_size.0 as f32 / sf,
-                self.render.window_size.1 as f32 / sf,
-            );
-
-            let Some(tab) = self.active_tab_mut() else {
-                return;
-            };
-
-            tab.relayout(viewport);
-
-            let Some((layout, info)) = tab.layout_and_info() else {
-                log::debug!("No layout/info available for active tab");
-                return;
-            };
-
-            let title = tab.title();
-            let draw_commands = renderer_model::generate_draw_commands(layout, info);
-
-            (title, draw_commands)
-        };
-
-        self.render.draw_commands = draw_commands;
-
-        if let Some(title) = title {
-            self.window_title = title;
-        }
-    }
-
-    /// Handles a `winit` window event and returns a `BrowserCommand`.
-    pub fn handle_window_event(
+    fn handle_window_event(
         &mut self,
+        window_id: WindowId,
         event: WindowEvent,
-        gpu: &mut GpuRenderer,
-    ) -> BrowserCommand {
-        let browser_cmd = match event {
-            WindowEvent::CloseRequested => BrowserCommand::Exit,
-
-            WindowEvent::RedrawRequested => {
-                self.redraw(gpu);
-                BrowserCommand::RenameWindowTitle
-            }
-
-            WindowEvent::Resized(size) => {
-                self.render.window_size = (size.width, size.height);
-                gpu.resize(size);
-                self.redraw(gpu);
-                BrowserCommand::RequestRedraw
-            }
-
-            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                gpu.set_scale_factor(scale_factor);
-                self.render.scale_factor = scale_factor;
-                self.redraw(gpu);
-                BrowserCommand::RequestRedraw
-            }
-
-            WindowEvent::MouseWheel { delta, .. } => {
-                self.handle_scroll(delta);
-                BrowserCommand::RequestRedraw
-            }
-
-            WindowEvent::CursorMoved { position, .. } => {
-                self.input.mouse_position = (position.x, position.y);
-                BrowserCommand::None
-            }
-
-            WindowEvent::MouseInput { button, .. } => self.handle_mouse_input(button),
-
-            _ => BrowserCommand::None,
-        };
-        let cmd_from_tick = self.tick();
-        match browser_cmd {
-            BrowserCommand::None => {
-                if matches!(cmd_from_tick, BrowserCommand::RequestRedraw) {
-                    self.redraw(gpu);
-                }
-                cmd_from_tick
-            }
-            _ => browser_cmd,
-        }
+        sink: &mut dyn DrawSink,
+    ) -> ShellCommand {
+        BrowserApp::handle_window_event(self, window_id, event, sink)
     }
 
-    /// Handles mouse input events, mainly left-clicks for the active tab.
-    fn handle_mouse_input(&mut self, button: winit::event::MouseButton) -> BrowserCommand {
-        if button != winit::event::MouseButton::Left {
-            return BrowserCommand::None;
-        }
-
-        let (x, y) = self.input.mouse_position;
-        let sf = self.render.scale_factor;
-        if let Some(tab) = self.active_tab_mut() {
-            Self::handle_mouse_click(tab, (x / sf) as f32, (y / sf) as f32);
-            BrowserCommand::RequestRedraw
-        } else {
-            BrowserCommand::None
-        }
+    fn apply_draw_commands(&mut self, window_id: WindowId, sink: &mut dyn DrawSink) {
+        BrowserApp::apply_draw_commands(self, window_id, sink);
     }
 
-    /// Handles scrolling for the active tab, updating its layout container offsets.
-    ///
-    /// Currently a stub.
-    fn handle_scroll(&mut self, delta: winit::event::MouseScrollDelta) {
-        let scroll_amount = match delta {
-            winit::event::MouseScrollDelta::LineDelta(_, y) => -y * 60.0,
-            winit::event::MouseScrollDelta::PixelDelta(pos) => -pos.y as f32,
-        };
+    fn poll_window(&mut self, window_id: WindowId) -> bool {
+        self.poll_window(window_id)
+    }
+}
 
-        let window_size = self.window_size();
-        let sf = self.render.scale_factor as f32;
+/// Applies the browser-controlled `Origin` / `Referer` request headers.
+///
+/// - Any `Origin` / `Referer` supplied by page scripts is stripped.
+/// - An `Origin` header is sent for CORS-mode requests (`fetch`/`XMLHttpRequest`)
+///   and for non-GET requests; the value is the initiator's serialized origin
+///   (`"null"` for opaque/internal pages), as required by the Fetch standard.
+/// - A `Referer` origin-only header is sent for network origins only; opaque
+///   pages never send one, so bundled `resource:` URLs cannot be leaked.
+fn apply_fetch_headers(request: &mut NetworkRequest, initiator: &Origin, kind: &FetchKind) {
+    request.headers.retain(|(name, _)| {
+        let name = name.to_ascii_lowercase();
+        name != "origin" && name != "referer"
+    });
 
-        if let Some(tab) = self.tabs.get_mut(self.active_tab)
-            && let Some((layout, info)) = tab.layout_and_info_mut()
-            && let layouter::types::NodeKind::Container {
-                scroll_offset_y, ..
-            } = &mut info.kind
-        {
-            *scroll_offset_y = (*scroll_offset_y + scroll_amount).clamp(
-                0.0,
-                (layout
-                    .layout_boxes
-                    .iter()
-                    .map(|l| l.children_box.height)
-                    .sum::<f32>()
-                    - (window_size.1 / sf))
-                    .max(0.0),
-            );
-        }
+    if !request.url.starts_with("http://") && !request.url.starts_with("https://") {
+        return;
     }
 
-    /// Handles a mouse click in the given tab at the specified coordinates.
-    pub fn handle_mouse_click(tab: &mut Tab, x: f32, y: f32) {
-        let hit_path = match tab.layout_and_info() {
-            Some((layout, info)) => crate::engine::input::hit_test(layout, info, x, y),
-            None => return,
-        };
-
-        let href_opt = {
-            if let Some(hit) = hit_path.iter().find(|e| {
-                matches!(
-                    e.info.kind,
-                    layouter::types::NodeKind::Container { ref role, .. }
-                        if matches!(role, layouter::types::ContainerRole::Link { .. })
-                )
-            }) {
-                if let layouter::types::NodeKind::Container { role, .. } = &hit.info.kind
-                    && let layouter::types::ContainerRole::Link { href } = role
-                {
-                    Some(href.clone())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        };
-
-        if let Some(href) = href_opt {
-            tab.move_to(&href)
-        }
+    let is_cors_request = matches!(kind, FetchKind::JavaScript { .. }) || request.method != "GET";
+    if is_cors_request {
+        request
+            .headers
+            .push(("Origin".to_string(), initiator.ascii_serialization()));
     }
-
-    /// Rebuilds the render tree and sends draw commands to the GPU.
-    pub fn redraw(&mut self, gpu: &mut GpuRenderer) {
-        self.rebuild_render_tree();
-        self.apply_draw_commands(gpu);
-        if let Err(e) = gpu.render() {
-            log::error!(target: "BrowserApp::redraw", "Render error occurred: {}", e);
-        }
-    }
-
-    /// Applies the current draw commands to the GPU renderer.
-    pub fn apply_draw_commands(&self, gpu: &mut GpuRenderer) {
-        gpu.parse_draw_commands(&self.render.draw_commands);
-    }
-
-    /// Adds a new tab to the browser.
-    pub fn add_tab(&mut self, tab: Tab) {
-        self.tabs.push(tab);
-    }
-
-    /// Returns the current window size as `(width, height)` in floating-point pixels.
-    pub fn window_size(&self) -> (f32, f32) {
-        (
-            self.render.window_size.0 as f32,
-            self.render.window_size.1 as f32,
-        )
-    }
-
-    /// Returns the current window title.
-    pub fn window_title(&self) -> String {
-        self.window_title.clone()
-    }
-
-    /// Sets the current scale factor for rendering.
-    pub fn set_scale_factor(&mut self, sf: f64) {
-        self.render.scale_factor = sf;
+    if initiator.is_network() {
+        request
+            .headers
+            .push(("Referer".to_string(), initiator.ascii_serialization()));
     }
 }
 
@@ -407,11 +481,9 @@ fn run_with_winit_backend(app: BrowserApp) -> Result<()> {
 }
 
 fn run_event_loop(app: BrowserApp) -> Result<()> {
-    let event_loop =
-        winit::event_loop::EventLoop::<crate::platform::system::State>::with_user_event()
-            .build()?;
+    let event_loop = winit::event_loop::EventLoop::new()?;
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
-    let mut app = App::new(app);
+    let mut app = App::new(Box::new(app));
     event_loop.run_app(&mut app)?;
     Ok(())
 }
@@ -449,5 +521,134 @@ fn configure_winit_backend_for_wslg() {
             env::remove_var("WAYLAND_DISPLAY");
         }
         log::info!("WSLg detected: defaulting to X11 backend for stability");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pins the `Send` bound reached so far, and documents what still blocks
+    /// `BrowserApp` from becoming `Send`.
+    ///
+    /// Everything the resource path owns is movable now that
+    /// [`BrowserResourceLoader`] holds its `NetworkCore` outright instead of
+    /// behind an `Rc`. The remaining blockers are all page-boundary state:
+    ///
+    /// - `Box<dyn Chrome>` / `Box<dyn ContextMenu>` (UI trait objects that
+    ///   predate the layering fix)
+    /// - `ui_layout::CustomLayouter` (reached through `LayoutNode`, and today
+    ///   sidestepped by `SendableResult`'s raw pointer)
+    /// - `Rc<DomTree>` and `Weak<RefCell<TreeNode<HtmlNodeType>>>` (the live
+    ///   DOM the browser layer still mutates directly)
+    ///
+    /// Add assertions here as each group is removed, so the progress is
+    /// visible and the bound can never silently regress.
+    #[test]
+    fn resource_path_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<BrowserResourceLoader>();
+        assert_send::<super::PendingFetches>();
+    }
+
+    fn js_fetch(method: &str) -> FetchKind {
+        FetchKind::JavaScript {
+            request_id: 1,
+            method: method.to_string(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        }
+    }
+
+    fn header<'a>(request: &'a NetworkRequest, name: &str) -> Option<&'a str> {
+        request
+            .headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn web_fetch_gets_browser_origin_and_origin_only_referer() {
+        let initiator = Origin::from_url_string("https://example.test/index.html");
+        let mut request = NetworkRequest::get("https://api.example.test/data".to_string());
+        request
+            .headers
+            .push(("Origin".to_string(), "https://evil.test".to_string()));
+        request
+            .headers
+            .push(("Referer".to_string(), "https://evil.test/leak".to_string()));
+
+        apply_fetch_headers(&mut request, &initiator, &js_fetch("GET"));
+
+        assert_eq!(header(&request, "Origin"), Some("https://example.test"));
+        assert_eq!(header(&request, "Referer"), Some("https://example.test"));
+    }
+
+    #[test]
+    fn non_get_requests_carry_origin_without_requiring_fetch_kind() {
+        let initiator = Origin::from_url_string("https://example.test/");
+        let mut request = NetworkRequest {
+            url: "https://api.example.test/items".to_string(),
+            method: "POST".to_string(),
+            headers: Vec::new(),
+            body: b"{}".to_vec(),
+        };
+
+        apply_fetch_headers(
+            &mut request,
+            &initiator,
+            &FetchKind::Image {
+                source: "irrelevant".to_string(),
+            },
+        );
+
+        assert_eq!(header(&request, "Origin"), Some("https://example.test"));
+        assert_eq!(header(&request, "Referer"), Some("https://example.test"));
+    }
+
+    #[test]
+    fn plain_subresources_skip_origin_header() {
+        let initiator = Origin::from_url_string("https://example.test/");
+        let mut request = NetworkRequest::get("https://cdn.example.test/pic.png".to_string());
+
+        apply_fetch_headers(
+            &mut request,
+            &initiator,
+            &FetchKind::Image {
+                source: "pic".to_string(),
+            },
+        );
+
+        assert_eq!(header(&request, "Origin"), None);
+        assert_eq!(header(&request, "Referer"), Some("https://example.test"));
+    }
+
+    #[test]
+    fn opaque_pages_never_leak_referer_or_internal_scheme() {
+        let initiator = Origin::opaque();
+        let mut request = NetworkRequest::get("resource:///devtools/index.html".to_string());
+        request
+            .headers
+            .push(("Referer".to_string(), "resource:///secret".to_string()));
+
+        apply_fetch_headers(&mut request, &initiator, &js_fetch("GET"));
+
+        assert!(
+            request.headers.is_empty(),
+            "headers = {:?}",
+            request.headers
+        );
+    }
+
+    #[test]
+    fn opaque_fetch_sends_null_origin_but_no_referer() {
+        let initiator = Origin::opaque();
+        let mut request = NetworkRequest::get("https://api.example.test/data".to_string());
+
+        apply_fetch_headers(&mut request, &initiator, &js_fetch("GET"));
+
+        assert_eq!(header(&request, "Origin"), Some("null"));
+        assert_eq!(header(&request, "Referer"), None);
     }
 }

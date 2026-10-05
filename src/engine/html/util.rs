@@ -18,6 +18,8 @@ use entities::{Codepoints, ENTITIES};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
+pub const MAX_ENTITY_NAME_LEN: usize = 31;
+
 static NAMED_ENTITIES: Lazy<HashMap<&'static str, String>> = Lazy::new(|| {
     let mut map = HashMap::new();
     for ent in ENTITIES.iter() {
@@ -148,6 +150,20 @@ const OTHER_TAGS: &[&str] = &[
     // 上のどれにも入れなかった代表的要素
     "svg", // svg は通常 inline だが独自挙動のため other に分離してもよい
 ];
+
+/// HTML "space characters", the only characters that separate tokens in a
+/// `class` attribute (and other space-separated attribute values).
+///
+/// Notably these are ASCII-only: U+2003 EM SPACE and U+3000 IDEOGRAPHIC SPACE
+/// are *not* separators, they are ordinary characters inside a class name.
+pub fn is_html_space(character: char) -> bool {
+    matches!(character, '\t' | '\n' | '\x0C' | '\r' | ' ')
+}
+
+/// Splits a space-separated attribute value into its tokens.
+pub fn split_html_space(value: &str) -> impl Iterator<Item = &str> {
+    value.split(is_html_space).filter(|token| !token.is_empty())
+}
 
 /// 要素の「カテゴリ文字列」を返すユーティリティ（テスト・デバッグ用）
 /// 戻り値: "block" | "inline" | "inline-block" | "table" | "other" | "unknown"

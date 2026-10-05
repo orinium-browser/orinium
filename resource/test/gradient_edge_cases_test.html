@@ -1,0 +1,294 @@
+<!doctype html>
+<html>
+    <head>
+        <meta charset="utf-8" />
+        <title>Gradient Edge Cases</title>
+
+        <style>
+            body {
+                margin: 0;
+                padding: 20px;
+                font-family: sans-serif;
+                background: #eee;
+            }
+
+            .grid {
+                display: grid;
+                grid-template-columns: repeat(2, 300px);
+                gap: 16px;
+            }
+
+            .test {
+                width: 300px;
+                height: 120px;
+                border: 1px solid #333;
+                box-sizing: border-box;
+                padding: 8px;
+                color: white;
+                font-weight: bold;
+            }
+
+            /* 1. Basic */
+            .basic {
+                background: linear-gradient(red, blue);
+            }
+
+            /* 2. Explicit angle */
+            .angle-0 {
+                background: linear-gradient(0deg, red, blue);
+            }
+
+            .angle-90 {
+                background: linear-gradient(90deg, red, blue);
+            }
+
+            .angle-180 {
+                background: linear-gradient(180deg, red, blue);
+            }
+
+            .angle-270 {
+                background: linear-gradient(270deg, red, blue);
+            }
+
+            /* 3. Negative and >360deg angles */
+            .angle-negative {
+                background: linear-gradient(-45deg, red, blue);
+            }
+
+            .angle-large {
+                background: linear-gradient(450deg, red, blue);
+            }
+
+            /* 4. Percentage positions */
+            .percent {
+                background: linear-gradient(red 0%, green 50%, blue 100%);
+            }
+
+            /* 5. Unitless zero */
+            .zero {
+                background: linear-gradient(red 0, blue 50%);
+            }
+
+            /* 6. Negative positions */
+            .negative-position {
+                background: linear-gradient(red -20%, blue 100%);
+            }
+
+            /* 7. Positions above 100% */
+            .large-position {
+                background: linear-gradient(red 0%, blue 120%);
+            }
+
+            /* 8. Unordered positions */
+            .unordered {
+                background: linear-gradient(red 80%, green 20%, blue 60%);
+            }
+
+            /* 9. Double-position color stop */
+            .double-position {
+                background: linear-gradient(red 20% 40%, blue 70% 90%);
+            }
+
+            /* 10. Adjacent stops */
+            .hard-stop {
+                background: linear-gradient(red 0% 50%, blue 50% 100%);
+            }
+
+            /* 11. No positions */
+            .implicit {
+                background: linear-gradient(red, green, blue);
+            }
+
+            /* 12. One explicit position */
+            .one-explicit {
+                background: linear-gradient(red, green 50%, blue);
+            }
+
+            /* 13. Two colors */
+            .two-colors {
+                background: linear-gradient(#ff0000 20%, #0000ff 80%);
+            }
+
+            /* 14. Many stops */
+            .many-stops {
+                background: linear-gradient(
+                    red 0%,
+                    orange 15%,
+                    yellow 30%,
+                    green 45%,
+                    cyan 60%,
+                    blue 75%,
+                    violet 90%,
+                    black 100%
+                );
+            }
+
+            /* 15. RGB colors */
+            .rgb {
+                background: linear-gradient(
+                    rgb(255 0 0) 0%,
+                    rgb(0 255 0) 50%,
+                    rgb(0 0 255) 100%
+                );
+            }
+
+            /* 16. Alpha colors */
+            .alpha {
+                background: linear-gradient(
+                    rgb(255 0 0 / 0) 0%,
+                    rgb(255 0 0 / 1) 100%
+                );
+            }
+
+            /* 17. Transparent */
+            .transparent {
+                background: linear-gradient(transparent, red, transparent);
+            }
+
+            /* 18. CSS variables */
+            .variables {
+                --start: red;
+                --middle: 40%;
+                --end: blue;
+
+                background: linear-gradient(
+                    var(--start) 0%,
+                    purple var(--middle),
+                    var(--end) 100%
+                );
+            }
+
+            /* 19. calc() positions */
+            .calc-position {
+                background: linear-gradient(
+                    red 0%,
+                    blue calc(50% + 10%),
+                    green 100%
+                );
+            }
+
+            /* 20. calc() with negative */
+            .calc-negative {
+                background: linear-gradient(red calc(50% * -1), blue 100%);
+            }
+
+            /* 21. calc() zero */
+            .calc-zero {
+                background: linear-gradient(red calc(0%), blue 100%);
+            }
+
+            /* 22. repeating gradient */
+            .repeating {
+                background: repeating-linear-gradient(
+                    90deg,
+                    red 0%,
+                    blue 25%,
+                    red 50%
+                );
+            }
+
+            /* 23. repeating gradient with hard stops */
+            .repeating-hard {
+                background: repeating-linear-gradient(
+                    90deg,
+                    red 0% 10%,
+                    blue 10% 20%
+                );
+            }
+
+            /* 24. Multiple negative stops */
+            .multiple-negative {
+                background: linear-gradient(
+                    red -50%,
+                    green -10%,
+                    blue 50%,
+                    black 150%
+                );
+            }
+
+            /* 25. px positions */
+            .px-position {
+                background: linear-gradient(red 10px, blue 100px);
+            }
+
+            /* 26. Mixed units */
+            .mixed-units {
+                background: linear-gradient(red 10px, green 50%, blue 100px);
+            }
+
+            /* 27. Zero degree + unitless zero stop */
+            .zero-everywhere {
+                background: linear-gradient(0deg, red 0, blue 0%);
+            }
+
+            /* 28. Color keyword edge cases */
+            .colors {
+                background: linear-gradient(currentColor, white, black);
+                color: red;
+            }
+
+            /* 29. Direction keywords */
+            .direction {
+                background: linear-gradient(to right, red, blue);
+            }
+
+            .direction-corner {
+                background: linear-gradient(to bottom right, red, blue);
+            }
+
+            /* 30. Direction + explicit positions */
+            .direction-stops {
+                background: linear-gradient(
+                    to right,
+                    red 0%,
+                    green 50%,
+                    blue 100%
+                );
+            }
+        </style>
+    </head>
+
+    <body>
+        <h1>Gradient Tests</h1>
+
+        <div class="grid">
+            <div class="test basic">1. Basic</div>
+            <div class="test angle-0">2. 0deg</div>
+            <div class="test angle-90">3. 90deg</div>
+            <div class="test angle-180">4. 180deg</div>
+            <div class="test angle-270">5. 270deg</div>
+            <div class="test angle-negative">6. -45deg</div>
+            <div class="test angle-large">7. 450deg</div>
+            <div class="test percent">8. Percent</div>
+            <div class="test zero">9. Unitless zero</div>
+            <div class="test negative-position">10. Negative position</div>
+            <div class="test large-position">11. >100%</div>
+            <div class="test unordered">12. Unordered</div>
+            <div class="test double-position">13. Double position</div>
+            <div class="test hard-stop">14. Hard stop</div>
+            <div class="test implicit">15. Implicit positions</div>
+            <div class="test one-explicit">16. One explicit position</div>
+            <div class="test two-colors">17. Explicit colors</div>
+            <div class="test many-stops">18. Many stops</div>
+            <div class="test rgb">19. RGB colors</div>
+            <div class="test alpha">20. Alpha colors</div>
+            <div class="test transparent">21. Transparent</div>
+            <div class="test variables">22. CSS variables</div>
+            <div class="test calc-position">23. calc() position</div>
+            <div class="test calc-negative">24. Negative calc()</div>
+            <div class="test calc-zero">25. Zero calc()</div>
+            <div class="test repeating">26. Repeating</div>
+            <div class="test repeating-hard">27. Repeating hard stops</div>
+            <div class="test multiple-negative">
+                28. Multiple negative stops
+            </div>
+            <div class="test px-position">29. px positions</div>
+            <div class="test mixed-units">30. Mixed units</div>
+            <div class="test zero-everywhere">31. Zero everywhere</div>
+            <div class="test colors">32. currentColor</div>
+            <div class="test direction">33. to right</div>
+            <div class="test direction-corner">34. to bottom right</div>
+            <div class="test direction-stops">35. Direction + stops</div>
+        </div>
+    </body>
+</html>

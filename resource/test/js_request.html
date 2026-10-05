@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <title>JavaScript Request Test</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 32px;
+        }
+
+        .result {
+            border: 2px solid #777;
+            margin: 12px 0 24px;
+            padding: 12px;
+        }
+
+        .result[data-complete="true"] {
+            background: #d9f7df;
+            border-color: #25813b;
+        }
+    </style>
+</head>
+<body>
+    <h1>JavaScript Request</h1>
+
+    <h2>Request properties</h2>
+    <div id="properties-result" class="result">waiting</div>
+
+    <h2>Copy and options override</h2>
+    <div id="copy-result" class="result">waiting</div>
+
+    <h2>fetch(Request)</h2>
+    <div id="fetch-result" class="result">waiting</div>
+
+    <script>
+        const headers = new Headers({ Accept: "text/plain" });
+        const original = new Request("data:text/plain,request%20accepted", {
+            method: "post",
+            headers: headers,
+            body: "request body"
+        });
+
+        const propertiesResult = document.getElementById("properties-result");
+        propertiesResult.textContent =
+            "url=" + original.url +
+            ", method=" + original.method +
+            ", accept=" + original.headers.get("ACCEPT");
+        propertiesResult.setAttribute("data-complete", "true");
+
+        const copied = new Request(original, {
+            method: "get",
+            body: null
+        });
+        const copyResult = document.getElementById("copy-result");
+        copyResult.textContent =
+            "method=" + copied.method +
+            ", accept=" + copied.headers.get("accept");
+        copyResult.setAttribute("data-complete", "true");
+
+        const fetchResult = document.getElementById("fetch-result");
+        fetch(copied)
+            .then(response => response.text())
+            .then(text => {
+                fetchResult.textContent = text;
+                fetchResult.setAttribute("data-complete", "true");
+            })
+            .catch(reason => {
+                fetchResult.textContent = "failed: " + reason;
+            });
+    </script>
+</body>
+</html>

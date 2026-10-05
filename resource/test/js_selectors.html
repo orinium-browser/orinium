@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <title>JavaScript Query Selector Test</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 32px;
+        }
+
+        .card,
+        .result {
+            border: 2px solid #777;
+            margin: 8px 0;
+            padding: 12px;
+        }
+
+        .selected,
+        .result[data-complete="true"] {
+            background: #d9f7df;
+            border-color: #25813b;
+        }
+    </style>
+</head>
+<body>
+    <h1>querySelector / querySelectorAll</h1>
+
+    <main id="scope">
+        <section class="card"><span data-kind="first">first</span></section>
+        <section class="card featured"><span data-kind="second">second</span></section>
+    </main>
+    <section class="card" id="outside">outside scope</section>
+
+    <div id="document-result" class="result">waiting</div>
+    <div id="scope-result" class="result">waiting</div>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", function () {
+            const featured = document.querySelector("main > section.card.featured");
+            featured.setAttribute("class", "card featured selected");
+
+            const allCards = document.querySelectorAll("section.card");
+            const documentResult = document.querySelector("#document-result");
+            documentResult.textContent = "document matches: " + allCards.length;
+            documentResult.setAttribute("data-complete", "true");
+
+            const scope = document.querySelector("#scope");
+            const scopedCards = scope.querySelectorAll("section.card");
+            scope.querySelector("[data-kind=\"first\"]").setAttribute("data-selected", "true");
+            const scopeResult = document.querySelector("#scope-result");
+            scopeResult.textContent = "scope matches: " + scopedCards.length;
+            scopeResult.setAttribute("data-complete", "true");
+        });
+    </script>
+</body>
+</html>

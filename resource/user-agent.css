@@ -2,35 +2,25 @@
    User Agent Stylesheet
    ========================= */
 
-/* --- Global defaults --- */
-* {
-    box-sizing: border-box;
-}
-
-/* --- CSS custom properties --- */
-:root {
-    --border-thin: 1px;
-    --border-medium: 3px;
-    --border-thick: 5px;
-}
-
 /* --- Root element --- */
 html {
     display: block;
     font-size: 16px;
+    line-height: normal;
+    overflow: auto;
 }
 
 /* --- Document body --- */
 body {
     display: block;
     margin: 8px;
+    background-color: #fff;
     font-family:
         system-ui,
         -apple-system,
         BlinkMacSystemFont,
         "Segoe UI",
         sans-serif;
-    line-height: 1.5;
 }
 
 /* --- Sectioning content --- */
@@ -116,6 +106,7 @@ dd {
 
 /* --- Links --- */
 a {
+    display: inline;
     color: #0000ee;
     text-decoration: underline;
     cursor: pointer;
@@ -128,37 +119,45 @@ a:visited {
 /* --- Inline text semantics --- */
 strong,
 b {
+    display: inline;
     font-weight: bold;
 }
 
 em,
 i {
+    display: inline;
     font-style: italic;
 }
 
 small {
+    display: inline;
     font-size: 0.8em;
 }
 
 mark {
+    display: inline;
     background-color: yellow;
     color: black;
 }
 
 del {
+    display: inline;
     text-decoration: line-through;
 }
 
 ins {
+    display: inline;
     text-decoration: underline;
 }
 
 sub {
+    display: inline;
     vertical-align: sub;
     font-size: 0.8em;
 }
 
 sup {
+    display: inline;
     vertical-align: super;
     font-size: 0.8em;
 }
@@ -170,6 +169,7 @@ blockquote {
 }
 
 q {
+    display: inline;
     quotes: "“" "”" "‘" "’";
 }
 
@@ -181,8 +181,24 @@ pre {
     margin: 1em 0;
 }
 
-code {
+code,
+samp {
+    display: inline;
     font-family: monospace;
+}
+
+var {
+    display: inline;
+    font-style: italic;
+}
+
+abbr {
+    display: inline;
+    text-decoration: underline dotted;
+}
+
+time {
+    display: inline;
 }
 
 /* --- Inline helpers --- */
@@ -197,6 +213,11 @@ br {
 /* --- Images --- */
 img {
     display: inline-block;
+}
+
+audio {
+    display: inline-block;
+    background-color: #f0f0f0;
 }
 
 /* --- Horizontal rule --- */
@@ -228,16 +249,24 @@ th {
     text-align: center;
 }
 
+/* --- Iframe --- */
+iframe {
+    border: 2px inset;
+}
+
 /* --- Form elements --- */
 input,
 textarea,
 select,
 button {
+    display: inline-block;
     font: inherit;
+    background-color: #f0f0f0;
 }
 
-button {
-    display: inline-block;
+button,
+select {
+    box-sizing: border-box;
 }
 
 input[type="hidden"] {
@@ -257,5 +286,10 @@ template {
 
 /* HTML hidden */
 [hidden] {
+    display: none;
+}
+
+/* Popover API: popovers are hidden until shown */
+[popover] {
     display: none;
 }

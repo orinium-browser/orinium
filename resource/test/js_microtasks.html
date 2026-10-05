@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <title>JavaScript Microtasks Test</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 32px;
+        }
+
+        .result {
+            border: 2px solid #777;
+            margin: 12px 0 24px;
+            padding: 12px;
+        }
+
+        .result[data-complete="true"] {
+            background: #d9f7df;
+            border-color: #25813b;
+        }
+    </style>
+</head>
+<body>
+    <h1>JavaScript Microtasks</h1>
+
+    <h2>Script checkpoint and nested FIFO jobs</h2>
+    <div id="script-result" class="result">waiting</div>
+
+    <h2>Microtask between timer tasks</h2>
+    <div id="timer-result" class="result">waiting</div>
+
+    <h2>Event checkpoint</h2>
+    <button id="event-button">Run click task</button>
+    <div id="event-result" class="result">waiting for click</div>
+
+    <script>
+        const scriptResult = document.querySelector("#script-result");
+        scriptResult.textContent = "sync";
+        queueMicrotask(function () {
+            scriptResult.textContent = scriptResult.textContent + " -> first";
+            queueMicrotask(function () {
+                scriptResult.textContent = scriptResult.textContent + " -> nested";
+                scriptResult.setAttribute("data-complete", "true");
+            });
+        });
+
+        const timerResult = document.querySelector("#timer-result");
+        setTimeout(function () {
+            timerResult.textContent = "first timer";
+            queueMicrotask(function () {
+                timerResult.textContent = timerResult.textContent + " -> microtask";
+            });
+        }, 0);
+        setTimeout(function () {
+            timerResult.textContent = timerResult.textContent + " -> second timer";
+            timerResult.setAttribute("data-complete", "true");
+        }, 0);
+
+        const eventResult = document.querySelector("#event-result");
+        document.querySelector("#event-button").addEventListener("click", function () {
+            eventResult.textContent = "click handler";
+            queueMicrotask(function () {
+                eventResult.textContent = eventResult.textContent + " -> microtask";
+                eventResult.setAttribute("data-complete", "true");
+            });
+        });
+    </script>
+</body>
+</html>

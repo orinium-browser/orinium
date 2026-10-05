@@ -1,7 +1,11 @@
+//! ネットワーク層の設定。タイムアウト、キャッシュ、ユーザーエージェント。
+
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 /// ネットワーク層全体の設定
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkConfig {
     /// User-Agent文字列
     pub user_agent: String,
@@ -41,7 +45,7 @@ pub enum ProxyType {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ProxyConfig {
     pub proxy_type: String,
     pub host: String,

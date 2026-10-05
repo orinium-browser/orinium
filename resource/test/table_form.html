@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="ja">
+    <head>
+        <meta charset="UTF-8" />
+        <title>Table & Form Test</title>
+        <style>
+            body {
+                font-family: sans-serif;
+                padding: 20px;
+                line-height: 1.6;
+            }
+
+            section {
+                margin-bottom: 40px;
+            }
+
+            h2 {
+                border-bottom: 2px solid #333;
+                padding-bottom: 5px;
+            }
+
+            table {
+                border-collapse: collapse;
+                margin: 10px 0;
+            }
+
+            th,
+            td {
+                border: 1px solid #666;
+                padding: 6px 12px;
+            }
+
+            th {
+                background: #e0e0e0;
+            }
+
+            .cell-long {
+                max-width: 160px;
+            }
+
+            .btn-cell {
+                background: #4a90e2;
+                color: white;
+                border: 1px solid #2a6ab2;
+                padding: 6px 14px;
+            }
+
+            .form-note {
+                background: #fff3cd;
+                border: 1px solid #666;
+                padding: 10px;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>Table &amp; Form Test</h1>
+
+        <section>
+            <h2>Basic Table</h2>
+            <table>
+                <tr>
+                    <th>Header 1</th>
+                    <th>Header 2</th>
+                    <th>Header 3</th>
+                </tr>
+                <tr>
+                    <td>Row 1 Col 1</td>
+                    <td>Row 1 Col 2</td>
+                    <td>Row 1 Col 3</td>
+                </tr>
+                <tr>
+                    <td>Row 2 Col 1</td>
+                    <td>Row 2 Col 2</td>
+                    <td>Row 2 Col 3</td>
+                </tr>
+            </table>
+        </section>
+
+        <section>
+            <h2>Table with thead / tbody / tfoot</h2>
+            <table>
+                <caption>
+                    Captioned table
+                </caption>
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Value</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>alpha</td>
+                        <td>10</td>
+                    </tr>
+                    <tr>
+                        <td>beta</td>
+                        <td>20</td>
+                    </tr>
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td>total</td>
+                        <td>30</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </section>
+
+        <section>
+            <h2>Cells with long content</h2>
+            <table>
+                <tr>
+                    <th>Short</th>
+                    <th>Long</th>
+                </tr>
+                <tr>
+                    <td>hi</td>
+                    <td class="cell-long">
+                        This cell contains a long sentence that should wrap
+                        inside the cell because the max-width is limited.
+                    </td>
+                </tr>
+            </table>
+        </section>
+
+        <section>
+            <h2>Button in a table cell</h2>
+            <table>
+                <tr>
+                    <th>Action</th>
+                    <th>Label</th>
+                </tr>
+                <tr>
+                    <td><button class="btn-cell">Click</button></td>
+                    <td>button inside a table cell</td>
+                </tr>
+            </table>
+        </section>
+
+        <section>
+            <h2>Forms</h2>
+            <div class="form-note">
+                Note: only the button control is rendered at present. text input
+                / textarea / select are not yet implemented, so they are not
+                shown below.
+            </div>
+            <button class="btn-cell">Submit</button>
+            <button class="btn-cell">Cancel</button>
+        </section>
+    </body>
+</html>

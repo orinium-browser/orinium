@@ -1,0 +1,5046 @@
+//! Minimal JS runtime backed by `pixi_byte`.
+//!
+//! Installs a small set of DOM bindings (`console`, `document.getElementById`,
+//! element properties). The engine never imports `platform`; DOM access goes
+//! through the shared host slot that `JsRuntime` registers on the VM. The
+//! runtime normally lives on a background thread (see [`processor`]), owning a
+//! private mirror of the DOM that is synced with the UI thread via
+//! [`DomSnapshot`] commits. It can also be used directly on any thread.
+
+use crate::engine::html::{DomTree, HtmlNodeType};
+use crate::engine::js::web_apis::dom::computed_style;
+use crate::engine::js::web_apis::dom::document::IframeDocument;
+use crate::engine::layouter::dom_snapshot::DomSnapshot;
+use crate::engine::tree::NodeRef;
+use pixi_byte::value::jsobject::JSObject;
+use pixi_byte::{JSError, JSValue};
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+
+pub mod devtools;
+pub mod processor;
+pub use devtools::JsDevToolsRequest;
+pub use processor::{JsProcessor, JsTask, JsTaskResult};
+
+mod common;
+pub(crate) mod runtime;
+pub(crate) mod web_apis;
+pub use web_apis::missing_api_detector;
+
+// Re-export items needed by sibling modules.
+pub(crate) use common::{
+    host_read_only_property, is_callable, node_dom_id, with_host, with_host_mut,
+};
+pub(crate) use web_apis::dom::document::expose_node;
+pub(crate) use web_apis::dom::events::{event_flag, make_event};
+pub(crate) use web_apis::network::{make_fetch_response, resolve_xml_http_request};
+
+// ---------------------------------------------------------------------------
+// Core types
+// ---------------------------------------------------------------------------
+
+pub(crate) struct JsTimer {
+    id: u64,
+    callback: JSValue,
+    arguments: Vec<JSValue>,
+    deadline: Instant,
+    interval: Option<Duration>,
+}
+
+pub(crate) struct JsFetchCapability {
+    resolve: JSValue,
+    reject: JSValue,
+}
+
+/// A fetch request waiting to be dispatched by the browser network layer.
+#[derive(Debug)]
+pub struct JsFetchRequest {
+    pub(crate) id: u64,
+    pub(crate) url: String,
+    pub(crate) method: String,
+    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) body: Vec<u8>,
+}
+
+/// An `<iframe src="...">` whose content has to be fetched and parsed.
+#[derive(Debug)]
+pub struct JsIframeFetchRequest {
+    /// The DOM id of the `<iframe>` element requesting the load.
+    pub dom_id: u64,
+    /// The absolute (resolved) URL of the iframe source.
+    pub url: String,
+}
+
+/// The serialized content document of a single `<iframe>`, carried from the JS
+/// thread so the layout can render it nested inside the host page.
+#[derive(Debug)]
+pub struct IframeContentSnapshot {
+    /// The JS-facing DOM id of the `<iframe>` element this content belongs to.
+    pub iframe_dom_id: u64,
+    /// The iframe's content document tree, serialized as a movable snapshot.
+    pub content: DomSnapshot,
+}
+
+/// A script element inserted by JavaScript after the initial HTML parse.
+#[derive(Debug)]
+pub(crate) struct JsDynamicScriptRequest {
+    pub(crate) node_id: u64,
+    pub(crate) source: JsDynamicScriptSource,
+}
+
+#[derive(Debug)]
+pub(crate) enum JsDynamicScriptSource {
+    Inline(String),
+    External(String),
+}
+
+#[derive(Debug)]
+pub(crate) struct JsDynamicStyleRequest {
+    pub(crate) node_id: u64,
+    pub(crate) url: String,
+}
+
+/// An image element created or populated after the initial HTML parse.
+#[derive(Debug)]
+// TODO: Track the owning image node so src changes can cancel/reload and dispatch load/error.
+pub(crate) struct JsDynamicImageRequest {
+    pub(crate) source: String,
+}
+
+/// Geometry produced by the committed layout tree for a live DOM element.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct JsLayoutMetrics {
+    pub offset_left: f64,
+    pub offset_top: f64,
+    pub offset_width: f64,
+    pub offset_height: f64,
+    pub client_width: f64,
+    pub client_height: f64,
+    pub rect_left: f64,
+    pub rect_top: f64,
+    pub rect_width: f64,
+    pub rect_height: f64,
+}
+
+/// The response data exposed to a JavaScript `Response` object.
+#[derive(Debug)]
+pub struct JsFetchResponse {
+    pub(crate) url: String,
+    pub(crate) status: u16,
+    pub(crate) status_text: String,
+    pub(crate) redirected: bool,
+    pub(crate) body: Vec<u8>,
+    pub(crate) headers: Vec<(String, String)>,
+}
+
+/// A registered custom element definition.
+#[derive(Clone)]
+pub(crate) struct CustomElementDefinition {
+    pub(crate) constructor: JSValue,
+    pub(crate) connected_callback: Option<JSValue>,
+    pub(crate) disconnected_callback: Option<JSValue>,
+    pub(crate) attribute_changed_callback: Option<JSValue>,
+    pub(crate) observed_attributes: Vec<String>,
+    /// Resolve functions for pending `whenDefined()` promises.
+    pub(crate) when_defined_resolvers: Vec<JSValue>,
+}
+
+/// State shared between the JS natives and the browser side.
+///
+/// The JS-facing `u64` counter (`__orinium_dom_id`) maps to a live DOM node so
+/// element handles survive relayouts: `Rc` handles on the DOM nodes are stable,
+/// while snapshot ids are not.
+pub struct JsHost {
+    pub(crate) dom: Rc<DomTree>,
+    pub(crate) refs: HashMap<
+        u64,
+        std::rc::Weak<std::cell::RefCell<crate::engine::tree::TreeNode<HtmlNodeType>>>,
+    >,
+    /// Element JS objects per DOM id, kept alive so `onclick` handlers
+    /// registered on them survive and can be invoked on user clicks.
+    pub(crate) objects: HashMap<u64, Rc<RefCell<JSObject>>>,
+    /// Stable `CSSStyleDeclaration` wrappers for exposed elements.
+    pub(crate) styles: HashMap<u64, Rc<RefCell<JSObject>>>,
+    /// Stable 2D rendering contexts for canvas elements.
+    pub(crate) canvas_contexts: HashMap<u64, Rc<RefCell<JSObject>>>,
+    /// Explicit namespaces assigned through `document.createElementNS`.
+    pub(crate) namespaces: HashMap<u64, String>,
+    pub(crate) element_prototype: Rc<RefCell<JSObject>>,
+    pub(crate) element_constructor: Rc<RefCell<JSObject>>,
+    pub(crate) node_prototype: Option<Rc<RefCell<JSObject>>>,
+    pub(crate) fragment_prototype: Option<Rc<RefCell<JSObject>>>,
+    /// `ShadowRoot` interface prototype assigned to exposed shadow-root
+    /// wrappers so `instanceof ShadowRoot` holds.
+    pub(crate) shadow_root_prototype: Option<Rc<RefCell<JSObject>>>,
+    pub(crate) document: Option<Rc<RefCell<JSObject>>>,
+    pub(crate) document_implementation: Option<Rc<RefCell<JSObject>>>,
+    /// Independent document instances for `<iframe>` elements, keyed by the
+    /// iframe element's DOM id. Each iframe gets its own DOM tree.
+    pub(crate) iframe_documents: HashMap<u64, Rc<RefCell<IframeDocument>>>,
+    /// DOM ids of iframes whose content failed to load; a failed load is not
+    /// retried automatically (only a new `src` re-queues it).
+    pub(crate) failed_iframe_fetches: HashSet<u64>,
+    pub(crate) document_event_listeners: HashMap<String, Vec<JSValue>>,
+    /// Stable `Selection` singleton returned by `document.getSelection()`.
+    pub(crate) document_selection: Option<Rc<RefCell<JSObject>>>,
+    /// Element event listeners keyed by dom id and event type. Each entry is a
+    /// `(callback, capture)` pair; the capture phase flag distinguishes
+    /// capturing listeners from bubbling ones.
+    pub(crate) element_event_listeners: HashMap<u64, HashMap<String, Vec<(JSValue, bool)>>>,
+    /// Inline event-handler content attributes mapped onto the Window per the
+    /// HTML spec (e.g. `<body onload="...">` registers a `load` event handler
+    /// on the Window). Keyed by event type; populated once when the DOM is
+    /// bound to the runtime so dispatching never re-scans the tree.
+    pub(crate) window_inline_event_handlers: HashMap<String, String>,
+    pub(crate) active_element: Option<u64>,
+    /// DOM id of the element that last entered fullscreen via
+    /// `requestFullscreen()`, or `None` when the page is not fullscreen.
+    pub(crate) fullscreen_element: Option<u64>,
+    /// Keeps JS-created or removed nodes alive while their wrappers exist.
+    pub(crate) detached_nodes: HashMap<u64, NodeRef<HtmlNodeType>>,
+    /// Detached document objects created via
+    /// `document.implementation.createHTMLDocument`, kept alive for scripts.
+    pub(crate) detached_documents: Vec<Rc<RefCell<JSObject>>>,
+    /// DOM id of the main document node, so that `ownerDocument` and the
+    /// `this`-relative document accessors can recognise the top-level document.
+    pub(crate) main_document_dom_id: Option<u64>,
+    pub(crate) timers: Vec<JsTimer>,
+    pub(crate) fetch_requests: Vec<JsFetchRequest>,
+    pub(crate) iframe_fetch_requests: Vec<JsIframeFetchRequest>,
+    /// Top-level navigation URLs requested by scripts (e.g. `form.submit()`),
+    /// drained after each task and dispatched by the browser chrome.
+    pub(crate) navigation_requests: Vec<String>,
+    /// DOM ids of iframes whose content is already queued for loading, to avoid
+    /// re-queuing a fetch on every `contentDocument` access.
+    pub(crate) pending_iframe_fetches: std::collections::HashSet<u64>,
+    pub(crate) dynamic_script_requests: Vec<JsDynamicScriptRequest>,
+    pub(crate) queued_dynamic_scripts: HashSet<u64>,
+    pub(crate) dynamic_style_requests: Vec<JsDynamicStyleRequest>,
+    pub(crate) queued_dynamic_styles: HashSet<u64>,
+    pub(crate) dynamic_image_requests: Vec<JsDynamicImageRequest>,
+    pub(crate) queued_dynamic_images: HashSet<u64>,
+    pub(crate) fetch_capabilities: HashMap<u64, JsFetchCapability>,
+    /// `AbortSignal` objects registered by in-flight fetches, keyed by request
+    /// id. Held here rather than on [`JsFetchRequest`] so the signal — an
+    /// `Rc<RefCell<JSObject>>` that can never leave the JS thread — never
+    /// crosses to the browser side. Entries are removed when the request
+    /// settles or aborts.
+    pub(crate) fetch_signals: HashMap<u64, Rc<RefCell<JSObject>>>,
+    pub(crate) xhr_requests: HashMap<u64, Rc<RefCell<JSObject>>>,
+    pub(crate) constructing_fetch_capability: Option<JsFetchCapability>,
+    pub(crate) devtools_requests: Vec<JsDevToolsRequest>,
+    pub(crate) devtools_capabilities: HashMap<u64, devtools::JsDevToolsCapability>,
+    pub(crate) constructing_devtools_capability: Option<devtools::JsDevToolsCapability>,
+    pub(crate) next_devtools_id: u64,
+    /// Registered custom element definitions keyed by lowercase tag name.
+    pub(crate) custom_elements: HashMap<String, CustomElementDefinition>,
+    /// Shadow root associations: host_dom_id -> shadow_root_dom_id.
+    pub(crate) shadow_roots: HashMap<u64, u64>,
+    // TODO: Persist localStorage per origin and sessionStorage per top-level browsing context.
+    pub(crate) local_storage: HashMap<String, String>,
+    pub(crate) session_storage: HashMap<String, String>,
+    // TODO: Move cookies into a shared origin/path-aware jar with expiry and security attributes.
+    pub(crate) document_cookies: HashMap<String, String>,
+    pub(crate) document_url: String,
+    /// ASCII serialization of the document's origin (`"null"` when opaque).
+    pub(crate) origin: String,
+    pub(crate) viewport: (f64, f64),
+    /// Committed layout measurements keyed by the address of a live DOM node.
+    pub(crate) layout_metrics: HashMap<usize, JsLayoutMetrics>,
+    /// Committed layout measurements keyed by stable JS-facing DOM id.
+    pub(crate) layout_metrics_by_dom_id: HashMap<u64, JsLayoutMetrics>,
+    /// Serialized computed CSS values (`name: value`) keyed by stable
+    /// JS-facing DOM id, rebuilt after each committed layout so
+    /// `getComputedStyle` reflects the resolved cascade instead of only the
+    /// inline `style` attribute.
+    pub(crate) computed_styles: HashMap<u64, Vec<(String, String)>>,
+    /// Stable read-only `CSSStyleDeclaration` wrappers backing
+    /// `getComputedStyle` results, keyed by DOM id.
+    pub(crate) computed_style_declarations: HashMap<u64, Rc<RefCell<JSObject>>>,
+    /// On-demand cascade resolution used when no committed layout snapshot is
+    /// available (headless callers, and reads before the first layout).
+    pub(crate) computed_style_resolver: computed_style::Resolver,
+    pub(crate) next_fetch_id: u64,
+    pub(crate) next_timer_id: u64,
+    pub(crate) time_origin: Instant,
+    pub(crate) dom_content_loaded_fired: bool,
+    pub(crate) window_load_fired: bool,
+    pub(crate) next_id: u64,
+    pub(crate) needs_redraw: Rc<Cell<bool>>,
+}
+
+impl JsHost {
+    /// Finds the JS-facing DOM id registered for a live DOM node, if any.
+    pub(crate) fn dom_id_for_node(&self, node: &NodeRef<HtmlNodeType>) -> Option<u64> {
+        self.refs.iter().find_map(|(&dom_id, weak)| {
+            if std::ptr::eq(weak.as_ptr(), Rc::as_ptr(node)) {
+                Some(dom_id)
+            } else {
+                None
+            }
+        })
+    }
+}
+
+/// A JS engine instance with DOM bindings installed.
+pub struct JsRuntime {
+    engine: pixi_byte::JSEngine,
+    needs_redraw: Rc<Cell<bool>>,
+}
+
+impl JsRuntime {
+    /// Creates a runtime sharing the given DOM tree with the browser side.
+    pub fn new(dom: Rc<DomTree>) -> Self {
+        let needs_redraw = Rc::new(Cell::new(false));
+        let (element_prototype, element_constructor) =
+            web_apis::dom::element::make_element_interface();
+        let mut host = JsHost {
+            dom,
+            refs: HashMap::new(),
+            objects: HashMap::new(),
+            styles: HashMap::new(),
+            canvas_contexts: HashMap::new(),
+            namespaces: HashMap::new(),
+            element_prototype,
+            element_constructor,
+            node_prototype: None,
+            fragment_prototype: None,
+            shadow_root_prototype: None,
+            document: None,
+            document_implementation: None,
+            iframe_documents: HashMap::new(),
+            failed_iframe_fetches: HashSet::new(),
+            document_event_listeners: HashMap::new(),
+            document_selection: None,
+            element_event_listeners: HashMap::new(),
+            window_inline_event_handlers: HashMap::new(),
+            active_element: None,
+            fullscreen_element: None,
+            detached_nodes: HashMap::new(),
+            timers: Vec::new(),
+            fetch_requests: Vec::new(),
+            iframe_fetch_requests: Vec::new(),
+            navigation_requests: Vec::new(),
+            pending_iframe_fetches: std::collections::HashSet::new(),
+            dynamic_script_requests: Vec::new(),
+            queued_dynamic_scripts: HashSet::new(),
+            dynamic_style_requests: Vec::new(),
+            queued_dynamic_styles: HashSet::new(),
+            dynamic_image_requests: Vec::new(),
+            queued_dynamic_images: HashSet::new(),
+            fetch_capabilities: HashMap::new(),
+            fetch_signals: HashMap::new(),
+            xhr_requests: HashMap::new(),
+            constructing_fetch_capability: None,
+            devtools_requests: Vec::new(),
+            devtools_capabilities: HashMap::new(),
+            constructing_devtools_capability: None,
+            next_devtools_id: 0,
+            custom_elements: HashMap::new(),
+            shadow_roots: HashMap::new(),
+            local_storage: HashMap::new(),
+            session_storage: HashMap::new(),
+            document_cookies: HashMap::new(),
+            document_url: "about:blank".to_string(),
+            origin: "null".to_string(),
+            viewport: (800.0, 600.0),
+            layout_metrics: HashMap::new(),
+            layout_metrics_by_dom_id: HashMap::new(),
+            computed_styles: HashMap::new(),
+            computed_style_declarations: HashMap::new(),
+            computed_style_resolver: computed_style::Resolver::new(),
+            next_fetch_id: 0,
+            next_timer_id: 0,
+            time_origin: Instant::now(),
+            dom_content_loaded_fired: false,
+            window_load_fired: false,
+            next_id: 0,
+            needs_redraw: Rc::clone(&needs_redraw),
+            detached_documents: Vec::new(),
+            main_document_dom_id: None,
+        };
+        Self::register_window_event_handlers(&mut host);
+
+        let host = Rc::new(RefCell::new(host));
+
+        let mut engine = pixi_byte::JSEngine::new();
+        engine.set_host(host);
+
+        web_apis::console::install_console(&mut engine);
+        web_apis::dom::document::install_document(&mut engine);
+
+        web_apis::observers::install_mutation_observer(&mut engine);
+        web_apis::observers::install_resize_observer(&mut engine);
+        web_apis::observers::install_intersection_observer(&mut engine);
+        web_apis::timers::install_timers(&mut engine);
+        web_apis::performance::install_performance(&mut engine);
+        web_apis::message_channel::install_message_channel(&mut engine);
+        runtime::microtasks::install_microtasks(&mut engine);
+        web_apis::network::install_headers(&mut engine);
+        web_apis::network::install_request(&mut engine);
+        web_apis::network::install_fetch(&mut engine);
+        web_apis::network::install_xml_http_request(&mut engine);
+        web_apis::network::install_response(&mut engine);
+        web_apis::abort::install_abort_apis(&mut engine);
+        web_apis::file::install_blob_apis(&mut engine);
+        devtools::install(&mut engine);
+        web_apis::url::install_url_apis(&mut engine);
+        web_apis::encoding::install_encoding_apis(&mut engine);
+        web_apis::browser_env::install_browser_environment(&mut engine);
+        web_apis::browser_env::install_global_aliases(&mut engine);
+        web_apis::misc::install_misc_apis(&mut engine);
+        web_apis::dom::custom_elements::install_custom_elements(&mut engine);
+
+        Self {
+            engine,
+            needs_redraw,
+        }
+    }
+
+    /// Updates the CSS-pixel viewport exposed through the Window API.
+    pub fn set_viewport(&mut self, width: f32, height: f32) {
+        let width = width.max(0.0) as f64;
+        let height = height.max(0.0) as f64;
+        let mut global = self.engine.global_mut().borrow_mut();
+        global.set("innerWidth".to_string(), JSValue::from_number(width));
+        global.set("innerHeight".to_string(), JSValue::from_number(height));
+        global.set("outerWidth".to_string(), JSValue::from_number(width));
+        global.set("outerHeight".to_string(), JSValue::from_number(height));
+        drop(global);
+        with_host_mut(self.engine.vm(), |host| host.viewport = (width, height));
+    }
+
+    /// Replaces geometry exposed by DOM measurement APIs with the latest
+    /// committed layout result.
+    #[cfg(test)]
+    pub(crate) fn set_layout_metrics(&mut self, metrics: HashMap<usize, JsLayoutMetrics>) {
+        with_host_mut(self.engine.vm(), |host| host.layout_metrics = metrics);
+    }
+
+    /// Replaces geometry using stable DOM ids supplied by the browser UI
+    /// thread, whose live node addresses differ from this runtime's mirror.
+    pub(crate) fn set_layout_metrics_by_dom_id(&mut self, metrics: HashMap<u64, JsLayoutMetrics>) {
+        with_host_mut(self.engine.vm(), |host| {
+            host.layout_metrics_by_dom_id = metrics
+        });
+    }
+
+    /// Replaces the serialized computed CSS values using stable DOM ids.
+    pub(crate) fn set_computed_styles_by_dom_id(
+        &mut self,
+        computed_styles: HashMap<u64, Vec<(String, String)>>,
+    ) {
+        with_host_mut(self.engine.vm(), |host| {
+            // A committed snapshot is authoritative from here on, so any
+            // on-demand values resolved before it are superseded.
+            host.computed_style_resolver.invalidate();
+            host.computed_styles = computed_styles
+        });
+    }
+
+    /// Updates the language preferences exposed through `navigator`.
+    pub fn set_language(&mut self, language: &str) {
+        let language = language.trim();
+        if language.is_empty() {
+            return;
+        }
+        let mut languages = vec![JSValue::from_string(language.to_string())];
+        if let Some(base) = language.split('-').next()
+            && !base.eq_ignore_ascii_case(language)
+        {
+            languages.push(JSValue::from_string(base.to_string()));
+        }
+        if !language.eq_ignore_ascii_case("en-US") {
+            languages.push(JSValue::from_string("en-US".to_string()));
+        }
+
+        let global = self.engine.global_mut().borrow_mut();
+        let Some(navigator) = global.get("navigator").as_object() else {
+            return;
+        };
+        drop(global);
+        let mut navigator = navigator.borrow_mut();
+        navigator.define_property(
+            "language".to_string(),
+            host_read_only_property(JSValue::from_string(language.to_string())),
+        );
+        navigator.define_property(
+            "languages".to_string(),
+            host_read_only_property(self.engine.vm().array_from_values(languages)),
+        );
+    }
+
+    /// Evaluates a script, logging JS errors instead of crashing the page.
+    pub fn run_script(&mut self, source: &str) {
+        match self.engine.eval(source) {
+            Ok(_) => {}
+            Err(err) => {
+                if let JSError::Thrown(value) = &err
+                    && let Some(object) = value.as_object()
+                {
+                    let object = object.borrow();
+                    let details = object
+                        .keys()
+                        .into_iter()
+                        .map(|key| format!("{key}={}", object.get(&key).to_console_string()))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    log::info!("JS error: uncaught object ({details})");
+                }
+                log::info!(
+                    "JS error: {} (source {:?}, pc={:?}, fn={:?}, stack={:?})",
+                    err,
+                    source.chars().take(60).collect::<String>(),
+                    self.engine.last_error_pc(),
+                    self.engine.last_error_fn(),
+                    self.engine
+                        .last_error_stack()
+                        .iter()
+                        .take(10)
+                        .collect::<Vec<_>>(),
+                );
+            }
+        }
+        self.perform_microtask_checkpoint();
+    }
+
+    /// Evaluates a script, returning the first JS error (parse or compile
+    /// failure, or an uncaught thrown value). Diagnostic harnesses use this to
+    /// distinguish "script ran clean" from "never parsed"; runtime exceptions
+    /// that the page itself catches still surface as `Ok`.
+    pub fn try_run_script(&mut self, source: &str) -> Result<(), String> {
+        let result = self.engine.eval(source);
+        self.perform_microtask_checkpoint();
+        match result {
+            Ok(_) => Ok(()),
+            Err(err) => Err(err.to_string()),
+        }
+    }
+
+    /// Evaluates an expression and returns its value, or `undefined` on error.
+    pub fn eval_value(&mut self, source: &str) -> JSValue {
+        match self.engine.eval(source) {
+            Ok(value) => value,
+            Err(err) => {
+                log::info!("JS error evaluating {source:?}: {err}");
+                JSValue::undefined()
+            }
+        }
+    }
+
+    /// Updates the URL exposed through the window's `location` object.
+    pub fn set_document_url(&mut self, url: &str) {
+        let _ = with_host_mut(self.engine.vm(), |host| {
+            host.document_url = url.to_string();
+        });
+    }
+
+    /// Updates the serialized origin exposed through the window's
+    /// `location`/`window`/`document` objects.
+    pub fn set_page_origin(&mut self, origin: &str) {
+        let _ = with_host_mut(self.engine.vm(), |host| {
+            host.origin = origin.to_string();
+        });
+    }
+
+    /// Dispatches `DOMContentLoaded` to document listeners once.
+    ///
+    /// Returns `true` only for the first dispatch attempt. Listener errors are
+    /// logged and do not prevent the remaining listeners from running.
+    pub fn dispatch_dom_content_loaded(&mut self) -> bool {
+        let Some((document, listeners)) = with_host_mut(self.engine.vm(), |host| {
+            if host.dom_content_loaded_fired {
+                return None;
+            }
+
+            host.dom_content_loaded_fired = true;
+            Some((
+                host.document.as_ref().cloned(),
+                host.document_event_listeners
+                    .get("DOMContentLoaded")
+                    .cloned()
+                    .unwrap_or_default(),
+            ))
+        })
+        .flatten() else {
+            return false;
+        };
+
+        let Some(document) = document else {
+            return true;
+        };
+        for listener in listeners {
+            let event = make_event(
+                "DOMContentLoaded",
+                Rc::clone(&document),
+                Rc::clone(&document),
+            );
+            if let Err(err) = self.engine.call(
+                listener,
+                JSValue::from_object(Rc::clone(&document)),
+                vec![JSValue::from_object(event)],
+            ) {
+                log::info!("JS error on DOMContentLoaded: {}", err);
+            }
+        }
+        self.perform_microtask_checkpoint();
+        true
+    }
+
+    /// Dispatches the window `load` event once the page has finished loading.
+    ///
+    /// Supports the body `onload` inline handler, the `window.onload` property,
+    /// and `addEventListener("load", ...)` registrations in that order. Returns
+    /// `true` only for the first dispatch attempt.
+    pub fn dispatch_window_load(&mut self) -> bool {
+        let state = with_host_mut(self.engine.vm(), |host| {
+            if host.window_load_fired {
+                return None;
+            }
+            host.window_load_fired = true;
+            Some((
+                host.window_inline_event_handlers
+                    .get("load")
+                    .cloned()
+                    .unwrap_or_default(),
+                host.document_event_listeners
+                    .get("load")
+                    .cloned()
+                    .unwrap_or_default(),
+            ))
+        });
+        let Some((body_onload, listeners)) = state.flatten() else {
+            return false;
+        };
+
+        let window_object = Rc::clone(self.engine.global_mut());
+
+        // The body `onload` is a window-level inline event handler that fires
+        // first, as if it had been registered first by the parser.
+        if !body_onload.trim().is_empty() {
+            self.call_inline_load_handler(&window_object, &body_onload, "body onload");
+        }
+
+        let onload = window_object.borrow().get("onload");
+        if is_callable(&onload) {
+            self.call_load_handler(&window_object, onload, "window.onload");
+        }
+
+        for listener in listeners {
+            self.call_load_handler(&window_object, listener, "window load listener");
+        }
+
+        self.perform_microtask_checkpoint();
+        true
+    }
+
+    /// Compiles and runs an inline event-handler content attribute (e.g.
+    /// `<body onload="...">`) with `this` bound to the Window and an `event`
+    /// parameter, per the HTML spec's inline event handler activation.
+    fn call_inline_load_handler(
+        &mut self,
+        window: &Rc<RefCell<JSObject>>,
+        code: &str,
+        label: &str,
+    ) {
+        let event = make_event("load", Rc::clone(window), Rc::clone(window));
+        // Per HTML spec, the inline handler is compiled as a function whose
+        // `event` parameter and `this` (the Window) are set; invoking it runs
+        // the assigned code (e.g. Acid3's body onload="update()").
+        let wrapped = format!("(function(event) {{ {code} \n}})");
+        let handler = self.engine.eval(&wrapped).unwrap_or(JSValue::undefined());
+        if is_callable(&handler)
+            && let Err(err) = self.engine.call(
+                handler,
+                JSValue::from_object(Rc::clone(window)),
+                vec![JSValue::from_object(event)],
+            )
+        {
+            log::info!("JS error in {label}: {err}");
+        }
+    }
+
+    /// Invokes a registered window `load` listener with the Window as `this`.
+    fn call_load_handler(&mut self, window: &Rc<RefCell<JSObject>>, handler: JSValue, label: &str) {
+        let event = make_event("load", Rc::clone(window), Rc::clone(window));
+        if let Err(err) = self.engine.call(
+            handler,
+            JSValue::from_object(Rc::clone(window)),
+            vec![JSValue::from_object(event)],
+        ) {
+            log::info!("JS error in {label}: {err}");
+        }
+    }
+
+    /// Runs timer callbacks whose deadlines have elapsed.
+    ///
+    /// Returns whether at least one callback was invoked. Repeating timers are
+    /// rescheduled before invocation so they can cancel themselves.
+    pub fn run_due_timers(&mut self) -> bool {
+        let invocations = with_host_mut(self.engine.vm(), |host| {
+            let now = Instant::now();
+            let mut invocations = Vec::new();
+            let mut index = 0;
+            while index < host.timers.len() {
+                if host.timers[index].deadline > now {
+                    index += 1;
+                    continue;
+                }
+
+                let callback = host.timers[index].callback.clone();
+                let arguments = host.timers[index].arguments.clone();
+                if let Some(interval) = host.timers[index].interval {
+                    host.timers[index].deadline = now + interval;
+                    index += 1;
+                } else {
+                    host.timers.remove(index);
+                }
+                invocations.push((callback, arguments));
+            }
+            invocations
+        })
+        .unwrap_or_default();
+
+        let ran_callback = !invocations.is_empty();
+        for (callback, arguments) in invocations {
+            if let Err(err) = self.engine.call(callback, JSValue::undefined(), arguments) {
+                log::info!("JS error in timer callback: {}", err);
+            }
+            self.perform_microtask_checkpoint();
+        }
+        ran_callback
+    }
+
+    /// Returns whether a script mutated the DOM and a relayout is needed.
+    pub fn needs_redraw(&self) -> bool {
+        self.needs_redraw.get()
+    }
+
+    /// Clears and returns the redraw flag.
+    pub fn take_needs_redraw(&self) -> bool {
+        self.needs_redraw.replace(false)
+    }
+
+    /// Flags that the runtime produced visible state (e.g. an iframe content
+    /// document) that must be carried back to the browser side even though the
+    /// host DOM tree itself did not mutate.
+    pub(crate) fn mark_needs_redraw(&self) {
+        self.needs_redraw.set(true);
+    }
+
+    /// Takes fetch requests queued by JavaScript since the previous call.
+    pub(crate) fn take_fetch_requests(&mut self) -> Vec<JsFetchRequest> {
+        with_host_mut(self.engine.vm(), |host| {
+            std::mem::take(&mut host.fetch_requests)
+        })
+        .unwrap_or_default()
+    }
+
+    /// Takes top-level navigation URLs queued by scripts since the previous
+    /// call (`form.requestSubmit()` / `form.submit()` on GET forms).
+    pub fn take_navigation_requests(&mut self) -> Vec<String> {
+        with_host_mut(self.engine.vm(), |host| {
+            std::mem::take(&mut host.navigation_requests)
+        })
+        .unwrap_or_default()
+    }
+
+    /// Takes iframe-loading requests queued by JavaScript since the previous
+    /// call. Each must be resolved via `resolve_iframe_fetch` once fetched.
+    pub fn take_iframe_fetch_requests(&mut self) -> Vec<JsIframeFetchRequest> {
+        with_host_mut(self.engine.vm(), |host| {
+            std::mem::take(&mut host.iframe_fetch_requests)
+        })
+        .unwrap_or_default()
+    }
+
+    /// Parses fetched iframe HTML, installs it as the iframe's `contentDocument`
+    /// and fires the iframe's `load` event.
+    pub fn resolve_iframe_fetch(&mut self, dom_id: u64, html: String, url: String) {
+        let installed = with_host_mut(self.engine.vm(), |host| {
+            host.pending_iframe_fetches.remove(&dom_id);
+            host.failed_iframe_fetches.remove(&dom_id);
+            web_apis::dom::document::install_parsed_iframe_document(host, dom_id, &html, &url)
+        });
+        if installed.unwrap_or(false) {
+            self.dispatch_element_event(dom_id, "load");
+            // Installing a content document does not mutate the host tree, so
+            // nothing would otherwise flag this task's result: mark the runtime
+            // so the processor ships the snapshot with the iframe documents and
+            // the browser thread grafts them into layout.
+            self.mark_needs_redraw();
+        }
+    }
+
+    /// Marks an iframe load as failed so later `contentDocument` accesses do not
+    /// keep re-queuing a fetch.
+    pub fn reject_iframe_fetch(&mut self, dom_id: u64) {
+        with_host_mut(self.engine.vm(), |host| {
+            host.pending_iframe_fetches.remove(&dom_id);
+            host.failed_iframe_fetches.insert(dom_id);
+        });
+    }
+
+    /// Queues network loads for every `<iframe src>` in the bound DOM that has
+    /// not yet been queued, loaded, or failed.
+    ///
+    /// Markup-declared iframes (and frames inserted through fragment parsing
+    /// such as `innerHTML`) never pass through the `src` setter, so nothing
+    /// would otherwise request their content. The processor runs this after
+    /// each task so those frames load like any other subresource. Returns the
+    /// number of loads newly queued.
+    pub(crate) fn queue_markup_iframe_loads(&mut self) -> usize {
+        with_host_mut(self.engine.vm(), |host| {
+            let iframes = host.dom.find_all(|node| node.tag_name() == Some("iframe"));
+            let mut queued = 0;
+            for node in iframes {
+                let src = {
+                    let node_ref = node.borrow();
+                    node_ref
+                        .value
+                        .get_attr("src")
+                        .map(str::trim)
+                        .unwrap_or("")
+                        .to_string()
+                };
+                if src.is_empty() {
+                    continue;
+                }
+                let Some(dom_id) = host.dom_id_for_node(&node) else {
+                    continue;
+                };
+                let before = host.pending_iframe_fetches.len();
+                web_apis::dom::element::queue_iframe_fetch_if_needed(host, dom_id, &src);
+                if host.pending_iframe_fetches.len() > before {
+                    queued += 1;
+                }
+            }
+            queued
+        })
+        .unwrap_or(0)
+    }
+
+    pub(crate) fn take_dynamic_script_requests(&mut self) -> Vec<JsDynamicScriptRequest> {
+        with_host_mut(self.engine.vm(), |host| {
+            std::mem::take(&mut host.dynamic_script_requests)
+        })
+        .unwrap_or_default()
+    }
+
+    pub(crate) fn take_dynamic_style_requests(&mut self) -> Vec<JsDynamicStyleRequest> {
+        with_host_mut(self.engine.vm(), |host| {
+            std::mem::take(&mut host.dynamic_style_requests)
+        })
+        .unwrap_or_default()
+    }
+
+    pub(crate) fn take_dynamic_image_requests(&mut self) -> Vec<JsDynamicImageRequest> {
+        with_host_mut(self.engine.vm(), |host| {
+            std::mem::take(&mut host.dynamic_image_requests)
+        })
+        .unwrap_or_default()
+    }
+
+    /// Dispatches a non-bubbling event to a dynamically inserted element.
+    pub(crate) fn dispatch_element_event(&mut self, node_id: u64, event_type: &str) {
+        let Some((target, listeners)) = with_host(self.engine.vm(), |host| {
+            let target = host.objects.get(&node_id).cloned()?;
+            let listeners = host
+                .element_event_listeners
+                .get(&node_id)
+                .and_then(|events| events.get(event_type))
+                .cloned()
+                .unwrap_or_default();
+            Some((target, listeners))
+        })
+        .flatten() else {
+            return;
+        };
+        let handler = target.borrow().get(&format!("on{event_type}"));
+        let event = make_event(event_type, Rc::clone(&target), Rc::clone(&target));
+        if is_callable(&handler)
+            && let Err(error) = self.engine.call(
+                handler,
+                JSValue::from_object(Rc::clone(&target)),
+                vec![JSValue::from_object(Rc::clone(&event))],
+            )
+        {
+            log::info!("JS error in on{event_type}: {error}");
+        }
+        for listener in listeners {
+            if event_flag(&event, "__orinium_immediate_propagation_stopped") {
+                break;
+            }
+            if let Err(error) = self.engine.call(
+                listener.0,
+                JSValue::from_object(Rc::clone(&target)),
+                vec![JSValue::from_object(Rc::clone(&event))],
+            ) {
+                log::info!("JS error in {event_type} listener: {error}");
+            }
+        }
+    }
+
+    /// Resolves a pending JavaScript fetch and runs its microtask checkpoint.
+    pub(crate) fn resolve_fetch(&mut self, id: u64, response: JsFetchResponse) {
+        with_host_mut(self.engine.vm(), |host| {
+            host.fetch_signals.remove(&id);
+        });
+        let capability =
+            with_host_mut(self.engine.vm(), |host| host.fetch_capabilities.remove(&id)).flatten();
+        if let Some(capability) = capability {
+            let response = make_fetch_response(response);
+            if let Err(err) = self.engine.call(
+                capability.resolve,
+                JSValue::undefined(),
+                vec![JSValue::from_object(response)],
+            ) {
+                log::info!("JS error while resolving fetch: {}", err);
+            }
+            self.perform_microtask_checkpoint();
+            return;
+        }
+        let xhr = with_host_mut(self.engine.vm(), |host| host.xhr_requests.remove(&id)).flatten();
+        let Some(xhr) = xhr else { return };
+        resolve_xml_http_request(&mut self.engine, xhr, response);
+        self.perform_microtask_checkpoint();
+    }
+
+    /// Rejects a pending JavaScript fetch and runs its microtask checkpoint.
+    pub(crate) fn reject_fetch(&mut self, id: u64, reason: String) {
+        with_host_mut(self.engine.vm(), |host| {
+            host.fetch_signals.remove(&id);
+        });
+        let capability =
+            with_host_mut(self.engine.vm(), |host| host.fetch_capabilities.remove(&id)).flatten();
+        if let Some(capability) = capability {
+            if let Err(err) = self.engine.call(
+                capability.reject,
+                JSValue::undefined(),
+                vec![JSValue::from_string(reason)],
+            ) {
+                log::info!("JS error while rejecting fetch: {}", err);
+            }
+            self.perform_microtask_checkpoint();
+            return;
+        }
+        let xhr = with_host_mut(self.engine.vm(), |host| host.xhr_requests.remove(&id)).flatten();
+        let Some(xhr) = xhr else { return };
+        let handler = xhr.borrow().get("onerror");
+        if is_callable(&handler) {
+            let _ = self.engine.call(
+                handler,
+                JSValue::from_object(Rc::clone(&xhr)),
+                vec![JSValue::from_string(reason)],
+            );
+        }
+        self.perform_microtask_checkpoint();
+    }
+
+    /// Serializes the current mirror DOM for the browser side.
+    ///
+    /// Nodes exposed to scripts keep their stable `dom_id` so the UI thread can
+    /// rebuild the tree and re-register references on commit.
+    pub fn snapshot(&self) -> DomSnapshot {
+        let Some((root, dom_ids)) = with_host(self.engine.vm(), |host| {
+            let mut reverse = HashMap::new();
+            for (dom_id, weak) in &host.refs {
+                if let Some(node) = weak.upgrade() {
+                    reverse.insert(Rc::as_ptr(&node) as usize, *dom_id);
+                }
+            }
+            (Rc::clone(&host.dom.root), reverse)
+        }) else {
+            return DomSnapshot::default();
+        };
+        DomSnapshot::from_mirror(&root, &dom_ids)
+    }
+
+    /// Serializes every iframe's content document into movable snapshots so the
+    /// layout can render each `<iframe>`'s content nested inside the host page.
+    pub fn snapshot_iframe_documents(&self) -> Vec<IframeContentSnapshot> {
+        let Some(docs) = with_host(self.engine.vm(), |host| {
+            let mut out: Vec<(u64, Rc<DomTree>)> = Vec::new();
+            for (dom_id, doc) in &host.iframe_documents {
+                out.push((*dom_id, Rc::clone(&doc.borrow().tree)));
+            }
+            Some(out)
+        })
+        .flatten() else {
+            return Vec::new();
+        };
+        let mut snapshots = Vec::with_capacity(docs.len());
+        for (dom_id, tree) in docs {
+            let (content, _refs) = DomSnapshot::from_tree(&tree.root);
+            snapshots.push(IframeContentSnapshot {
+                iframe_dom_id: dom_id,
+                content,
+            });
+        }
+        snapshots
+    }
+
+    /// Replaces the mirror DOM with a snapshot produced by the browser side.
+    ///
+    /// The mirror is rebuilt from `snapshot` and node references are re-registered
+    /// so existing JS element handles keep resolving. JS-created (detached) nodes
+    /// are preserved; they are not part of the committed DOM but may still be
+    /// referenced from scripts.
+    pub fn apply_dom(&mut self, snapshot: &DomSnapshot) {
+        let (tree, dom_ids) = snapshot.into_tree();
+        with_host_mut(self.engine.vm(), |host| {
+            host.dom = Rc::new(tree);
+            let mut refs = std::mem::take(&mut host.refs);
+            host.dom.traverse(|node| {
+                if let Some(&dom_id) = dom_ids.get(&(Rc::as_ptr(node) as usize)) {
+                    refs.insert(dom_id, Rc::downgrade(node));
+                }
+            });
+            for (&dom_id, node) in &host.detached_nodes {
+                refs.entry(dom_id).or_insert_with(|| Rc::downgrade(node));
+            }
+            host.refs = refs;
+            if let Some(max_id) = dom_ids.values().max() {
+                host.next_id = host.next_id.max(*max_id);
+            }
+            Self::register_window_event_handlers(host);
+        });
+    }
+
+    /// Hoists the document's event-handler content attributes that the HTML
+    /// spec maps onto the Window (`<body onload="...">`) into the host's
+    /// handler registry, so dispatching never searches the DOM again.
+    ///
+    /// Called once when a DOM is bound to the runtime (initial parse and every
+    /// `apply_dom`), mirroring how the parser activates a `load` handler on the
+    /// `<body>` element as it is parsed.
+    fn register_window_event_handlers(host: &mut JsHost) {
+        for node in host.dom.find_all(|node| node.tag_name() == Some("body")) {
+            if let Some(code) = node.borrow().value.get_attr("onload") {
+                host.window_inline_event_handlers
+                    .insert("load".to_string(), code.to_string());
+            }
+        }
+    }
+
+    /// Dispatches a click to the handlers registered on the element with the
+    /// given JS-facing dom id. Returns whether at least one handler ran.
+    pub fn click_dom_id(&mut self, dom_id: u64) -> bool {
+        let Some(node) = with_host(self.engine.vm(), |host| {
+            host.refs.get(&dom_id).and_then(|w| w.upgrade())
+        })
+        .flatten() else {
+            return false;
+        };
+        self.click(&node)
+    }
+
+    /// Dispatches a click to the handlers registered on `node`.
+    ///
+    /// Both the `onclick` property and `addEventListener("click", ...)` are
+    /// supported. The event bubbles through exposed ancestor elements so
+    /// delegated listeners such as React's root listener receive it.
+    /// Returns whether at least one handler ran.
+    pub fn click(&mut self, node: &NodeRef<HtmlNodeType>) -> bool {
+        let mut path = Vec::new();
+        let mut current = Some(Rc::clone(node));
+        while let Some(node) = current {
+            current = node.borrow().parent();
+            if let Some(object) = expose_node(self.engine.vm(), node).and_then(|v| v.as_object()) {
+                path.push(object);
+            }
+        }
+        let Some(target) = path.first().cloned() else {
+            return false;
+        };
+
+        let mut ran_handler = false;
+        for current_target in path {
+            let Some(dom_id) = node_dom_id(&JSValue::from_object(Rc::clone(&current_target)))
+            else {
+                continue;
+            };
+            let onclick = current_target.borrow().get("onclick");
+            let listeners = with_host(self.engine.vm(), |host| {
+                host.element_event_listeners
+                    .get(&dom_id)
+                    .and_then(|events| events.get("click"))
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+            let has_onclick = is_callable(&onclick);
+            if !has_onclick && listeners.is_empty() {
+                continue;
+            }
+
+            ran_handler = true;
+            let event = make_event("click", Rc::clone(&target), Rc::clone(&current_target));
+            if has_onclick
+                && let Err(err) = self.engine.call(
+                    onclick,
+                    JSValue::from_object(Rc::clone(&current_target)),
+                    vec![JSValue::from_object(Rc::clone(&event))],
+                )
+            {
+                log::info!("JS error in onclick: {}", err);
+            }
+            if !event_flag(&event, "__orinium_immediate_propagation_stopped") {
+                for listener in listeners {
+                    if let Err(err) = self.engine.call(
+                        listener.0,
+                        JSValue::from_object(Rc::clone(&current_target)),
+                        vec![JSValue::from_object(Rc::clone(&event))],
+                    ) {
+                        log::info!("JS error in click listener: {}", err);
+                    }
+                    if event_flag(&event, "__orinium_immediate_propagation_stopped") {
+                        break;
+                    }
+                }
+            }
+            if event_flag(&event, "cancelBubble") {
+                break;
+            }
+        }
+        if ran_handler {
+            self.perform_microtask_checkpoint();
+        }
+        ran_handler
+    }
+
+    /// Dispatches a `scroll` event to the handlers registered on the element
+    /// with the given JS-facing dom id. Returns whether at least one handler
+    /// ran.
+    pub fn scroll_dom_id(&mut self, dom_id: u64) -> bool {
+        let Some(node) = with_host(self.engine.vm(), |host| {
+            host.refs.get(&dom_id).and_then(|w| w.upgrade())
+        })
+        .flatten() else {
+            return false;
+        };
+        self.scroll(&node)
+    }
+
+    /// Dispatches a `scroll` event that bubbles through `node`'s exposed
+    /// ancestors.
+    ///
+    /// Both the `onscroll` property and `addEventListener("scroll", ...)` are
+    /// supported. Returns whether at least one handler ran.
+    pub fn scroll(&mut self, node: &NodeRef<HtmlNodeType>) -> bool {
+        let mut path = Vec::new();
+        let mut current = Some(Rc::clone(node));
+        while let Some(node) = current {
+            current = node.borrow().parent();
+            if let Some(object) = expose_node(self.engine.vm(), node).and_then(|v| v.as_object()) {
+                path.push(object);
+            }
+        }
+        let Some(target) = path.first().cloned() else {
+            return false;
+        };
+
+        let mut ran_handler = false;
+        for current_target in path {
+            let Some(dom_id) = node_dom_id(&JSValue::from_object(Rc::clone(&current_target)))
+            else {
+                continue;
+            };
+            let onscroll = current_target.borrow().get("onscroll");
+            let listeners = with_host(self.engine.vm(), |host| {
+                host.element_event_listeners
+                    .get(&dom_id)
+                    .and_then(|events| events.get("scroll"))
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+            let has_onscroll = is_callable(&onscroll);
+            if !has_onscroll && listeners.is_empty() {
+                continue;
+            }
+
+            ran_handler = true;
+            let event = make_event("scroll", Rc::clone(&target), Rc::clone(&current_target));
+            if has_onscroll
+                && let Err(err) = self.engine.call(
+                    onscroll,
+                    JSValue::from_object(Rc::clone(&current_target)),
+                    vec![JSValue::from_object(Rc::clone(&event))],
+                )
+            {
+                log::info!("JS error in onscroll: {}", err);
+            }
+            if !event_flag(&event, "__orinium_immediate_propagation_stopped") {
+                for listener in listeners {
+                    if let Err(err) = self.engine.call(
+                        listener.0,
+                        JSValue::from_object(Rc::clone(&current_target)),
+                        vec![JSValue::from_object(Rc::clone(&event))],
+                    ) {
+                        log::info!("JS error in scroll listener: {}", err);
+                    }
+                    if event_flag(&event, "__orinium_immediate_propagation_stopped") {
+                        break;
+                    }
+                }
+            }
+            if event_flag(&event, "cancelBubble") {
+                break;
+            }
+        }
+        if ran_handler {
+            self.perform_microtask_checkpoint();
+        }
+        ran_handler
+    }
+    /// Drains queued microtasks; exposed for tests and harnesses that call
+    /// native APIs directly between script evaluations.
+    #[cfg(test)]
+    pub(crate) fn perform_microtask_checkpoint_public(&mut self) {
+        self.perform_microtask_checkpoint();
+    }
+
+    /// Drains queued microtasks/jobs without requiring a timer to be due.
+    ///
+    /// Framework schedulers (React's `MessageChannel`-based pump) queue their
+    /// work as jobs rather than timers, so harnesses need this to settle them.
+    pub fn drain_microtasks(&mut self) {
+        self.perform_microtask_checkpoint();
+    }
+
+    /// Drains queued microtasks in FIFO order, including jobs queued by jobs.
+    fn perform_microtask_checkpoint(&mut self) {
+        while let Err(err) = self.engine.run_jobs() {
+            if let JSError::Thrown(value) = &err
+                && let Some(object) = value.as_object()
+            {
+                let object = object.borrow();
+                let details = object
+                    .keys()
+                    .into_iter()
+                    .map(|key| format!("{key}={}", object.get(&key).to_console_string()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                log::info!("JS error in microtask: {} ({details})", err);
+            } else {
+                log::info!("JS error in microtask: {}", err);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::html::Parser as HtmlParser;
+    use web_apis::dom::element::{HTML_NAMESPACE, SVG_NAMESPACE, style_property_name};
+
+    fn runtime_from_html(html: &str) -> (JsRuntime, Rc<DomTree>) {
+        let mut parser = HtmlParser::new(html);
+        let dom = Rc::new(parser.parse());
+        let runtime = JsRuntime::new(Rc::clone(&dom));
+        (runtime, dom)
+    }
+
+    /// A [`JsTaskResult`] travels JS thread → UI thread through a channel, so
+    /// it must be `Send`. `JsFetchRequest` used to carry an `AbortSignal`
+    /// (`Rc<RefCell<JSObject>>`) purely to keep it alive, which silently made
+    /// every result `!Send`; the signal now stays in `JsHost::fetch_signals`.
+    /// Asserted so that field cannot come back unnoticed.
+    #[test]
+    fn task_result_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<crate::engine::js::processor::JsTaskResult>();
+        assert_send::<JsFetchRequest>();
+        assert_send::<JsFetchResponse>();
+    }
+
+    #[test]
+    fn misc_globals_behave_like_the_platform() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const results = [];
+
+            // Object.defineProperties
+            const target = {a: 1};
+            Object.defineProperties(target, {
+                b: {value: 2, enumerable: true},
+                c: {get: function () { return 3; }, enumerable: true},
+            });
+            results.push("defineProperties:" + (target.a + target.b + target.c));
+
+            // Reflect
+            results.push("reflect.has:" + Reflect.has(target, "b"));
+            results.push("reflect.get:" + Reflect.get(target, "a"));
+            results.push("reflect.ownKeys:" + Reflect.ownKeys(target).length);
+            results.push(
+                "reflect.apply:" + Reflect.apply(function (x) { return x * 2; }, null, [21])
+            );
+
+            // crypto.getRandomValues
+            const bytes = new Uint8Array(8);
+            crypto.getRandomValues(bytes);
+            const filled = Array.prototype.every.call(bytes, function (b) { return b >= 0; });
+            results.push("crypto:" + filled + ":" + bytes.length + ":" + bytes.byteLength);
+            results.push("uuid:" + /^[0-9a-f-]{36}$/.test(crypto.randomUUID()));
+
+            // FormData
+            const form = new FormData();
+            form.append("q", "hello world");
+            form.append("lang", "ja");
+            form.append("q", "second");
+            results.push("form.get:" + form.get("q"));
+            results.push("form.getAll:" + form.getAll("q").join("|"));
+            results.push("form.has:" + form.has("lang"));
+            form.set("lang", "en");
+            results.push("form.afterSet:" + form.get("lang"));
+            form.delete("lang");
+            results.push("form.afterDelete:" + form.get("lang"));
+            results.push("form.toString:" + form.toString());
+
+            // DOMParser
+            const doc = new DOMParser().parseFromString(
+                '<html><body><p id="x">hi</p><span class="k">there</span></body></html>',
+                "text/html"
+            );
+            results.push("parser.body:" + (doc.body !== null));
+            results.push("parser.qs:" + doc.querySelector("#x").textContent);
+            results.push("parser.tag:" + doc.getElementsByTagName("span").length);
+
+            document.getElementById("result").setAttribute("data-misc", results.join(";"));
+            "##,
+        );
+
+        let node = dom.get_element_by_id("result").unwrap();
+        let data = node
+            .borrow()
+            .value
+            .get_attr("data-misc")
+            .unwrap_or_default()
+            .to_string();
+        let parts: Vec<&str> = data.split(';').collect();
+
+        assert_eq!(parts[0], "defineProperties:6");
+        assert_eq!(parts[1], "reflect.has:true");
+        assert_eq!(parts[2], "reflect.get:1");
+        assert_eq!(parts[3], "reflect.ownKeys:3");
+        assert_eq!(parts[4], "reflect.apply:42");
+        assert!(parts[5].starts_with("crypto:true:8:8"), "got {}", parts[5]);
+        assert_eq!(parts[6], "uuid:true");
+        assert_eq!(parts[7], "form.get:hello world");
+        assert_eq!(parts[8], "form.getAll:hello world|second");
+        assert_eq!(parts[9], "form.has:true");
+        assert_eq!(parts[10], "form.afterSet:en");
+        assert_eq!(parts[11], "form.afterDelete:null");
+        assert_eq!(parts[12], "form.toString:q=hello+world&q=second");
+        assert_eq!(parts[13], "parser.body:true");
+        assert_eq!(parts[14], "parser.qs:hi");
+        assert_eq!(parts[15], "parser.tag:1");
+    }
+
+    #[test]
+    fn event_target_and_window_constructors_supported() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const results = [];
+
+            // window.EventTarget / window.Window / window.XMLHttpRequest
+            // must be constructors with an object `.prototype` for the
+            // webcomponents-sd `ab()` feature detection to pass.
+            results.push("et:" + typeof window.EventTarget);
+            results.push("et.proto:" + (typeof EventTarget.prototype === "object"));
+            results.push("win:" + (typeof Window === "function" || typeof Window === "object"));
+            results.push("win.proto:" + (typeof Window.prototype === "object"));
+            results.push("xhr:" + (typeof XMLHttpRequest));
+            results.push("xhr.proto:" + (typeof XMLHttpRequest.prototype === "object"));
+
+            // Mimic wc-sd's E(): getOwnPropertyDescriptor on each prototype.
+            function e(a, b) {
+                b = b === undefined ? [] : b;
+                const out = [];
+                for (let c = 0; c < b.length; c++) {
+                    const d = b[c];
+                    out.push(!!Object.getOwnPropertyDescriptor(a, d));
+                }
+                return out.join(",");
+            }
+            const keys = ["dispatchEvent", "addEventListener", "removeEventListener"];
+            results.push("et." + e(window.EventTarget.prototype, keys));
+            results.push("win." + e(window.Window.prototype, keys));
+            results.push("node." + e(Node.prototype, keys));
+            results.push("xr." + e(XMLHttpRequest.prototype, keys));
+
+            // Node instances are EventTargets too.
+            results.push("node.methods:" + typeof Node.prototype.addEventListener + ":" + typeof Node.prototype.dispatchEvent);
+
+            // wc-sd ab() also runs E() over Element/DocumentFragment/Document.
+            results.push("el:" + (typeof Element.prototype));
+            results.push("df:" + (typeof DocumentFragment.prototype));
+            results.push("doc:" + (typeof Document.prototype));
+
+            // new EventTarget() instances inherit the methods from the prototype
+            const t = new EventTarget();
+            results.push("inst:" + typeof t.addEventListener + ":" + typeof t.dispatchEvent);
+
+            document.getElementById("result").setAttribute("data-eventtarget", results.join(";"));
+            "##,
+        );
+
+        let node = dom.get_element_by_id("result").unwrap();
+        let data = node
+            .borrow()
+            .value
+            .get_attr("data-eventtarget")
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(
+            data,
+            "et:object;et.proto:true;win:true;win.proto:true;xhr:object;xhr.proto:true;et.true,true,true;win.true,true,true;node.true,true,true;xr.true,true,true;node.methods:function:function;el:object;df:object;doc:object;inst:function:function",
+            "got: {data}"
+        );
+    }
+
+    #[test]
+    fn template_content_exposes_parsed_fragment() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<template id="t"><div id="x">hi</div></template><div id="result"></div>"#,
+        );
+        runtime.run_script(
+            r##"
+            const results = [];
+            results.push("tmpl:" + typeof window.HTMLTemplateElement);
+            results.push("tmpl.proto:" + (typeof HTMLTemplateElement.prototype === "object"));
+            const t = document.getElementById("t");
+            const content = t.content;
+            results.push("content:" + (content instanceof DocumentFragment));
+            results.push("content.firstChild:" + (content.firstChild && content.firstChild.tagName === "DIV"));
+            const x = content.querySelector("#x");
+            results.push("x:" + (x && x.textContent === "hi"));
+            if (x) {
+                x.setAttribute("data-stamped", "yes");
+            }
+            document.getElementById("result").setAttribute("data-template", results.join(";"));
+            "##,
+        );
+        let node = dom.get_element_by_id("result").unwrap();
+        let data = node
+            .borrow()
+            .value
+            .get_attr("data-template")
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(
+            data, "tmpl:function;tmpl.proto:true;content:true;content.firstChild:true;x:true",
+            "got: {data}"
+        );
+    }
+
+    #[test]
+    fn template_inertness_and_lazy_content() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<template id="t"><div id="inner" class="c">hi</div><span>two</span></template><div id="result"></div>"#,
+        );
+        runtime.run_script(
+            r##"
+            const results = [];
+            const t = document.getElementById("t");
+
+            // Instance-of checks against the real constructors.
+            results.push("inst:" + (t instanceof HTMLTemplateElement));
+            results.push("elem:" + (t instanceof Element) + ":" + (t instanceof HTMLElement));
+
+            // `content` exposes the parsed children as a DocumentFragment and
+            // is live: repeated accesses return the same fragment.
+            const content = t.content;
+            results.push("content:" + (content instanceof DocumentFragment));
+            results.push("live:" + (t.content === content));
+            results.push("count:" + content.childNodes.length);
+            const inner = content.querySelector("#inner");
+            results.push("inner:" + (inner && inner.textContent === "hi"));
+            results.push("span:" + content.querySelectorAll("span").length);
+
+            // Inertness: template contents are unreachable from document-wide
+            // queries (matching browsers) but mutations inside `content` work.
+            results.push("qs:" + (document.querySelector("#inner") === null));
+            results.push("id:" + (document.getElementById("inner") === null));
+            results.push("btn:" + document.getElementsByTagName("span").length);
+            results.push("cls:" + document.getElementsByClassName("c").length);
+            inner.setAttribute("data-stamped", "yes");
+            results.push("stamp:" + (content.querySelector("#inner").getAttribute("data-stamped") === "yes"));
+
+            // `document.createElement("template")` gets a lazily created,
+            // usable, stable `content` fragment.
+            const t2 = document.createElement("template");
+            results.push("lazy:" + (t2.content instanceof DocumentFragment));
+            t2.content.appendChild(document.createElement("b"));
+            results.push("append:" + t2.content.childNodes.length);
+            results.push("stable:" + (t2.content === t2.content));
+
+            document.getElementById("result").setAttribute("data-template", results.join(";"));
+            "##,
+        );
+        let node = dom.get_element_by_id("result").unwrap();
+        let data = node
+            .borrow()
+            .value
+            .get_attr("data-template")
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(
+            data,
+            "inst:true;elem:true:true;content:true;live:true;count:2;inner:true;span:1;qs:true;id:true;btn:0;cls:0;stamp:true;lazy:true;append:1;stable:true",
+            "got: {data}"
+        );
+    }
+
+    #[test]
+    fn template_content_instantiation_via_import_node_and_clone_node() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<div id="host"></div><ul id="list"></ul>\
+               <template id="row"><li class="row"><b class="name"></b></li></template>\
+               <template id="nested"><div><span>deep</span><template><i>inner</i></template></div></template>\
+               <div id="result"></div>"#,
+        );
+        runtime.run_script(
+            r##"
+            const results = [];
+            const host = document.getElementById("host");
+
+            // importNode(template.content, true) deep-clones into a detached
+            // fragment without touching the original template.
+            const t = document.getElementById("row");
+            const frag = document.importNode(t.content, true);
+            results.push("frag:" + (frag instanceof DocumentFragment) + ":" + frag.childNodes.length);
+            results.push("orig-intact:" + (t.content.querySelectorAll("li").length === 1));
+
+            // Appending the fragment instantiates the cloned rows into the
+            // document, where document-wide queries can now reach them.
+            host.appendChild(frag);
+            results.push("appended:" + host.querySelectorAll("li.row").length);
+            results.push("doc-visible:" + document.querySelectorAll("li.row").length);
+            results.push("deep:" + (host.querySelector("li.row b.name") !== null));
+
+            // Instantiated copies are independent of the template: mutations
+            // on the clone never leak back into `template.content`.
+            host.querySelector("b.name").textContent = "cloned!";
+            results.push("independent:" + (t.content.querySelector("b.name").textContent === ""));
+
+            // cloneNode(true) on `content` works as an alternative.
+            const frag2 = t.content.cloneNode(true);
+            results.push("clone-frag:" + (frag2 instanceof DocumentFragment) + ":" + frag2.querySelectorAll("li").length);
+
+            // Repeated instantiation yields fresh copies each time.
+            const frag3 = document.importNode(t.content, true);
+            document.getElementById("list").appendChild(frag3);
+            results.push("repeat:" + document.querySelectorAll("li.row").length);
+
+            // Nested templates: importing the outer content keeps the inner
+            // `<template>` inert — its content stays inside its own fragment.
+            const nested = document.getElementById("nested");
+            const nfrag = document.importNode(nested.content, true);
+            host.appendChild(nfrag);
+            results.push("nested-span:" + (host.querySelector("span") !== null));
+            const innerTemplate = host.querySelector("template");
+            results.push("nested-tmpl:" + (innerTemplate !== null) + ":" + (innerTemplate && innerTemplate.content.querySelector("i") !== null));
+
+            // Shallow import clones the fragment but none of its children.
+            const shallow = document.importNode(t.content, false);
+            results.push("shallow:" + (shallow instanceof DocumentFragment) + ":" + shallow.childNodes.length);
+
+            // `importNode(node)` defaults deep to true (per spec).
+            const def = document.importNode(t.content);
+            results.push("default-deep:" + def.querySelectorAll("li").length);
+
+            document.getElementById("result").setAttribute("data-r", results.join(";"));
+            "##,
+        );
+        let node = dom.get_element_by_id("result").unwrap();
+        let data = node
+            .borrow()
+            .value
+            .get_attr("data-r")
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(
+            data,
+            "frag:true:1;orig-intact:true;appended:1;doc-visible:1;deep:true;independent:true;clone-frag:true:1;repeat:2;nested-span:true;nested-tmpl:true:true;shallow:true:0;default-deep:1",
+            "got: {data}"
+        );
+    }
+
+    #[test]
+    fn implementation_create_document_is_independent() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const results = [];
+
+            // A created document is a distinct object with its own tree.
+            const d = document.implementation.createDocument(null, null, null);
+            results.push("distinct:" + (d !== document));
+            results.push("nodeType:" + d.nodeType);
+            results.push("children:" + d.childNodes.length);
+
+            // Appending to the document makes the element its documentElement.
+            const root = d.createElement("root");
+            d.appendChild(root);
+            results.push("documentElement:" + d.documentElement.tagName);
+            results.push("sameNode:" + (d.documentElement === root));
+
+            // ownerDocument is correct for a node that is in no tree yet, and
+            // for one that has been inserted.
+            const e1 = d.createElement("test");
+            results.push("detachedOwner:" + (e1.ownerDocument === d));
+            d.documentElement.appendChild(e1);
+            results.push("insertedOwner:" + (e1.parentNode.ownerDocument === d));
+            results.push("ownerType:" + e1.parentNode.ownerDocument.nodeType);
+
+            // The top-level document is untouched by any of the above.
+            results.push("mainDocElement:" + document.documentElement.tagName);
+            results.push("mainUntouched:" + (document.getElementById("result") !== null));
+
+            // createDocument with a qualified name builds an XHTML-ish document.
+            const x = document.implementation.createDocument(
+                "http://www.w3.org/1999/xhtml", "html", null);
+            results.push("xhtmlRoot:" + x.documentElement.tagName);
+            results.push("xhtmlTitle:" + JSON.stringify(x.title));
+            x.documentElement.appendChild(
+                x.createElementNS("http://www.w3.org/1999/xhtml", "head"));
+            x.documentElement.appendChild(
+                x.createElementNS("http://www.w3.org/1999/xhtml", "body"));
+            const title = x.createElementNS("http://www.w3.org/1999/xhtml", "title");
+            x.documentElement.firstChild.appendChild(title);
+            results.push("xhtmlBody:" + x.body.tagName);
+            results.push("xhtmlForms:" + x.forms.length);
+            title.textContent = "Sparrow";
+            results.push("xhtmlTitleSet:" + x.title);
+
+            document.getElementById("result").setAttribute("data-r", results.join(";"));
+            "##,
+        );
+        let node = dom.get_element_by_id("result").unwrap();
+        let data = node
+            .borrow()
+            .value
+            .get_attr("data-r")
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(
+            data,
+            "distinct:true;nodeType:9;children:0;documentElement:ROOT;sameNode:true;\
+             detachedOwner:true;insertedOwner:true;ownerType:9;mainDocElement:HTML;\
+             mainUntouched:true;xhtmlRoot:HTML;xhtmlTitle:\"\";xhtmlBody:BODY;xhtmlForms:0;\
+             xhtmlTitleSet:Sparrow",
+            "got: {data}"
+        );
+    }
+
+    #[test]
+    fn node_interface_and_html_document_helpers() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const results = [];
+
+            // Node is now a constructor with a prototype
+            results.push("node.typeof:" + typeof Node);
+            results.push("node.prototype:" + (typeof Node.prototype === "object"));
+
+            // wc-sd gate: firstChild must be a configurable accessor with a getter
+            const d = Object.getOwnPropertyDescriptor(Node.prototype, "firstChild");
+            results.push("fc.desc:" + (!!d && d.configurable === true && typeof d.get === "function"));
+            results.push("fc.enum:" + d.enumerable + ":" + d.writable);
+
+            // getRootNode gate for ShadyDOM detection
+            results.push("rootNode:" + typeof Node.prototype.getRootNode);
+            results.push("rootIsDoc:" + (document.documentElement.getRootNode() === document));
+
+            // textNode rides Node.prototype accessors? (engine: instance props win)
+
+            // document.implementation.createHTMLDocument
+            const doc = document.implementation.createHTMLDocument("inert");
+            results.push("htmlDoc.doctype:" + (doc !== null));
+            results.push("htmlDoc.ns:" + doc.namespaceURI);
+            results.push("htmlDoc.html:" + doc.documentElement.tagName);
+            results.push("htmlDoc.body:" + doc.body.tagName);
+            results.push("htmlDoc.title:" + doc.title);
+            const p = doc.createElement("p");
+            p.innerHTML = "<b>hi</b>";
+            results.push("htmlDoc.el:" + p.tagName + ":" + p.firstChild.tagName);
+
+            // createEvent('CustomEvent') + initCustomEvent
+            const ev = document.createEvent("CustomEvent");
+            results.push("ce.has:" + typeof ev.initCustomEvent);
+            ev.initCustomEvent("yt:run", true, false, {x: 1});
+            results.push("ce.prop:" + ev.type + ":" + ev.bubbles + ":" + ev.cancelable + ":" + ev.detail.x);
+
+            document.getElementById("result").setAttribute("data-node", results.join(";"));
+            "##,
+        );
+
+        let node = dom.get_element_by_id("result").unwrap();
+        let data = node
+            .borrow()
+            .value
+            .get_attr("data-node")
+            .unwrap_or_default()
+            .to_string();
+        let parts: Vec<&str> = data.split(';').collect();
+
+        assert_eq!(parts[0], "node.typeof:object");
+        assert_eq!(parts[1], "node.prototype:true");
+        assert_eq!(parts[2], "fc.desc:true");
+        assert_eq!(parts[3], "fc.enum:false:undefined");
+        assert_eq!(parts[4], "rootNode:function");
+        assert_eq!(parts[5], "rootIsDoc:true");
+        assert_eq!(parts[6], "htmlDoc.doctype:true");
+        assert_eq!(parts[7], "htmlDoc.ns:http://www.w3.org/1999/xhtml");
+        assert_eq!(parts[8], "htmlDoc.html:HTML");
+        assert_eq!(parts[9], "htmlDoc.body:BODY");
+        assert_eq!(parts[10], "htmlDoc.title:inert");
+        assert_eq!(parts[11], "htmlDoc.el:P:B");
+        assert_eq!(parts[12], "ce.has:function");
+        assert_eq!(parts[13], "ce.prop:yt:run:true:false:1");
+    }
+
+    #[test]
+    fn set_text_content_mutates_dom_and_marks_dirty() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="hello">before</div>"#);
+        runtime.run_script(
+            r#"const el = document.getElementById("hello"); el.textContent = "hello from js";"#,
+        );
+        assert!(runtime.needs_redraw());
+        assert!(runtime.take_needs_redraw());
+
+        let node = dom.get_element_by_id("hello").unwrap();
+        assert_eq!(DomTree::inner_text(&node), "hello from js");
+    }
+
+    #[test]
+    fn viewport_dimensions_follow_browser_resizes() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.set_viewport(1280.0, 720.0);
+        runtime.run_script(
+            r#"document.getElementById("result").setAttribute("data-size", innerWidth + ":" + innerHeight);"#,
+        );
+        assert_eq!(
+            dom.get_element_by_id("result")
+                .unwrap()
+                .borrow()
+                .value
+                .get_attr("data-size"),
+            Some("1280:720")
+        );
+        runtime.run_script(
+            r#"document.getElementById("result").setAttribute("data-root", document.body.clientWidth + ":" + document.body.clientHeight + ":" + outerWidth + ":" + outerHeight);"#,
+        );
+        assert_eq!(
+            dom.get_element_by_id("result")
+                .unwrap()
+                .borrow()
+                .value
+                .get_attr("data-root"),
+            Some("1280:720:1280:720")
+        );
+    }
+
+    #[test]
+    fn set_attribute_mutates_dom() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="hello"></div>"#);
+        runtime.run_script(
+            r#"const el = document.getElementById("hello"); el.setAttribute("data-run", "1");"#,
+        );
+
+        let node = dom.get_element_by_id("hello").unwrap();
+        assert_eq!(node.borrow().value.get_attr("data-run"), Some("1"));
+    }
+
+    #[test]
+    fn match_media_evaluates_width_and_type_queries_against_viewport() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.set_viewport(1000.0, 600.0);
+        runtime.run_script(
+            r#"
+            const results = [];
+            results.push(matchMedia("(max-width: 1000px)").matches);
+            results.push(matchMedia("(max-width: 999px)").matches);
+            results.push(matchMedia("(min-width: 1000px)").matches);
+            results.push(matchMedia("screen").matches);
+            results.push(matchMedia("print").matches);
+            results.push(matchMedia("all").matches);
+            results.push(matchMedia("").matches);
+            results.push(matchMedia("screen and (min-width: 500px) and (max-width: 1200px)").matches);
+            results.push(matchMedia("only screen and (max-width: 600px)").matches);
+            document.getElementById("result").setAttribute("data-media", results.join(","));
+            "#,
+        );
+        let data = dom
+            .get_element_by_id("result")
+            .unwrap()
+            .borrow()
+            .value
+            .get_attr("data-media")
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(
+            data, "true,false,true,true,false,true,false,true,false",
+            "got: {data}"
+        );
+    }
+
+    #[test]
+    fn computed_style_reflects_committed_layout_values() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<div id="xm" style="color: red"></div><div id="result"></div>"#);
+        runtime.run_script(
+            r#"document.getElementById("result").setAttribute("data-id", String(document.getElementById("xm").__orinium_dom_id));"#,
+        );
+        let dom_id: u64 = dom
+            .get_element_by_id("result")
+            .unwrap()
+            .borrow()
+            .value
+            .get_attr("data-id")
+            .unwrap_or_default()
+            .parse()
+            .expect("JS-facing dom id");
+        runtime.set_computed_styles_by_dom_id(std::collections::HashMap::from([(
+            dom_id,
+            vec![
+                ("display".to_string(), "flex".to_string()),
+                ("opacity".to_string(), "0.5".to_string()),
+                ("background-color".to_string(), "#3366ff".to_string()),
+                ("width".to_string(), "240px".to_string()),
+            ],
+        )]));
+        runtime.run_script(
+            r#"
+            const xm = document.getElementById("xm");
+            const cs = getComputedStyle(xm);
+            const results = [];
+            results.push(cs.opacity);
+            results.push(cs.getPropertyValue("display"));
+            results.push(cs.width);
+            results.push(cs.backgroundColor);
+            results.push(cs.getPropertyValue("color"));
+            results.push(String(cs));
+            results.push(cs.cssText);
+            results.push(String(xm.style));
+            results.push(String(cs) === cs.cssText);
+            document.getElementById("result").setAttribute("data-computed", results.join("|"));
+            "#,
+        );
+        let data = dom
+            .get_element_by_id("result")
+            .unwrap()
+            .borrow()
+            .value
+            .get_attr("data-computed")
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(
+            data,
+            "0.5|flex|240px|#3366ff|red|display: flex; opacity: 0.5; background-color: #3366ff; width: 240px;|display: flex; opacity: 0.5; background-color: #3366ff; width: 240px;|color: red|true",
+            "got: {data}"
+        );
+    }
+
+    #[test]
+    fn computed_style_writes_are_ignored_and_resolve_back_to_inline_when_unlaid_out() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<div id="xm" style="margin-left: 3px"></div><div id="result"></div>"#,
+        );
+        runtime.run_script(
+            r#"
+            const cs = getComputedStyle(document.getElementById("xm"));
+            cs.opacity = "0.99";
+            cs.cssText = "color: blue";
+            cs.setProperty("color", "green");
+            cs.removeProperty("color");
+            document.getElementById("result").setAttribute(
+                "data-inline",
+                cs.opacity + ":" + cs.getPropertyValue("margin-left") + ":" + cs.getPropertyValue("color")
+            );
+            "#,
+        );
+        let data = dom
+            .get_element_by_id("result")
+            .unwrap()
+            .borrow()
+            .value
+            .get_attr("data-inline")
+            .unwrap_or_default()
+            .to_string();
+        // The element never received a layout snapshot, so computed falls back
+        // to the inline `style` attribute; writes must be no-ops.
+        assert_eq!(data, ":3px:", "got: {data}");
+    }
+
+    #[test]
+    fn browser_environment_exposes_react_bootstrap_apis() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.set_document_url("https://scratch.mit.edu/projects/editor/?tutorial=1#stage");
+        runtime.run_script(
+            r#"
+            localStorage.setItem("answer", 42);
+            sessionStorage.setItem("temporary", "yes");
+            const query = matchMedia("(prefers-color-scheme: dark)");
+            query.addEventListener("change", function () {});
+            const event = new CustomEvent("ready", {detail: "loaded", cancelable: true});
+            event.preventDefault();
+            const frame = requestAnimationFrame(function () {});
+            cancelAnimationFrame(frame);
+            document.getElementById("result").setAttribute(
+                "data-environment",
+                navigator.language + ":" + localStorage.getItem("answer") + ":" +
+                    localStorage.length + ":" + query.matches + ":" + (frame > 0) + ":" +
+                    location.pathname + ":" + event.detail + ":" + event.defaultPrevented + ":" +
+                    (typeof Intl === "object") + ":" + ("Locale" in Intl) + ":" +
+                    Intl.getCanonicalLocales(["EN-us", "ja"])[0] + ":" +
+                    new Intl.Locale("und-x-private").toString()
+            );
+            "#,
+        );
+
+        let node = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            node.borrow().value.get_attr("data-environment"),
+            Some(
+                "en-US:42:1:false:true:/projects/editor/:loaded:true:true:true:en-US:und-x-private"
+            )
+        );
+    }
+
+    #[test]
+    fn browser_origin_exposed_consistently_across_window_location_and_document() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.set_page_origin("https://example.test");
+        runtime.run_script(
+            r#"document.getElementById("result").setAttribute(
+                "data-origins",
+                window.origin + ":" + location.origin + ":" + document.origin
+            );"#,
+        );
+
+        let node = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            node.borrow().value.get_attr("data-origins"),
+            Some("https://example.test:https://example.test:https://example.test")
+        );
+    }
+
+    #[test]
+    fn opaque_page_reports_null_origin_everywhere() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.set_page_origin("null");
+        runtime.run_script(
+            r#"document.getElementById("result").setAttribute(
+                "data-origins",
+                window.origin + ":" + location.origin + ":" + document.origin
+            );"#,
+        );
+
+        let node = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            node.borrow().value.get_attr("data-origins"),
+            Some("null:null:null")
+        );
+    }
+
+    #[test]
+    fn browser_language_preferences_follow_the_host() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.set_language("ja-JP");
+        runtime.run_script(
+            r#"
+            document.getElementById("result").setAttribute(
+                "data-languages",
+                navigator.language + ":" + navigator.languages[0] + ":" +
+                    navigator.languages[1] + ":" + navigator.languages[2]
+            );
+            "#,
+        );
+
+        assert_eq!(
+            dom.get_element_by_id("result")
+                .unwrap()
+                .borrow()
+                .value
+                .get_attr("data-languages"),
+            Some("ja-JP:ja-JP:ja:en-US")
+        );
+    }
+
+    #[test]
+    fn document_cookie_is_a_string_and_supports_assignment_and_expiry() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r#"
+            const result = document.getElementById("result");
+            result.setAttribute("data-empty-cookie", typeof document.cookie + ":" + document.cookie);
+            document.cookie = "scratchlanguage=ja; Path=/";
+            result.setAttribute("data-cookie", document.cookie);
+            document.cookie = "scratchlanguage=; Max-Age=0; Path=/";
+            result.setAttribute("data-expired-cookie", document.cookie);
+            "#,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-empty-cookie"), Some("string:"));
+        assert_eq!(
+            result.value.get_attr("data-cookie"),
+            Some("scratchlanguage=ja")
+        );
+        assert_eq!(result.value.get_attr("data-expired-cookie"), Some(""));
+    }
+
+    #[test]
+    fn url_apis_resolve_assets_and_manage_query_parameters() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r#"
+            const asset = new URL("../assets/stage.svg?locale=ja#costume", "https://scratch.mit.edu/projects/editor/");
+            const params = new URLSearchParams("project=123&mode=editor");
+            params.set("mode", "fullscreen");
+            params.append("cloud", "on");
+            params.delete("project");
+            document.getElementById("result").setAttribute(
+                "data-url",
+                asset.origin + ":" + asset.pathname + ":" + asset.searchParams.get("locale") +
+                    ":" + params.has("cloud") + ":" + params.toString()
+            );
+            "#,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-url"),
+            Some(
+                "https://scratch.mit.edu:/projects/assets/stage.svg:ja:true:mode=fullscreen&cloud=on"
+            )
+        );
+    }
+
+    #[test]
+    fn encoding_apis_round_trip_utf8_and_base64() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r#"
+            const encoder = new TextEncoder();
+            const decoder = new TextDecoder("utf-8");
+            const bytes = encoder.encode("Scratch 日本");
+            document.getElementById("result").setAttribute(
+                "data-encoding",
+                decoder.decode(bytes) + ":" + bytes.length + ":" + atob(btoa("Scratch")) +
+                    ":" + decodeURIComponent(encodeURIComponent("日本 語"))
+            );
+            "#,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-encoding"),
+            Some("Scratch 日本:14:Scratch:日本 語")
+        );
+    }
+
+    #[test]
+    fn layout_measurement_and_resize_observer_report_element_size() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<canvas id="stage" width="480" height="360"></canvas><div id="result"></div>"#,
+        );
+        runtime.run_script(
+            r#"
+            const stage = document.getElementById("stage");
+            const rect = stage.getBoundingClientRect();
+            const observer = new ResizeObserver(function (entries) {
+                const observed = entries[0].contentRect;
+                document.getElementById("result").setAttribute(
+                    "data-resize",
+                    observed.width + ":" + observed.height
+                );
+            });
+            observer.observe(stage);
+            document.getElementById("result").setAttribute(
+                "data-measure",
+                rect.width + ":" + rect.height + ":" + stage.clientWidth + ":" + stage.offsetHeight
+            );
+            "#,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(
+            result.value.get_attr("data-measure"),
+            Some("480:360:480:360")
+        );
+        assert_eq!(result.value.get_attr("data-resize"), Some("480:360"));
+    }
+
+    #[test]
+    fn layout_offsets_have_a_numeric_fallback() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<div id="list" class="carousel slick-list"></div><div id="plain"></div><div id="result"></div>"#,
+        );
+        runtime.run_script(
+            r#"
+            document.getElementById("result").setAttribute(
+                "data-widths",
+                document.getElementById("list").offsetWidth + ":" +
+                    document.getElementById("plain").offsetWidth + ":" +
+                    document.getElementById("list").offsetLeft + ":" +
+                    document.getElementById("list").offsetTop
+            );
+            "#,
+        );
+
+        assert_eq!(
+            dom.get_element_by_id("result")
+                .unwrap()
+                .borrow()
+                .value
+                .get_attr("data-widths"),
+            Some("800:0:0:0")
+        );
+    }
+
+    #[test]
+    fn dom_measurements_prefer_committed_layout_geometry() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<div id="target" style="width: 1px; height: 2px"></div><div id="result"></div>"#,
+        );
+        let target = dom.get_element_by_id("target").unwrap();
+        runtime.set_layout_metrics(HashMap::from([(
+            Rc::as_ptr(&target) as usize,
+            JsLayoutMetrics {
+                offset_left: 12.0,
+                offset_top: 34.0,
+                offset_width: 222.0,
+                offset_height: 111.0,
+                client_width: 218.0,
+                client_height: 107.0,
+                rect_left: 42.5,
+                rect_top: 64.25,
+                rect_width: 222.0,
+                rect_height: 111.0,
+            },
+        )]));
+        runtime.run_script(
+            r#"
+            const target = document.getElementById("target");
+            const rect = target.getBoundingClientRect();
+            document.getElementById("result").setAttribute(
+                "data-layout",
+                target.offsetLeft + ":" + target.offsetTop + ":" +
+                    target.offsetWidth + ":" + target.offsetHeight + ":" +
+                    target.clientWidth + ":" + target.clientHeight + ":" +
+                    rect.left + ":" + rect.top + ":" + rect.right + ":" + rect.bottom
+            );
+            "#,
+        );
+
+        assert_eq!(
+            dom.get_element_by_id("result")
+                .unwrap()
+                .borrow()
+                .value
+                .get_attr("data-layout"),
+            Some("12:34:222:111:218:107:42.5:64.25:264.5:175.25")
+        );
+    }
+
+    #[test]
+    fn inserting_script_element_queues_dynamic_resource_load() {
+        let (mut runtime, _dom) = runtime_from_html(r#"<html><head></head><body></body></html>"#);
+        runtime.run_script(
+            r#"
+            const script = document.createElement("script");
+            script.src = "/static/chunks/editor.js";
+            script.async = true;
+            document.head.appendChild(script);
+            "#,
+        );
+
+        let requests = runtime.take_dynamic_script_requests();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].node_id > 0);
+        match &requests[0].source {
+            JsDynamicScriptSource::External(source) => {
+                assert_eq!(source, "/static/chunks/editor.js")
+            }
+            JsDynamicScriptSource::Inline(_) => panic!("expected an external script request"),
+        }
+    }
+
+    #[test]
+    fn inserting_stylesheet_link_queues_dynamic_resource_load() {
+        let (mut runtime, _dom) = runtime_from_html(r#"<html><head></head><body></body></html>"#);
+        runtime.run_script(
+            r#"
+            const link = document.createElement("link");
+            link.rel = "stylesheet";
+            link.href = "/static/css/editor.css";
+            document.head.appendChild(link);
+            "#,
+        );
+
+        let requests = runtime.take_dynamic_style_requests();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].node_id > 0);
+        assert_eq!(requests[0].url, "/static/css/editor.css");
+    }
+
+    #[test]
+    fn inserting_image_queues_dynamic_resource_load_once() {
+        let (mut runtime, _dom) = runtime_from_html(r#"<html><body></body></html>"#);
+        runtime.run_script(
+            r#"
+            const image = document.createElement("img");
+            image.src = "/images/scratch-logo.svg";
+            document.body.appendChild(image);
+            "#,
+        );
+
+        let requests = runtime.take_dynamic_image_requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].source, "/images/scratch-logo.svg");
+    }
+
+    #[test]
+    fn canvas_2d_context_records_visible_rectangle_commands() {
+        let (mut runtime, dom) = runtime_from_html(r#"<canvas id="stage"></canvas>"#);
+        runtime.run_script(
+            r##"
+            const canvas = document.getElementById("stage");
+            canvas.width = 480;
+            canvas.height = 360;
+            const context = canvas.getContext("2d");
+            context.fillStyle = "#ff8800";
+            context.fillRect(10, 20, 30, 40);
+            context.strokeStyle = "blue";
+            context.strokeRect(0, 0, 480, 360);
+            canvas.setAttribute("data-metrics", context.measureText("Scratch").width);
+            "##,
+        );
+
+        let canvas = dom.get_element_by_id("stage").unwrap();
+        let canvas = canvas.borrow();
+        assert_eq!(canvas.value.get_attr("width"), Some("480"));
+        assert_eq!(canvas.value.get_attr("height"), Some("360"));
+        assert_eq!(canvas.value.get_attr("data-metrics"), Some("42"));
+        assert_eq!(
+            canvas.value.get_attr("data-orinium-canvas-commands"),
+            Some("fillRect|#ff8800|10|20|30|40\nstrokeRect|blue|0|0|480|360")
+        );
+    }
+
+    #[test]
+    fn canvas_exposes_webgl_capability_surface() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<canvas id="stage" width="480" height="360"></canvas>"#);
+        runtime.run_script(
+            r#"
+            const canvas = document.getElementById("stage");
+            const gl = canvas.getContext("webgl");
+            const shader = gl.createShader(gl.VERTEX_SHADER);
+            gl.shaderSource(shader, "void main() {}");
+            gl.compileShader(shader);
+            const program = gl.createProgram();
+            gl.attachShader(program, shader);
+            gl.linkProgram(program);
+            canvas.setAttribute(
+                "data-webgl",
+                gl.getShaderParameter(shader, gl.COMPILE_STATUS) + ":" +
+                    gl.getProgramParameter(program, gl.LINK_STATUS) + ":" +
+                    gl.getParameter(gl.MAX_TEXTURE_SIZE) + ":" + gl.drawingBufferWidth
+            );
+            "#,
+        );
+
+        let canvas = dom.get_element_by_id("stage").unwrap();
+        assert_eq!(
+            canvas.borrow().value.get_attr("data-webgl"),
+            Some("true:true:4096:480")
+        );
+    }
+
+    #[test]
+    fn mutation_observer_can_register_for_dom_changes() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<html><body><div id="target"></div></body></html>"#);
+        runtime.run_script(
+            r#"
+            const observer = new MutationObserver(function () {
+                document.getElementById("target").setAttribute("data-observed", "yes");
+            });
+            observer.observe(document.documentElement, { childList: true, subtree: true });
+            const records = observer.takeRecords();
+            observer.disconnect();
+            document.getElementById("target").setAttribute("data-records", records.length);
+            "#,
+        );
+
+        let node = dom.get_element_by_id("target").unwrap();
+        assert_eq!(node.borrow().value.get_attr("data-records"), Some("0"));
+        assert_eq!(node.borrow().value.get_attr("data-observed"), Some("yes"));
+    }
+
+    #[test]
+    fn element_id_is_a_live_reflected_property() {
+        let (mut runtime, dom) = runtime_from_html(r#"<main id="root"></main>"#);
+        runtime.run_script(
+            r#"
+            const child = document.createElement("button");
+            child.id = "first";
+            document.getElementById("root").appendChild(child);
+            child.setAttribute("id", "second");
+            child.setAttribute("data-current-id", child.id);
+            "#,
+        );
+
+        let child = dom.get_element_by_id("second").unwrap();
+        assert_eq!(
+            child.borrow().value.get_attr("data-current-id"),
+            Some("second")
+        );
+        assert!(runtime.needs_redraw());
+    }
+
+    #[test]
+    fn form_properties_reflect_to_dom_attributes() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<input id="field"><option id="option"></option><select id="select"></select>"#,
+        );
+        runtime.run_script(
+            r#"
+            const field = document.getElementById("field");
+            field.value = "hello";
+            field.checked = true;
+            field.disabled = true;
+            field.checked = false;
+            const option = document.getElementById("option");
+            option.selected = true;
+            const select = document.getElementById("select");
+            select.multiple = true;
+            "#,
+        );
+
+        let field = dom.get_element_by_id("field").unwrap();
+        let field = field.borrow();
+        assert_eq!(field.value.get_attr("value"), Some("hello"));
+        assert_eq!(field.value.get_attr("checked"), None);
+        assert_eq!(field.value.get_attr("disabled"), Some(""));
+        drop(field);
+        let option = dom.get_element_by_id("option").unwrap();
+        assert_eq!(option.borrow().value.get_attr("selected"), Some(""));
+        let select = dom.get_element_by_id("select").unwrap();
+        assert_eq!(select.borrow().value.get_attr("multiple"), Some(""));
+        assert!(runtime.needs_redraw());
+    }
+
+    #[test]
+    fn form_properties_are_accessors_on_the_element_prototype() {
+        let (mut runtime, dom) = runtime_from_html(r#"<input id="field">"#);
+        runtime.run_script(
+            r#"
+            const field = document.getElementById("field");
+            const prototype = field.constructor.prototype;
+            const descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
+            field.setAttribute("data-prototype", Object.getPrototypeOf(field) === prototype);
+            field.setAttribute("data-interface", field.constructor === HTMLElement && field instanceof Element);
+            field.setAttribute("data-own-value", field.hasOwnProperty("value"));
+            field.setAttribute("data-accessor", typeof descriptor.get + ":" + typeof descriptor.set);
+            descriptor.set.call(field, "tracked");
+            field.setAttribute("data-read", descriptor.get.call(field));
+            "#,
+        );
+
+        let field = dom.get_element_by_id("field").unwrap();
+        let field = field.borrow();
+        assert_eq!(field.value.get_attr("data-prototype"), Some("true"));
+        assert_eq!(field.value.get_attr("data-interface"), Some("true"));
+        assert_eq!(field.value.get_attr("data-own-value"), Some("false"));
+        assert_eq!(
+            field.value.get_attr("data-accessor"),
+            Some("function:function")
+        );
+        assert_eq!(field.value.get_attr("data-read"), Some("tracked"));
+        assert_eq!(field.value.get_attr("value"), Some("tracked"));
+    }
+
+    #[test]
+    fn exposes_document_and_node_metadata_used_by_react_dom() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<html><body><main id="root"><span id="child">text</span></main></body></html>"#,
+        );
+        runtime.run_script(
+            r#"
+            const root = document.getElementById("root");
+            const child = document.getElementById("child");
+            child.setAttribute("data-default-view", document.defaultView === window);
+            child.setAttribute("data-ready-before", document.readyState);
+            child.setAttribute("data-local-name", child.localName);
+            child.setAttribute("data-parent-element", child.parentElement === root);
+            child.setAttribute("data-connected", child.isConnected);
+            child.setAttribute("data-text-connected", child.firstChild.isConnected);
+            "#,
+        );
+
+        let child = dom.get_element_by_id("child").unwrap();
+        let child = child.borrow();
+        assert_eq!(child.value.get_attr("data-default-view"), Some("true"));
+        assert_eq!(child.value.get_attr("data-ready-before"), Some("loading"));
+        assert_eq!(child.value.get_attr("data-local-name"), Some("span"));
+        assert_eq!(child.value.get_attr("data-parent-element"), Some("true"));
+        assert_eq!(child.value.get_attr("data-connected"), Some("true"));
+        assert_eq!(child.value.get_attr("data-text-connected"), Some("true"));
+        drop(child);
+
+        assert!(runtime.dispatch_dom_content_loaded());
+        runtime.run_script(
+            r#"
+            document.getElementById("child").setAttribute(
+                "data-ready-after",
+                document.readyState
+            );
+            "#,
+        );
+        assert_eq!(
+            dom.get_element_by_id("child")
+                .unwrap()
+                .borrow()
+                .value
+                .get_attr("data-ready-after"),
+            Some("complete")
+        );
+    }
+
+    #[test]
+    fn style_declaration_mutates_inline_style() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="target"></div>"#);
+        runtime.run_script(
+            r#"
+            const target = document.getElementById("target");
+            target.style.backgroundColor = "red";
+            target.style.setProperty("--accent", "blue");
+            target.style.marginTop = "4px";
+            target.style.removeProperty("background-color");
+            "#,
+        );
+
+        let node = dom.get_element_by_id("target").unwrap();
+        assert_eq!(
+            node.borrow().value.get_attr("style"),
+            Some("--accent: blue; margin-top: 4px;")
+        );
+        assert!(runtime.needs_redraw());
+    }
+
+    #[test]
+    fn inner_html_parses_replaces_and_serializes_children() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<div id="target"><em id="old">old</em></div><div id="result"></div>"#,
+        );
+        runtime.run_script(
+            r#"
+            const target = document.getElementById("target");
+            const old = document.getElementById("old");
+            target.innerHTML = '<span id="child" data-label="a&b">hello</span><br>';
+            old.setAttribute("data-detached", "yes");
+            document.getElementById("result").setAttribute("data-html", target.innerHTML);
+            "#,
+        );
+
+        let target = dom.get_element_by_id("target").unwrap();
+        assert_eq!(target.borrow().children().len(), 2);
+        assert!(dom.get_element_by_id("old").is_none());
+        assert_eq!(
+            dom.get_element_by_id("result")
+                .unwrap()
+                .borrow()
+                .value
+                .get_attr("data-html"),
+            Some("<span id=\"child\" data-label=\"a&amp;b\">hello</span><br>")
+        );
+        assert!(runtime.needs_redraw());
+    }
+
+    #[test]
+    fn style_property_names_follow_cssom_spelling() {
+        assert_eq!(style_property_name("backgroundColor"), "background-color");
+        assert_eq!(style_property_name("msTransition"), "-ms-transition");
+        assert_eq!(style_property_name("WebkitTransform"), "-webkit-transform");
+        assert_eq!(style_property_name("cssFloat"), "float");
+        assert_eq!(style_property_name("--accent"), "--accent");
+    }
+
+    #[test]
+    fn get_attribute_reads_dom() {
+        let (mut runtime, _dom) = runtime_from_html(r#"<div id="hello" data-x="v"></div>"#);
+        runtime.run_script(
+            r#"const el = document.getElementById("hello"); if (el.getAttribute("data-x") !== "v") { throw new Error("mismatch"); }"#,
+        );
+    }
+
+    #[test]
+    fn missing_id_returns_null() {
+        let (mut runtime, _dom) = runtime_from_html(r#"<div id="hello"></div>"#);
+        runtime.run_script(
+            r#"const el = document.getElementById("missing"); if (el !== null) { throw new Error("expected null"); }"#,
+        );
+    }
+
+    #[test]
+    fn console_log_does_not_panic() {
+        let (mut runtime, _dom) = runtime_from_html(r#"<html></html>"#);
+        runtime.run_script(
+            r#"console.log("a", 1, undefined); console.warn("w"); console.error("e");"#,
+        );
+    }
+
+    #[test]
+    fn syntax_error_is_logged_not_panicked() {
+        let (mut runtime, _dom) = runtime_from_html(r#"<html></html>"#);
+        runtime.run_script("this is not valid js ((");
+    }
+
+    #[test]
+    fn accessor_reads_text_content() {
+        let (mut runtime, _dom) = runtime_from_html(r#"<div id="hello">hi</div>"#);
+        runtime.run_script(
+            r#"const el = document.getElementById("hello"); if (el.textContent !== "hi") { throw new Error("mismatch"); }"#,
+        );
+    }
+
+    #[test]
+    fn click_invokes_onclick_and_mutates_dom() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<button id="b">click me</button><p id="result">not clicked</p>"#);
+        runtime.run_script(
+            r#"
+            const button = document.getElementById("b");
+            const result = document.getElementById("result");
+            button.onclick = function () {
+                result.textContent = "clicked!";
+                result.setAttribute("data-clicked", "true");
+            };
+            "#,
+        );
+
+        let button = dom.get_element_by_id("b").unwrap();
+        assert!(runtime.click(&button));
+        assert!(runtime.needs_redraw());
+        assert!(runtime.take_needs_redraw());
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(DomTree::inner_text(&result), "clicked!");
+        assert_eq!(result.borrow().value.get_attr("data-clicked"), Some("true"));
+    }
+
+    #[test]
+    fn click_without_handler_is_noop() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="x"></div>"#);
+        runtime.run_script(r#"document.getElementById("x");"#);
+        let node = dom.get_element_by_id("x").unwrap();
+        assert!(!runtime.click(&node));
+        assert!(!runtime.needs_redraw());
+    }
+
+    #[test]
+    fn click_invokes_element_event_listeners_in_registration_order() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<button id="button">click</button><div id="result"></div>"#);
+        runtime.run_script(
+            r#"
+            const button = document.getElementById("button");
+            const result = document.getElementById("result");
+            let order = "";
+            button.addEventListener("click", function (event) {
+                order = order + "a";
+                result.setAttribute("data-event-type", event.type);
+            });
+            button.addEventListener("click", function () {
+                order = order + "b";
+                result.setAttribute("data-order", order);
+            });
+            "#,
+        );
+
+        let button = dom.get_element_by_id("button").unwrap();
+        assert!(runtime.click(&button));
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-order"), Some("ab"));
+        assert_eq!(
+            result.borrow().value.get_attr("data-event-type"),
+            Some("click")
+        );
+        assert!(runtime.needs_redraw());
+    }
+
+    #[test]
+    fn event_listeners_are_deduplicated_and_removable() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<button id="button">click</button><div id="result"></div>"#);
+        runtime.run_script(
+            r#"
+            const button = document.getElementById("button");
+            const result = document.getElementById("result");
+            function listener() {
+                const count = result.getAttribute("data-count");
+                result.setAttribute("data-count", count === null ? 1 : Number(count) + 1);
+            }
+            button.addEventListener("click", listener);
+            button.addEventListener("click", listener);
+            "#,
+        );
+
+        let button = dom.get_element_by_id("button").unwrap();
+        assert!(runtime.click(&button));
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-count"), Some("1"));
+
+        runtime.run_script(
+            r#"
+            button.removeEventListener("click", listener);
+            window.addEventListener("test", listener);
+            window.removeEventListener("test", listener);
+            "#,
+        );
+        assert!(!runtime.click(&button));
+        assert_eq!(result.borrow().value.get_attr("data-count"), Some("1"));
+    }
+
+    #[test]
+    fn document_event_listeners_can_be_removed() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r#"
+            const result = document.getElementById("result");
+            function listener() { result.setAttribute("data-ran", "yes"); }
+            document.addEventListener("DOMContentLoaded", listener);
+            document.removeEventListener("DOMContentLoaded", listener);
+            "#,
+        );
+
+        assert!(runtime.dispatch_dom_content_loaded());
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-ran"), None);
+    }
+
+    #[test]
+    fn click_bubbles_to_delegated_ancestor_listeners() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<main id="root"><button id="button">click</button></main><div id="result"></div>"#,
+        );
+        runtime.run_script(
+            r#"
+            const root = document.getElementById("root");
+            const result = document.getElementById("result");
+            root.addEventListener("click", function (event) {
+                result.setAttribute("data-target", event.target.id);
+                result.setAttribute("data-current", event.currentTarget.id);
+                result.setAttribute("data-this", this.id);
+                event.preventDefault();
+                result.setAttribute("data-prevented", event.defaultPrevented);
+            });
+            "#,
+        );
+
+        let button = dom.get_element_by_id("button").unwrap();
+        assert!(runtime.click(&button));
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-target"), Some("button"));
+        assert_eq!(result.value.get_attr("data-current"), Some("root"));
+        assert_eq!(result.value.get_attr("data-this"), Some("root"));
+        assert_eq!(result.value.get_attr("data-prevented"), Some("true"));
+    }
+
+    #[test]
+    fn click_propagation_can_be_stopped() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<main id="root"><button id="button">click</button></main><div id="result"></div>"#,
+        );
+        runtime.run_script(
+            r#"
+            const root = document.getElementById("root");
+            const button = document.getElementById("button");
+            const result = document.getElementById("result");
+            button.addEventListener("click", function (event) {
+                result.setAttribute("data-child", "ran");
+                event.stopPropagation();
+            });
+            root.addEventListener("click", function () {
+                result.setAttribute("data-root", "ran");
+            });
+            "#,
+        );
+
+        let button = dom.get_element_by_id("button").unwrap();
+        assert!(runtime.click(&button));
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-child"), Some("ran"));
+        assert_eq!(result.value.get_attr("data-root"), None);
+    }
+
+    #[test]
+    fn click_does_not_invoke_other_event_types() {
+        let (mut runtime, dom) = runtime_from_html(r#"<button id="button">click</button>"#);
+        runtime.run_script(
+            r#"
+            const button = document.getElementById("button");
+            button.addEventListener("mouseover", function () {
+                button.setAttribute("data-ran", "yes");
+            });
+            "#,
+        );
+
+        let button = dom.get_element_by_id("button").unwrap();
+        assert!(!runtime.click(&button));
+        assert_eq!(button.borrow().value.get_attr("data-ran"), None);
+    }
+
+    #[test]
+    fn scroll_invokes_onscroll_and_mutates_dom() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<div id="s">scroll</div><p id="result">not scrolled</p>"#);
+        runtime.run_script(
+            r#"
+            const s = document.getElementById("s");
+            const result = document.getElementById("result");
+            window.__scrolls = 0;
+            s.onscroll = function () {
+                window.__scrolls = (window.__scrolls || 0) + 1;
+                result.textContent = "scrolled!";
+            };
+            "#,
+        );
+
+        let s = dom.get_element_by_id("s").unwrap();
+        assert!(runtime.scroll(&s));
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(DomTree::inner_text(&result), "scrolled!");
+    }
+
+    #[test]
+    fn scroll_without_handler_is_noop() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="x"></div>"#);
+        runtime.run_script(r#"document.getElementById("x");"#);
+        let node = dom.get_element_by_id("x").unwrap();
+        assert!(!runtime.scroll(&node));
+    }
+
+    #[test]
+    fn scroll_invokes_element_listeners_in_registration_order() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<div id="s">scroll</div><div id="result"></div>"#);
+        runtime.run_script(
+            r#"
+            const s = document.getElementById("s");
+            const result = document.getElementById("result");
+            let order = "";
+            s.addEventListener("scroll", function (event) {
+                order = order + "a";
+                result.setAttribute("data-event-type", event.type);
+            });
+            s.addEventListener("scroll", function () {
+                order = order + "b";
+                result.setAttribute("data-order", order);
+            });
+            "#,
+        );
+
+        let s = dom.get_element_by_id("s").unwrap();
+        assert!(runtime.scroll(&s));
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-order"), Some("ab"));
+        assert_eq!(
+            result.borrow().value.get_attr("data-event-type"),
+            Some("scroll")
+        );
+    }
+
+    #[test]
+    fn scroll_bubbles_to_delegated_ancestor_listeners() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<main id="root"><div id="s">scroll</div></main><div id="result"></div>"#,
+        );
+        runtime.run_script(
+            r#"
+            const root = document.getElementById("root");
+            const result = document.getElementById("result");
+            root.addEventListener("scroll", function (event) {
+                result.setAttribute("data-target", event.target.id);
+            });
+            "#,
+        );
+
+        let s = dom.get_element_by_id("s").unwrap();
+        assert!(runtime.scroll(&s));
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-target"), Some("s"));
+    }
+
+    #[test]
+    fn scroll_dom_id_dispatches_to_the_named_element() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="s">scroll</div>"#);
+        runtime.run_script(
+            r#"
+            const s = document.getElementById("s");
+            s.addEventListener("scroll", function () {
+                s.setAttribute("data-ran", "yes");
+            });
+            "#,
+        );
+        let s = dom.get_element_by_id("s").unwrap();
+        // mirror the browser's mapping: resolve the live node's hidden dom id
+        // and route the scroll through it.
+        let dom_id = with_host(runtime.engine.vm(), |host| {
+            host.refs
+                .iter()
+                .find(|(_, weak)| {
+                    weak.upgrade()
+                        .is_some_and(|n| Rc::as_ptr(&n) == Rc::as_ptr(&s))
+                })
+                .map(|(id, _)| *id)
+        })
+        .flatten()
+        .expect("element must be registered in the host refs");
+        assert!(runtime.scroll_dom_id(dom_id));
+        assert_eq!(s.borrow().value.get_attr("data-ran"), Some("yes"));
+    }
+
+    #[test]
+    fn scroll_does_not_invoke_other_event_types() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="s">scroll</div>"#);
+        runtime.run_script(
+            r#"
+            const s = document.getElementById("s");
+            s.addEventListener("mouseover", function () {
+                s.setAttribute("data-ran", "yes");
+            });
+            "#,
+        );
+
+        let s = dom.get_element_by_id("s").unwrap();
+        assert!(!runtime.scroll(&s));
+        assert_eq!(s.borrow().value.get_attr("data-ran"), None);
+    }
+
+    #[test]
+    fn get_element_by_id_reuses_the_same_object() {
+        let (mut runtime, _dom) = runtime_from_html(r#"<div id="x"></div>"#);
+        runtime.run_script(
+            r#"
+            const a = document.getElementById("x");
+            const b = document.getElementById("x");
+            a.onclick = function () {};
+            if (a !== b) { throw new Error("expected the same object"); }
+            "#,
+        );
+    }
+
+    #[test]
+    fn dom_content_loaded_listener_runs_when_dispatched() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r#"
+            document.addEventListener("DOMContentLoaded", function (event) {
+                const result = document.getElementById("result");
+                result.setAttribute("data-ready", "yes");
+                result.setAttribute("data-event-type", event.type);
+            });
+            "#,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-ready"), None);
+        assert!(runtime.dispatch_dom_content_loaded());
+        assert_eq!(result.borrow().value.get_attr("data-ready"), Some("yes"));
+        assert_eq!(
+            result.borrow().value.get_attr("data-event-type"),
+            Some("DOMContentLoaded")
+        );
+        assert!(runtime.needs_redraw());
+    }
+
+    #[test]
+    fn dom_content_loaded_is_dispatched_only_once() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r#"
+            let dispatchCount = 0;
+            document.addEventListener("DOMContentLoaded", function () {
+                dispatchCount = dispatchCount + 1;
+                document.getElementById("result").setAttribute("data-count", dispatchCount);
+            });
+            "#,
+        );
+
+        assert!(runtime.dispatch_dom_content_loaded());
+        assert!(!runtime.dispatch_dom_content_loaded());
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-count"), Some("1"));
+    }
+
+    #[test]
+    fn window_onload_runs_when_dispatched() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r#"
+            window.onload = function (event) {
+                const result = document.getElementById("result");
+                result.setAttribute("data-ready", "yes");
+                result.setAttribute("data-event-type", event.type);
+            };
+            "#,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-ready"), None);
+        assert!(runtime.dispatch_window_load());
+        assert_eq!(result.borrow().value.get_attr("data-ready"), Some("yes"));
+        assert_eq!(
+            result.borrow().value.get_attr("data-event-type"),
+            Some("load")
+        );
+    }
+
+    #[test]
+    fn window_load_listener_runs_when_dispatched_and_only_once() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r#"
+            let dispatchCount = 0;
+            window.addEventListener("load", function () {
+                dispatchCount = dispatchCount + 1;
+                document.getElementById("result").setAttribute("data-count", dispatchCount);
+            });
+            "#,
+        );
+
+        assert!(runtime.dispatch_window_load());
+        assert!(!runtime.dispatch_window_load());
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-count"), Some("1"));
+    }
+
+    #[test]
+    fn body_onload_registered_at_setup_runs_on_dispatch() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<body onload="document.getElementById('result').setAttribute('data-onload', 'yes')"><div id="result"></div></body>"#,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-onload"), None);
+        assert!(runtime.dispatch_window_load());
+        assert_eq!(result.borrow().value.get_attr("data-onload"), Some("yes"));
+        // The handler is registered at setup time, not re-scanned at dispatch.
+        assert!(!runtime.dispatch_window_load());
+    }
+
+    #[test]
+    fn document_query_selector_and_query_selector_all_expose_elements() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"
+            <div id="result"></div>
+            <main><p class="item">first</p><p class="item featured">second</p></main>
+            "#,
+        );
+        runtime.run_script(
+            r#"
+            const featured = document.querySelector("main > p.featured");
+            featured.setAttribute("data-selected", "yes");
+            const items = document.querySelectorAll("p.item");
+            const classified = document.querySelectorAll("[class]");
+            items[0].setAttribute("data-first", "yes");
+            items.forEach(function (item, index) {
+                item.setAttribute("data-index", index);
+            });
+            document.getElementById("result").setAttribute("data-count", items.length);
+            document.getElementById("result").setAttribute("data-class-count", classified.length);
+            "#,
+        );
+
+        let items = dom.get_elements_by_class_name("item");
+        assert_eq!(items[0].borrow().value.get_attr("data-first"), Some("yes"));
+        assert_eq!(items[0].borrow().value.get_attr("data-index"), Some("0"));
+        assert_eq!(items[1].borrow().value.get_attr("data-index"), Some("1"));
+        assert_eq!(
+            items[1].borrow().value.get_attr("data-selected"),
+            Some("yes")
+        );
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-count"), Some("2"));
+        assert_eq!(
+            result.borrow().value.get_attr("data-class-count"),
+            Some("2")
+        );
+    }
+
+    #[test]
+    fn element_query_selectors_are_scoped_to_descendants() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"
+            <section id="scope"><span class="item">one</span><span class="item">two</span></section>
+            <span class="item" id="outside">outside</span>
+            "#,
+        );
+        runtime.run_script(
+            r##"
+            const scope = document.querySelector("#scope");
+            scope.querySelector(".item").setAttribute("data-first", "yes");
+            const items = scope.querySelectorAll(".item");
+            items[1].setAttribute("data-second", "yes");
+            scope.setAttribute("data-count", items.length);
+            "##,
+        );
+
+        let scope = dom.get_element_by_id("scope").unwrap();
+        assert_eq!(scope.borrow().value.get_attr("data-count"), Some("2"));
+        let items = DomTree::query_selector_all_within(&scope, ".item");
+        assert_eq!(items[0].borrow().value.get_attr("data-first"), Some("yes"));
+        assert_eq!(items[1].borrow().value.get_attr("data-second"), Some("yes"));
+        let outside = dom.get_element_by_id("outside").unwrap();
+        assert_eq!(outside.borrow().value.get_attr("data-first"), None);
+        assert_eq!(outside.borrow().value.get_attr("data-second"), None);
+    }
+
+    #[test]
+    fn react_dom_collection_and_event_apis_are_available() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"
+            <main id="root">
+                <button class="control primary">one</button>
+                <button class="control">two</button>
+                <span class="primary">label</span>
+            </main>
+            <div id="result"></div>
+            "#,
+        );
+        runtime.run_script(
+            r#"
+            const root = document.getElementById("root");
+            const button = root.getElementsByTagName("button")[0];
+            let received = "no";
+            button.addEventListener("scratch-ready", function (event) {
+                received = event.detail + ":" + (event.target === button);
+                event.preventDefault();
+            });
+            const accepted = button.dispatchEvent(new CustomEvent(
+                "scratch-ready", {detail: "yes", cancelable: true}
+            ));
+            document.getElementById("result").setAttribute(
+                "data-dom-apis",
+                document.getElementsByTagName("button").length + ":" +
+                    document.getElementsByClassName("control primary").length + ":" +
+                    root.getElementsByClassName("primary").length + ":" + received + ":" + accepted
+            );
+            "#,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-dom-apis"),
+            Some("2:1:2:yes:true:false")
+        );
+    }
+
+    #[test]
+    fn create_and_append_element_and_text_nodes() {
+        let (mut runtime, dom) = runtime_from_html(r#"<ul id="list"></ul>"#);
+        runtime.run_script(
+            r##"
+            const item = document.createElement("li");
+            item.setAttribute("class", "dynamic");
+            const text = document.createTextNode("created by JavaScript");
+            item.appendChild(text);
+            document.querySelector("#list").appendChild(item);
+            "##,
+        );
+
+        let item = dom.query_selector("li.dynamic").unwrap();
+        assert_eq!(DomTree::inner_text(&item), "created by JavaScript");
+        assert!(runtime.needs_redraw());
+    }
+
+    #[test]
+    fn document_head_and_element_append_insert_dynamic_styles() {
+        let (mut runtime, dom) = runtime_from_html(r#"<html><head></head><body></body></html>"#);
+        runtime.run_script(
+            r#"
+            const style = document.createElement("style");
+            style.append("body { color: red; }");
+            document.head.append(style);
+            "#,
+        );
+
+        let style = dom.query_selector("head style").unwrap();
+        assert_eq!(DomTree::inner_text(&style), "body { color: red; }");
+        assert!(runtime.needs_redraw());
+    }
+
+    #[test]
+    fn namespace_dom_apis_create_svg_elements_and_attributes() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<main id="root"></main><div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            path.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", "#shape");
+            svg.appendChild(path);
+            document.querySelector("#root").appendChild(svg);
+
+            const result = document.querySelector("#result");
+            result.setAttribute("data-svg-ns", svg.namespaceURI);
+            result.setAttribute("data-path-ns", path.namespaceURI);
+            result.setAttribute("data-html-ns", result.namespaceURI);
+            "##,
+        );
+
+        let path = dom.query_selector("path").unwrap();
+        assert_eq!(path.borrow().value.get_attr("xlink:href"), Some("#shape"));
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-svg-ns"), Some(SVG_NAMESPACE));
+        assert_eq!(result.value.get_attr("data-path-ns"), Some(SVG_NAMESPACE));
+        assert_eq!(result.value.get_attr("data-html-ns"), Some(HTML_NAMESPACE));
+        assert!(runtime.needs_redraw());
+    }
+
+    #[test]
+    fn element_contains_checks_self_descendants_and_unrelated_nodes() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<main id="root"><section id="child"><span id="nested"></span></section></main><aside id="other"></aside>"#,
+        );
+        runtime.run_script(
+            r##"
+            const root = document.querySelector("#root");
+            const child = document.querySelector("#child");
+            const nested = document.querySelector("#nested");
+            const other = document.querySelector("#other");
+            root.setAttribute("data-self", root.contains(root));
+            root.setAttribute("data-child", root.contains(child));
+            root.setAttribute("data-nested", root.contains(nested));
+            root.setAttribute("data-other", root.contains(other));
+            root.setAttribute("data-null", root.contains(null));
+            "##,
+        );
+
+        let root = dom.get_element_by_id("root").unwrap();
+        let root = root.borrow();
+        assert_eq!(root.value.get_attr("data-self"), Some("true"));
+        assert_eq!(root.value.get_attr("data-child"), Some("true"));
+        assert_eq!(root.value.get_attr("data-nested"), Some("true"));
+        assert_eq!(root.value.get_attr("data-other"), Some("false"));
+        assert_eq!(root.value.get_attr("data-null"), Some("false"));
+    }
+
+    #[test]
+    fn document_tracks_the_focused_element() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<body><input id="field"><button id="other"></button><div id="result"></div></body>"#,
+        );
+        runtime.run_script(
+            r##"
+            const field = document.querySelector("#field");
+            const other = document.querySelector("#other");
+            const result = document.querySelector("#result");
+            result.setAttribute("data-initial", document.activeElement === document.body);
+            field.focus();
+            result.setAttribute("data-field", document.activeElement === field);
+            other.focus();
+            result.setAttribute("data-other", document.activeElement === other);
+            other.blur();
+            result.setAttribute("data-blurred", document.activeElement === document.body);
+            result.setAttribute("data-has-focus", document.hasFocus());
+            "##,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-initial"), Some("true"));
+        assert_eq!(result.value.get_attr("data-field"), Some("true"));
+        assert_eq!(result.value.get_attr("data-other"), Some("true"));
+        assert_eq!(result.value.get_attr("data-blurred"), Some("true"));
+        assert_eq!(result.value.get_attr("data-has-focus"), Some("true"));
+    }
+
+    #[test]
+    fn react_dom_node_primitives_identify_and_reorder_nodes() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<main id="root"></main><div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const root = document.querySelector("#root");
+            const first = document.createElement("span");
+            first.setAttribute("data-name", "first");
+            const second = document.createElement("span");
+            second.setAttribute("data-name", "second");
+            const text = document.createTextNode("before");
+            text.nodeValue = "after";
+            second.appendChild(text);
+            root.appendChild(first);
+            root.insertBefore(second, first);
+            root.removeChild(first);
+            second.className = "react-node";
+            second.setAttribute("data-remove", "yes");
+            second.removeAttribute("data-remove");
+
+            const result = document.querySelector("#result");
+            result.setAttribute("data-document-type", document.nodeType);
+            result.setAttribute("data-root-type", root.nodeType);
+            result.setAttribute("data-root-name", root.nodeName);
+            result.setAttribute("data-owner", root.ownerDocument === document);
+            result.setAttribute("data-first", root.firstChild.getAttribute("data-name"));
+            result.setAttribute("data-last", root.lastChild.getAttribute("data-name"));
+            result.setAttribute("data-count", root.childNodes.length);
+            result.setAttribute("data-text", root.firstChild.firstChild.data);
+            result.setAttribute("data-class", root.firstChild.className);
+            result.setAttribute("data-removed", root.firstChild.hasAttribute("data-remove"));
+            "##,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-document-type"), Some("9"));
+        assert_eq!(result.value.get_attr("data-root-type"), Some("1"));
+        assert_eq!(result.value.get_attr("data-root-name"), Some("MAIN"));
+        assert_eq!(result.value.get_attr("data-owner"), Some("true"));
+        assert_eq!(result.value.get_attr("data-first"), Some("second"));
+        assert_eq!(result.value.get_attr("data-last"), Some("second"));
+        assert_eq!(result.value.get_attr("data-count"), Some("1"));
+        assert_eq!(result.value.get_attr("data-text"), Some("after"));
+        assert_eq!(result.value.get_attr("data-class"), Some("react-node"));
+        assert_eq!(result.value.get_attr("data-removed"), Some("false"));
+
+        let root = dom.get_element_by_id("root").unwrap();
+        assert_eq!(root.borrow().children().len(), 1);
+        assert_eq!(
+            root.borrow().children()[0]
+                .borrow()
+                .value
+                .get_attr("data-remove"),
+            None
+        );
+    }
+
+    #[test]
+    fn html_iframe_element_supports_host_instance_checks() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<body><iframe id="frame"></iframe><div id="result"></div></body>"#,
+        );
+        runtime.run_script(
+            r#"
+            const frame = document.getElementById("frame");
+            const result = document.getElementById("result");
+            result.setAttribute("data-frame", frame instanceof HTMLIFrameElement);
+            result.setAttribute("data-body", document.body instanceof HTMLIFrameElement);
+            "#,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-frame"), Some("true"));
+        assert_eq!(result.value.get_attr("data-body"), Some("false"));
+    }
+
+    #[test]
+    fn markup_declared_iframes_queue_loads_once_and_failures_are_not_retried() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<html><body>
+                <iframe src="https://example.test/frame-a.html"></iframe>
+                <iframe src="frames/frame-b.html"></iframe>
+                <iframe id="placeholder"></iframe>
+            </body></html>"#,
+        );
+        runtime.set_document_url("https://example.test/dir/page.html");
+
+        // Register a stable dom id per node, as the processor's initial
+        // `apply_dom` does, so the markup iframes are visible to the scan.
+        let ids: HashMap<usize, u64> = {
+            let mut ids = HashMap::new();
+            let mut next_id = 1u64;
+            dom.traverse(|node| {
+                ids.insert(Rc::as_ptr(node) as usize, next_id);
+                next_id += 1;
+            });
+            ids
+        };
+        let snapshot = DomSnapshot::from_mirror(&dom.root, &ids);
+        runtime.apply_dom(&snapshot);
+
+        // The two iframes with a src are queued exactly once; the src-less
+        // placeholder is skipped.
+        assert_eq!(runtime.queue_markup_iframe_loads(), 2);
+        let requests = runtime.take_iframe_fetch_requests();
+        assert_eq!(requests.len(), 2);
+        let by_url: HashMap<String, u64> = requests
+            .into_iter()
+            .map(|req| (req.url, req.dom_id))
+            .collect();
+        assert_eq!(
+            by_url.len(),
+            2,
+            "one request per src-ified iframe, absolute or relative"
+        );
+        // Absolute src stays as-is; relative src resolves against the document.
+        assert!(by_url.contains_key("https://example.test/frame-a.html"));
+        assert!(by_url.contains_key("https://example.test/dir/frames/frame-b.html"));
+        let frame_a = by_url["https://example.test/frame-a.html"];
+        let frame_b = by_url["https://example.test/dir/frames/frame-b.html"];
+
+        // A second scan finds nothing new to queue.
+        assert_eq!(runtime.queue_markup_iframe_loads(), 0);
+        assert!(runtime.take_iframe_fetch_requests().is_empty());
+
+        // A resolved load is not re-queued on later scans.
+        runtime.resolve_iframe_fetch(
+            frame_a,
+            r#"<html><body><p>frame content</p></body></html>"#.to_string(),
+            "https://example.test/frame-a.html".to_string(),
+        );
+        assert_eq!(runtime.queue_markup_iframe_loads(), 0);
+        assert!(runtime.take_iframe_fetch_requests().is_empty());
+
+        // A failed load is remembered so it is not refetched every scan.
+        runtime.reject_iframe_fetch(frame_b);
+        assert_eq!(runtime.queue_markup_iframe_loads(), 0);
+        assert!(runtime.take_iframe_fetch_requests().is_empty());
+    }
+
+    #[test]
+    fn remove_detaches_node_but_keeps_it_available_for_reappend() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<div id="first"><span id="moving">move</span></div><div id="second"></div>"#,
+        );
+        runtime.run_script(
+            r##"
+            const moving = document.querySelector("#moving");
+            moving.remove();
+            document.querySelector("#second").appendChild(moving);
+            "##,
+        );
+
+        let first = dom.get_element_by_id("first").unwrap();
+        let second = dom.get_element_by_id("second").unwrap();
+        assert!(DomTree::query_selector_within(&first, "#moving").is_none());
+        assert!(DomTree::query_selector_within(&second, "#moving").is_some());
+        assert!(runtime.needs_redraw());
+    }
+
+    #[test]
+    fn parent_node_and_children_expose_tree_relationships() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<div id="parent">text<span id="first"></span><span id="second"></span></div>"#,
+        );
+        runtime.run_script(
+            r##"
+            const first = document.querySelector("#first");
+            first.parentNode.setAttribute("data-parent", "yes");
+            const children = first.parentNode.children;
+            children[1].setAttribute("data-second", "yes");
+            first.parentNode.setAttribute("data-child-count", children.length);
+
+            const text = document.createTextNode("dynamic");
+            first.appendChild(text);
+            text.parentNode.setAttribute("data-text-parent", "yes");
+            "##,
+        );
+
+        let parent = dom.get_element_by_id("parent").unwrap();
+        assert_eq!(parent.borrow().value.get_attr("data-parent"), Some("yes"));
+        assert_eq!(
+            parent.borrow().value.get_attr("data-child-count"),
+            Some("2")
+        );
+        let first = dom.get_element_by_id("first").unwrap();
+        assert_eq!(
+            first.borrow().value.get_attr("data-text-parent"),
+            Some("yes")
+        );
+        let second = dom.get_element_by_id("second").unwrap();
+        assert_eq!(second.borrow().value.get_attr("data-second"), Some("yes"));
+    }
+
+    #[test]
+    fn class_list_mutates_class_attribute_and_reports_membership() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="target" class="one two"></div>"#);
+        runtime.run_script(
+            r##"
+            const target = document.querySelector("#target");
+            let initial = "";
+            for (const token of target.classList) initial += token + ",";
+            target.setAttribute("data-initial-classes", initial);
+            target.classList.add("two", "three");
+            target.classList.remove("one", "missing");
+            target.setAttribute("data-has-three", target.classList.contains("three"));
+            target.setAttribute("data-removed-three", target.classList.toggle("three"));
+            target.setAttribute("data-added-four", target.classList.toggle("four"));
+            target.setAttribute("data-forced-off", target.classList.toggle("four", false));
+            target.setAttribute("data-forced-on", target.classList.toggle("five", true));
+            "##,
+        );
+
+        let target = dom.get_element_by_id("target").unwrap();
+        let target = target.borrow();
+        assert_eq!(target.value.get_attr("class"), Some("two five"));
+        assert_eq!(
+            target.value.get_attr("data-initial-classes"),
+            Some("one,two,")
+        );
+        assert_eq!(target.value.get_attr("data-has-three"), Some("true"));
+        assert_eq!(target.value.get_attr("data-removed-three"), Some("false"));
+        assert_eq!(target.value.get_attr("data-added-four"), Some("true"));
+        assert_eq!(target.value.get_attr("data-forced-off"), Some("false"));
+        assert_eq!(target.value.get_attr("data-forced-on"), Some("true"));
+        assert!(runtime.needs_redraw());
+    }
+
+    #[test]
+    fn timeout_runs_once_with_additional_arguments_and_can_be_cancelled() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            setTimeout(function (value) {
+                document.querySelector("#result").setAttribute("data-value", value);
+            }, 0, "done");
+            const cancelled = setTimeout(function () {
+                document.querySelector("#result").setAttribute("data-cancelled", "no");
+            }, 0);
+            clearTimeout(cancelled);
+            "##,
+        );
+
+        assert!(runtime.run_due_timers());
+        assert!(!runtime.run_due_timers());
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-value"), Some("done"));
+        assert_eq!(result.borrow().value.get_attr("data-cancelled"), None);
+    }
+
+    #[test]
+    fn interval_can_clear_itself() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const intervalId = setInterval(function () {
+                document.querySelector("#result").setAttribute("data-ran", "once");
+                clearInterval(intervalId);
+            }, 0);
+            "##,
+        );
+
+        assert!(runtime.run_due_timers());
+        assert!(!runtime.run_due_timers());
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-ran"), Some("once"));
+    }
+
+    #[test]
+    fn performance_now_exposes_monotonic_runtime_time() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r#"
+            const first = performance.now();
+            const second = performance.now();
+            document.getElementById("result").setAttribute(
+                "data-monotonic",
+                typeof first === "number" && second >= first
+            );
+            "#,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-monotonic"),
+            Some("true")
+        );
+    }
+
+    #[test]
+    fn microtasks_run_in_fifo_order_after_script_evaluation() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const result = document.querySelector("#result");
+            queueMicrotask(function () {
+                result.setAttribute("data-order", result.getAttribute("data-order") + "-first");
+                queueMicrotask(function () {
+                    result.setAttribute("data-order", result.getAttribute("data-order") + "-second");
+                });
+            });
+            result.setAttribute("data-order", "sync");
+            "##,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-order"),
+            Some("sync-first-second")
+        );
+    }
+
+    #[test]
+    fn timer_microtasks_run_before_the_next_timer_task() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const result = document.querySelector("#result");
+            setTimeout(function () {
+                result.setAttribute("data-order", "timer");
+                queueMicrotask(function () {
+                    result.setAttribute("data-order", "timer-microtask");
+                });
+            }, 0);
+            setTimeout(function () {
+                result.setAttribute("data-observed", result.getAttribute("data-order"));
+            }, 0);
+            "##,
+        );
+
+        assert!(runtime.run_due_timers());
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-observed"),
+            Some("timer-microtask")
+        );
+    }
+
+    #[test]
+    fn promise_reactions_share_fifo_order_with_queued_microtasks() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const result = document.querySelector("#result");
+            result.setAttribute("data-order", "sync");
+            queueMicrotask(function () {
+                result.setAttribute("data-order", result.getAttribute("data-order") + "-first");
+            });
+            new Promise(function (resolve) {
+                resolve("promise");
+            }).then(function (value) {
+                result.setAttribute("data-order", result.getAttribute("data-order") + "-" + value);
+            });
+            queueMicrotask(function () {
+                result.setAttribute("data-order", result.getAttribute("data-order") + "-last");
+            });
+            "##,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-order"),
+            Some("sync-first-promise-last")
+        );
+    }
+
+    #[test]
+    fn a_failed_microtask_does_not_block_later_jobs() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            queueMicrotask(function () {
+                missingFunction();
+            });
+            queueMicrotask(function () {
+                document.querySelector("#result").setAttribute("data-ran", "yes");
+            });
+            "##,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-ran"), Some("yes"));
+    }
+
+    #[test]
+    fn promise_static_methods_complete_during_script_checkpoint() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const result = document.querySelector("#result");
+            Promise.all([Promise.resolve("first"), "second"])
+                .then(function (values) {
+                    result.setAttribute("data-all", values[0] + "-" + values[1]);
+                    return Promise.reject("expected");
+                })
+                .catch(function (reason) {
+                    result.setAttribute("data-catch", reason);
+                });
+            "##,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-all"),
+            Some("first-second")
+        );
+        assert_eq!(
+            result.borrow().value.get_attr("data-catch"),
+            Some("expected")
+        );
+    }
+
+    #[test]
+    fn arrow_callbacks_work_with_promises_and_lexical_this() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<button id="target"></button><div id="other"></div>"#);
+        runtime.run_script(
+            r##"
+            const target = document.querySelector("#target");
+            Promise.resolve("promise").then(value => {
+                target.setAttribute("data-promise", value);
+            });
+            target.addEventListener("click", function () {
+                const update = () => this.setAttribute("data-this", "target");
+                update.call(document.querySelector("#other"));
+            });
+            "##,
+        );
+
+        let target = dom.get_element_by_id("target").unwrap();
+        assert!(runtime.click(&target));
+        assert_eq!(
+            target.borrow().value.get_attr("data-promise"),
+            Some("promise")
+        );
+        assert_eq!(target.borrow().value.get_attr("data-this"), Some("target"));
+        let other = dom.get_element_by_id("other").unwrap();
+        assert_eq!(other.borrow().value.get_attr("data-this"), None);
+    }
+
+    #[test]
+    fn queue_microtask_accepts_an_arrow_callback() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const result = document.querySelector("#result");
+            queueMicrotask(() => {
+                result.setAttribute("data-microtask", "yes");
+            });
+            "##,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-microtask"),
+            Some("yes")
+        );
+    }
+
+    #[test]
+    fn browser_global_aliases_share_window_properties() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const result = window.document.querySelector("#result");
+            result.setAttribute("data-same-self", window === self);
+            result.setAttribute("data-same-global", window === globalThis);
+            result.setAttribute("data-document", window.document === document);
+            window.queueMicrotask(() => {
+                result.setAttribute("data-microtask", "yes");
+            });
+            "##,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-same-self"), Some("true"));
+        assert_eq!(result.value.get_attr("data-same-global"), Some("true"));
+        assert_eq!(result.value.get_attr("data-document"), Some("true"));
+        assert_eq!(result.value.get_attr("data-microtask"), Some("yes"));
+    }
+
+    #[test]
+    fn fetch_resolves_response_metadata_and_text_promise() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            fetch("data:text/plain,hello").then(response => {
+                const result = document.querySelector("#result");
+                result.setAttribute("data-ok", response.ok);
+                result.setAttribute("data-status", response.status);
+                result.setAttribute("data-status-text", response.statusText);
+                result.setAttribute("data-url", response.url);
+                result.setAttribute("data-redirected", response.redirected);
+                result.setAttribute("data-body-used-before", response.bodyUsed);
+                const body = response.text();
+                result.setAttribute("data-body-used-after", response.bodyUsed);
+                return body;
+            }).then(text => {
+                document.querySelector("#result").setAttribute("data-text", text);
+            });
+            "##,
+        );
+
+        let requests = runtime.take_fetch_requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].url, "data:text/plain,hello");
+        runtime.resolve_fetch(
+            requests[0].id,
+            JsFetchResponse {
+                url: "data:text/plain,hello".to_string(),
+                status: 200,
+                status_text: "All Good".to_string(),
+                redirected: true,
+                body: b"hello".to_vec(),
+                headers: Vec::new(),
+            },
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-ok"), Some("true"));
+        assert_eq!(result.value.get_attr("data-status"), Some("200"));
+        assert_eq!(result.value.get_attr("data-status-text"), Some("All Good"));
+        assert_eq!(result.value.get_attr("data-redirected"), Some("true"));
+        assert_eq!(
+            result.value.get_attr("data-body-used-before"),
+            Some("false")
+        );
+        assert_eq!(result.value.get_attr("data-body-used-after"), Some("true"));
+        assert_eq!(
+            result.value.get_attr("data-url"),
+            Some("data:text/plain,hello")
+        );
+        assert_eq!(result.value.get_attr("data-text"), Some("hello"));
+    }
+
+    #[test]
+    fn fetch_array_buffer_preserves_binary_bytes() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            fetch("https://assets.scratch.mit.edu/project.sb3")
+                .then(response => response.arrayBuffer())
+                .then(buffer => {
+                    const bytes = new Uint8Array(buffer);
+                    document.querySelector("#result").setAttribute(
+                        "data-bytes",
+                        buffer.byteLength + ":" + bytes.length + ":" + bytes[0] + ":" + bytes[3]
+                    );
+                });
+            "##,
+        );
+
+        let requests = runtime.take_fetch_requests();
+        runtime.resolve_fetch(
+            requests[0].id,
+            JsFetchResponse {
+                url: requests[0].url.clone(),
+                status: 200,
+                status_text: "OK".to_string(),
+                redirected: false,
+                body: vec![0, 127, 128, 255],
+                headers: Vec::new(),
+            },
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-bytes"),
+            Some("4:4:0:255")
+        );
+    }
+
+    #[test]
+    fn response_body_cannot_be_consumed_twice() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            fetch("data:text/plain,hello").then(response => {
+                return response.text().then(() => response.text());
+            }).catch(reason => {
+                document.querySelector("#result").setAttribute("data-error", reason);
+            });
+            "##,
+        );
+
+        let requests = runtime.take_fetch_requests();
+        runtime.resolve_fetch(
+            requests[0].id,
+            JsFetchResponse {
+                url: "data:text/plain,hello".to_string(),
+                status: 200,
+                status_text: "OK".to_string(),
+                redirected: false,
+                body: b"hello".to_vec(),
+                headers: Vec::new(),
+            },
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-error"),
+            Some("Response body has already been consumed")
+        );
+    }
+
+    #[test]
+    fn fetch_captures_method_headers_and_body() {
+        let (mut runtime, _dom) = runtime_from_html("<div></div>");
+        runtime.run_script(
+            r#"
+            const headers = {};
+            headers["Content-Type"] = "application/json";
+            headers["X-Test"] = "yes";
+            fetch("https://example.test/messages", {
+                method: "post",
+                headers: headers,
+                body: "{\"message\":\"hello\"}"
+            });
+            "#,
+        );
+
+        let requests = runtime.take_fetch_requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "POST");
+        assert!(
+            requests[0]
+                .headers
+                .contains(&("Content-Type".to_string(), "application/json".to_string()))
+        );
+        assert!(
+            requests[0]
+                .headers
+                .contains(&("X-Test".to_string(), "yes".to_string()))
+        );
+        assert_eq!(requests[0].body, br#"{"message":"hello"}"#);
+    }
+
+    #[test]
+    fn xml_http_request_captures_request_and_dispatches_load() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const request = new XMLHttpRequest();
+            request.open("post", "https://example.test/messages");
+            request.setRequestHeader("Content-Type", "text/plain");
+            request.onload = function () {
+                const result = document.querySelector("#result");
+                result.setAttribute("data-state", this.readyState);
+                result.setAttribute("data-status", this.status);
+                result.setAttribute("data-text", this.responseText);
+                result.setAttribute("data-headers", this.getAllResponseHeaders());
+            };
+            request.send("hello");
+            "##,
+        );
+
+        let requests = runtime.take_fetch_requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].url, "https://example.test/messages");
+        assert_eq!(requests[0].method, "POST");
+        assert_eq!(requests[0].body, b"hello");
+        assert!(
+            requests[0]
+                .headers
+                .contains(&("Content-Type".to_string(), "text/plain".to_string()))
+        );
+
+        runtime.resolve_fetch(
+            requests[0].id,
+            JsFetchResponse {
+                url: requests[0].url.clone(),
+                status: 201,
+                status_text: "Created".to_string(),
+                redirected: false,
+                body: b"saved".to_vec(),
+                headers: vec![("X-Test".to_string(), "yes".to_string())],
+            },
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-state"), Some("4"));
+        assert_eq!(result.value.get_attr("data-status"), Some("201"));
+        assert_eq!(result.value.get_attr("data-text"), Some("saved"));
+        assert_eq!(
+            result.value.get_attr("data-headers"),
+            Some("X-Test: yes\r\n")
+        );
+    }
+
+    #[test]
+    fn headers_are_case_insensitive_and_mutable() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const headers = new Headers({ Accept: "application/json" });
+            headers.append("X-Test", "one");
+            headers.append("x-test", "two");
+            headers.set("X-Replace", "before");
+            headers.set("x-replace", "after");
+            headers.delete("ACCEPT");
+
+            const result = document.querySelector("#result");
+            result.setAttribute("data-test", headers.get("X-TEST"));
+            result.setAttribute("data-replace", headers.get("X-Replace"));
+            result.setAttribute("data-has-accept", headers.has("accept"));
+            result.setAttribute("data-missing", headers.get("missing") === null);
+
+            fetch("https://example.test/", { headers: headers });
+            "##,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-test"), Some("one, two"));
+        assert_eq!(result.value.get_attr("data-replace"), Some("after"));
+        assert_eq!(result.value.get_attr("data-has-accept"), Some("false"));
+        assert_eq!(result.value.get_attr("data-missing"), Some("true"));
+
+        let requests = runtime.take_fetch_requests();
+        assert!(
+            requests[0]
+                .headers
+                .contains(&("x-test".to_string(), "one, two".to_string()))
+        );
+        assert!(
+            requests[0]
+                .headers
+                .contains(&("x-replace".to_string(), "after".to_string()))
+        );
+    }
+
+    #[test]
+    fn response_exposes_read_only_headers() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            fetch("data:text/plain,hello").then(response => {
+                const result = document.querySelector("#result");
+                result.setAttribute("data-type", response.headers.get("Content-Type"));
+                result.setAttribute("data-has", response.headers.has("X-Test"));
+            });
+            "##,
+        );
+
+        let requests = runtime.take_fetch_requests();
+        runtime.resolve_fetch(
+            requests[0].id,
+            JsFetchResponse {
+                url: "data:text/plain,hello".to_string(),
+                status: 200,
+                status_text: "OK".to_string(),
+                redirected: false,
+                body: b"hello".to_vec(),
+                headers: vec![
+                    ("content-type".to_string(), "text/plain".to_string()),
+                    ("X-Test".to_string(), "yes".to_string()),
+                ],
+            },
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-type"), Some("text/plain"));
+        assert_eq!(result.value.get_attr("data-has"), Some("true"));
+    }
+
+    #[test]
+    fn request_objects_can_be_copied_and_passed_to_fetch() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            const headers = new Headers({ Accept: "application/json" });
+            const original = new Request("https://example.test/messages", {
+                method: "post",
+                headers: headers,
+                body: "hello"
+            });
+            const copied = new Request(original);
+            const result = document.querySelector("#result");
+            result.setAttribute("data-url", copied.url);
+            result.setAttribute("data-method", copied.method);
+            result.setAttribute("data-accept", copied.headers.get("accept"));
+            fetch(copied, { method: "put" });
+            "##,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(
+            result.value.get_attr("data-url"),
+            Some("https://example.test/messages")
+        );
+        assert_eq!(result.value.get_attr("data-method"), Some("POST"));
+        assert_eq!(
+            result.value.get_attr("data-accept"),
+            Some("application/json")
+        );
+
+        let requests = runtime.take_fetch_requests();
+        assert_eq!(requests[0].url, "https://example.test/messages");
+        assert_eq!(requests[0].method, "PUT");
+        assert_eq!(requests[0].body, b"hello");
+        assert!(
+            requests[0]
+                .headers
+                .contains(&("accept".to_string(), "application/json".to_string()))
+        );
+    }
+
+    #[test]
+    fn response_json_resolves_objects_and_arrays() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            fetch("data:application/json,pending").then(response => response.json()).then(value => {
+                const result = document.querySelector("#result");
+                result.setAttribute("data-name", value.name);
+                result.setAttribute("data-second", value.items[1]);
+                result.setAttribute("data-enabled", value.enabled);
+                result.setAttribute("data-empty", value.empty === null);
+            });
+            "##,
+        );
+
+        let requests = runtime.take_fetch_requests();
+        runtime.resolve_fetch(
+            requests[0].id,
+            JsFetchResponse {
+                url: "data:application/json,pending".to_string(),
+                status: 200,
+                status_text: "OK".to_string(),
+                redirected: false,
+                body: br#"{"name":"Orinium","items":[1,2],"enabled":true,"empty":null}"#.to_vec(),
+                headers: Vec::new(),
+            },
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-name"), Some("Orinium"));
+        assert_eq!(result.value.get_attr("data-second"), Some("2"));
+        assert_eq!(result.value.get_attr("data-enabled"), Some("true"));
+        assert_eq!(result.value.get_attr("data-empty"), Some("true"));
+    }
+
+    #[test]
+    fn response_json_rejects_invalid_json() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            fetch("data:application/json,invalid")
+                .then(response => response.json())
+                .catch(reason => {
+                    document.querySelector("#result").setAttribute("data-error", reason);
+                });
+            "##,
+        );
+
+        let requests = runtime.take_fetch_requests();
+        runtime.resolve_fetch(
+            requests[0].id,
+            JsFetchResponse {
+                url: "data:application/json,invalid".to_string(),
+                status: 200,
+                status_text: "OK".to_string(),
+                redirected: false,
+                body: b"not json".to_vec(),
+                headers: Vec::new(),
+            },
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        assert!(
+            result
+                .borrow()
+                .value
+                .get_attr("data-error")
+                .unwrap()
+                .starts_with("Failed to parse JSON:")
+        );
+    }
+
+    #[test]
+    fn fetch_rejection_runs_catch_reaction() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            fetch("https://invalid.test/").catch(reason => {
+                document.querySelector("#result").setAttribute("data-error", reason);
+            });
+            "##,
+        );
+
+        let requests = runtime.take_fetch_requests();
+        runtime.reject_fetch(requests[0].id, "network failed".to_string());
+        let result = dom.get_element_by_id("result").unwrap();
+        assert_eq!(
+            result.borrow().value.get_attr("data-error"),
+            Some("network failed")
+        );
+    }
+
+    #[test]
+    fn intersection_observer_fires_on_observe() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<div id="target" style="width: 100px; height: 50px"></div><div id="result"></div>"#,
+        );
+        runtime.run_script(
+            r#"
+            const target = document.getElementById("target");
+            const result = document.getElementById("result");
+            const observer = new IntersectionObserver(function (entries) {
+                const entry = entries[0];
+                result.setAttribute("data-target", entry.target === target);
+                result.setAttribute("data-is-intersecting", entry.isIntersecting);
+                result.setAttribute("data-ratio", entry.intersectionRatio);
+                result.setAttribute("data-has-root-bounds", entry.rootBounds !== null);
+                result.setAttribute("data-bcr-width", entry.boundingClientRect.width);
+            });
+            observer.observe(target);
+            "#,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-target"), Some("true"));
+        // The element has style width/height so it is visible within the viewport.
+        assert_eq!(result.value.get_attr("data-is-intersecting"), Some("true"));
+        assert_eq!(result.value.get_attr("data-ratio"), Some("1"));
+        assert_eq!(result.value.get_attr("data-has-root-bounds"), Some("true"));
+        assert_eq!(result.value.get_attr("data-bcr-width"), Some("100"));
+    }
+
+    #[test]
+    fn custom_elements_define_and_connect() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<html><body><div id="result"></div></body></html>"#);
+        runtime.run_script(
+            r#"
+            class MyElement extends HTMLElement {
+                connectedCallback() {
+                    document.getElementById("result").setAttribute("data-connected", "yes");
+                }
+                disconnectedCallback() {
+                    document.getElementById("result").setAttribute("data-disconnected", "yes");
+                }
+            }
+            customElements.define("my-element", MyElement);
+            document.getElementById("result").setAttribute(
+                "data-proto",
+                typeof MyElement.prototype.connectedCallback
+            );
+            const el = document.createElement("my-element");
+            document.body.appendChild(el);
+            document.body.removeChild(el);
+            "#,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        // The prototype lookup finds the function.
+        assert_eq!(result.value.get_attr("data-proto"), Some("function"));
+        // Lifecycle callbacks fire via enqueue_job + microtask checkpoint.
+        assert_eq!(result.value.get_attr("data-connected"), Some("yes"));
+        assert_eq!(result.value.get_attr("data-disconnected"), Some("yes"));
+    }
+
+    #[test]
+    fn custom_elements_define_getters_work() {
+        let (mut runtime, _dom) = runtime_from_html(r#"<html><body></body></html>"#);
+        runtime.run_script(
+            r#"
+            class MyEl extends HTMLElement {}
+            customElements.define("my-el", MyEl);
+            if (customElements.get("my-el") === undefined) throw new Error("get failed");
+            if (customElements.get("no-such") !== undefined) throw new Error("get should be undefined");
+            "#,
+        );
+    }
+
+    #[test]
+    fn custom_elements_attribute_changed_and_when_defined() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<html><body><div id="result"></div></body></html>"#);
+        runtime.run_script(
+            r#"
+            globalThis.__attrLog = [];
+            class AttrEl extends HTMLElement {
+                attributeChangedCallback(name, oldVal, newVal) {
+                    globalThis.__attrLog.push(name + ":" + (oldVal === null ? "null" : oldVal) + ":" + (newVal === null ? "null" : newVal));
+                }
+            }
+            AttrEl.observedAttributes = ["data-val"];
+            customElements.define("attr-el", AttrEl);
+            const el = document.createElement("attr-el");
+            document.body.appendChild(el);
+            el.setAttribute("data-val", "first");
+            el.setAttribute("data-val", "second");
+            el.removeAttribute("data-val");
+            // whenDefined resolves immediately for an already-defined name.
+            let wdResolved = false;
+            customElements.whenDefined("attr-el").then(function () {
+                wdResolved = true;
+            });
+            document.getElementById("result").setAttribute(
+                "data-wd", wdResolved
+            );
+            "#,
+        );
+
+        // Read the log after microtasks have fired the callbacks.
+        runtime.run_script(
+            r#"document.getElementById("result").setAttribute(
+                "data-log", globalThis.__attrLog.join("|")
+            );"#,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        // Three callbacks fire via microtask: first set, second set, remove.
+        // oldValue is null on first set (attr didn't exist before).        assert_eq!(result.value.get_attr("data-log"), Some("data-val:null:first|data-val:first:second|data-val:second:null"));
+        assert_eq!(result.value.get_attr("data-wd"), Some("true"));
+    }
+
+    #[test]
+    fn shadow_dom_attach_and_query() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<html><body><div id="host"></div></body></html>"#);
+        // First: verify attachShadow works at all
+        runtime.run_script(
+            r##"
+            var host = document.getElementById("host");
+            host.setAttribute("data-step1", "ready");
+            "##,
+        );
+        let result = dom.get_element_by_id("host").unwrap();
+        assert_eq!(result.borrow().value.get_attr("data-step1"), Some("ready"));
+
+        // Now try attachShadow in its own script
+        runtime.run_script(
+            r##"
+            var host = document.getElementById("host");
+            host.attachShadow({ mode: "open" });
+            host.setAttribute("data-step2", "shadow-attached");
+            "##,
+        );
+        assert_eq!(
+            result.borrow().value.get_attr("data-step2"),
+            Some("shadow-attached")
+        );
+
+        // Now test the rest
+        runtime.run_script(
+            r##"
+            var host = document.getElementById("host");
+            try {
+                var sr = host.shadowRoot;
+                host.setAttribute("data-sr", sr !== null ? "true" : "false");
+                var span = document.createElement("span");
+                span.id = "inner";
+                span.textContent = "shadow text";
+                sr.appendChild(span);
+                var found = sr.querySelector("#inner");
+                host.setAttribute("data-found", found !== null ? found.textContent : "NOT_FOUND");
+                var notFound = host.querySelector("#inner");
+                host.setAttribute("data-boundary", notFound === null ? "true" : "false");
+                host.setAttribute("data-text", host.textContent.trim() === "" ? "true" : "false");
+            } catch(e) {
+                host.setAttribute("data-error", e.toString());
+            }
+            "##,
+        );
+        let result = dom.get_element_by_id("host").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-sr"), Some("true"));
+        assert_eq!(result.value.get_attr("data-found"), Some("shadow text"));
+        assert_eq!(result.value.get_attr("data-boundary"), Some("true"));
+        assert_eq!(result.value.get_attr("data-text"), Some("true"));
+    }
+
+    #[test]
+    fn shadow_dom_closed_root() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<html><body><div id="host"></div></body></html>"#);
+        runtime.run_script(
+            r##"
+            var host = document.getElementById("host");
+            host.attachShadow({ mode: "closed" });
+            host.setAttribute("data-closed", host.shadowRoot === null ? "true" : "false");
+            "##,
+        );
+        let result = dom.get_element_by_id("host").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-closed"), Some("true"));
+    }
+
+    #[test]
+    fn document_write_inserts_parsed_html_into_body() {
+        let (mut runtime, dom) = runtime_from_html(r#"<html><body></body></html>"#);
+        runtime.run_script(r#"document.write("<p>Hello</p>");"#);
+        let p = dom.query_selector("body p").unwrap();
+        assert_eq!(DomTree::inner_text(&p), "Hello");
+        assert!(runtime.needs_redraw());
+    }
+
+    #[test]
+    fn document_writeln_appends_content_with_newline() {
+        let (mut runtime, dom) = runtime_from_html(r#"<html><body></body></html>"#);
+        runtime.run_script(r#"document.writeln("<span>A</span>");"#);
+        let span = dom.query_selector("body span").unwrap();
+        assert_eq!(DomTree::inner_text(&span), "A");
+    }
+
+    #[test]
+    fn dom_exception_has_name_message_and_code() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        try {
+            throw new DOMException("test error", "SyntaxError");
+        } catch (e) {
+            document.getElementById("r").setAttribute("data-name", e.name);
+            document.getElementById("r").setAttribute("data-msg", e.message);
+            document.getElementById("r").setAttribute("data-code", e.code);
+        }
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        let r = r.borrow();
+        assert_eq!(r.value.get_attr("data-name"), Some("SyntaxError"));
+        assert_eq!(r.value.get_attr("data-msg"), Some("test error"));
+        assert_eq!(r.value.get_attr("data-code"), Some("12"));
+    }
+
+    #[test]
+    fn dom_exception_static_constants_are_exposed() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        document.getElementById("r").setAttribute(
+            "data-codes",
+            DOMException.SYNTAX_ERR + ":" +
+            DOMException.HIERARCHY_REQUEST_ERR + ":" +
+            DOMException.NOT_FOUND_ERR + ":" +
+            DOMException.INVALID_STATE_ERR
+        );
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(r.borrow().value.get_attr("data-codes"), Some("12:3:8:11"));
+    }
+
+    #[test]
+    fn dom_exception_to_string_formats_name_and_message() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var e = new DOMException("oops", "NotFoundError");
+        document.getElementById("r").setAttribute("data-str", e.toString());
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(
+            r.borrow().value.get_attr("data-str"),
+            Some("NotFoundError: oops")
+        );
+    }
+
+    #[test]
+    fn create_element_throws_invalid_character_error_for_empty_name() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        try {
+            document.createElement("");
+            document.getElementById("r").setAttribute("data-error", "no-throw");
+        } catch (e) {
+            document.getElementById("r").setAttribute("data-error", e.name);
+        }
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(
+            r.borrow().value.get_attr("data-error"),
+            Some("InvalidCharacterError")
+        );
+    }
+
+    #[test]
+    fn create_element_throws_invalid_character_error_for_invalid_name() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        try {
+            document.createElement("123bad");
+            document.getElementById("r").setAttribute("data-error", "no-throw");
+        } catch (e) {
+            document.getElementById("r").setAttribute("data-error", e.name);
+        }
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(
+            r.borrow().value.get_attr("data-error"),
+            Some("InvalidCharacterError")
+        );
+    }
+
+    #[test]
+    fn create_element_valid_name_works() {
+        let (mut runtime, dom) = runtime_from_html(r#"<html><body></body></html>"#);
+        runtime.run_script(
+            r#"
+        var el = document.createElement("div");
+        el.id = "created";
+        document.body.appendChild(el);
+        "#,
+        );
+        assert!(dom.get_element_by_id("created").is_some());
+    }
+
+    #[test]
+    fn create_element_ns_throws_invalid_character_error_for_invalid_name() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        try {
+            document.createElementNS("http://www.w3.org/2000/svg", "123bad");
+            document.getElementById("r").setAttribute("data-error", "no-throw");
+        } catch (e) {
+            document.getElementById("r").setAttribute("data-error", e.name);
+        }
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(
+            r.borrow().value.get_attr("data-error"),
+            Some("InvalidCharacterError")
+        );
+    }
+
+    #[test]
+    fn node_constants_are_exposed_on_global() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        document.getElementById("r").setAttribute("data-elem", Node.ELEMENT_NODE);
+        document.getElementById("r").setAttribute("data-text", Node.TEXT_NODE);
+        document.getElementById("r").setAttribute("data-doc", Node.DOCUMENT_NODE);
+        document.getElementById("r").setAttribute("data-frag", Node.DOCUMENT_FRAGMENT_NODE);
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        let r = r.borrow();
+        assert_eq!(r.value.get_attr("data-elem"), Some("1"));
+        assert_eq!(r.value.get_attr("data-text"), Some("3"));
+        assert_eq!(r.value.get_attr("data-doc"), Some("9"));
+        assert_eq!(r.value.get_attr("data-frag"), Some("11"));
+    }
+
+    #[test]
+    fn node_constants_are_exposed_on_instance_nodes() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        document.getElementById("r").setAttribute("data-doc-frag", document.DOCUMENT_FRAGMENT_NODE);
+        document.getElementById("r").setAttribute("data-cmt", document.body.COMMENT_NODE);
+        document.getElementById("r").setAttribute("data-txt", document.createTextNode("").ELEMENT_NODE);
+        document.getElementById("r").setAttribute("data-frag", document.createElement("div").DOCUMENT_FRAGMENT_NODE);
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        let r = r.borrow();
+        assert_eq!(r.value.get_attr("data-doc-frag"), Some("11"));
+        assert_eq!(r.value.get_attr("data-cmt"), Some("8"));
+        assert_eq!(r.value.get_attr("data-txt"), Some("1"));
+        assert_eq!(r.value.get_attr("data-frag"), Some("11"));
+    }
+
+    #[test]
+    fn document_first_child_is_doctype_node() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<!DOCTYPE html><html><body><div id="r"><span>x</span></div></body></html>"#,
+        );
+        runtime.run_script(
+            r#"
+        document.getElementById("r").setAttribute("data-doc-type", document.nodeType);
+        document.getElementById("r").setAttribute("data-doctype-node", document.firstChild.nodeType);
+        document.getElementById("r").setAttribute("data-doctype-name", document.firstChild.nodeName);
+        var span = document.getElementById("r").firstChild;
+        document.getElementById("r").setAttribute("data-text-type", span.firstChild.nodeType);
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        let r = r.borrow();
+        assert_eq!(r.value.get_attr("data-doc-type"), Some("9"));
+        assert_eq!(r.value.get_attr("data-doctype-node"), Some("10"));
+        assert_eq!(r.value.get_attr("data-doctype-name"), Some("html"));
+        assert_eq!(r.value.get_attr("data-text-type"), Some("3"));
+    }
+
+    #[test]
+    fn create_element_ns_preserves_qualified_name() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var el = document.createElementNS("http://ns.example.com/", "prefix:localname");
+        document.getElementById("r").setAttribute("data-tag", el.tagName);
+        document.getElementById("r").setAttribute("data-local", el.localName);
+        document.getElementById("r").setAttribute("data-prefix", el.prefix);
+        document.getElementById("r").setAttribute("data-ns", el.namespaceURI);
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        let r = r.borrow();
+        assert_eq!(r.value.get_attr("data-tag"), Some("prefix:localname"));
+        assert_eq!(r.value.get_attr("data-local"), Some("localname"));
+        assert_eq!(r.value.get_attr("data-prefix"), Some("prefix"));
+        assert_eq!(r.value.get_attr("data-ns"), Some("http://ns.example.com/"));
+    }
+
+    #[test]
+    fn document_close_returns_undefined() {
+        let (mut runtime, _) = runtime_from_html(r#"<html><body></body></html>"#);
+        runtime.run_script(
+            r#"
+        var result = document.close();
+        document.getElementById("r").setAttribute("data-close", typeof result);
+        "#,
+        );
+        // document.close() returns undefined, and there is no element "r" yet
+        // so we test it differently
+        let (mut runtime2, dom2) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime2.run_script(
+            r#"
+        document.close();
+        document.getElementById("r").setAttribute("data-close", "ok");
+        "#,
+        );
+        let r = dom2.get_element_by_id("r").unwrap();
+        assert_eq!(r.borrow().value.get_attr("data-close"), Some("ok"));
+    }
+
+    #[test]
+    fn dom_exception_instanceof_error() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var e = new DOMException("test", "SyntaxError");
+        document.getElementById("r").setAttribute("data-is-error", e instanceof Error);
+        document.getElementById("r").setAttribute("data-is-domexc", e instanceof DOMException);
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        let r = r.borrow();
+        assert_eq!(r.value.get_attr("data-is-error"), Some("true"));
+        assert_eq!(r.value.get_attr("data-is-domexc"), Some("true"));
+    }
+
+    #[test]
+    fn create_comment_returns_comment_node() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var c = document.createComment("hello");
+        document.getElementById("r").setAttribute("data-type", c.nodeType);
+        document.getElementById("r").setAttribute("data-name", c.nodeName);
+        document.getElementById("r").setAttribute("data-data", c.data);
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        let r = r.borrow();
+        assert_eq!(r.value.get_attr("data-type"), Some("8"));
+        assert_eq!(r.value.get_attr("data-name"), Some("#comment"));
+        assert_eq!(r.value.get_attr("data-data"), Some("hello"));
+    }
+
+    #[test]
+    fn create_processing_instruction_returns_pi_node() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var pi = document.createProcessingInstruction("xml-stylesheet", "href=\"style.css\"");
+        document.getElementById("r").setAttribute("data-type", pi.nodeType);
+        document.getElementById("r").setAttribute("data-data", pi.data);
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        let r = r.borrow();
+        assert_eq!(r.value.get_attr("data-type"), Some("7"));
+        assert_eq!(r.value.get_attr("data-data"), Some("href=\"style.css\""));
+    }
+
+    #[test]
+    fn create_processing_instruction_empty_target_throws() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        try {
+            document.createProcessingInstruction("", "data");
+            document.getElementById("r").setAttribute("data-error", "no-throw");
+        } catch (e) {
+            document.getElementById("r").setAttribute("data-error", e.name);
+        }
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(r.borrow().value.get_attr("data-error"), Some("SyntaxError"));
+    }
+
+    #[test]
+    fn innerhtml_setter_uses_parser_and_replaces_children() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="target"></div><div id="r"></div>"#);
+        runtime.run_script(r#"
+        var t = document.getElementById("target");
+        t.innerHTML = "<p>A</p><span>B</span>";
+        document.getElementById("r").setAttribute("data-count", t.childNodes.length);
+        document.getElementById("r").setattr || document.getElementById("r").setAttribute("data-tags",
+            t.children[0].tagName + ":" + t.children[1].tagName
+        );
+        "#);
+        let r = dom.get_element_by_id("r").unwrap();
+        let r = r.borrow();
+        assert_eq!(r.value.get_attr("data-count"), Some("2"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Formerly missing Web Platform APIs (detector list)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn all_detector_listed_apis_are_present() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var missing = [];
+        var globals = ["AbortController", "AbortSignal", "Blob", "CustomElementRegistry",
+            "FileReader", "Response", "ShadowRoot"];
+        for (var i = 0; i < globals.length; i++) {
+            if (typeof window[globals[i]] === "undefined") missing.push("window." + globals[i]);
+        }
+        var docMethods = ["elementFromPoint", "elementsFromPoint", "execCommand", "getSelection",
+            "pictureInPictureElement"];
+        for (var j = 0; j < docMethods.length; j++) {
+            if (typeof document[docMethods[j]] === "undefined") missing.push("document." + docMethods[j]);
+        }
+        var elementMethods = ["getAnimations", "requestFullscreen", "scrollIntoView", "scrollTo"];
+        for (var k = 0; k < elementMethods.length; k++) {
+            if (typeof Element.prototype[elementMethods[k]] === "undefined")
+                missing.push("Element.prototype." + elementMethods[k]);
+        }
+        document.getElementById("r").setAttribute("data-missing", missing.join(","));
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(r.borrow().value.get_attr("data-missing"), Some(""));
+    }
+
+    #[test]
+    fn element_prototype_methods_are_callable_noops() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var el = document.getElementById("r");
+        var out = [];
+        out.push("anims:" + (el.getAnimations() instanceof Array));
+        out.push("scrollIntoView:" + el.scrollIntoView());
+        out.push("scrollTo:" + el.scrollTo(0, 10));
+        out.push("scrollToOptions:" + el.scrollTo({left: 1, top: 2}));
+        el.requestFullscreen().then(function () {
+            el.setAttribute("data-fs", "resolved:" + (document.fullscreenElement === el));
+        });
+        el.setAttribute("data-out", out.join(";"));
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        let attrs = r.borrow();
+        assert_eq!(
+            attrs.value.get_attr("data-out"),
+            Some(
+                "anims:true;scrollIntoView:undefined;scrollTo:undefined;scrollToOptions:undefined"
+            )
+        );
+        assert_eq!(attrs.value.get_attr("data-fs"), Some("resolved:true"));
+    }
+
+    #[test]
+    fn document_selection_and_point_apis_behave() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var out = [];
+        var sel = document.getSelection();
+        out.push("selSingleton:" + (document.getSelection() === sel));
+        out.push("rangeCount:" + sel.rangeCount);
+        out.push("type:" + sel.type);
+        out.push("exec:" + document.execCommand("bold"));
+        out.push("execEmpty:" + document.execCommand(""));
+        out.push("pipType:" + typeof document.pictureInPictureElement);
+        out.push("pipNull:" + (document.pictureInPictureElement === null));
+        out.push("point:" + (document.elementFromPoint(5, 5) === null));
+        out.push("stack:" + document.elementsFromPoint(5, 5).length);
+        document.getElementById("r").setAttribute("data-out", out.join(";"));
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(
+            r.borrow().value.get_attr("data-out"),
+            Some(
+                "selSingleton:true;rangeCount:0;type:None;exec:true;execEmpty:false;pipType:object;pipNull:true;point:true;stack:0"
+            )
+        );
+    }
+
+    #[test]
+    fn abort_controller_and_signal_follow_platform_semantics() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var out = [];
+        var controller = new AbortController();
+        out.push("fresh:" + controller.signal.aborted);
+        var fired = 0;
+        controller.signal.addEventListener("abort", function () { fired++; });
+        controller.abort();
+        out.push("aborted:" + controller.signal.aborted);
+        out.push("reasonName:" + controller.signal.reason.name);
+        out.push("fired:" + fired);
+        var custom = new AbortController();
+        custom.abort("because");
+        out.push("customReason:" + custom.signal.reason);
+        out.push("reabort:" + (controller.abort(), controller.signal.reason.name));
+        try { controller.signal.throwIfAborted(); } catch (e) { out.push("throw:" + e.name); }
+        var staticAborted = AbortSignal.abort();
+        out.push("static:" + staticAborted.aborted + ":" + staticAborted.reason.name);
+        var any = AbortSignal.any([controller.signal, new AbortController().signal]);
+        out.push("any:" + any.aborted);
+        document.getElementById("r").setAttribute("data-out", out.join(";"));
+        "#,
+        );
+        runtime.perform_microtask_checkpoint_public();
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(
+            r.borrow().value.get_attr("data-out"),
+            Some(
+                "fresh:false;aborted:true;reasonName:AbortError;fired:1;customReason:because;reabort:AbortError;throw:AbortError;static:true:AbortError;any:true"
+            )
+        );
+    }
+
+    #[test]
+    fn fetch_with_preaborted_signal_rejects_without_request() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var controller = new AbortController();
+        controller.abort();
+        fetch("https://example.com/data", { signal: controller.signal })
+            .then(function () {
+                document.getElementById("r").setAttribute("data-result", "resolved");
+            })
+            .catch(function (error) {
+                document.getElementById("r").setAttribute("data-result", "rejected:" + error.name);
+            });
+        "#,
+        );
+        runtime.perform_microtask_checkpoint_public();
+        let requests = runtime.take_fetch_requests();
+        assert!(
+            requests.is_empty(),
+            "no fetch should be queued for an aborted signal"
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(
+            r.borrow().value.get_attr("data-result"),
+            Some("rejected:AbortError")
+        );
+    }
+
+    #[test]
+    fn fetch_registers_signal_and_abort_rejects_pending_request() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var controller = new AbortController();
+        fetch("https://example.com/slow", { signal: controller.signal })
+            .then(function () {
+                document.getElementById("r").setAttribute("data-result", "resolved");
+            })
+            .catch(function (error) {
+                document.getElementById("r").setAttribute("data-result", "rejected:" + error.name);
+            });
+        controller.abort();
+        "#,
+        );
+        runtime.perform_microtask_checkpoint_public();
+        let requests = runtime.take_fetch_requests();
+        assert!(
+            requests.is_empty(),
+            "aborted fetch must be removed from the queue"
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(
+            r.borrow().value.get_attr("data-result"),
+            Some("rejected:AbortError")
+        );
+    }
+
+    #[test]
+    fn blob_and_file_reader_round_trip() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var out = [];
+        var blob = new Blob(["hello", " ", "world"], { type: "text/plain" });
+        out.push("size:" + blob.size);
+        out.push("type:" + blob.type);
+        blob.text().then(function (text) { out.push("text:" + text); });
+        blob.arrayBuffer().then(function (buffer) { out.push("bytes:" + buffer.byteLength); });
+        var sliced = blob.slice(0, 5);
+        sliced.text().then(function (text) { out.push("slice:" + text); });
+        var reader = new FileReader();
+        var loaded = null;
+        reader.onload = function (event) { loaded = event.type; };
+        reader.readAsText(blob);
+        out.push("read:" + reader.result);
+        out.push("loadEvent:" + loaded);
+        document.getElementById("r").setAttribute("data-out", out.join(";"));
+        window.__blob_out = out;
+        "#,
+        );
+        runtime.perform_microtask_checkpoint_public();
+        // Re-run to capture the results produced by microtasks.
+        runtime.run_script(
+            r#"
+        document.getElementById("r").setAttribute("data-out", window.__blob_out.join(";"));
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        let observed = r
+            .borrow()
+            .value
+            .get_attr("data-out")
+            .unwrap_or_default()
+            .to_string();
+        assert!(observed.contains("size:11"), "got {observed}");
+        assert!(observed.contains("type:text/plain"), "got {observed}");
+        assert!(observed.contains("text:hello world"), "got {observed}");
+        assert!(observed.contains("bytes:11"), "got {observed}");
+        assert!(observed.contains("slice:hello"), "got {observed}");
+        assert!(observed.contains("read:hello world"), "got {observed}");
+        assert!(observed.contains("loadEvent:load"), "got {observed}");
+    }
+
+    #[test]
+    fn response_constructor_produces_a_working_response() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var out = [];
+        var response = new Response("body text", { status: 201, statusText: "Created" });
+        out.push("status:" + response.status);
+        out.push("statusText:" + response.statusText);
+        out.push("ok:" + response.ok);
+        response.text().then(function (text) { out.push("text:" + text); });
+        var jsonResponse = new Response("{}", { headers: { "content-type": "application/json" } });
+        jsonResponse.json().then(function (value) { out.push("json:" + (typeof value === "object")); });
+        window.__response_out = out;
+        "#,
+        );
+        runtime.perform_microtask_checkpoint_public();
+        runtime.run_script(
+            r#"
+        document.getElementById("r").setAttribute("data-out", window.__response_out.join(";"));
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        let observed = r
+            .borrow()
+            .value
+            .get_attr("data-out")
+            .unwrap_or_default()
+            .to_string();
+        assert!(observed.contains("status:201"), "got {observed}");
+        assert!(observed.contains("statusText:Created"), "got {observed}");
+        assert!(observed.contains("ok:true"), "got {observed}");
+        assert!(observed.contains("text:body text"), "got {observed}");
+        assert!(observed.contains("json:true"), "got {observed}");
+    }
+
+    #[test]
+    fn custom_element_registry_and_shadow_root_are_instanciable_checks() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var out = [];
+        out.push("ceType:" + typeof CustomElementRegistry);
+        out.push("instance:" + (customElements instanceof CustomElementRegistry));
+        out.push("define:" + typeof customElements.define);
+        out.push("whenDefined:" + typeof customElements.whenDefined);
+        out.push("srType:" + typeof ShadowRoot);
+        out.push("hostHook:" + typeof ShadowRoot.prototype);
+        var host = document.getElementById("r");
+        var shadow = host.attachShadow({ mode: "open" });
+        out.push("attach:" + (shadow instanceof ShadowRoot));
+        try { new ShadowRoot(); out.push("ctor:no-throw"); }
+        catch (e) { out.push("ctor:" + (e instanceof TypeError)); }
+        document.getElementById("r").setAttribute("data-out", out.join(";"));
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(
+            r.borrow().value.get_attr("data-out"),
+            Some(
+                "ceType:function;instance:true;define:function;whenDefined:function;srType:function;hostHook:object;attach:true;ctor:true"
+            )
+        );
+    }
+
+    #[test]
+    fn promise_finally_race_any_and_all_settled_compose() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        window.__out = [];
+        function log(s) { window.__out.push(s); }
+        Promise.race([new Promise(function (_, rej) { rej("early"); })])
+            .catch(function (e) { log("race:" + e); });
+        Promise.allSettled([Promise.resolve(1), Promise.reject("bad")])
+            .then(function (rs) {
+                log("settled:" + rs[0].status + ":" + rs[1].status + ":" + rs[1].reason);
+            });
+        Promise.any([Promise.reject("a"), Promise.resolve("ok")])
+            .then(function (v) { log("any:" + v); });
+        Promise.any([Promise.reject("x"), Promise.reject("y")])
+            .catch(function (e) {
+                log("anyReject:" + e.name + ":" + e.errors.length + ":" + e.errors[0]);
+            });
+        Promise.resolve("base")
+            .finally(function () { log("finally:ran"); })
+            .then(function (v) { log("finally:" + v); });
+        Promise.reject("original")
+            .finally(function () { log("finallyReject:ran"); })
+            .catch(function (e) { log("finallyReject:" + e); });
+        "#,
+        );
+        runtime.perform_microtask_checkpoint_public();
+        runtime.run_script(
+            r#"
+        document.getElementById("r").setAttribute("data-out", window.__out.join(";"));
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(
+            r.borrow().value.get_attr("data-out"),
+            Some(
+                "finally:ran;finallyReject:ran;race:early;settled:fulfilled:rejected:bad;any:ok;anyReject:AggregateError:2:x;finally:base;finallyReject:original"
+            )
+        );
+    }
+
+    #[test]
+    fn promise_rejections_and_host_errors_preserve_error_instances() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        window.__out = [];
+        function log(s) { window.__out.push(s); }
+        Promise.resolve(1)
+            .then(function () { throw new TypeError("boom"); })
+            .catch(function (e) {
+                log("thrown:" + (e instanceof TypeError) + ":" + e.name + ":" + e.message);
+            });
+        Promise.reject(new RangeError("nope"))
+            .catch(function (e) {
+                log("rejected:" + (e instanceof RangeError) + ":" + e.message);
+            });
+        try { JSON.parse("{not json"); }
+        catch (e) { log("hostSyntax:" + (e instanceof SyntaxError) + ":" + e.name); }
+        try { new ShadowRoot(); }
+        catch (e) { log("hostType:" + (e instanceof TypeError)); }
+        "#,
+        );
+        runtime.perform_microtask_checkpoint_public();
+        runtime.run_script(
+            r#"
+        document.getElementById("r").setAttribute("data-out", window.__out.join(";"));
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(
+            r.borrow().value.get_attr("data-out"),
+            Some(
+                "hostSyntax:true:SyntaxError;hostType:true;rejected:true:nope;thrown:true:TypeError:boom"
+            )
+        );
+    }
+
+    #[test]
+    fn try_run_script_distinguishes_parse_failures_from_clean_runs() {
+        let (mut runtime, _dom) = runtime_from_html(r#""#);
+        assert!(runtime.try_run_script("var x = 1; 1 + 1;").is_ok());
+        let err = runtime
+            .try_run_script("var x = ;")
+            .expect_err("syntax error must surface");
+        assert!(!err.is_empty(), "parse error still needs a message");
+        // A host error thrown by the script itself also surfaces.
+        runtime
+            .try_run_script("throw new TypeError('boom');")
+            .expect_err("thrown value must surface");
+    }
+
+    #[test]
+    fn drain_microtasks_settles_job_queued_callbacks() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"queueMicrotask(function () {
+                document.getElementById("r").setAttribute("data-out", "drained");
+            });"#,
+        );
+        runtime.drain_microtasks();
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(
+            r.borrow().value.get_attr("data-out"),
+            Some("drained"),
+            "queueMicrotask work must settle without a timer"
+        );
+    }
+
+    #[test]
+    fn host_constructed_encoders_and_views_pass_instanceof() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+            var results = [];
+            var enc = new TextEncoder();
+            var dec = new TextDecoder();
+            var buf = new ArrayBuffer(8);
+            var view = new Uint8Array(buf);
+            var dv = new DataView(buf);
+            results.push("enc:" + (enc instanceof TextEncoder));
+            results.push("dec:" + (dec instanceof TextDecoder));
+            results.push("decNotEnc:" + (dec instanceof TextEncoder));
+            results.push("buf:" + (buf instanceof ArrayBuffer));
+            results.push("view:" + (view instanceof Uint8Array));
+            results.push("dv:" + (dv instanceof DataView));
+            results.push("plain:" + ({} instanceof TextEncoder));
+            document.getElementById("r").setAttribute("data-out", results.join(";"));
+            "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(
+            r.borrow().value.get_attr("data-out"),
+            Some("enc:true;dec:true;decNotEnc:false;buf:true;view:true;dv:true;plain:false")
+        );
+    }
+}

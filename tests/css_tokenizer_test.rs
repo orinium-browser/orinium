@@ -1,7 +1,7 @@
 use orinium_browser::engine::css::tokenizer::{Token, Tokenizer};
 
 // Collect all tokens until EOF
-fn tokenize(input: &str) -> Vec<Token> {
+fn tokenize(input: &str) -> Vec<Token<'_>> {
     let mut tokenizer = Tokenizer::new(input);
     let mut tokens = Vec::new();
 

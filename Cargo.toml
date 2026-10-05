@@ -8,32 +8,58 @@ license = "Apache-2.0"
 resolver = "3"
 
 [dependencies]
-anyhow = "1.0"
-tokio = { version = "1", features = ["rt", "net", "time", "io-std", "fs"] }
-pollster = "0.4"
-env_logger = "0.11.9"
-log = "0.4.29"
-once_cell = "1.21.3"
-entities = "1.0.1"
-winit = "0.30.12"
-wgpu = "28.0.0"
-wgpu-types = "28.0.0"
-glyphon = { git = "https://github.com/grovesNL/glyphon", rev = "37b973d" }
-fontdue = "0.9.3"
+dhat = "0.3.3"
+
+orinium_text = { git = "https://github.com/orinium-browser/orinium_text", rev = "e647a94996f72caacaaa06322ddb75cde06077f5" }
+
 ab_glyph = "0.2"
+anyhow = "1.0"
+base64 = "0.23"
+brotli-decompressor = "4"
 bytemuck = { version = "1.25", features = ["derive"] }
-url = "2.5"
-rustls = { version = "0.23.36", default-features = false, features = ["tls12"] }
-rustls-native-certs = "0.8.3"
-tokio-rustls = "0.26.4"
-hyper = { version = "1", features = ["client", "http1", "http2"] }
+cpal = "0.18.1"
+dark-light = "3.0"
+entities = "1.0.1"
+env_logger = "0.11.10"
+etagere = "0.3.0"
+flate2 = "1.1.10"
+fontdue = "0.9.3"
+getrandom = "0.3"
 http-body-util = "0.1"
+hyper = { version = "1", features = ["client", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
-image = "0.25.9"
-ui_layout = "0.9.6"
-cpal = "0.17.3"
-symphonia = { version = "0.5.5", features = ["aac", "flac", "mp3", "vorbis", "wav"] }
+image = "0.25.10"
+ipc-channel = "0.23.0"
+log = "0.4.32"
+lru = "0.18"
+once_cell = "1.21.4"
+pixi_byte = { git = "https://github.com/orinium-browser/pixi_byte", rev = "74468af" }
+pollster = "1.0"
+rustls = { version = "0.23.40", default-features = false, features = ["tls12"] }
+rustls-native-certs = "0.8.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+smol_str = "0.3.6"
+swash = { version = "0.2.10", features = ["render", "scale"] }
+symphonia = { version = "0.6.0", features = ["aac", "flac", "mp3", "vorbis", "wav"] }
+tokio = { version = "1.52", features = ["fs", "io-std", "net", "rt", "time"] }
+tokio-rustls = "0.26.4"
+ttf-parser = "0.25.1"
+ui_layout = { git = "https://github.com/098orin/ui_layout-rs", rev = "65b288349863ab568924f6cf75bde79ce1a45c60" }
+url = "2.5"
+wgpu = "30.0.1"
+wgpu-types = "30.0.1"
+winit = "0.30.13"
 
 [dev-dependencies]
-colored = "3.1.1" # コマンドラインハイライト用
+colored = "3.1.1"  # コマンドラインハイライト用
 strsim = "0.11.1"
+
+[features]
+dhat-heap = []
+# Compiles in timing instrumentation and its log output
+# (`[LayoutMetrics]`, `[JsMetrics]`, `TextMeasurer`, `TextRenderer`, …).
+profile = []
+
+[profile.dev.package.pixi_byte]
+opt-level = 3
