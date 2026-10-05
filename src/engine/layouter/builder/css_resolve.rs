@@ -592,6 +592,14 @@ fn parse_grid_track(
         CssValue::Keyword(keyword) if keyword == "auto" => {
             Some(GridTrack::Breadth(LengthOrAuto::Auto))
         }
+        // TODO: Support content-based sizing; fall back to `auto` for now.
+        CssValue::Keyword(keyword) if matches!(keyword.as_str(), "min-content" | "max-content") => {
+            Some(GridTrack::Breadth(LengthOrAuto::Auto))
+        }
+        // TODO: Support `fit-content()` sizing; fall back to `auto` for now.
+        CssValue::Function(function, _) if function == "fit-content" => {
+            Some(GridTrack::Breadth(LengthOrAuto::Auto))
+        }
         CssValue::Length(factor, Unit::Fr) if *factor >= 0.0 => Some(GridTrack::Flex(*factor)),
         CssValue::Function(function, args) if function == "minmax" => {
             let [minimum, maximum] = args.as_slice() else {
