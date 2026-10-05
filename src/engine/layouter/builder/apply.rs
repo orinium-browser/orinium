@@ -3,6 +3,7 @@ use std::sync::LazyLock;
 use smol_str::SmolStr;
 
 use crate::engine::css::values::{CssValue, Unit};
+use crate::engine::layouter::builder::css_resolve::parse_grid_template;
 use crate::engine::layouter::types::CursorStyle;
 
 use ui_layout::{
@@ -1923,6 +1924,16 @@ pub fn apply_declaration(
 
         ("grid-template-rows", _) => {
             style.grid_template_rows = parse_grid_tracks(name, value, text_flow_style)?;
+        }
+
+        ("grid-template", _) => {
+            // A shorthand resets every longhand it covers, so the areas are
+            // overwritten even when the value names none.
+            let template = parse_grid_template(value, text_flow_style)?;
+
+            style.grid_template_rows = template.rows;
+            style.grid_template_columns = template.columns;
+            style.grid_template_areas = template.areas;
         }
 
         ("grid-template-areas", _) => {

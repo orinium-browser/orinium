@@ -1,7 +1,7 @@
 use super::*;
 use crate::engine::bridge::audio::NullAudioSinkFactory;
 use crate::engine::bridge::text::FallbackTextMeasurer;
-use crate::engine::css::parser::Parser as CssParser;
+use crate::engine::css::parser::{CssNodeType, Parser as CssParser};
 use crate::engine::html::parser::Parser as HtmlParser;
 use crate::engine::layouter::css_resolver::CssResolver;
 use crate::engine::layouter::types::ClipPath;
@@ -30,6 +30,47 @@ fn apply_layout_property(name: &str, value: CssValue) -> Style {
     );
     assert!(parsed.is_some());
     style
+}
+
+/// Apply declarations in order to one style so that shorthand resets are
+/// observable. Returns `None` when a declaration is rejected.
+fn apply_layout_declarations(declarations: &[(&str, CssValue)]) -> Option<Style> {
+    let mut style = Style::default();
+    let mut container_style = ContainerStyle::default();
+    let mut text_style = TextStyle::default();
+    let mut text_flow_style = TextFlowStyle::default();
+    let mut overflow = Overflow::default();
+    for (name, value) in declarations {
+        apply_declaration(
+            name,
+            value,
+            &mut style,
+            &mut container_style,
+            &mut text_style,
+            &mut text_flow_style,
+            &Style::default(),
+            &ContainerStyle::default(),
+            &TextStyle::default(),
+            &TextFlowStyle::default(),
+            &mut overflow,
+            ColorScheme::Light,
+        )?;
+    }
+    Some(style)
+}
+
+/// Apply a `grid-template` shorthand through the stylesheet parser, so tests
+/// see the same token stream a real stylesheet produces. Returns `None` when
+/// the declaration is invalid.
+fn grid_template_style(declaration: &str) -> Option<Style> {
+    let sheet = CssParser::new(&format!(".grid {{ grid-template: {declaration} }}"))
+        .parse()
+        .unwrap();
+    let node = sheet.children()[0].children()[0].node();
+    let CssNodeType::Declaration { value, .. } = node else {
+        panic!("expected a declaration");
+    };
+    apply_layout_declarations(&[("grid-template", value.clone())])
 }
 
 fn apply_container_property(name: &str, value: CssValue) -> ContainerStyle {
@@ -575,6 +616,203 @@ fn grid_named_areas_map_rows_and_item_name() {
 
     let item = apply_layout_property("grid-area", CssValue::Keyword("header".into()));
     assert_eq!(item.grid_area.as_deref(), Some("header"));
+}
+
+#[test]
+fn grid_template_shorthand_splits_rows_from_columns() {
+    let style = grid_template_style("auto 1fr / auto 1fr auto").expect("valid declaration");
+    assert_eq!(
+        style.grid_template_rows,
+        vec![GridTrack::default(), GridTrack::Flex(1.0)]
+    );
+    assert_eq!(
+        style.grid_template_columns,
+        vec![
+            GridTrack::default(),
+            GridTrack::Flex(1.0),
+            GridTrack::default()
+        ]
+    );
+    assert!(
+        style.grid_template_areas.is_empty(),
+        "`rows / columns` sets grid-template-areas to none"
+    );
+}
+
+#[test]
+fn grid_template_shorthand_pairs_area_strings_with_row_sizes() {
+    let style = grid_template_style(r#""h h" 25px "m m" 1fr / auto 1fr"#)
+        .expect("area strings interleaved with row sizes are valid");
+    assert_eq!(
+        style.grid_template_areas,
+        vec![
+            vec!["h".to_string(), "h".to_string()],
+            vec!["m".to_string(), "m".to_string()],
+        ]
+    );
+    assert_eq!(
+        style.grid_template_rows,
+        vec![
+            GridTrack::Breadth(LengthOrAuto::Length(Length::Px(25.0))),
+            GridTrack::Flex(1.0),
+        ]
+    );
+    assert_eq!(
+        style.grid_template_columns,
+        vec![GridTrack::default(), GridTrack::Flex(1.0)]
+    );
+}
+
+#[test]
+fn grid_template_shorthand_defaults_unsized_area_rows_to_auto() {
+    let style = grid_template_style(r#""h h" "m m" 1fr / 1fr 1fr"#).expect("valid declaration");
+    assert_eq!(
+        style.grid_template_rows,
+        vec![GridTrack::default(), GridTrack::Flex(1.0)],
+        "an area string without a following size sizes its row `auto`"
+    );
+}
+
+#[test]
+fn grid_template_shorthand_without_slash_declares_only_areas() {
+    let style = grid_template_style(r#""h h" "m m""#).expect("valid declaration");
+    assert_eq!(
+        style.grid_template_areas,
+        vec![
+            vec!["h".to_string(), "h".to_string()],
+            vec!["m".to_string(), "m".to_string()],
+        ]
+    );
+    assert_eq!(
+        style.grid_template_rows,
+        vec![GridTrack::default(), GridTrack::default()]
+    );
+    assert!(
+        style.grid_template_columns.is_empty(),
+        "no `/ <explicit-track-list>`, so grid-template-columns stays none"
+    );
+}
+
+#[test]
+fn grid_template_shorthand_skips_line_names_around_area_strings() {
+    // Named grid lines are not modelled by `Style` yet, but a declaration that
+    // uses them must still apply its tracks and areas instead of being dropped.
+    let style = grid_template_style(r#"[top] "h h" [middle] 1fr [bottom] / [left] 1fr [right]"#)
+        .expect("line names must not invalidate the declaration");
+    assert_eq!(
+        style.grid_template_areas,
+        vec![vec!["h".to_string(), "h".to_string()]]
+    );
+    assert_eq!(style.grid_template_rows, vec![GridTrack::Flex(1.0)]);
+    assert_eq!(style.grid_template_columns, vec![GridTrack::Flex(1.0)]);
+}
+
+#[test]
+fn grid_template_shorthand_resets_areas_from_earlier_declarations() {
+    let style = apply_layout_declarations(&[
+        (
+            "grid-template-areas",
+            CssValue::List(vec![CssValue::String("h h".into())]),
+        ),
+        (
+            "grid-template",
+            CssValue::List(vec![
+                CssValue::Length(1.0, Unit::Fr),
+                CssValue::Keyword("/".into()),
+                CssValue::Length(2.0, Unit::Fr),
+            ]),
+        ),
+    ])
+    .expect("valid declarations");
+    assert!(
+        style.grid_template_areas.is_empty(),
+        "the shorthand resets grid-template-areas, it does not leave it alone"
+    );
+    assert_eq!(style.grid_template_rows, vec![GridTrack::Flex(1.0)]);
+    assert_eq!(style.grid_template_columns, vec![GridTrack::Flex(2.0)]);
+}
+
+#[test]
+fn grid_template_none_resets_rows_columns_and_areas() {
+    let style = apply_layout_declarations(&[
+        (
+            "grid-template",
+            CssValue::List(vec![
+                CssValue::String("h h".into()),
+                CssValue::Length(1.0, Unit::Fr),
+                CssValue::Keyword("/".into()),
+                CssValue::Length(1.0, Unit::Fr),
+            ]),
+        ),
+        ("grid-template", CssValue::Keyword("none".into())),
+    ])
+    .expect("valid declarations");
+    assert!(style.grid_template_rows.is_empty());
+    assert!(style.grid_template_columns.is_empty());
+    assert!(style.grid_template_areas.is_empty());
+}
+
+#[test]
+fn grid_template_shorthand_rejects_a_track_list_without_columns() {
+    assert!(
+        grid_template_style("auto 1fr auto").is_none(),
+        "`<rows>` without a `/` is not one of the shorthand's grammar forms"
+    );
+}
+
+#[test]
+fn grid_template_shorthand_accepts_none_on_either_side_of_the_slash() {
+    for (declaration, rows, columns) in [
+        ("none / 1fr", 0, 1),
+        ("1fr / none", 1, 0),
+        ("none / none", 0, 0),
+    ] {
+        let style =
+            grid_template_style(declaration).unwrap_or_else(|| panic!("{declaration} is valid"));
+        assert_eq!(style.grid_template_rows.len(), rows, "{declaration}");
+        assert_eq!(style.grid_template_columns.len(), columns, "{declaration}");
+    }
+}
+
+#[test]
+fn grid_template_shorthand_areas_control_final_layout() {
+    let html = r#"<html><body><div class="grid"><div class="header"></div><div class="sidebar"></div><div class="main"></div></div></body></html>"#;
+    // The `grid-template` form of `named_grid_area_css_controls_final_layout`,
+    // which asserts the same geometry via the longhands.
+    let css = r#"
+            .grid {
+                display: grid;
+                width: 300px;
+                grid-template: "header header" 20px "sidebar main" 20px / 1fr 2fr;
+                gap: 10px;
+            }
+            .grid > div { height: 20px; }
+            .header { grid-area: header; }
+            .sidebar { grid-area: sidebar; }
+            .main { grid-area: main; }
+        "#;
+    let (mut layout, _) = layout_and_info_for(html, css);
+    ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+
+    fn find_grid(node: &LayoutNode) -> Option<&LayoutNode> {
+        if node.style.display.inner() == Some(InnerDisplay::Grid) {
+            return Some(node);
+        }
+        node.children
+            .iter()
+            .filter_map(LayoutChild::node)
+            .find_map(find_grid)
+    }
+    let grid = find_grid(&layout).expect("grid container");
+    let items: Vec<_> = grid.children.iter().filter_map(LayoutChild::node).collect();
+    assert_eq!(items.len(), 3);
+    assert_eq!(items[0].layout_box.width_box(), 300.0);
+    assert_eq!(items[1].layout_box.iter().next().unwrap().border_box.x, 0.0);
+    assert!((items[2].layout_box.iter().next().unwrap().border_box.x - 106.66667).abs() < 0.01);
+    assert_eq!(
+        items[1].layout_box.iter().next().unwrap().border_box.y,
+        30.0
+    );
 }
 
 #[test]

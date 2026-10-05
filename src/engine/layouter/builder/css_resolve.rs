@@ -498,8 +498,22 @@ pub fn parse_grid_tracks(
         CssValue::List(values) => values.iter().collect(),
         value => vec![value],
     };
+    parse_grid_track_list(name, &values, text_flow_style)
+}
+
+fn parse_grid_track_list(
+    name: &str,
+    values: &[&CssValue],
+    text_flow_style: &TextFlowStyle,
+) -> Option<Vec<GridTrack>> {
+    // A lone `none` is valid for both track-list longhands, but a token slice
+    // can no longer recognise it as the whole value the way `parse_grid_tracks`
+    // does.
+    if matches!(values, [CssValue::Keyword(keyword)] if keyword == "none") {
+        return Some(Vec::new());
+    }
     values
-        .into_iter()
+        .iter()
         .map(|value| parse_grid_track(name, value, text_flow_style))
         .collect()
 }
@@ -615,6 +629,158 @@ fn parse_grid_track(
     }
 }
 
+/// The three longhands a `grid-template` shorthand declaration covers.
+pub struct GridTemplate {
+    pub rows: Vec<GridTrack>,
+    pub columns: Vec<GridTrack>,
+    pub areas: Vec<Vec<String>>,
+}
+
+/// Parse the `grid-template` shorthand (CSS Grid Layout 1 §7.4):
+///
+/// ```text
+/// none
+///  | <'grid-template-rows'> / <'grid-template-columns'>
+///  | [ <line-names>? <string> <track-size>? <line-names>? ]+
+///      [ / <explicit-track-list> ]?
+/// ```
+///
+/// In the third form the area strings and the row sizes that follow them are
+/// interleaved, so the tokens before the `/` are not a plain track list.
+///
+/// All three longhands are always set, since a shorthand resets every longhand
+/// it covers.
+pub fn parse_grid_template(
+    value: &CssValue,
+    text_flow_style: &TextFlowStyle,
+) -> Option<GridTemplate> {
+    if matches!(value, CssValue::Keyword(keyword) if keyword == "none") {
+        return Some(GridTemplate {
+            rows: Vec::new(),
+            columns: Vec::new(),
+            areas: Vec::new(),
+        });
+    }
+
+    let values: Vec<&CssValue> = match value {
+        CssValue::List(values) => values.iter().collect(),
+        value => vec![value],
+    };
+
+    let slash = values
+        .iter()
+        .position(|value| matches!(value, CssValue::Keyword(keyword) if keyword == "/"));
+    let (head, columns) = match slash {
+        Some(slash) => (&values[..slash], Some(&values[slash + 1..])),
+        None => (values.as_slice(), None),
+    };
+
+    // Named grid lines are not modelled by `Style`, so drop them up front
+    // rather than mistake them for track sizes.
+    let head = without_grid_line_names(head)?;
+    let columns = match columns {
+        Some(columns) => Some(without_grid_line_names(columns)?),
+        None => None,
+    };
+
+    // Area strings only appear in the third form.
+    if head
+        .iter()
+        .any(|value| matches!(value, CssValue::String(_)))
+    {
+        let (rows, areas) = parse_grid_template_row_areas(&head, text_flow_style)?;
+        // Omitting `/ <explicit-track-list>` leaves grid-template-columns none.
+        let columns = match columns {
+            Some(columns) => {
+                parse_grid_track_list("grid-template-columns", &columns, text_flow_style)?
+            }
+            None => Vec::new(),
+        };
+        return Some(GridTemplate {
+            rows,
+            columns,
+            areas,
+        });
+    }
+
+    // Without a `/` a bare track list matches none of the grammar's forms.
+    let rows = parse_grid_track_list("grid-template-rows", &head, text_flow_style)?;
+    let columns = parse_grid_track_list("grid-template-columns", &columns?, text_flow_style)?;
+
+    // `<rows> / <columns>` sets grid-template-areas to none.
+    Some(GridTemplate {
+        rows,
+        columns,
+        areas: Vec::new(),
+    })
+}
+
+/// Parse `[ <line-names>? <string> <track-size>? <line-names>? ]+` into the
+/// `grid-template-rows` tracks and the `grid-template-areas` rows. A string
+/// with no `<track-size>` after it sizes its row `auto`.
+fn parse_grid_template_row_areas(
+    values: &[&CssValue],
+    text_flow_style: &TextFlowStyle,
+) -> Option<(Vec<GridTrack>, Vec<Vec<String>>)> {
+    let mut rows = Vec::new();
+    let mut strings = Vec::new();
+    let mut index = 0;
+    while let Some(value) = values.get(index) {
+        // Each group starts with an area string.
+        let CssValue::String(string) = value else {
+            return None;
+        };
+        strings.push(string.as_str());
+        match values.get(index + 1) {
+            Some(next) if !matches!(next, CssValue::String(_)) => {
+                rows.push(parse_grid_track(
+                    "grid-template-rows",
+                    next,
+                    text_flow_style,
+                )?);
+                index += 2;
+            }
+            _ => {
+                rows.push(GridTrack::default());
+                index += 1;
+            }
+        }
+    }
+    Some((rows, resolve_grid_template_area_rows(&strings)?))
+}
+
+/// Drop `[ <custom-ident>* ]` groups from a token slice. `None` means a group
+/// was left unterminated.
+fn without_grid_line_names<'a>(values: &[&'a CssValue]) -> Option<Vec<&'a CssValue>> {
+    let mut tracks = Vec::with_capacity(values.len());
+    let mut index = 0;
+    while index < values.len() {
+        index = skip_grid_line_names(values, index)?;
+        if let Some(value) = values.get(index) {
+            tracks.push(*value);
+            index += 1;
+        }
+    }
+    Some(tracks)
+}
+
+/// A `[ <custom-ident>* ]` group is tokenized as separate `[`, ident and `]`
+/// keywords. Returns the index just past the group starting at `index`, or
+/// `index` itself when no group starts there.
+fn skip_grid_line_names(values: &[&CssValue], index: usize) -> Option<usize> {
+    if !matches!(values.get(index), Some(CssValue::Keyword(keyword)) if keyword == "[") {
+        return Some(index);
+    }
+    let mut index = index + 1;
+    while !matches!(values.get(index), Some(CssValue::Keyword(keyword)) if keyword == "]") {
+        if !matches!(values.get(index), Some(CssValue::Keyword(_))) {
+            return None;
+        }
+        index += 1;
+    }
+    Some(index + 1)
+}
+
 pub fn parse_grid_template_areas(value: &CssValue) -> Option<Vec<Vec<String>>> {
     if matches!(value, CssValue::Keyword(keyword) if keyword == "none") {
         return Some(Vec::new());
@@ -630,8 +796,14 @@ pub fn parse_grid_template_areas(value: &CssValue) -> Option<Vec<Vec<String>>> {
             .collect::<Option<_>>()?,
         _ => return None,
     };
+    resolve_grid_template_area_rows(&rows)
+}
+
+/// Split one template string per row into area names, rejecting rows of
+/// differing widths and names that do not form a rectangle.
+fn resolve_grid_template_area_rows(rows: &[&str]) -> Option<Vec<Vec<String>>> {
     let areas: Vec<Vec<String>> = rows
-        .into_iter()
+        .iter()
         .map(|row| {
             row.split_whitespace()
                 .map(|name| {
