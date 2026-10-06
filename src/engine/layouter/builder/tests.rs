@@ -73,6 +73,19 @@ fn grid_template_style(declaration: &str) -> Option<Style> {
     apply_layout_declarations(&[("grid-template", value.clone())])
 }
 
+/// Parse a single declaration through the stylesheet parser and return its
+/// value, so tests exercise the same token stream a real stylesheet produces.
+fn declaration_value(declaration: &str) -> CssValue {
+    let sheet = CssParser::new(&format!(".t {{ {declaration} }}"))
+        .parse()
+        .unwrap();
+    let node = sheet.children()[0].children()[0].node();
+    let CssNodeType::Declaration { value, .. } = node else {
+        panic!("expected a declaration");
+    };
+    value.clone()
+}
+
 fn apply_container_property(name: &str, value: CssValue) -> ContainerStyle {
     let mut style = Style::default();
     let mut container_style = ContainerStyle::default();
@@ -3193,6 +3206,335 @@ fn linear_gradient_calc_zero_position() {
     )
     .expect("gradient parses");
     assert_eq!(gradient.stops[0].position, Some(0.0));
+}
+
+#[test]
+fn resolve_css_len_round_returns_percent_length() {
+    // round(25%, 10%) → Length::Round { value: 25%, step: 10% }
+    let value = CssValue::Function(
+        "round".into(),
+        vec![
+            vec![CssValue::Length(25.0, Unit::Percent)],
+            vec![CssValue::Length(10.0, Unit::Percent)],
+        ],
+    );
+    let text_flow_style = TextFlowStyle::default();
+    let resolved = resolve_css_len("width", std::slice::from_ref(&value), &text_flow_style);
+    let Some(Length::Round {
+        strategy: _,
+        value: v,
+        step: s,
+    }) = resolved
+    else {
+        panic!("expected round() length, got {:?}", resolved);
+    };
+    assert!(matches!(v.as_ref(), Length::Percent(25.0)));
+    assert!(matches!(s.as_ref(), Length::Percent(10.0)));
+}
+
+#[test]
+fn resolve_css_len_round_maps_rounding_strategies() {
+    let resolve = |strategy: Option<&str>| {
+        let mut args = vec![vec![CssValue::Length(25.0, Unit::Percent)]];
+        if let Some(strategy) = strategy {
+            args.insert(0, vec![CssValue::Keyword(strategy.into())]);
+        }
+        args.push(vec![CssValue::Length(10.0, Unit::Percent)]);
+        let value = CssValue::Function("round".into(), args);
+        let resolved = resolve_css_len(
+            "width",
+            std::slice::from_ref(&value),
+            &TextFlowStyle::default(),
+        );
+        let Some(Length::Round { strategy, .. }) = resolved else {
+            panic!("expected round() length, got {:?}", resolved);
+        };
+        strategy
+    };
+
+    // Omitting the strategy uses the initial value `nearest`.
+    assert_eq!(resolve(None), ui_layout::RoundingStrategy::Nearest);
+    assert_eq!(
+        resolve(Some("nearest")),
+        ui_layout::RoundingStrategy::Nearest
+    );
+    assert_eq!(resolve(Some("up")), ui_layout::RoundingStrategy::Up);
+    assert_eq!(resolve(Some("down")), ui_layout::RoundingStrategy::Down);
+    assert_eq!(
+        resolve(Some("to-zero")),
+        ui_layout::RoundingStrategy::ToZero
+    );
+    // Rounding-strategy keywords are ASCII case-insensitive.
+    assert_eq!(resolve(Some("UP")), ui_layout::RoundingStrategy::Up);
+}
+
+#[test]
+fn resolve_css_len_round_accepts_bare_arithmetic_operands() {
+    // round(25% - 5%, 5%) keeps the arithmetic on the value side.
+    let value = CssValue::Function(
+        "round".into(),
+        vec![
+            vec![
+                CssValue::Length(25.0, Unit::Percent),
+                CssValue::Keyword("-".into()),
+                CssValue::Length(5.0, Unit::Percent),
+            ],
+            vec![CssValue::Length(5.0, Unit::Percent)],
+        ],
+    );
+    let text_flow_style = TextFlowStyle::default();
+    let resolved = resolve_css_len("width", std::slice::from_ref(&value), &text_flow_style);
+    let Some(Length::Round { value, step, .. }) = resolved else {
+        panic!("expected round() length, got {:?}", resolved);
+    };
+    assert_eq!(
+        value.as_ref(),
+        &Length::Sub(
+            Box::new(Length::Percent(25.0)),
+            Box::new(Length::Percent(5.0))
+        )
+    );
+    assert!(matches!(step.as_ref(), Length::Percent(5.0)));
+}
+
+#[test]
+fn resolve_css_len_round_rejects_zero_step() {
+    let text_flow_style = TextFlowStyle::default();
+    for step in [
+        CssValue::Length(0.0, Unit::Percent),
+        CssValue::Length(0.0, Unit::Px),
+        CssValue::Number(0.0),
+    ] {
+        let value = CssValue::Function(
+            "round".into(),
+            vec![
+                vec![CssValue::Length(10.0, Unit::Percent)],
+                vec![step.clone()],
+            ],
+        );
+        assert_eq!(
+            resolve_css_len("width", std::slice::from_ref(&value), &text_flow_style),
+            None,
+            "zero step should be rejected: {:?}",
+            step
+        );
+    }
+}
+
+#[test]
+fn resolve_css_len_round_rejects_mismatched_operand_types() {
+    let text_flow_style = TextFlowStyle::default();
+    let round = |value: CssValue, step: CssValue| {
+        let value = CssValue::Function("round".into(), vec![vec![value], vec![step]]);
+        resolve_css_len("width", std::slice::from_ref(&value), &text_flow_style)
+    };
+    // A number step with a length value, and vice versa, are invalid.
+    assert_eq!(
+        round(CssValue::Length(10.0, Unit::Px), CssValue::Number(5.0)),
+        None
+    );
+    assert_eq!(
+        round(CssValue::Number(5.0), CssValue::Length(10.0, Unit::Px)),
+        None
+    );
+    // Omitting the step is only valid for <number> values.
+    let omitted = CssValue::Function(
+        "round".into(),
+        vec![vec![CssValue::Length(50.0, Unit::Percent)]],
+    );
+    assert_eq!(
+        resolve_css_len("width", std::slice::from_ref(&omitted), &text_flow_style),
+        None
+    );
+}
+
+#[test]
+fn resolve_round_reduces_number_values() {
+    let text_flow_style = TextFlowStyle::default();
+    let round = |args: Vec<Vec<CssValue>>| {
+        resolve_calc_value(
+            "line-height",
+            &CssValue::Function("round".into(), args),
+            &text_flow_style,
+        )
+    };
+    // The step defaults to 1 when omitted; nearest ties go towards +∞.
+    assert_eq!(
+        round(vec![vec![CssValue::Number(1.5)]]),
+        Some(CalcValue::Number(2.0))
+    );
+    assert_eq!(
+        round(vec![
+            vec![CssValue::Keyword("down".into())],
+            vec![CssValue::Number(1.5)]
+        ]),
+        Some(CalcValue::Number(1.0))
+    );
+    // round(up, 1.4, 0.5) → 1.5
+    assert_eq!(
+        round(vec![
+            vec![CssValue::Keyword("up".into())],
+            vec![CssValue::Number(1.4)],
+            vec![CssValue::Number(0.5)]
+        ]),
+        Some(CalcValue::Number(1.5))
+    );
+    // A zero step stays invalid.
+    assert_eq!(
+        round(vec![
+            vec![CssValue::Number(1.5)],
+            vec![CssValue::Number(0.0)]
+        ]),
+        None
+    );
+}
+
+#[test]
+fn font_size_round_snaps_to_step() {
+    let round = CssValue::Function(
+        "round".into(),
+        vec![
+            vec![CssValue::Keyword("up".into())],
+            vec![CssValue::Length(13.5, Unit::Px)],
+            vec![CssValue::Length(2.0, Unit::Px)],
+        ],
+    );
+    let mut style = Style::default();
+    let mut container_style = ContainerStyle::default();
+    let mut text_style = TextStyle::default();
+    let mut text_flow_style = TextFlowStyle::default();
+    let mut overflow = Overflow::default();
+    assert!(
+        apply_declaration(
+            "font-size",
+            &round,
+            &mut style,
+            &mut container_style,
+            &mut text_style,
+            &mut text_flow_style,
+            &Style::default(),
+            &ContainerStyle::default(),
+            &TextStyle::default(),
+            &TextFlowStyle::default(),
+            &mut overflow,
+            ColorScheme::Light,
+        )
+        .is_some()
+    );
+    // round(up, 13.5px, 2px) → 14px.
+    assert_eq!(text_flow_style.font_size, 14.0);
+}
+
+#[test]
+fn parsed_stylesheet_round_value_reaches_layout() {
+    // End-to-end: a round() margin survives CSS parsing and resolves into a
+    // Length::Round for the layout pass.
+    let value = declaration_value("margin-top: round(up, 13px, 5px)");
+    let style = apply_layout_declarations(&[("margin-top", value)]).expect("round() is valid");
+    let LengthOrAuto::Length(Length::Round {
+        strategy,
+        value,
+        step,
+    }) = style.spacing.margin_top
+    else {
+        panic!(
+            "expected a round() length, got {:?}",
+            style.spacing.margin_top
+        );
+    };
+    assert_eq!(strategy, ui_layout::RoundingStrategy::Up);
+    assert_eq!(value.as_ref(), &Length::Px(13.0));
+    assert_eq!(step.as_ref(), &Length::Px(5.0));
+}
+
+#[test]
+fn line_height_round_number_reduces() {
+    // line-height: round(up, 1.45) → 2 (the step defaults to 1).
+    let value = declaration_value("line-height: round(up, 1.45)");
+    let mut style = Style::default();
+    let mut container_style = ContainerStyle::default();
+    let mut text_style = TextStyle::default();
+    let mut text_flow_style = TextFlowStyle::default();
+    let mut overflow = Overflow::default();
+    assert!(
+        apply_declaration(
+            "line-height",
+            &value,
+            &mut style,
+            &mut container_style,
+            &mut text_style,
+            &mut text_flow_style,
+            &Style::default(),
+            &ContainerStyle::default(),
+            &TextStyle::default(),
+            &TextFlowStyle::default(),
+            &mut overflow,
+            ColorScheme::Light,
+        )
+        .is_some()
+    );
+    assert_eq!(text_flow_style.line_height, LineHeight::Number(2.0));
+}
+
+#[test]
+fn gradient_stop_position_round_rejects_zero_step() {
+    let step = CssValue::Function(
+        "round".into(),
+        vec![
+            vec![CssValue::Length(10.0, Unit::Percent)],
+            vec![CssValue::Length(0.0, Unit::Percent)],
+        ],
+    );
+    let args = vec![
+        CssValue::Keyword("red".into()),
+        step,
+        CssValue::Keyword("blue".into()),
+        CssValue::Length(100.0, Unit::Percent),
+    ];
+    let gradient = parse_gradient(
+        "linear-gradient",
+        &args,
+        &TextStyle::default(),
+        &TextFlowStyle::default(),
+        ColorScheme::Light,
+    );
+    assert!(gradient.is_none());
+}
+
+#[test]
+fn gradient_stop_position_supports_round_strategies() {
+    let stop = |strategy: Option<&str>| {
+        let mut args = vec![vec![CssValue::Length(35.0, Unit::Percent)]];
+        if let Some(strategy) = strategy {
+            args.insert(0, vec![CssValue::Keyword(strategy.into())]);
+        }
+        args.push(vec![CssValue::Length(20.0, Unit::Percent)]);
+        CssValue::Function("round".into(), args)
+    };
+    let stops = [stop(None), stop(Some("nearest")), stop(Some("down"))];
+    let args = vec![
+        CssValue::Keyword("red".into()),
+        stops[0].clone(),
+        CssValue::Keyword("green".into()),
+        stops[1].clone(),
+        CssValue::Keyword("blue".into()),
+        stops[2].clone(),
+        CssValue::Keyword("black".into()),
+        CssValue::Length(100.0, Unit::Percent),
+    ];
+    let gradient = parse_gradient(
+        "linear-gradient",
+        &args,
+        &TextStyle::default(),
+        &TextFlowStyle::default(),
+        ColorScheme::Light,
+    )
+    .expect("gradient parses");
+    // round(nearest, 35%, 20%) → 0.4 (ties go up); round(down, 35%, 20%) → 0.2.
+    assert_eq!(gradient.stops[0].position, Some(0.4));
+    assert_eq!(gradient.stops[1].position, Some(0.4));
+    assert_eq!(gradient.stops[2].position, Some(0.2));
+    assert_eq!(gradient.stops[3].position, Some(1.0));
 }
 
 #[test]

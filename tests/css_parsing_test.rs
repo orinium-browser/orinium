@@ -1,4 +1,5 @@
 use orinium_browser::engine::css::parser::{CssNodeType, Parser};
+use orinium_browser::engine::css::values::{CssValue, Unit};
 
 #[test]
 fn test_parse_all_css_syntax() {
@@ -214,4 +215,59 @@ fn test_css_nesting_resolves_correctly() {
     };
     let resolved3 = parent_sel.nest(&child3[0]);
     assert_eq!(resolved3.to_string(), ".parent.sidebar");
+}
+
+#[test]
+fn test_parse_css_round_function() {
+    let css = r#"
+    .box {
+        width: round(up, calc(100% - 20px), 25px);
+        font-size: round(nearest, 1.2, 0.1);
+    }
+    "#;
+
+    let mut parser = Parser::new(css);
+    let result = parser.parse();
+    assert!(result.is_ok(), "CSS parser failed: {:?}", result.err());
+    let stylesheet = result.unwrap();
+
+    let rule = &stylesheet.children()[0];
+    let children = rule.children();
+    assert_eq!(children.len(), 2);
+
+    // width: round(up, calc(100% - 20px), 25px)
+    let CssNodeType::Declaration { name, value } = children[0].node() else {
+        panic!("expected declaration");
+    };
+    assert_eq!(name, "width");
+    let CssValue::Function(fn_name, args) = value else {
+        panic!("expected round() function, got {:?}", value);
+    };
+    assert_eq!(fn_name, "round");
+    assert_eq!(args.len(), 3, "round() should keep its three arguments");
+    assert_eq!(args[0], vec![CssValue::Keyword("up".into())]);
+    assert!(
+        matches!(args[1].as_slice(), [CssValue::Function(nested, _)] if nested == "calc"),
+        "the value operand should keep its calc() wrapper: {:?}",
+        args[1]
+    );
+    assert_eq!(args[2], vec![CssValue::Length(25.0, Unit::Px)]);
+
+    // font-size: round(nearest, 1.2, 0.1)
+    let CssNodeType::Declaration { name, value } = children[1].node() else {
+        panic!("expected declaration");
+    };
+    assert_eq!(name, "font-size");
+    let CssValue::Function(fn_name, args) = value else {
+        panic!("expected round() function, got {:?}", value);
+    };
+    assert_eq!(fn_name, "round");
+    assert_eq!(
+        *args,
+        vec![
+            vec![CssValue::Keyword("nearest".into())],
+            vec![CssValue::Number(1.2)],
+            vec![CssValue::Number(0.1)],
+        ]
+    );
 }

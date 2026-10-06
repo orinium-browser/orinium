@@ -480,3 +480,56 @@ fn test_supports_calc_in_min() {
         "calc() inside min() should be recognized"
     );
 }
+
+#[test]
+fn test_supports_round_length() {
+    let s = resolve(
+        r#"
+        @supports (width: round(up, calc(100% - 20px), 25px)) {
+            div {
+                --val: supported;
+            }
+        }
+        "#,
+    );
+    assert!(
+        has_prop_in_rule(&s, "--val"),
+        "round() with a calc() operand should be recognized"
+    );
+}
+
+#[test]
+fn test_supports_round_zero_step_unsupported() {
+    // A zero step makes round() invalid, so the @supports block is skipped.
+    let s = resolve(
+        r#"
+        @supports (width: round(50%, 0%)) {
+            div {
+                --val: supported;
+            }
+        }
+        "#,
+    );
+    assert!(
+        !has_prop_in_rule(&s, "--val"),
+        "round() with a zero step should not be recognized"
+    );
+}
+
+#[test]
+fn test_supports_round_mismatched_types_unsupported() {
+    // A <number> step against a <length> value is a type error.
+    let s = resolve(
+        r#"
+        @supports (width: round(50%, 2)) {
+            div {
+                --val: supported;
+            }
+        }
+        "#,
+    );
+    assert!(
+        !has_prop_in_rule(&s, "--val"),
+        "round() with mismatched operand types should not be recognized"
+    );
+}

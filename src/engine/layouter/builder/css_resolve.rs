@@ -1,6 +1,8 @@
 use crate::engine::css::values::{CssValue, Unit};
 use crate::engine::layouter::types::TextFlowStyle;
-use ui_layout::{GridPlacement, GridPlacementEnd, GridRepeat, GridTrack, Length, LengthOrAuto};
+use ui_layout::{
+    GridPlacement, GridPlacementEnd, GridRepeat, GridTrack, Length, LengthOrAuto, RoundingStrategy,
+};
 
 /// Extract font family names from a `font-family` CSS value.
 ///
@@ -79,6 +81,61 @@ pub fn resolve_font_size_px(length: &Length, inherited_size: f32) -> Option<f32>
             Some(resolve_font_size_px(value, inherited_size)? / factor)
         }
         Length::Vw(_) | Length::Vh(_) | Length::Div(_, _) => None,
+        Length::Round {
+            strategy,
+            value,
+            step,
+        } => {
+            let value_px = resolve_font_size_px(value.as_ref(), inherited_size)?;
+            let step_px = resolve_font_size_px(step.as_ref(), inherited_size)?;
+            if step_px == 0.0 {
+                None
+            } else {
+                Some(round_to_step(*strategy, value_px, step_px))
+            }
+        }
+    }
+}
+
+/// Snaps `value` to a multiple of `step` following the CSS `round()` definition.
+///
+/// The two multiples of `abs(step)` that bracket `value` are computed directly
+/// rather than rounding `value / step`. The two are not equivalent for a
+/// negative step: `nearest` ties resolve to the numerically larger multiple, so
+/// `round(15px, -10px)` is `20px` and not the `10px` that rounding the quotient
+/// would produce.
+///
+/// This mirrors `ui_layout`'s own resolution of [`Length::Round`] so that
+/// values resolved eagerly (font sizes, gradient stop fractions) stay
+/// consistent with values the layout pass resolves later.
+pub(super) fn round_to_step(strategy: RoundingStrategy, value: f32, step: f32) -> f32 {
+    let magnitude = step.abs();
+    let lower = (value / magnitude).floor() * magnitude;
+
+    // A value that is already an exact multiple of the step resolves to itself
+    // under every strategy, so `up` and `to-zero` must not nudge it off.
+    if value == lower {
+        return value;
+    }
+
+    let upper = lower + magnitude;
+    match strategy {
+        RoundingStrategy::Nearest => {
+            if value - lower < upper - value {
+                lower
+            } else {
+                upper
+            }
+        }
+        RoundingStrategy::Up => upper,
+        RoundingStrategy::Down => lower,
+        RoundingStrategy::ToZero => {
+            if value > 0.0 {
+                lower
+            } else {
+                upper
+            }
+        }
     }
 }
 
@@ -360,6 +417,9 @@ pub fn resolve_calc_value(
                 }
             }
         }
+        CssValue::Function(fn_name, args) if fn_name == "round" => {
+            resolve_round(name, args, text_flow_style)
+        }
         _ => {
             log::error!(
                 target: "Layouter",
@@ -370,6 +430,121 @@ pub fn resolve_calc_value(
             None
         }
     }
+}
+
+/// Parse a `<rounding-strategy>` keyword (ASCII case-insensitive) from
+/// `round()`. `line-width` and other keywords are not supported.
+fn parse_rounding_strategy(keyword: &str) -> Option<RoundingStrategy> {
+    if keyword.eq_ignore_ascii_case("nearest") {
+        Some(RoundingStrategy::Nearest)
+    } else if keyword.eq_ignore_ascii_case("up") {
+        Some(RoundingStrategy::Up)
+    } else if keyword.eq_ignore_ascii_case("down") {
+        Some(RoundingStrategy::Down)
+    } else if keyword.eq_ignore_ascii_case("to-zero") {
+        Some(RoundingStrategy::ToZero)
+    } else {
+        None
+    }
+}
+
+/// Parse `round(<rounding-strategy>?, <value>, <step>?)` (CSS Values 4 §10.3).
+///
+/// The value and the step must both resolve to `<number>`s or both to `<length>`s
+/// (a bare `0` counts as a length, as for `min()`/`clamp()`); otherwise the
+/// declaration is invalid. Number rounds reduce numerically — a step may be
+/// omitted for them and defaults to `1` — while length rounds keep the
+/// [`Length::Round`] tree for the layout pass to resolve.
+fn resolve_round(
+    name: &str,
+    args: &[Vec<CssValue>],
+    text_flow_style: &TextFlowStyle,
+) -> Option<CalcValue> {
+    let mut strategy = RoundingStrategy::Nearest;
+    let mut groups = args.iter().peekable();
+    // An optional leading strategy keyword occupies its own argument group,
+    // e.g. `round(up, 50%, 25%)`.
+    if let Some(first) = groups.peek()
+        && let [CssValue::Keyword(keyword)] = first.as_slice()
+        && let Some(parsed) = parse_rounding_strategy(keyword)
+    {
+        strategy = parsed;
+        groups.next();
+    }
+
+    let value = groups.next()?;
+    let step = groups.next();
+    if groups.next().is_some() {
+        log::error!(
+            target: "Layouter",
+            "Too many arguments for round() in `{}`",
+            name
+        );
+        return None;
+    }
+
+    let value = resolve_calc_value(name, &CssValue::List(value.clone()), text_flow_style)?;
+    let step = match step {
+        Some(step) => resolve_calc_value(name, &CssValue::List(step.clone()), text_flow_style)?,
+        // `round(1.5)` — the step defaults to `1` for `<number>` values only;
+        // an omitted step with a `<length>` value is invalid.
+        None => CalcValue::Number(1.0),
+    };
+
+    match (value, step) {
+        (CalcValue::Number(value), CalcValue::Number(step)) => {
+            if step == 0.0 {
+                log::error!(
+                    target: "Layouter",
+                    "Zero step in round() for `{}`",
+                    name
+                );
+                return None;
+            }
+            Some(CalcValue::Number(round_to_step(strategy, value, step)))
+        }
+        // A bare `0` is a valid <length>, as for min()/clamp().
+        (CalcValue::Number(0.0), CalcValue::Length(step)) => {
+            round_length(name, strategy, Length::Px(0.0), step)
+        }
+        (CalcValue::Length(value), CalcValue::Length(step)) => {
+            round_length(name, strategy, value, step)
+        }
+        (CalcValue::Number(value), CalcValue::Length(_))
+        | (CalcValue::Length(_), CalcValue::Number(value)) => {
+            log::error!(
+                target: "Layouter",
+                "Mismatched number/length operands for round() in `{}`: {}",
+                name,
+                value
+            );
+            None
+        }
+    }
+}
+
+/// Build a [`Length::Round`], rejecting a step that is already known to be
+/// zero. Steps that only evaluate to zero after resolution (e.g. inside a
+/// `calc()`) are rejected by the consumers of the resolved length instead.
+fn round_length(
+    name: &str,
+    strategy: RoundingStrategy,
+    value: Length,
+    step: Length,
+) -> Option<CalcValue> {
+    if matches!(step, Length::Px(0.0) | Length::Percent(0.0)) {
+        log::error!(
+            target: "Layouter",
+            "Zero step in round() for `{}`",
+            name
+        );
+        return None;
+    }
+    Some(CalcValue::Length(Length::Round {
+        strategy,
+        value: Box::new(value),
+        step: Box::new(step),
+    }))
 }
 
 /// Resolve a slice of CSS component values to a Length.

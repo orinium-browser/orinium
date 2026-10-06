@@ -1,5 +1,6 @@
 use crate::engine::css::values::{CssValue, Unit};
 
+use super::css_resolve::round_to_step;
 use super::{resolve_css_color, resolve_css_len};
 use crate::engine::layouter::types::{
     Background, BackgroundDimension, BackgroundOffset, BackgroundPosition, BackgroundPositionAxis,
@@ -784,6 +785,9 @@ fn parse_color_stops(
                 i += 1;
                 continue;
             }
+            // Math functions (including round()) resolve through the shared
+            // length resolver below; anything unresolvable (absolute lengths,
+            // unsupported functions) ends the position loop.
             match resolve_gradient_position(&args[i], text_flow_style) {
                 Some(position) => {
                     positions.push(position.clamp(0.0, 1.0));
@@ -868,10 +872,10 @@ fn resolve_gradient_position(value: &CssValue, text_flow_style: &TextFlowStyle) 
         CssValue::Length(v, Unit::Percent) => Some(*v / 100.0),
         CssValue::Length(v, Unit::Deg) => Some(*v / 360.0),
         CssValue::Number(0.0) => Some(0.0),
-        // calc()/min()/max()/clamp() and other math functions reduce to a
+        // calc()/min()/max()/clamp()/round() and other math functions reduce to a
         // Length via the shared resolver, then to a gradient fraction.
         CssValue::Function(fn_name, args)
-            if matches!(fn_name.as_str(), "calc" | "min" | "max" | "clamp") =>
+            if matches!(fn_name.as_str(), "calc" | "min" | "max" | "clamp" | "round") =>
         {
             let value = CssValue::Function(fn_name.clone(), args.clone());
             let length =
@@ -904,5 +908,20 @@ fn length_to_fraction(length: &Length) -> Option<f32> {
             Some(length_to_fraction(val)?.clamp(length_to_fraction(min)?, length_to_fraction(max)?))
         }
         Length::Px(_) | Length::Vw(_) | Length::Vh(_) => None,
+        // `round()` of percentage-valued stops resolves in the normalized
+        // fraction space (100% == 1.0) used throughout this function.
+        Length::Round {
+            strategy,
+            value,
+            step,
+        } => {
+            let value = length_to_fraction(value.as_ref())?;
+            let step = length_to_fraction(step.as_ref())?;
+            if step == 0.0 {
+                None
+            } else {
+                Some(round_to_step(*strategy, value, step))
+            }
+        }
     }
 }
