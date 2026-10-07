@@ -332,7 +332,7 @@ impl AsyncNetworkCore {
         let req = request
             .body(Full::new(Bytes::copy_from_slice(body)))
             .map_err(|_| NetworkError::HttpRequestFailed)?;
-
+        
         let mut res = match &mut sender {
             HttpSender::Http1(s) => s
                 .send_request(req)
