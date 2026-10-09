@@ -1,3 +1,4 @@
+use super::args::{ArgResolver, CssGroupCursor, ParseError};
 use crate::engine::css::values::{CssValue, Unit};
 use crate::engine::layouter::types::TextFlowStyle;
 use ui_layout::{
@@ -278,6 +279,97 @@ fn calc_combine(name: &str, op: &CssValue, left: CalcValue, right: CalcValue) ->
     }
 }
 
+/// Resolve one comma-separated argument group as an arithmetic expression.
+fn resolve_arg_group(
+    name: &str,
+    group: &[CssValue],
+    text_flow_style: &TextFlowStyle,
+) -> Option<CalcValue> {
+    resolve_calc_value(name, &CssValue::List(group.to_vec()), text_flow_style)
+}
+
+impl ArgResolver for CalcValue {
+    fn resolve(name: &str, text_flow_style: &TextFlowStyle, group: &[CssValue]) -> Option<Self> {
+        resolve_arg_group(name, group, text_flow_style)
+    }
+}
+
+impl ArgResolver for RoundingStrategy {
+    fn resolve(_name: &str, _text_flow_style: &TextFlowStyle, group: &[CssValue]) -> Option<Self> {
+        match group {
+            [CssValue::Keyword(keyword)] => parse_rounding_strategy(keyword),
+            _ => None,
+        }
+    }
+}
+
+/// 数値オペランド群の型統一結果。
+///
+/// 全オペランドが `<number>` なら [`OperandMode::Numbers`] に、それ以外は
+/// [`OperandMode::Lengths`] に統一される (bare `0` は `<length>` として扱う)。
+/// number/length の混在や非0の数値はエラーになる。
+enum OperandMode {
+    Numbers(Vec<f32>),
+    Lengths(Vec<Length>),
+}
+
+/// Resolve a list of [`CalcValue`]s into a uniform operand mode, applying the
+/// "bare `0` counts as a `<length>`" coercion shared by `min()`/`max()`/
+/// `clamp()`/`round()` and logging on any other number/length mismatch.
+fn unify_operands(name: &str, fn_name: &str, values: Vec<CalcValue>) -> Option<OperandMode> {
+    if values.iter().all(|v| matches!(v, CalcValue::Number(_))) {
+        return Some(OperandMode::Numbers(
+            values
+                .into_iter()
+                .map(|v| match v {
+                    CalcValue::Number(n) => n,
+                    _ => unreachable!(),
+                })
+                .collect(),
+        ));
+    }
+
+    let mut lengths = Vec::with_capacity(values.len());
+    for value in values {
+        match value {
+            CalcValue::Length(l) => lengths.push(l),
+            // A bare `0` is a valid <length>, as for min()/clamp().
+            CalcValue::Number(0.0) => lengths.push(Length::Px(0.0)),
+            CalcValue::Number(n) => {
+                log::error!(
+                    target: "Layouter",
+                    "Invalid operand for {fn_name}() in `{}` (expected length): {}",
+                    name,
+                    n
+                );
+                return None;
+            }
+        }
+    }
+    Some(OperandMode::Lengths(lengths))
+}
+
+/// Bridge a [`ParseError`] from `parse_args!` to the CSS-layer error log.
+///
+/// Only arity failures are reported; resolver/operand failures are silent.
+fn report_parse_error(err: &ParseError, fn_name: &str, name: &str) {
+    match err {
+        ParseError::MissingArgument => log::error!(
+            target: "Layouter",
+            "Not enough arguments for {}() in `{}`",
+            fn_name,
+            name
+        ),
+        ParseError::UnexpectedArgument => log::error!(
+            target: "Layouter",
+            "Too many arguments for {}() in `{}`",
+            fn_name,
+            name
+        ),
+        _ => {}
+    }
+}
+
 /// CssValue を number / length の型情報付きで評価する。
 pub fn resolve_calc_value(
     name: &str,
@@ -296,130 +388,120 @@ pub fn resolve_calc_value(
             resolve_length(name, *v, unit, text_flow_style).map(CalcValue::Length)
         }
         CssValue::Number(n) => Some(CalcValue::Number(*n)),
-        CssValue::Function(fn_name, args) if fn_name == "calc" => {
-            if args.len() == 1 {
-                let list = args[0].clone();
-                resolve_calc_value(name, &CssValue::List(list), text_flow_style)
-            } else {
-                // Syntax error
-                None
+        CssValue::Function(fn_name, args) if fn_name == "calc" => parse_args! {
+            fn calc(name: &str, args: &[Vec<CssValue>], text_flow_style: &TextFlowStyle)
+            -> Result<CalcValue, ParseError>
+            {
+                expr: CalcValue
             }
+            => { Some(expr) }
         }
+        .inspect_err(|e| report_parse_error(e, fn_name, name))
+        .ok(),
         CssValue::Function(fn_name, args) if (fn_name == "min" || fn_name == "max") => {
-            if args.len() == 1 {
-                resolve_calc_value(name, &CssValue::List(args[0].clone()), text_flow_style)
-            } else if args.len() >= 2 {
-                let mut resolved: Vec<CalcValue> = Vec::with_capacity(args.len());
-                for arg in args {
-                    resolved.push(resolve_calc_value(
-                        name,
-                        &CssValue::List(arg.clone()),
-                        text_flow_style,
-                    )?);
+            parse_args! {
+                fn min_max(
+                    name: &str,
+                    args: &[Vec<CssValue>],
+                    text_flow_style: &TextFlowStyle,
+                    fn_name: &str
+                )
+                as fn_name
+                -> Result<CalcValue, ParseError>
+                {
+                    groups: Vec<CalcValue>
                 }
-                if resolved.iter().all(|v| matches!(v, CalcValue::Number(_))) {
-                    // All operands are numbers: reduce numerically.
-                    let mut result = match resolved.remove(0) {
-                        CalcValue::Number(n) => n,
-                        _ => unreachable!(),
-                    };
-                    for v in resolved {
-                        let CalcValue::Number(n) = v else {
-                            unreachable!();
-                        };
-                        result = if fn_name == "min" {
-                            result.min(n)
-                        } else {
-                            result.max(n)
-                        };
-                    }
-                    Some(CalcValue::Number(result))
-                } else {
-                    // Length-typed operands; `0` may be written as a bare number.
-                    let mut result = match resolved.remove(resolved.len() - 1) {
-                        CalcValue::Length(l) => l,
-                        CalcValue::Number(0.0) => Length::Px(0.0),
-                        CalcValue::Number(n) => {
-                            log::error!(
-                                target: "Layouter",
-                                "Invalid operand for {fn_name}() in `{}` (expected length): {}",
-                                name,
-                                n
-                            );
-                            return None;
-                        }
-                    };
-                    for v in resolved.into_iter().rev() {
-                        let arg = match v {
-                            CalcValue::Length(l) => l,
-                            CalcValue::Number(0.0) => Length::Px(0.0),
-                            CalcValue::Number(n) => {
-                                log::error!(
-                                    target: "Layouter",
-                                    "Invalid operand for {fn_name}() in `{}` (expected length): {}",
-                                    name,
-                                    n
-                                );
-                                return None;
-                            }
-                        };
-                        result = if fn_name == "min" {
-                            Length::Min(Box::new(arg), Box::new(result))
-                        } else {
-                            Length::Max(Box::new(arg), Box::new(result))
-                        };
-                    }
-                    Some(CalcValue::Length(result))
-                }
-            } else {
-                None
-            }
-        }
-        CssValue::Function(fn_name, args) if fn_name == "clamp" && args.len() == 3 => {
-            let mut resolved: Vec<CalcValue> = Vec::with_capacity(args.len());
-            for arg in args {
-                resolved.push(resolve_calc_value(
-                    name,
-                    &CssValue::List(arg.clone()),
-                    text_flow_style,
-                )?);
-            }
-            match resolved.as_slice() {
-                [
-                    CalcValue::Number(min),
-                    CalcValue::Number(value),
-                    CalcValue::Number(max),
-                ] => Some(CalcValue::Number(value.clamp(*min, *max))),
-                _ => {
-                    let lengths = resolved
+                number {
+                    groups
                         .into_iter()
-                        .map(|v| match v {
-                            CalcValue::Length(l) => Ok(l),
-                            CalcValue::Number(0.0) => Ok(Length::Px(0.0)),
-                            CalcValue::Number(n) => {
-                                log::error!(
-                                    target: "Layouter",
-                                    "Invalid operand for clamp() in `{}` (expected length): {}",
-                                    name,
-                                    n
-                                );
-                                Err(())
+                        .reduce(if fn_name == "min" { f32::min } else { f32::max })
+                        .map(CalcValue::Number)
+                }
+                length {
+                    // Fold right so the last operand becomes the innermost
+                    // argument: min(a, b, c) => Min(a, Min(b, c)).
+                    groups
+                        .into_iter()
+                        .rev()
+                        .reduce(|acc, arg| {
+                            if fn_name == "min" {
+                                Length::Min(Box::new(arg), Box::new(acc))
+                            } else {
+                                Length::Max(Box::new(arg), Box::new(acc))
                             }
                         })
-                        .collect::<Result<Vec<_>, _>>()
-                        .ok()?;
-                    let [min, val, max] = lengths.try_into().ok()?;
-                    Some(CalcValue::Length(Length::Clamp {
-                        min: Box::new(min),
-                        val: Box::new(val),
-                        max: Box::new(max),
-                    }))
+                        .map(CalcValue::Length)
                 }
             }
+            .inspect_err(|e| report_parse_error(e, fn_name, name))
+            .ok()
         }
-        CssValue::Function(fn_name, args) if fn_name == "round" => {
-            resolve_round(name, args, text_flow_style)
+        CssValue::Function(fn_name, args) if fn_name == "clamp" => parse_args! {
+            fn clamp(
+                name: &str,
+                args: &[Vec<CssValue>],
+                text_flow_style: &TextFlowStyle,
+                fn_name: &str
+            )
+            as fn_name
+            -> Result<CalcValue, ParseError>
+            {
+                min: CalcValue, value: CalcValue, max: CalcValue
+            }
+            number {
+                Some(CalcValue::Number(value.clamp(min, max)))
+            }
+            length {
+                Some(CalcValue::Length(Length::Clamp {
+                    min: Box::new(min),
+                    val: Box::new(value),
+                    max: Box::new(max),
+                }))
+            }
         }
+        .inspect_err(|e| report_parse_error(e, fn_name, name))
+        .ok(),
+        CssValue::Function(fn_name, args) if fn_name == "round" => parse_args! {
+            fn round(
+                name: &str,
+                args: &[Vec<CssValue>],
+                text_flow_style: &TextFlowStyle,
+                fn_name: &str
+            )
+            as fn_name
+            -> Result<CalcValue, ParseError>
+            {
+                strategy: Option<RoundingStrategy>,
+                value: CalcValue,
+                step: CalcValue = CalcValue::Number(1.0)
+            }
+            number {
+                if step == 0.0 {
+                    log::error!(
+                        target: "Layouter",
+                        "Zero step in round() for `{}`",
+                        name
+                    );
+                    None
+                } else {
+                    Some(CalcValue::Number(round_to_step(
+                        strategy.unwrap_or(RoundingStrategy::Nearest),
+                        value,
+                        step,
+                    )))
+                }
+            }
+            length {
+                round_length(
+                    name,
+                    strategy.unwrap_or(RoundingStrategy::Nearest),
+                    value,
+                    step,
+                )
+            }
+        }
+        .inspect_err(|e| report_parse_error(e, fn_name, name))
+        .ok(),
         _ => {
             log::error!(
                 target: "Layouter",
@@ -445,81 +527,6 @@ fn parse_rounding_strategy(keyword: &str) -> Option<RoundingStrategy> {
         Some(RoundingStrategy::ToZero)
     } else {
         None
-    }
-}
-
-/// Parse `round(<rounding-strategy>?, <value>, <step>?)` (CSS Values 4 §10.3).
-///
-/// The value and the step must both resolve to `<number>`s or both to `<length>`s
-/// (a bare `0` counts as a length, as for `min()`/`clamp()`); otherwise the
-/// declaration is invalid. Number rounds reduce numerically — a step may be
-/// omitted for them and defaults to `1` — while length rounds keep the
-/// [`Length::Round`] tree for the layout pass to resolve.
-fn resolve_round(
-    name: &str,
-    args: &[Vec<CssValue>],
-    text_flow_style: &TextFlowStyle,
-) -> Option<CalcValue> {
-    let mut strategy = RoundingStrategy::Nearest;
-    let mut groups = args.iter().peekable();
-    // An optional leading strategy keyword occupies its own argument group,
-    // e.g. `round(up, 50%, 25%)`.
-    if let Some(first) = groups.peek()
-        && let [CssValue::Keyword(keyword)] = first.as_slice()
-        && let Some(parsed) = parse_rounding_strategy(keyword)
-    {
-        strategy = parsed;
-        groups.next();
-    }
-
-    let value = groups.next()?;
-    let step = groups.next();
-    if groups.next().is_some() {
-        log::error!(
-            target: "Layouter",
-            "Too many arguments for round() in `{}`",
-            name
-        );
-        return None;
-    }
-
-    let value = resolve_calc_value(name, &CssValue::List(value.clone()), text_flow_style)?;
-    let step = match step {
-        Some(step) => resolve_calc_value(name, &CssValue::List(step.clone()), text_flow_style)?,
-        // `round(1.5)` — the step defaults to `1` for `<number>` values only;
-        // an omitted step with a `<length>` value is invalid.
-        None => CalcValue::Number(1.0),
-    };
-
-    match (value, step) {
-        (CalcValue::Number(value), CalcValue::Number(step)) => {
-            if step == 0.0 {
-                log::error!(
-                    target: "Layouter",
-                    "Zero step in round() for `{}`",
-                    name
-                );
-                return None;
-            }
-            Some(CalcValue::Number(round_to_step(strategy, value, step)))
-        }
-        // A bare `0` is a valid <length>, as for min()/clamp().
-        (CalcValue::Number(0.0), CalcValue::Length(step)) => {
-            round_length(name, strategy, Length::Px(0.0), step)
-        }
-        (CalcValue::Length(value), CalcValue::Length(step)) => {
-            round_length(name, strategy, value, step)
-        }
-        (CalcValue::Number(value), CalcValue::Length(_))
-        | (CalcValue::Length(_), CalcValue::Number(value)) => {
-            log::error!(
-                target: "Layouter",
-                "Mismatched number/length operands for round() in `{}`: {}",
-                name,
-                value
-            );
-            None
-        }
     }
 }
 

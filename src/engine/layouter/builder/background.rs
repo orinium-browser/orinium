@@ -331,7 +331,7 @@ pub fn parse_background_shorthand(
         {
             maybe_gradient = Some(parse_gradient(
                 fn_name,
-                &args.iter().flatten().cloned().collect::<Vec<_>>(),
+                args,
                 text_style,
                 text_flow_style,
                 color_scheme,
@@ -415,7 +415,7 @@ pub fn parse_background_shorthand(
 
 pub fn parse_gradient(
     fn_name: &str,
-    args: &[CssValue],
+    args: &[Vec<CssValue>],
     text_style: &TextStyle,
     text_flow_style: &TextFlowStyle,
     color_scheme: ColorScheme,
@@ -435,17 +435,31 @@ pub fn parse_gradient(
 }
 
 fn parse_linear_gradient(
-    args: &[CssValue],
+    args: &[Vec<CssValue>],
     text_style: &TextStyle,
     text_flow_style: &TextFlowStyle,
     color_scheme: ColorScheme,
 ) -> Option<Gradient> {
-    let (skip, angle) = parse_linear_direction(args);
-    let stops = parse_color_stops(&args[skip..], text_style, text_flow_style, color_scheme)?;
+    // Optional leading direction group: `<angle>` or `to <side-or-corner>`,
+    // taken only when it makes up the whole group; otherwise it is a stop.
+    let direction = args.first().and_then(|group| {
+        let (consumed, angle) = parse_linear_direction(group);
+        match angle {
+            Some(angle) if consumed == group.len() => Some(angle),
+            _ => None,
+        }
+    });
+    let stop_start = if direction.is_some() { 1 } else { 0 };
 
+    let stops = parse_color_stops(
+        &args[stop_start..],
+        text_style,
+        text_flow_style,
+        color_scheme,
+    )?;
     Some(Gradient {
         kind: GradientKind::Linear {
-            angle: angle.unwrap_or(180.0),
+            angle: direction.unwrap_or(180.0),
         },
         stops,
         spread: GradientSpread::default(),
@@ -546,35 +560,29 @@ fn parse_explicit_radial_size(
     ))
 }
 
-fn parse_radial_gradient(
-    args: &[CssValue],
-    text_style: &TextStyle,
-    text_flow_style: &TextFlowStyle,
-    color_scheme: ColorScheme,
-) -> Option<Gradient> {
+/// The radial-gradient prelude — `[<ending-shape> || <size>]? [at <position>]?` —
+/// as a single comma group. `None` means the group is not (fully) a prelude,
+/// in which case the caller treats it as a color stop.
+fn parse_radial_prelude(group: &[CssValue]) -> Option<(RadialShape, RadialSizeKind, (f32, f32))> {
     let mut shape = RadialShape::Ellipse;
     let mut size = RadialSizeKind::default();
-    let mut position = (0.5f32, 0.5f32);
-
+    let mut position = (0.5, 0.5);
+    let mut shape_seen = false;
+    let mut size_seen = false;
     let mut idx = 0;
 
     // Consume the shape and size (in any order, case-insensitively) before a
     // possible "at <position>" clause. At most one shape and one size are valid;
     // duplicates are rejected.
-    let mut shape_seen = false;
-    let mut size_seen = false;
-    while idx < args.len() {
+    while idx < group.len() {
         // Explicit size (`<length-percentage>`): the size may precede the shape
         // keyword (e.g. `30% 50% ellipse`), so consume it here too.
-        if matches!(&args[idx], CssValue::Length(_, Unit::Percent | Unit::Px)) {
+        if matches!(&group[idx], CssValue::Length(_, Unit::Percent | Unit::Px)) {
             if size_seen {
                 return None;
             }
-            let Some((consumed, parsed_size, inferred_shape)) =
-                parse_explicit_radial_size(&args[idx..])
-            else {
-                break;
-            };
+            let (consumed, parsed_size, inferred_shape) =
+                parse_explicit_radial_size(&group[idx..])?;
             size = parsed_size;
             size_seen = true;
             if let Some(shape_hint) = inferred_shape {
@@ -591,7 +599,7 @@ fn parse_radial_gradient(
             idx += consumed;
             continue;
         }
-        let CssValue::Keyword(k) = &args[idx] else {
+        let CssValue::Keyword(k) = &group[idx] else {
             break;
         };
         match k.to_ascii_lowercase().as_str() {
@@ -648,11 +656,11 @@ fn parse_radial_gradient(
     }
 
     // Optional "at <position>".
-    if idx < args.len()
-        && let CssValue::Keyword(k) = &args[idx]
+    if idx < group.len()
+        && let CssValue::Keyword(k) = &group[idx]
         && k.eq_ignore_ascii_case("at")
     {
-        let (consumed, parsed) = parse_gradient_position(&args[idx + 1..])?;
+        let (consumed, parsed) = parse_gradient_position(&group[idx + 1..])?;
         if consumed == 0 {
             return None;
         }
@@ -660,7 +668,31 @@ fn parse_radial_gradient(
         idx += 1 + consumed;
     }
 
-    let stops = parse_color_stops(&args[idx..], text_style, text_flow_style, color_scheme)?;
+    // A group is a prelude only when it starts with (and is fully consumed
+    // by) shape/size/`at` clauses; anything else is a color stop.
+    if idx == 0 || idx != group.len() {
+        return None;
+    }
+    Some((shape, size, position))
+}
+
+fn parse_radial_gradient(
+    args: &[Vec<CssValue>],
+    text_style: &TextStyle,
+    text_flow_style: &TextFlowStyle,
+    color_scheme: ColorScheme,
+) -> Option<Gradient> {
+    let prelude = args.first().and_then(|group| parse_radial_prelude(group));
+    let stop_start = if prelude.is_some() { 1 } else { 0 };
+    let (shape, size, position) =
+        prelude.unwrap_or_else(|| (RadialShape::Ellipse, RadialSizeKind::default(), (0.5, 0.5)));
+
+    let stops = parse_color_stops(
+        &args[stop_start..],
+        text_style,
+        text_flow_style,
+        color_scheme,
+    )?;
     Some(Gradient {
         kind: GradientKind::Radial {
             shape,
@@ -678,7 +710,8 @@ fn parse_radial_gradient(
 ///
 /// Returns `(consumed, (x, y))`; `None` when no valid position is present.
 /// Percentage/length offsets alongside a keyword (e.g. `at left 10px`) are not
-/// representable and yield `None` (the caller rejects the gradient).
+/// representable and yield `None` (the caller rejects the gradient). The second
+/// value may be absent when the position ends its group.
 fn parse_gradient_position(args: &[CssValue]) -> Option<(usize, (f32, f32))> {
     // `(coordinate, is_vertical)` for a side keyword.
     fn keyword_axis(kw: &str) -> Option<(f32, bool)> {
@@ -697,14 +730,12 @@ fn parse_gradient_position(args: &[CssValue]) -> Option<(usize, (f32, f32))> {
         }
     }
 
-    let (Some(k0), Some(k1)) = (args.first(), args.get(1)) else {
-        return None;
-    };
+    let k0 = args.first()?;
 
     // A bare <length-percentage>. One value means x with y centered;
     // two values are (x, y) horizontal-then-vertical.
     if let Some(x) = percent_fraction(k0) {
-        if let Some(y) = percent_fraction(k1) {
+        if let Some(y) = args.get(1).and_then(percent_fraction) {
             return Some((2, (x, y)));
         }
         return Some((1, (x, 0.5)));
@@ -717,7 +748,7 @@ fn parse_gradient_position(args: &[CssValue]) -> Option<(usize, (f32, f32))> {
 
     // center + optional bare percent → (0.5, y) or (0.5, 0.5).
     if k0 == "center" {
-        if let Some(y) = percent_fraction(k1) {
+        if let Some(y) = args.get(1).and_then(percent_fraction) {
             return Some((2, (0.5, y)));
         }
         return Some((1, (0.5, 0.5)));
@@ -726,7 +757,7 @@ fn parse_gradient_position(args: &[CssValue]) -> Option<(usize, (f32, f32))> {
     let (v0, is_v0) = keyword_axis(&k0)?;
 
     // keyword + bare <length-percentage> → perpendicular axis.
-    if let Some(y) = percent_fraction(k1) {
+    if let Some(y) = args.get(1).and_then(percent_fraction) {
         return if is_v0 {
             Some((2, (y, v0))) // k0 vertical, percentage is horizontal
         } else {
@@ -735,7 +766,7 @@ fn parse_gradient_position(args: &[CssValue]) -> Option<(usize, (f32, f32))> {
     }
 
     // Two keywords forming a corner (one horizontal, one vertical).
-    if let CssValue::Keyword(k1) = k1 {
+    if let Some(CssValue::Keyword(k1)) = args.get(1) {
         let k1 = k1.to_ascii_lowercase();
         if let Some((v1, is_v1)) = keyword_axis(&k1)
             && is_v0 != is_v1
@@ -757,44 +788,41 @@ fn parse_gradient_position(args: &[CssValue]) -> Option<(usize, (f32, f32))> {
 }
 
 fn parse_color_stops(
-    args: &[CssValue],
+    args: &[Vec<CssValue>],
     text_style: &TextStyle,
     text_flow_style: &TextFlowStyle,
     color_scheme: ColorScheme,
 ) -> Option<Vec<ColorStop>> {
     let mut stops = Vec::new();
-    let mut i = 0;
 
-    while i < args.len() {
-        let color = match &args[i] {
+    for group in args {
+        let (first, rest) = group.split_first()?;
+        let color = match first {
             CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentColor") => text_style.color,
-            _ => resolve_css_color("gradient", &args[i], color_scheme)?,
+            _ => resolve_css_color("gradient", first, color_scheme)?,
         };
-        i += 1;
 
         // Consume up to two position lengths (a double-position stop is
         // equivalent to two stops at the same color).
         let mut positions: Vec<f32> = Vec::new();
-        while positions.len() < 2 && i < args.len() {
+        for value in rest {
+            if positions.len() == 2 {
+                return None;
+            }
             // Absolute lengths (px/vw/vh/…) cannot be resolved without the
             // gradient box; they are dropped here and treated as auto stops.
             if matches!(
-                &args[i],
+                value,
                 CssValue::Length(_, Unit::Px | Unit::Em | Unit::Rem | Unit::Vw | Unit::Vh)
             ) {
-                i += 1;
                 continue;
             }
             // Math functions (including round()) resolve through the shared
             // length resolver below; anything unresolvable (absolute lengths,
-            // unsupported functions) ends the position loop.
-            match resolve_gradient_position(&args[i], text_flow_style) {
-                Some(position) => {
-                    positions.push(position.clamp(0.0, 1.0));
-                    i += 1;
-                }
-                None => break,
-            }
+            // unsupported functions, zero steps) is not a position, so the
+            // gradient is rejected.
+            let position = resolve_gradient_position(value, text_flow_style)?;
+            positions.push(position.clamp(0.0, 1.0));
         }
 
         if positions.is_empty() {
@@ -819,22 +847,19 @@ fn parse_color_stops(
     Some(stops)
 }
 
-fn parse_conic_gradient(
-    args: &[CssValue],
-    text_style: &TextStyle,
-    text_flow_style: &TextFlowStyle,
-    color_scheme: ColorScheme,
-) -> Option<Gradient> {
-    let mut angle = 0.0f32;
-    let mut position = (0.5f32, 0.5f32);
+/// The conic-gradient prelude — `from <angle>? && at <position>?` — as a
+/// single comma group. `None` means the group is not (fully) a prelude, in
+/// which case the caller treats it as a color stop.
+fn parse_conic_prelude(group: &[CssValue]) -> Option<(f32, (f32, f32))> {
+    let mut angle = 0.0;
+    let mut position = (0.5, 0.5);
     let mut idx = 0;
 
     // Optional `from <angle>`
-    if idx < args.len()
-        && let CssValue::Keyword(k) = &args[idx]
+    if let Some(CssValue::Keyword(k)) = group.get(idx)
         && k.eq_ignore_ascii_case("from")
     {
-        match &args.get(idx + 1) {
+        match group.get(idx + 1) {
             Some(CssValue::Length(v, Unit::Deg)) => {
                 angle = *v;
                 idx += 2;
@@ -844,11 +869,10 @@ fn parse_conic_gradient(
     }
 
     // Optional `at <position>`
-    if idx < args.len()
-        && let CssValue::Keyword(k) = &args[idx]
+    if let Some(CssValue::Keyword(k)) = group.get(idx)
         && k.eq_ignore_ascii_case("at")
     {
-        let (consumed, parsed) = parse_gradient_position(&args[idx + 1..])?;
+        let (consumed, parsed) = parse_gradient_position(&group[idx + 1..])?;
         if consumed == 0 {
             return None;
         }
@@ -856,7 +880,30 @@ fn parse_conic_gradient(
         idx += 1 + consumed;
     }
 
-    let stops = parse_color_stops(&args[idx..], text_style, text_flow_style, color_scheme)?;
+    // A group is a prelude only when it starts with (and is fully consumed
+    // by) a `from`/`at` clause; anything else is a color stop.
+    if idx == 0 || idx != group.len() {
+        return None;
+    }
+    Some((angle, position))
+}
+
+fn parse_conic_gradient(
+    args: &[Vec<CssValue>],
+    text_style: &TextStyle,
+    text_flow_style: &TextFlowStyle,
+    color_scheme: ColorScheme,
+) -> Option<Gradient> {
+    let prelude = args.first().and_then(|group| parse_conic_prelude(group));
+    let stop_start = if prelude.is_some() { 1 } else { 0 };
+    let (angle, position) = prelude.unwrap_or((0.0, (0.5, 0.5)));
+
+    let stops = parse_color_stops(
+        &args[stop_start..],
+        text_style,
+        text_flow_style,
+        color_scheme,
+    )?;
     Some(Gradient {
         kind: GradientKind::Conic { angle, position },
         stops,

@@ -2911,13 +2911,19 @@ fn color_mix_alpha_is_premultiplied() {
 #[test]
 fn conic_gradient_parses_stops_and_kind() {
     let args = vec![
-        CssValue::Keyword("red".into()),
-        CssValue::Length(0.0, Unit::Deg),
-        CssValue::Keyword("red".into()),
-        CssValue::Length(0.0, Unit::Deg),
-        CssValue::Length(1.0, Unit::Deg),
-        CssValue::Keyword("red".into()),
-        CssValue::Length(2.0, Unit::Deg),
+        vec![
+            CssValue::Keyword("red".into()),
+            CssValue::Length(0.0, Unit::Deg),
+        ],
+        vec![
+            CssValue::Keyword("red".into()),
+            CssValue::Length(0.0, Unit::Deg),
+            CssValue::Length(1.0, Unit::Deg),
+        ],
+        vec![
+            CssValue::Keyword("red".into()),
+            CssValue::Length(2.0, Unit::Deg),
+        ],
     ];
     let gradient = parse_gradient(
         "conic-gradient",
@@ -2953,10 +2959,14 @@ fn conic_gradient_background_shorthand() {
         CssValue::Function(
             "conic-gradient".into(),
             vec![
-                vec![CssValue::Keyword("red".into())],
-                vec![CssValue::Length(0.0, Unit::Deg)],
-                vec![CssValue::Keyword("blue".into())],
-                vec![CssValue::Length(180.0, Unit::Deg)],
+                vec![
+                    CssValue::Keyword("red".into()),
+                    CssValue::Length(0.0, Unit::Deg),
+                ],
+                vec![
+                    CssValue::Keyword("blue".into()),
+                    CssValue::Length(180.0, Unit::Deg),
+                ],
             ],
         ),
     );
@@ -3133,19 +3143,25 @@ fn scratch_responsive_background_position_is_parsed() {
 #[test]
 fn linear_gradient_calc_position_resolves() {
     let args = vec![
-        CssValue::Keyword("red".into()),
-        CssValue::Length(0.0, Unit::Percent),
-        CssValue::Keyword("blue".into()),
-        CssValue::Function(
-            "calc".into(),
-            vec![vec![
-                CssValue::Length(50.0, Unit::Percent),
-                CssValue::Keyword("+".into()),
-                CssValue::Length(10.0, Unit::Percent),
-            ]],
-        ),
-        CssValue::Keyword("green".into()),
-        CssValue::Length(100.0, Unit::Percent),
+        vec![
+            CssValue::Keyword("red".into()),
+            CssValue::Length(0.0, Unit::Percent),
+        ],
+        vec![
+            CssValue::Keyword("blue".into()),
+            CssValue::Function(
+                "calc".into(),
+                vec![vec![
+                    CssValue::Length(50.0, Unit::Percent),
+                    CssValue::Keyword("+".into()),
+                    CssValue::Length(10.0, Unit::Percent),
+                ]],
+            ),
+        ],
+        vec![
+            CssValue::Keyword("green".into()),
+            CssValue::Length(100.0, Unit::Percent),
+        ],
     ];
     let gradient = parse_gradient(
         "linear-gradient",
@@ -3163,17 +3179,21 @@ fn linear_gradient_calc_position_resolves() {
 #[test]
 fn linear_gradient_calc_negative_position_clamps() {
     let args = vec![
-        CssValue::Keyword("red".into()),
-        CssValue::Function(
-            "calc".into(),
-            vec![vec![
-                CssValue::Length(50.0, Unit::Percent),
-                CssValue::Keyword("*".into()),
-                CssValue::Number(-1.0),
-            ]],
-        ),
-        CssValue::Keyword("blue".into()),
-        CssValue::Length(100.0, Unit::Percent),
+        vec![
+            CssValue::Keyword("red".into()),
+            CssValue::Function(
+                "calc".into(),
+                vec![vec![
+                    CssValue::Length(50.0, Unit::Percent),
+                    CssValue::Keyword("*".into()),
+                    CssValue::Number(-1.0),
+                ]],
+            ),
+        ],
+        vec![
+            CssValue::Keyword("blue".into()),
+            CssValue::Length(100.0, Unit::Percent),
+        ],
     ];
     let gradient = parse_gradient(
         "linear-gradient",
@@ -3189,13 +3209,17 @@ fn linear_gradient_calc_negative_position_clamps() {
 #[test]
 fn linear_gradient_calc_zero_position() {
     let args = vec![
-        CssValue::Keyword("red".into()),
-        CssValue::Function(
-            "calc".into(),
-            vec![vec![CssValue::Length(0.0, Unit::Percent)]],
-        ),
-        CssValue::Keyword("blue".into()),
-        CssValue::Length(100.0, Unit::Percent),
+        vec![
+            CssValue::Keyword("red".into()),
+            CssValue::Function(
+                "calc".into(),
+                vec![vec![CssValue::Length(0.0, Unit::Percent)]],
+            ),
+        ],
+        vec![
+            CssValue::Keyword("blue".into()),
+            CssValue::Length(100.0, Unit::Percent),
+        ],
     ];
     let gradient = parse_gradient(
         "linear-gradient",
@@ -3486,10 +3510,11 @@ fn gradient_stop_position_round_rejects_zero_step() {
         ],
     );
     let args = vec![
-        CssValue::Keyword("red".into()),
-        step,
-        CssValue::Keyword("blue".into()),
-        CssValue::Length(100.0, Unit::Percent),
+        vec![CssValue::Keyword("red".into()), step],
+        vec![
+            CssValue::Keyword("blue".into()),
+            CssValue::Length(100.0, Unit::Percent),
+        ],
     ];
     let gradient = parse_gradient(
         "linear-gradient",
@@ -3513,14 +3538,13 @@ fn gradient_stop_position_supports_round_strategies() {
     };
     let stops = [stop(None), stop(Some("nearest")), stop(Some("down"))];
     let args = vec![
-        CssValue::Keyword("red".into()),
-        stops[0].clone(),
-        CssValue::Keyword("green".into()),
-        stops[1].clone(),
-        CssValue::Keyword("blue".into()),
-        stops[2].clone(),
-        CssValue::Keyword("black".into()),
-        CssValue::Length(100.0, Unit::Percent),
+        vec![CssValue::Keyword("red".into()), stops[0].clone()],
+        vec![CssValue::Keyword("green".into()), stops[1].clone()],
+        vec![CssValue::Keyword("blue".into()), stops[2].clone()],
+        vec![
+            CssValue::Keyword("black".into()),
+            CssValue::Length(100.0, Unit::Percent),
+        ],
     ];
     let gradient = parse_gradient(
         "linear-gradient",
@@ -3545,12 +3569,16 @@ fn repeating_gradient_parses_through_background_shorthand() {
             "repeating-linear-gradient".into(),
             vec![
                 vec![CssValue::Length(90.0, Unit::Deg)],
-                vec![CssValue::Keyword("red".into())],
-                vec![CssValue::Length(0.0, Unit::Percent)],
-                vec![CssValue::Length(10.0, Unit::Percent)],
-                vec![CssValue::Keyword("blue".into())],
-                vec![CssValue::Length(10.0, Unit::Percent)],
-                vec![CssValue::Length(20.0, Unit::Percent)],
+                vec![
+                    CssValue::Keyword("red".into()),
+                    CssValue::Length(0.0, Unit::Percent),
+                    CssValue::Length(10.0, Unit::Percent),
+                ],
+                vec![
+                    CssValue::Keyword("blue".into()),
+                    CssValue::Length(10.0, Unit::Percent),
+                    CssValue::Length(20.0, Unit::Percent),
+                ],
             ],
         ),
     );
@@ -3567,9 +3595,9 @@ fn repeating_gradient_parses_through_background_shorthand() {
 #[test]
 fn gradient_current_color_stop_resolves_to_text_color() {
     let args = vec![
-        CssValue::Keyword("currentColor".into()),
-        CssValue::Keyword("white".into()),
-        CssValue::Keyword("black".into()),
+        vec![CssValue::Keyword("currentColor".into())],
+        vec![CssValue::Keyword("white".into())],
+        vec![CssValue::Keyword("black".into())],
     ];
     let text_style = TextStyle {
         color: Color(255, 0, 0, 255),
@@ -3589,11 +3617,13 @@ fn gradient_current_color_stop_resolves_to_text_color() {
 #[test]
 fn gradient_keywords_are_case_insensitive() {
     let args = vec![
-        CssValue::Keyword("TO".into()),
-        CssValue::Keyword("TOP".into()),
-        CssValue::Keyword("LEFT".into()),
-        CssValue::Keyword("RED".into()),
-        CssValue::Keyword("BLUE".into()),
+        vec![
+            CssValue::Keyword("TO".into()),
+            CssValue::Keyword("TOP".into()),
+            CssValue::Keyword("LEFT".into()),
+        ],
+        vec![CssValue::Keyword("RED".into())],
+        vec![CssValue::Keyword("BLUE".into())],
     ];
     let gradient = parse_gradient(
         "linear-gradient",
@@ -3616,21 +3646,25 @@ fn linear_direction_accepts_corner_in_any_order() {
     for (args, expected) in [
         (
             vec![
-                CssValue::Keyword("to".into()),
-                CssValue::Keyword("left".into()),
-                CssValue::Keyword("top".into()),
-                CssValue::Keyword("red".into()),
-                CssValue::Keyword("blue".into()),
+                vec![
+                    CssValue::Keyword("to".into()),
+                    CssValue::Keyword("left".into()),
+                    CssValue::Keyword("top".into()),
+                ],
+                vec![CssValue::Keyword("red".into())],
+                vec![CssValue::Keyword("blue".into())],
             ],
             315.0,
         ),
         (
             vec![
-                CssValue::Keyword("to".into()),
-                CssValue::Keyword("bottom".into()),
-                CssValue::Keyword("right".into()),
-                CssValue::Keyword("red".into()),
-                CssValue::Keyword("blue".into()),
+                vec![
+                    CssValue::Keyword("to".into()),
+                    CssValue::Keyword("bottom".into()),
+                    CssValue::Keyword("right".into()),
+                ],
+                vec![CssValue::Keyword("red".into())],
+                vec![CssValue::Keyword("blue".into())],
             ],
             135.0,
         ),
@@ -3654,15 +3688,17 @@ fn linear_direction_accepts_corner_in_any_order() {
 #[test]
 fn linear_direction_rejects_contradictory_sides() {
     let args = vec![
-        CssValue::Keyword("to".into()),
-        CssValue::Keyword("top".into()),
-        CssValue::Keyword("bottom".into()),
-        CssValue::Keyword("red".into()),
-        CssValue::Keyword("blue".into()),
+        vec![
+            CssValue::Keyword("to".into()),
+            CssValue::Keyword("top".into()),
+            CssValue::Keyword("bottom".into()),
+        ],
+        vec![CssValue::Keyword("red".into())],
+        vec![CssValue::Keyword("blue".into())],
     ];
-    // Opposing keywords are not a valid corner; however "top" alone is a valid
-    // side, so the direction prelude consumes "top" and "bottom" is treated as
-    // color-stop-ish. Parsing should fail because "bottom" is not a color.
+    // Opposing keywords are not a valid corner, so the direction prelude does
+    // not parse; the group then reaches the color-stop parser, where "to" is
+    // not a color. Parsing should fail either way.
     assert!(
         parse_gradient(
             "linear-gradient",
@@ -3678,7 +3714,7 @@ fn linear_direction_rejects_contradictory_sides() {
 #[test]
 fn gradient_rejects_single_color_stop() {
     // CSS requires at least two color stops.
-    let args = vec![CssValue::Keyword("red".into())];
+    let args = vec![vec![CssValue::Keyword("red".into())]];
     assert!(
         parse_gradient(
             "linear-gradient",
@@ -3694,12 +3730,14 @@ fn gradient_rejects_single_color_stop() {
 #[test]
 fn radial_gradient_parses_shape_size_and_position() {
     let args = vec![
-        CssValue::Keyword("circle".into()),
-        CssValue::Keyword("closest-side".into()),
-        CssValue::Keyword("at".into()),
-        CssValue::Keyword("center".into()),
-        CssValue::Keyword("red".into()),
-        CssValue::Keyword("blue".into()),
+        vec![
+            CssValue::Keyword("circle".into()),
+            CssValue::Keyword("closest-side".into()),
+            CssValue::Keyword("at".into()),
+            CssValue::Keyword("center".into()),
+        ],
+        vec![CssValue::Keyword("red".into())],
+        vec![CssValue::Keyword("blue".into())],
     ];
     let gradient = parse_gradient(
         "radial-gradient",
@@ -3722,11 +3760,13 @@ fn radial_gradient_parses_shape_size_and_position() {
 #[test]
 fn radial_gradient_parses_at_top_left_corner_case_insensitive() {
     let args = vec![
-        CssValue::Keyword("AT".into()),
-        CssValue::Keyword("TOP".into()),
-        CssValue::Keyword("LEFT".into()),
-        CssValue::Keyword("red".into()),
-        CssValue::Keyword("blue".into()),
+        vec![
+            CssValue::Keyword("AT".into()),
+            CssValue::Keyword("TOP".into()),
+            CssValue::Keyword("LEFT".into()),
+        ],
+        vec![CssValue::Keyword("red".into())],
+        vec![CssValue::Keyword("blue".into())],
     ];
     let gradient = parse_gradient(
         "radial-gradient",
@@ -3749,14 +3789,20 @@ fn radial_gradient_parses_at_top_left_corner_case_insensitive() {
 fn radial_gradient_at_two_percentages_resolves_position_and_stops() {
     // `radial-gradient(ellipse at 50% 50%, black 16%, transparent 66%)`
     let args = vec![
-        CssValue::Keyword("ellipse".into()),
-        CssValue::Keyword("at".into()),
-        CssValue::Length(50.0, Unit::Percent),
-        CssValue::Length(50.0, Unit::Percent),
-        CssValue::Keyword("black".into()),
-        CssValue::Length(16.0, Unit::Percent),
-        CssValue::Keyword("transparent".into()),
-        CssValue::Length(66.0, Unit::Percent),
+        vec![
+            CssValue::Keyword("ellipse".into()),
+            CssValue::Keyword("at".into()),
+            CssValue::Length(50.0, Unit::Percent),
+            CssValue::Length(50.0, Unit::Percent),
+        ],
+        vec![
+            CssValue::Keyword("black".into()),
+            CssValue::Length(16.0, Unit::Percent),
+        ],
+        vec![
+            CssValue::Keyword("transparent".into()),
+            CssValue::Length(66.0, Unit::Percent),
+        ],
     ];
     let gradient = parse_gradient(
         "radial-gradient",
@@ -3783,13 +3829,15 @@ fn radial_gradient_at_two_percentages_resolves_position_and_stops() {
 fn radial_gradient_at_center_percent_position() {
     // `radial-gradient(ellipse farthest-side at center 22%, #ffcd33, #a37b00)`
     let args = vec![
-        CssValue::Keyword("ellipse".into()),
-        CssValue::Keyword("farthest-side".into()),
-        CssValue::Keyword("at".into()),
-        CssValue::Keyword("center".into()),
-        CssValue::Length(22.0, Unit::Percent),
-        CssValue::Color("ffcd33".into()),
-        CssValue::Color("a37b00".into()),
+        vec![
+            CssValue::Keyword("ellipse".into()),
+            CssValue::Keyword("farthest-side".into()),
+            CssValue::Keyword("at".into()),
+            CssValue::Keyword("center".into()),
+            CssValue::Length(22.0, Unit::Percent),
+        ],
+        vec![CssValue::Color("ffcd33".into())],
+        vec![CssValue::Color("a37b00".into())],
     ];
     let gradient = parse_gradient(
         "radial-gradient",
@@ -3813,10 +3861,12 @@ fn radial_gradient_at_center_percent_position() {
 #[test]
 fn radial_gradient_rejects_duplicate_shape() {
     let args = vec![
-        CssValue::Keyword("circle".into()),
-        CssValue::Keyword("ellipse".into()),
-        CssValue::Keyword("red".into()),
-        CssValue::Keyword("blue".into()),
+        vec![
+            CssValue::Keyword("circle".into()),
+            CssValue::Keyword("ellipse".into()),
+        ],
+        vec![CssValue::Keyword("red".into())],
+        vec![CssValue::Keyword("blue".into())],
     ];
     assert!(
         parse_gradient(
@@ -3833,11 +3883,13 @@ fn radial_gradient_rejects_duplicate_shape() {
 #[test]
 fn radial_gradient_parses_ellipse_percentage_size_after_shape_keyword() {
     let args = vec![
-        CssValue::Keyword("ellipse".into()),
-        CssValue::Length(30.0, Unit::Percent),
-        CssValue::Length(50.0, Unit::Percent),
-        CssValue::Keyword("red".into()),
-        CssValue::Keyword("blue".into()),
+        vec![
+            CssValue::Keyword("ellipse".into()),
+            CssValue::Length(30.0, Unit::Percent),
+            CssValue::Length(50.0, Unit::Percent),
+        ],
+        vec![CssValue::Keyword("red".into())],
+        vec![CssValue::Keyword("blue".into())],
     ];
     let gradient = parse_gradient(
         "radial-gradient",
@@ -3860,11 +3912,13 @@ fn radial_gradient_parses_ellipse_percentage_size_after_shape_keyword() {
 #[test]
 fn radial_gradient_parses_ellipse_percentage_size_before_shape_keyword() {
     let args = vec![
-        CssValue::Length(30.0, Unit::Percent),
-        CssValue::Length(50.0, Unit::Percent),
-        CssValue::Keyword("ellipse".into()),
-        CssValue::Keyword("red".into()),
-        CssValue::Keyword("blue".into()),
+        vec![
+            CssValue::Length(30.0, Unit::Percent),
+            CssValue::Length(50.0, Unit::Percent),
+            CssValue::Keyword("ellipse".into()),
+        ],
+        vec![CssValue::Keyword("red".into())],
+        vec![CssValue::Keyword("blue".into())],
     ];
     let gradient = parse_gradient(
         "radial-gradient",
@@ -3887,9 +3941,9 @@ fn radial_gradient_parses_ellipse_percentage_size_before_shape_keyword() {
 #[test]
 fn radial_gradient_rejects_lone_percentage_size() {
     let args = vec![
-        CssValue::Length(50.0, Unit::Percent),
-        CssValue::Keyword("red".into()),
-        CssValue::Keyword("blue".into()),
+        vec![CssValue::Length(50.0, Unit::Percent)],
+        vec![CssValue::Keyword("red".into())],
+        vec![CssValue::Keyword("blue".into())],
     ];
     assert!(
         parse_gradient(
@@ -3906,10 +3960,12 @@ fn radial_gradient_rejects_lone_percentage_size() {
 #[test]
 fn radial_gradient_rejects_negative_percentage_size() {
     let args = vec![
-        CssValue::Length(30.0, Unit::Percent),
-        CssValue::Length(-50.0, Unit::Percent),
-        CssValue::Keyword("red".into()),
-        CssValue::Keyword("blue".into()),
+        vec![
+            CssValue::Length(30.0, Unit::Percent),
+            CssValue::Length(-50.0, Unit::Percent),
+        ],
+        vec![CssValue::Keyword("red".into())],
+        vec![CssValue::Keyword("blue".into())],
     ];
     assert!(
         parse_gradient(
@@ -3926,13 +3982,15 @@ fn radial_gradient_rejects_negative_percentage_size() {
 #[test]
 fn conic_gradient_parses_from_and_at_angle() {
     let args = vec![
-        CssValue::Keyword("from".into()),
-        CssValue::Length(90.0, Unit::Deg),
-        CssValue::Keyword("at".into()),
-        CssValue::Keyword("bottom".into()),
-        CssValue::Keyword("right".into()),
-        CssValue::Keyword("red".into()),
-        CssValue::Keyword("blue".into()),
+        vec![
+            CssValue::Keyword("from".into()),
+            CssValue::Length(90.0, Unit::Deg),
+            CssValue::Keyword("at".into()),
+            CssValue::Keyword("bottom".into()),
+            CssValue::Keyword("right".into()),
+        ],
+        vec![CssValue::Keyword("red".into())],
+        vec![CssValue::Keyword("blue".into())],
     ];
     let gradient = parse_gradient(
         "conic-gradient",
@@ -3976,14 +4034,13 @@ fn gradient_stop_position_supports_min_max_clamp() {
         ],
     );
     let args = vec![
-        CssValue::Keyword("red".into()),
-        min,
-        CssValue::Keyword("green".into()),
-        max,
-        CssValue::Keyword("blue".into()),
-        clamp,
-        CssValue::Keyword("black".into()),
-        CssValue::Length(100.0, Unit::Percent),
+        vec![CssValue::Keyword("red".into()), min],
+        vec![CssValue::Keyword("green".into()), max],
+        vec![CssValue::Keyword("blue".into()), clamp],
+        vec![
+            CssValue::Keyword("black".into()),
+            CssValue::Length(100.0, Unit::Percent),
+        ],
     ];
     let gradient = parse_gradient(
         "linear-gradient",
@@ -4074,6 +4131,14 @@ fn resolved_color_scheme(css: &str, prop: &str, scheme: ColorScheme) -> Color {
 /// Convenience: resolve `color` property from a CSS rule.
 fn rc(css: &str) -> Color {
     resolved_color(css, "color")
+}
+
+/// Like [`rc`] but yields `None` when the value does not resolve to a color.
+fn rc_opt(css: &str) -> Option<Color> {
+    let stylesheet = CssParser::new(css).parse().unwrap();
+    let resolved = CssResolver::resolve(&stylesheet);
+    let decl = resolved.iter().find(|d| d.name == "color")?;
+    resolve_css_color(&decl.name, &decl.value, ColorScheme::Light)
 }
 
 #[test]
@@ -4830,6 +4895,186 @@ fn rgb_calc_complex_expression() {
         rc("div { color: rgb(calc(255 * 0.5 + 127), 0, 0); }"),
         Color(255, 0, 0, 255)
     );
+}
+
+#[test]
+fn rgb_fourth_value_is_positional_alpha() {
+    assert_eq!(
+        rc("div { color: rgb(255 0 0 0.5); }"),
+        Color(255, 0, 0, 128)
+    );
+}
+
+#[test]
+fn rgb_slash_alpha_conflicts_with_fourth_value() {
+    assert!(rc_opt("div { color: rgb(255 0 0 4 / 0.5); }").is_none());
+    assert!(rc_opt("div { color: rgb(255 0 0 0.5 / 0.5); }").is_none());
+}
+
+#[test]
+fn rgb_slash_bare_percent_pops_into_alpha_and_fails_arity() {
+    assert!(rc_opt("div { color: rgb(1 2 3 / %); }").is_none());
+}
+
+#[test]
+fn rgb_bare_percent_marks_percentage_channels() {
+    assert_eq!(
+        rc("div { color: rgb(calc(100/2) % 0 0); }"),
+        Color(128, 0, 0, 255)
+    );
+}
+
+#[test]
+fn hsl_positional_alpha_and_extra_value_dropped() {
+    assert_eq!(
+        rc("div { color: hsl(0 100% 50% 0.5); }"),
+        Color(255, 0, 0, 128)
+    );
+    assert_eq!(
+        rc("div { color: hsl(0 100% 50% 0.5 0.7); }"),
+        Color(255, 0, 0, 128)
+    );
+}
+
+#[test]
+fn hsl_bare_percent_divides_previous_channel() {
+    assert_eq!(
+        rc("div { color: hsl(0deg, calc(50) %, 50%); }"),
+        Color(128, 127, 127, 255)
+    );
+}
+
+#[test]
+fn positional_percent_alpha_overwrites_in_hsl_but_not_hwb() {
+    assert_eq!(
+        rc("div { color: hsl(0 100% 50% 40% 60%); }"),
+        Color(255, 0, 0, 153)
+    );
+    assert_eq!(
+        rc("div { color: hwb(120 0% 0% 40% 60%); }"),
+        Color(0, 255, 0, 102)
+    );
+}
+
+#[test]
+fn lab_resolves_channels_and_slash_alpha() {
+    assert_eq!(
+        rc("div { color: lab(50% 0 0); }"),
+        Color(119, 119, 119, 255)
+    );
+    assert_eq!(
+        rc("div { color: lab(50% 50% 0); }"),
+        Color(210, 61, 121, 255)
+    );
+    assert_eq!(
+        rc("div { color: lab(50% 0 0 / 0.5); }"),
+        Color(119, 119, 119, 128)
+    );
+}
+
+#[test]
+fn lab_extra_positional_value_is_dropped() {
+    assert_eq!(
+        rc("div { color: lab(50 0 0 0.5); }"),
+        Color(119, 119, 119, 255)
+    );
+}
+
+// ─── parse_args! slot cardinality ─────────────────────────────────────────
+
+/// The `parse_args!` slot forms — required `x: T`, try-parse
+/// `x: Option<T>`, parse-time default `x: T = <expr>` — plus the arity
+/// errors that the CSS-layer bridge turns into log lines.
+#[test]
+fn parse_args_slot_cardinality_forms() {
+    use super::args::{ArgResolver, CssGroupCursor, ParseError};
+
+    let name = "slot-cardinality";
+    let text_flow_style = &TextFlowStyle::default();
+
+    let empty: &[Vec<CssValue>] = &[];
+    let one: &[Vec<CssValue>] = &[vec![CssValue::Number(1.0)]];
+    let two: &[Vec<CssValue>] = &[vec![CssValue::Number(1.0)], vec![CssValue::Number(2.0)]];
+    let three: &[Vec<CssValue>] = &[
+        vec![CssValue::Number(1.0)],
+        vec![CssValue::Number(2.0)],
+        vec![CssValue::Number(3.0)],
+    ];
+
+    // Optional slot absent → None for the body.
+    let args = one;
+    let out = parse_args! {
+        fn t(name: &str, args: &[Vec<CssValue>], text_flow_style: &TextFlowStyle)
+        -> Result<f32, ParseError>
+        {
+            a: f32, b: Option<f32>
+        }
+        => { Some(a + b.unwrap_or(10.0)) }
+    }
+    .ok();
+    assert_eq!(out, Some(11.0));
+
+    // Optional slot present → bound.
+    let args = two;
+    let out = parse_args! {
+        fn t(name: &str, args: &[Vec<CssValue>], text_flow_style: &TextFlowStyle)
+        -> Result<f32, ParseError>
+        {
+            a: f32, b: Option<f32>
+        }
+        => { Some(a + b.unwrap_or(10.0)) }
+    }
+    .ok();
+    assert_eq!(out, Some(3.0));
+
+    // Parse-time default: absent → default, present → resolved value.
+    let args = empty;
+    let out = parse_args! {
+        fn t(name: &str, args: &[Vec<CssValue>], text_flow_style: &TextFlowStyle)
+        -> Result<f32, ParseError>
+        {
+            a: f32 = 5.0
+        }
+        => { Some(a) }
+    }
+    .ok();
+    assert_eq!(out, Some(5.0));
+    let args = one;
+    let out = parse_args! {
+        fn t(name: &str, args: &[Vec<CssValue>], text_flow_style: &TextFlowStyle)
+        -> Result<f32, ParseError>
+        {
+            a: f32 = 5.0
+        }
+        => { Some(a) }
+    }
+    .ok();
+    assert_eq!(out, Some(1.0));
+
+    // Arity failures surface as ParseError for the call-site bridge.
+    let args = empty;
+    let err = parse_args! {
+        fn t(name: &str, args: &[Vec<CssValue>], text_flow_style: &TextFlowStyle)
+        -> Result<f32, ParseError>
+        {
+            a: f32
+        }
+        => { Some(a) }
+    }
+    .unwrap_err();
+    assert_eq!(err, ParseError::MissingArgument);
+
+    let args = three;
+    let err = parse_args! {
+        fn t(name: &str, args: &[Vec<CssValue>], text_flow_style: &TextFlowStyle)
+        -> Result<f32, ParseError>
+        {
+            a: f32, b: Option<f32>
+        }
+        => { Some(a + b.unwrap_or(0.0)) }
+    }
+    .unwrap_err();
+    assert_eq!(err, ParseError::UnexpectedArgument);
 }
 
 // ─── hsl boundary hues (continued) ────────────────────────────────────────

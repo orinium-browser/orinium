@@ -1,5 +1,6 @@
+use super::args::{ArgResolver, CssGroupCursor, ParseError};
 use crate::engine::css::values::{CssValue, Unit};
-use crate::engine::layouter::types::{Color, ColorScheme};
+use crate::engine::layouter::types::{Color, ColorScheme, TextFlowStyle};
 
 fn mix_colors(colors: &[Color], weights: &[f32], space: &str) -> Color {
     let n = colors.len().min(weights.len());
@@ -258,32 +259,41 @@ fn resolve_channel(value: &CssValue) -> Option<f32> {
 
 /// Resolve the arguments of a CSS math function to a plain `f32`.
 fn resolve_channel_function(fn_name: &str, args: &[Vec<CssValue>]) -> Option<f32> {
+    let text_flow_style = &TextFlowStyle::default();
     match fn_name {
-        "calc" => {
-            // calc() has a single argument list: calc(a + b)
-            let flat: Vec<&CssValue> = args.iter().flatten().collect();
-            resolve_channel_expr(&flat)
-        }
-        "min" | "max" => {
-            // Each comma-separated argument is an independent expression.
-            let mut values = Vec::with_capacity(args.len());
-            for arg_group in args {
-                let flat: Vec<&CssValue> = arg_group.iter().collect();
-                values.push(resolve_channel_expr(&flat)?);
+        "calc" => parse_args! {
+            fn calc(fn_name: &str, args: &[Vec<CssValue>], text_flow_style: &TextFlowStyle)
+            -> Result<f32, ParseError>
+            {
+                expr: f32
             }
-            match fn_name {
-                "min" => values.into_iter().reduce(f32::min),
-                _ => values.into_iter().reduce(f32::max),
+            => { Some(expr) }
+        }
+        .ok(),
+        "min" | "max" => parse_args! {
+            fn min_max(fn_name: &str, args: &[Vec<CssValue>], text_flow_style: &TextFlowStyle)
+            -> Result<f32, ParseError>
+            {
+                values: Vec<f32>
+            }
+            => {
+                if fn_name == "min" {
+                    values.into_iter().reduce(f32::min)
+                } else {
+                    values.into_iter().reduce(f32::max)
+                }
             }
         }
-        "clamp" => {
-            // clamp(min, val, max) — each argument may be a calc expression.
-            let refs: Vec<Vec<&CssValue>> = args.iter().map(|a| a.iter().collect()).collect();
-            let min = resolve_channel_expr(&refs[0])?;
-            let val = resolve_channel_expr(&refs[1])?;
-            let max = resolve_channel_expr(&refs[2])?;
-            Some(val.clamp(min, max))
+        .ok(),
+        "clamp" => parse_args! {
+            fn clamp(fn_name: &str, args: &[Vec<CssValue>], text_flow_style: &TextFlowStyle)
+            -> Result<f32, ParseError>
+            {
+                min: f32, value: f32, max: f32
+            }
+            => { Some(value.clamp(min, max)) }
         }
+        .ok(),
         _ => None,
     }
 }
@@ -341,6 +351,12 @@ fn resolve_channel_slice(items: &[CssValue]) -> Option<f32> {
     resolve_channel_expr(&refs)
 }
 
+impl ArgResolver for f32 {
+    fn resolve(_name: &str, _text_flow_style: &TextFlowStyle, group: &[CssValue]) -> Option<Self> {
+        resolve_channel_slice(group)
+    }
+}
+
 /// Normalize a percentage-range value from `resolve_channel` to 0.0–1.0.
 ///
 /// CSS spec: plain numbers > 1.0 in hsl/hwb are treated as percentages
@@ -351,6 +367,250 @@ fn normalize_hsl_percent(v: f32) -> f32 {
     } else {
         v.clamp(0.0, 1.0)
     }
+}
+
+/// How a single channel slot interprets percent and number inputs.
+#[derive(Clone, Copy)]
+enum ChannelScale {
+    /// Percents and plain numbers both pass through unchanged (rgb).
+    Raw,
+    /// Hue: `Ndeg` and plain numbers are degrees, percents are `p/100` degrees.
+    Deg,
+    /// 0–100% maps to 0.0–1.0; plain numbers use [`normalize_hsl_percent`].
+    Pct01,
+    /// 0–100% maps to 0–100 (lab L*); plain numbers pass through.
+    Pct100,
+    /// −100–100% maps to −125–125 (lab a*/b*); plain numbers pass through.
+    Pct125,
+}
+
+impl ChannelScale {
+    fn on_percent(self, p: f32) -> f32 {
+        match self {
+            ChannelScale::Raw => p,
+            ChannelScale::Deg => (p / 100.0).rem_euclid(360.0),
+            ChannelScale::Pct01 => p / 100.0,
+            ChannelScale::Pct100 => p,
+            ChannelScale::Pct125 => p * 1.25,
+        }
+    }
+
+    fn on_number(self, v: f32) -> f32 {
+        match self {
+            ChannelScale::Deg => v.rem_euclid(360.0),
+            ChannelScale::Pct01 => normalize_hsl_percent(v),
+            ChannelScale::Raw | ChannelScale::Pct100 | ChannelScale::Pct125 => v,
+        }
+    }
+
+    /// Retroactive fix applied when a bare `%` keyword follows a value.
+    fn fix_bare_pct(self, v: &mut f32) {
+        match self {
+            ChannelScale::Raw | ChannelScale::Deg => {}
+            ChannelScale::Pct01 => *v /= 100.0,
+            ChannelScale::Pct100 => *v = v.clamp(0.0, 100.0),
+            ChannelScale::Pct125 => *v *= 1.25,
+        }
+    }
+}
+
+/// What a pre-slash value past the last channel slot does.
+#[derive(Clone, Copy)]
+enum ExtraPolicy {
+    /// Discard the value.
+    Drop,
+    /// Position `n` becomes alpha; later values are discarded.
+    Alpha,
+    /// Position `n` and later all overwrite alpha.
+    AlphaOverwrite,
+    /// Position `n` is a fourth channel; later values fail arity.
+    Fourth,
+}
+
+/// Per-function channel-walking rules shared by rgb/hsl/hwb/lab.
+struct ChannelSpec {
+    scales: &'static [ChannelScale; 3],
+    number_extra: ExtraPolicy,
+    percent_extra: ExtraPolicy,
+    /// rgb: arity is exact (3 values, or 4 with the 4th as alpha), and a
+    /// bare `%` after `/` pops the last value into alpha.
+    strict: bool,
+    /// rgb: any percent marks the whole color percentage-mapped.
+    global_pct: bool,
+}
+
+const RGB_CHANNELS: ChannelSpec = ChannelSpec {
+    scales: &[ChannelScale::Raw, ChannelScale::Raw, ChannelScale::Raw],
+    number_extra: ExtraPolicy::Fourth,
+    percent_extra: ExtraPolicy::Fourth,
+    strict: true,
+    global_pct: true,
+};
+
+const HSL_CHANNELS: ChannelSpec = ChannelSpec {
+    scales: &[ChannelScale::Deg, ChannelScale::Pct01, ChannelScale::Pct01],
+    number_extra: ExtraPolicy::Alpha,
+    percent_extra: ExtraPolicy::AlphaOverwrite,
+    strict: false,
+    global_pct: false,
+};
+
+const HWB_CHANNELS: ChannelSpec = ChannelSpec {
+    scales: &[ChannelScale::Deg, ChannelScale::Pct01, ChannelScale::Pct01],
+    number_extra: ExtraPolicy::Alpha,
+    percent_extra: ExtraPolicy::Alpha,
+    strict: false,
+    global_pct: false,
+};
+
+const LAB_CHANNELS: ChannelSpec = ChannelSpec {
+    scales: &[
+        ChannelScale::Pct100,
+        ChannelScale::Pct125,
+        ChannelScale::Pct125,
+    ],
+    number_extra: ExtraPolicy::Drop,
+    percent_extra: ExtraPolicy::Drop,
+    strict: false,
+    global_pct: false,
+};
+
+/// Resolved channel walk: three scaled slots, a clamped alpha, and rgb's
+/// global percentage flag.
+struct Walked {
+    channels: [f32; 3],
+    alpha: f32,
+    pct: bool,
+}
+
+/// Walk the flattened components of a color function according to `spec`.
+///
+/// Handles `/` separators, bare `%` retroactive fixes, unit suffixes, and
+/// the per-function extra-value policies. Returns `None` when a slot is
+/// missing or rgb's exact arity check fails.
+fn walk_channels(spec: &ChannelSpec, args: &[Vec<CssValue>]) -> Option<Walked> {
+    let n = spec.scales.len();
+    let mut slots: [Option<f32>; 3] = [None; 3];
+    let mut index = 0usize;
+    let mut alpha: Option<f32> = None;
+    let mut fourth: Option<f32> = None;
+    let mut after_slash = false;
+    let mut pct = false;
+
+    for arg in args.iter().flatten() {
+        match arg {
+            CssValue::Keyword(k) if k == "/" => {
+                after_slash = true;
+            }
+            CssValue::Keyword(k) if k == "%" => {
+                if spec.global_pct {
+                    pct = true;
+                }
+                if after_slash {
+                    if spec.strict {
+                        if index == n + 1 {
+                            alpha = Some(fourth.take()? / 100.0);
+                            index -= 1;
+                        } else if (1..=n).contains(&index) {
+                            alpha = Some(slots[index - 1].take()? / 100.0);
+                            index -= 1;
+                        }
+                    } else if let Some(a) = alpha.as_mut() {
+                        *a /= 100.0;
+                    }
+                } else if index > 0
+                    && index - 1 < n
+                    && let Some(v) = slots[index - 1].as_mut()
+                {
+                    spec.scales[index - 1].fix_bare_pct(v);
+                }
+            }
+            CssValue::Length(p, Unit::Percent) if after_slash => {
+                if spec.global_pct {
+                    pct = true;
+                }
+                alpha = Some(p / 100.0);
+            }
+            CssValue::Length(d, Unit::Deg)
+                if !after_slash && matches!(spec.scales[0], ChannelScale::Deg) =>
+            {
+                slots[0] = Some(d.rem_euclid(360.0));
+                index += 1;
+            }
+            CssValue::Length(p, Unit::Percent) => {
+                if spec.global_pct {
+                    pct = true;
+                }
+                if index < n {
+                    slots[index] = Some(spec.scales[index].on_percent(*p));
+                } else {
+                    match spec.percent_extra {
+                        ExtraPolicy::Drop => {}
+                        ExtraPolicy::Alpha => {
+                            if index == n {
+                                alpha = Some(p / 100.0);
+                            }
+                        }
+                        ExtraPolicy::AlphaOverwrite => alpha = Some(p / 100.0),
+                        ExtraPolicy::Fourth => {
+                            if index == n {
+                                fourth = Some(*p);
+                            }
+                        }
+                    }
+                }
+                index += 1;
+            }
+            _ => {
+                let v = resolve_channel(arg)?;
+                if after_slash {
+                    alpha = Some(v);
+                } else {
+                    if index < n {
+                        slots[index] = Some(spec.scales[index].on_number(v));
+                    } else {
+                        match spec.number_extra {
+                            ExtraPolicy::Drop => {}
+                            ExtraPolicy::Alpha => {
+                                if index == n {
+                                    alpha = Some(v);
+                                }
+                            }
+                            ExtraPolicy::AlphaOverwrite => alpha = Some(v),
+                            ExtraPolicy::Fourth => {
+                                if index == n {
+                                    fourth = Some(v);
+                                }
+                            }
+                        }
+                    }
+                    index += 1;
+                }
+            }
+        }
+    }
+
+    let channels = [slots[0]?, slots[1]?, slots[2]?];
+    let alpha = if spec.strict {
+        match index {
+            3 => alpha.unwrap_or(1.0),
+            4 => {
+                if alpha.is_some() {
+                    return None;
+                }
+                fourth?
+            }
+            _ => return None,
+        }
+    } else {
+        alpha.unwrap_or(1.0)
+    };
+
+    Some(Walked {
+        channels,
+        alpha: alpha.clamp(0.0, 1.0),
+        pct,
+    })
 }
 
 /// Resolve a computed CssValue into a final RGBA Color.
@@ -594,62 +854,12 @@ pub fn resolve_css_color(
 
         // rgb() / rgba() unified
         CssValue::Function(func, args) if func == "rgb" || func == "rgba" => {
-            let mut values = Vec::new();
-            let mut has_pct = false;
-            let mut alpha: Option<f32> = None;
-            let mut after_slash = false;
-
-            for arg in args.iter().flatten() {
-                match arg {
-                    CssValue::Keyword(k) if k == "/" => {
-                        after_slash = true;
-                    }
-                    CssValue::Keyword(k) if k == "%" => {
-                        // A bare % after a resolved value means that value is a
-                        // percentage. This handles `calc(100/2)%` from the parser.
-                        has_pct = true;
-                        if after_slash && !values.is_empty() {
-                            // Convert the last pushed number to a percentage alpha.
-                            let v = values.pop().unwrap();
-                            alpha = Some(v / 100.0);
-                        }
-                    }
-                    CssValue::Length(_p, Unit::Percent) => {
-                        has_pct = true;
-                        let v = resolve_channel(arg)?;
-                        if after_slash {
-                            alpha = Some(v / 100.0);
-                        } else {
-                            values.push(v);
-                        }
-                    }
-                    _ => {
-                        // Number, calc(), min(), max(), clamp(), var(), etc.
-                        let v = resolve_channel(arg)?;
-                        if after_slash {
-                            alpha = Some(v);
-                        } else {
-                            values.push(v);
-                        }
-                    }
-                }
-            }
-
-            // rgb(r, g, b) -> 3 values
-            // rgba(r, g, b, a) -> 4 values
-            // rgb(r g b / a) -> 3 values + after_slash
-            let (a, values) = if values.len() == 4 && alpha.is_none() {
-                (values[3], vec![values[0], values[1], values[2]])
-            } else if values.len() == 3 {
-                (alpha.unwrap_or(1.0), values)
-            } else {
-                return None;
-            };
+            let walked = walk_channels(&RGB_CHANNELS, args)?;
 
             // CSS stores rgb values as 0-255 integers or 0.0-1.0 floats
             // or 0%-100% (already handled above).
             let map_channel = |v: f32| -> f32 {
-                if has_pct {
+                if walked.pct {
                     v / 100.0 * 255.0
                 } else if v > 1.0 {
                     v.clamp(0.0, 255.0)
@@ -659,300 +869,53 @@ pub fn resolve_css_color(
             };
 
             Some(Color(
-                map_channel(values[0]).round() as u8,
-                map_channel(values[1]).round() as u8,
-                map_channel(values[2]).round() as u8,
-                (a * 255.0).round() as u8,
+                map_channel(walked.channels[0]).round() as u8,
+                map_channel(walked.channels[1]).round() as u8,
+                map_channel(walked.channels[2]).round() as u8,
+                (walked.alpha * 255.0).round() as u8,
             ))
         }
 
         // hsl() / hsla() unified
         CssValue::Function(func, args) if func == "hsl" || func == "hsla" => {
-            let mut hue_val: Option<f32> = None;
-            let mut sat_val: Option<f32> = None;
-            let mut light_val: Option<f32> = None;
-            let mut alpha: Option<f32> = None;
-            let mut after_slash = false;
-            let mut channel_index = 0u8;
-
-            for arg in args.iter().flatten() {
-                match arg {
-                    CssValue::Keyword(k) if k == "/" => {
-                        after_slash = true;
-                    }
-                    CssValue::Keyword(k) if k == "%" => {
-                        // Bare % means the *previous* channel is a percentage.
-                        // channel_index was already incremented past it.
-                        if after_slash {
-                            if let Some(ref mut a) = alpha {
-                                *a /= 100.0;
-                            }
-                        } else if channel_index > 0 {
-                            match channel_index - 1 {
-                                1 => {
-                                    if let Some(ref mut s) = sat_val {
-                                        *s /= 100.0;
-                                    }
-                                }
-                                2 => {
-                                    if let Some(ref mut l) = light_val {
-                                        *l /= 100.0;
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    CssValue::Length(percent, Unit::Percent) if after_slash => {
-                        alpha = Some(percent / 100.0);
-                    }
-                    CssValue::Length(value, Unit::Deg) if !after_slash => {
-                        hue_val = Some(value.rem_euclid(360.0));
-                        channel_index += 1;
-                    }
-                    CssValue::Length(value, Unit::Percent) if !after_slash => {
-                        let v = value / 100.0;
-                        match channel_index {
-                            0 => {
-                                hue_val = Some(v.rem_euclid(360.0));
-                            }
-                            1 => {
-                                sat_val = Some(v);
-                            }
-                            2 => {
-                                light_val = Some(v);
-                            }
-                            _ => {
-                                alpha = Some(v);
-                            }
-                        }
-                        channel_index += 1;
-                    }
-                    _ => {
-                        // Number, calc(), min(), max(), clamp(), etc.
-                        let v = resolve_channel(arg)?;
-                        if after_slash {
-                            alpha = Some(v);
-                        } else {
-                            match channel_index {
-                                0 => {
-                                    hue_val = Some(v.rem_euclid(360.0));
-                                }
-                                1 => {
-                                    sat_val = Some(normalize_hsl_percent(v));
-                                }
-                                2 => {
-                                    light_val = Some(normalize_hsl_percent(v));
-                                }
-                                3 => {
-                                    alpha = Some(v);
-                                }
-                                _ => {}
-                            }
-                            channel_index += 1;
-                        }
-                    }
-                }
-            }
-
-            let hue = hue_val?;
-            let saturation = sat_val?.clamp(0.0, 1.0);
-            let lightness = light_val?.clamp(0.0, 1.0);
-            let alpha = alpha.unwrap_or(1.0).clamp(0.0, 1.0);
-            let (r, g, b, a) = hsla_to_rgba(hue, saturation, lightness, alpha);
+            let walked = walk_channels(&HSL_CHANNELS, args)?;
+            let (r, g, b, a) = hsla_to_rgba(
+                walked.channels[0],
+                walked.channels[1].clamp(0.0, 1.0),
+                walked.channels[2].clamp(0.0, 1.0),
+                walked.alpha,
+            );
 
             Some(Color(r, g, b, a))
         }
 
         // hwb() — hue, whiteness, blackness
         CssValue::Function(func, args) if func == "hwb" => {
-            let mut hue_val: Option<f32> = None;
-            let mut white_val: Option<f32> = None;
-            let mut black_val: Option<f32> = None;
-            let mut alpha: Option<f32> = None;
-            let mut after_slash = false;
-            let mut channel_index = 0u8;
-
-            for arg in args.iter().flatten() {
-                match arg {
-                    CssValue::Keyword(k) if k == "/" => {
-                        after_slash = true;
-                    }
-                    CssValue::Keyword(k) if k == "%" => {
-                        if after_slash {
-                            if let Some(ref mut a) = alpha {
-                                *a /= 100.0;
-                            }
-                        } else if channel_index > 0 {
-                            match channel_index - 1 {
-                                1 => {
-                                    if let Some(ref mut w) = white_val {
-                                        *w /= 100.0;
-                                    }
-                                }
-                                2 => {
-                                    if let Some(ref mut b) = black_val {
-                                        *b /= 100.0;
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    CssValue::Length(percent, Unit::Percent) if after_slash => {
-                        alpha = Some(percent / 100.0);
-                    }
-                    CssValue::Length(value, Unit::Deg) if !after_slash => {
-                        hue_val = Some(value.rem_euclid(360.0));
-                        channel_index += 1;
-                    }
-                    CssValue::Length(value, Unit::Percent) if !after_slash => {
-                        let v = value / 100.0;
-                        match channel_index {
-                            0 => {
-                                hue_val = Some(v.rem_euclid(360.0));
-                            }
-                            1 => {
-                                white_val = Some(v);
-                            }
-                            2 => {
-                                black_val = Some(v);
-                            }
-                            3 => {
-                                alpha = Some(v);
-                            }
-                            _ => {}
-                        }
-                        channel_index += 1;
-                    }
-                    _ => {
-                        let v = resolve_channel(arg)?;
-                        if after_slash {
-                            alpha = Some(v);
-                        } else {
-                            match channel_index {
-                                0 => {
-                                    hue_val = Some(v.rem_euclid(360.0));
-                                }
-                                1 => {
-                                    white_val = Some(normalize_hsl_percent(v));
-                                }
-                                2 => {
-                                    black_val = Some(normalize_hsl_percent(v));
-                                }
-                                3 => {
-                                    alpha = Some(v);
-                                }
-                                _ => {}
-                            }
-                            channel_index += 1;
-                        }
-                    }
-                }
-            }
-
-            let hue = hue_val?;
-            let w = white_val?.clamp(0.0, 1.0);
-            let b = black_val?.clamp(0.0, 1.0);
-            let alpha = alpha.unwrap_or(1.0).clamp(0.0, 1.0);
-
-            let (r, g, bl, a) = hwb_to_rgba(hue, w, b, alpha);
+            let walked = walk_channels(&HWB_CHANNELS, args)?;
+            let (r, g, bl, a) = hwb_to_rgba(
+                walked.channels[0],
+                walked.channels[1].clamp(0.0, 1.0),
+                walked.channels[2].clamp(0.0, 1.0),
+                walked.alpha,
+            );
             Some(Color(r, g, bl, a))
         }
 
         // lab() — CIE L*a*b*
         CssValue::Function(func, args) if func == "lab" => {
-            let mut lightness: Option<f32> = None;
-            let mut a_val: Option<f32> = None;
-            let mut b_val: Option<f32> = None;
-            let mut alpha: Option<f32> = None;
-            let mut after_slash = false;
-            let mut channel_index = 0u8;
-
-            for arg in args.iter().flatten() {
-                match arg {
-                    CssValue::Keyword(k) if k == "/" => {
-                        after_slash = true;
-                    }
-                    CssValue::Keyword(k) if k == "%" => {
-                        // A bare % applies to the preceding component.
-                        if after_slash {
-                            if let Some(ref mut value) = alpha {
-                                *value /= 100.0;
-                            }
-                        } else if channel_index > 0 {
-                            match channel_index - 1 {
-                                0 => {
-                                    if let Some(ref mut value) = lightness {
-                                        *value = (*value).clamp(0.0, 100.0);
-                                    }
-                                }
-                                1 => {
-                                    if let Some(ref mut value) = a_val {
-                                        *value *= 1.25;
-                                    }
-                                }
-                                2 => {
-                                    if let Some(ref mut value) = b_val {
-                                        *value *= 1.25;
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    CssValue::Length(value, Unit::Percent) if after_slash => {
-                        alpha = Some(value / 100.0);
-                    }
-                    CssValue::Length(value, Unit::Percent) if !after_slash => {
-                        match channel_index {
-                            0 => {
-                                // 0%..100% maps to 0..100.
-                                lightness = Some(*value);
-                            }
-                            1 => {
-                                // -100%..100% maps to -125..125.
-                                a_val = Some(*value * 1.25);
-                            }
-                            2 => {
-                                // -100%..100% maps to -125..125.
-                                b_val = Some(*value * 1.25);
-                            }
-                            _ => {}
-                        }
-                        channel_index += 1;
-                    }
-                    _ => {
-                        let value = resolve_channel(arg)?;
-
-                        if after_slash {
-                            alpha = Some(value);
-                        } else {
-                            match channel_index {
-                                0 => lightness = Some(value),
-                                1 => a_val = Some(value),
-                                2 => b_val = Some(value),
-                                _ => {}
-                            }
-                            channel_index += 1;
-                        }
-                    }
-                }
-            }
-
-            let l = lightness?.clamp(0.0, 100.0);
-            let a = a_val?.clamp(-125.0, 125.0);
-            let b = b_val?.clamp(-125.0, 125.0);
-            let alpha = alpha.unwrap_or(1.0).clamp(0.0, 1.0);
-
-            let (x, y, z) = lab_to_xyz(l, a, b);
+            let walked = walk_channels(&LAB_CHANNELS, args)?;
+            let (x, y, z) = lab_to_xyz(
+                walked.channels[0].clamp(0.0, 100.0),
+                walked.channels[1].clamp(-125.0, 125.0),
+                walked.channels[2].clamp(-125.0, 125.0),
+            );
             let (r, g, b) = xyz_to_srgb(x, y, z);
 
             Some(Color(
                 (r.clamp(0.0, 1.0) * 255.0).round() as u8,
                 (g.clamp(0.0, 1.0) * 255.0).round() as u8,
                 (b.clamp(0.0, 1.0) * 255.0).round() as u8,
-                (alpha * 255.0).round() as u8,
+                (walked.alpha * 255.0).round() as u8,
             ))
         }
 
