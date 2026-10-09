@@ -5455,6 +5455,153 @@ fn var_preserved_in_resolver() {
     assert!(matches!(decl.value, CssValue::Function(ref name, _) if name == "var"));
 }
 
+// ─── env() ─────────────────────────────────────────────────────────────────
+// NOTE: no UA environment variables are defined yet, so every name is
+// unrecognized and substitutes the fallback (css-env-1 §3). Without a
+// fallback the declaration is invalid at computed-value time.
+
+fn resolve_env_function(value: &CssValue) -> Option<CssValue> {
+    DeclarationResolver::resolve_var(value, &Properties::new(), &mut HashSet::new())
+}
+
+fn env_function(args: Vec<Vec<CssValue>>) -> CssValue {
+    CssValue::Function("env".into(), args)
+}
+
+#[test]
+fn env_substitutes_fallback_when_variable_is_unknown() {
+    assert_eq!(
+        resolve_env_function(&env_function(vec![
+            vec![CssValue::Keyword("safe-area-inset-top".into())],
+            vec![CssValue::Length(0.0, Unit::Px)],
+        ])),
+        Some(CssValue::Length(0.0, Unit::Px))
+    );
+    assert_eq!(
+        resolve_env_function(&env_function(vec![vec![CssValue::Keyword(
+            "safe-area-inset-top".into()
+        )]])),
+        None
+    );
+}
+
+#[test]
+fn env_fallback_substitutes_nested_env() {
+    assert_eq!(
+        resolve_env_function(&env_function(vec![
+            vec![CssValue::Keyword("unknown-var".into())],
+            vec![env_function(vec![
+                vec![CssValue::Keyword("also-unknown".into())],
+                vec![CssValue::Length(8.0, Unit::Px)],
+            ])],
+        ])),
+        Some(CssValue::Length(8.0, Unit::Px))
+    );
+}
+
+#[test]
+fn env_fallback_spans_comma_groups() {
+    // `env(x, red, blue)` — everything after the first comma is the
+    // fallback, so the two comma groups join into one list.
+    assert_eq!(
+        resolve_env_function(&env_function(vec![
+            vec![CssValue::Keyword("x".into())],
+            vec![CssValue::Keyword("red".into())],
+            vec![CssValue::Keyword("blue".into())],
+        ])),
+        Some(CssValue::List(vec![
+            CssValue::Keyword("red".into()),
+            CssValue::Keyword("blue".into()),
+        ]))
+    );
+    // `env(x, 10px 20px)` — one group of space-separated components.
+    assert_eq!(
+        resolve_env_function(&env_function(vec![
+            vec![CssValue::Keyword("x".into())],
+            vec![
+                CssValue::Length(10.0, Unit::Px),
+                CssValue::Length(20.0, Unit::Px),
+            ],
+        ])),
+        Some(CssValue::List(vec![
+            CssValue::Length(10.0, Unit::Px),
+            CssValue::Length(20.0, Unit::Px),
+        ]))
+    );
+}
+
+#[test]
+fn env_fallback_resolves_nested_var() {
+    let mut props = Properties::new();
+    set_inline_custom_property(
+        &mut props,
+        "--pad".to_string(),
+        CssValue::Length(4.0, Unit::Px),
+        false,
+    );
+    let value = env_function(vec![
+        vec![CssValue::Keyword("unknown-var".into())],
+        vec![CssValue::Function(
+            "var".into(),
+            vec![vec![CssValue::Keyword("--pad".into())]],
+        )],
+    ]);
+    assert_eq!(
+        DeclarationResolver::resolve_var(&value, &props, &mut HashSet::new()),
+        Some(CssValue::Length(4.0, Unit::Px))
+    );
+}
+
+#[test]
+fn env_rejects_malformed_syntax() {
+    assert_eq!(resolve_env_function(&env_function(vec![])), None);
+    assert_eq!(resolve_env_function(&env_function(vec![vec![]])), None);
+    // The env() grammar starts with <custom-ident>.
+    assert_eq!(
+        resolve_env_function(&env_function(vec![
+            vec![CssValue::Number(1.0)],
+            vec![CssValue::Length(4.0, Unit::Px)],
+        ])),
+        None
+    );
+}
+
+#[test]
+fn env_function_reaches_layout() {
+    let (mut layout, _) = layout_and_info_for(
+        r#"<div>x</div>"#,
+        r#"
+            :root { --pad: 4px; }
+            div { width: calc(env(nope, 8px) + 2px); margin-left: env(nope, var(--pad)); }
+        "#,
+    );
+    ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+
+    // The width declaration survived env() substitution and calc folding
+    // (env(nope, 8px) + 2px → 10px); a failed substitution would leave the
+    // width at auto, filling the viewport instead.
+    fn find_div(node: &LayoutNode) -> Option<&LayoutNode> {
+        if node
+            .layout_box
+            .iter()
+            .any(|bm| (bm.border_box.width - 10.0).abs() < 0.001)
+        {
+            return Some(node);
+        }
+        node.children
+            .iter()
+            .filter_map(LayoutChild::node)
+            .find_map(find_div)
+    }
+
+    let div = find_div(&layout).expect("div with env()-resolved width must exist");
+    // The fallback may itself be a var() → margin-left: 4px.
+    assert_eq!(
+        div.style.spacing.margin_left,
+        LengthOrAuto::Length(Length::Px(4.0))
+    );
+}
+
 // ─── Inheritance through the resolver ───────────────────────────────────────
 
 #[test]

@@ -952,6 +952,33 @@ impl DeclarationResolver {
                 result
             }
 
+            // `env(safe-area-inset-top, 0px)` — env() substitution
+            // (css-env-1 §3). UA-defined environment variables are not
+            // implemented yet, so every name is unrecognized: substitute
+            // the fallback (with any nested env() substituted as well),
+            // and without one the declaration is invalid at
+            // computed-value time.
+            CssValue::Function(name, args) if name == "env" => {
+                match args.first().and_then(|argument| argument.first()) {
+                    Some(CssValue::Keyword(_)) => {}
+                    _ => return None,
+                }
+
+                // The fallback is everything after the first comma —
+                // a `<declaration-value>` that may span groups and hold
+                // commas itself (`env(x, red, blue)`).
+                let fallback: Vec<CssValue> = args[1..]
+                    .iter()
+                    .flatten()
+                    .map(|v| Self::resolve_var(v, custom_props, &mut visited.clone()))
+                    .collect::<Option<_>>()?;
+                match fallback.len() {
+                    0 => None,
+                    1 => Some(fallback.into_iter().next().unwrap()),
+                    _ => Some(CssValue::List(fallback)),
+                }
+            }
+
             // `rgb(var(--r), var(--g), var(--b))` — resolve args independently
             CssValue::Function(name, args) => {
                 let resolved_args = args
