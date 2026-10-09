@@ -22,6 +22,9 @@ pub enum Unit {
     Vmax,
 
     Deg,
+    Rad,
+    Grad,
+    Turn,
     Fr,
     Unknown,
 }
@@ -74,6 +77,9 @@ impl Unit {
             Unit::Vmax => "vmax",
 
             Unit::Deg => "deg",
+            Unit::Rad => "rad",
+            Unit::Grad => "grad",
+            Unit::Turn => "turn",
             Unit::Fr => "fr",
             Unit::Unknown => "unknown",
         }

@@ -140,11 +140,13 @@ pub(super) fn round_to_step(strategy: RoundingStrategy, value: f32, step: f32) -
     }
 }
 
-/// calc() の評価結果。型 (number / length) を保持する。
+/// calc() の評価結果。型 (number / length / angle) を保持する。
 #[derive(Debug, Clone, PartialEq)]
 pub enum CalcValue {
     Number(f32),
     Length(Length),
+    /// 角度。正規化済みの度数 (deg) で保持する。
+    Angle(f32),
 }
 
 fn resolve_length(
@@ -176,10 +178,10 @@ fn resolve_length(
             None
         }
 
-        Unit::Deg => {
+        Unit::Deg | Unit::Rad | Unit::Grad | Unit::Turn => {
             log::error!(
                 target: "Layouter",
-                "Unexpected deg unit for `{}` (expected length)",
+                "Unexpected angle unit for `{}` (expected length)",
                 name
             );
             None
@@ -209,10 +211,11 @@ fn calc_combine(name: &str, op: &CssValue, left: CalcValue, right: CalcValue) ->
             (CalcValue::Length(x), CalcValue::Length(y)) => {
                 Some(CalcValue::Length(Length::Add(Box::new(x), Box::new(y))))
             }
+            (CalcValue::Angle(x), CalcValue::Angle(y)) => Some(CalcValue::Angle(x + y)),
             _ => {
                 log::error!(
                     target: "Layouter",
-                    "Cannot add number and length in calc() for `{}`",
+                    "Cannot add these operands in calc() for `{}`",
                     name
                 );
                 None
@@ -223,10 +226,11 @@ fn calc_combine(name: &str, op: &CssValue, left: CalcValue, right: CalcValue) ->
             (CalcValue::Length(x), CalcValue::Length(y)) => {
                 Some(CalcValue::Length(Length::Sub(Box::new(x), Box::new(y))))
             }
+            (CalcValue::Angle(x), CalcValue::Angle(y)) => Some(CalcValue::Angle(x - y)),
             _ => {
                 log::error!(
                     target: "Layouter",
-                    "Cannot subtract number and length in calc() for `{}`",
+                    "Cannot subtract these operands in calc() for `{}`",
                     name
                 );
                 None
@@ -240,10 +244,12 @@ fn calc_combine(name: &str, op: &CssValue, left: CalcValue, right: CalcValue) ->
             (CalcValue::Length(x), CalcValue::Number(y)) => {
                 Some(CalcValue::Length(Length::Mul(Box::new(x), y)))
             }
+            (CalcValue::Number(x), CalcValue::Angle(y)) => Some(CalcValue::Angle(x * y)),
+            (CalcValue::Angle(x), CalcValue::Number(y)) => Some(CalcValue::Angle(x * y)),
             _ => {
                 log::error!(
                     target: "Layouter",
-                    "Cannot multiply two lengths in calc() for `{}`",
+                    "Cannot multiply these operands in calc() for `{}`",
                     name
                 );
                 None
@@ -251,7 +257,8 @@ fn calc_combine(name: &str, op: &CssValue, left: CalcValue, right: CalcValue) ->
         },
         CssValue::Keyword(o) if o == "/" => match (left, right) {
             (CalcValue::Number(_), CalcValue::Number(0.0))
-            | (CalcValue::Length(_), CalcValue::Number(0.0)) => {
+            | (CalcValue::Length(_), CalcValue::Number(0.0))
+            | (CalcValue::Angle(_), CalcValue::Number(0.0)) => {
                 log::error!(
                     target: "Layouter",
                     "Division by zero in calc() for `{}`",
@@ -263,10 +270,11 @@ fn calc_combine(name: &str, op: &CssValue, left: CalcValue, right: CalcValue) ->
             (CalcValue::Length(x), CalcValue::Number(y)) => {
                 Some(CalcValue::Length(Length::Div(Box::new(x), y)))
             }
+            (CalcValue::Angle(x), CalcValue::Number(y)) => Some(CalcValue::Angle(x / y)),
             _ => {
                 log::error!(
                     target: "Layouter",
-                    "Cannot divide by length in calc() for `{}`",
+                    "Cannot divide by this operand in calc() for `{}`",
                     name
                 );
                 None
@@ -344,6 +352,16 @@ fn unify_operands(name: &str, fn_name: &str, values: Vec<CalcValue>) -> Option<O
                 );
                 return None;
             }
+            CalcValue::Angle(deg) => {
+                // min()/max()/clamp()/round() only feed length consumers.
+                log::error!(
+                    target: "Layouter",
+                    "Angle operand for {fn_name}() in `{}` is not supported: {}",
+                    name,
+                    deg
+                );
+                return None;
+            }
         }
     }
     Some(OperandMode::Lengths(lengths))
@@ -384,10 +402,22 @@ pub fn resolve_calc_value(
                 resolve_calc_value_slice(name, v, text_flow_style)
             }
         }
-        CssValue::Length(v, unit) => {
-            resolve_length(name, *v, unit, text_flow_style).map(CalcValue::Length)
-        }
+        CssValue::Length(v, unit) => match unit {
+            // Angle units carry their own dimension; normalise to degrees.
+            Unit::Deg => Some(CalcValue::Angle(*v)),
+            Unit::Rad => Some(CalcValue::Angle(v.to_degrees())),
+            Unit::Grad => Some(CalcValue::Angle(*v * 0.9)),
+            Unit::Turn => Some(CalcValue::Angle(*v * 360.0)),
+            unit => resolve_length(name, *v, unit, text_flow_style).map(CalcValue::Length),
+        },
         CssValue::Number(n) => Some(CalcValue::Number(*n)),
+        // Named constants inside calc()-style expressions (CSS Values 4 §10.1).
+        CssValue::Keyword(k) if k.eq_ignore_ascii_case("pi") => {
+            Some(CalcValue::Number(std::f32::consts::PI))
+        }
+        CssValue::Keyword(k) if k.eq_ignore_ascii_case("e") => {
+            Some(CalcValue::Number(std::f32::consts::E))
+        }
         CssValue::Function(fn_name, args) if fn_name == "calc" => parse_args! {
             fn calc(name: &str, args: &[Vec<CssValue>], text_flow_style: &TextFlowStyle)
             -> Result<CalcValue, ParseError>
@@ -502,6 +532,351 @@ pub fn resolve_calc_value(
         }
         .inspect_err(|e| report_parse_error(e, fn_name, name))
         .ok(),
+        // CSS Values 4 §10.5–10.9: the mathematical functions.
+        CssValue::Function(fn_name, args)
+            if matches!(
+                fn_name.as_str(),
+                "sin" | "cos"
+                    | "tan"
+                    | "asin"
+                    | "acos"
+                    | "atan"
+                    | "sqrt"
+                    | "exp"
+                    | "abs"
+                    | "sign"
+            ) => parse_args! {
+                fn math_unary(
+                    name: &str,
+                    args: &[Vec<CssValue>],
+                    text_flow_style: &TextFlowStyle,
+                    fn_name: &str
+                )
+                -> Result<CalcValue, ParseError>
+                {
+                    x: CalcValue
+                }
+                => {
+                    let value = if fn_name == "abs" {
+                        // abs() preserves its input's type.
+                        match &x {
+                            CalcValue::Number(n) => CalcValue::Number(n.abs()),
+                            CalcValue::Angle(deg) => CalcValue::Angle(deg.abs()),
+                            CalcValue::Length(length) => {
+                                let Some(px) = const_length_px(length) else {
+                                    log::error!(
+                                        target: "Layouter",
+                                        "Unsupported length operand for {fn_name}() in `{}`",
+                                        name
+                                    );
+                                    return Err(ParseError::InvalidValue);
+                                };
+                                CalcValue::Length(Length::Px(px.abs()))
+                            }
+                        }
+                    } else if fn_name == "sign" {
+                        // sign() always yields a unitless number.
+                        let scalar = match &x {
+                            CalcValue::Number(n) => *n,
+                            CalcValue::Angle(deg) => *deg,
+                            CalcValue::Length(length) => {
+                                let Some(px) = const_length_px(length) else {
+                                    log::error!(
+                                        target: "Layouter",
+                                        "Unsupported length operand for {fn_name}() in `{}`",
+                                        name
+                                    );
+                                    return Err(ParseError::InvalidValue);
+                                };
+                                px
+                            }
+                        };
+                        CalcValue::Number(if scalar > 0.0 {
+                            1.0
+                        } else if scalar < 0.0 {
+                            -1.0
+                        } else {
+                            scalar
+                        })
+                    } else if fn_name == "sqrt" || fn_name == "exp" {
+                        let CalcValue::Number(n) = &x else {
+                            log::error!(
+                                target: "Layouter",
+                                "Invalid operand for {fn_name}() in `{}` (expected number)",
+                                name
+                            );
+                            return Err(ParseError::InvalidValue);
+                        };
+                        CalcValue::Number(if fn_name == "sqrt" { n.sqrt() } else { n.exp() })
+                    } else if fn_name == "asin" || fn_name == "acos" || fn_name == "atan" {
+                        // The arc functions return an angle (degrees).
+                        let CalcValue::Number(n) = &x else {
+                            log::error!(
+                                target: "Layouter",
+                                "Invalid operand for {fn_name}() in `{}` (expected number)",
+                                name
+                            );
+                            return Err(ParseError::InvalidValue);
+                        };
+                        CalcValue::Angle(match fn_name {
+                            "asin" => n.asin().to_degrees(),
+                            "acos" => n.acos().to_degrees(),
+                            _ => n.atan().to_degrees(),
+                        })
+                    } else {
+                        // sin()/cos()/tan() accept an angle or a number of radians.
+                        let radians = match &x {
+                            CalcValue::Number(n) => *n,
+                            CalcValue::Angle(deg) => deg.to_radians(),
+                            CalcValue::Length(_) => {
+                                log::error!(
+                                    target: "Layouter",
+                                    "Invalid operand for {fn_name}() in `{}` (expected angle or number)",
+                                    name
+                                );
+                                return Err(ParseError::InvalidValue);
+                            }
+                        };
+                        CalcValue::Number(match fn_name {
+                            "sin" => radians.sin(),
+                            "cos" => radians.cos(),
+                            _ => radians.tan(),
+                        })
+                    };
+                    // CSS Values 4 §10.1: a NaN or infinite result is invalid.
+                    let scalar = match &value {
+                        CalcValue::Number(n) => *n,
+                        CalcValue::Angle(deg) => *deg,
+                        CalcValue::Length(Length::Px(v)) => *v,
+                        CalcValue::Length(_) => return Err(ParseError::InvalidValue),
+                    };
+                    if !scalar.is_finite() {
+                        log::error!(
+                            target: "Layouter",
+                            "Non-finite result for {fn_name}() in `{}`",
+                            name
+                        );
+                        return Err(ParseError::InvalidValue);
+                    }
+                    Some(value)
+                }
+            }
+            .inspect_err(|e| report_parse_error(e, fn_name, name))
+            .ok(),
+        CssValue::Function(fn_name, args)
+            if matches!(fn_name.as_str(), "atan2" | "pow" | "mod" | "rem") => parse_args! {
+                fn math_binary(
+                    name: &str,
+                    args: &[Vec<CssValue>],
+                    text_flow_style: &TextFlowStyle,
+                    fn_name: &str
+                )
+                -> Result<CalcValue, ParseError>
+                {
+                    a: CalcValue, b: CalcValue
+                }
+                => {
+                    // CSS Values 4 §10.7: mod() takes the sign of the divisor,
+                    // rem() the sign of the dividend; a zero divisor is NaN.
+                    let remainder = |x: f32, y: f32| {
+                        if fn_name == "mod" {
+                            x - y * (x / y).floor()
+                        } else {
+                            x % y
+                        }
+                    };
+                    let value = match fn_name {
+                        "pow" => {
+                            let (CalcValue::Number(base), CalcValue::Number(exp)) = (&a, &b) else {
+                                log::error!(
+                                    target: "Layouter",
+                                    "Invalid operand for pow() in `{}` (expected numbers)",
+                                    name
+                                );
+                                return Err(ParseError::InvalidValue);
+                            };
+                            CalcValue::Number(base.powf(*exp))
+                        }
+                        "atan2" => match (&a, &b) {
+                            (CalcValue::Number(y), CalcValue::Number(x)) => {
+                                CalcValue::Angle(y.atan2(*x).to_degrees())
+                            }
+                            (CalcValue::Angle(y), CalcValue::Angle(x)) => {
+                                CalcValue::Angle(y.atan2(*x).to_degrees())
+                            }
+                            (CalcValue::Length(y), CalcValue::Length(x)) => {
+                                let (Some(y), Some(x)) =
+                                    (const_length_px(y), const_length_px(x))
+                                else {
+                                    log::error!(
+                                        target: "Layouter",
+                                        "Unsupported length operand for atan2() in `{}`",
+                                        name
+                                    );
+                                    return Err(ParseError::InvalidValue);
+                                };
+                                CalcValue::Angle(y.atan2(x).to_degrees())
+                            }
+                            _ => {
+                                log::error!(
+                                    target: "Layouter",
+                                    "Mismatched operands for atan2() in `{}`",
+                                    name
+                                );
+                                return Err(ParseError::InvalidValue);
+                            }
+                        },
+                        // mod()/rem() keep their operands' type.
+                        _ => match (&a, &b) {
+                            (CalcValue::Number(x), CalcValue::Number(y)) => {
+                                CalcValue::Number(remainder(*x, *y))
+                            }
+                            (CalcValue::Angle(x), CalcValue::Angle(y)) => {
+                                CalcValue::Angle(remainder(*x, *y))
+                            }
+                            (CalcValue::Length(x), CalcValue::Length(y)) => {
+                                let (Some(x), Some(y)) =
+                                    (const_length_px(x), const_length_px(y))
+                                else {
+                                    log::error!(
+                                        target: "Layouter",
+                                        "Unsupported length operand for {fn_name}() in `{}`",
+                                        name
+                                    );
+                                    return Err(ParseError::InvalidValue);
+                                };
+                                CalcValue::Length(Length::Px(remainder(x, y)))
+                            }
+                            _ => {
+                                log::error!(
+                                    target: "Layouter",
+                                    "Mismatched operands for {fn_name}() in `{}`",
+                                    name
+                                );
+                                return Err(ParseError::InvalidValue);
+                            }
+                        },
+                    };
+                    let scalar = match &value {
+                        CalcValue::Number(n) => *n,
+                        CalcValue::Angle(deg) => *deg,
+                        CalcValue::Length(Length::Px(v)) => *v,
+                        CalcValue::Length(_) => return Err(ParseError::InvalidValue),
+                    };
+                    if !scalar.is_finite() {
+                        log::error!(
+                            target: "Layouter",
+                            "Non-finite result for {fn_name}() in `{}`",
+                            name
+                        );
+                        return Err(ParseError::InvalidValue);
+                    }
+                    Some(value)
+                }
+            }
+            .inspect_err(|e| report_parse_error(e, fn_name, name))
+            .ok(),
+        CssValue::Function(fn_name, args) if fn_name == "hypot" => parse_args! {
+            fn math_hypot(
+                name: &str,
+                args: &[Vec<CssValue>],
+                text_flow_style: &TextFlowStyle
+            )
+            -> Result<CalcValue, ParseError>
+            {
+                values: Vec<CalcValue>
+            }
+            => {
+                // CSS Values 4 §10.4: every operand shares one type and the
+                // result keeps it.
+                let Some(first) = values.first() else {
+                    return Err(ParseError::InvalidValue);
+                };
+                let mut sum = 0.0f32;
+                for operand in &values {
+                    let scalar = match (first, operand) {
+                        (CalcValue::Number(_), CalcValue::Number(n)) => *n,
+                        (CalcValue::Angle(_), CalcValue::Angle(deg)) => *deg,
+                        (CalcValue::Length(_), CalcValue::Length(length)) => {
+                            let Some(px) = const_length_px(length) else {
+                                log::error!(
+                                    target: "Layouter",
+                                    "Unsupported length operand for hypot() in `{}`",
+                                    name
+                                );
+                                return Err(ParseError::InvalidValue);
+                            };
+                            px
+                        }
+                        _ => {
+                            log::error!(
+                                target: "Layouter",
+                                "Mismatched operands for hypot() in `{}`",
+                                name
+                            );
+                            return Err(ParseError::InvalidValue);
+                        }
+                    };
+                    sum += scalar * scalar;
+                }
+                let hypot = sum.sqrt();
+                if !hypot.is_finite() {
+                    log::error!(
+                        target: "Layouter",
+                        "Non-finite result for hypot() in `{}`",
+                        name
+                    );
+                    return Err(ParseError::InvalidValue);
+                }
+                Some(match first {
+                    CalcValue::Number(_) => CalcValue::Number(hypot),
+                    CalcValue::Angle(_) => CalcValue::Angle(hypot),
+                    CalcValue::Length(_) => CalcValue::Length(Length::Px(hypot)),
+                })
+            }
+        }
+        .inspect_err(|e| report_parse_error(e, fn_name, name))
+        .ok(),
+        CssValue::Function(fn_name, args) if fn_name == "log" => parse_args! {
+            fn math_log(
+                name: &str,
+                args: &[Vec<CssValue>],
+                text_flow_style: &TextFlowStyle,
+                fn_name: &str
+            )
+            -> Result<CalcValue, ParseError>
+            {
+                value: CalcValue,
+                base: CalcValue = CalcValue::Number(std::f32::consts::E)
+            }
+            => {
+                let (CalcValue::Number(value), CalcValue::Number(base)) = (value, base) else {
+                    log::error!(
+                        target: "Layouter",
+                        "Invalid operand for {fn_name}() in `{}` (expected numbers)",
+                        name
+                    );
+                    return Err(ParseError::InvalidValue);
+                };
+                // Omitting the base takes the natural logarithm.
+                let result = if base == std::f32::consts::E {
+                    value.ln()
+                } else {
+                    value.ln() / base.ln()
+                };
+                if !result.is_finite() {
+                    log::error!(
+                        target: "Layouter",
+                        "Non-finite result for {fn_name}() in `{}`",
+                        name
+                    );
+                    return Err(ParseError::InvalidValue);
+                }
+                Some(CalcValue::Number(result))
+            }
+        }
+        .inspect_err(|e| report_parse_error(e, fn_name, name))
+        .ok(),
         _ => {
             log::error!(
                 target: "Layouter",
@@ -552,6 +927,37 @@ fn round_length(
         value: Box::new(value),
         step: Box::new(step),
     }))
+}
+
+/// Fully evaluate a length tree to pixels for the type-preserving math
+/// functions (`abs()`, `mod()`, `hypot()`, `atan2()`, `sign()`).
+///
+/// Percentages and viewport units depend on context that is not known
+/// here and yield `None`; so does a `div` by a step that is already zero.
+fn const_length_px(length: &Length) -> Option<f32> {
+    Some(match length {
+        Length::Px(v) => *v,
+        Length::Percent(_) | Length::Vw(_) | Length::Vh(_) => return None,
+        Length::Add(a, b) => const_length_px(a)? + const_length_px(b)?,
+        Length::Sub(a, b) => const_length_px(a)? - const_length_px(b)?,
+        Length::Mul(a, factor) => const_length_px(a)? * factor,
+        Length::Div(a, factor) => {
+            if *factor == 0.0 {
+                return None;
+            }
+            const_length_px(a)? / factor
+        }
+        Length::Min(a, b) => const_length_px(a)?.min(const_length_px(b)?),
+        Length::Max(a, b) => const_length_px(a)?.max(const_length_px(b)?),
+        Length::Clamp { min, val, max } => {
+            const_length_px(val)?.clamp(const_length_px(min)?, const_length_px(max)?)
+        }
+        Length::Round {
+            strategy,
+            value,
+            step,
+        } => round_to_step(*strategy, const_length_px(value)?, const_length_px(step)?),
+    })
 }
 
 /// Resolve a slice of CSS component values to a Length.
@@ -610,6 +1016,15 @@ fn calc_value_to_length(name: &str, value: CalcValue) -> Option<Length> {
     match value {
         CalcValue::Length(l) => Some(l),
         CalcValue::Number(0.0) => Some(Length::Px(0.0)),
+        CalcValue::Angle(deg) => {
+            log::error!(
+                target: "Layouter",
+                "calc() resolved to an angle ({}deg) for `{}` (expected length)",
+                deg,
+                name
+            );
+            None
+        }
         CalcValue::Number(n) => {
             log::error!(
                 target: "Layouter",

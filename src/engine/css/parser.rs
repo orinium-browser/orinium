@@ -1737,6 +1737,9 @@ impl<'a> Parser<'a> {
                         "vmin" => Unit::Vmin,
                         "vmax" => Unit::Vmax,
                         "deg" => Unit::Deg,
+                        "rad" => Unit::Rad,
+                        "grad" => Unit::Grad,
+                        "turn" => Unit::Turn,
                         "fr" => Unit::Fr,
                         _ => Unit::Unknown,
                     };

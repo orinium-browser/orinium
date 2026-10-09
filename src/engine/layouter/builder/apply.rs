@@ -1012,7 +1012,7 @@ pub fn apply_declaration(
                         &len,
                         text_flow_style.font_size,
                     ))),
-                    None => None,
+                    Some(CalcValue::Angle(_)) | None => None,
                 },
             };
 
@@ -1149,7 +1149,7 @@ pub fn apply_declaration(
                             text_flow_style.line_height =
                                 LineHeight::Px(length_to_px(&lh_len, text_flow_style.font_size));
                         }
-                        None => {}
+                        Some(CalcValue::Angle(_)) | None => {}
                     }
                     2 // skip `/` and line-height value
                 } else {

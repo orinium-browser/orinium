@@ -3500,6 +3500,268 @@ fn line_height_round_number_reduces() {
     assert_eq!(text_flow_style.line_height, LineHeight::Number(2.0));
 }
 
+/// Resolve one CSS math function through `resolve_calc_value` with hand-built
+/// arguments.
+fn math_result(name: &str, args: Vec<Vec<CssValue>>) -> Option<CalcValue> {
+    let text_flow_style = TextFlowStyle::default();
+    resolve_calc_value(
+        "math",
+        &CssValue::Function(name.into(), args),
+        &text_flow_style,
+    )
+}
+
+fn math_deg(v: f32) -> Vec<Vec<CssValue>> {
+    vec![vec![CssValue::Length(v, Unit::Deg)]]
+}
+
+fn math_num(args: &[f32]) -> Vec<Vec<CssValue>> {
+    args.iter().map(|n| vec![CssValue::Number(*n)]).collect()
+}
+
+fn expect_number(actual: Option<CalcValue>, expected: f32) {
+    let Some(CalcValue::Number(n)) = actual else {
+        panic!("expected a number, got {actual:?}");
+    };
+    assert!((n - expected).abs() <= 1e-4, "expected {expected}, got {n}");
+}
+
+fn expect_angle(actual: Option<CalcValue>, expected_deg: f32) {
+    let Some(CalcValue::Angle(deg)) = actual else {
+        panic!("expected an angle, got {actual:?}");
+    };
+    assert!(
+        (deg - expected_deg).abs() <= 1e-4,
+        "expected {expected_deg}deg, got {deg}deg"
+    );
+}
+
+#[test]
+fn math_trig_functions_resolve_numbers_and_angles() {
+    // sin/cos/tan take an angle (or a number of radians) and yield a number.
+    expect_number(math_result("sin", math_deg(90.0)), 1.0);
+    expect_number(math_result("cos", math_deg(90.0)), 0.0);
+    expect_number(math_result("tan", math_deg(45.0)), 1.0);
+    expect_number(
+        math_result("sin", math_num(&[std::f32::consts::FRAC_PI_2])),
+        1.0,
+    );
+    // `pi` is a named constant inside the expression.
+    expect_number(
+        math_result(
+            "sin",
+            vec![vec![
+                CssValue::Keyword("pi".into()),
+                CssValue::Keyword("/".into()),
+                CssValue::Number(2.0),
+            ]],
+        ),
+        1.0,
+    );
+
+    // The arc functions return an angle in degrees.
+    expect_angle(math_result("asin", math_num(&[0.5])), 30.0);
+    expect_angle(math_result("acos", math_num(&[0.0])), 90.0);
+    expect_angle(math_result("atan", math_num(&[1.0])), 45.0);
+    expect_angle(math_result("atan2", math_num(&[1.0, -1.0])), 135.0);
+    // atan2() accepts matching angle operands too.
+    expect_angle(
+        math_result(
+            "atan2",
+            vec![
+                vec![CssValue::Length(90.0, Unit::Deg)],
+                vec![CssValue::Length(-90.0, Unit::Deg)],
+            ],
+        ),
+        135.0,
+    );
+}
+
+#[test]
+fn math_exponential_functions_resolve() {
+    expect_number(math_result("pow", math_num(&[2.0, 10.0])), 1024.0);
+    expect_number(math_result("sqrt", math_num(&[9.0])), 3.0);
+    expect_number(
+        math_result("sqrt", math_num(&[2.0])),
+        std::f32::consts::SQRT_2,
+    );
+    expect_number(math_result("exp", math_num(&[0.0])), 1.0);
+    expect_number(math_result("exp", math_num(&[1.0])), std::f32::consts::E);
+    // An explicit base, and the natural-log default.
+    expect_number(math_result("log", math_num(&[8.0, 2.0])), 3.0);
+    expect_number(
+        math_result("log", vec![vec![CssValue::Keyword("e".into())]]),
+        1.0,
+    );
+    expect_number(math_result("log", math_num(&[std::f32::consts::E])), 1.0);
+}
+
+#[test]
+fn math_mod_and_rem_follow_css_sign_rules() {
+    // mod() takes the sign of the divisor, rem() the sign of the dividend.
+    expect_number(math_result("mod", math_num(&[10.0, 3.0])), 1.0);
+    expect_number(math_result("mod", math_num(&[-10.0, 3.0])), 2.0);
+    expect_number(math_result("rem", math_num(&[-10.0, 3.0])), -1.0);
+    expect_number(math_result("rem", math_num(&[10.0, -3.0])), 1.0);
+
+    // Angles and lengths keep their type.
+    assert_eq!(
+        math_result(
+            "mod",
+            vec![
+                vec![CssValue::Length(45.0, Unit::Deg)],
+                vec![CssValue::Length(30.0, Unit::Deg)],
+            ]
+        ),
+        Some(CalcValue::Angle(15.0))
+    );
+    assert_eq!(
+        math_result(
+            "rem",
+            vec![
+                vec![CssValue::Length(-10.0, Unit::Px)],
+                vec![CssValue::Length(3.0, Unit::Px)],
+            ]
+        ),
+        Some(CalcValue::Length(Length::Px(-1.0)))
+    );
+
+    // A zero divisor produces NaN, which is an invalid result.
+    assert_eq!(math_result("mod", math_num(&[10.0, 0.0])), None);
+    assert_eq!(math_result("rem", math_num(&[10.0, 0.0])), None);
+}
+
+#[test]
+fn math_abs_and_sign_preserve_domain() {
+    assert_eq!(
+        math_result("abs", math_num(&[-2.5])),
+        Some(CalcValue::Number(2.5))
+    );
+    assert_eq!(
+        math_result("abs", vec![vec![CssValue::Length(-10.0, Unit::Px)]]),
+        Some(CalcValue::Length(Length::Px(10.0)))
+    );
+    assert_eq!(
+        math_result("abs", math_deg(-45.0)),
+        Some(CalcValue::Angle(45.0))
+    );
+
+    // sign() always yields a unitless number; zero keeps its sign.
+    assert_eq!(
+        math_result("sign", math_num(&[-3.0])),
+        Some(CalcValue::Number(-1.0))
+    );
+    assert_eq!(
+        math_result("sign", math_num(&[5.0])),
+        Some(CalcValue::Number(1.0))
+    );
+    assert_eq!(
+        math_result("sign", math_num(&[0.0])),
+        Some(CalcValue::Number(0.0))
+    );
+    assert_eq!(
+        math_result("sign", vec![vec![CssValue::Length(-5.0, Unit::Px)]]),
+        Some(CalcValue::Number(-1.0))
+    );
+}
+
+#[test]
+fn math_hypot_keeps_operand_type() {
+    assert_eq!(
+        math_result("hypot", math_num(&[3.0, 4.0])),
+        Some(CalcValue::Number(5.0))
+    );
+    assert_eq!(
+        math_result(
+            "hypot",
+            vec![
+                vec![CssValue::Length(3.0, Unit::Px)],
+                vec![CssValue::Length(4.0, Unit::Px)],
+            ]
+        ),
+        Some(CalcValue::Length(Length::Px(5.0)))
+    );
+    assert_eq!(
+        math_result(
+            "hypot",
+            vec![
+                vec![CssValue::Length(90.0, Unit::Deg)],
+                vec![CssValue::Length(120.0, Unit::Deg)],
+            ]
+        ),
+        Some(CalcValue::Angle(150.0))
+    );
+    // Mixed operand types are invalid.
+    assert_eq!(
+        math_result(
+            "hypot",
+            vec![
+                vec![CssValue::Number(3.0)],
+                vec![CssValue::Length(4.0, Unit::Px)],
+            ]
+        ),
+        None
+    );
+}
+
+#[test]
+fn math_functions_reject_invalid_arguments() {
+    // Type mismatches.
+    assert_eq!(
+        math_result("sin", vec![vec![CssValue::Length(10.0, Unit::Px)]]),
+        None
+    );
+    assert_eq!(math_result("asin", math_num(&[2.0])), None);
+    assert_eq!(math_result("sqrt", math_num(&[-1.0])), None);
+    assert_eq!(
+        math_result(
+            "pow",
+            vec![
+                vec![CssValue::Length(2.0, Unit::Px)],
+                vec![CssValue::Number(3.0)],
+            ]
+        ),
+        None
+    );
+    // Arity.
+    assert_eq!(math_result("sin", vec![]), None);
+    assert_eq!(math_result("atan2", math_num(&[1.0])), None);
+    assert_eq!(math_result("sin", math_num(&[1.0, 2.0])), None);
+    assert_eq!(math_result("log", math_num(&[1.0, 2.0, 3.0])), None);
+    // Percentages and viewport units are context-dependent.
+    assert_eq!(
+        math_result("abs", vec![vec![CssValue::Length(-10.0, Unit::Percent)]]),
+        None
+    );
+}
+
+#[test]
+fn parsed_math_function_reaches_layout() {
+    // calc(sin(90deg) * 10px) → Length::Mul(Px(10), 1.0).
+    let value = declaration_value("margin-top: calc(sin(90deg) * 10px)");
+    let style = apply_layout_declarations(&[("margin-top", value)]).expect("sin() is valid");
+    assert_eq!(
+        style.spacing.margin_top,
+        LengthOrAuto::Length(Length::Mul(Box::new(Length::Px(10.0)), 1.0))
+    );
+
+    // Turn angles normalise to degrees inside the trig functions.
+    let value = declaration_value("margin-top: calc(sin(0.25turn) * 10px)");
+    let style = apply_layout_declarations(&[("margin-top", value)]).expect("turn() is valid");
+    assert_eq!(
+        style.spacing.margin_top,
+        LengthOrAuto::Length(Length::Mul(Box::new(Length::Px(10.0)), 1.0))
+    );
+
+    // hypot() keeps a length operand's type end to end.
+    let value = declaration_value("margin-top: hypot(3px, 4px)");
+    let style = apply_layout_declarations(&[("margin-top", value)]).expect("hypot() is valid");
+    assert_eq!(
+        style.spacing.margin_top,
+        LengthOrAuto::Length(Length::Px(5.0))
+    );
+}
+
 #[test]
 fn gradient_stop_position_round_rejects_zero_step() {
     let step = CssValue::Function(
