@@ -285,11 +285,21 @@ impl BrowserUi {
             };
             for task in tab.tick() {
                 match task {
-                    TabTask::Fetch { url, kind, origin, generation } => {
+                    TabTask::Fetch {
+                        url,
+                        kind,
+                        origin,
+                        generation,
+                    } => {
                         log::info!("Fetch requested in BrowserUi: url={}", url);
                         fetches.push(TabFetchRequest {
                             tab_id: *tab_id,
-                            request: FetchRequest { url, kind, origin, generation },
+                            request: FetchRequest {
+                                url,
+                                kind,
+                                origin,
+                                generation,
+                            },
                         });
                     }
                     TabTask::NeedsRedraw => {

@@ -471,9 +471,19 @@ impl Chrome for BasicChrome {
         let mut redraw = false;
         for task in self.debug_pane.tick() {
             match task {
-                TabTask::Fetch { url, kind, origin, generation } => {
+                TabTask::Fetch {
+                    url,
+                    kind,
+                    origin,
+                    generation,
+                } => {
                     log::info!("Fetch requested in BasicChrome: url={}", url);
-                    fetches_buf.push(FetchRequest { url, kind, origin, generation });
+                    fetches_buf.push(FetchRequest {
+                        url,
+                        kind,
+                        origin,
+                        generation,
+                    });
                 }
                 TabTask::NeedsRedraw => redraw = true,
                 TabTask::DevToolsRequest { id, method, params } => {

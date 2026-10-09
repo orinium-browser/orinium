@@ -76,7 +76,8 @@ impl PendingFetches {
 
         let id = self.generate_id(&url);
 
-        self.map.insert(id, (window_id, tab_id, kind, url, generation));
+        self.map
+            .insert(id, (window_id, tab_id, kind, url, generation));
         id
     }
 
@@ -354,7 +355,9 @@ impl BrowserApp {
             log::info!("Network message received in App for fetch_id={}", msg.id);
 
             // pending_fetches から fetch 情報を取得
-            let Some((window_id, tab_id, kind, url, generation)) = self.pending_fetches.remove(msg.id) else {
+            let Some((window_id, tab_id, kind, url, generation)) =
+                self.pending_fetches.remove(msg.id)
+            else {
                 log::warn!("No pending fetch found for fetch_id={}", msg.id);
                 continue;
             };
