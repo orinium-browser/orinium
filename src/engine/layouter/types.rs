@@ -565,6 +565,74 @@ pub enum ClipPath {
     },
 }
 
+/// Inset side an [`AnchorSpec`] was declared on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchorInsetSide {
+    Top,
+    Right,
+    Bottom,
+    Left,
+}
+
+/// Resolved side of an anchor box referenced by `anchor()`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AnchorSide {
+    Top,
+    Right,
+    Bottom,
+    Left,
+    Center,
+    Start,
+    End,
+    SelfStart,
+    SelfEnd,
+    /// `<percentage>` along the relevant axis.
+    Percent(f32),
+}
+
+/// A parsed `<anchor()>` function used as the value of an inset property.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnchorSpec {
+    /// Explicit `<dashed-ident>` anchor element, if any.
+    pub element: Option<String>,
+    pub side: AnchorSide,
+    /// Fallback `<length-percentage>` used when the anchor is missing.
+    pub fallback: Option<ui_layout::LengthOrAuto>,
+}
+
+/// CSS Anchor Positioning state for a container.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AnchorStyle {
+    /// `anchor-name` — names this element can be referenced by.
+    pub anchors: Vec<String>,
+    /// `position-anchor` — the default anchor this element positions against.
+    pub position_anchor: Option<String>,
+    pub top: Option<AnchorSpec>,
+    pub right: Option<AnchorSpec>,
+    pub bottom: Option<AnchorSpec>,
+    pub left: Option<AnchorSpec>,
+}
+
+impl AnchorStyle {
+    pub fn inset_mut(&mut self, side: AnchorInsetSide) -> &mut Option<AnchorSpec> {
+        match side {
+            AnchorInsetSide::Top => &mut self.top,
+            AnchorInsetSide::Right => &mut self.right,
+            AnchorInsetSide::Bottom => &mut self.bottom,
+            AnchorInsetSide::Left => &mut self.left,
+        }
+    }
+
+    pub fn inset(&self, side: AnchorInsetSide) -> Option<&AnchorSpec> {
+        match side {
+            AnchorInsetSide::Top => self.top.as_ref(),
+            AnchorInsetSide::Right => self.right.as_ref(),
+            AnchorInsetSide::Bottom => self.bottom.as_ref(),
+            AnchorInsetSide::Left => self.left.as_ref(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContainerStyle {
     pub cursor: CursorStyle,
@@ -588,6 +656,8 @@ pub struct ContainerStyle {
     pub text_align: TextAlign,
     /// CSS `clip-path` applied to the element's border box.
     pub clip_path: ClipPath,
+    /// CSS Anchor Positioning declarations.
+    pub anchor: AnchorStyle,
 }
 
 impl Default for ContainerStyle {
@@ -608,6 +678,7 @@ impl Default for ContainerStyle {
             border_radius: Default::default(),
             text_align: Default::default(),
             clip_path: Default::default(),
+            anchor: Default::default(),
         }
     }
 }

@@ -1957,6 +1957,7 @@ impl WebView {
         layouter::correct_atomic_inline_spacing_with_info(layout, info);
         layouter::align_table_columns(layout, info);
         layouter::refresh_missing_text_layout_results(layout, info, viewport);
+        layouter::resolve_anchor_positioning(layout, info);
 
         self.positioned_layout = Some((self.layout_applied_version, viewport));
     }
@@ -2413,6 +2414,12 @@ fn push_container_computed(declarations: &mut Vec<(String, String)>, style: &Con
     ));
     declarations.push(("cursor".into(), css_cursor(style.cursor)));
     declarations.push(("text-align".into(), css_text_align(style.text_align)));
+    if !style.anchor.anchors.is_empty() {
+        declarations.push(("anchor-name".into(), style.anchor.anchors.join(", ")));
+    }
+    if let Some(ref name) = style.anchor.position_anchor {
+        declarations.push(("position-anchor".into(), name.clone()));
+    }
     match &style.background {
         Background::Color(color) | Background::Image { color, .. } if color.3 > 0 => {
             declarations.push(("background-color".into(), css_color(color)));

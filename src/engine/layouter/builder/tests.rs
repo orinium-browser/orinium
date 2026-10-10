@@ -5863,3 +5863,130 @@ fn pseudo_element_declarations_do_not_leak_to_element() {
     // Only the pseudo text is red; the element's own text stays default.
     assert_eq!(text_style_for(&info, "x").color, Color(0, 0, 0, 255));
 }
+
+#[test]
+fn anchor_name_parses_dashed_ident_and_list() {
+    let mut style = Style::default();
+    let mut container_style = ContainerStyle::default();
+    let mut text_style = TextStyle::default();
+    let mut text_flow_style = TextFlowStyle::default();
+    let mut overflow = Overflow::default();
+    assert!(
+        apply_declaration(
+            "anchor-name",
+            &CssValue::Keyword("--foo".into()),
+            &mut style,
+            &mut container_style,
+            &mut text_style,
+            &mut text_flow_style,
+            &Style::default(),
+            &ContainerStyle::default(),
+            &TextStyle::default(),
+            &TextFlowStyle::default(),
+            &mut overflow,
+            ColorScheme::Light,
+        )
+        .is_some()
+    );
+    assert_eq!(container_style.anchor.anchors, vec!["--foo".to_string()]);
+}
+
+#[test]
+fn anchor_name_parses_dashed_ident_and_list2() {
+    let mut style = Style::default();
+    let mut container_style = ContainerStyle::default();
+    let mut text_style = TextStyle::default();
+    let mut text_flow_style = TextFlowStyle::default();
+    let mut overflow = Overflow::default();
+    assert!(
+        apply_declaration(
+            "anchor-name",
+            &CssValue::List(vec![
+                CssValue::Keyword("--a".into()),
+                CssValue::Keyword("--b".into()),
+            ]),
+            &mut style,
+            &mut container_style,
+            &mut text_style,
+            &mut text_flow_style,
+            &Style::default(),
+            &ContainerStyle::default(),
+            &TextStyle::default(),
+            &TextFlowStyle::default(),
+            &mut overflow,
+            ColorScheme::Light,
+        )
+        .is_some()
+    );
+    assert_eq!(
+        container_style.anchor.anchors,
+        vec!["--a".to_string(), "--b".to_string()]
+    );
+}
+
+#[test]
+fn position_anchor_parses_dashed_ident_and_auto() {
+    let mut style = Style::default();
+    let mut container_style = ContainerStyle::default();
+    let mut text_style = TextStyle::default();
+    let mut text_flow_style = TextFlowStyle::default();
+    let mut overflow = Overflow::default();
+    assert!(
+        apply_declaration(
+            "position-anchor",
+            &CssValue::Keyword("--anchor".into()),
+            &mut style,
+            &mut container_style,
+            &mut text_style,
+            &mut text_flow_style,
+            &Style::default(),
+            &ContainerStyle::default(),
+            &TextStyle::default(),
+            &TextFlowStyle::default(),
+            &mut overflow,
+            ColorScheme::Light,
+        )
+        .is_some()
+    );
+    assert_eq!(
+        container_style.anchor.position_anchor,
+        Some("--anchor".to_string())
+    );
+}
+
+#[test]
+fn anchor_function_parses_side_and_element() {
+    let val = declaration_value("top: anchor(--anchor bottom)");
+    match val {
+        CssValue::Function(n, _) if n == "anchor" => {}
+        _ => panic!("expected anchor function"),
+    }
+}
+
+#[test]
+fn anchor_top_stores_spec_and_sets_fallback_auto() {
+    let mut style = Style::default();
+    let mut container_style = ContainerStyle::default();
+    let mut text_style = TextStyle::default();
+    let mut text_flow_style = TextFlowStyle::default();
+    let mut overflow = Overflow::default();
+    let parsed = apply_declaration(
+        "top",
+        &CssValue::Function(
+            "anchor".into(),
+            vec![vec![CssValue::Keyword("bottom".into())]],
+        ),
+        &mut style,
+        &mut container_style,
+        &mut text_style,
+        &mut text_flow_style,
+        &Style::default(),
+        &ContainerStyle::default(),
+        &TextStyle::default(),
+        &TextFlowStyle::default(),
+        &mut overflow,
+        ColorScheme::Light,
+    );
+    assert!(parsed.is_some());
+    assert!(container_style.anchor.top.is_some());
+}

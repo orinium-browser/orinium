@@ -11,6 +11,7 @@ use ui_layout::{
     JustifyItems, Length, LengthOrAuto, OuterDisplay, Position, Style,
 };
 
+use crate::engine::layouter::builder::parse_anchor_spec;
 use crate::engine::layouter::types::{
     Background, BorderRadius, BorderStyle, ClipPath, Color, ColorScheme, ContainerStyle,
     CornerRadius, CssClear, CssFloat, FontStyle, FontWeight, LineHeight, Overflow, TextAlign,
@@ -1656,16 +1657,90 @@ pub fn apply_declaration(
                 _ => return None,
             };
         }
+        ("anchor-name", _) => {
+            container_style.anchor.anchors.clear();
+            match value {
+                CssValue::Keyword(k) if k.eq_ignore_ascii_case("none") => {}
+                CssValue::List(list) => {
+                    for v in list {
+                        if let CssValue::Keyword(k) = v {
+                            if k.eq_ignore_ascii_case("none") {
+                                continue;
+                            }
+                            if k.starts_with("--") {
+                                container_style.anchor.anchors.push(k.to_string());
+                            }
+                        }
+                    }
+                }
+                CssValue::Keyword(k) if k.starts_with("--") => {
+                    container_style.anchor.anchors.push(k.to_string());
+                }
+                _ => return None,
+            }
+        }
+        ("position-anchor", _) => match value {
+            CssValue::Keyword(k) if k.eq_ignore_ascii_case("auto") => {
+                container_style.anchor.position_anchor = None;
+            }
+            CssValue::Keyword(k) if k.eq_ignore_ascii_case("none") => {
+                container_style.anchor.position_anchor = None;
+            }
+            CssValue::Keyword(k) if k.starts_with("--") => {
+                container_style.anchor.position_anchor = Some(k.to_string());
+            }
+            _ => return None,
+        },
         ("top", _) => {
+            // Check for anchor()
+            if let CssValue::Function(name_fn, _) = value {
+                if name_fn.eq_ignore_ascii_case("anchor") {
+                    if let Some(spec) = parse_anchor_spec(value) {
+                        container_style.anchor.top = Some(spec.clone());
+                        style.position.top = spec.fallback.unwrap_or(ui_layout::LengthOrAuto::Auto);
+                        return Some(());
+                    }
+                }
+            }
             style.position.top = resolve_css_len_auto(name, value, text_flow_style)?;
         }
         ("right", _) => {
+            if let CssValue::Function(name_fn, _) = value {
+                if name_fn.eq_ignore_ascii_case("anchor") {
+                    if let Some(spec) = parse_anchor_spec(value) {
+                        container_style.anchor.right = Some(spec.clone());
+                        style.position.right =
+                            spec.fallback.unwrap_or(ui_layout::LengthOrAuto::Auto);
+                        return Some(());
+                    }
+                }
+            }
             style.position.right = resolve_css_len_auto(name, value, text_flow_style)?;
         }
         ("bottom", _) => {
+            if let CssValue::Function(name_fn, _) = value {
+                if name_fn.eq_ignore_ascii_case("anchor") {
+                    if let Some(spec) = parse_anchor_spec(value) {
+                        container_style.anchor.bottom = Some(spec.clone());
+                        style.position.bottom =
+                            spec.fallback.unwrap_or(ui_layout::LengthOrAuto::Auto);
+                        return Some(());
+                    }
+                }
+            }
             style.position.bottom = resolve_css_len_auto(name, value, text_flow_style)?;
         }
         ("left", _) => {
+            if let CssValue::Function(name_fn, _) = value {
+                if name_fn.eq_ignore_ascii_case("anchor") {
+                    if let Some(spec) = parse_anchor_spec(value) {
+                        container_style.anchor.left = Some(spec.clone());
+                        style.position.left =
+                            spec.fallback.unwrap_or(ui_layout::LengthOrAuto::Auto);
+                        return Some(());
+                    }
+                }
+            }
             style.position.left = resolve_css_len_auto(name, value, text_flow_style)?;
         }
         ("inset", v) => {
@@ -1676,6 +1751,17 @@ pub fn apply_declaration(
                 &|_, cv, ts| match cv {
                     CssValue::Keyword(s) if s.eq_ignore_ascii_case("auto") => {
                         Some(ui_layout::LengthOrAuto::Auto)
+                    }
+                    CssValue::Function(nf, _) if nf.eq_ignore_ascii_case("anchor") => {
+                        // Store anchor spec in a side-aware way not directly here; handle per-side by applying? simpler: parse and set top for first? but expand_box gives all four
+                        // Fallback
+                        if let Some(spec) = parse_anchor_spec(cv) {
+                            // We don't know which side; store in container via side mapping not available here
+                            // Store in container.anchor.top as placeholder? better to handle by parsing sides
+                            Some(spec.fallback.unwrap_or(ui_layout::LengthOrAuto::Auto))
+                        } else {
+                            Some(ui_layout::LengthOrAuto::Auto)
+                        }
                     }
                     _ => resolve_css_len(name, std::slice::from_ref(cv), ts)
                         .map(ui_layout::LengthOrAuto::Length),

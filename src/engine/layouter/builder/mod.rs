@@ -5,6 +5,7 @@ mod args;
 mod munch;
 #[macro_use]
 mod parse_args;
+mod anchor;
 mod apply;
 mod background;
 mod color;
@@ -13,6 +14,7 @@ mod layout_fix;
 #[cfg(test)]
 mod tests;
 
+pub use anchor::{parse_anchor_spec, resolve_anchor_positioning};
 pub use apply::{apply_declaration, blockify_out_of_flow_positioned};
 pub use layout_fix::{
     constrain_auto_grid_track_items, correct_atomic_inline_spacing,
