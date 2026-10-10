@@ -1693,53 +1693,46 @@ pub fn apply_declaration(
         },
         ("top", _) => {
             // Check for anchor()
-            if let CssValue::Function(name_fn, _) = value {
-                if name_fn.eq_ignore_ascii_case("anchor") {
-                    if let Some(spec) = parse_anchor_spec(value) {
-                        container_style.anchor.top = Some(spec.clone());
-                        style.position.top = spec.fallback.unwrap_or(ui_layout::LengthOrAuto::Auto);
-                        return Some(());
-                    }
-                }
+            if let CssValue::Function(name_fn, _) = value
+                && name_fn.eq_ignore_ascii_case("anchor")
+                && let Some(spec) = parse_anchor_spec(value)
+            {
+                container_style.anchor.top = Some(spec.clone());
+                style.position.top = spec.fallback.unwrap_or(ui_layout::LengthOrAuto::Auto);
+                return Some(());
             }
             style.position.top = resolve_css_len_auto(name, value, text_flow_style)?;
         }
         ("right", _) => {
-            if let CssValue::Function(name_fn, _) = value {
-                if name_fn.eq_ignore_ascii_case("anchor") {
-                    if let Some(spec) = parse_anchor_spec(value) {
-                        container_style.anchor.right = Some(spec.clone());
-                        style.position.right =
-                            spec.fallback.unwrap_or(ui_layout::LengthOrAuto::Auto);
-                        return Some(());
-                    }
-                }
+            if let CssValue::Function(name_fn, _) = value
+                && name_fn.eq_ignore_ascii_case("anchor")
+                && let Some(spec) = parse_anchor_spec(value)
+            {
+                container_style.anchor.right = Some(spec.clone());
+                style.position.right = spec.fallback.unwrap_or(ui_layout::LengthOrAuto::Auto);
+                return Some(());
             }
             style.position.right = resolve_css_len_auto(name, value, text_flow_style)?;
         }
         ("bottom", _) => {
-            if let CssValue::Function(name_fn, _) = value {
-                if name_fn.eq_ignore_ascii_case("anchor") {
-                    if let Some(spec) = parse_anchor_spec(value) {
-                        container_style.anchor.bottom = Some(spec.clone());
-                        style.position.bottom =
-                            spec.fallback.unwrap_or(ui_layout::LengthOrAuto::Auto);
-                        return Some(());
-                    }
-                }
+            if let CssValue::Function(name_fn, _) = value
+                && name_fn.eq_ignore_ascii_case("anchor")
+                && let Some(spec) = parse_anchor_spec(value)
+            {
+                container_style.anchor.bottom = Some(spec.clone());
+                style.position.bottom = spec.fallback.unwrap_or(ui_layout::LengthOrAuto::Auto);
+                return Some(());
             }
             style.position.bottom = resolve_css_len_auto(name, value, text_flow_style)?;
         }
         ("left", _) => {
-            if let CssValue::Function(name_fn, _) = value {
-                if name_fn.eq_ignore_ascii_case("anchor") {
-                    if let Some(spec) = parse_anchor_spec(value) {
-                        container_style.anchor.left = Some(spec.clone());
-                        style.position.left =
-                            spec.fallback.unwrap_or(ui_layout::LengthOrAuto::Auto);
-                        return Some(());
-                    }
-                }
+            if let CssValue::Function(name_fn, _) = value
+                && name_fn.eq_ignore_ascii_case("anchor")
+                && let Some(spec) = parse_anchor_spec(value)
+            {
+                container_style.anchor.left = Some(spec.clone());
+                style.position.left = spec.fallback.unwrap_or(ui_layout::LengthOrAuto::Auto);
+                return Some(());
             }
             style.position.left = resolve_css_len_auto(name, value, text_flow_style)?;
         }

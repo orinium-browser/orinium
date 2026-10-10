@@ -253,36 +253,36 @@ fn resolve_node(
 
     if let Some(cs) = &container_style_ref {
         // top
-        if let Some(spec) = &cs.anchor.top {
-            if let Some(rect) = find_anchor_rect(spec, cs, anchors) {
-                let target_y = anchor_side_coord(rect, spec.side, Axis::Vertical);
-                if let Some(b) = border {
-                    dy += target_y - (parent_origin.y + b.y);
-                }
+        if let Some(spec) = &cs.anchor.top
+            && let Some(rect) = find_anchor_rect(spec, cs, anchors)
+        {
+            let target_y = anchor_side_coord(rect, spec.side, Axis::Vertical);
+            if let Some(b) = border {
+                dy += target_y - (parent_origin.y + b.y);
             }
         }
-        if let Some(spec) = &cs.anchor.bottom {
-            if let Some(rect) = find_anchor_rect(spec, cs, anchors) {
-                let target_y = anchor_side_coord(rect, spec.side, Axis::Vertical);
-                if let Some(b) = border {
-                    dy += target_y - (parent_origin.y + b.bottom());
-                }
+        if let Some(spec) = &cs.anchor.bottom
+            && let Some(rect) = find_anchor_rect(spec, cs, anchors)
+        {
+            let target_y = anchor_side_coord(rect, spec.side, Axis::Vertical);
+            if let Some(b) = border {
+                dy += target_y - (parent_origin.y + b.bottom());
             }
         }
-        if let Some(spec) = &cs.anchor.left {
-            if let Some(rect) = find_anchor_rect(spec, cs, anchors) {
-                let target_x = anchor_side_coord(rect, spec.side, Axis::Horizontal);
-                if let Some(b) = border {
-                    dx += target_x - (parent_origin.x + b.x);
-                }
+        if let Some(spec) = &cs.anchor.left
+            && let Some(rect) = find_anchor_rect(spec, cs, anchors)
+        {
+            let target_x = anchor_side_coord(rect, spec.side, Axis::Horizontal);
+            if let Some(b) = border {
+                dx += target_x - (parent_origin.x + b.x);
             }
         }
-        if let Some(spec) = &cs.anchor.right {
-            if let Some(rect) = find_anchor_rect(spec, cs, anchors) {
-                let target_x = anchor_side_coord(rect, spec.side, Axis::Horizontal);
-                if let Some(b) = border {
-                    dx += target_x - (parent_origin.x + b.right());
-                }
+        if let Some(spec) = &cs.anchor.right
+            && let Some(rect) = find_anchor_rect(spec, cs, anchors)
+        {
+            let target_x = anchor_side_coord(rect, spec.side, Axis::Horizontal);
+            if let Some(b) = border {
+                dx += target_x - (parent_origin.x + b.right());
             }
         }
     }
@@ -312,16 +312,16 @@ fn find_anchor_rect<'a>(
     anchors: &'a HashMap<String, Rect>,
 ) -> Option<&'a Rect> {
     // Try explicit element name first
-    if let Some(ref name) = spec.element {
-        if let Some(r) = anchors.get(name) {
-            return Some(r);
-        }
+    if let Some(ref name) = spec.element
+        && let Some(r) = anchors.get(name)
+    {
+        return Some(r);
     }
     // Try position-anchor
-    if let Some(ref name) = container_style.anchor.position_anchor {
-        if let Some(r) = anchors.get(name) {
-            return Some(r);
-        }
+    if let Some(ref name) = container_style.anchor.position_anchor
+        && let Some(r) = anchors.get(name)
+    {
+        return Some(r);
     }
     None
 }
