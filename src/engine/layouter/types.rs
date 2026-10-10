@@ -600,6 +600,23 @@ pub struct AnchorSpec {
     pub fallback: Option<ui_layout::LengthOrAuto>,
 }
 
+/// Inline text direction (`direction`), used to resolve logical anchor sides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Direction {
+    #[default]
+    Ltr,
+    Rtl,
+}
+
+/// Writing mode (`writing-mode`), used to resolve logical anchor sides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WritingMode {
+    #[default]
+    HorizontalTb,
+    VerticalRl,
+    VerticalLr,
+}
+
 /// CSS Anchor Positioning state for a container.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AnchorStyle {
@@ -607,6 +624,8 @@ pub struct AnchorStyle {
     pub anchors: Vec<String>,
     /// `position-anchor` — the default anchor this element positions against.
     pub position_anchor: Option<String>,
+    /// `anchor-scope` — limits anchor name lookup scope.
+    pub anchor_scope: Option<String>,
     pub top: Option<AnchorSpec>,
     pub right: Option<AnchorSpec>,
     pub bottom: Option<AnchorSpec>,
@@ -656,6 +675,10 @@ pub struct ContainerStyle {
     pub text_align: TextAlign,
     /// CSS `clip-path` applied to the element's border box.
     pub clip_path: ClipPath,
+    /// CSS `direction` (inherited). Resolves logical anchor sides.
+    pub direction: Direction,
+    /// CSS `writing-mode` (inherited). Resolves logical anchor sides.
+    pub writing_mode: WritingMode,
     /// CSS Anchor Positioning declarations.
     pub anchor: AnchorStyle,
 }
@@ -678,6 +701,8 @@ impl Default for ContainerStyle {
             border_radius: Default::default(),
             text_align: Default::default(),
             clip_path: Default::default(),
+            direction: Default::default(),
+            writing_mode: Default::default(),
             anchor: Default::default(),
         }
     }

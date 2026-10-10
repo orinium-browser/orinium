@@ -5990,3 +5990,89 @@ fn anchor_top_stores_spec_and_sets_fallback_auto() {
     assert!(parsed.is_some());
     assert!(container_style.anchor.top.is_some());
 }
+
+#[test]
+fn direction_parses_ltr_and_rtl() {
+    use crate::engine::layouter::types::Direction;
+
+    for (raw, expected) in [("ltr", Direction::Ltr), ("rtl", Direction::Rtl)] {
+        let mut container_style = ContainerStyle::default();
+        assert!(
+            apply_declaration(
+                "direction",
+                &CssValue::Keyword(raw.into()),
+                &mut Style::default(),
+                &mut container_style,
+                &mut TextStyle::default(),
+                &mut TextFlowStyle::default(),
+                &Style::default(),
+                &ContainerStyle::default(),
+                &TextStyle::default(),
+                &TextFlowStyle::default(),
+                &mut Overflow::default(),
+                ColorScheme::Light,
+            )
+            .is_some()
+        );
+        assert_eq!(container_style.direction, expected);
+    }
+}
+
+#[test]
+fn writing_mode_parses_variants() {
+    use crate::engine::layouter::types::WritingMode;
+
+    for (raw, expected) in [
+        ("horizontal-tb", WritingMode::HorizontalTb),
+        ("vertical-rl", WritingMode::VerticalRl),
+        ("vertical-lr", WritingMode::VerticalLr),
+    ] {
+        let mut container_style = ContainerStyle::default();
+        assert!(
+            apply_declaration(
+                "writing-mode",
+                &CssValue::Keyword(raw.into()),
+                &mut Style::default(),
+                &mut container_style,
+                &mut TextStyle::default(),
+                &mut TextFlowStyle::default(),
+                &Style::default(),
+                &ContainerStyle::default(),
+                &TextStyle::default(),
+                &TextFlowStyle::default(),
+                &mut Overflow::default(),
+                ColorScheme::Light,
+            )
+            .is_some()
+        );
+        assert_eq!(container_style.writing_mode, expected);
+    }
+}
+
+#[test]
+fn inset_shorthand_stores_anchor_specs_on_all_sides() {
+    let mut style = Style::default();
+    let mut container_style = ContainerStyle::default();
+    let parsed = apply_declaration(
+        "inset",
+        &CssValue::Function(
+            "anchor".into(),
+            vec![vec![CssValue::Keyword("bottom".into())]],
+        ),
+        &mut style,
+        &mut container_style,
+        &mut TextStyle::default(),
+        &mut TextFlowStyle::default(),
+        &Style::default(),
+        &ContainerStyle::default(),
+        &TextStyle::default(),
+        &TextFlowStyle::default(),
+        &mut Overflow::default(),
+        ColorScheme::Light,
+    );
+    assert!(parsed.is_some());
+    assert!(container_style.anchor.top.is_some());
+    assert!(container_style.anchor.right.is_some());
+    assert!(container_style.anchor.bottom.is_some());
+    assert!(container_style.anchor.left.is_some());
+}

@@ -11,19 +11,19 @@ use ui_layout::{
     JustifyItems, Length, LengthOrAuto, OuterDisplay, Position, Style,
 };
 
-use crate::engine::layouter::builder::parse_anchor_spec;
-use crate::engine::layouter::types::{
-    Background, BorderRadius, BorderStyle, ClipPath, Color, ColorScheme, ContainerStyle,
-    CornerRadius, CssClear, CssFloat, FontStyle, FontWeight, LineHeight, Overflow, TextAlign,
-    TextDecoration, TextFlowStyle, TextStyle, TextTransform, VerticalAlign, Visibility, WhiteSpace,
-};
-
 use super::{
     CalcValue, apply_background_shorthand_geometry, extract_font_families, length_to_px,
     one_or_two_values, parse_background_position, parse_background_repeat,
     parse_background_shorthand, parse_background_size, parse_grid_line, parse_grid_line_end,
     parse_grid_placement, parse_grid_template_areas, parse_grid_tracks, resolve_calc_value,
     resolve_css_color, resolve_css_len, resolve_css_len_auto, resolve_font_size_px,
+};
+use crate::engine::layouter::builder::parse_anchor_spec;
+use crate::engine::layouter::types::{
+    AnchorInsetSide, Background, BorderRadius, BorderStyle, ClipPath, Color, ColorScheme,
+    ContainerStyle, CornerRadius, CssClear, CssFloat, Direction, FontStyle, FontWeight, LineHeight,
+    Overflow, TextAlign, TextDecoration, TextFlowStyle, TextStyle, TextTransform, VerticalAlign,
+    Visibility, WhiteSpace, WritingMode,
 };
 
 macro_rules! apply_property {
@@ -1691,6 +1691,46 @@ pub fn apply_declaration(
             }
             _ => return None,
         },
+        ("anchor-scope", _) => match value {
+            CssValue::Keyword(k) if k.eq_ignore_ascii_case("none") => {
+                container_style.anchor.anchor_scope = None;
+            }
+            CssValue::Keyword(k) if k.starts_with("--") => {
+                container_style.anchor.anchor_scope = Some(k.to_string());
+            }
+            _ => return None,
+        },
+        ("direction", _) => {
+            apply_property!(
+                direction,
+                container_style,
+                parent_container_style,
+                DEFAULT_CONTAINER_STYLE,
+                value,
+                CssValue::Keyword(v),
+                match v.as_str() {
+                    "ltr" => Direction::Ltr,
+                    "rtl" => Direction::Rtl,
+                    _ => return None,
+                }
+            );
+        }
+        ("writing-mode", _) => {
+            apply_property!(
+                writing_mode,
+                container_style,
+                parent_container_style,
+                DEFAULT_CONTAINER_STYLE,
+                value,
+                CssValue::Keyword(v),
+                match v.as_str() {
+                    "horizontal-tb" => WritingMode::HorizontalTb,
+                    "vertical-rl" => WritingMode::VerticalRl,
+                    "vertical-lr" => WritingMode::VerticalLr,
+                    _ => return None,
+                }
+            );
+        }
         ("top", _) => {
             // Check for anchor()
             if let CssValue::Function(name_fn, _) = value
@@ -1737,35 +1777,53 @@ pub fn apply_declaration(
             style.position.left = resolve_css_len_auto(name, value, text_flow_style)?;
         }
         ("inset", v) => {
-            expand_box(
-                name,
-                v,
-                text_flow_style,
-                &|_, cv, ts| match cv {
+            let (tv, rv, bv, lv): (&CssValue, &CssValue, &CssValue, &CssValue) = match v {
+                CssValue::List(values) => match values.as_slice() {
+                    [a] => (a, a, a, a),
+                    [vert, horiz] => (vert, horiz, vert, horiz),
+                    [t, h, b] => (t, h, b, h),
+                    [t, r, b, l] => (t, r, b, l),
+                    _ => return None,
+                },
+                _ => (v, v, v, v),
+            };
+            for (side, cv) in [
+                (AnchorInsetSide::Top, tv),
+                (AnchorInsetSide::Right, rv),
+                (AnchorInsetSide::Bottom, bv),
+                (AnchorInsetSide::Left, lv),
+            ] {
+                if let CssValue::Function(nf, _) = cv
+                    && nf.eq_ignore_ascii_case("anchor")
+                    && let Some(spec) = parse_anchor_spec(cv)
+                {
+                    *container_style.anchor.inset_mut(side) = Some(spec.clone());
+                    let fallback = spec.fallback.unwrap_or(ui_layout::LengthOrAuto::Auto);
+                    match side {
+                        AnchorInsetSide::Top => style.position.top = fallback,
+                        AnchorInsetSide::Right => style.position.right = fallback,
+                        AnchorInsetSide::Bottom => style.position.bottom = fallback,
+                        AnchorInsetSide::Left => style.position.left = fallback,
+                    }
+                    continue;
+                }
+                let resolved = match cv {
                     CssValue::Keyword(s) if s.eq_ignore_ascii_case("auto") => {
-                        Some(ui_layout::LengthOrAuto::Auto)
+                        ui_layout::LengthOrAuto::Auto
                     }
-                    CssValue::Function(nf, _) if nf.eq_ignore_ascii_case("anchor") => {
-                        // Store anchor spec in a side-aware way not directly here; handle per-side by applying? simpler: parse and set top for first? but expand_box gives all four
-                        // Fallback
-                        if let Some(spec) = parse_anchor_spec(cv) {
-                            // We don't know which side; store in container via side mapping not available here
-                            // Store in container.anchor.top as placeholder? better to handle by parsing sides
-                            Some(spec.fallback.unwrap_or(ui_layout::LengthOrAuto::Auto))
-                        } else {
-                            Some(ui_layout::LengthOrAuto::Auto)
-                        }
-                    }
-                    _ => resolve_css_len(name, std::slice::from_ref(cv), ts)
-                        .map(ui_layout::LengthOrAuto::Length),
-                },
-                |t, r, b, l| {
-                    style.position.top = t;
-                    style.position.right = r;
-                    style.position.bottom = b;
-                    style.position.left = l;
-                },
-            )?;
+                    _ => ui_layout::LengthOrAuto::Length(resolve_css_len(
+                        name,
+                        std::slice::from_ref(cv),
+                        text_flow_style,
+                    )?),
+                };
+                match side {
+                    AnchorInsetSide::Top => style.position.top = resolved,
+                    AnchorInsetSide::Right => style.position.right = resolved,
+                    AnchorInsetSide::Bottom => style.position.bottom = resolved,
+                    AnchorInsetSide::Left => style.position.left = resolved,
+                }
+            }
         }
 
         /* ======================
