@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::engine::css::values::{CssValue, Unit};
-use crate::engine::layouter::builder::layout_fix::shift_layout_box;
+use crate::engine::layouter::shift::shift_box;
 use crate::engine::layouter::types::{
     AnchorSide, AnchorSpec, ContainerStyle, Direction, InfoNode, NodeKind, WritingMode,
 };
@@ -623,7 +623,7 @@ fn resolve_node(
 
     let shifted = dx.abs() > 0.001 || dy.abs() > 0.001;
     if shifted {
-        shift_layout_box(&mut layout.layout_box, dx, dy);
+        shift_box(&mut layout.layout_box, dx, dy);
     }
 
     // Children are positioned relative to this node's content box, so a shift

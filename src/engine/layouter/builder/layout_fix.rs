@@ -1,3 +1,4 @@
+use crate::engine::layouter::shift::shift_box;
 use crate::engine::layouter::text_layouter::TextFlowLayouter;
 use crate::engine::layouter::types::{InfoNode, NodeKind, TextAlign};
 use ui_layout::{
@@ -191,11 +192,11 @@ fn correct_atomic_inline_spacing_impl(node: &mut LayoutNode, info: Option<&InfoN
 
             let shift_x = desired_x - rect.x;
             if shift_x.abs() >= 0.01 {
-                shift_layout_box_x(&mut child.layout_box, shift_x);
+                shift_box(&mut child.layout_box, shift_x, 0.0);
             }
             let shift_y = desired_y - rect.y;
             if shift_y.abs() >= 0.01 {
-                shift_layout_box_y(&mut child.layout_box, shift_y);
+                shift_box(&mut child.layout_box, 0.0, shift_y);
             }
 
             line_bottom = line_bottom.max(desired_y + rect.height);
@@ -376,54 +377,13 @@ fn correct_single_row_grid_inline_alignment(node: &mut LayoutNode) {
             (true, false) => free_space,
             _ => 0.0,
         };
-        shift_layout_box_x(&mut child.layout_box, offset);
+        shift_box(&mut child.layout_box, offset, 0.0);
     }
 }
 
 // ---------------------------------------------------------------------------
 // utilities
 // ---------------------------------------------------------------------------
-
-/// Shift every layer (content, padding, border, children) of a layout box
-/// by `dx` and `dy` pixels.
-pub(crate) fn shift_layout_box(layout_box: &mut ui_layout::LayoutBox, dx: f32, dy: f32) {
-    if dx.abs() < 1e-12 && dy.abs() < 1e-12 {
-        return;
-    }
-    let shift_model = |model: &mut ui_layout::BoxModel| {
-        model.border_box.x += dx;
-        model.padding_box.x += dx;
-        model.content_box.x += dx;
-        model.children_box.x += dx;
-        model.border_box.y += dy;
-        model.padding_box.y += dy;
-        model.content_box.y += dy;
-        model.children_box.y += dy;
-    };
-    match layout_box {
-        ui_layout::LayoutBox::None => {}
-        ui_layout::LayoutBox::BlockBox(model) => shift_model(model),
-        ui_layout::LayoutBox::InlineBox(inline) => {
-            shift_model(&mut inline.box_model);
-            for span in &mut inline.line_spans {
-                span.line_pos.0 += dx;
-                span.line_pos.1 += dy;
-            }
-        }
-    }
-}
-
-/// Shift every layer (content, padding, border, children) of a layout box
-/// horizontally by `shift_x` pixels.
-fn shift_layout_box_x(layout_box: &mut ui_layout::LayoutBox, shift_x: f32) {
-    shift_layout_box(layout_box, shift_x, 0.0);
-}
-
-/// Shift every layer (content, padding, border, children) of a layout box
-/// vertically by `shift_y` pixels.
-fn shift_layout_box_y(layout_box: &mut ui_layout::LayoutBox, shift_y: f32) {
-    shift_layout_box(layout_box, 0.0, shift_y);
-}
 
 /// Extract a non-negative pixel value from a `LengthOrAuto`, returning `0.0`
 /// for `Auto` or non-pixel lengths.

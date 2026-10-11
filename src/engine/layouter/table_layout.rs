@@ -5,8 +5,9 @@
 //! across every row group. This pass preserves the layout/info tree shape and
 //! expands each column to the widest cell found anywhere in the table.
 
-use ui_layout::{BoxModel, LayoutBox, LayoutNode};
+use ui_layout::LayoutNode;
 
+use super::shift::{grow_box_width, move_box_x};
 use super::types::{ContainerRole, InfoNode, NodeKind};
 
 pub fn align_table_columns(layout: &mut LayoutNode, info: &InfoNode) {
@@ -122,44 +123,9 @@ fn container_role(info: &InfoNode) -> Option<&ContainerRole> {
     }
 }
 
-fn move_box_x(layout_box: &mut LayoutBox, target_x: f32) {
-    match layout_box {
-        LayoutBox::None => {}
-        LayoutBox::BlockBox(model) => translate_box_x(model, target_x - model.border_box.x),
-        LayoutBox::InlineBox(inline) => {
-            let dx = target_x - inline.box_model.border_box.x;
-            translate_box_x(&mut inline.box_model, dx);
-            inline
-                .line_spans
-                .iter_mut()
-                .for_each(|l| l.line_pos.0 += dx);
-        }
-    }
-}
-
-fn translate_box_x(model: &mut BoxModel, dx: f32) {
-    model.border_box.x += dx;
-    model.padding_box.x += dx;
-    model.content_box.x += dx;
-    model.children_box.x += dx;
-}
-
-fn grow_box_width(layout_box: &mut LayoutBox, target_border_width: f32) {
-    let model = match layout_box {
-        LayoutBox::None => return,
-        LayoutBox::BlockBox(model) => model,
-        LayoutBox::InlineBox(inline) => &mut inline.box_model,
-    };
-    let delta = (target_border_width - model.border_box.width).max(0.0);
-    model.border_box.width += delta;
-    model.padding_box.width += delta;
-    model.content_box.width += delta;
-    model.children_box.width += delta;
-}
-
 #[cfg(test)]
 mod tests {
-    use ui_layout::{LayoutNode, Rect, Style};
+    use ui_layout::{LayoutBox, LayoutNode, Rect, Style};
 
     use super::*;
     use crate::engine::layouter::types::ContainerStyle;
