@@ -5266,8 +5266,7 @@ fn parse_args_slot_cardinality_forms() {
     // Optional slot absent → None for the body.
     let args = one;
     let out = parse_args! {
-        fn t(name: &str, args: &[Vec<CssValue>], text_flow_style: &TextFlowStyle)
-        -> Result<f32, ParseError>
+        (name, args, text_flow_style)
         {
             a: f32, b: Option<f32>
         }
@@ -5279,8 +5278,7 @@ fn parse_args_slot_cardinality_forms() {
     // Optional slot present → bound.
     let args = two;
     let out = parse_args! {
-        fn t(name: &str, args: &[Vec<CssValue>], text_flow_style: &TextFlowStyle)
-        -> Result<f32, ParseError>
+        (name, args, text_flow_style)
         {
             a: f32, b: Option<f32>
         }
@@ -5292,8 +5290,7 @@ fn parse_args_slot_cardinality_forms() {
     // Parse-time default: absent → default, present → resolved value.
     let args = empty;
     let out = parse_args! {
-        fn t(name: &str, args: &[Vec<CssValue>], text_flow_style: &TextFlowStyle)
-        -> Result<f32, ParseError>
+        (name, args, text_flow_style)
         {
             a: f32 = 5.0
         }
@@ -5303,8 +5300,7 @@ fn parse_args_slot_cardinality_forms() {
     assert_eq!(out, Some(5.0));
     let args = one;
     let out = parse_args! {
-        fn t(name: &str, args: &[Vec<CssValue>], text_flow_style: &TextFlowStyle)
-        -> Result<f32, ParseError>
+        (name, args, text_flow_style)
         {
             a: f32 = 5.0
         }
@@ -5316,8 +5312,7 @@ fn parse_args_slot_cardinality_forms() {
     // Arity failures surface as ParseError for the call-site bridge.
     let args = empty;
     let err = parse_args! {
-        fn t(name: &str, args: &[Vec<CssValue>], text_flow_style: &TextFlowStyle)
-        -> Result<f32, ParseError>
+        (name, args, text_flow_style)
         {
             a: f32
         }
@@ -5328,8 +5323,7 @@ fn parse_args_slot_cardinality_forms() {
 
     let args = three;
     let err = parse_args! {
-        fn t(name: &str, args: &[Vec<CssValue>], text_flow_style: &TextFlowStyle)
-        -> Result<f32, ParseError>
+        (name, args, text_flow_style)
         {
             a: f32, b: Option<f32>
         }

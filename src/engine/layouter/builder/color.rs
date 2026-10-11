@@ -262,20 +262,14 @@ fn resolve_channel_function(fn_name: &str, args: &[Vec<CssValue>]) -> Option<f32
     let text_flow_style = &TextFlowStyle::default();
     match fn_name {
         "calc" => parse_args! {
-            fn calc(fn_name: &str, args: &[Vec<CssValue>], text_flow_style: &TextFlowStyle)
-            -> Result<f32, ParseError>
-            {
-                expr: f32
-            }
+            (fn_name, args, text_flow_style)
+            { expr: f32 }
             => { Some(expr) }
         }
         .ok(),
         "min" | "max" => parse_args! {
-            fn min_max(fn_name: &str, args: &[Vec<CssValue>], text_flow_style: &TextFlowStyle)
-            -> Result<f32, ParseError>
-            {
-                values: Vec<f32>
-            }
+            (fn_name, args, text_flow_style)
+            { values: Vec<f32> }
             => {
                 if fn_name == "min" {
                     values.into_iter().reduce(f32::min)
@@ -286,11 +280,8 @@ fn resolve_channel_function(fn_name: &str, args: &[Vec<CssValue>]) -> Option<f32
         }
         .ok(),
         "clamp" => parse_args! {
-            fn clamp(fn_name: &str, args: &[Vec<CssValue>], text_flow_style: &TextFlowStyle)
-            -> Result<f32, ParseError>
-            {
-                min: f32, value: f32, max: f32
-            }
+            (fn_name, args, text_flow_style)
+            { min: f32, value: f32, max: f32 }
             => { Some(value.clamp(min, max)) }
         }
         .ok(),

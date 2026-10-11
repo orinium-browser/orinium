@@ -419,25 +419,16 @@ pub fn resolve_calc_value(
             Some(CalcValue::Number(std::f32::consts::E))
         }
         CssValue::Function(fn_name, args) if fn_name == "calc" => parse_args! {
-            fn calc(name: &str, args: &[Vec<CssValue>], text_flow_style: &TextFlowStyle)
-            -> Result<CalcValue, ParseError>
-            {
-                expr: CalcValue
-            }
+            (name, args, text_flow_style)
+            { expr: CalcValue }
             => { Some(expr) }
         }
         .inspect_err(|e| report_parse_error(e, fn_name, name))
         .ok(),
         CssValue::Function(fn_name, args) if (fn_name == "min" || fn_name == "max") => {
             parse_args! {
-                fn min_max(
-                    name: &str,
-                    args: &[Vec<CssValue>],
-                    text_flow_style: &TextFlowStyle,
-                    fn_name: &str
-                )
+                (name, args, text_flow_style, fn_name)
                 as fn_name
-                -> Result<CalcValue, ParseError>
                 {
                     groups: Vec<CalcValue>
                 }
@@ -467,14 +458,8 @@ pub fn resolve_calc_value(
             .ok()
         }
         CssValue::Function(fn_name, args) if fn_name == "clamp" => parse_args! {
-            fn clamp(
-                name: &str,
-                args: &[Vec<CssValue>],
-                text_flow_style: &TextFlowStyle,
-                fn_name: &str
-            )
+            (name, args, text_flow_style, fn_name)
             as fn_name
-            -> Result<CalcValue, ParseError>
             {
                 min: CalcValue, value: CalcValue, max: CalcValue
             }
@@ -492,14 +477,8 @@ pub fn resolve_calc_value(
         .inspect_err(|e| report_parse_error(e, fn_name, name))
         .ok(),
         CssValue::Function(fn_name, args) if fn_name == "round" => parse_args! {
-            fn round(
-                name: &str,
-                args: &[Vec<CssValue>],
-                text_flow_style: &TextFlowStyle,
-                fn_name: &str
-            )
+            (name, args, text_flow_style, fn_name)
             as fn_name
-            -> Result<CalcValue, ParseError>
             {
                 strategy: Option<RoundingStrategy>,
                 value: CalcValue,
@@ -546,13 +525,7 @@ pub fn resolve_calc_value(
                     | "abs"
                     | "sign"
             ) => parse_args! {
-                fn math_unary(
-                    name: &str,
-                    args: &[Vec<CssValue>],
-                    text_flow_style: &TextFlowStyle,
-                    fn_name: &str
-                )
-                -> Result<CalcValue, ParseError>
+                (name, args, text_flow_style, fn_name)
                 {
                     x: CalcValue
                 }
@@ -665,13 +638,7 @@ pub fn resolve_calc_value(
             .ok(),
         CssValue::Function(fn_name, args)
             if matches!(fn_name.as_str(), "atan2" | "pow" | "mod" | "rem") => parse_args! {
-                fn math_binary(
-                    name: &str,
-                    args: &[Vec<CssValue>],
-                    text_flow_style: &TextFlowStyle,
-                    fn_name: &str
-                )
-                -> Result<CalcValue, ParseError>
+                (name, args, text_flow_style, fn_name)
                 {
                     a: CalcValue, b: CalcValue
                 }
@@ -777,12 +744,7 @@ pub fn resolve_calc_value(
             .inspect_err(|e| report_parse_error(e, fn_name, name))
             .ok(),
         CssValue::Function(fn_name, args) if fn_name == "hypot" => parse_args! {
-            fn math_hypot(
-                name: &str,
-                args: &[Vec<CssValue>],
-                text_flow_style: &TextFlowStyle
-            )
-            -> Result<CalcValue, ParseError>
+            (name, args, text_flow_style)
             {
                 values: Vec<CalcValue>
             }
@@ -838,13 +800,7 @@ pub fn resolve_calc_value(
         .inspect_err(|e| report_parse_error(e, fn_name, name))
         .ok(),
         CssValue::Function(fn_name, args) if fn_name == "log" => parse_args! {
-            fn math_log(
-                name: &str,
-                args: &[Vec<CssValue>],
-                text_flow_style: &TextFlowStyle,
-                fn_name: &str
-            )
-            -> Result<CalcValue, ParseError>
+            (name, args, text_flow_style, fn_name)
             {
                 value: CalcValue,
                 base: CalcValue = CalcValue::Number(std::f32::consts::E)
