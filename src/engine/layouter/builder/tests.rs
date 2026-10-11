@@ -6076,3 +6076,316 @@ fn inset_shorthand_stores_anchor_specs_on_all_sides() {
     assert!(container_style.anchor.bottom.is_some());
     assert!(container_style.anchor.left.is_some());
 }
+
+fn find_boxes_by_style<'a>(
+    layout: &'a LayoutNode,
+    info: &'a InfoNode,
+    pred: &dyn Fn(&ContainerStyle) -> bool,
+) -> Vec<&'a ui_layout::LayoutBox> {
+    let mut out = Vec::new();
+    if let NodeKind::Container { style, .. } = &info.kind
+        && pred(style)
+    {
+        out.push(&layout.layout_box);
+    }
+    for (child, child_info) in layout.children.iter().zip(info.children.iter()) {
+        if let LayoutChild::Node(n) = child {
+            out.extend(find_boxes_by_style(n, child_info, pred));
+        }
+    }
+    out
+}
+
+fn box_for(
+    layout: &LayoutNode,
+    info: &InfoNode,
+    pred: &dyn Fn(&ContainerStyle) -> bool,
+) -> ui_layout::Rect {
+    find_boxes_by_style(layout, info, pred)
+        .into_iter()
+        .next()
+        .map(|b| b.iter().next().unwrap().border_box)
+        .expect("expected exactly one matching box")
+}
+
+/// Border boxes of every element registered with `anchor-name: --a`, sorted by
+/// their vertical page position so the test is agnostic to DOM order.
+fn anchor_border_boxes(layout: &LayoutNode, info: &InfoNode) -> Vec<ui_layout::Rect> {
+    let mut rects: Vec<_> = find_boxes_by_style(layout, info, &|s| {
+        s.anchor.anchors.iter().any(|a| a == "--a")
+    })
+    .into_iter()
+    .map(|b| b.iter().next().unwrap().border_box)
+    .collect();
+    rects.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap());
+    rects
+}
+
+#[test]
+fn e2e_multiple_anchors_same_name_prefers_nearest_ancestor() {
+    // Two elements share `anchor-name: --a`. The target is nested inside the
+    // first one, so per the spec the *nearest ancestor* must win over the later
+    // same-name anchor — which a plain "last in document order" rule would pick.
+    // The target is stored relative to `a1`'s content box, so its resolved y is
+    // simply `a1`'s height.
+    let (mut layout, info) = layout_and_info_for(
+        r#"<div class="a1"><div class="target"></div></div><div class="a2"></div>"#,
+        ".a1 { position: absolute; top: 100px; left: 50px; width: 200px; height: 80px; anchor-name: --a; }
+         .a2 { position: absolute; top: 300px; left: 50px; width: 200px; height: 80px; anchor-name: --a; }
+         .target { position: absolute; width: 60px; height: 40px; position-anchor: --a; top: anchor(bottom); }",
+    );
+    ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+    resolve_anchor_positioning(&mut layout, &info);
+
+    let anchors = anchor_border_boxes(&layout, &info);
+    assert_eq!(anchors.len(), 2, "two same-name anchors must exist");
+    let ancestor = anchors[0];
+    let later = anchors[1];
+    assert!((ancestor.y - 100.0).abs() < 0.01 && (later.y - 300.0).abs() < 0.01);
+
+    let target = box_for(&layout, &info, &|s| {
+        s.anchor.position_anchor.as_deref() == Some("--a")
+    });
+    assert!(
+        (target.y - ancestor.height).abs() < 0.5,
+        "target y={} (a1-relative) should align with ancestor bottom {}",
+        target.y,
+        ancestor.height
+    );
+    // Guard against the old bug: tethering to the *later* same-name anchor
+    // would put the target's a1-relative y at `later.bottom - ancestor.y`.
+    let wrong = later.y + later.height - ancestor.y;
+    assert!(
+        (target.y - wrong).abs() > 1.0,
+        "target must not tether to the later same-name anchor (would be y={})",
+        wrong
+    );
+}
+
+#[test]
+fn e2e_multiple_anchors_same_name_no_ancestor_uses_last_in_dom_order() {
+    // With no ancestor among the acceptable same-name anchors, the spec falls
+    // back to the last one in document order (`a2`). Both anchors are in flow
+    // (`position: relative`) so both are acceptable for the target.
+    let (mut layout, info) = layout_and_info_for(
+        r#"<div class="a1"></div><div class="target"></div><div class="a2"></div>"#,
+        ".a1 { position: relative; top: 100px; left: 50px; width: 200px; height: 80px; anchor-name: --a; }
+         .a2 { position: relative; top: 300px; left: 50px; width: 200px; height: 80px; anchor-name: --a; }
+         .target { position: absolute; width: 60px; height: 40px; position-anchor: --a; top: anchor(bottom); }",
+    );
+    ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+    resolve_anchor_positioning(&mut layout, &info);
+
+    let anchors = anchor_border_boxes(&layout, &info);
+    assert_eq!(anchors.len(), 2);
+    let first = anchors[0];
+    let last = anchors[1];
+
+    let target = box_for(&layout, &info, &|s| {
+        s.anchor.position_anchor.as_deref() == Some("--a")
+    });
+    assert!(
+        (target.y - (last.y + last.height)).abs() < 0.5,
+        "target y={} expected last-in-DOM bottom={}, not first bottom={}",
+        target.y,
+        last.y + last.height,
+        first.y + first.height
+    );
+}
+
+#[test]
+fn e2e_multiple_anchors_prefers_scoped_ancestor_over_global_later() {
+    // A scoped `--a` anchor that is also the target's ancestor must win over a
+    // later global `--a` (which is also visible). Scopes limit visibility but
+    // never override the nearest-ancestor preference.
+    let (mut layout, info) = layout_and_info_for(
+        r#"<div class="scope"><div class="a1"><div class="target"></div></div></div><div class="a2"></div>"#,
+        ".scope { anchor-scope: --a; }
+         .a1 { position: absolute; top: 100px; left: 50px; width: 200px; height: 80px; anchor-name: --a; }
+         .a2 { position: absolute; top: 300px; left: 50px; width: 200px; height: 80px; anchor-name: --a; }
+         .target { position: absolute; width: 60px; height: 40px; position-anchor: --a; top: anchor(bottom); }",
+    );
+    ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+    resolve_anchor_positioning(&mut layout, &info);
+
+    let anchors = anchor_border_boxes(&layout, &info);
+    assert_eq!(anchors.len(), 2);
+    let ancestor = anchors[0];
+    let later = anchors[1];
+
+    let target = box_for(&layout, &info, &|s| {
+        s.anchor.position_anchor.as_deref() == Some("--a")
+    });
+    assert!(
+        (target.y - ancestor.height).abs() < 0.5,
+        "target y={} (a1-relative) should align with scoped ancestor bottom {}",
+        target.y,
+        ancestor.height
+    );
+    let wrong = later.y + later.height - ancestor.y;
+    assert!(
+        (target.y - wrong).abs() > 1.0,
+        "target must not tether to the later global anchor (would be y={})",
+        wrong
+    );
+}
+
+#[test]
+fn e2e_anchor_scope_keeps_repeated_components_anchored_locally() {
+    // Two repeated components, each with an `anchor-scope: --a`: every target
+    // must tether to the anchor inside its own component, even though both
+    // scopes share the same name. Component boxes and their absolute children
+    // are all stored in that component's own coordinate frame.
+    let (mut layout, info) = layout_and_info_for(
+        r#"
+        <div class="comp"><div class="anchor">A</div><div class="target">T</div></div>
+        <div class="comp"><div class="anchor">A</div><div class="target">T</div></div>
+        "#,
+        ".comp { anchor-scope: --a; position: relative; margin-top: 40px; }
+         .anchor { position: absolute; top: 10px; left: 10px; width: 120px; height: 40px; anchor-name: --a; }
+         .target { position: absolute; width: 60px; height: 30px; position-anchor: --a; top: anchor(bottom); }",
+    );
+    ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+    resolve_anchor_positioning(&mut layout, &info);
+
+    let anchors: Vec<_> = find_boxes_by_style(&layout, &info, &|s| {
+        s.anchor.anchors.iter().any(|a| a == "--a")
+    })
+    .into_iter()
+    .map(|b| b.iter().next().unwrap().border_box)
+    .collect();
+    assert_eq!(anchors.len(), 2, "one anchor per component");
+
+    let targets: Vec<_> = find_boxes_by_style(&layout, &info, &|s| {
+        s.anchor.position_anchor.as_deref() == Some("--a")
+    })
+    .into_iter()
+    .map(|b| b.iter().next().unwrap().border_box)
+    .collect();
+    assert_eq!(targets.len(), 2, "one target per component");
+
+    // Each component's anchor: top 10, height 40 -> bottom 50 in that
+    // component's frame. Each in-scope target must land exactly on its own
+    // component's anchor bottom; tethering to the other component's anchor
+    // would push the first target down (buggy value ~90).
+    for anchor in &anchors {
+        assert!((anchor.y - 10.0).abs() < 0.5 && (anchor.height - 40.0).abs() < 0.5);
+    }
+    for target in &targets {
+        assert!(
+            (target.y - 50.0).abs() < 0.5,
+            "target y={} should be tethered to its own component's anchor bottom=50",
+            target.y
+        );
+    }
+}
+
+#[test]
+fn e2e_target_anchors_two_different_anchors_on_separate_axes() {
+    // `top` and `left` reference *different* anchors: each axis must resolve
+    // against its own anchor element.
+    let (mut layout, info) = layout_and_info_for(
+        r#"<div class="h"></div><div class="v"></div><div class="target"></div>"#,
+        ".h { position: absolute; top: 100px; left: 50px; width: 200px; height: 80px; anchor-name: --h; }
+         .v { position: absolute; top: 200px; left: 400px; width: 150px; height: 60px; anchor-name: --v; }
+         .target { position: absolute; width: 60px; height: 40px; top: anchor(--v top); left: anchor(--h right); }",
+    );
+    ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+    resolve_anchor_positioning(&mut layout, &info);
+
+    // target.x aligns to `--h` right (= 50 + 200) and target.y to `--v` top (= 200).
+    let target = box_for(&layout, &info, &|s| {
+        s.anchor.top.is_some() && s.anchor.left.is_some()
+    });
+    assert!(
+        (target.x - 250.0).abs() < 0.5,
+        "target.x={} expected --h right=250",
+        target.x
+    );
+    assert!(
+        (target.y - 200.0).abs() < 0.5,
+        "target.y={} expected --v top=200",
+        target.y
+    );
+}
+
+#[test]
+fn e2e_anchor_with_multiple_names_matched_by_secondary_name() {
+    // A single element carries two anchor names; a target referencing the
+    // secondary name must still tether to it.
+    let (mut layout, info) = layout_and_info_for(
+        r#"<div class="anchor"></div><div class="target"></div>"#,
+        ".anchor { position: absolute; top: 100px; left: 50px; width: 200px; height: 80px; anchor-name: --a, --b; }
+         .target { position: absolute; width: 60px; height: 40px; position-anchor: --b; top: anchor(bottom); }",
+    );
+    ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+    resolve_anchor_positioning(&mut layout, &info);
+
+    let anchor = box_for(&layout, &info, &|s| {
+        s.anchor.anchors.iter().any(|a| a == "--a")
+    });
+    let target = box_for(&layout, &info, &|s| {
+        s.anchor.position_anchor.as_deref() == Some("--b")
+    });
+    assert!(
+        (target.y - (anchor.y + anchor.height)).abs() < 0.5,
+        "target y={} anchor bottom={}",
+        target.y,
+        anchor.y + anchor.height
+    );
+}
+
+#[test]
+fn e2e_same_name_anchors_in_sibling_containing_blocks_stay_local() {
+    // Mirrors resource/.local/test.html: three identical `.stage` cards
+    // (`position: relative`), each holding a static `anchor-name: --a` anchor
+    // and a `position-anchor: --a` target. Anchors in the *other* stages live
+    // in different containing blocks and are not acceptable, so every target
+    // must stay anchored inside its own card (top = anchor bottom 44 + 8).
+    let html = r#"
+      <div class="stage"><div class="anchor">A</div><div class="target">T</div></div>
+      <div class="stage"><div class="anchor">A</div><div class="target">T</div></div>
+      <div class="stage"><div class="anchor">A</div><div class="target">T</div></div>
+    "#;
+    let css = r#"
+      * { box-sizing: border-box; }
+      body { margin: 0; padding: 24px; }
+      .stage { position: relative; min-height: 190px; margin-top: 12px; padding: 24px; border: 1px dashed #aab5c7; }
+      .anchor { width: 100px; height: 44px; display: grid; place-items: center; anchor-name: --a; }
+      .target { position: absolute; width: 100px; min-height: 32px; display: grid; place-items: center; padding: 4px; border: 2px solid #d97706; }
+      .target { top: anchor(--a bottom); left: anchor(--a left); margin-top: 8px; position-anchor: --a; }
+    "#;
+    let (mut layout, info) = layout_and_info_for(html, css);
+    ui_layout::LayoutEngine::layout(&mut layout, 800.0, 600.0);
+    resolve_anchor_positioning(&mut layout, &info);
+
+    let anchors: Vec<_> = find_boxes_by_style(&layout, &info, &|s| {
+        s.anchor.anchors.iter().any(|a| a == "--a")
+    })
+    .into_iter()
+    .map(|b| b.iter().next().unwrap().border_box)
+    .collect();
+    let targets: Vec<_> = find_boxes_by_style(&layout, &info, &|s| {
+        s.anchor.position_anchor.as_deref() == Some("--a")
+    })
+    .into_iter()
+    .map(|b| b.iter().next().unwrap().border_box)
+    .collect();
+    assert_eq!(anchors.len(), 3);
+    assert_eq!(targets.len(), 3);
+
+    // Each anchor sits at the top of its own card's content box.
+    for anchor in &anchors {
+        assert!((anchor.y - 0.0).abs() < 0.5 && (anchor.height - 44.0).abs() < 0.5);
+    }
+    // With local anchoring each target lands at 44 + 8 = 52 in its own card.
+    // The buggy "last anchor in DOM order" behavior pushed the earlier cards'
+    // targets far below (they all collapsed onto the final card).
+    for target in &targets {
+        assert!(
+            (target.y - 52.0).abs() < 0.5,
+            "target y={} must stay anchored to its own card's anchor (expected 52)",
+            target.y
+        );
+    }
+}

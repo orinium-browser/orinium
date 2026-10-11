@@ -1,40 +1,37 @@
 //! CSS Anchor Positioning resolution.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use crate::engine::css::values::CssValue;
+use crate::engine::css::values::{CssValue, Unit};
 use crate::engine::layouter::builder::layout_fix::shift_layout_box;
 use crate::engine::layouter::types::{
     AnchorSide, AnchorSpec, ContainerStyle, Direction, InfoNode, NodeKind, WritingMode,
 };
-
 use ui_layout::{LayoutBox, LayoutChild, LayoutNode, LengthOrAuto, Rect};
 
 /// Parse a single `<anchor()>` function value into `AnchorSpec`.
 pub fn parse_anchor_spec(value: &CssValue) -> Option<AnchorSpec> {
-    let (name, args_groups) = match value {
-        CssValue::Function(name, args) if name.eq_ignore_ascii_case("anchor") => {
-            (name.clone(), args.clone())
-        }
-        _ => return None,
+    let CssValue::Function(name, args_groups) = value else {
+        return None;
     };
+    if !name.eq_ignore_ascii_case("anchor") {
+        return None;
+    }
 
-    let _ = name;
-
-    // Take the first comma-separated argument list (top-level arguments).
-    let mut groups = args_groups;
+    let mut groups: Vec<Vec<CssValue>> = args_groups.clone();
     if groups.is_empty() {
         return None;
     }
     let first_group = groups.remove(0);
+    let second_group = groups.first().cloned();
 
     let mut element: Option<String> = None;
     let mut side: Option<AnchorSide> = None;
-    let mut fallback: Option<LengthOrAuto> = None;
+    let mut inline_fallback: Option<LengthOrAuto> = None;
 
-    for v in first_group {
+    for v in &first_group {
         match v {
-            CssValue::Keyword(ref k) => {
+            CssValue::Keyword(k) => {
                 let lower = k.to_ascii_lowercase();
                 match lower.as_str() {
                     "top" => side = Some(AnchorSide::Top),
@@ -46,8 +43,9 @@ pub fn parse_anchor_spec(value: &CssValue) -> Option<AnchorSpec> {
                     "end" => side = Some(AnchorSide::End),
                     "self-start" => side = Some(AnchorSide::SelfStart),
                     "self-end" => side = Some(AnchorSide::SelfEnd),
+                    "inside" => side = Some(AnchorSide::Inside),
+                    "outside" => side = Some(AnchorSide::Outside),
                     _ => {
-                        // Could be a dashed ident.
                         if lower.starts_with("--") {
                             element = Some(k.to_string());
                         }
@@ -55,23 +53,27 @@ pub fn parse_anchor_spec(value: &CssValue) -> Option<AnchorSpec> {
                 }
             }
             CssValue::Length(val, unit) => {
-                let len = match unit {
-                    crate::engine::css::values::Unit::Px => ui_layout::Length::Px(val),
-                    crate::engine::css::values::Unit::Percent => ui_layout::Length::Percent(val),
-                    _ => ui_layout::Length::Px(val),
-                };
-                fallback = Some(LengthOrAuto::Length(len));
+                if *unit == Unit::Percent {
+                    side = Some(AnchorSide::Percent(*val));
+                } else if let Some(len) = length_from_css_unit(*val, *unit) {
+                    inline_fallback = Some(LengthOrAuto::Length(len));
+                }
             }
-            CssValue::Number(0.0) => {
-                fallback = Some(LengthOrAuto::Length(ui_layout::Length::Px(0.0)));
+            CssValue::Number(n) if *n == 0.0 => {
+                inline_fallback = Some(LengthOrAuto::Length(ui_layout::Length::Px(0.0)));
             }
             _ => {}
         }
     }
 
+    let fallback = second_group
+        .as_ref()
+        .and_then(|g| parse_len_percentage(g))
+        .or(inline_fallback);
+
     Some(AnchorSpec {
         element,
-        side: side.unwrap_or(AnchorSide::Top),
+        side: side.unwrap_or(AnchorSide::Center),
         fallback,
     })
 }
@@ -89,17 +91,60 @@ enum Axis {
     Horizontal,
 }
 
+/// Identity of a single `anchor-scope` instance: the element that declared it.
+///
+/// Scopes are distinguished per *instance* (the subtree root that set the
+/// scope), not merely by name. Two unrelated subtrees may both use the same
+/// scope name, and anchors inside them must not leak to positioned elements in
+/// the other subtree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ScopeInstance {
+    node: usize,
+}
+
 /// A collected anchor: its page-space border box, the writing mode and
-/// direction of the anchor element, and the innermost `anchor-scope` name that
-/// was active where the anchor was declared (`None` means globally scoped).
-#[derive(Clone)]
+/// direction of the anchor element, the innermost `anchor-scope` instance that
+/// was active where the anchor was declared (`None` means globally scoped), and
+/// the stable identity of the declaring node (used to prefer anchors that are
+/// ancestors of the target).
+#[derive(Clone, Debug)]
 struct AnchorEntry {
     rect: Rect,
     writing_mode: WritingMode,
     direction: Direction,
-    scope: Option<String>,
+    scope: Option<ScopeInstance>,
+    node_id: usize,
 }
 
+fn length_from_css_unit(val: f32, unit: Unit) -> Option<ui_layout::Length> {
+    match unit {
+        Unit::Px => Some(ui_layout::Length::Px(val)),
+        Unit::Percent => Some(ui_layout::Length::Percent(val)),
+        Unit::Vw => Some(ui_layout::Length::Vw(val)),
+        Unit::Vh => Some(ui_layout::Length::Vh(val)),
+        _ => None,
+    }
+}
+
+fn parse_len_percentage(group: &[CssValue]) -> Option<LengthOrAuto> {
+    for v in group {
+        match v {
+            CssValue::Length(val, unit) => {
+                if let Some(len) = length_from_css_unit(*val, *unit) {
+                    return Some(LengthOrAuto::Length(len));
+                }
+            }
+            CssValue::Number(n) if *n == 0.0 => {
+                return Some(LengthOrAuto::Length(ui_layout::Length::Px(0.0)));
+            }
+            CssValue::Keyword(k) if k.eq_ignore_ascii_case("auto") => {
+                return Some(LengthOrAuto::Auto);
+            }
+            _ => {}
+        }
+    }
+    None
+}
 fn box_border_rect(layout_box: &LayoutBox) -> Option<Rect> {
     match layout_box {
         LayoutBox::BlockBox(m) => Some(m.border_box),
@@ -178,6 +223,7 @@ fn anchor_side_coord(
                 low
             }
         }
+        AnchorSide::Inside | AnchorSide::Outside => low,
     }
 }
 
@@ -217,11 +263,15 @@ fn style_of(info: &InfoNode) -> Option<&ContainerStyle> {
 }
 
 /// Push the scope active for this node's subtree. Returns `true` if pushed.
-fn push_scope(style: Option<&ContainerStyle>, scopes: &mut Vec<String>) -> bool {
+fn push_scope(
+    node_id: usize,
+    style: Option<&ContainerStyle>,
+    scopes: &mut Vec<ScopeInstance>,
+) -> bool {
     if let Some(cs) = style
-        && let Some(name) = &cs.anchor.anchor_scope
+        && cs.anchor.anchor_scope.is_some()
     {
-        scopes.push(name.clone());
+        scopes.push(ScopeInstance { node: node_id });
         return true;
     }
     false
@@ -232,7 +282,7 @@ fn collect_anchors(
     info: &InfoNode,
     parent_origin: Point,
     anchors: &mut HashMap<String, Vec<AnchorEntry>>,
-    scopes: &mut Vec<String>,
+    scopes: &mut Vec<ScopeInstance>,
 ) {
     let (border_off, content_off) = box_offsets(&layout.layout_box);
     let origin = Point {
@@ -240,8 +290,9 @@ fn collect_anchors(
         y: parent_origin.y + content_off.y,
     };
 
+    let node_id = info as *const InfoNode as usize;
     let style = style_of(info);
-    let pushed = push_scope(style, scopes);
+    let pushed = push_scope(node_id, style, scopes);
 
     if let Some(cs) = style
         && let Some(b) = box_border_rect(&layout.layout_box)
@@ -255,7 +306,8 @@ fn collect_anchors(
             },
             writing_mode: cs.writing_mode,
             direction: cs.direction,
-            scope: scopes.last().cloned(),
+            scope: scopes.last().copied(),
+            node_id,
         };
         for name in &cs.anchor.anchors {
             anchors.entry(name.clone()).or_default().push(entry.clone());
@@ -283,7 +335,8 @@ fn collect_anchors(
                         },
                         writing_mode: cs.writing_mode,
                         direction: cs.direction,
-                        scope: scopes.last().cloned(),
+                        scope: scopes.last().copied(),
+                        node_id: info_child as *const InfoNode as usize,
                     };
                     for name in &cs.anchor.anchors {
                         anchors.entry(name.clone()).or_default().push(entry.clone());
@@ -299,43 +352,158 @@ fn collect_anchors(
     }
 }
 
-/// Whether an anchor scoped to `scope` is visible from an element whose active
-/// scope chain is `active`.
-fn scope_visible(scope: Option<&str>, active: &[String]) -> bool {
+/// Whether an anchor declared under scope instance `scope` is visible from an
+/// element whose active scope chain is `active`.
+fn scope_visible(scope: Option<ScopeInstance>, active: &[ScopeInstance]) -> bool {
     match scope {
         None => true,
-        Some(name) => active.iter().any(|a| a == name),
+        Some(instance) => active.contains(&instance),
     }
 }
 
-/// Whether `name` is among the element's active scopes.
-fn scope_rank(name: &str, active: &[String]) -> Option<usize> {
-    active.iter().rposition(|a| a == name)
+/// The depth of `scope` among the element's active scope instances, if any.
+fn scope_rank(scope: Option<ScopeInstance>, active: &[ScopeInstance]) -> Option<usize> {
+    scope.and_then(|instance| active.iter().rposition(|a| *a == instance))
+}
+
+/// Of `entries`, return the one whose declaring node is the nearest ancestor
+/// of the target (the deepest entry in the target's ancestor chain), if any.
+fn nearest_ancestor<'a>(
+    entries: &[&'a AnchorEntry],
+    target_ancestors: &[usize],
+) -> Option<&'a AnchorEntry> {
+    let mut best: Option<(&'a AnchorEntry, usize)> = None;
+    for entry in entries {
+        if let Some(pos) = target_ancestors.iter().rposition(|&id| id == entry.node_id)
+            && best.is_none_or(|(_, best_pos)| pos > best_pos)
+        {
+            best = Some((entry, pos));
+        }
+    }
+    best.map(|(entry, _)| entry)
+}
+
+/// Per-element layout facts used to decide whether an anchor is *acceptable*
+/// for a given positioned element (CSS “acceptable anchor element”).
+///
+/// An anchor is acceptable for a target when it is laid out strictly before the
+/// target in a compatible containing-block context: either the anchor is an
+/// ancestor of the target, or walking the anchor's containing-block chain
+/// reaches an element that shares the target's containing block and that
+/// element is not itself an out-of-flow box laid out after the target.
+///
+/// This is what stops two same-name anchors living in *different* containing
+/// blocks (e.g. two sibling `position: relative` cards) from being visible to
+/// each other's targets.
+#[derive(Default)]
+struct AnchorContext {
+    /// Containing block element of each node (`None` = initial containing
+    /// block / viewport). Keyed by the node identity used in `AnchorEntry`.
+    containing_block: HashMap<usize, Option<usize>>,
+    /// Pre-order index, used to approximate flat-tree order.
+    order: HashMap<usize, usize>,
+    /// Nodes whose box is out of flow (`position: absolute | fixed`).
+    out_of_flow: HashSet<usize>,
+}
+
+impl AnchorContext {
+    fn build(layout: &LayoutNode, info: &InfoNode) -> Self {
+        fn walk(
+            layout: &LayoutNode,
+            info: &InfoNode,
+            parent: Option<usize>,
+            positioned: &mut Vec<usize>,
+            order: &mut usize,
+            ctx: &mut AnchorContext,
+        ) {
+            let id = info as *const InfoNode as usize;
+            let kind = layout.style.position.kind;
+            let containing_block = if kind.is_out_of_flow() {
+                positioned.last().copied()
+            } else {
+                parent
+            };
+            ctx.containing_block.insert(id, containing_block);
+            ctx.order.insert(id, *order);
+            *order += 1;
+            if kind.is_out_of_flow() {
+                ctx.out_of_flow.insert(id);
+            }
+            let establishes_cb = kind != ui_layout::Position::Static;
+            if establishes_cb {
+                positioned.push(id);
+            }
+            for (idx, child) in layout.children.iter().enumerate() {
+                if let LayoutChild::Node(n) = child
+                    && let Some(child_info) = info.children.get(idx)
+                {
+                    walk(n, child_info, Some(id), positioned, order, ctx);
+                }
+            }
+            if establishes_cb {
+                positioned.pop();
+            }
+        }
+
+        let mut ctx = AnchorContext::default();
+        let mut order = 0usize;
+        walk(layout, info, None, &mut Vec::new(), &mut order, &mut ctx);
+        ctx
+    }
+
+    fn acceptable(&self, anchor: &AnchorEntry, target: usize, target_ancestors: &[usize]) -> bool {
+        // Ancestors are always laid out before the target and can anchor it.
+        if target_ancestors.contains(&anchor.node_id) {
+            return true;
+        }
+        let target_cb = self.containing_block.get(&target).copied().flatten();
+        let mut current = Some(anchor.node_id);
+        while let Some(node) = current {
+            let node_cb = self.containing_block.get(&node).copied().flatten();
+            if node_cb == target_cb {
+                return !self.out_of_flow.contains(&node)
+                    || self.order.get(&node) < self.order.get(&target);
+            }
+            current = node_cb;
+        }
+        false
+    }
 }
 
 fn find_anchor_entry<'a>(
     spec: &AnchorSpec,
     container_style: &ContainerStyle,
     anchors: &'a HashMap<String, Vec<AnchorEntry>>,
-    active: &[String],
+    active: &[ScopeInstance],
+    target: usize,
+    target_ancestors: &[usize],
+    ctx: &AnchorContext,
 ) -> Option<&'a AnchorEntry> {
     let name = spec
         .element
         .as_ref()
         .or(container_style.anchor.position_anchor.as_ref())?;
     let candidates = anchors.get(name)?;
-    // Prefer the candidate scoped to the innermost active scope; ties are
-    // broken by document order (the last matching candidate).
+    let visible: Vec<&AnchorEntry> = candidates
+        .iter()
+        .filter(|entry| scope_visible(entry.scope, active))
+        .filter(|entry| ctx.acceptable(entry, target, target_ancestors))
+        .collect();
+    if visible.is_empty() {
+        return None;
+    }
+    // Per CSS Anchor Positioning the anchor element is the nearest ancestor of
+    // the target (if any) among the visible candidates, otherwise the last one
+    // in DOM order. Prefer the nearest ancestor first.
+    if let Some(entry) = nearest_ancestor(&visible, target_ancestors) {
+        return Some(entry);
+    }
+    // Fall back to the last visible candidate in document order (the existing
+    // scope-depth preference keeps the innermost declared scope winning).
     let mut best: Option<&AnchorEntry> = None;
     let mut best_rank: isize = -1;
-    for entry in candidates {
-        if !scope_visible(entry.scope.as_deref(), active) {
-            continue;
-        }
-        let rank = match entry.scope.as_deref() {
-            None => 0,
-            Some(n) => scope_rank(n, active).map(|p| p as isize + 1).unwrap_or(0),
-        };
+    for entry in visible {
+        let rank = scope_rank(entry.scope, active).map_or(0, |p| p as isize + 1);
         if rank >= best_rank {
             best_rank = rank;
             best = Some(entry);
@@ -363,7 +531,9 @@ fn resolve_node(
     info: &InfoNode,
     parent_origin: Point,
     anchors: &HashMap<String, Vec<AnchorEntry>>,
-    scopes: &mut Vec<String>,
+    scopes: &mut Vec<ScopeInstance>,
+    node_path: &mut Vec<usize>,
+    ctx: &AnchorContext,
 ) -> bool {
     let (border_off, content_off) = box_offsets(&layout.layout_box);
     let border_origin = Point {
@@ -376,13 +546,14 @@ fn resolve_node(
     };
     let border = box_border_rect(&layout.layout_box);
 
+    let node_id = info as *const InfoNode as usize;
     let container_style = style_of(info).cloned();
     let mut dx: f32 = 0.0;
     let mut dy: f32 = 0.0;
 
     // Scope chain for this element's own lookups (excludes its own
     // `anchor-scope`, which only affects descendants).
-    let active: Vec<String> = scopes.clone();
+    let active: Vec<ScopeInstance> = scopes.clone();
 
     if let Some(cs) = &container_style {
         // The inset positions the margin box, so a border edge target is
@@ -393,14 +564,31 @@ fn resolve_node(
         let margin_right = margin_px(&layout.style.spacing.margin_right);
 
         let mut apply = |spec: &AnchorSpec, axis: Axis, edge: Edge| {
-            let Some(entry) = find_anchor_entry(spec, cs, anchors, &active) else {
+            let Some(entry) =
+                find_anchor_entry(spec, cs, anchors, &active, node_id, node_path, ctx)
+            else {
                 return;
             };
             let (wm, dir) = match spec.side {
                 AnchorSide::SelfStart | AnchorSide::SelfEnd => (cs.writing_mode, cs.direction),
                 _ => (entry.writing_mode, entry.direction),
             };
-            let target = anchor_side_coord(&entry.rect, spec.side, axis, wm, dir);
+            let resolved_side = match spec.side {
+                AnchorSide::Inside => match (axis, edge) {
+                    (Axis::Vertical, Edge::Low) => AnchorSide::Top,
+                    (Axis::Vertical, Edge::High) => AnchorSide::Bottom,
+                    (Axis::Horizontal, Edge::Low) => AnchorSide::Left,
+                    (Axis::Horizontal, Edge::High) => AnchorSide::Right,
+                },
+                AnchorSide::Outside => match (axis, edge) {
+                    (Axis::Vertical, Edge::Low) => AnchorSide::Bottom,
+                    (Axis::Vertical, Edge::High) => AnchorSide::Top,
+                    (Axis::Horizontal, Edge::Low) => AnchorSide::Right,
+                    (Axis::Horizontal, Edge::High) => AnchorSide::Left,
+                },
+                other => other,
+            };
+            let target = anchor_side_coord(&entry.rect, resolved_side, axis, wm, dir);
             if let Some(b) = border {
                 let current = match edge {
                     Edge::Low => match axis {
@@ -445,16 +633,22 @@ fn resolve_node(
         y: origin.y + dy,
     };
 
-    let pushed = push_scope(container_style.as_ref(), scopes);
+    let pushed = push_scope(node_id, container_style.as_ref(), scopes);
+
+    // This node becomes an ancestor of its children, so record it before
+    // descending for the ancestor-preference lookup.
+    node_path.push(node_id);
 
     let mut child_shifted = false;
     for (child_idx, child) in layout.children.iter_mut().enumerate() {
         if let LayoutChild::Node(n) = child
             && let Some(info_child) = info.children.get(child_idx)
         {
-            child_shifted |= resolve_node(n, info_child, origin, anchors, scopes);
+            child_shifted |= resolve_node(n, info_child, origin, anchors, scopes, node_path, ctx);
         }
     }
+
+    node_path.pop();
 
     if pushed {
         scopes.pop();
@@ -469,16 +663,26 @@ fn resolve_node(
 /// then shifts elements that use `anchor()` inset functions.
 pub fn resolve_anchor_positioning(layout: &mut LayoutNode, info: &InfoNode) {
     let origin = Point { x: 0.0, y: 0.0 };
+    let ctx = AnchorContext::build(layout, info);
     // Anchors may themselves move while resolving (e.g. an anchor nested in a
     // subtree that also gets shifted), so re-collect and re-resolve until the
     // layout stabilizes. The pass count is bounded to guarantee termination.
     const MAX_PASSES: usize = 4;
     for _ in 0..MAX_PASSES {
         let mut anchors: HashMap<String, Vec<AnchorEntry>> = HashMap::new();
-        let mut collect_scopes: Vec<String> = Vec::new();
+        let mut collect_scopes: Vec<ScopeInstance> = Vec::new();
         collect_anchors(layout, info, origin, &mut anchors, &mut collect_scopes);
-        let mut resolve_scopes: Vec<String> = Vec::new();
-        if !resolve_node(layout, info, origin, &anchors, &mut resolve_scopes) {
+        let mut resolve_scopes: Vec<ScopeInstance> = Vec::new();
+        let mut node_path: Vec<usize> = Vec::new();
+        if !resolve_node(
+            layout,
+            info,
+            origin,
+            &anchors,
+            &mut resolve_scopes,
+            &mut node_path,
+            &ctx,
+        ) {
             break;
         }
     }
@@ -872,5 +1076,124 @@ mod tests {
         let target = root.children[1].node().unwrap();
         let target_box = target.layout_box.iter().next().unwrap();
         assert!((target_box.border_box.y - 20.0).abs() < 0.01);
+    }
+
+    fn entry(scope: Option<ScopeInstance>, node_id: usize) -> AnchorEntry {
+        AnchorEntry {
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            writing_mode: WritingMode::HorizontalTb,
+            direction: Direction::Ltr,
+            scope,
+            node_id,
+        }
+    }
+
+    fn name_spec() -> AnchorSpec {
+        AnchorSpec {
+            element: Some("--a".to_string()),
+            side: AnchorSide::Bottom,
+            fallback: None,
+        }
+    }
+
+    #[test]
+    fn find_anchor_entry_prefers_nearest_ancestor_over_later_sibling() {
+        let mut anchors: HashMap<String, Vec<AnchorEntry>> = HashMap::new();
+        anchors.insert("--a".to_string(), vec![entry(None, 1), entry(None, 2)]);
+        let cs = ContainerStyle::default();
+        let ctx = AnchorContext::default();
+
+        // Target's ancestor chain (root -> ... -> 1) contains node 1, which is
+        // *not* the last entry, so the ancestor must win.
+        let found = find_anchor_entry(&name_spec(), &cs, &anchors, &[], 99, &[0, 1, 7], &ctx);
+        assert_eq!(found.unwrap().node_id, 1);
+
+        // Without any ancestor, fall back to the last entry in DOM order.
+        let found = find_anchor_entry(&name_spec(), &cs, &anchors, &[], 99, &[0, 5, 7], &ctx);
+        assert_eq!(found.unwrap().node_id, 2);
+    }
+
+    #[test]
+    fn find_anchor_entry_prefers_deepest_ancestor() {
+        let mut anchors: HashMap<String, Vec<AnchorEntry>> = HashMap::new();
+        anchors.insert("--a".to_string(), vec![entry(None, 3), entry(None, 1)]);
+        let cs = ContainerStyle::default();
+        let ctx = AnchorContext::default();
+
+        // Both 1 and 3 are ancestors; the deeper one (1) must win even though 3
+        // appears first in DOM order.
+        let found = find_anchor_entry(&name_spec(), &cs, &anchors, &[], 99, &[0, 3, 1], &ctx);
+        assert_eq!(found.unwrap().node_id, 1);
+    }
+
+    #[test]
+    fn find_anchor_entry_scope_instance_isolates_same_name_scopes() {
+        // Two different `anchor-scope: --a` instances both hold a `--a` anchor.
+        // A target inside instance 10 must only ever see the anchor under 10,
+        // never the one under 20 (which shares the same scope *name*).
+        let mut anchors: HashMap<String, Vec<AnchorEntry>> = HashMap::new();
+        anchors.insert(
+            "--a".to_string(),
+            vec![
+                entry(Some(ScopeInstance { node: 10 }), 10),
+                entry(Some(ScopeInstance { node: 20 }), 20),
+            ],
+        );
+        let cs = ContainerStyle::default();
+        let ctx = AnchorContext::default();
+
+        let active = [ScopeInstance { node: 20 }];
+        let found =
+            find_anchor_entry(&name_spec(), &cs, &anchors, &active, 99, &[20], &ctx).unwrap();
+        assert_eq!(found.node_id, 20);
+
+        // A target with no active scope sees neither scoped anchor.
+        assert!(find_anchor_entry(&name_spec(), &cs, &anchors, &[], 99, &[], &ctx).is_none());
+    }
+
+    #[test]
+    fn anchor_context_rejects_anchor_in_other_containing_block() {
+        // Two sibling `position: relative` cards, each with a static `--a`
+        // anchor. A target whose containing block is card 1 must not accept
+        // card 2's anchor.
+        let ctx = AnchorContext {
+            containing_block: HashMap::from([
+                (1, Some(10)), // card 1 -> parent 10
+                (2, Some(20)), // card 2 -> parent 20
+                (10, Some(0)), // parent 10
+                (20, Some(0)), // parent 20
+                (0, None),     // root -> ICB
+                (3, Some(10)), // target inside card 1
+            ]),
+            order: HashMap::from([(0, 0), (10, 1), (1, 2), (3, 3), (20, 4), (2, 5)]),
+            out_of_flow: HashSet::new(),
+        };
+
+        let own = entry(None, 1);
+        let other = entry(None, 2);
+        assert!(ctx.acceptable(&own, 3, &[0, 10]));
+        assert!(!ctx.acceptable(&other, 3, &[0, 10]));
+    }
+
+    #[test]
+    fn anchor_context_rejects_out_of_flow_anchor_after_target() {
+        // An out-of-flow anchor sharing the target's containing block is only
+        // acceptable when it is laid out before the target. Target (node 5) is
+        // ordered between the two anchors.
+        let ctx = AnchorContext {
+            containing_block: HashMap::from([(0, None), (1, Some(0)), (5, Some(0)), (2, Some(0))]),
+            order: HashMap::from([(0, 0), (1, 1), (5, 2), (2, 3)]),
+            out_of_flow: HashSet::from([1, 2]),
+        };
+
+        let before = entry(None, 1);
+        let after = entry(None, 2);
+        assert!(ctx.acceptable(&before, 5, &[0]));
+        assert!(!ctx.acceptable(&after, 5, &[0]));
     }
 }

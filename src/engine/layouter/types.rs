@@ -586,6 +586,10 @@ pub enum AnchorSide {
     End,
     SelfStart,
     SelfEnd,
+    /// Same side as the inset property (inside).
+    Inside,
+    /// Opposite side of the inset property (outside).
+    Outside,
     /// `<percentage>` along the relevant axis.
     Percent(f32),
 }
