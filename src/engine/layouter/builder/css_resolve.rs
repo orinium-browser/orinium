@@ -428,30 +428,31 @@ pub fn resolve_calc_value(
         CssValue::Function(fn_name, args) if (fn_name == "min" || fn_name == "max") => {
             parse_args! {
                 (name, args, text_flow_style, fn_name)
-                as fn_name
                 {
                     groups: Vec<CalcValue>
                 }
-                number {
-                    groups
-                        .into_iter()
-                        .reduce(if fn_name == "min" { f32::min } else { f32::max })
-                        .map(CalcValue::Number)
-                }
-                length {
-                    // Fold right so the last operand becomes the innermost
-                    // argument: min(a, b, c) => Min(a, Min(b, c)).
-                    groups
-                        .into_iter()
-                        .rev()
-                        .reduce(|acc, arg| {
-                            if fn_name == "min" {
-                                Length::Min(Box::new(arg), Box::new(acc))
-                            } else {
-                                Length::Max(Box::new(arg), Box::new(acc))
-                            }
-                        })
-                        .map(CalcValue::Length)
+                => {
+                    match unify_operands(name, fn_name, groups)
+                        .ok_or(ParseError::InvalidValue)?
+                    {
+                        OperandMode::Numbers(groups) => groups
+                            .into_iter()
+                            .reduce(if fn_name == "min" { f32::min } else { f32::max })
+                            .map(CalcValue::Number),
+                        // Fold right so the last operand becomes the innermost
+                        // argument: min(a, b, c) => Min(a, Min(b, c)).
+                        OperandMode::Lengths(groups) => groups
+                            .into_iter()
+                            .rev()
+                            .reduce(|acc, arg| {
+                                if fn_name == "min" {
+                                    Length::Min(Box::new(arg), Box::new(acc))
+                                } else {
+                                    Length::Max(Box::new(arg), Box::new(acc))
+                                }
+                            })
+                            .map(CalcValue::Length),
+                    }
                 }
             }
             .inspect_err(|e| report_parse_error(e, fn_name, name))
@@ -459,54 +460,68 @@ pub fn resolve_calc_value(
         }
         CssValue::Function(fn_name, args) if fn_name == "clamp" => parse_args! {
             (name, args, text_flow_style, fn_name)
-            as fn_name
             {
                 min: CalcValue, value: CalcValue, max: CalcValue
             }
-            number {
-                Some(CalcValue::Number(value.clamp(min, max)))
-            }
-            length {
-                Some(CalcValue::Length(Length::Clamp {
-                    min: Box::new(min),
-                    val: Box::new(value),
-                    max: Box::new(max),
-                }))
+            => {
+                match unify_operands(name, fn_name, vec![min, value, max])
+                    .ok_or(ParseError::InvalidValue)?
+                {
+                    OperandMode::Numbers(values) => {
+                        let [min, value, max]: [f32; 3] = values
+                            .try_into()
+                            .map_err(|_| ParseError::InvalidValue)?;
+                        Some(CalcValue::Number(value.clamp(min, max)))
+                    }
+                    OperandMode::Lengths(values) => {
+                        let [min, value, max]: [Length; 3] = values
+                            .try_into()
+                            .map_err(|_| ParseError::InvalidValue)?;
+                        Some(CalcValue::Length(Length::Clamp {
+                            min: Box::new(min),
+                            val: Box::new(value),
+                            max: Box::new(max),
+                        }))
+                    }
+                }
             }
         }
         .inspect_err(|e| report_parse_error(e, fn_name, name))
         .ok(),
         CssValue::Function(fn_name, args) if fn_name == "round" => parse_args! {
             (name, args, text_flow_style, fn_name)
-            as fn_name
             {
                 strategy: Option<RoundingStrategy>,
                 value: CalcValue,
                 step: CalcValue = CalcValue::Number(1.0)
             }
-            number {
-                if step == 0.0 {
-                    log::error!(
-                        target: "Layouter",
-                        "Zero step in round() for `{}`",
-                        name
-                    );
-                    None
-                } else {
-                    Some(CalcValue::Number(round_to_step(
-                        strategy.unwrap_or(RoundingStrategy::Nearest),
-                        value,
-                        step,
-                    )))
+            => {
+                let strategy = strategy.unwrap_or(RoundingStrategy::Nearest);
+                match unify_operands(name, fn_name, vec![value, step])
+                    .ok_or(ParseError::InvalidValue)?
+                {
+                    OperandMode::Numbers(values) => {
+                        let [value, step]: [f32; 2] = values
+                            .try_into()
+                            .map_err(|_| ParseError::InvalidValue)?;
+                        if step == 0.0 {
+                            log::error!(
+                                target: "Layouter",
+                                "Zero step in round() for `{}`",
+                                name
+                            );
+                            None
+                        } else {
+                            Some(CalcValue::Number(round_to_step(strategy, value, step)))
+                        }
+                    }
+                    OperandMode::Lengths(values) => {
+                        let [value, step]: [Length; 2] = values
+                            .try_into()
+                            .map_err(|_| ParseError::InvalidValue)?;
+                        round_length(name, strategy, value, step)
+                    }
                 }
-            }
-            length {
-                round_length(
-                    name,
-                    strategy.unwrap_or(RoundingStrategy::Nearest),
-                    value,
-                    step,
-                )
             }
         }
         .inspect_err(|e| report_parse_error(e, fn_name, name))
