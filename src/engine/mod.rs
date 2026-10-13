@@ -11,6 +11,7 @@ pub mod input;
 pub mod js;
 pub mod layouter;
 pub mod origin;
+pub mod permissions;
 pub mod port;
 pub mod renderer_model;
 pub mod svg;
