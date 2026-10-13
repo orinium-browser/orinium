@@ -218,7 +218,11 @@ fn matches_lang(element: &ElementInfo, language: &str) -> bool {
 }
 
 fn matches_an_plus_b(index: usize, a: i32, b: i32) -> bool {
-    let index = index as i32;
+    // Widen to `i128` so neither `index - b` nor the modulo/division can
+    // overflow for large element indices or extreme `a`/`b` values.
+    let index = index as i128;
+    let a = i128::from(a);
+    let b = i128::from(b);
     if a == 0 {
         return index == b;
     }
@@ -919,6 +923,17 @@ mod tests {
         // A valid ASCII prefix followed by a multi-byte subtag still matches.
         subject.lang = Some("en-日本語".to_string());
         assert!(parse_selector(":lang(en)").matches(&chain([subject])));
+    }
+
+    #[test]
+    fn nth_pseudo_class_is_immune_to_index_overflow() {
+        // An element index above `i32::MAX` previously truncated to a negative
+        // `i32`, yielding a wrong answer and risking arithmetic overflow.
+        let huge = element("p", &[], 2_147_483_649, 3_000_000_000, 1, 1);
+        assert!(parse_selector(":nth-child(odd)").matches(&chain([huge.clone()])));
+        // `:nth-child(-n)` has a = -1; on `i32::MIN` the modulo/division used to
+        // overflow and panic.
+        assert!(!parse_selector(":nth-child(-n)").matches(&chain([huge])));
     }
 
     #[test]
