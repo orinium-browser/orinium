@@ -24,6 +24,15 @@ use crate::engine::svg::{
 };
 use crate::engine::tree::NodeRef;
 
+/// Largest single viewport edge the rasterizer will allocate, in pixels.
+const MAX_RASTER_DIMENSION: u32 = 8192;
+/// Largest total pixel count (width × height) the rasterizer will allocate.
+/// At 4 bytes per pixel this bounds a single buffer to ~128 MiB.
+const MAX_RASTER_PIXELS: u64 = 33_554_432;
+/// Maximum element nesting depth walked before bailing out, so a deeply nested
+/// SVG cannot overflow the stack.
+const MAX_SVG_DEPTH: usize = 128;
+
 /// Decoded RGBA8 pixels plus the rasterized viewport dimensions.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RasterResult {
@@ -66,12 +75,24 @@ pub fn rasterize(markup: &str, target: Option<(u32, u32)>) -> Result<RasterResul
             viewport_len(root_el, "height", view_box, 150.0),
         ),
     };
-    let width = vw.max(1.0) as u32;
-    let height = vh.max(1.0) as u32;
+    if !vw.is_finite() || !vh.is_finite() {
+        return Err("SVG viewport size is not finite".to_string());
+    }
+    let width = vw.clamp(1.0, MAX_RASTER_DIMENSION as f32) as u32;
+    let height = vh.clamp(1.0, MAX_RASTER_DIMENSION as f32) as u32;
+    if u64::from(width) * u64::from(height) > MAX_RASTER_PIXELS {
+        return Err(format!(
+            "SVG viewport {width}x{height} exceeds the rasterization limit"
+        ));
+    }
+    let buffer_len = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| "SVG viewport buffer size overflowed".to_string())?;
 
     let base = viewbox_meet_transform(view_box.unwrap_or((0.0, 0.0, 0.0, 0.0)), vw, vh);
     let gradients = HashMap::new();
-    let mut rgba = vec![0u8; width as usize * height as usize * 4];
+    let mut rgba = vec![0u8; buffer_len];
     for child in root.children() {
         process_element(
             child,
@@ -82,6 +103,7 @@ pub fn rasterize(markup: &str, target: Option<(u32, u32)>) -> Result<RasterResul
             width,
             height,
             &mut rgba,
+            0,
         )?;
     }
     Ok(RasterResult {
@@ -125,7 +147,11 @@ fn process_element(
     width: u32,
     height: u32,
     rgba: &mut [u8],
+    depth: usize,
 ) -> Result<(), String> {
+    if depth > MAX_SVG_DEPTH {
+        return Err(format!("SVG nesting exceeds {MAX_SVG_DEPTH} levels"));
+    }
     let el = node.borrow();
     let name = el.value.name.clone();
     let eff = match el.value.attr("transform") {
@@ -148,6 +174,7 @@ fn process_element(
                     width,
                     height,
                     rgba,
+                    depth + 1,
                 )?;
             }
         }
@@ -490,6 +517,33 @@ mod tests {
     fn non_svg_root_is_rejected() {
         assert!(rasterize("<html></html>", None).is_err());
         assert!(rasterize("<svg", None).is_err());
+    }
+
+    #[test]
+    fn huge_intrinsic_viewport_is_clamped_or_rejected() {
+        // A scientific-notation edge parses to `inf`; reject rather than
+        // overflow the buffer size.
+        assert!(rasterize(r#"<svg width="1e300" height="10"></svg>"#, None).is_err());
+
+        // A finite but enormous viewport must not attempt a multi-gigabyte
+        // allocation; it is either clamped within limits or rejected.
+        if let Ok(result) = rasterize(r#"<svg width="100000" height="100000"></svg>"#, None) {
+            assert!(result.width <= MAX_RASTER_DIMENSION);
+            assert!(result.height <= MAX_RASTER_DIMENSION);
+            assert!(u64::from(result.width) * u64::from(result.height) <= MAX_RASTER_PIXELS);
+        }
+    }
+    #[test]
+    fn deeply_nested_elements_are_rejected() {
+        let mut svg = String::from("<svg width=\"10\" height=\"10\">");
+        for _ in 0..(MAX_SVG_DEPTH + 8) {
+            svg.push_str("<g>");
+        }
+        for _ in 0..(MAX_SVG_DEPTH + 8) {
+            svg.push_str("</g>");
+        }
+        svg.push_str("</svg>");
+        assert!(rasterize(&svg, None).is_err());
     }
 
     #[test]
