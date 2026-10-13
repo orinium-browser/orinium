@@ -13,6 +13,8 @@ use crate::engine::js::web_apis::dom::element::{
 };
 use crate::engine::js::web_apis::dom::node_iterator;
 use crate::engine::js::web_apis::dom::node_iterator::{make_node_iterator, make_tree_walker};
+use crate::engine::origin::Origin;
+use crate::engine::permissions::Permissions;
 use crate::engine::tree::{NodeRef, TreeNode};
 use pixi_byte::value::jsobject::{JSObject, Property};
 use pixi_byte::vm::VM;
@@ -1909,6 +1911,11 @@ pub(crate) struct IframeDocument {
     pub(crate) document: Rc<RefCell<JSObject>>,
     /// Effective URL after redirects; used to enforce iframe same-origin access.
     pub(crate) document_url: String,
+    /// The frame's own origin, derived from its document URL.
+    pub(crate) origin: Origin,
+    /// Effective capabilities of the frame: the base capabilities of its origin
+    /// intersected with the parent frame's permissions.
+    pub(crate) permissions: Permissions,
     /// The exposed `<html>` element node of this iframe document.
     pub(crate) document_element: NodeRef<HtmlNodeType>,
 }
@@ -1918,6 +1925,8 @@ pub(crate) struct IframeDocument {
 pub(crate) fn make_iframe_document(
     host_dom_id: u64,
     document_url: String,
+    origin: Origin,
+    permissions: Permissions,
 ) -> Rc<RefCell<IframeDocument>> {
     let document = TreeNode::new(HtmlNodeType::Document);
     let html = TreeNode::new(HtmlNodeType::Element {
@@ -1943,6 +1952,8 @@ pub(crate) fn make_iframe_document(
         tree,
         document: document_obj,
         document_url,
+        origin,
+        permissions,
         document_element: html,
     }))
 }
@@ -1960,10 +1971,14 @@ pub(crate) fn install_parsed_iframe_document(
         .query_selector("html")
         .unwrap_or_else(|| Rc::clone(&tree.root));
     let document_obj = build_iframe_document_object(iframe_dom_id, &tree);
+    let origin = Origin::from_url_string(document_url);
+    let permissions = Permissions::content_for_str(document_url).inherit(host.permissions);
     let iframe_doc = Rc::new(RefCell::new(IframeDocument {
         tree,
         document: document_obj,
         document_url: document_url.to_string(),
+        origin,
+        permissions,
         document_element,
     }));
     host.iframe_documents.insert(iframe_dom_id, iframe_doc);

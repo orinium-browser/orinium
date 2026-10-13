@@ -16,6 +16,7 @@ use crate::{
             types::{ColorScheme, ContainerRole, InfoNode, NodeKind},
         },
         origin::Origin,
+        permissions::Permissions,
         renderer_model::{self, DrawCommand},
         tree::TreeNode,
         ui::{CustomNode, PointerEvent, input_text_types::InputTextEvent},
@@ -33,6 +34,8 @@ pub enum TabTask {
         kind: FetchKind,
         /// The origin of the document that requested this resource.
         origin: Origin,
+        /// The effective capabilities of the requesting frame.
+        permissions: Permissions,
         /// Monotonic generation of the document that issued the fetch.
         generation: u64,
     },
@@ -76,6 +79,10 @@ pub struct Tab {
     /// Policy controlling whether page scripts are executed and how
     /// `<noscript>` contents are parsed.
     js_policy: JsPolicy,
+
+    /// Whether this tab is a browser-created chrome context (the shell or the
+    /// DevTools pane). Only chrome contexts hold [`Permissions::chrome`].
+    privileged: bool,
 
     state: TabState,
     /// Monotonically increasing generation for the current document.
@@ -124,6 +131,8 @@ impl Tab {
 
             js_policy,
 
+            privileged: false,
+
             state: TabState::Loading,
             document_generation: 0,
             history: Vec::new(),
@@ -133,16 +142,35 @@ impl Tab {
         }
     }
 
-    /// The tab's current page origin, derived from the loaded document URL.
+    /// Marks this tab as a browser-created chrome context, granting it
+    /// [`Permissions::chrome`]. Only the shell and the DevTools pane should.
+    pub fn set_privileged(&mut self, privileged: bool) {
+        self.privileged = privileged;
+    }
+
+    /// The tab's root origin.
     ///
-    /// Internal until a document has been fetched, so pages backed by internal
-    /// schemes (e.g. the DevTools page) or the browser shell itself hold
-    /// internal privileges.
-    fn page_origin(&self) -> Origin {
+    /// Chrome contexts are internal; ordinary tabs derive their origin from the
+    /// loaded document, and a tab with no document yet is opaque.
+    fn root_origin(&self) -> Origin {
+        if self.privileged {
+            return Origin::internal();
+        }
         self.document_url
             .as_ref()
             .map(Origin::from_url)
-            .unwrap_or_else(Origin::internal)
+            .unwrap_or_else(Origin::opaque)
+    }
+
+    /// The effective capabilities of the tab's top-level document.
+    fn root_permissions(&self) -> Permissions {
+        if self.privileged {
+            return Permissions::chrome();
+        }
+        self.document_url
+            .as_ref()
+            .map(Permissions::content_for)
+            .unwrap_or_else(Permissions::none)
     }
 
     pub(crate) fn document_generation(&self) -> u64 {
@@ -150,18 +178,19 @@ impl Tab {
     }
 
     /// Whether a `fetch()`/`XMLHttpRequest` response may be read by the given
-    /// initiator.
+    /// frame.
     ///
-    /// Internal initiators may always read responses; web origins and unprivileged
-    /// opaque origins (like `data:`) are restricted to same-origin responses and
-    /// cross-origin responses that opt in via `Access-Control-Allow-Origin`.
+    /// Chrome frames may always read responses; everything else is restricted to
+    /// same-origin responses and cross-origin responses that opt in via
+    /// `Access-Control-Allow-Origin`, evaluated against the frame's own origin.
     fn may_read_fetch_response(
         &self,
         initiator: &Origin,
+        permissions: Permissions,
         url: &Url,
         headers: &[(String, String)],
     ) -> bool {
-        if initiator.is_internal() {
+        if permissions.is_chrome() {
             return true;
         }
         match url.scheme() {
@@ -180,7 +209,8 @@ impl Tab {
     /// - 発生した Task を BrowserApp に返す
     pub fn tick(&mut self) -> Vec<TabTask> {
         let mut tasks = Vec::new();
-        let page_origin = self.page_origin();
+        let page_origin = self.root_origin();
+        let page_permissions = self.root_permissions();
         let Some(wv) = self.webview.as_mut() else {
             return tasks;
         };
@@ -196,6 +226,7 @@ impl Tab {
                         url,
                         kind,
                         origin: page_origin.clone(),
+                        permissions: page_permissions,
                         generation: self.document_generation,
                     });
                 }
@@ -210,6 +241,7 @@ impl Tab {
                         url: self.document_url.as_ref().unwrap().clone(),
                         kind: FetchKind::Html,
                         origin: page_origin.clone(),
+                        permissions: page_permissions,
                         generation: self.document_generation,
                     });
                 }
@@ -242,6 +274,8 @@ impl Tab {
         &mut self,
         kind: FetchKind,
         url: Url,
+        origin: Origin,
+        permissions: Permissions,
         response: Result<BrowserResponse, BrowserNetworkError>,
     ) {
         match response {
@@ -290,10 +324,14 @@ impl Tab {
                     }
                 }
                 FetchKind::JavaScript { request_id, .. } => {
-                    let initiator = self.page_origin();
                     let response_url = Url::parse(&resp.url);
                     if response_url.as_ref().is_ok_and(|response_url| {
-                        self.may_read_fetch_response(&initiator, response_url, &resp.headers)
+                        self.may_read_fetch_response(
+                            &origin,
+                            permissions,
+                            response_url,
+                            &resp.headers,
+                        )
                     }) {
                         let redirected = resp.url != url.as_str();
                         self.on_fetch_succeeded_js(request_id, resp, redirected);
@@ -301,7 +339,7 @@ impl Tab {
                         log::warn!(
                             "Blocked CORS read of {} from {}",
                             resp.url,
-                            initiator.ascii_serialization()
+                            origin.ascii_serialization()
                         );
                         self.on_fetch_failed_js(
                             request_id,
@@ -748,6 +786,7 @@ impl Tab {
         self.document_generation = self.document_generation.saturating_add(1);
         self.document_url = Some(url);
         let mut webview = WebView::new(self.system_color_scheme, self.js_policy);
+        webview.set_privileged(self.privileged);
         webview.navigate();
         self.webview = Some(webview);
         self.state = TabState::Loading;
@@ -1002,32 +1041,34 @@ mod tests {
     fn cross_origin_fetch_requires_matching_cors_header() {
         let tab = Tab::default();
         let web_origin = Origin::from_url_string("https://example.test/index.html");
+        let permissions = Permissions::content_for_str("https://example.test/index.html");
         let url = Url::parse("https://other.test/data.json").unwrap();
 
-        assert!(!tab.may_read_fetch_response(&web_origin, &url, &[]));
+        assert!(!tab.may_read_fetch_response(&web_origin, permissions, &url, &[]));
 
         let wildcard = vec![("Access-Control-Allow-Origin".to_string(), "*".to_string())];
-        assert!(tab.may_read_fetch_response(&web_origin, &url, &wildcard));
+        assert!(tab.may_read_fetch_response(&web_origin, permissions, &url, &wildcard));
 
         let matching = vec![(
             "Access-Control-Allow-Origin".to_string(),
             "https://example.test".to_string(),
         )];
-        assert!(tab.may_read_fetch_response(&web_origin, &url, &matching));
+        assert!(tab.may_read_fetch_response(&web_origin, permissions, &url, &matching));
 
         let other = vec![(
             "Access-Control-Allow-Origin".to_string(),
             "https://other.test".to_string(),
         )];
-        assert!(!tab.may_read_fetch_response(&web_origin, &url, &other));
+        assert!(!tab.may_read_fetch_response(&web_origin, permissions, &url, &other));
     }
 
     #[test]
     fn same_origin_fetch_is_readable_without_cors_header() {
         let tab = Tab::default();
         let web_origin = Origin::from_url_string("https://example.test/");
+        let permissions = Permissions::content_for_str("https://example.test/");
         let url = Url::parse("https://example.test:443/api").unwrap();
-        assert!(tab.may_read_fetch_response(&web_origin, &url, &[]));
+        assert!(tab.may_read_fetch_response(&web_origin, permissions, &url, &[]));
     }
 
     #[test]
@@ -1035,17 +1076,18 @@ mod tests {
         let tab = Tab::default();
         let internal = Origin::internal();
         let url = Url::parse("https://other.test/api").unwrap();
-        assert!(tab.may_read_fetch_response(&internal, &url, &[]));
+        assert!(tab.may_read_fetch_response(&internal, Permissions::chrome(), &url, &[]));
     }
 
     #[test]
     fn data_page_cannot_read_internal_scheme_responses() {
         let tab = Tab::default();
         let data_origin = Origin::from_url(&Url::parse("data:text/html,test").unwrap());
+        let permissions = Permissions::content_for_str("data:text/html,test");
         let resource_url = Url::parse("resource:///devtools/index.html").unwrap();
-        assert!(!tab.may_read_fetch_response(&data_origin, &resource_url, &[]));
+        assert!(!tab.may_read_fetch_response(&data_origin, permissions, &resource_url, &[]));
         let file_url = Url::parse("file:///etc/passwd").unwrap();
-        assert!(!tab.may_read_fetch_response(&data_origin, &file_url, &[]));
+        assert!(!tab.may_read_fetch_response(&data_origin, permissions, &file_url, &[]));
     }
 
     #[test]
@@ -1053,9 +1095,9 @@ mod tests {
         let tab = Tab::default();
         let opaque = Origin::opaque();
         let resource_url = Url::parse("resource:///devtools/index.html").unwrap();
-        assert!(!tab.may_read_fetch_response(&opaque, &resource_url, &[]));
+        assert!(!tab.may_read_fetch_response(&opaque, Permissions::none(), &resource_url, &[]));
         let file_url = Url::parse("file:///etc/passwd").unwrap();
-        assert!(!tab.may_read_fetch_response(&opaque, &file_url, &[]));
+        assert!(!tab.may_read_fetch_response(&opaque, Permissions::none(), &file_url, &[]));
     }
 
     #[test]
@@ -1064,8 +1106,29 @@ mod tests {
         // so such responses never reach this check in practice.
         let tab = Tab::default();
         let web_origin = Origin::from_url_string("https://example.test/");
+        let permissions = Permissions::content_for_str("https://example.test/");
         let url = Url::parse("data:text/plain,hello").unwrap();
-        assert!(tab.may_read_fetch_response(&web_origin, &url, &[]));
+        assert!(tab.may_read_fetch_response(&web_origin, permissions, &url, &[]));
+    }
+
+    #[test]
+    fn privileged_tab_holds_chrome_permissions() {
+        let mut tab = Tab::default();
+        tab.set_privileged(true);
+        tab.navigate("resource:///devtools/index.html".parse().unwrap());
+        assert_eq!(tab.root_permissions(), Permissions::chrome());
+        assert!(tab.root_origin().is_internal());
+    }
+
+    #[test]
+    fn ordinary_resource_page_gets_no_chrome_permissions() {
+        let mut tab = Tab::default();
+        tab.navigate("resource:///test/index.html".parse().unwrap());
+        let permissions = tab.root_permissions();
+        assert!(!permissions.is_chrome());
+        assert!(!permissions.file);
+        assert!(permissions.resource);
+        assert!(!tab.root_origin().is_internal());
     }
 
     #[test]

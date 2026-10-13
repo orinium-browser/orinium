@@ -22,6 +22,8 @@ use crate::browser::Tab;
 use crate::browser::core::resource_loader::{BrowserNetworkError, BrowserResponse};
 use crate::browser::core::tab::{FetchKind, TabTask};
 use crate::engine::layouter::types::ColorScheme;
+use crate::engine::origin::Origin;
+use crate::engine::permissions::Permissions;
 use crate::engine::renderer_model::{DrawCommand, Rect};
 use crate::engine::ui::PointerEvent;
 use crate::engine::ui::input_text_types::{InputTextEvent, InputTextKey};
@@ -94,6 +96,8 @@ pub struct FetchRequest {
     pub kind: FetchKind,
     /// The origin of the document that requested this resource.
     pub origin: crate::engine::origin::Origin,
+    /// The effective capabilities of the requesting frame.
+    pub permissions: crate::engine::permissions::Permissions,
     /// Generation of the document that created this request. Stale responses
     /// from older navigations are ignored.
     pub generation: u64,
@@ -289,6 +293,7 @@ impl BrowserUi {
                         url,
                         kind,
                         origin,
+                        permissions,
                         generation,
                     } => {
                         log::info!("Fetch requested in BrowserUi: url={}", url);
@@ -298,6 +303,7 @@ impl BrowserUi {
                                 url,
                                 kind,
                                 origin,
+                                permissions,
                                 generation,
                             },
                         });
@@ -358,10 +364,14 @@ impl BrowserUi {
         tab_id: &TabId,
         kind: FetchKind,
         url: Url,
+        origin: Origin,
+        permissions: Permissions,
         response: Result<BrowserResponse, BrowserNetworkError>,
     ) {
         if tab_id == &TabId(0) {
-            self.renderer.chrome.deliver_fetch(kind, url, response);
+            self.renderer
+                .chrome
+                .deliver_fetch(kind, url, origin, permissions, response);
             return;
         }
 
@@ -371,7 +381,7 @@ impl BrowserUi {
         };
 
         log::info!("Delivering fetch result in BrowserUi for tab_id={}", tab_id);
-        tab.deliver_fetch(kind, url, response);
+        tab.deliver_fetch(kind, url, origin, permissions, response);
     }
 
     /// Handles a `winit` window event for this window and returns a `BrowserCommand`.

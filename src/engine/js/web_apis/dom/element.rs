@@ -19,6 +19,8 @@ use crate::engine::js::{
     JsIframeFetchRequest, JsLayoutMetrics,
 };
 use crate::engine::layouter::css_resolver::MediaEnvironment;
+use crate::engine::origin::Origin;
+use crate::engine::permissions::Permissions;
 use crate::engine::tree::{NodeRef, TreeNode};
 use pixi_byte::value::JSArray;
 use pixi_byte::value::jsobject::{JSObject, Property};
@@ -2200,6 +2202,26 @@ fn is_iframe_same_origin(document_url: &str, iframe_url: &str) -> bool {
     doc_url.origin() == iframe_url.origin()
 }
 
+/// Whether the top-level document may access the content of iframe `dom_id`.
+///
+/// A frame that carries its own origin and capabilities is admitted only when
+/// the parent could itself load its scheme and the origins match; a frame whose
+/// content has not been resolved yet falls back to a URL-based comparison.
+fn iframe_content_accessible(host: &JsHost, dom_id: u64, src: &str) -> bool {
+    if let Some(doc) = host.iframe_documents.get(&dom_id) {
+        let doc = doc.borrow();
+        if doc.document_url.is_empty() || doc.document_url == "about:blank" {
+            return true;
+        }
+        if !doc.permissions.allows_str(&doc.document_url) {
+            return false;
+        }
+        return Origin::from_url_string(&host.document_url).same_origin(&doc.origin);
+    }
+    let url = resolved_iframe_url(&host.document_url, src).unwrap_or_else(|| src.to_string());
+    is_iframe_same_origin(&host.document_url, &url)
+}
+
 fn get_iframe_content_document(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let this = args.first().unwrap_or(&UNDEFINED);
     let Some(dom_id) = node_dom_id(this) else {
@@ -2215,15 +2237,8 @@ fn get_iframe_content_document(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVa
         .get_attr("src")
         .unwrap_or("")
         .to_string();
-    let is_same_origin = with_host(vm, |host| {
-        let url = host
-            .iframe_documents
-            .get(&dom_id)
-            .map(|doc| doc.borrow().document_url.clone())
-            .unwrap_or_else(|| src.clone());
-        is_iframe_same_origin(&host.document_url, &url)
-    })
-    .unwrap_or(false);
+    let is_same_origin =
+        with_host(vm, |host| iframe_content_accessible(host, dom_id, &src)).unwrap_or(false);
     if !is_same_origin {
         return Ok(JSValue::null());
     }
@@ -2241,8 +2256,16 @@ fn get_iframe_content_document(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVa
     let _ = with_host_mut(vm, |host| {
         queue_iframe_fetch_if_needed(host, dom_id, &src);
     });
-    let document_url = with_host(vm, |host| host.document_url.clone()).unwrap_or_default();
-    let iframe_doc = make_iframe_document(dom_id, document_url);
+    let (document_url, origin, permissions) = with_host(vm, |host| {
+        let resolved = resolved_iframe_url(&host.document_url, &src).unwrap_or_else(|| src.clone());
+        (
+            host.document_url.clone(),
+            Origin::from_url_string(&resolved),
+            Permissions::content_for_str(&resolved).inherit(host.permissions),
+        )
+    })
+    .unwrap_or_else(|| (String::new(), Origin::opaque(), Permissions::none()));
+    let iframe_doc = make_iframe_document(dom_id, document_url, origin, permissions);
     let document = Rc::clone(&iframe_doc.borrow().document);
     let _ = with_host_mut(vm, |host| {
         host.iframe_documents.insert(dom_id, iframe_doc);
@@ -2267,15 +2290,8 @@ fn get_iframe_content_window(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValu
         .get_attr("src")
         .unwrap_or("")
         .to_string();
-    let is_same_origin = with_host(vm, |host| {
-        let url = host
-            .iframe_documents
-            .get(&dom_id)
-            .map(|doc| doc.borrow().document_url.clone())
-            .unwrap_or_else(|| src.clone());
-        is_iframe_same_origin(&host.document_url, &url)
-    })
-    .unwrap_or(false);
+    let is_same_origin =
+        with_host(vm, |host| iframe_content_accessible(host, dom_id, &src)).unwrap_or(false);
     if !is_same_origin {
         return Ok(JSValue::null());
     }

@@ -18,10 +18,9 @@ use url::{Origin as UrlOrigin, Url};
 /// whose equality ignores default ports. Everything else (`resource:`, `data:`,
 /// `about:`, `file:`, custom schemes) is opaque: it serializes as `"null"` in
 /// JavaScript and never compares equal to another origin.
-/// An origin may also carry internal/privileged status. Only internal origins
-/// (`resource:` scheme or browser-created origins) are allowed to access internal
-/// schemes like `resource:` and `file:`. Other opaque origins (such as `data:`
-/// documents or sandboxed contexts) do not have internal access.
+/// An origin may also carry internal/privileged status. Only browser-created
+/// origins ([`Origin::internal`]) hold internal privileges. No URL scheme grants
+/// it: loading `resource://` content does not make a page internal.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Origin {
     inner: UrlOrigin,
@@ -31,12 +30,13 @@ pub struct Origin {
 impl Origin {
     /// Computes the origin of a parsed URL.
     ///
-    /// URLs with the `resource` scheme are marked as internal.
+    /// No URL grants internal privilege: a `resource://` page is an ordinary
+    /// opaque origin. Internal status is only ever conferred explicitly by the
+    /// browser through [`Origin::internal`] for chrome-created origins.
     pub fn from_url(url: &Url) -> Self {
-        let is_internal = url.scheme() == "resource";
         Self {
             inner: url.origin(),
-            is_internal,
+            is_internal: false,
         }
     }
 
@@ -157,9 +157,9 @@ mod tests {
     }
 
     #[test]
-    fn resource_url_is_internal_and_opaque() {
+    fn resource_url_is_opaque_but_not_internal() {
         let origin = Origin::from_url(&url("resource:///test/index.html"));
-        assert!(origin.is_internal());
+        assert!(!origin.is_internal());
         assert!(origin.is_opaque());
         assert!(!origin.is_network());
         assert_eq!(origin.ascii_serialization(), "null");

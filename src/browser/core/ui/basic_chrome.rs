@@ -293,6 +293,7 @@ impl BasicChrome {
     /// Create a new default chrome with an empty toolbar.
     pub fn new() -> Self {
         let mut tab = Tab::default();
+        tab.set_privileged(true);
         tab.navigate(DEVTOOLS_URL.parse().unwrap());
 
         Self {
@@ -475,6 +476,7 @@ impl Chrome for BasicChrome {
                     url,
                     kind,
                     origin,
+                    permissions,
                     generation,
                 } => {
                     log::info!("Fetch requested in BasicChrome: url={}", url);
@@ -482,6 +484,7 @@ impl Chrome for BasicChrome {
                         url,
                         kind,
                         origin,
+                        permissions,
                         generation,
                     });
                 }
@@ -499,9 +502,12 @@ impl Chrome for BasicChrome {
         &mut self,
         kind: FetchKind,
         url: Url,
+        origin: crate::engine::origin::Origin,
+        permissions: crate::engine::permissions::Permissions,
         response: Result<BrowserResponse, BrowserNetworkError>,
     ) {
-        self.debug_pane.deliver_fetch(kind, url, response);
+        self.debug_pane
+            .deliver_fetch(kind, url, origin, permissions, response);
     }
 
     fn sync_url(&mut self, url: Option<&str>) {
@@ -1121,6 +1127,8 @@ mod tests {
             chrome.deliver_fetch(
                 FetchKind::Html,
                 DEVTOOLS_URL.parse().unwrap(),
+                crate::engine::origin::Origin::internal(),
+                crate::engine::permissions::Permissions::chrome(),
                 Ok(response(&format!("<html><body>{pane_body}</body></html>"))),
             );
 

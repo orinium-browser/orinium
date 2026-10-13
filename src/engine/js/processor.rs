@@ -21,6 +21,7 @@ use super::{
     JsRuntime,
 };
 use crate::engine::layouter::dom_snapshot::DomSnapshot;
+use crate::engine::permissions::Permissions;
 
 /// What the background JS thread should do next.
 #[derive(Debug)]
@@ -29,6 +30,9 @@ pub enum JsTask {
     SetDocumentUrl { url: String },
     /// Set the serialized origin exposed through `window`/`location`/`document`.
     SetOrigin { origin: String },
+    /// Install the effective capabilities of the top-level document, inherited
+    /// by any child frame.
+    SetPermissions { permissions: Permissions },
     /// Update CSS-pixel dimensions exposed through the Window API.
     SetViewport { width: f32, height: f32 },
     /// Update the language preferences exposed through `navigator`.
@@ -256,6 +260,10 @@ fn run_task(runtime: &mut JsRuntime, task: JsTask) -> bool {
         }
         JsTask::SetOrigin { origin } => {
             runtime.set_page_origin(&origin);
+            false
+        }
+        JsTask::SetPermissions { permissions } => {
+            runtime.set_page_permissions(permissions);
             false
         }
         JsTask::SetViewport { width, height } => {

@@ -4,6 +4,7 @@
 //! network-free `resource:///`, `data:` and `file://` schemes.
 
 use crate::engine::origin::Origin;
+use crate::engine::permissions::Permissions;
 use crate::engine::port::{InProcess, Mailbox, Outbox, Transport};
 use crate::platform::network::{
     NetworkConfig, NetworkCore, NetworkError, NetworkRequest, StatusCode,
@@ -13,19 +14,15 @@ use base64::Engine;
 use std::fmt;
 use url::Url;
 
-/// Whether a document with `initiator` may load a resource addressed by `url`.
+/// Whether a document holding `permissions` may load a resource addressed by
+/// `url`.
 ///
-/// Web (network) origins and unprivileged opaque origins (like `data:`) may only
-/// reach external schemes and `data:`; internal schemes (`resource:`, `file:`)
-/// require an internal origin.
-///
-/// TODO(security): Review `file:` access; local files could read the entire home directory.
-fn scheme_allowed(initiator: &Origin, url: &Url) -> bool {
-    match url.scheme() {
-        "http" | "https" | "data" => true,
-        "resource" | "file" => initiator.is_internal(),
-        _ => false,
-    }
+/// Capabilities are granted by the parent frame (see
+/// [`crate::engine::permissions::Permissions`]); an ordinary `resource://`
+/// document therefore has no local-file access, and internal schemes require the
+/// internal capability that only chrome origins hold.
+fn scheme_allowed(permissions: Permissions, url: &Url) -> bool {
+    permissions.allows(url)
 }
 
 /// BrowserResourceLoader
@@ -143,15 +140,32 @@ impl BrowserResourceLoader {
     /// Async fetch: resolve immediate schemes (`resource` / `data`) in place and
     /// push the result to `immediate_pool`; delegate all other schemes to `NetworkCore`.
     ///
-    /// `initiator` is the origin of the requesting document. Its scheme access
-    /// is enforced here: web (network) origins can never reach internal
-    /// `resource:`/custom scheme content.
-    pub fn fetch_async(&mut self, url: Url, id: usize, initiator: &Origin) {
-        self.fetch_request_async(NetworkRequest::get(url.to_string()), id, initiator);
+    /// `initiator` is the origin of the requesting document and `permissions` its
+    /// effective capabilities. Scheme access is enforced here: a document can
+    /// never reach a scheme its `permissions` do not allow.
+    pub fn fetch_async(
+        &mut self,
+        url: Url,
+        id: usize,
+        initiator: &Origin,
+        permissions: Permissions,
+    ) {
+        self.fetch_request_async(
+            NetworkRequest::get(url.to_string()),
+            id,
+            initiator,
+            permissions,
+        );
     }
 
     /// Fetches a request while preserving method, headers, and body for HTTP(S).
-    pub fn fetch_request_async(&mut self, request: NetworkRequest, id: usize, initiator: &Origin) {
+    pub fn fetch_request_async(
+        &mut self,
+        request: NetworkRequest,
+        id: usize,
+        initiator: &Origin,
+        permissions: Permissions,
+    ) {
         let Ok(url) = Url::parse(&request.url) else {
             self.post_immediate(BrowserNetworkMessage {
                 id,
@@ -162,9 +176,9 @@ impl BrowserResourceLoader {
             });
             return;
         };
-        if !scheme_allowed(initiator, &url) {
+        if !scheme_allowed(permissions, &url) {
             log::warn!(
-                "Blocked {} from {} (internal scheme access denied)",
+                "Blocked {} from {} (scheme access denied)",
                 url,
                 initiator.ascii_serialization()
             );
@@ -498,8 +512,9 @@ mod tests {
     fn fetch_async_pushes_data_url_into_immediate_pool() {
         let mut loader = BrowserResourceLoader::offline();
         let url = Url::parse("data:text/plain,hi").unwrap();
+        let permissions = Permissions::content_for(&url);
 
-        loader.fetch_async(url, 7, &Origin::opaque());
+        loader.fetch_async(url, 7, &Origin::opaque(), permissions);
         let msgs = loader.try_receive();
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].id, 7);
@@ -519,6 +534,7 @@ mod tests {
             },
             8,
             &Origin::opaque(),
+            Permissions::chrome(),
         );
 
         let messages = loader.try_receive();
@@ -531,11 +547,13 @@ mod tests {
     fn network_origin_cannot_reach_resource_scheme() {
         let mut loader = BrowserResourceLoader::offline();
         let web = Origin::from_url(&Url::parse("https://example.test/").unwrap());
+        let permissions = Permissions::content_for(&Url::parse("https://example.test/").unwrap());
 
         loader.fetch_async(
             Url::parse("resource:///devtools/index.html").unwrap(),
             9,
             &web,
+            permissions,
         );
 
         let messages = loader.try_receive();
@@ -553,6 +571,7 @@ mod tests {
             Url::parse("resource:///devtools/index.html").unwrap(),
             10,
             &internal,
+            Permissions::chrome(),
         );
 
         let messages = loader.try_receive();
@@ -565,8 +584,14 @@ mod tests {
     fn any_origin_can_reach_data_scheme() {
         let mut loader = BrowserResourceLoader::offline();
         let web = Origin::from_url(&Url::parse("https://example.test/").unwrap());
+        let permissions = Permissions::content_for(&Url::parse("https://example.test/").unwrap());
 
-        loader.fetch_async(Url::parse("data:text/plain,hi").unwrap(), 11, &web);
+        loader.fetch_async(
+            Url::parse("data:text/plain,hi").unwrap(),
+            11,
+            &web,
+            permissions,
+        );
 
         let messages = loader.try_receive();
         assert_eq!(messages.len(), 1);
@@ -603,7 +628,7 @@ mod tests {
         let url = Url::from_file_path(&path).unwrap();
         let mut loader = BrowserResourceLoader::offline();
 
-        loader.fetch_async(url, 12, &Origin::internal());
+        loader.fetch_async(url, 12, &Origin::internal(), Permissions::chrome());
         let msgs = loader.try_receive();
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].id, 12);
@@ -618,7 +643,7 @@ mod tests {
         let url = Url::from_file_path(&path).unwrap();
         let mut loader = BrowserResourceLoader::offline();
 
-        loader.fetch_async(url, 13, &Origin::internal());
+        loader.fetch_async(url, 13, &Origin::internal(), Permissions::chrome());
         let msgs = loader.try_receive();
         assert_eq!(msgs.len(), 1);
         let resp = msgs[0].response.as_ref().unwrap();
@@ -631,9 +656,10 @@ mod tests {
         let path = temp_file(b"secret");
         let url = Url::from_file_path(&path).unwrap();
         let web = Origin::from_url(&Url::parse("https://example.test/").unwrap());
+        let permissions = Permissions::content_for(&Url::parse("https://example.test/").unwrap());
         let mut loader = BrowserResourceLoader::offline();
 
-        loader.fetch_async(url, 14, &web);
+        loader.fetch_async(url, 14, &web, permissions);
         let msgs = loader.try_receive();
         assert_eq!(msgs.len(), 1);
         assert!(msgs[0].response.is_err());
@@ -644,11 +670,13 @@ mod tests {
     fn data_origin_cannot_reach_resource_scheme() {
         let mut loader = BrowserResourceLoader::offline();
         let data_origin = Origin::from_url(&Url::parse("data:text/html,evil").unwrap());
+        let permissions = Permissions::content_for(&Url::parse("data:text/html,evil").unwrap());
 
         loader.fetch_async(
             Url::parse("resource:///devtools/index.html").unwrap(),
             20,
             &data_origin,
+            permissions,
         );
 
         let messages = loader.try_receive();
@@ -662,9 +690,10 @@ mod tests {
         let path = temp_file(b"secret");
         let url = Url::from_file_path(&path).unwrap();
         let data_origin = Origin::from_url(&Url::parse("data:text/html,evil").unwrap());
+        let permissions = Permissions::content_for(&Url::parse("data:text/html,evil").unwrap());
         let mut loader = BrowserResourceLoader::offline();
 
-        loader.fetch_async(url, 21, &data_origin);
+        loader.fetch_async(url, 21, &data_origin, permissions);
         let msgs = loader.try_receive();
         assert_eq!(msgs.len(), 1);
         assert!(msgs[0].response.is_err());
@@ -680,6 +709,7 @@ mod tests {
             Url::parse("resource:///devtools/index.html").unwrap(),
             22,
             &opaque,
+            Permissions::none(),
         );
         let messages = loader.try_receive();
         assert_eq!(messages.len(), 1);
@@ -687,7 +717,7 @@ mod tests {
 
         let path = temp_file(b"secret");
         let file_url = Url::from_file_path(&path).unwrap();
-        loader.fetch_async(file_url, 23, &opaque);
+        loader.fetch_async(file_url, 23, &opaque, Permissions::none());
         let messages = loader.try_receive();
         assert_eq!(messages.len(), 1);
         assert!(messages[0].response.is_err());
@@ -704,7 +734,8 @@ mod tests {
         let mut loader = BrowserResourceLoader::with_transport(None, &Buffered);
         let url = Url::parse("data:text/plain,relayed").unwrap();
 
-        loader.fetch_async(url, 15, &Origin::opaque());
+        let permissions = Permissions::content_for(&url);
+        loader.fetch_async(url, 15, &Origin::opaque(), permissions);
         let msgs = loader.try_receive();
 
         assert_eq!(msgs.len(), 1);
@@ -729,7 +760,8 @@ mod tests {
 
         std::thread::spawn(move || {
             let mut loader = loader;
-            loader.fetch_async(url, 16, &Origin::opaque());
+            let permissions = Permissions::content_for(&url);
+            loader.fetch_async(url, 16, &Origin::opaque(), permissions);
             for message in loader.try_receive() {
                 sender.send(message.id).expect("receiver is alive");
             }

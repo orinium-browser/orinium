@@ -11,6 +11,7 @@ use crate::engine::html::{DomTree, HtmlNodeType};
 use crate::engine::js::web_apis::dom::computed_style;
 use crate::engine::js::web_apis::dom::document::IframeDocument;
 use crate::engine::layouter::dom_snapshot::DomSnapshot;
+use crate::engine::permissions::Permissions;
 use crate::engine::tree::NodeRef;
 use pixi_byte::value::jsobject::JSObject;
 use pixi_byte::{JSError, JSValue};
@@ -246,6 +247,9 @@ pub struct JsHost {
     pub(crate) document_url: String,
     /// ASCII serialization of the document's origin (`"null"` when opaque).
     pub(crate) origin: String,
+    /// Effective capabilities of the top-level document, inherited by any child
+    /// frame. Defaults to no capabilities until the browser sets them.
+    pub(crate) permissions: Permissions,
     pub(crate) viewport: (f64, f64),
     /// Committed layout measurements keyed by the address of a live DOM node.
     pub(crate) layout_metrics: HashMap<usize, JsLayoutMetrics>,
@@ -345,6 +349,7 @@ impl JsRuntime {
             document_cookies: HashMap::new(),
             document_url: "about:blank".to_string(),
             origin: "null".to_string(),
+            permissions: Permissions::none(),
             viewport: (800.0, 600.0),
             layout_metrics: HashMap::new(),
             layout_metrics_by_dom_id: HashMap::new(),
@@ -542,6 +547,16 @@ impl JsRuntime {
     pub fn set_page_origin(&mut self, origin: &str) {
         let _ = with_host_mut(self.engine.vm(), |host| {
             host.origin = origin.to_string();
+        });
+    }
+
+    /// Installs the effective capabilities of the top-level document.
+    ///
+    /// Child frames derive their own permissions by inheriting from this set, so
+    /// an embedded document can never hold a capability the page lacks.
+    pub fn set_page_permissions(&mut self, permissions: Permissions) {
+        let _ = with_host_mut(self.engine.vm(), |host| {
+            host.permissions = permissions;
         });
     }
 

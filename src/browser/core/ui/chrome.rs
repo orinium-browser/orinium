@@ -90,6 +90,8 @@ pub trait Chrome: std::fmt::Debug {
         &mut self,
         kind: FetchKind,
         url: Url,
+        origin: crate::engine::origin::Origin,
+        permissions: crate::engine::permissions::Permissions,
         response: Result<BrowserResponse, BrowserNetworkError>,
     );
 

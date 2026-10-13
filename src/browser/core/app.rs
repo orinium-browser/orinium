@@ -43,15 +43,29 @@ use super::ui::BrowserUi;
 use super::{BrowserCommand, resource_loader::BrowserResourceLoader};
 use crate::browser::core::ui::TabId;
 use crate::engine::origin::Origin;
+use crate::engine::permissions::Permissions;
 use crate::platform::network::{NetworkCore, NetworkRequest};
 use crate::platform::renderer::draw_sink::DrawSink;
 use crate::platform::system::App;
 use crate::platform::system::shell::{BrowserHost, ShellCommand, WindowGeometry};
 
-pub struct PendingFetches {
-    /// Maps (id) to (window_id, tab_id, FetchKind, Url)
-    /// Id is used to track pending fetch requests.
-    map: HashMap<usize, (WindowId, TabId, FetchKind, Url, u64)>,
+/// A resource fetch in flight from a tab.
+pub(crate) struct PendingFetch {
+    window_id: WindowId,
+    tab_id: TabId,
+    kind: FetchKind,
+    url: Url,
+    generation: u64,
+    /// The origin of the frame that requested the resource.
+    origin: Origin,
+    /// The effective capabilities of the requesting frame, retained so the
+    /// response can be handed back to the correct frame.
+    permissions: Permissions,
+}
+
+pub(crate) struct PendingFetches {
+    /// Maps generated fetch ids to the request they belong to.
+    map: HashMap<usize, PendingFetch>,
     counter: usize,
 }
 
@@ -64,6 +78,7 @@ impl PendingFetches {
     }
 
     /// URLとFetchKindを受け取り、一意IDを生成して登録
+    #[allow(clippy::too_many_arguments)]
     pub fn insert(
         &mut self,
         window_id: WindowId,
@@ -71,13 +86,25 @@ impl PendingFetches {
         kind: FetchKind,
         url: Url,
         generation: u64,
+        origin: Origin,
+        permissions: Permissions,
     ) -> usize {
         self.counter += 1;
 
         let id = self.generate_id(&url);
 
-        self.map
-            .insert(id, (window_id, tab_id, kind, url, generation));
+        self.map.insert(
+            id,
+            PendingFetch {
+                window_id,
+                tab_id,
+                kind,
+                url,
+                generation,
+                origin,
+                permissions,
+            },
+        );
         id
     }
 
@@ -97,7 +124,7 @@ impl PendingFetches {
         now ^ self.counter ^ url_hash
     }
 
-    pub fn remove(&mut self, id: usize) -> Option<(WindowId, TabId, FetchKind, Url, u64)> {
+    pub fn remove(&mut self, id: usize) -> Option<PendingFetch> {
         self.map.remove(&id)
     }
 }
@@ -309,6 +336,7 @@ impl BrowserApp {
             let url = fetch.request.url;
             let kind = fetch.request.kind;
             let initiator = fetch.request.origin;
+            let permissions = fetch.request.permissions;
             log::info!("Fetch requested in App: url={}", url);
             let mut request = match &kind {
                 FetchKind::JavaScript {
@@ -334,11 +362,14 @@ impl BrowserApp {
                 kind,
                 url,
                 fetch.request.generation,
+                initiator.clone(),
+                permissions,
             );
-            // The initiator gates access to internal schemes inside the loader.
-            // We also track the originating document generation so stale results
-            // from an earlier navigation are dropped when they arrive.
-            self.network.fetch_request_async(request, id, &initiator);
+            // The frame's permissions gate access to internal schemes inside the
+            // loader. We also track the originating document generation so stale
+            // results from an earlier navigation are dropped when they arrive.
+            self.network
+                .fetch_request_async(request, id, &initiator, permissions);
         }
 
         if outcome.needs_redraw {
@@ -355,12 +386,19 @@ impl BrowserApp {
             log::info!("Network message received in App for fetch_id={}", msg.id);
 
             // pending_fetches から fetch 情報を取得
-            let Some((window_id, tab_id, kind, url, generation)) =
-                self.pending_fetches.remove(msg.id)
-            else {
+            let Some(pending) = self.pending_fetches.remove(msg.id) else {
                 log::warn!("No pending fetch found for fetch_id={}", msg.id);
                 continue;
             };
+            let PendingFetch {
+                window_id,
+                tab_id,
+                kind,
+                url,
+                generation,
+                origin,
+                permissions,
+            } = pending;
 
             let Some(ui) = self.windows.get_mut(&window_id) else {
                 log::warn!("There is no window called id={:?}", window_id);
@@ -382,7 +420,7 @@ impl BrowserApp {
                     continue;
                 }
             }
-            ui.deliver_fetch(&tab_id, kind, url, msg.response);
+            ui.deliver_fetch(&tab_id, kind, url, origin, permissions, msg.response);
         }
     }
 }

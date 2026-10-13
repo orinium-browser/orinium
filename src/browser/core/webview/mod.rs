@@ -33,6 +33,7 @@ use crate::engine::{
         types::{InfoNode, NodeKind},
     },
     origin::Origin,
+    permissions::Permissions,
     renderer_model::{Image, StickyViewport, is_scrollport, sticky_offset},
     tree::{NodeRef, TreeNode},
 };
@@ -251,6 +252,10 @@ pub struct WebView {
     /// Policy controlling whether page scripts are executed and how
     /// `<noscript>` contents are parsed.
     js_policy: JsPolicy,
+
+    /// Whether this webview renders a browser-created chrome document (shell or
+    /// DevTools). Chrome webviews hold [`Permissions::chrome`].
+    privileged: bool,
 
     layout_processor: layouter::LayoutProcessor,
     layout_pending: bool,
@@ -479,6 +484,8 @@ impl WebView {
 
             js_policy,
 
+            privileged: false,
+
             layout_processor: layouter::LayoutProcessor::new(),
             layout_pending: false,
             layout_requested_version: 0,
@@ -553,6 +560,12 @@ impl WebView {
             let processor = JsProcessor::new(snapshot);
             processor.send(JsTask::SetDocumentUrl { url: document_url });
             processor.send(JsTask::SetOrigin { origin });
+            let permissions = self
+                .docment_info
+                .as_ref()
+                .map(|info| self.page_permissions_for(&info.document_url))
+                .unwrap_or_else(Permissions::none);
+            processor.send(JsTask::SetPermissions { permissions });
             processor.send(JsTask::SetViewport {
                 width: self.viewport.0,
                 height: self.viewport.1,
@@ -562,13 +575,30 @@ impl WebView {
             });
             self.js_processor = Some(processor);
             self.js_dom_ids = dom_ids;
-            self.pending_js_tasks = 4;
+            self.pending_js_tasks = 5;
         }
     }
 
     /// Returns the current JavaScript execution policy.
     pub fn js_policy(&self) -> JsPolicy {
         self.js_policy
+    }
+
+    /// Marks this webview as rendering a browser-created chrome document.
+    ///
+    /// Chrome webviews derive [`Permissions::chrome`] instead of the ordinary
+    /// content capabilities for their document URL.
+    pub fn set_privileged(&mut self, privileged: bool) {
+        self.privileged = privileged;
+    }
+
+    /// Effective capabilities for a document loaded from `url` in this webview.
+    fn page_permissions_for(&self, url: &Url) -> Permissions {
+        if self.privileged {
+            Permissions::chrome()
+        } else {
+            Permissions::content_for(url)
+        }
     }
 
     /// Stops script execution immediately, dropping the runtime and any
@@ -755,6 +785,9 @@ impl WebView {
             processor.send(JsTask::SetOrigin {
                 origin: Origin::from_url(&parsed.document_url).ascii_serialization(),
             });
+            processor.send(JsTask::SetPermissions {
+                permissions: self.page_permissions_for(&parsed.document_url),
+            });
             processor.send(JsTask::SetViewport {
                 width: self.viewport.0,
                 height: self.viewport.1,
@@ -762,7 +795,7 @@ impl WebView {
             processor.send(JsTask::SetLanguage {
                 language: locale::preferred_language(),
             });
-            initial_js_tasks = 4;
+            initial_js_tasks = 5;
             Some(processor)
         } else {
             None
