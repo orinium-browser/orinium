@@ -26,6 +26,11 @@ use std::sync::{Arc, RwLock};
 use tokio::{net::TcpStream, runtime::Runtime, task::LocalSet};
 use tokio_rustls::TlsConnector;
 
+/// Upper bound on a decoded response body (before or after decompression),
+/// guarding against memory exhaustion from oversized or decompression-bomb
+/// responses.
+const MAX_RESPONSE_BODY_BYTES: usize = 64 * 1024 * 1024;
+
 /// Per-thread driver for the shared network state.
 ///
 /// The tokio runtime and its [`LocalSet`] are `!Send`, so each pool worker
@@ -208,9 +213,13 @@ impl AsyncNetworkCore {
                 return Ok(cached);
             }
 
-            let resp = self
-                .send_request(&current, &method, &headers, &body)
-                .await?;
+            let read_timeout = self.inner.network_config.read().unwrap().read_timeout;
+            let resp = tokio::time::timeout(
+                read_timeout,
+                self.send_request(&current, &method, &headers, &body),
+            )
+            .await
+            .map_err(|_| NetworkError::Timeout)??;
 
             if self.inner.network_config.read().unwrap().follow_redirects
                 && hyper::StatusCode::try_from(resp.status.0)
@@ -371,6 +380,9 @@ impl AsyncNetworkCore {
         while let Some(frame) = res.frame().await {
             let frame = frame.map_err(|_| NetworkError::HttpResponseFailed)?;
             if let Some(chunk) = frame.data_ref() {
+                if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BODY_BYTES {
+                    return Err(NetworkError::ResponseTooLarge);
+                }
                 body.extend_from_slice(chunk);
             }
         }
@@ -380,7 +392,7 @@ impl AsyncNetworkCore {
             .get("content-encoding")
             .and_then(|v| v.to_str().ok())
             .map(|v| v.to_string());
-        let body = Self::decode_content(content_encoding.as_deref(), body);
+        let body = Self::decode_content(content_encoding.as_deref(), body)?;
 
         Ok(Response {
             url,
@@ -393,46 +405,43 @@ impl AsyncNetworkCore {
 
     /// Decodes a response body according to the `Content-Encoding` header value
     /// (e.g. `gzip`, `deflate`, `br`). Unknown or undecodable encodings leave
-    /// the body untouched.
-    fn decode_content(encoding: Option<&str>, mut body: Vec<u8>) -> Vec<u8> {
+    /// the body untouched; a decoded body larger than
+    /// [`MAX_RESPONSE_BODY_BYTES`] is rejected.
+    fn decode_content(encoding: Option<&str>, mut body: Vec<u8>) -> Result<Vec<u8>, NetworkError> {
         let Some(encoding) = encoding else {
-            return body;
+            return Ok(body);
         };
         for part in encoding.split(',').map(|s| s.trim().to_ascii_lowercase()) {
-            body = match part.as_str() {
-                "gzip" | "x-gzip" => Self::gunzip(&body).unwrap_or(body),
-                "deflate" => Self::inflate(&body).unwrap_or(body),
-                "br" => Self::brotli(&body).unwrap_or(body),
-                _ => body,
+            let decoded = match part.as_str() {
+                "gzip" | "x-gzip" => Self::read_decompressed(GzDecoder::new(&body[..]))?,
+                "deflate" => match Self::read_decompressed(ZlibDecoder::new(&body[..]))? {
+                    Some(decoded) => Some(decoded),
+                    None => Self::read_decompressed(RawDeflateDecoder::new(&body[..]))?,
+                },
+                "br" => Self::read_decompressed(BrotliDecompressor::new(&body[..], 1 << 16))?,
+                _ => None,
             };
+            if let Some(decoded) = decoded {
+                body = decoded;
+            }
         }
-        body
+        Ok(body)
     }
 
-    fn gunzip(body: &[u8]) -> Option<Vec<u8>> {
+    /// Reads a decompression stream to completion.
+    ///
+    /// Returns `Ok(None)` when the stream cannot be decoded (matching the
+    /// previous lenient behavior of leaving the body untouched), and
+    /// `Err(ResponseTooLarge)` when the decoded output would exceed
+    /// [`MAX_RESPONSE_BODY_BYTES`].
+    fn read_decompressed<R: std::io::Read>(reader: R) -> Result<Option<Vec<u8>>, NetworkError> {
         let mut output = Vec::new();
-        GzDecoder::new(body).read_to_end(&mut output).ok()?;
-        Some(output)
-    }
-
-    /// HTTP `deflate` is zlib-wrapped in practice; fall back to raw DEFLATE if
-    /// some servers omit the zlib header.
-    fn inflate(body: &[u8]) -> Option<Vec<u8>> {
-        let mut output = Vec::new();
-        if ZlibDecoder::new(body).read_to_end(&mut output).is_ok() {
-            return Some(output);
+        let mut limited = reader.take(MAX_RESPONSE_BODY_BYTES as u64 + 1);
+        match limited.read_to_end(&mut output) {
+            Ok(_) if output.len() > MAX_RESPONSE_BODY_BYTES => Err(NetworkError::ResponseTooLarge),
+            Ok(_) => Ok(Some(output)),
+            Err(_) => Ok(None),
         }
-        let mut output = Vec::new();
-        RawDeflateDecoder::new(body).read_to_end(&mut output).ok()?;
-        Some(output)
-    }
-
-    fn brotli(body: &[u8]) -> Option<Vec<u8>> {
-        let mut output = Vec::new();
-        BrotliDecompressor::new(body, 1 << 16)
-            .read_to_end(&mut output)
-            .ok()?;
-        Some(output)
     }
 
     async fn get_or_create_sender(&self, key: &HostKey) -> Result<HttpSender, NetworkError> {
@@ -445,8 +454,10 @@ impl AsyncNetworkCore {
 
     async fn create_connection(&self, key: &HostKey) -> Result<HttpSender, NetworkError> {
         let addr = format!("{}:{}", key.host, key.port);
-        let stream = TcpStream::connect(addr)
+        let connect_timeout = self.inner.network_config.read().unwrap().connect_timeout;
+        let stream = tokio::time::timeout(connect_timeout, TcpStream::connect(addr))
             .await
+            .map_err(|_| NetworkError::Timeout)?
             .map_err(|_| NetworkError::ConnectionFailed)?;
 
         if key.scheme == Scheme::HTTPS {
@@ -787,5 +798,41 @@ mod tests {
             .fetch_request_blocking(&NetworkRequest::get(format!("http://{address}/third")))
             .unwrap();
         assert_eq!(third.body, b"ok:GET /third HTTP/1.1");
+    }
+
+    #[test]
+    fn decode_content_gzip_round_trips() {
+        use flate2::{Compression, write::GzEncoder};
+        use std::io::Write as _;
+
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(b"hello world").unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        let decoded =
+            AsyncNetworkCore::decode_content(Some("gzip"), compressed).expect("decodes gzip");
+        assert_eq!(decoded, b"hello world");
+    }
+
+    #[test]
+    fn decode_content_rejects_decompression_bomb() {
+        use flate2::{Compression, write::GzEncoder};
+        use std::io::Write as _;
+
+        // Compresses to a few KiB but expands past the body limit.
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::best());
+        encoder
+            .write_all(&vec![0_u8; MAX_RESPONSE_BODY_BYTES + 1024])
+            .unwrap();
+        let compressed = encoder.finish().unwrap();
+        assert!(
+            compressed.len() < MAX_RESPONSE_BODY_BYTES,
+            "payload must be a bomb (small on the wire)"
+        );
+
+        assert!(matches!(
+            AsyncNetworkCore::decode_content(Some("gzip"), compressed),
+            Err(NetworkError::ResponseTooLarge)
+        ));
     }
 }

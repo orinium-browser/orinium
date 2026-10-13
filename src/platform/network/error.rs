@@ -20,6 +20,7 @@ pub enum NetworkError {
     HttpResponseFailed,
     TooManyRedirects,
     UnsupportedHttpVersion,
+    ResponseTooLarge,
 
     // Infrastructure
     InvalidIpcStatusCode,
@@ -43,6 +44,7 @@ impl std::fmt::Display for NetworkError {
             HttpResponseFailed => "HTTP response failed",
             TooManyRedirects => "too many redirects",
             UnsupportedHttpVersion => "unsupported HTTP version",
+            ResponseTooLarge => "response body exceeded the allowed size",
 
             InvalidIpcStatusCode => "invalid HTTP status received via IPC",
             Disconnected => "network subsystem disconnected",
