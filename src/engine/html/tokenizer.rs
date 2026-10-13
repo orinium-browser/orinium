@@ -610,13 +610,21 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
+    /// Returns whether the remaining input at the current position starts with
+    /// `keyword`, compared ASCII case-insensitively without allocating.
+    fn peek_starts_with_ascii_ci(&self, keyword: &str) -> bool {
+        self.input[self.pos..]
+            .get(..keyword.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(keyword))
+    }
+
     fn state_doctype(&mut self, c: char) {
         match c {
             c if c.is_whitespace() => match self.state {
                 TokenizerState::Doctype => self.state = TokenizerState::DoctypeName,
                 TokenizerState::DoctypeName
-                    if (self.input[self.pos..].to_lowercase().starts_with("public")
-                        || self.input[self.pos..].to_lowercase().starts_with("system")) =>
+                    if (self.peek_starts_with_ascii_ci("public")
+                        || self.peek_starts_with_ascii_ci("system")) =>
                 {
                     self.pos += 6;
                     self.state = TokenizerState::BeforeDoctypePublicId;
@@ -852,6 +860,35 @@ mod tests {
                 force_quirks: false
             }]
         );
+    }
+
+    #[test]
+    fn doctype_public_keyword_is_detected_case_insensitively() {
+        // A miss would leave the keyword appended to the name instead.
+        let tokens = collect_tokens(r#"<!DOCTYPE html PuBlIc "x">"#);
+        match &tokens[..] {
+            [
+                Token::Doctype {
+                    name, public_id, ..
+                },
+            ] => {
+                assert_eq!(name.as_deref(), Some("html"));
+                assert!(public_id.as_deref().is_some_and(|id| id.contains('x')));
+            }
+            other => panic!("unexpected tokens: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn peek_starts_with_ascii_ci_avoids_boundary_panics() {
+        let mut tokenizer = Tokenizer::new("html sYsTeM");
+        tokenizer.pos = 5;
+        assert!(tokenizer.peek_starts_with_ascii_ci("system"));
+        assert!(!tokenizer.peek_starts_with_ascii_ci("public"));
+
+        // A non-ASCII input at the boundary must not panic.
+        let tokenizer = Tokenizer::new("é");
+        assert!(!tokenizer.peek_starts_with_ascii_ci("public"));
     }
 
     #[test]
