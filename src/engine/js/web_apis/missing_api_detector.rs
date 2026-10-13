@@ -104,7 +104,12 @@ fn prologue() -> String {
 ///
 /// Usage in a harness:
 /// ```no_run
-/// let (mut runtime, _dom) = ...;
+/// use std::rc::Rc;
+/// use orinium_browser::engine::html::Parser;
+/// use orinium_browser::engine::js::{JsRuntime, missing_api_detector};
+///
+/// let dom = Rc::new(Parser::new("<div></div>").parse());
+/// let mut runtime = JsRuntime::new(dom);
 /// missing_api_detector::install_missing_api_report(&mut runtime);
 /// ```
 pub fn install_missing_api_report(runtime: &mut JsRuntime) {
