@@ -18,6 +18,14 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::default::{get_codecs, get_probe};
 
+/// Largest audio payload accepted for decoding, guarding against memory
+/// exhaustion from an oversized media source.
+const MAX_AUDIO_INPUT_BYTES: usize = 64 * 1024 * 1024;
+/// Largest total number of decoded interleaved `f32` samples. A small
+/// compressed file can decode to billions of samples (a decompression bomb);
+/// this caps the decoded buffer at roughly 200 MiB.
+const MAX_DECODED_SAMPLES: usize = 50_000_000;
+
 /// 音声の管理を行う構造体
 pub struct SoundManager {
     /// f32のインタリーブドサンプルバッファ
@@ -324,6 +332,12 @@ pub fn default_audio_sink_factory() -> Arc<dyn AudioSinkFactory> {
 
 /// 音声をデコードする
 fn decode(data: &[u8]) -> Result<(Vec<f32>, usize, u32)> {
+    if data.len() > MAX_AUDIO_INPUT_BYTES {
+        anyhow::bail!(
+            "audio payload of {} bytes exceeds the {MAX_AUDIO_INPUT_BYTES}-byte limit",
+            data.len()
+        );
+    }
     let cursor = Cursor::new(data.to_vec());
     let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
 
@@ -373,7 +387,11 @@ fn decode(data: &[u8]) -> Result<(Vec<f32>, usize, u32)> {
                 channels = audio_buf.spec().channels().count();
                 sample_rate = audio_buf.spec().rate();
 
-                let mut decoded = vec![f32::MID; audio_buf.samples_interleaved()];
+                let decoded_len = audio_buf.samples_interleaved();
+                if samples.len().saturating_add(decoded_len) > MAX_DECODED_SAMPLES {
+                    anyhow::bail!("decoded audio exceeds the {MAX_DECODED_SAMPLES}-sample limit");
+                }
+                let mut decoded = vec![f32::MID; decoded_len];
                 audio_buf.copy_to_slice_interleaved(&mut decoded);
                 samples.extend_from_slice(&decoded);
             }
@@ -497,5 +515,49 @@ fn write_output_u16(
             }
         }
         *p += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds a minimal mono 16-bit PCM WAV with `samples` frames.
+    fn wav(samples: &[i16]) -> Vec<u8> {
+        let data_len = (samples.len() * 2) as u32;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+        bytes.extend_from_slice(b"WAVE");
+        bytes.extend_from_slice(b"fmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        bytes.extend_from_slice(&1u16.to_le_bytes()); // channels
+        bytes.extend_from_slice(&8000u32.to_le_bytes()); // sample rate
+        bytes.extend_from_slice(&16000u32.to_le_bytes()); // byte rate
+        bytes.extend_from_slice(&2u16.to_le_bytes()); // block align
+        bytes.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_len.to_le_bytes());
+        for sample in samples {
+            bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    fn decodes_a_small_wav() {
+        let (samples, channels, sample_rate) =
+            decode(&wav(&[0, 1000, -1000, 2000])).expect("decodes wav");
+        assert!(!samples.is_empty());
+        assert_eq!(channels, 1);
+        assert_eq!(sample_rate, 8000);
+    }
+
+    #[test]
+    fn rejects_oversized_input_before_decoding() {
+        let oversized = vec![0_u8; MAX_AUDIO_INPUT_BYTES + 1];
+        let error = decode(&oversized).expect_err("oversized input must be rejected");
+        assert!(error.to_string().contains("exceeds"));
     }
 }
