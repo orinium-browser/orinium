@@ -210,9 +210,11 @@ fn matches_lang(element: &ElementInfo, language: &str) -> bool {
     if tag.eq_ignore_ascii_case(language) {
         return true;
     }
-    tag.len() > language.len()
-        && tag[language.len()..].starts_with('-')
-        && tag[..language.len()].eq_ignore_ascii_case(language)
+    // Compare the byte prefix safely: `language.len()` may not fall on a char
+    // boundary of `tag`, in which case there is no match rather than a panic.
+    tag.get(..language.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(language))
+        && tag.as_bytes().get(language.len()) == Some(&b'-')
 }
 
 fn matches_an_plus_b(index: usize, a: i32, b: i32) -> bool {
@@ -904,6 +906,19 @@ mod tests {
         let mut untagged = element("div", &[], 1, 1, 1, 1);
         untagged.lang = None;
         assert!(!parse_selector(":lang(en)").matches(&chain([untagged])));
+    }
+
+    #[test]
+    fn lang_pseudo_class_handles_non_ascii_boundaries() {
+        // `language.len()` lands inside a multi-byte character of the tag;
+        // this must not panic and must not match.
+        let mut subject = element("div", &[], 1, 1, 1, 1);
+        subject.lang = Some("é".to_string());
+        assert!(!parse_selector(":lang(e)").matches(&chain([subject.clone()])));
+
+        // A valid ASCII prefix followed by a multi-byte subtag still matches.
+        subject.lang = Some("en-日本語".to_string());
+        assert!(parse_selector(":lang(en)").matches(&chain([subject])));
     }
 
     #[test]
