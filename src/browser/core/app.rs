@@ -76,7 +76,6 @@ impl PendingFetches {
             counter: 0,
         }
     }
-
     /// URLとFetchKindを受け取り、一意IDを生成して登録
     #[allow(clippy::too_many_arguments)]
     pub fn insert(
@@ -127,6 +126,17 @@ impl PendingFetches {
     pub fn remove(&mut self, id: usize) -> Option<PendingFetch> {
         self.map.remove(&id)
     }
+}
+
+/// Whether a fetch result captured at `fetch_generation` is stale for a tab
+/// currently at `current_generation`.
+///
+/// A tab's generation is bumped on every navigation, so a result produced for a
+/// previous document must be dropped rather than delivered to the new one. This
+/// is a pure function so the decision can be tested directly, and kept as the
+/// single place the staleness rule lives.
+fn fetch_is_stale(current_generation: u64, fetch_generation: u64) -> bool {
+    current_generation != fetch_generation
 }
 
 /// Main browser application struct.
@@ -410,7 +420,7 @@ impl BrowserApp {
                     continue;
                 };
                 let current_generation = tab.document_generation();
-                if current_generation != generation {
+                if fetch_is_stale(current_generation, generation) {
                     log::info!(
                         "Dropping stale fetch result for tab_id={} generation={} (current={})",
                         tab_id,
@@ -691,5 +701,57 @@ mod tests {
 
         assert_eq!(header(&request, "Origin"), Some("null"));
         assert_eq!(header(&request, "Referer"), None);
+    }
+
+    #[test]
+    fn only_a_matching_generation_is_fresh() {
+        assert!(fetch_is_stale(1, 0));
+        assert!(fetch_is_stale(2, 1));
+        assert!(fetch_is_stale(0, 1));
+        assert!(!fetch_is_stale(0, 0));
+        assert!(!fetch_is_stale(7, 7));
+    }
+
+    fn pending_request(generation: u64, permissions: Permissions) -> (usize, PendingFetches) {
+        let mut pending = PendingFetches::new();
+        let id = pending.insert(
+            WindowId::from(0u64),
+            TabId(1),
+            FetchKind::Image {
+                source: "pic".to_string(),
+            },
+            Url::parse("https://example.test/pic.png").unwrap(),
+            generation,
+            Origin::from_url_string("https://example.test/"),
+            permissions,
+        );
+        (id, pending)
+    }
+
+    #[test]
+    fn pending_fetch_round_trips_origin_permissions_and_generation() {
+        let origin = Origin::from_url_string("https://example.test/");
+        let permissions = Permissions::content_for_str("https://example.test/");
+        let (id, mut pending) = pending_request(3, permissions);
+
+        let fetch = pending.remove(id).expect("just inserted");
+        assert_eq!(fetch.tab_id, TabId(1));
+        assert_eq!(fetch.generation, 3);
+        assert_eq!(fetch.origin, origin);
+        assert_eq!(fetch.permissions, permissions);
+
+        assert!(
+            pending.remove(id).is_none(),
+            "a fetch id must be consumed exactly once"
+        );
+    }
+
+    #[test]
+    fn pending_fetch_snapshots_privilege_at_request_time() {
+        // Privilege is captured with the request; it is not re-derived from the
+        // tab later, so a navigation cannot retroactively widen an old fetch.
+        let (id, mut pending) = pending_request(0, Permissions::chrome());
+        let fetch = pending.remove(id).expect("just inserted");
+        assert!(fetch.permissions.is_chrome());
     }
 }

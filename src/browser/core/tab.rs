@@ -1136,6 +1136,18 @@ mod tests {
     }
 
     #[test]
+    fn navigating_bumps_document_generation() {
+        // The generation a fetch is tagged with must change on every
+        // navigation, so results from a previous document are detectable.
+        let mut tab = Tab::default();
+        let before = tab.document_generation();
+        tab.navigate("resource:///test/a.html".parse().unwrap());
+        assert_eq!(tab.document_generation(), before + 1);
+        tab.navigate("resource:///test/b.html".parse().unwrap());
+        assert_eq!(tab.document_generation(), before + 2);
+    }
+
+    #[test]
     fn headers_allow_cors_requires_exact_origin_value() {
         let initiator = Origin::from_url_string("https://example.test/");
         assert!(headers_allow_cors(
