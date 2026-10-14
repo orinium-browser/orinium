@@ -180,9 +180,13 @@ impl Tab {
     /// Whether a `fetch()`/`XMLHttpRequest` response may be read by the given
     /// frame.
     ///
-    /// Chrome frames may always read responses; everything else is restricted to
-    /// same-origin responses and cross-origin responses that opt in via
-    /// `Access-Control-Allow-Origin`, evaluated against the frame's own origin.
+    /// Read authority is decided by exactly two things: whether the frame is
+    /// privileged (chrome, which bypasses CORS entirely) and, otherwise, CORS
+    /// (same-origin or `Access-Control-Allow-Origin`). The scheme capabilities
+    /// in `permissions` are deliberately ignored here: reaching a URL and being
+    /// allowed to read its response are separate questions, so a response header
+    /// can never substitute for a missing scheme capability, nor a scheme
+    /// capability for CORS.
     fn may_read_fetch_response(
         &self,
         initiator: &Origin,
@@ -1151,6 +1155,69 @@ mod tests {
                 "https://other.test".to_string()
             )],
             &initiator
+        ));
+    }
+
+    #[test]
+    fn scheme_capabilities_do_not_bypass_cors() {
+        // Every scheme capability present, but not privileged: a cross-origin
+        // response is still unreadable without CORS.
+        let tab = Tab::default();
+        let initiator = Origin::from_url_string("https://a.test/");
+        let permissions = Permissions {
+            network: true,
+            resource: true,
+            file: true,
+            privileged: false,
+        };
+        let url = Url::parse("https://b.test/x").unwrap();
+
+        assert!(!tab.may_read_fetch_response(&initiator, permissions, &url, &[]));
+        assert!(tab.may_read_fetch_response(
+            &initiator,
+            permissions,
+            &url,
+            &[(
+                "Access-Control-Allow-Origin".to_string(),
+                "https://a.test".to_string()
+            )],
+        ));
+    }
+
+    #[test]
+    fn privilege_is_the_only_cors_bypass() {
+        let tab = Tab::default();
+        let initiator = Origin::from_url_string("https://a.test/");
+        let url = Url::parse("https://b.test/x").unwrap();
+
+        let privileged = Permissions {
+            network: true,
+            resource: true,
+            file: true,
+            privileged: true,
+        };
+        assert!(tab.may_read_fetch_response(&initiator, privileged, &url, &[]));
+
+        let unprivileged = Permissions {
+            privileged: false,
+            ..privileged
+        };
+        assert!(!tab.may_read_fetch_response(&initiator, unprivileged, &url, &[]));
+    }
+
+    #[test]
+    fn cors_headers_do_not_grant_local_file_read() {
+        // A response header can never establish access to a non-http scheme.
+        let tab = Tab::default();
+        let initiator = Origin::from_url_string("https://a.test/");
+        let permissions = Permissions::content_for_str("https://a.test/");
+        let url = Url::parse("file:///etc/passwd").unwrap();
+
+        assert!(!tab.may_read_fetch_response(
+            &initiator,
+            permissions,
+            &url,
+            &[("Access-Control-Allow-Origin".to_string(), "*".to_string())],
         ));
     }
 }

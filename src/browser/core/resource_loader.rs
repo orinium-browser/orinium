@@ -21,6 +21,11 @@ use url::Url;
 /// [`crate::engine::permissions::Permissions`]); an ordinary `resource://`
 /// document therefore has no local-file access, and internal schemes require the
 /// internal capability that only chrome origins hold.
+///
+/// This gate consults only scheme capabilities. Whether the response may later
+/// be *read* is a separate decision made by CORS at the call site; a CORS header
+/// can never make a disallowed scheme fetch happen, and a granted scheme never
+/// implies read access.
 fn scheme_allowed(permissions: Permissions, url: &Url) -> bool {
     permissions.allows(url)
 }
@@ -598,6 +603,25 @@ mod tests {
         assert_eq!(messages[0].id, 11);
         let resp = messages[0].response.as_ref().unwrap();
         assert_eq!(resp.body, b"hi");
+    }
+
+    #[test]
+    fn data_scheme_requires_network_permission() {
+        // Reading a data: response is gated at fetch time by the network
+        // capability, not by the CORS read check.
+        let mut loader = BrowserResourceLoader::offline();
+
+        loader.fetch_async(
+            Url::parse("data:text/plain,hi").unwrap(),
+            25,
+            &Origin::opaque(),
+            Permissions::none(),
+        );
+
+        let messages = loader.try_receive();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].id, 25);
+        assert!(messages[0].response.is_err());
     }
 
     #[test]
