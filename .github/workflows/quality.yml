@@ -1,0 +1,49 @@
+name: Quality
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: ["master", "dev"]
+  pull_request:
+    branches: ["master", "dev"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            libudev-dev \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            mesa-vulkan-drivers
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Layering
+        run: ./scripts/check_layering.sh
+
+      - name: Test (lib)
+        run: cargo test --lib
+
+      - name: Test (doc)
+        run: cargo test --doc
