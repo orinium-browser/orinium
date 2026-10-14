@@ -1972,7 +1972,7 @@ pub(crate) fn install_parsed_iframe_document(
         .unwrap_or_else(|| Rc::clone(&tree.root));
     let document_obj = build_iframe_document_object(iframe_dom_id, &tree);
     let origin = Origin::from_url_string(document_url);
-    let permissions = Permissions::content_for_str(document_url).inherit(host.permissions);
+    let permissions = host.permissions.for_child_frame(document_url);
     let iframe_doc = Rc::new(RefCell::new(IframeDocument {
         tree,
         document: document_obj,

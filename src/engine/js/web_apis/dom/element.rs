@@ -2261,7 +2261,7 @@ fn get_iframe_content_document(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVa
         (
             host.document_url.clone(),
             Origin::from_url_string(&resolved),
-            Permissions::content_for_str(&resolved).inherit(host.permissions),
+            host.permissions.for_child_frame(&resolved),
         )
     })
     .unwrap_or_else(|| (String::new(), Origin::opaque(), Permissions::none()));
