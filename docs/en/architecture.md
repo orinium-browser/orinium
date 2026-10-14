@@ -70,9 +70,21 @@ sequenceDiagram
 
 ## 4. Dependency direction and inversion
 
-- Module dependencies should be strictly one-way: top → bottom.
-- Lower layers must not reference higher layers.
-- Inversion of dependencies should be avoided as it can introduce cyclic dependencies.
+Dependencies point inward, toward the domain core:
+
+```
+browser  →  platform  →  engine
+   └──────────────────→  engine
+```
+
+- `engine` is the innermost layer (the domain core). It depends only on
+  external crates and Rust std, and never performs I/O.
+- `platform` (adapters) may reference `engine`: it implements the engine-declared
+  ports and consumes engine data types.
+- `browser` (orchestration) may reference both `platform` and `engine`.
+- No layer may reference an outer layer; in particular `engine` must never
+  reference `platform`, and `platform` must never reference `browser`.
+- Cyclic dependencies are forbidden.
 
 > [!NOTE]
 > The `engine` layer must not reference the `platform` layer.
@@ -84,6 +96,13 @@ sequenceDiagram
 ┌─────────────────────┐
 │ browser::core       │
 │ (app, tab, command) │
+└──────┬───────┬──────┘
+       │       │
+       ▼       │
+┌──────────────┴──────┐
+│ platform            │
+│ (renderer, network, │
+│  system, io, audio) │
 └──────────┬──────────┘
            ▼
 ┌─────────────────────┐
@@ -92,18 +111,13 @@ sequenceDiagram
 │  renderer_model     │
 │  tree, input, ui,   │
 │  bridge)            │
-└──────────┬──────────┘
-           ▼
-┌─────────────────────┐
-│ platform            │
-│ (renderer, network, │
-│  system, io, audio) │
 └─────────────────────┘
 ```
 
-- Arrows indicate dependency direction.
-- Only the upper layer calls the lower layer in a single direction.
+- Arrows indicate dependency direction (who depends on whom).
+- Outer layers point inward; the core depends on nothing inside the crate.
 - `engine` does NOT depend on `platform`; it only depends on external crates and Rust std.
+- `platform` DOES depend on `engine` (port implementations and shared data types).
 
 ### Only types owned by the lower layer cross a boundary
 

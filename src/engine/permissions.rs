@@ -24,8 +24,8 @@ use url::Url;
 pub struct Permissions {
     /// May load network-backed schemes (`http`, `https`) and `data:` URLs.
     pub network: bool,
-    /// May load `resource://` content, confined to the bundle directory by
-    /// [`crate::platform::io::load_resource`].
+    /// May load `resource://` content. The resource loader confines such loads
+    /// to the bundle directory.
     pub resource: bool,
     /// May load arbitrary local files via `file://`. Reserved for chrome.
     pub file: bool,
