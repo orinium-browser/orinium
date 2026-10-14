@@ -578,6 +578,7 @@ fn configure_winit_backend_for_wslg() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::assert_send;
 
     /// Pins the `Send` bound reached so far, and documents what still blocks
     /// `BrowserApp` from becoming `Send`.
@@ -597,7 +598,6 @@ mod tests {
     /// visible and the bound can never silently regress.
     #[test]
     fn resource_path_is_send() {
-        fn assert_send<T: Send>() {}
         assert_send::<BrowserResourceLoader>();
         assert_send::<super::PendingFetches>();
     }

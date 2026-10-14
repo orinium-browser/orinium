@@ -140,10 +140,7 @@ impl Permissions {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn url(s: &str) -> Url {
-        Url::parse(s).unwrap()
-    }
+    use crate::test_support::parse_url as url;
 
     #[test]
     fn content_resource_page_gets_no_file_access() {

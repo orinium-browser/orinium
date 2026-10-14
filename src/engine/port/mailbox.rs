@@ -165,6 +165,7 @@ pub trait Consume<T>: Send + Sync {
 mod tests {
     use super::*;
     use crate::engine::port::transport::{InProcess, Transport};
+    use crate::test_support::{assert_send, assert_sync};
 
     /// The protocol tests run against the production transport, so they cover
     /// the two ends against one another rather than a stand-in that could
@@ -242,8 +243,6 @@ mod tests {
     /// the contract rather than an implementation detail.
     #[test]
     fn ends_are_shareable_across_threads() {
-        fn assert_send<T: Send>() {}
-        fn assert_sync<T: Sync>() {}
         assert_send::<Outbox<u32>>();
         assert_sync::<Outbox<u32>>();
         assert_send::<Mailbox<u32>>();

@@ -920,10 +920,7 @@ fn same_document_navigation(current: Option<&Url>, next: &Url) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn url(s: &str) -> Url {
-        Url::parse(s).unwrap()
-    }
+    use crate::test_support::parse_url as url;
 
     #[test]
     fn navigate_records_history() {

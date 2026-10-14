@@ -422,6 +422,7 @@ fn hex_value(b: u8) -> Option<u8> {
 mod tests {
     use super::*;
     use crate::engine::port::{Consume, Disconnected, Produce, Undeliverable};
+    use crate::test_support::assert_send;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// The loader owns its `NetworkCore`, so it must be movable across
@@ -429,7 +430,6 @@ mod tests {
     /// `NetworkCore` would silently break, so it is asserted directly.
     #[test]
     fn loader_is_send() {
-        fn assert_send<T: Send>() {}
         assert_send::<BrowserResourceLoader>();
         assert_send::<BrowserNetworkMessage>();
         assert_send::<BrowserResponse>();

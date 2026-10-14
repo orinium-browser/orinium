@@ -1255,6 +1255,7 @@ impl JsRuntime {
 mod tests {
     use super::*;
     use crate::engine::html::Parser as HtmlParser;
+    use crate::test_support::assert_send;
     use web_apis::dom::element::{HTML_NAMESPACE, SVG_NAMESPACE, style_property_name};
 
     fn runtime_from_html(html: &str) -> (JsRuntime, Rc<DomTree>) {
@@ -1271,7 +1272,6 @@ mod tests {
     /// Asserted so that field cannot come back unnoticed.
     #[test]
     fn task_result_is_send() {
-        fn assert_send<T: Send>() {}
         assert_send::<crate::engine::js::processor::JsTaskResult>();
         assert_send::<JsFetchRequest>();
         assert_send::<JsFetchResponse>();

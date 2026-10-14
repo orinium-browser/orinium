@@ -53,4 +53,7 @@ pub mod platform;
 mod process;
 pub use process::*;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 mod profile;

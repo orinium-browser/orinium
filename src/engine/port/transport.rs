@@ -69,13 +69,12 @@ impl<T: Send + 'static> Consume<T> for Receiver<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{assert_send, assert_sync};
 
     /// A transport must be usable from another thread, otherwise it cannot
     /// describe a channel between the UI thread and a worker.
     #[test]
     fn transport_is_shareable_across_threads() {
-        fn assert_send<T: Send>() {}
-        fn assert_sync<T: Sync>() {}
         assert_send::<InProcess>();
         assert_sync::<InProcess>();
     }

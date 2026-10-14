@@ -94,10 +94,7 @@ impl Origin {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn url(s: &str) -> Url {
-        Url::parse(s).unwrap()
-    }
+    use crate::test_support::parse_url as url;
 
     #[test]
     fn network_origins_equal_with_default_port_normalization() {
