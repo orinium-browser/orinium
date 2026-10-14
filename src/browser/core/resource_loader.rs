@@ -666,6 +666,27 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// Regression guard for the chrome-escalation bug: a page loaded from a
+    /// `resource://` URL holds the `resource` capability but must never be
+    /// treated as chrome, so it cannot reach `file://`.
+    #[test]
+    fn resource_page_cannot_read_local_file() {
+        let path = temp_file(b"secret");
+        let url = Url::from_file_path(&path).unwrap();
+        let resource_url = Url::parse("resource:///devtools/index.html").unwrap();
+        let origin = Origin::from_url(&resource_url);
+        let permissions = Permissions::content_for(&resource_url);
+        let mut loader = BrowserResourceLoader::offline();
+
+        assert!(permissions.resource);
+        assert!(!permissions.is_chrome());
+        loader.fetch_async(url, 24, &origin, permissions);
+        let msgs = loader.try_receive();
+        assert_eq!(msgs.len(), 1);
+        assert!(msgs[0].response.is_err());
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn data_origin_cannot_reach_resource_scheme() {
         let mut loader = BrowserResourceLoader::offline();

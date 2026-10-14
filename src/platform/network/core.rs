@@ -662,6 +662,39 @@ mod tests {
         assert_eq!(headers, [("X-Request".to_string(), "keep".to_string())]);
     }
 
+    #[test]
+    fn redirect_never_escalates_scheme_to_file() {
+        let base: Uri = "https://example.test/start".parse().unwrap();
+        let next = resolve_redirect(&base, "file:///etc/passwd").unwrap();
+        assert_eq!(next.scheme_str(), Some("https"));
+        assert_eq!(next.authority().unwrap().as_str(), "example.test");
+    }
+
+    #[test]
+    fn redirect_never_escalates_scheme_to_resource() {
+        let base: Uri = "https://example.test/start".parse().unwrap();
+        let next = resolve_redirect(&base, "resource:///devtools/index.html").unwrap();
+        assert_eq!(next.scheme_str(), Some("https"));
+        assert_eq!(next.authority().unwrap().as_str(), "example.test");
+    }
+
+    #[test]
+    fn redirect_keeps_http_and_https_absolute_locations() {
+        let base: Uri = "https://example.test/start".parse().unwrap();
+        assert_eq!(
+            resolve_redirect(&base, "http://other.test/x")
+                .unwrap()
+                .scheme_str(),
+            Some("http")
+        );
+        assert_eq!(
+            resolve_redirect(&base, "https://other.test/x")
+                .unwrap()
+                .scheme_str(),
+            Some("https")
+        );
+    }
+
     fn serve_keep_alive_connection(mut stream: std::net::TcpStream) {
         stream
             .set_read_timeout(Some(Duration::from_secs(10)))
