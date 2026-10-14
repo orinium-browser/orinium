@@ -18,25 +18,25 @@
 <a href=#18 id=18 data-nosnippet>18</a>/// whose equality ignores default ports. Everything else (`resource:`, `data:`,
 <a href=#19 id=19 data-nosnippet>19</a>/// `about:`, `file:`, custom schemes) is opaque: it serializes as `"null"` in
 <a href=#20 id=20 data-nosnippet>20</a>/// JavaScript and never compares equal to another origin.
-<a href=#21 id=21 data-nosnippet>21</a>/// An origin may also carry internal/privileged status. Only internal origins
-<a href=#22 id=22 data-nosnippet>22</a>/// (`resource:` scheme or browser-created origins) are allowed to access internal
-<a href=#23 id=23 data-nosnippet>23</a>/// schemes like `resource:` and `file:`. Other opaque origins (such as `data:`
-<a href=#24 id=24 data-nosnippet>24</a>/// documents or sandboxed contexts) do not have internal access.
-<a href=#25 id=25 data-nosnippet>25</a></span><span class="attr">#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-<a href=#26 id=26 data-nosnippet>26</a></span><span class="kw">pub struct </span>Origin {
-<a href=#27 id=27 data-nosnippet>27</a>    inner: UrlOrigin,
-<a href=#28 id=28 data-nosnippet>28</a>    is_internal: bool,
-<a href=#29 id=29 data-nosnippet>29</a>}
-<a href=#30 id=30 data-nosnippet>30</a>
-<a href=#31 id=31 data-nosnippet>31</a><span class="kw">impl </span>Origin {
-<a href=#32 id=32 data-nosnippet>32</a>    <span class="doccomment">/// Computes the origin of a parsed URL.
-<a href=#33 id=33 data-nosnippet>33</a>    ///
-<a href=#34 id=34 data-nosnippet>34</a>    /// URLs with the `resource` scheme are marked as internal.
-<a href=#35 id=35 data-nosnippet>35</a>    </span><span class="kw">pub fn </span>from_url(url: <span class="kw-2">&amp;</span>Url) -&gt; <span class="self">Self </span>{
-<a href=#36 id=36 data-nosnippet>36</a>        <span class="kw">let </span>is_internal = url.scheme() == <span class="string">"resource"</span>;
+<a href=#21 id=21 data-nosnippet>21</a>/// An origin may also carry internal/privileged status. Only browser-created
+<a href=#22 id=22 data-nosnippet>22</a>/// origins ([`Origin::internal`]) hold internal privileges. No URL scheme grants
+<a href=#23 id=23 data-nosnippet>23</a>/// it: loading `resource://` content does not make a page internal.
+<a href=#24 id=24 data-nosnippet>24</a></span><span class="attr">#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+<a href=#25 id=25 data-nosnippet>25</a></span><span class="kw">pub struct </span>Origin {
+<a href=#26 id=26 data-nosnippet>26</a>    inner: UrlOrigin,
+<a href=#27 id=27 data-nosnippet>27</a>    is_internal: bool,
+<a href=#28 id=28 data-nosnippet>28</a>}
+<a href=#29 id=29 data-nosnippet>29</a>
+<a href=#30 id=30 data-nosnippet>30</a><span class="kw">impl </span>Origin {
+<a href=#31 id=31 data-nosnippet>31</a>    <span class="doccomment">/// Computes the origin of a parsed URL.
+<a href=#32 id=32 data-nosnippet>32</a>    ///
+<a href=#33 id=33 data-nosnippet>33</a>    /// No URL grants internal privilege: a `resource://` page is an ordinary
+<a href=#34 id=34 data-nosnippet>34</a>    /// opaque origin. Internal status is only ever conferred explicitly by the
+<a href=#35 id=35 data-nosnippet>35</a>    /// browser through [`Origin::internal`] for chrome-created origins.
+<a href=#36 id=36 data-nosnippet>36</a>    </span><span class="kw">pub fn </span>from_url(url: <span class="kw-2">&amp;</span>Url) -&gt; <span class="self">Self </span>{
 <a href=#37 id=37 data-nosnippet>37</a>        <span class="self">Self </span>{
 <a href=#38 id=38 data-nosnippet>38</a>            inner: url.origin(),
-<a href=#39 id=39 data-nosnippet>39</a>            is_internal,
+<a href=#39 id=39 data-nosnippet>39</a>            is_internal: <span class="bool-val">false</span>,
 <a href=#40 id=40 data-nosnippet>40</a>        }
 <a href=#41 id=41 data-nosnippet>41</a>    }
 <a href=#42 id=42 data-nosnippet>42</a>
@@ -157,9 +157,9 @@
 <a href=#157 id=157 data-nosnippet>157</a>    }
 <a href=#158 id=158 data-nosnippet>158</a>
 <a href=#159 id=159 data-nosnippet>159</a>    <span class="attr">#[test]
-<a href=#160 id=160 data-nosnippet>160</a>    </span><span class="kw">fn </span>resource_url_is_internal_and_opaque() {
+<a href=#160 id=160 data-nosnippet>160</a>    </span><span class="kw">fn </span>resource_url_is_opaque_but_not_internal() {
 <a href=#161 id=161 data-nosnippet>161</a>        <span class="kw">let </span>origin = Origin::from_url(<span class="kw-2">&amp;</span>url(<span class="string">"resource:///test/index.html"</span>));
-<a href=#162 id=162 data-nosnippet>162</a>        <span class="macro">assert!</span>(origin.is_internal());
+<a href=#162 id=162 data-nosnippet>162</a>        <span class="macro">assert!</span>(!origin.is_internal());
 <a href=#163 id=163 data-nosnippet>163</a>        <span class="macro">assert!</span>(origin.is_opaque());
 <a href=#164 id=164 data-nosnippet>164</a>        <span class="macro">assert!</span>(!origin.is_network());
 <a href=#165 id=165 data-nosnippet>165</a>        <span class="macro">assert_eq!</span>(origin.ascii_serialization(), <span class="string">"null"</span>);
