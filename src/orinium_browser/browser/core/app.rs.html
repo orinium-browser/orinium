@@ -578,26 +578,26 @@
 <a href=#578 id=578 data-nosnippet>578</a><span class="attr">#[cfg(test)]
 <a href=#579 id=579 data-nosnippet>579</a></span><span class="kw">mod </span>tests {
 <a href=#580 id=580 data-nosnippet>580</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
-<a href=#581 id=581 data-nosnippet>581</a>
-<a href=#582 id=582 data-nosnippet>582</a>    <span class="doccomment">/// Pins the `Send` bound reached so far, and documents what still blocks
-<a href=#583 id=583 data-nosnippet>583</a>    /// `BrowserApp` from becoming `Send`.
-<a href=#584 id=584 data-nosnippet>584</a>    ///
-<a href=#585 id=585 data-nosnippet>585</a>    /// Everything the resource path owns is movable now that
-<a href=#586 id=586 data-nosnippet>586</a>    /// [`BrowserResourceLoader`] holds its `NetworkCore` outright instead of
-<a href=#587 id=587 data-nosnippet>587</a>    /// behind an `Rc`. The remaining blockers are all page-boundary state:
-<a href=#588 id=588 data-nosnippet>588</a>    ///
-<a href=#589 id=589 data-nosnippet>589</a>    /// - `Box&lt;dyn Chrome&gt;` / `Box&lt;dyn ContextMenu&gt;` (UI trait objects that
-<a href=#590 id=590 data-nosnippet>590</a>    ///   predate the layering fix)
-<a href=#591 id=591 data-nosnippet>591</a>    /// - `ui_layout::CustomLayouter` (reached through `LayoutNode`, and today
-<a href=#592 id=592 data-nosnippet>592</a>    ///   sidestepped by `SendableResult`'s raw pointer)
-<a href=#593 id=593 data-nosnippet>593</a>    /// - `Rc&lt;DomTree&gt;` and `Weak&lt;RefCell&lt;TreeNode&lt;HtmlNodeType&gt;&gt;&gt;` (the live
-<a href=#594 id=594 data-nosnippet>594</a>    ///   DOM the browser layer still mutates directly)
-<a href=#595 id=595 data-nosnippet>595</a>    ///
-<a href=#596 id=596 data-nosnippet>596</a>    /// Add assertions here as each group is removed, so the progress is
-<a href=#597 id=597 data-nosnippet>597</a>    /// visible and the bound can never silently regress.
-<a href=#598 id=598 data-nosnippet>598</a>    </span><span class="attr">#[test]
-<a href=#599 id=599 data-nosnippet>599</a>    </span><span class="kw">fn </span>resource_path_is_send() {
-<a href=#600 id=600 data-nosnippet>600</a>        <span class="kw">fn </span>assert_send&lt;T: Send&gt;() {}
+<a href=#581 id=581 data-nosnippet>581</a>    <span class="kw">use </span><span class="kw">crate</span>::test_support::assert_send;
+<a href=#582 id=582 data-nosnippet>582</a>
+<a href=#583 id=583 data-nosnippet>583</a>    <span class="doccomment">/// Pins the `Send` bound reached so far, and documents what still blocks
+<a href=#584 id=584 data-nosnippet>584</a>    /// `BrowserApp` from becoming `Send`.
+<a href=#585 id=585 data-nosnippet>585</a>    ///
+<a href=#586 id=586 data-nosnippet>586</a>    /// Everything the resource path owns is movable now that
+<a href=#587 id=587 data-nosnippet>587</a>    /// [`BrowserResourceLoader`] holds its `NetworkCore` outright instead of
+<a href=#588 id=588 data-nosnippet>588</a>    /// behind an `Rc`. The remaining blockers are all page-boundary state:
+<a href=#589 id=589 data-nosnippet>589</a>    ///
+<a href=#590 id=590 data-nosnippet>590</a>    /// - `Box&lt;dyn Chrome&gt;` / `Box&lt;dyn ContextMenu&gt;` (UI trait objects that
+<a href=#591 id=591 data-nosnippet>591</a>    ///   predate the layering fix)
+<a href=#592 id=592 data-nosnippet>592</a>    /// - `ui_layout::CustomLayouter` (reached through `LayoutNode`, and today
+<a href=#593 id=593 data-nosnippet>593</a>    ///   sidestepped by `SendableResult`'s raw pointer)
+<a href=#594 id=594 data-nosnippet>594</a>    /// - `Rc&lt;DomTree&gt;` and `Weak&lt;RefCell&lt;TreeNode&lt;HtmlNodeType&gt;&gt;&gt;` (the live
+<a href=#595 id=595 data-nosnippet>595</a>    ///   DOM the browser layer still mutates directly)
+<a href=#596 id=596 data-nosnippet>596</a>    ///
+<a href=#597 id=597 data-nosnippet>597</a>    /// Add assertions here as each group is removed, so the progress is
+<a href=#598 id=598 data-nosnippet>598</a>    /// visible and the bound can never silently regress.
+<a href=#599 id=599 data-nosnippet>599</a>    </span><span class="attr">#[test]
+<a href=#600 id=600 data-nosnippet>600</a>    </span><span class="kw">fn </span>resource_path_is_send() {
 <a href=#601 id=601 data-nosnippet>601</a>        assert_send::&lt;BrowserResourceLoader&gt;();
 <a href=#602 id=602 data-nosnippet>602</a>        assert_send::&lt;<span class="kw">super</span>::PendingFetches&gt;();
 <a href=#603 id=603 data-nosnippet>603</a>    }

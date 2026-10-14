@@ -24,8 +24,8 @@
 <a href=#24 id=24 data-nosnippet>24</a></span><span class="kw">pub struct </span>Permissions {
 <a href=#25 id=25 data-nosnippet>25</a>    <span class="doccomment">/// May load network-backed schemes (`http`, `https`) and `data:` URLs.
 <a href=#26 id=26 data-nosnippet>26</a>    </span><span class="kw">pub </span>network: bool,
-<a href=#27 id=27 data-nosnippet>27</a>    <span class="doccomment">/// May load `resource://` content, confined to the bundle directory by
-<a href=#28 id=28 data-nosnippet>28</a>    /// [`crate::platform::io::load_resource`].
+<a href=#27 id=27 data-nosnippet>27</a>    <span class="doccomment">/// May load `resource://` content. The resource loader confines such loads
+<a href=#28 id=28 data-nosnippet>28</a>    /// to the bundle directory.
 <a href=#29 id=29 data-nosnippet>29</a>    </span><span class="kw">pub </span>resource: bool,
 <a href=#30 id=30 data-nosnippet>30</a>    <span class="doccomment">/// May load arbitrary local files via `file://`. Reserved for chrome.
 <a href=#31 id=31 data-nosnippet>31</a>    </span><span class="kw">pub </span>file: bool,
@@ -140,116 +140,113 @@
 <a href=#140 id=140 data-nosnippet>140</a><span class="attr">#[cfg(test)]
 <a href=#141 id=141 data-nosnippet>141</a></span><span class="kw">mod </span>tests {
 <a href=#142 id=142 data-nosnippet>142</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
-<a href=#143 id=143 data-nosnippet>143</a>
-<a href=#144 id=144 data-nosnippet>144</a>    <span class="kw">fn </span>url(s: <span class="kw-2">&amp;</span>str) -&gt; Url {
-<a href=#145 id=145 data-nosnippet>145</a>        Url::parse(s).unwrap()
-<a href=#146 id=146 data-nosnippet>146</a>    }
-<a href=#147 id=147 data-nosnippet>147</a>
-<a href=#148 id=148 data-nosnippet>148</a>    <span class="attr">#[test]
-<a href=#149 id=149 data-nosnippet>149</a>    </span><span class="kw">fn </span>content_resource_page_gets_no_file_access() {
-<a href=#150 id=150 data-nosnippet>150</a>        <span class="kw">let </span>perms = Permissions::content_for(<span class="kw-2">&amp;</span>url(<span class="string">"resource:///test/index.html"</span>));
-<a href=#151 id=151 data-nosnippet>151</a>        <span class="macro">assert!</span>(perms.network);
-<a href=#152 id=152 data-nosnippet>152</a>        <span class="macro">assert!</span>(perms.resource);
-<a href=#153 id=153 data-nosnippet>153</a>        <span class="macro">assert!</span>(!perms.file);
-<a href=#154 id=154 data-nosnippet>154</a>        <span class="macro">assert!</span>(!perms.allows(<span class="kw-2">&amp;</span>url(<span class="string">"file:///etc/passwd"</span>)));
-<a href=#155 id=155 data-nosnippet>155</a>        <span class="macro">assert!</span>(perms.allows(<span class="kw-2">&amp;</span>url(<span class="string">"resource:///test/style.css"</span>)));
-<a href=#156 id=156 data-nosnippet>156</a>    }
-<a href=#157 id=157 data-nosnippet>157</a>
-<a href=#158 id=158 data-nosnippet>158</a>    <span class="attr">#[test]
-<a href=#159 id=159 data-nosnippet>159</a>    </span><span class="kw">fn </span>web_page_reaches_network_only() {
-<a href=#160 id=160 data-nosnippet>160</a>        <span class="kw">let </span>perms = Permissions::content_for(<span class="kw-2">&amp;</span>url(<span class="string">"https://example.test/"</span>));
-<a href=#161 id=161 data-nosnippet>161</a>        <span class="macro">assert!</span>(perms.allows(<span class="kw-2">&amp;</span>url(<span class="string">"https://example.test/x.js"</span>)));
-<a href=#162 id=162 data-nosnippet>162</a>        <span class="macro">assert!</span>(perms.allows(<span class="kw-2">&amp;</span>url(<span class="string">"data:text/plain,hi"</span>)));
-<a href=#163 id=163 data-nosnippet>163</a>        <span class="macro">assert!</span>(!perms.allows(<span class="kw-2">&amp;</span>url(<span class="string">"resource:///test/index.html"</span>)));
-<a href=#164 id=164 data-nosnippet>164</a>        <span class="macro">assert!</span>(!perms.allows(<span class="kw-2">&amp;</span>url(<span class="string">"file:///etc/passwd"</span>)));
-<a href=#165 id=165 data-nosnippet>165</a>    }
-<a href=#166 id=166 data-nosnippet>166</a>
-<a href=#167 id=167 data-nosnippet>167</a>    <span class="attr">#[test]
-<a href=#168 id=168 data-nosnippet>168</a>    </span><span class="kw">fn </span>chrome_reaches_files() {
-<a href=#169 id=169 data-nosnippet>169</a>        <span class="kw">let </span>chrome = Permissions::chrome();
-<a href=#170 id=170 data-nosnippet>170</a>        <span class="macro">assert!</span>(chrome.is_chrome());
-<a href=#171 id=171 data-nosnippet>171</a>        <span class="macro">assert!</span>(chrome.privileged);
-<a href=#172 id=172 data-nosnippet>172</a>        <span class="macro">assert!</span>(chrome.allows(<span class="kw-2">&amp;</span>url(<span class="string">"file:///etc/passwd"</span>)));
-<a href=#173 id=173 data-nosnippet>173</a>        <span class="macro">assert!</span>(chrome.allows(<span class="kw-2">&amp;</span>url(<span class="string">"resource:///test/index.html"</span>)));
-<a href=#174 id=174 data-nosnippet>174</a>    }
-<a href=#175 id=175 data-nosnippet>175</a>
-<a href=#176 id=176 data-nosnippet>176</a>    <span class="attr">#[test]
-<a href=#177 id=177 data-nosnippet>177</a>    </span><span class="kw">fn </span>privilege_is_separate_from_scheme_capabilities() {
-<a href=#178 id=178 data-nosnippet>178</a>        <span class="comment">// Every scheme capability can be present without any CORS-bypass
-<a href=#179 id=179 data-nosnippet>179</a>        // authority: privilege is not implied by reaching files or resources.
-<a href=#180 id=180 data-nosnippet>180</a>        </span><span class="kw">let </span>permissive_content = Permissions {
-<a href=#181 id=181 data-nosnippet>181</a>            network: <span class="bool-val">true</span>,
-<a href=#182 id=182 data-nosnippet>182</a>            resource: <span class="bool-val">true</span>,
-<a href=#183 id=183 data-nosnippet>183</a>            file: <span class="bool-val">true</span>,
-<a href=#184 id=184 data-nosnippet>184</a>            privileged: <span class="bool-val">false</span>,
-<a href=#185 id=185 data-nosnippet>185</a>        };
-<a href=#186 id=186 data-nosnippet>186</a>        <span class="macro">assert!</span>(!permissive_content.is_chrome());
-<a href=#187 id=187 data-nosnippet>187</a>        <span class="macro">assert!</span>(permissive_content.allows(<span class="kw-2">&amp;</span>url(<span class="string">"file:///etc/passwd"</span>)));
-<a href=#188 id=188 data-nosnippet>188</a>    }
-<a href=#189 id=189 data-nosnippet>189</a>
-<a href=#190 id=190 data-nosnippet>190</a>    <span class="attr">#[test]
-<a href=#191 id=191 data-nosnippet>191</a>    </span><span class="kw">fn </span>inherit_never_grants_more_than_the_parent() {
-<a href=#192 id=192 data-nosnippet>192</a>        <span class="comment">// A chrome frame embedding a web frame cannot hand down file access or
-<a href=#193 id=193 data-nosnippet>193</a>        // privilege.
-<a href=#194 id=194 data-nosnippet>194</a>        </span><span class="kw">let </span>child =
-<a href=#195 id=195 data-nosnippet>195</a>            Permissions::content_for(<span class="kw-2">&amp;</span>url(<span class="string">"https://example.test/"</span>)).inherit(Permissions::chrome());
-<a href=#196 id=196 data-nosnippet>196</a>        <span class="macro">assert!</span>(!child.file);
-<a href=#197 id=197 data-nosnippet>197</a>        <span class="macro">assert!</span>(!child.resource);
-<a href=#198 id=198 data-nosnippet>198</a>        <span class="macro">assert!</span>(!child.privileged);
-<a href=#199 id=199 data-nosnippet>199</a>        <span class="macro">assert!</span>(child.network);
-<a href=#200 id=200 data-nosnippet>200</a>
-<a href=#201 id=201 data-nosnippet>201</a>        <span class="comment">// A web frame embedding a chrome frame also yields web-only.
-<a href=#202 id=202 data-nosnippet>202</a>        </span><span class="kw">let </span>child =
-<a href=#203 id=203 data-nosnippet>203</a>            Permissions::chrome().inherit(Permissions::content_for(<span class="kw-2">&amp;</span>url(<span class="string">"https://example.test/"</span>)));
-<a href=#204 id=204 data-nosnippet>204</a>        <span class="macro">assert!</span>(!child.file);
-<a href=#205 id=205 data-nosnippet>205</a>        <span class="macro">assert!</span>(!child.privileged);
-<a href=#206 id=206 data-nosnippet>206</a>    }
-<a href=#207 id=207 data-nosnippet>207</a>
-<a href=#208 id=208 data-nosnippet>208</a>    <span class="attr">#[test]
-<a href=#209 id=209 data-nosnippet>209</a>    </span><span class="kw">fn </span>privilege_never_reappears_down_the_tree() {
-<a href=#210 id=210 data-nosnippet>210</a>        <span class="comment">// chrome -&gt; web -&gt; chrome: once privilege is lost it cannot return,
-<a href=#211 id=211 data-nosnippet>211</a>        // even if the deepest frame is itself a chrome URL.
-<a href=#212 id=212 data-nosnippet>212</a>        </span><span class="kw">let </span>web = Permissions::chrome().for_child_frame(<span class="string">"https://example.test/"</span>);
-<a href=#213 id=213 data-nosnippet>213</a>        <span class="kw">let </span>regressed = web.for_child_frame(<span class="string">"resource:///shell.html"</span>);
-<a href=#214 id=214 data-nosnippet>214</a>        <span class="macro">assert!</span>(!regressed.privileged);
-<a href=#215 id=215 data-nosnippet>215</a>        <span class="macro">assert!</span>(!regressed.is_chrome());
-<a href=#216 id=216 data-nosnippet>216</a>    }
-<a href=#217 id=217 data-nosnippet>217</a>
-<a href=#218 id=218 data-nosnippet>218</a>    <span class="attr">#[test]
-<a href=#219 id=219 data-nosnippet>219</a>    </span><span class="kw">fn </span>for_child_frame_uses_the_child_origin_not_the_parent() {
-<a href=#220 id=220 data-nosnippet>220</a>        <span class="comment">// A resource child of a chrome parent keeps bundle access but is not
-<a href=#221 id=221 data-nosnippet>221</a>        // privileged; a web child of a chrome parent loses resource access too.
-<a href=#222 id=222 data-nosnippet>222</a>        </span><span class="kw">let </span>chrome = Permissions::chrome();
-<a href=#223 id=223 data-nosnippet>223</a>        <span class="kw">let </span>resource_child = chrome.for_child_frame(<span class="string">"resource:///test/index.html"</span>);
-<a href=#224 id=224 data-nosnippet>224</a>        <span class="macro">assert!</span>(resource_child.resource);
-<a href=#225 id=225 data-nosnippet>225</a>        <span class="macro">assert!</span>(!resource_child.file);
-<a href=#226 id=226 data-nosnippet>226</a>        <span class="macro">assert!</span>(!resource_child.privileged);
-<a href=#227 id=227 data-nosnippet>227</a>
-<a href=#228 id=228 data-nosnippet>228</a>        <span class="kw">let </span>web_child = chrome.for_child_frame(<span class="string">"https://example.test/"</span>);
-<a href=#229 id=229 data-nosnippet>229</a>        <span class="macro">assert!</span>(!web_child.resource);
-<a href=#230 id=230 data-nosnippet>230</a>        <span class="macro">assert!</span>(!web_child.file);
-<a href=#231 id=231 data-nosnippet>231</a>        <span class="macro">assert!</span>(!web_child.privileged);
-<a href=#232 id=232 data-nosnippet>232</a>
-<a href=#233 id=233 data-nosnippet>233</a>        <span class="comment">// An unparsable child URL is treated as opaque network content.
-<a href=#234 id=234 data-nosnippet>234</a>        </span><span class="kw">let </span>opaque_child = chrome.for_child_frame(<span class="string">"not a url"</span>);
-<a href=#235 id=235 data-nosnippet>235</a>        <span class="macro">assert!</span>(opaque_child.network);
-<a href=#236 id=236 data-nosnippet>236</a>        <span class="macro">assert!</span>(!opaque_child.resource);
-<a href=#237 id=237 data-nosnippet>237</a>        <span class="macro">assert!</span>(!opaque_child.file);
-<a href=#238 id=238 data-nosnippet>238</a>        <span class="macro">assert!</span>(!opaque_child.privileged);
-<a href=#239 id=239 data-nosnippet>239</a>    }
-<a href=#240 id=240 data-nosnippet>240</a>
-<a href=#241 id=241 data-nosnippet>241</a>    <span class="attr">#[test]
-<a href=#242 id=242 data-nosnippet>242</a>    </span><span class="kw">fn </span>inherit_of_chrome_and_chrome_stays_chrome() {
-<a href=#243 id=243 data-nosnippet>243</a>        <span class="macro">assert_eq!</span>(
-<a href=#244 id=244 data-nosnippet>244</a>            Permissions::chrome().inherit(Permissions::chrome()),
-<a href=#245 id=245 data-nosnippet>245</a>            Permissions::chrome()
-<a href=#246 id=246 data-nosnippet>246</a>        );
-<a href=#247 id=247 data-nosnippet>247</a>    }
-<a href=#248 id=248 data-nosnippet>248</a>
-<a href=#249 id=249 data-nosnippet>249</a>    <span class="attr">#[test]
-<a href=#250 id=250 data-nosnippet>250</a>    </span><span class="kw">fn </span>inherit_is_idempotent() {
-<a href=#251 id=251 data-nosnippet>251</a>        <span class="kw">let </span>perms = Permissions::content_for(<span class="kw-2">&amp;</span>url(<span class="string">"resource:///a/b.html"</span>));
-<a href=#252 id=252 data-nosnippet>252</a>        <span class="macro">assert_eq!</span>(perms.inherit(perms), perms);
-<a href=#253 id=253 data-nosnippet>253</a>    }
-<a href=#254 id=254 data-nosnippet>254</a>}
+<a href=#143 id=143 data-nosnippet>143</a>    <span class="kw">use </span><span class="kw">crate</span>::test_support::parse_url <span class="kw">as </span>url;
+<a href=#144 id=144 data-nosnippet>144</a>
+<a href=#145 id=145 data-nosnippet>145</a>    <span class="attr">#[test]
+<a href=#146 id=146 data-nosnippet>146</a>    </span><span class="kw">fn </span>content_resource_page_gets_no_file_access() {
+<a href=#147 id=147 data-nosnippet>147</a>        <span class="kw">let </span>perms = Permissions::content_for(<span class="kw-2">&amp;</span>url(<span class="string">"resource:///test/index.html"</span>));
+<a href=#148 id=148 data-nosnippet>148</a>        <span class="macro">assert!</span>(perms.network);
+<a href=#149 id=149 data-nosnippet>149</a>        <span class="macro">assert!</span>(perms.resource);
+<a href=#150 id=150 data-nosnippet>150</a>        <span class="macro">assert!</span>(!perms.file);
+<a href=#151 id=151 data-nosnippet>151</a>        <span class="macro">assert!</span>(!perms.allows(<span class="kw-2">&amp;</span>url(<span class="string">"file:///etc/passwd"</span>)));
+<a href=#152 id=152 data-nosnippet>152</a>        <span class="macro">assert!</span>(perms.allows(<span class="kw-2">&amp;</span>url(<span class="string">"resource:///test/style.css"</span>)));
+<a href=#153 id=153 data-nosnippet>153</a>    }
+<a href=#154 id=154 data-nosnippet>154</a>
+<a href=#155 id=155 data-nosnippet>155</a>    <span class="attr">#[test]
+<a href=#156 id=156 data-nosnippet>156</a>    </span><span class="kw">fn </span>web_page_reaches_network_only() {
+<a href=#157 id=157 data-nosnippet>157</a>        <span class="kw">let </span>perms = Permissions::content_for(<span class="kw-2">&amp;</span>url(<span class="string">"https://example.test/"</span>));
+<a href=#158 id=158 data-nosnippet>158</a>        <span class="macro">assert!</span>(perms.allows(<span class="kw-2">&amp;</span>url(<span class="string">"https://example.test/x.js"</span>)));
+<a href=#159 id=159 data-nosnippet>159</a>        <span class="macro">assert!</span>(perms.allows(<span class="kw-2">&amp;</span>url(<span class="string">"data:text/plain,hi"</span>)));
+<a href=#160 id=160 data-nosnippet>160</a>        <span class="macro">assert!</span>(!perms.allows(<span class="kw-2">&amp;</span>url(<span class="string">"resource:///test/index.html"</span>)));
+<a href=#161 id=161 data-nosnippet>161</a>        <span class="macro">assert!</span>(!perms.allows(<span class="kw-2">&amp;</span>url(<span class="string">"file:///etc/passwd"</span>)));
+<a href=#162 id=162 data-nosnippet>162</a>    }
+<a href=#163 id=163 data-nosnippet>163</a>
+<a href=#164 id=164 data-nosnippet>164</a>    <span class="attr">#[test]
+<a href=#165 id=165 data-nosnippet>165</a>    </span><span class="kw">fn </span>chrome_reaches_files() {
+<a href=#166 id=166 data-nosnippet>166</a>        <span class="kw">let </span>chrome = Permissions::chrome();
+<a href=#167 id=167 data-nosnippet>167</a>        <span class="macro">assert!</span>(chrome.is_chrome());
+<a href=#168 id=168 data-nosnippet>168</a>        <span class="macro">assert!</span>(chrome.privileged);
+<a href=#169 id=169 data-nosnippet>169</a>        <span class="macro">assert!</span>(chrome.allows(<span class="kw-2">&amp;</span>url(<span class="string">"file:///etc/passwd"</span>)));
+<a href=#170 id=170 data-nosnippet>170</a>        <span class="macro">assert!</span>(chrome.allows(<span class="kw-2">&amp;</span>url(<span class="string">"resource:///test/index.html"</span>)));
+<a href=#171 id=171 data-nosnippet>171</a>    }
+<a href=#172 id=172 data-nosnippet>172</a>
+<a href=#173 id=173 data-nosnippet>173</a>    <span class="attr">#[test]
+<a href=#174 id=174 data-nosnippet>174</a>    </span><span class="kw">fn </span>privilege_is_separate_from_scheme_capabilities() {
+<a href=#175 id=175 data-nosnippet>175</a>        <span class="comment">// Every scheme capability can be present without any CORS-bypass
+<a href=#176 id=176 data-nosnippet>176</a>        // authority: privilege is not implied by reaching files or resources.
+<a href=#177 id=177 data-nosnippet>177</a>        </span><span class="kw">let </span>permissive_content = Permissions {
+<a href=#178 id=178 data-nosnippet>178</a>            network: <span class="bool-val">true</span>,
+<a href=#179 id=179 data-nosnippet>179</a>            resource: <span class="bool-val">true</span>,
+<a href=#180 id=180 data-nosnippet>180</a>            file: <span class="bool-val">true</span>,
+<a href=#181 id=181 data-nosnippet>181</a>            privileged: <span class="bool-val">false</span>,
+<a href=#182 id=182 data-nosnippet>182</a>        };
+<a href=#183 id=183 data-nosnippet>183</a>        <span class="macro">assert!</span>(!permissive_content.is_chrome());
+<a href=#184 id=184 data-nosnippet>184</a>        <span class="macro">assert!</span>(permissive_content.allows(<span class="kw-2">&amp;</span>url(<span class="string">"file:///etc/passwd"</span>)));
+<a href=#185 id=185 data-nosnippet>185</a>    }
+<a href=#186 id=186 data-nosnippet>186</a>
+<a href=#187 id=187 data-nosnippet>187</a>    <span class="attr">#[test]
+<a href=#188 id=188 data-nosnippet>188</a>    </span><span class="kw">fn </span>inherit_never_grants_more_than_the_parent() {
+<a href=#189 id=189 data-nosnippet>189</a>        <span class="comment">// A chrome frame embedding a web frame cannot hand down file access or
+<a href=#190 id=190 data-nosnippet>190</a>        // privilege.
+<a href=#191 id=191 data-nosnippet>191</a>        </span><span class="kw">let </span>child =
+<a href=#192 id=192 data-nosnippet>192</a>            Permissions::content_for(<span class="kw-2">&amp;</span>url(<span class="string">"https://example.test/"</span>)).inherit(Permissions::chrome());
+<a href=#193 id=193 data-nosnippet>193</a>        <span class="macro">assert!</span>(!child.file);
+<a href=#194 id=194 data-nosnippet>194</a>        <span class="macro">assert!</span>(!child.resource);
+<a href=#195 id=195 data-nosnippet>195</a>        <span class="macro">assert!</span>(!child.privileged);
+<a href=#196 id=196 data-nosnippet>196</a>        <span class="macro">assert!</span>(child.network);
+<a href=#197 id=197 data-nosnippet>197</a>
+<a href=#198 id=198 data-nosnippet>198</a>        <span class="comment">// A web frame embedding a chrome frame also yields web-only.
+<a href=#199 id=199 data-nosnippet>199</a>        </span><span class="kw">let </span>child =
+<a href=#200 id=200 data-nosnippet>200</a>            Permissions::chrome().inherit(Permissions::content_for(<span class="kw-2">&amp;</span>url(<span class="string">"https://example.test/"</span>)));
+<a href=#201 id=201 data-nosnippet>201</a>        <span class="macro">assert!</span>(!child.file);
+<a href=#202 id=202 data-nosnippet>202</a>        <span class="macro">assert!</span>(!child.privileged);
+<a href=#203 id=203 data-nosnippet>203</a>    }
+<a href=#204 id=204 data-nosnippet>204</a>
+<a href=#205 id=205 data-nosnippet>205</a>    <span class="attr">#[test]
+<a href=#206 id=206 data-nosnippet>206</a>    </span><span class="kw">fn </span>privilege_never_reappears_down_the_tree() {
+<a href=#207 id=207 data-nosnippet>207</a>        <span class="comment">// chrome -&gt; web -&gt; chrome: once privilege is lost it cannot return,
+<a href=#208 id=208 data-nosnippet>208</a>        // even if the deepest frame is itself a chrome URL.
+<a href=#209 id=209 data-nosnippet>209</a>        </span><span class="kw">let </span>web = Permissions::chrome().for_child_frame(<span class="string">"https://example.test/"</span>);
+<a href=#210 id=210 data-nosnippet>210</a>        <span class="kw">let </span>regressed = web.for_child_frame(<span class="string">"resource:///shell.html"</span>);
+<a href=#211 id=211 data-nosnippet>211</a>        <span class="macro">assert!</span>(!regressed.privileged);
+<a href=#212 id=212 data-nosnippet>212</a>        <span class="macro">assert!</span>(!regressed.is_chrome());
+<a href=#213 id=213 data-nosnippet>213</a>    }
+<a href=#214 id=214 data-nosnippet>214</a>
+<a href=#215 id=215 data-nosnippet>215</a>    <span class="attr">#[test]
+<a href=#216 id=216 data-nosnippet>216</a>    </span><span class="kw">fn </span>for_child_frame_uses_the_child_origin_not_the_parent() {
+<a href=#217 id=217 data-nosnippet>217</a>        <span class="comment">// A resource child of a chrome parent keeps bundle access but is not
+<a href=#218 id=218 data-nosnippet>218</a>        // privileged; a web child of a chrome parent loses resource access too.
+<a href=#219 id=219 data-nosnippet>219</a>        </span><span class="kw">let </span>chrome = Permissions::chrome();
+<a href=#220 id=220 data-nosnippet>220</a>        <span class="kw">let </span>resource_child = chrome.for_child_frame(<span class="string">"resource:///test/index.html"</span>);
+<a href=#221 id=221 data-nosnippet>221</a>        <span class="macro">assert!</span>(resource_child.resource);
+<a href=#222 id=222 data-nosnippet>222</a>        <span class="macro">assert!</span>(!resource_child.file);
+<a href=#223 id=223 data-nosnippet>223</a>        <span class="macro">assert!</span>(!resource_child.privileged);
+<a href=#224 id=224 data-nosnippet>224</a>
+<a href=#225 id=225 data-nosnippet>225</a>        <span class="kw">let </span>web_child = chrome.for_child_frame(<span class="string">"https://example.test/"</span>);
+<a href=#226 id=226 data-nosnippet>226</a>        <span class="macro">assert!</span>(!web_child.resource);
+<a href=#227 id=227 data-nosnippet>227</a>        <span class="macro">assert!</span>(!web_child.file);
+<a href=#228 id=228 data-nosnippet>228</a>        <span class="macro">assert!</span>(!web_child.privileged);
+<a href=#229 id=229 data-nosnippet>229</a>
+<a href=#230 id=230 data-nosnippet>230</a>        <span class="comment">// An unparsable child URL is treated as opaque network content.
+<a href=#231 id=231 data-nosnippet>231</a>        </span><span class="kw">let </span>opaque_child = chrome.for_child_frame(<span class="string">"not a url"</span>);
+<a href=#232 id=232 data-nosnippet>232</a>        <span class="macro">assert!</span>(opaque_child.network);
+<a href=#233 id=233 data-nosnippet>233</a>        <span class="macro">assert!</span>(!opaque_child.resource);
+<a href=#234 id=234 data-nosnippet>234</a>        <span class="macro">assert!</span>(!opaque_child.file);
+<a href=#235 id=235 data-nosnippet>235</a>        <span class="macro">assert!</span>(!opaque_child.privileged);
+<a href=#236 id=236 data-nosnippet>236</a>    }
+<a href=#237 id=237 data-nosnippet>237</a>
+<a href=#238 id=238 data-nosnippet>238</a>    <span class="attr">#[test]
+<a href=#239 id=239 data-nosnippet>239</a>    </span><span class="kw">fn </span>inherit_of_chrome_and_chrome_stays_chrome() {
+<a href=#240 id=240 data-nosnippet>240</a>        <span class="macro">assert_eq!</span>(
+<a href=#241 id=241 data-nosnippet>241</a>            Permissions::chrome().inherit(Permissions::chrome()),
+<a href=#242 id=242 data-nosnippet>242</a>            Permissions::chrome()
+<a href=#243 id=243 data-nosnippet>243</a>        );
+<a href=#244 id=244 data-nosnippet>244</a>    }
+<a href=#245 id=245 data-nosnippet>245</a>
+<a href=#246 id=246 data-nosnippet>246</a>    <span class="attr">#[test]
+<a href=#247 id=247 data-nosnippet>247</a>    </span><span class="kw">fn </span>inherit_is_idempotent() {
+<a href=#248 id=248 data-nosnippet>248</a>        <span class="kw">let </span>perms = Permissions::content_for(<span class="kw-2">&amp;</span>url(<span class="string">"resource:///a/b.html"</span>));
+<a href=#249 id=249 data-nosnippet>249</a>        <span class="macro">assert_eq!</span>(perms.inherit(perms), perms);
+<a href=#250 id=250 data-nosnippet>250</a>    }
+<a href=#251 id=251 data-nosnippet>251</a>}
 </code></pre></div></section></main></body></html>

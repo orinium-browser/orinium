@@ -422,14 +422,14 @@
 <a href=#422 id=422 data-nosnippet>422</a></span><span class="kw">mod </span>tests {
 <a href=#423 id=423 data-nosnippet>423</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
 <a href=#424 id=424 data-nosnippet>424</a>    <span class="kw">use </span><span class="kw">crate</span>::engine::port::{Consume, Disconnected, Produce, Undeliverable};
-<a href=#425 id=425 data-nosnippet>425</a>    <span class="kw">use </span>std::sync::atomic::{AtomicUsize, Ordering};
-<a href=#426 id=426 data-nosnippet>426</a>
-<a href=#427 id=427 data-nosnippet>427</a>    <span class="doccomment">/// The loader owns its `NetworkCore`, so it must be movable across
-<a href=#428 id=428 data-nosnippet>428</a>    /// threads. This is the invariant that a `!Send` handle around
-<a href=#429 id=429 data-nosnippet>429</a>    /// `NetworkCore` would silently break, so it is asserted directly.
-<a href=#430 id=430 data-nosnippet>430</a>    </span><span class="attr">#[test]
-<a href=#431 id=431 data-nosnippet>431</a>    </span><span class="kw">fn </span>loader_is_send() {
-<a href=#432 id=432 data-nosnippet>432</a>        <span class="kw">fn </span>assert_send&lt;T: Send&gt;() {}
+<a href=#425 id=425 data-nosnippet>425</a>    <span class="kw">use </span><span class="kw">crate</span>::test_support::assert_send;
+<a href=#426 id=426 data-nosnippet>426</a>    <span class="kw">use </span>std::sync::atomic::{AtomicUsize, Ordering};
+<a href=#427 id=427 data-nosnippet>427</a>
+<a href=#428 id=428 data-nosnippet>428</a>    <span class="doccomment">/// The loader owns its `NetworkCore`, so it must be movable across
+<a href=#429 id=429 data-nosnippet>429</a>    /// threads. This is the invariant that a `!Send` handle around
+<a href=#430 id=430 data-nosnippet>430</a>    /// `NetworkCore` would silently break, so it is asserted directly.
+<a href=#431 id=431 data-nosnippet>431</a>    </span><span class="attr">#[test]
+<a href=#432 id=432 data-nosnippet>432</a>    </span><span class="kw">fn </span>loader_is_send() {
 <a href=#433 id=433 data-nosnippet>433</a>        assert_send::&lt;BrowserResourceLoader&gt;();
 <a href=#434 id=434 data-nosnippet>434</a>        assert_send::&lt;BrowserNetworkMessage&gt;();
 <a href=#435 id=435 data-nosnippet>435</a>        assert_send::&lt;BrowserResponse&gt;();
