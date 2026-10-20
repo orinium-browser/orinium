@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::engine::bridge::text::{
     GlyphCluster, MeasuredFragment, TextMeasureError, TextMeasureRequest, TextMeasurer,
 };
@@ -78,11 +80,12 @@ impl TextMeasurer for PlatformTextMeasurer {
         let shaped = if let Some(shaped) = self.cache.get(&req.text, &ori_style) {
             shaped
         } else {
-            let shaped = global_font::with_global_font_system(|fs| {
+            let shaped = Arc::new(global_font::with_global_font_system(|fs| {
                 layouter.shape_text(fs, &req.text, &ori_style)
-            });
+            }));
 
-            self.cache.insert(&req.text, &ori_style, shaped.clone());
+            self.cache
+                .insert(&req.text, &ori_style, Arc::clone(&shaped));
             shaped
         };
         #[cfg(any(feature = "profile", debug_assertions))]
@@ -176,11 +179,12 @@ impl TextMeasurer for PlatformTextMeasurer {
         let shaped = if let Some(shaped) = self.cache.get(&req.text, &ori_style) {
             shaped
         } else {
-            let shaped = global_font::with_global_font_system(|fs| {
+            let shaped = Arc::new(global_font::with_global_font_system(|fs| {
                 layouter.shape_text(fs, &req.text, &ori_style)
-            });
+            }));
 
-            self.cache.insert(&req.text, &ori_style, shaped.clone());
+            self.cache
+                .insert(&req.text, &ori_style, Arc::clone(&shaped));
             shaped
         };
 

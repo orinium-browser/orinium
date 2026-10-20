@@ -1,4 +1,8 @@
 //! Bounded cache for shaped text results keyed by text and style.
+//!
+//! Values are shared through [`Arc`] so cache hits stay cheap: the measurer
+//! keeps using the shaped text by reference while the cache holds another
+//! handle to the same allocation.
 
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
@@ -18,7 +22,7 @@ const DEFAULT_CAPACITY: usize = 4096;
 
 #[derive(Clone)]
 pub struct TextShapeCache {
-    inner: Arc<Mutex<LruCache<TextShapeCacheKey, ShapedText>>>,
+    inner: Arc<Mutex<LruCache<TextShapeCacheKey, Arc<ShapedText>>>>,
     stats: Arc<CacheStats>,
 }
 
@@ -42,7 +46,7 @@ impl TextShapeCache {
         }
     }
 
-    pub fn get(&self, text: &str, style: &orinium_text::TextStyle) -> Option<ShapedText> {
+    pub fn get(&self, text: &str, style: &orinium_text::TextStyle) -> Option<Arc<ShapedText>> {
         let key = TextShapeCacheKey::new(text, style);
 
         let Ok(mut cache) = self.inner.lock() else {
@@ -51,9 +55,8 @@ impl TextShapeCache {
         };
         match cache.get(&key) {
             Some(shaped) => {
-                let shaped = shaped.clone();
                 self.stats.record_hit();
-                Some(shaped)
+                Some(Arc::clone(shaped))
             }
             None => {
                 self.stats.record_miss();
@@ -62,7 +65,7 @@ impl TextShapeCache {
         }
     }
 
-    pub fn insert(&self, text: &str, style: &orinium_text::TextStyle, shaped: ShapedText) {
+    pub fn insert(&self, text: &str, style: &orinium_text::TextStyle, shaped: Arc<ShapedText>) {
         let key = TextShapeCacheKey::new(text, style);
 
         if let Ok(mut cache) = self.inner.lock() {
@@ -162,10 +165,10 @@ mod tests {
     /// Produces a real `ShapedText` without touching system fonts: the font
     /// system starts from an empty database, and shaping an empty database
     /// returns an empty (but valid) result.
-    fn sample_shape() -> ShapedText {
+    fn sample_shape() -> Arc<ShapedText> {
         let db = orinium_text::fontdb::Database::new();
         let mut fs = FontSystem::new_with_locale_and_db_and_fallback(db, PlatformFallback);
-        TextLayouter::new().shape_text(&mut fs, "sample", &TextStyle::default())
+        Arc::new(TextLayouter::new().shape_text(&mut fs, "sample", &TextStyle::default()))
     }
 
     #[test]
@@ -201,6 +204,17 @@ mod tests {
         assert!(cache.get("hello", &other).is_none());
         assert!(cache.get("hello", &TextStyle::default()).is_some());
         assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn hits_share_the_same_allocation() {
+        let cache = TextShapeCache::new();
+        cache.insert("hello", &TextStyle::default(), sample_shape());
+
+        let first = cache.get("hello", &TextStyle::default()).unwrap();
+        let second = cache.get("hello", &TextStyle::default()).unwrap();
+
+        assert!(Arc::ptr_eq(&first, &second));
     }
 
     #[test]

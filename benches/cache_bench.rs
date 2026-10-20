@@ -61,10 +61,10 @@ fn bench_shaping(c: &mut Criterion) {
     group.bench_function("shape_cache_hit", |b| {
         let mut fs = FontSystem::new();
         let mut layouter = TextLayouter::new();
-        let shaped = layouter.shape_text(&mut fs, SAMPLE_TEXT, &style);
+        let shaped = Arc::new(layouter.shape_text(&mut fs, SAMPLE_TEXT, &style));
 
         let cache = TextShapeCache::with_capacity(1024);
-        cache.insert(SAMPLE_TEXT, &style, shaped);
+        cache.insert(SAMPLE_TEXT, &style, Arc::clone(&shaped));
 
         b.iter(|| black_box(cache.get(black_box(SAMPLE_TEXT), &style)));
     });
@@ -83,7 +83,7 @@ fn bench_text_shape_cache(c: &mut Criterion) {
     let style = TextStyle::default();
     let mut fs = FontSystem::new();
     let mut layouter = TextLayouter::new();
-    let shaped = layouter.shape_text(&mut fs, SAMPLE_TEXT, &style);
+    let shaped = Arc::new(layouter.shape_text(&mut fs, SAMPLE_TEXT, &style));
 
     let keys: Vec<String> = (0..1024)
         .map(|i| format!("cached label number {i}"))
@@ -92,7 +92,7 @@ fn bench_text_shape_cache(c: &mut Criterion) {
     group.bench_function("hit_1024_working_set", |b| {
         let cache = TextShapeCache::with_capacity(4096);
         for key in &keys {
-            cache.insert(key, &style, shaped.clone());
+            cache.insert(key, &style, Arc::clone(&shaped));
         }
 
         let mut i = 0usize;
@@ -108,7 +108,7 @@ fn bench_text_shape_cache(c: &mut Criterion) {
         let mut i = 0usize;
         b.iter(|| {
             i += 1;
-            cache.insert(&format!("unique text {i}"), &style, shaped.clone());
+            cache.insert(&format!("unique text {i}"), &style, Arc::clone(&shaped));
         });
     });
 
