@@ -6,6 +6,7 @@ use orinium_text::{
     Color as OriColor, FontKey, FontStyle as OriFontStyle, FontSystem, FontWeight as OriFontWeight,
     TextLayout, TextLayouter, TextStyle as OriTextStyle, fontdb,
 };
+use smol_str::SmolStr;
 use swash::{
     FontRef,
     scale::{Render, ScaleContext, Source},
@@ -16,6 +17,7 @@ use wgpu::util::DeviceExt;
 use super::atlas::{GlyphAtlas, GlyphKey, RasterizedMask};
 use super::global_font;
 use crate::engine::layouter::types::{FontStyle, LineHeight, TextFlowStyle, TextStyle};
+use crate::platform::cache_stats::{CacheStats, CacheStatsSnapshot};
 use crate::platform::renderer::mesh::{self, TextSection};
 use crate::{perf_scope, profile_log};
 
@@ -29,6 +31,8 @@ fn rasterizable_font_size(px: f32) -> bool {
 
 const SUBPIXEL_PHASES_X: i32 = 4;
 const BEARING_CACHE_CAPACITY: usize = 32_768;
+/// Maximum number of laid-out text buffers kept in [`TextRenderer`]'s LRU.
+const LAYOUT_CACHE_CAPACITY: usize = 128;
 
 fn quantize_subpixel_x(x: f32) -> (f32, u8) {
     let quantized = (x * SUBPIXEL_PHASES_X as f32).round() as i32;
@@ -206,7 +210,7 @@ pub fn build_family_list<'a>(families: &'a [String]) -> Vec<fontdb::Family<'a>> 
 /// テキストセクション位置・クリップ・描画範囲をまとめた構造体
 /// (定義は [`mesh::TextSection`] を参照)
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum CachedLineHeight {
     Normal,
     Number(u32),
@@ -223,16 +227,15 @@ impl CachedLineHeight {
     }
 }
 
-#[derive(Debug, Clone)]
-struct CachedLayout {
-    text: String,
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+struct CachedLayoutKey {
+    text: SmolStr,
     font_size_bits: u32,
     color: u32,
     font_weight: u16,
     font_style: FontStyle,
     line_height: CachedLineHeight,
     font_families: Vec<String>,
-    layout: Arc<TextLayout>,
 }
 
 fn sections_hash(sections: &[TextSection]) -> u64 {
@@ -281,8 +284,10 @@ pub struct TextRenderer {
     /// while preserving interleaved draw order.
     section_ranges: Vec<(u32, u32)>,
 
-    layout_cache: Vec<CachedLayout>,
+    layout_cache: LruCache<CachedLayoutKey, Arc<TextLayout>>,
     bearing_cache: LruCache<(fontdb::ID, u32, u32, u16), (f32, f32)>,
+    layout_stats: CacheStats,
+    bearing_stats: CacheStats,
 }
 
 impl TextRenderer {
@@ -490,8 +495,10 @@ impl TextRenderer {
             prev_sections_hash: 0,
             prev_sections_count: 0,
             section_ranges: Vec::new(),
-            layout_cache: Vec::new(),
+            layout_cache: LruCache::new(NonZeroUsize::new(LAYOUT_CACHE_CAPACITY).unwrap()),
             bearing_cache: LruCache::new(NonZeroUsize::new(BEARING_CACHE_CAPACITY).unwrap()),
+            layout_stats: CacheStats::new("text_layout"),
+            bearing_stats: CacheStats::new("glyph_bearing"),
         })
     }
 
@@ -513,45 +520,41 @@ impl TextRenderer {
         let line_height = CachedLineHeight::from_line_height(flow_style.line_height);
         let font_families = style.font_families.clone();
 
-        for i in 0..self.layout_cache.len() {
-            let cached = &self.layout_cache[i];
+        let key = CachedLayoutKey {
+            text: SmolStr::new(text),
+            font_size_bits,
+            color,
+            font_weight,
+            font_style,
+            line_height,
+            font_families,
+        };
 
-            if cached.text == text
-                && cached.font_size_bits == font_size_bits
-                && cached.color == color
-                && cached.font_weight == font_weight
-                && cached.font_style == font_style
-                && cached.line_height == line_height
-                && cached.font_families == font_families
-            {
-                let entry = self.layout_cache.remove(i);
-                let layout = Arc::clone(&entry.layout);
-                self.layout_cache.insert(0, entry);
-                return layout;
-            }
+        if let Some(layout) = self.layout_cache.get(&key) {
+            self.layout_stats.record_hit();
+            return Arc::clone(layout);
         }
+        self.layout_stats.record_miss();
 
         let layout = Arc::new(self.create_buffer_for_text_inner(text, &style, &flow_style));
 
-        self.layout_cache.insert(
-            0,
-            CachedLayout {
-                text: text.to_string(),
-                font_size_bits,
-                color,
-                font_weight,
-                font_style,
-                line_height,
-                font_families,
-                layout: Arc::clone(&layout),
-            },
-        );
-
-        if self.layout_cache.len() > 128 {
-            self.layout_cache.pop();
+        let unchanged_key = key.clone();
+        if let Some((evicted_key, _)) = self.layout_cache.push(key, Arc::clone(&layout))
+            && evicted_key != unchanged_key
+        {
+            self.layout_stats.record_eviction();
         }
 
         layout
+    }
+
+    /// Snapshot of the layout, bearing and glyph-atlas cache counters.
+    pub fn cache_stats(&self) -> [CacheStatsSnapshot; 3] {
+        [
+            self.layout_stats.snapshot(),
+            self.bearing_stats.snapshot(),
+            self.atlas.stats(),
+        ]
     }
 
     fn create_buffer_for_text_inner(
@@ -719,12 +722,19 @@ impl TextRenderer {
                         let (bearing_x, bearing_y) = if let Some(bearings) =
                             self.bearing_cache.get(&bearing_key)
                         {
+                            self.bearing_stats.record_hit();
                             *bearings
                         } else {
+                            self.bearing_stats.record_miss();
                             let bearings =
                                 unhinted_bearings(fs, font_key, glyph.glyph_id, glyph.font_size)
                                     .unwrap_or((0.0, 0.0));
-                            self.bearing_cache.put(bearing_key, bearings);
+                            if let Some((evicted_key, _)) =
+                                self.bearing_cache.push(bearing_key, bearings)
+                                && evicted_key != bearing_key
+                            {
+                                self.bearing_stats.record_eviction();
+                            }
                             bearings
                         };
 

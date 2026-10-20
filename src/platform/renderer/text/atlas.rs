@@ -4,6 +4,8 @@ use etagere::{BucketedAtlasAllocator, size2};
 use lru::LruCache;
 use orinium_text::fontdb;
 
+use crate::platform::cache_stats::{CacheStats, CacheStatsSnapshot};
+
 /// (fontdb ID, glyph_id, font_size_bits, CSS weight, horizontal subpixel phase)
 pub type GlyphKey = (fontdb::ID, u32, u32, u16, u8);
 
@@ -53,6 +55,7 @@ pub struct GlyphAtlas {
     layers: u32,
     allocators: Vec<BucketedAtlasAllocator>,
     glyph_map: LruCache<GlyphKey, GlyphCacheValue>,
+    stats: CacheStats,
     cpu_layers: Vec<Vec<u8>>,
     dirty_layers: std::collections::HashSet<u32>,
 }
@@ -104,6 +107,7 @@ impl GlyphAtlas {
             layers: 1,
             allocators: vec![allocator],
             glyph_map: LruCache::new(NonZeroUsize::new(LRU_CAPACITY).unwrap()),
+            stats: CacheStats::new("glyph_atlas"),
             cpu_layers: vec![vec![0u8; layer_size]],
             dirty_layers: std::collections::HashSet::new(),
         }
@@ -115,10 +119,20 @@ impl GlyphAtlas {
 
     /// Returns cached (layer, u, v, w, h) if the glyph is already in the atlas.
     pub fn lookup(&mut self, key: GlyphKey) -> Option<GlyphAtlasEntry> {
-        let (layer, _alloc_id, rect, width, height, left, top) = self.glyph_map.get(&key)?;
+        let Some((layer, _alloc_id, rect, width, height, left, top)) = self.glyph_map.get(&key)
+        else {
+            self.stats.record_miss();
+            return None;
+        };
+        self.stats.record_hit();
         Some(Self::entry(
             self.size, *layer, *rect, *width, *height, *left, *top,
         ))
+    }
+
+    /// Snapshot of this atlas's hit/miss/eviction counters.
+    pub fn stats(&self) -> CacheStatsSnapshot {
+        self.stats.snapshot()
     }
 
     /// Evict a single LRU entry from the cache and free its atlas allocation.
@@ -126,6 +140,7 @@ impl GlyphAtlas {
     fn evict_one(&mut self) -> bool {
         if let Some((_key, (layer, alloc_id, ..))) = self.glyph_map.pop_lru() {
             self.allocators[layer as usize].deallocate(alloc_id);
+            self.stats.record_eviction();
             true
         } else {
             false
@@ -249,6 +264,7 @@ impl GlyphAtlas {
             && let Some((_k, (elayer, ealloc_id, ..))) = self.glyph_map.pop_lru()
         {
             self.allocators[elayer as usize].deallocate(ealloc_id);
+            self.stats.record_eviction();
         }
         self.glyph_map.put(key, cache_val);
 

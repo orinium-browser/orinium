@@ -1,5 +1,6 @@
 //! Platform abstraction layer. OS-specific implementations.
 
+pub mod cache_stats;
 pub mod io;
 pub mod locale;
 pub mod network;

@@ -1,6 +1,7 @@
 //! wgpuを使用してGPUで描画するためのコンテキストと処理を提供するモジュール
 
 use crate::engine::renderer_model::DrawCommand;
+use crate::platform::cache_stats::CacheStatsSnapshot;
 use anyhow::Result;
 use winit::dpi::PhysicalSize;
 
@@ -254,6 +255,16 @@ impl GpuRenderer {
                 );
             }
         }
+    }
+
+    /// Returns the hit/miss/eviction counters of the internal text caches
+    /// (layout, glyph bearings, glyph atlas). Empty when text rendering is
+    /// unavailable.
+    pub fn cache_stats(&self) -> Vec<CacheStatsSnapshot> {
+        self.text_renderer
+            .as_ref()
+            .map(|renderer| renderer.cache_stats().to_vec())
+            .unwrap_or_default()
     }
 
     /// 描画命令を解析して頂点バッファやテキストキューに登録

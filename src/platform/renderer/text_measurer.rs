@@ -123,7 +123,7 @@ impl TextMeasurer for PlatformTextMeasurer {
         profile_log!(
             target: "TextMeasurer",
             log::Level::Info,
-            "measure: text={:?} len={} font_size={}  shape={:?}  layout={:?}  total={:?}  fragments={}",
+            "measure: text={:?} len={} font_size={}  shape={:?}  layout={:?}  total={:?}  fragments={}  cache={}",
             crate::profile::text_preview(&req.text),
             req.text.len(),
             font_size,
@@ -131,6 +131,7 @@ impl TextMeasurer for PlatformTextMeasurer {
             layout_time,
             total.elapsed(),
             fragments.len(),
+            self.cache.stats(),
         );
         Ok(fragments)
     }
@@ -196,12 +197,13 @@ impl TextMeasurer for PlatformTextMeasurer {
         profile_log!(
             target: "TextMeasurer",
             log::Level::Info,
-            "measure_shaped: text={:?} len={} font_size={}  total={:?}  clusters={}",
+            "measure_shaped: text={:?} len={} font_size={}  total={:?}  clusters={}  cache={}",
             crate::profile::text_preview(&req.text),
             req.text.len(),
             font_size,
             total.elapsed(),
             clusters.len(),
+            self.cache.stats(),
         );
 
         Ok(clusters)

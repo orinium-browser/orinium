@@ -7,6 +7,8 @@ use std::time::{Duration, SystemTime};
 
 use lru::LruCache;
 
+use crate::platform::cache_stats::{CacheStats, CacheStatsSnapshot};
+
 use super::core::Response;
 
 /// Maximum number of responses kept before the oldest ones are evicted.
@@ -16,6 +18,7 @@ const DEFAULT_MAX_ENTRIES: usize = 512;
 pub struct Cache {
     enabled: AtomicBool,
     store: Arc<Mutex<LruCache<String, CachedResponse>>>,
+    stats: CacheStats,
 }
 
 #[derive(Debug)]
@@ -42,6 +45,7 @@ impl Cache {
         Self {
             enabled: AtomicBool::new(true),
             store: Arc::new(Mutex::new(LruCache::new(capacity))),
+            stats: CacheStats::new("http"),
         }
     }
 
@@ -69,16 +73,23 @@ impl Cache {
             return None;
         }
         let mut store = self.store.lock().ok()?;
-        let entry = store.get(url)?;
+        let Some(entry) = store.get(url) else {
+            self.stats.record_miss();
+            return None;
+        };
         if let Some(exp) = entry.expires_at
             && SystemTime::now() > exp
         {
             store.pop(url);
+            self.stats.record_eviction();
+            self.stats.record_miss();
             return None;
         }
         if normalized_headers(request_headers) != entry.request_headers {
+            self.stats.record_miss();
             return None;
         }
+        self.stats.record_hit();
         Some(entry.response.clone())
     }
 
@@ -105,7 +116,9 @@ impl Cache {
             return;
         }
         if let Ok(mut store) = self.store.lock() {
-            store.put(
+            // `push` returns the replaced entry when the URL is revalidated
+            // and the least recently used entry when the cache overflows.
+            let evicted = store.push(
                 url.to_string(),
                 CachedResponse {
                     response: response.clone(),
@@ -113,7 +126,17 @@ impl Cache {
                     request_headers: normalized_headers(request_headers),
                 },
             );
+            if let Some((evicted_url, _)) = evicted
+                && evicted_url != url
+            {
+                self.stats.record_eviction();
+            }
         }
+    }
+
+    /// Snapshot of this cache's hit/miss/eviction counters.
+    pub fn stats(&self) -> CacheStatsSnapshot {
+        self.stats.snapshot()
     }
 
     /// Number of responses currently held.
@@ -314,5 +337,40 @@ mod tests {
                 .is_none()
         );
         assert!(cache.get(url).is_none());
+    }
+
+    #[test]
+    fn stats_count_hits_misses_and_lru_evictions() {
+        let cache = Cache::with_capacity(2);
+        let a = "https://example.test/a";
+        let b = "https://example.test/b";
+        let c = "https://example.test/c";
+
+        assert!(cache.get(a).is_none());
+        cache.set(a, &response(b"a", Vec::new()));
+        assert!(cache.get(a).is_some());
+        assert!(cache.get(a).is_some());
+        cache.set(b, &response(b"b", Vec::new()));
+        cache.set(c, &response(b"c", Vec::new()));
+
+        let stats = cache.stats();
+        assert_eq!(stats.name, "http");
+        assert_eq!(stats.hits, 2);
+        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.evictions, 1, "inserting c evicts the oldest entry");
+    }
+
+    #[test]
+    fn expired_entries_count_as_misses_and_evictions() {
+        let cache = Cache::with_capacity(16);
+        let url = "https://example.test/page";
+
+        cache.set(url, &response(b"hello", cache_control("max-age=0")));
+        assert!(cache.get(url).is_none());
+
+        let stats = cache.stats();
+        assert_eq!(stats.hits, 0);
+        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.evictions, 1);
     }
 }
