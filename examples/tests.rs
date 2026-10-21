@@ -11,7 +11,9 @@ use orinium_browser::{
         js::{JsRuntime, missing_api_detector},
         layouter::{
             InheritedCss, build_layout_and_info,
-            css_resolver::{CssResolver, ResolvedStyles, StyleOrigin, append_resolved_styles},
+            css_resolver::{
+                CssResolver, MediaEnvironment, ResolvedStyles, StyleOrigin, append_resolved_styles,
+            },
             types::{TextFlowStyle, TextStyle},
         },
         renderer_model::generate_draw_commands,
@@ -343,6 +345,15 @@ fn main() -> Result<()> {
                     eprintln!("Please provide a URL for the webcompat report.");
                 }
             }
+            "bench_layout_cache" => {
+                if args.len() >= 3 {
+                    let raw_url = &args[2];
+                    let (viewport_w, viewport_h) = viewport_args(&args, 800.0, 600.0)?;
+                    bench_layout_cache(raw_url, (viewport_w, viewport_h))?;
+                } else {
+                    eprintln!("Please provide a URL (URL [WIDTH HEIGHT]).");
+                }
+            }
             _ => {
                 eprintln!("Unknown argument: {}", args[1]);
                 let commands: Vec<&str> = get_commands().keys().copied().collect();
@@ -499,6 +510,99 @@ fn build_layout_info_inner(
 /// that were already fetched by the webcompat harness, so the layout stage
 /// does not re-fetch the page or its CSS. `<style>` blocks are re-collected
 /// from the live DOM so scripts that inject styles are reflected.
+/// Measures the layout worker's selector match cache on a real page.
+///
+/// Fetches `raw_url`, builds a `DomSnapshot` and `ResolvedStyles` once, then
+/// runs layout builds through a real `LayoutProcessor`. The first populates
+/// the caches; the second reports the hit rate that repeat layout runs (scroll,
+/// resize, animation) achieve on that page. Run with `--features profile` to
+/// see the `[LayoutRun]` cache statistics.
+fn bench_layout_cache(raw_url: &str, viewport: (f32, f32)) -> Result<()> {
+    use orinium_browser::engine::layouter::{DomSnapshot, LayoutProcessor, LayoutTask};
+
+    let parsed_url: url::Url = raw_url.parse()?;
+    let net = NetworkCore::new()?;
+    let loader = BrowserResourceLoader::with_network(net);
+    let resp = loader
+        .fetch_blocking(parsed_url.clone())
+        .expect("Failed to fetch URL");
+    let html = String::from_utf8_lossy(&resp.body).to_string();
+
+    let dom = HtmlParser::new(&html).parse();
+    let (snapshot, _dom_refs) = DomSnapshot::from_tree(&dom.root);
+    let snapshot = Arc::new(snapshot);
+    let root = snapshot.roots()[0];
+
+    let mut resolved_styles = ResolvedStyles::default();
+    let ua_css = include_str!("../resource/user-agent.css");
+    let ua_sheet = CssParser::new(ua_css).parse().expect("UA CSS parses");
+    append_resolved_styles(
+        &mut resolved_styles,
+        CssResolver::resolve_with_origin(&ua_sheet, StyleOrigin::UserAgent),
+    );
+    for css in dom.collect_text_by_tag("style") {
+        if let Ok(sheet) = CssParser::new(&css).parse() {
+            append_resolved_styles(&mut resolved_styles, CssResolver::resolve(&sheet));
+        }
+    }
+
+    let media_environment = MediaEnvironment::new(viewport, Default::default());
+    let measurer: Arc<dyn orinium_browser::engine::bridge::text::TextMeasurer> = Arc::new(
+        PlatformTextMeasurer::new().expect("Failed to initialize text measurer (no system font)"),
+    );
+
+    let processor = LayoutProcessor::new();
+    let run = |dom_version: u64| -> std::time::Duration {
+        let task = LayoutTask {
+            snapshot: Arc::clone(&snapshot),
+            root,
+            resolved_styles: Arc::new(resolved_styles.clone()),
+            media_environment,
+            measurer: Arc::clone(&measurer),
+            audio_sinks: default_audio_sink_factory(),
+            system_color_scheme: Default::default(),
+            scripting_mode: orinium_browser::engine::html::ScriptingMode::Enabled,
+            images: Default::default(),
+            audio: Default::default(),
+            parent: InheritedCss {
+                text_style: TextStyle::default(),
+                text_flow_style: TextFlowStyle {
+                    font_size: 16.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            chain: ElementChain::default(),
+            write_back_sender: None,
+            styles_version: 1,
+            dom_version,
+            version: 0,
+        };
+        let start = std::time::Instant::now();
+        processor.send(task);
+        let deadline = start + std::time::Duration::from_secs(30);
+        loop {
+            if processor.try_receive().is_some() {
+                return start.elapsed();
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "layout result did not arrive"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    };
+
+    println!("Page nodes: {}", snapshot.nodes().len());
+    println!("First build:  {:?}", run(1));
+    println!(
+        "Second build: {:?} (rule set + selector matches reused)",
+        run(1)
+    );
+    println!("Third build (new DOM version): {:?}", run(2));
+    Ok(())
+}
+
 fn build_layout_for_dom(
     dom: &Rc<DomTree>,
     external_css: &[String],
@@ -1386,6 +1490,14 @@ fn get_commands<'a>() -> HashMap<&'a str, (&'a str, &'a str, &'a str)> {
             "Diagnostic report of how well this engine can load a real-world URL.",
             "URL",
             "Fetches the HTML, parses the DOM, discovers and fetches scripts/stylesheets/fonts, runs the scripts through the JS engine while capturing console errors and missing Web Platform APIs, and attempts a full layout build.",
+        ),
+    );
+    map.insert(
+        "bench_layout_cache",
+        (
+            "Measure selector match cache reuse across repeated layout runs of a page.",
+            "URL [WIDTH HEIGHT]",
+            "Fetches the page, builds a DomSnapshot and resolved styles once, then runs layout builds through a real LayoutProcessor. The first build populates the rule-set and selector-match caches; later builds with the same styles/DOM version report the reuse that scroll, resize and animation frames get. Combine with --features profile for [LayoutRun] cache statistics.",
         ),
     );
 
