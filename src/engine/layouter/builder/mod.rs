@@ -55,6 +55,7 @@ use crate::engine::tree::NodeRef;
 use crate::engine::ui::custom_node_bridge::CustomNodeBridge;
 use crate::engine::ui::registry::{ComponentRegistry, CustomNodeContext, DomWriteBack};
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -958,7 +959,7 @@ pub fn build_layout_and_info_from_snapshot(
                         };
 
                         let t = match text_style.text_transform {
-                            TextTransform::None => t,
+                            TextTransform::None => t.into_owned(),
                             TextTransform::Uppercase => t.to_ascii_uppercase(),
                             TextTransform::Lowercase => t.to_ascii_lowercase(),
                         };
@@ -1555,7 +1556,67 @@ fn resolve_named_grid_area(node: &mut LayoutNode, areas: &[Vec<String>]) {
 
 // ── Text normalization ──────────────────────────────────────────────────────
 
-pub fn normalize_whitespace(text: &str, white_space: WhiteSpace) -> String {
+/// Normalizes segment breaks and collapsible whitespace according to the
+/// element's `white-space`.
+///
+/// Returns [`Cow::Borrowed`] when `text` is already in normalized form, which
+/// is the common case for the many short text nodes whose content has no
+/// segment breaks, repeated spaces or leading/trailing whitespace. Only the
+/// text that actually needs rewriting is copied.
+pub fn normalize_whitespace(text: &str, white_space: WhiteSpace) -> Cow<'_, str> {
+    // `pre`-like modes only rewrite segment breaks (`\r\n`, `\r`, `\x0c` are
+    // all replaced by `\n`); every other rune is preserved verbatim.
+    let is_pre_like = matches!(
+        white_space,
+        WhiteSpace::Pre | WhiteSpace::PreWrap | WhiteSpace::BreakSpaces
+    );
+    let has_segment_break = text.as_bytes().iter().any(|&b| b == b'\r' || b == b'\x0c');
+
+    if is_pre_like {
+        if !has_segment_break {
+            return Cow::Borrowed(text);
+        }
+        // Only segment breaks change; avoid the throwaway second `replace`.
+        let mut result = String::with_capacity(text.len());
+        let mut chars = text.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '\r' => {
+                    if chars.peek() == Some(&'\n') {
+                        chars.next();
+                    }
+                    result.push('\n');
+                }
+                '\x0c' => result.push('\n'),
+                _ => result.push(c),
+            }
+        }
+        return Cow::Owned(result);
+    }
+
+    // `Normal`, `Nowrap` and `PreLine` all collapse runs of CSS whitespace:
+    // every whitespace rune is mapped to a single `' '`. The text therefore
+    // only needs rewriting when a segment break is present, when a whitespace
+    // rune other than `' '` appears (tab, newline, …), or when two whitespace
+    // runes are adjacent (the second would be dropped).
+    let needs_rewrite = has_segment_break || {
+        let mut prev_was_space = false;
+        let mut rewrite = false;
+        for c in text.chars() {
+            let is_space = is_css_whitespace(c);
+            if is_space && (prev_was_space || c != ' ') {
+                rewrite = true;
+                break;
+            }
+            prev_was_space = is_space;
+        }
+        rewrite
+    };
+
+    if !needs_rewrite {
+        return Cow::Borrowed(text);
+    }
+
     let text = text.replace("\r\n", "\n");
     let text = text.replace(['\r', '\x0c'], "\n");
 
@@ -1604,7 +1665,7 @@ pub fn normalize_whitespace(text: &str, white_space: WhiteSpace) -> String {
         }
     }
 
-    result
+    Cow::Owned(result)
 }
 
 /// Measure text and create a [`TextFlowLayouter`] + [`NodeKind::Text`].
@@ -1798,7 +1859,7 @@ fn build_pseudo_slot(
     if !content_text.is_empty() {
         let content_text = normalize_whitespace(&content_text, text_flow_style.white_space);
         let content_text = match text_style.text_transform {
-            TextTransform::None => content_text,
+            TextTransform::None => content_text.into_owned(),
             TextTransform::Uppercase => content_text.to_ascii_uppercase(),
             TextTransform::Lowercase => content_text.to_ascii_lowercase(),
         };

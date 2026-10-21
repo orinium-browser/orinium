@@ -5,9 +5,11 @@
 //! * Quantifies what a shaping-cache hit saves compared to real text shaping.
 //! * Measures the HTTP response cache hit/miss paths.
 //! * Measures the selector match cache lookup and eviction paths.
+//! * Compares `normalize_whitespace` against its pre-optimization form.
 //!
 //! Run with `cargo bench --bench cache_bench`.
 
+use std::borrow::Cow;
 use std::hint::black_box;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -20,6 +22,8 @@ use smol_str::SmolStr;
 
 use orinium_browser::engine::css::parser::ComplexSelector;
 use orinium_browser::engine::layouter::match_cache::SelectorMatchCache;
+use orinium_browser::engine::layouter::normalize_whitespace;
+use orinium_browser::engine::layouter::types::WhiteSpace;
 use orinium_browser::platform::network::{Cache, Response, StatusCode};
 use orinium_browser::platform::renderer::text_cache::TextShapeCache;
 
@@ -385,6 +389,124 @@ fn bench_selector_match_cache(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
+// whitespace normalization
+// ---------------------------------------------------------------------------
+
+/// The pre-optimization `normalize_whitespace`: unconditional `replace` passes
+/// plus a full rebuild, even when the text is already normalized.
+fn normalize_whitespace_baseline(text: &str, white_space: WhiteSpace) -> String {
+    let text = text.replace("\r\n", "\n");
+    let text = text.replace(['\r', '\x0c'], "\n");
+
+    let mut result = String::new();
+    let mut prev_was_space = false;
+
+    let is_space = |c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0c');
+
+    for c in text.chars() {
+        match white_space {
+            WhiteSpace::Normal | WhiteSpace::Nowrap => {
+                if is_space(c) {
+                    if !prev_was_space {
+                        result.push(' ');
+                    }
+                    prev_was_space = true;
+                } else {
+                    result.push(c);
+                    prev_was_space = false;
+                }
+            }
+            WhiteSpace::Pre | WhiteSpace::PreWrap | WhiteSpace::BreakSpaces => {
+                result.push(c);
+                prev_was_space = false;
+            }
+            WhiteSpace::PreLine => {
+                if c == '\n' {
+                    result.push('\n');
+                    prev_was_space = false;
+                } else if is_space(c) {
+                    if !prev_was_space {
+                        result.push(' ');
+                    }
+                    prev_was_space = true;
+                } else {
+                    result.push(c);
+                    prev_was_space = false;
+                }
+            }
+        }
+    }
+
+    if white_space == WhiteSpace::PreLine {
+        while result.ends_with('\n') {
+            result.pop();
+        }
+    }
+
+    result
+}
+
+fn bench_normalize_whitespace(c: &mut Criterion) {
+    let mut group = c.benchmark_group("normalize_whitespace");
+    tune(&mut group);
+
+    // Representative short text nodes: mostly already normalized, a few with
+    // work to do.
+    let samples: Vec<&str> = vec![
+        "Rust",
+        "programming language",
+        "The quick brown fox jumps over the lazy dog.",
+        "This line has  double  spaces  to collapse.",
+        "trailing space ",
+        "tab\tseparated\twords",
+        "multi\nline\ntext",
+        "CJK テキスト と English mixed",
+    ];
+
+    group.bench_function("optimized_normal", |b| {
+        b.iter(|| {
+            let mut sink = 0usize;
+            for sample in &samples {
+                sink +=
+                    black_box(normalize_whitespace(black_box(sample), WhiteSpace::Normal)).len();
+            }
+            black_box(sink)
+        });
+    });
+
+    group.bench_function("baseline_normal", |b| {
+        b.iter(|| {
+            let mut sink = 0usize;
+            for sample in &samples {
+                sink += black_box(normalize_whitespace_baseline(
+                    black_box(sample),
+                    WhiteSpace::Normal,
+                ))
+                .len();
+            }
+            black_box(sink)
+        });
+    });
+
+    group.bench_function("optimized_borrow_ratio", |b| {
+        b.iter(|| {
+            let mut borrowed = 0usize;
+            for sample in &samples {
+                if matches!(
+                    normalize_whitespace(black_box(sample), WhiteSpace::Normal),
+                    Cow::Borrowed(_)
+                ) {
+                    borrowed += 1;
+                }
+            }
+            black_box(borrowed)
+        });
+    });
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
 // HTTP response cache
 // ---------------------------------------------------------------------------
 
@@ -436,6 +558,7 @@ criterion_group!(
     bench_text_shape_cache,
     bench_layout_cache,
     bench_selector_match_cache,
+    bench_normalize_whitespace,
     bench_http_cache
 );
 criterion_main!(benches);

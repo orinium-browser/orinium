@@ -145,7 +145,8 @@ impl CustomNodeFactory for ButtonFactory {
             _ => default_bg,
         };
         let label =
-            normalize_whitespace(&ctx.dom_snapshot.inner_text(ctx.dom_id), WhiteSpace::Normal);
+            normalize_whitespace(&ctx.dom_snapshot.inner_text(ctx.dom_id), WhiteSpace::Normal)
+                .into_owned();
         Some(Arc::new(ButtonComponent::new(
             label,
             bg,
@@ -286,7 +287,8 @@ impl CustomNodeFactory for SelectFactory {
                             label: normalize_whitespace(
                                 &ctx.dom_snapshot.inner_text(*child),
                                 WhiteSpace::Pre,
-                            ),
+                            )
+                            .into_owned(),
                             selected: child_node.kind.has_attr("selected"),
                             disabled: group_disabled || child_node.kind.has_attr("disabled"),
                             group: Some(group.clone()),
@@ -298,7 +300,8 @@ impl CustomNodeFactory for SelectFactory {
                     label: normalize_whitespace(
                         &ctx.dom_snapshot.inner_text(*id),
                         WhiteSpace::Normal,
-                    ),
+                    )
+                    .into_owned(),
                     selected: node.kind.has_attr("selected"),
                     disabled: node.kind.has_attr("disabled"),
                     group: None,
