@@ -385,6 +385,69 @@ fn bench_selector_match_cache(c: &mut Criterion) {
         });
     });
 
+    // Baseline for the hit path: a plain `HashMap` keyed the same way, without
+    // the LRU recency bookkeeping. Each `(selector, element)` pair is queried
+    // exactly once per build, so the move-to-front that `LruCache` performs on
+    // every hit is pure overhead within an epoch.
+    group.bench_function("hashmap_hit", |b| {
+        let mut cache: std::collections::HashMap<(usize, u32), bool> =
+            std::collections::HashMap::new();
+        for (s_idx, selector) in selectors.iter().enumerate() {
+            for node in 0..node_count {
+                cache.insert(
+                    (Arc::as_ptr(selector) as usize, node),
+                    (s_idx as u32 + node).is_multiple_of(2),
+                );
+            }
+        }
+
+        let mut i = 0usize;
+        b.iter(|| {
+            let key = (
+                Arc::as_ptr(&selectors[i % selectors.len()]) as usize,
+                (i / selectors.len()) as u32 % node_count,
+            );
+            i += 1;
+            black_box(*cache.get(black_box(&key)).unwrap())
+        });
+    });
+
+    // Production-scale hit pass: ~1500 selectors x ~40 candidates each is
+    // about the 60k pair count a large page produces. The traversal is
+    // element-major: for each element, walk its candidate groups (matching the
+    // builder's actual access order), then repeat the whole pass as the second
+    // layout build does.
+    group.bench_function("hit_production_scale_60k", |b| {
+        let selector_count = 1500usize;
+        let per_element = 40usize;
+        let big_selectors: Vec<Arc<ComplexSelector>> = (0..selector_count)
+            .map(|_| Arc::new(ComplexSelector { parts: Vec::new() }))
+            .collect();
+        let elements = 60_000usize / per_element;
+
+        let mut cache = SelectorMatchCache::new();
+        let mut keys = Vec::with_capacity(60_000);
+        for element in 0..elements {
+            for k in 0..per_element {
+                let sel = (element * 7 + k * 13) % selector_count;
+                keys.push((big_selectors[sel].clone(), element as u32));
+            }
+        }
+        for (sel, node) in &keys {
+            cache.get_or_insert(sel, *node, || true);
+        }
+
+        b.iter(|| {
+            let mut hits = 0usize;
+            for (sel, node) in &keys {
+                if cache.get_or_insert(black_box(sel), black_box(*node), || unreachable!()) {
+                    hits += 1;
+                }
+            }
+            black_box(hits)
+        });
+    });
+
     group.finish();
 }
 
