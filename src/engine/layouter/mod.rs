@@ -15,6 +15,7 @@
 mod builder;
 pub mod css_resolver;
 pub mod dom_snapshot;
+pub mod match_cache;
 pub mod processor;
 mod shift;
 pub mod style_inspect;
@@ -31,5 +32,6 @@ pub use builder::{
     refresh_missing_text_layout_results, resolve_anchor_positioning,
 };
 pub use dom_snapshot::{DomSnapshot, NodeId, SnapNode};
+pub use match_cache::SelectorMatchCache;
 pub use processor::{LayoutProcessor, LayoutResult, LayoutTask};
 pub use table_layout::align_table_columns;

@@ -4,6 +4,7 @@
 //!   the current LRU-based implementations.
 //! * Quantifies what a shaping-cache hit saves compared to real text shaping.
 //! * Measures the HTTP response cache hit/miss paths.
+//! * Measures the selector match cache lookup and eviction paths.
 //!
 //! Run with `cargo bench --bench cache_bench`.
 
@@ -17,6 +18,8 @@ use lru::LruCache;
 use orinium_text::{FontSystem, TextLayouter, TextStyle};
 use smol_str::SmolStr;
 
+use orinium_browser::engine::css::parser::ComplexSelector;
+use orinium_browser::engine::layouter::match_cache::SelectorMatchCache;
 use orinium_browser::platform::network::{Cache, Response, StatusCode};
 use orinium_browser::platform::renderer::text_cache::TextShapeCache;
 
@@ -332,6 +335,56 @@ fn bench_layout_cache(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
+// selector match cache
+// ---------------------------------------------------------------------------
+
+fn bench_selector_match_cache(c: &mut Criterion) {
+    let mut group = c.benchmark_group("selector_match_cache");
+    tune(&mut group);
+
+    // One allocation per selector mirrors the rule set, where every rule group
+    // owns an `Arc<ComplexSelector>` that stays alive for the whole epoch.
+    let selectors: Vec<Arc<ComplexSelector>> = (0..512)
+        .map(|_| Arc::new(ComplexSelector { parts: Vec::new() }))
+        .collect();
+    let node_count = 128u32;
+
+    group.bench_function("hit_512_selectors_x_128_nodes", |b| {
+        let mut cache = SelectorMatchCache::new();
+        for (s_idx, selector) in selectors.iter().enumerate() {
+            for node in 0..node_count {
+                cache.get_or_insert(selector, node, || (s_idx as u32 + node).is_multiple_of(2));
+            }
+        }
+
+        let mut i = 0usize;
+        b.iter(|| {
+            let selector = &selectors[i % selectors.len()];
+            let node = (i / selectors.len()) as u32 % node_count;
+            i += 1;
+            black_box(
+                cache.get_or_insert(black_box(selector), black_box(node), || {
+                    unreachable!("a warm cache must not recompute the match")
+                }),
+            )
+        });
+    });
+
+    group.bench_function("insert_with_eviction", |b| {
+        let mut cache = SelectorMatchCache::with_capacity(4096);
+        let mut i = 0usize;
+        b.iter(|| {
+            i += 1;
+            let selector = &selectors[i % selectors.len()];
+            let node = (i / selectors.len()) as u32;
+            black_box(cache.get_or_insert(selector, node, || true))
+        });
+    });
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
 // HTTP response cache
 // ---------------------------------------------------------------------------
 
@@ -382,6 +435,7 @@ criterion_group!(
     bench_shaping,
     bench_text_shape_cache,
     bench_layout_cache,
+    bench_selector_match_cache,
     bench_http_cache
 );
 criterion_main!(benches);

@@ -1716,6 +1716,7 @@ impl WebView {
             chain: ElementChain::default(),
             write_back_sender: Some(self.write_back_tx.clone()),
             styles_version: self.resolved_styles_version,
+            dom_version,
             version: 0,
         };
         self.layout_dom_refs = dom_refs;

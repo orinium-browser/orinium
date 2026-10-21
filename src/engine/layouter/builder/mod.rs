@@ -69,6 +69,7 @@ use ui_layout::{
 use super::css_resolver::{
     MediaEnvironment, ResolvedStyles, RuleSet, resolve_inline_style, set_inline_custom_property,
 };
+use super::match_cache::SelectorMatchCache;
 use super::text_layouter::TextFlowLayouter;
 #[allow(unused_imports)]
 use super::types::{
@@ -317,6 +318,7 @@ pub fn build_layout_and_info_with_images(
         images,
         &HashMap::new(),
         None,
+        None,
     )
 }
 
@@ -328,6 +330,10 @@ pub fn build_layout_and_info_with_images(
 ///
 /// `system_color_scheme` seeds the root element's used color scheme and is
 /// used to resolve `color-scheme: light dark` and `light-dark()` values.
+///
+/// `match_cache` (when set) memoizes selector match results across builds that
+/// share the same DOM snapshot and rule set. The caller is responsible for
+/// clearing it when either input changes.
 #[allow(clippy::too_many_arguments)]
 pub fn build_layout_and_info_from_snapshot(
     snapshot: &DomSnapshot,
@@ -342,6 +348,7 @@ pub fn build_layout_and_info_from_snapshot(
     images: &HashMap<String, Image>,
     audio: &HashMap<String, Arc<[u8]>>,
     write_back_sender: Option<DomWriteBack>,
+    mut match_cache: Option<&mut SelectorMatchCache>,
 ) -> (LayoutNode, InfoNode) {
     perf_scope!(total);
 
@@ -426,6 +433,7 @@ pub fn build_layout_and_info_from_snapshot(
             let child_css = Arc::clone(&stack[top_idx].child);
 
             let html_node = &snapshot.node(stack[top_idx].dom).kind;
+            let node_id = stack[top_idx].dom;
             let mut text_style = child_css.text_style.clone();
             let mut text_flow_style = child_css.text_flow_style;
             let mut container_style = ContainerStyle::default();
@@ -447,6 +455,8 @@ pub fn build_layout_and_info_from_snapshot(
                         collect_candidates(
                             rule_set,
                             &chain_for_css,
+                            node_id,
+                            match_cache.as_deref_mut(),
                             #[cfg(any(feature = "profile", debug_assertions))]
                             &mut cand_stats,
                         );
@@ -1907,6 +1917,8 @@ struct CandidateMetrics {
 fn collect_candidates(
     rule_set: &RuleSet,
     chain: &ElementChain,
+    node_id: NodeId,
+    mut match_cache: Option<&mut SelectorMatchCache>,
     #[cfg(any(feature = "profile", debug_assertions))] stats: &mut CandidateMetrics,
 ) -> (Properties, Properties, HashMap<PseudoElement, Properties>) {
     let mut properties = HashMap::new();
@@ -1944,7 +1956,12 @@ fn collect_candidates(
         // Declarations sharing an identical selector are grouped, so the
         // (comparatively expensive) selector walk happens once per group.
         perf_scope!(sel_match);
-        let matches_sel = group.selector.matches(chain);
+        let matches_sel = match match_cache.as_deref_mut() {
+            Some(cache) => {
+                cache.get_or_insert(&group.selector, node_id, || group.selector.matches(chain))
+            }
+            None => group.selector.matches(chain),
+        };
         #[cfg(any(feature = "profile", debug_assertions))]
         {
             stats.selector_match_time += sel_match.elapsed();

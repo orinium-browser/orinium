@@ -23,6 +23,7 @@ use ui_layout::LayoutNode;
 use super::builder::{InheritedCss, build_layout_and_info_from_snapshot};
 use super::css_resolver::{MediaEnvironment, ResolvedStyles};
 use super::dom_snapshot::{DomSnapshot, NodeId};
+use super::match_cache::SelectorMatchCache;
 use super::types::InfoNode;
 use crate::engine::background_worker::BackgroundWorker;
 use crate::engine::bridge::audio::AudioSinkFactory;
@@ -54,21 +55,21 @@ pub struct LayoutTask {
     /// by the UI thread; see [`LayoutProcessor`] for how it drives the
     /// [`RuleSet`] cache.
     pub styles_version: u64,
+    /// Monotonic version of the DOM snapshot handed to the task. Selector match
+    /// results are only reused across tasks with the same version.
+    pub dom_version: u64,
     /// Monotonic sequence number used to coalesce stale tasks. Assigned by
     /// [`LayoutProcessor::send`], ignore when constructing a task.
     pub version: u64,
 }
 
-/// Per-worker cache of the last built [`RuleSet`].
+/// Per-worker caches reused across layout tasks.
 ///
-/// Building a `RuleSet` (`@media` filtering, selector grouping and subject
-/// indexing) is the dominant fixed cost of every layout build. The styles
-/// only change on CSS application, so the rule set is reusable across the
-/// numerous visual-update tasks in between. The UI thread bumps
-/// [`LayoutTask::styles_version`] on every mutation of the styles, so the
-/// worker can tell a stale rule set from the current one even when the
-/// styles were changed in place (`Arc::make_mut`).
-struct RuleSetCache {
+/// The rule set and the selector match results are both derived from the
+/// resolved styles and the DOM snapshot, so they stay valid until the UI
+/// thread reports a newer [`LayoutTask::styles_version`] or
+/// [`LayoutTask::dom_version`].
+struct WorkerCache {
     /// Styles version the cached rule set was built from.
     styles_version: u64,
     /// Media environment the cached rule set was built against.
@@ -77,15 +78,21 @@ struct RuleSetCache {
     rule_set: RuleSet,
     /// Whether `rule_set` has been populated at least once.
     have_rule_set: bool,
+    /// Memoized selector match results for the current rule set and DOM.
+    match_cache: SelectorMatchCache,
+    /// DOM version the match cache entries are valid for.
+    match_cache_dom_version: u64,
 }
 
-impl Default for RuleSetCache {
+impl Default for WorkerCache {
     fn default() -> Self {
         Self {
             styles_version: 0,
             media_environment: MediaEnvironment::new((0.0, 0.0), ColorScheme::Light),
             rule_set: RuleSet::default(),
             have_rule_set: false,
+            match_cache: SelectorMatchCache::new(),
+            match_cache_dom_version: 0,
         }
     }
 }
@@ -155,7 +162,7 @@ impl LayoutProcessor {
     pub fn new() -> Self {
         let latest = Arc::new(AtomicU64::new(0));
         let latest_clone = Arc::clone(&latest);
-        let cache = Arc::new(Mutex::new(RuleSetCache::default()));
+        let cache = Arc::new(Mutex::new(WorkerCache::default()));
 
         let worker = BackgroundWorker::new(1, move |cmd: LayoutCommand| {
             match cmd {
@@ -169,7 +176,7 @@ impl LayoutProcessor {
                     let version = task.version;
                     perf_scope!(worker_total);
 
-                    let mut cache = cache.lock().expect("layout rule-set cache poisoned");
+                    let mut cache = cache.lock().expect("layout worker cache poisoned");
                     let cache_hit = cache.have_rule_set
                         && cache.styles_version == task.styles_version
                         && cache.media_environment == task.media_environment;
@@ -195,12 +202,28 @@ impl LayoutProcessor {
                         cache.styles_version = task.styles_version;
                         cache.media_environment = task.media_environment;
                         cache.have_rule_set = true;
+                        // Cached matches are keyed by selector allocation and
+                        // node id; a rebuilt rule set allocates new selectors.
+                        cache.match_cache.clear();
                     }
 
+                    // Selector match results also embed the DOM (ancestors,
+                    // siblings, :checked, …), so a new snapshot invalidates
+                    // them even when the rule set is unchanged.
+                    if cache.match_cache_dom_version != task.dom_version {
+                        cache.match_cache.clear();
+                        cache.match_cache_dom_version = task.dom_version;
+                    }
+
+                    let WorkerCache {
+                        rule_set,
+                        match_cache,
+                        ..
+                    } = &mut *cache;
                     let (layout, info) = build_layout_and_info_from_snapshot(
                         &task.snapshot,
                         task.root,
-                        &cache.rule_set,
+                        rule_set,
                         task.measurer,
                         task.audio_sinks,
                         task.parent,
@@ -210,6 +233,7 @@ impl LayoutProcessor {
                         &task.images,
                         &task.audio,
                         task.write_back_sender,
+                        Some(match_cache),
                     );
                     let result = LayoutResult {
                         layout,
@@ -220,10 +244,11 @@ impl LayoutProcessor {
                     profile_log!(
                         target: "LayoutRun",
                         log::Level::Info,
-                        "[LayoutRun] build: total {:?} | ruleset_build: {:?} | cache_hit: {}",
+                        "[LayoutRun] build: total {:?} | ruleset_build: {:?} | cache_hit: {} | {}",
                         worker_total.elapsed(),
                         ruleset_build_time,
                         cache_hit,
+                        cache.match_cache.stats(),
                     );
                     Some(SendableResult(Box::into_raw(Box::new(result))))
                 }
@@ -289,6 +314,7 @@ mod tests {
             chain: ElementChain::default(),
             write_back_sender,
             styles_version: 0,
+            dom_version: 0,
             version: 0,
         }
     }

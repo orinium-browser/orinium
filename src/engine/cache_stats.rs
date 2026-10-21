@@ -1,9 +1,13 @@
-//! Hit/miss counters shared by the platform caches.
+//! Hit/miss counters shared by the engine and platform caches.
 //!
-//! Every cache in [`crate::platform`] (HTTP responses, glyph atlas, glyph
-//! bearings, text layouts, text shaping) owns a [`CacheStats`] counter set so
-//! hit rates and eviction pressure can be observed at runtime and measured in
-//! `benches/cache_bench.rs`.
+//! Every cache in the engine (CSS selector match results) and in the platform
+//! layer (HTTP responses, glyph atlas, glyph bearings, text layouts, text
+//! shaping) owns a [`CacheStats`] counter set so hit rates and eviction
+//! pressure can be observed at runtime and measured in `benches/cache_bench.rs`.
+//!
+//! This module lives in the engine layer so engine-side caches can count hits
+//! without reaching down into the platform; the platform re-exports it under
+//! its original path.
 
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
