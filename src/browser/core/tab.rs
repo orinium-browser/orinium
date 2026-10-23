@@ -84,6 +84,13 @@ pub struct Tab {
     /// DevTools pane). Only chrome contexts hold [`Permissions::chrome`].
     privileged: bool,
 
+    /// Text measurer shared by every [`WebView`] this tab has created.
+    ///
+    /// Reusing one measurer keeps its shaping cache warm across navigations, so
+    /// text shared between documents (chrome, common markup, repeated phrases)
+    /// is not re-shaped from scratch on each page load.
+    text_measurer: Option<Arc<crate::platform::renderer::text_measurer::PlatformTextMeasurer>>,
+
     state: TabState,
     /// Monotonically increasing generation for the current document.
     document_generation: u64,
@@ -132,6 +139,8 @@ impl Tab {
             js_policy,
 
             privileged: false,
+
+            text_measurer: None,
 
             state: TabState::Loading,
             document_generation: 0,
@@ -780,6 +789,19 @@ impl Tab {
         !self.history.is_empty()
     }
 
+    /// Creates this tab's shared text measurer on first use.
+    ///
+    /// Failure to initialize a system font leaves the slot empty, and the web
+    /// view falls back to creating its own measurer.
+    fn ensure_text_measurer(&mut self) {
+        if self.text_measurer.is_none() {
+            self.text_measurer =
+                crate::platform::renderer::text_measurer::PlatformTextMeasurer::new()
+                    .ok()
+                    .map(Arc::new);
+        }
+    }
+
     fn navigate_internal(&mut self, url: Url, record_history: bool) {
         if record_history
             && self.document_url.as_ref() != Some(&url)
@@ -789,8 +811,10 @@ impl Tab {
         }
         self.document_generation = self.document_generation.saturating_add(1);
         self.document_url = Some(url);
+        self.ensure_text_measurer();
         let mut webview = WebView::new(self.system_color_scheme, self.js_policy);
         webview.set_privileged(self.privileged);
+        webview.set_text_measurer(self.text_measurer.clone());
         webview.navigate();
         self.webview = Some(webview);
         self.state = TabState::Loading;
@@ -1142,6 +1166,28 @@ mod tests {
         assert_eq!(tab.document_generation(), before + 1);
         tab.navigate("resource:///test/b.html".parse().unwrap());
         assert_eq!(tab.document_generation(), before + 2);
+    }
+
+    #[test]
+    fn navigation_reuses_the_same_text_measurer() {
+        // A tab shares one measurer across its web views so the shaping cache
+        // survives navigation. Skip when no system font is available, since
+        // then there is nothing to share.
+        let mut tab = Tab::default();
+        tab.navigate("resource:///test/a.html".parse().unwrap());
+        let Some(first) = tab.text_measurer.clone() else {
+            return;
+        };
+        tab.navigate("resource:///test/b.html".parse().unwrap());
+        let Some(second) = tab.text_measurer.clone() else {
+            panic!("the measurer must outlive a navigation");
+        };
+        assert!(Arc::ptr_eq(&first, &second));
+        // The live web view must be using the shared instance, not its own.
+        assert!(Arc::ptr_eq(
+            &first,
+            tab.webview.as_ref().unwrap().text_measurer().unwrap()
+        ));
     }
 
     #[test]

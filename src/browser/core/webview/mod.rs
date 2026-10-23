@@ -1643,6 +1643,22 @@ impl WebView {
         }
     }
 
+    /// Installs a text measurer created by the owning [`Tab`], so its shape
+    /// cache survives across navigations instead of being rebuilt (and
+    /// re-shaped from scratch) for every document.
+    ///
+    /// A `None` measurer leaves the web view to create its own on first use.
+    ///
+    /// [`Tab`]: crate::browser::core::tab::Tab
+    pub fn set_text_measurer(&mut self, measurer: Option<Arc<PlatformTextMeasurer>>) {
+        self.text_measurer = measurer;
+    }
+
+    /// The measurer this web view is using, if one has been created yet.
+    pub fn text_measurer(&self) -> Option<&Arc<PlatformTextMeasurer>> {
+        self.text_measurer.as_ref()
+    }
+
     /// Builds a snapshot and hands the heavy tree construction to the background.
     fn update_layout(&mut self) {
         if self.docment_info.is_none() {
