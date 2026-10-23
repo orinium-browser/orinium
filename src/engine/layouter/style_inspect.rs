@@ -189,7 +189,7 @@ fn chain_for_node(snapshot: &DomSnapshot, target: NodeId) -> Option<ElementChain
 
     // The nearest `lang` at or above each ancestor is what `:lang()` sees, so
     // walk forward once and carry the value down the path.
-    let mut inherited_lang: Option<String> = None;
+    let mut inherited_lang: Option<std::sync::Arc<str>> = None;
     let mut langs = Vec::with_capacity(path.len());
     for &node_id in path.iter() {
         if let Some(lang) = own_lang(snapshot, node_id) {
@@ -342,7 +342,7 @@ mod tests {
 
         // The chain reaches ancestors: first() is the node itself.
         let chain = chain_for_node(&snapshot, lis[1]).unwrap();
-        assert_eq!(chain.first().unwrap().tag_name, "li");
+        assert_eq!(chain.first().unwrap().tag_name.as_ref(), "li");
     }
 
     #[test]

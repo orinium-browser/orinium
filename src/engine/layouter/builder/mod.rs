@@ -95,23 +95,28 @@ pub(crate) fn element_info(html_node: &HtmlNodeType) -> Option<ElementInfo> {
         return None;
     };
     Some(ElementInfo {
-        tag_name: tag_name.clone(),
+        tag_name: tag_name.as_str().into(),
         id: attributes
             .iter()
             .find(|attribute| attribute.name == "id")
-            .map(|attribute| attribute.value.clone()),
+            .map(|attribute| Arc::from(attribute.value.as_str())),
         classes: attributes
             .iter()
             .find(|attribute| attribute.name == "class")
             .map(|attribute| {
                 split_html_space(&attribute.value)
-                    .map(str::to_string)
+                    .map(Arc::<str>::from)
                     .collect()
             })
             .unwrap_or_default(),
         attributes: attributes
             .iter()
-            .map(|attribute| (attribute.name.clone(), attribute.value.clone()))
+            .map(|attribute| {
+                (
+                    Arc::<str>::from(attribute.name.as_str()),
+                    Arc::<str>::from(attribute.value.as_str()),
+                )
+            })
             .collect(),
         element_index: 1,
         element_count: 1,
@@ -137,14 +142,14 @@ pub(crate) fn is_element_node(snapshot: &DomSnapshot, id: NodeId) -> bool {
 }
 
 /// Read an element's own `lang` attribute, if any.
-pub(crate) fn own_lang(snapshot: &DomSnapshot, id: NodeId) -> Option<String> {
+pub(crate) fn own_lang(snapshot: &DomSnapshot, id: NodeId) -> Option<Arc<str>> {
     snapshot
         .node(id)
         .kind
         .get_attr("lang")
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(str::to_string)
+        .map(Arc::<str>::from)
 }
 
 /// The Selectors 4 `:empty` test: no element children, and no text node whose
@@ -166,15 +171,15 @@ pub(crate) fn element_sibling_infos(
     children: &[NodeId],
     parent_lang: Option<&str>,
 ) -> Vec<Option<ElementInfo>> {
-    let mut type_counts = HashMap::<String, usize>::new();
+    let mut type_counts = HashMap::<Arc<str>, usize>::new();
     for &child in children {
         if let Some(tag_name) = snapshot.node(child).kind.tag_name() {
-            *type_counts.entry(tag_name.to_string()).or_default() += 1;
+            *type_counts.entry(Arc::from(tag_name)).or_default() += 1;
         }
     }
     let element_count = type_counts.values().sum();
 
-    let mut seen_types = HashMap::<String, usize>::new();
+    let mut seen_types = HashMap::<Arc<str>, usize>::new();
     let mut previous_siblings = ElementChain::default();
     let mut element_index = 0;
     children
@@ -185,7 +190,7 @@ pub(crate) fn element_sibling_infos(
                 None => return None,
             };
             element_index += 1;
-            let seen = seen_types.entry(info.tag_name.clone()).or_default();
+            let seen = seen_types.entry(Arc::clone(&info.tag_name)).or_default();
             *seen += 1;
             info.element_index = element_index;
             info.element_count = element_count;
@@ -196,7 +201,7 @@ pub(crate) fn element_sibling_infos(
             info.checked = snapshot.node(child).checked;
             // `:lang()` sees the element's own tag, or the one inherited from
             // the nearest ancestor that declares one.
-            info.lang = own_lang(snapshot, child).or_else(|| parent_lang.map(str::to_string));
+            info.lang = own_lang(snapshot, child).or_else(|| parent_lang.map(Arc::<str>::from));
 
             let mut sibling = info.clone();
             sibling.previous_siblings = ElementChain::default();
@@ -240,7 +245,7 @@ struct StackFrame {
     dom: NodeId,
     /// The language tag in effect for this node, so that descendants inherit
     /// `:lang()` correctly.
-    lang: Option<String>,
+    lang: Option<Arc<str>>,
     chain: ElementChain,
     child: Arc<InheritedCss>,
     kind: Option<NodeKind>,

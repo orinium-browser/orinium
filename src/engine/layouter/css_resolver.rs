@@ -206,26 +206,26 @@ impl RuleSet {
         let id = element
             .id
             .as_ref()
-            .and_then(|id_str| self.id_rules.get(id_str))
+            .and_then(|id_str| self.id_rules.get(id_str.as_ref()))
             .into_iter()
             .flat_map(|indices| indices.iter().map(|&g| &self.groups[g]));
 
         let tag = self
             .tag_rules
-            .get(&element.tag_name)
+            .get(element.tag_name.as_ref())
             .into_iter()
             .flat_map(|indices| indices.iter().map(|&g| &self.groups[g]));
 
         let classes = element
             .classes
             .iter()
-            .filter_map(|class_str| self.class_rules.get(class_str))
+            .filter_map(|class_str| self.class_rules.get(class_str.as_ref()))
             .flat_map(|indices| indices.iter().map(|&g| &self.groups[g]));
 
         let attributes = element
             .attributes
             .iter()
-            .filter_map(|(name, _)| self.attribute_rules.get(name))
+            .filter_map(|(name, _)| self.attribute_rules.get(name.as_ref()))
             .flat_map(|indices| indices.iter().map(|&g| &self.groups[g]));
 
         universal
@@ -1157,9 +1157,9 @@ mod tests {
 
         // Test element 1: <div id="header" class="btn">
         let el1 = crate::engine::css::matcher::ElementInfo {
-            tag_name: "div".to_string(),
-            id: Some("header".to_string()),
-            classes: vec!["btn".to_string()],
+            tag_name: "div".into(),
+            id: Some("header".into()),
+            classes: vec!["btn".into()].into(),
             ..Default::default()
         };
         let candidates1: Vec<_> = rule_set.query_candidates(&el1).flat_map(decls_of).collect();
@@ -1172,9 +1172,9 @@ mod tests {
 
         // Test element 2: <span class="other">
         let el2 = crate::engine::css::matcher::ElementInfo {
-            tag_name: "span".to_string(),
+            tag_name: "span".into(),
             id: None,
-            classes: vec!["other".to_string()],
+            classes: vec!["other".into()].into(),
             ..Default::default()
         };
         let candidates2: Vec<_> = rule_set.query_candidates(&el2).flat_map(decls_of).collect();
@@ -1203,7 +1203,7 @@ mod tests {
         // The two `div` blocks share an identical selector, so all three
         // declarations merge into a single group.
         let div = crate::engine::css::matcher::ElementInfo {
-            tag_name: "div".to_string(),
+            tag_name: "div".into(),
             ..Default::default()
         };
         let groups: Vec<_> = rule_set.query_candidates(&div).collect();
@@ -1212,15 +1212,15 @@ mod tests {
 
         // Plain `p` only matches the `p` group.
         let p = crate::engine::css::matcher::ElementInfo {
-            tag_name: "p".to_string(),
+            tag_name: "p".into(),
             ..Default::default()
         };
         assert_eq!(rule_set.query_candidates(&p).count(), 1);
 
         // Distinct selectors stay in distinct groups.
         let padded = crate::engine::css::matcher::ElementInfo {
-            tag_name: "p".to_string(),
-            classes: vec!["padded".to_string()],
+            tag_name: "p".into(),
+            classes: vec!["padded".into()].into(),
             ..Default::default()
         };
         assert_eq!(rule_set.query_candidates(&padded).count(), 2);
@@ -1239,8 +1239,8 @@ mod tests {
         let rule_set = RuleSet::from_declarations(&styles, &env);
 
         let hidden = crate::engine::css::matcher::ElementInfo {
-            tag_name: "div".to_string(),
-            attributes: vec![("hidden".to_string(), String::new())],
+            tag_name: "div".into(),
+            attributes: vec![("hidden".into(), "".into())].into(),
             ..Default::default()
         };
         assert_eq!(
@@ -1253,7 +1253,7 @@ mod tests {
         );
 
         let plain = crate::engine::css::matcher::ElementInfo {
-            tag_name: "div".to_string(),
+            tag_name: "div".into(),
             ..Default::default()
         };
         assert_eq!(

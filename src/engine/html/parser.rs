@@ -12,6 +12,7 @@ use crate::engine::{
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShadowRootMode {
     Open,
@@ -492,7 +493,7 @@ pub fn checkedness(node: &NodeRef<HtmlNodeType>) -> bool {
 /// The `lang` attribute in effect for a node: its own, or failing that the
 /// nearest ancestor's. `:lang()` matches against this rather than the raw
 /// attribute, so language is inherited through the tree.
-fn effective_lang(node: &NodeRef<HtmlNodeType>) -> Option<String> {
+fn effective_lang(node: &NodeRef<HtmlNodeType>) -> Option<Arc<str>> {
     let mut current = Some(Rc::clone(node));
     while let Some(candidate) = current {
         if let Some(lang) = candidate
@@ -502,7 +503,7 @@ fn effective_lang(node: &NodeRef<HtmlNodeType>) -> Option<String> {
             .map(str::trim)
             .filter(|value| !value.is_empty())
         {
-            return Some(lang.to_string());
+            return Some(Arc::from(lang));
         }
         current = candidate.borrow().parent();
     }
@@ -549,7 +550,7 @@ fn element_info(node: &NodeRef<HtmlNodeType>) -> Option<ElementInfo> {
     let element_count = sibling_elements.len();
     let mut type_counts = HashMap::<String, usize>::new();
     for (_, sibling) in &sibling_elements {
-        *type_counts.entry(sibling.tag_name.clone()).or_default() += 1;
+        *type_counts.entry(sibling.tag_name.to_string()).or_default() += 1;
     }
 
     let position = sibling_elements
@@ -558,7 +559,7 @@ fn element_info(node: &NodeRef<HtmlNodeType>) -> Option<ElementInfo> {
     let element_index = position + 1;
     let type_index = sibling_elements[..=position]
         .iter()
-        .filter(|(_, sibling)| sibling.tag_name == tag_name)
+        .filter(|(_, sibling)| sibling.tag_name.as_ref() == tag_name)
         .count();
     let previous_siblings = ElementChain::from_document_order(
         sibling_elements[..position]
@@ -567,11 +568,11 @@ fn element_info(node: &NodeRef<HtmlNodeType>) -> Option<ElementInfo> {
     );
 
     Some(ElementInfo {
-        tag_name: tag_name.clone(),
+        tag_name: tag_name.as_str().into(),
         id: attributes
             .iter()
             .find(|attribute| attribute.name.eq_ignore_ascii_case("id"))
-            .map(|attribute| attribute.value.clone()),
+            .map(|attribute| Arc::from(attribute.value.as_str())),
         classes: attributes
             .iter()
             .find(|attribute| attribute.name.eq_ignore_ascii_case("class"))
@@ -579,13 +580,18 @@ fn element_info(node: &NodeRef<HtmlNodeType>) -> Option<ElementInfo> {
                 attribute
                     .value
                     .split_whitespace()
-                    .map(str::to_string)
+                    .map(Arc::<str>::from)
                     .collect()
             })
             .unwrap_or_default(),
         attributes: attributes
             .into_iter()
-            .map(|attribute| (attribute.name, attribute.value))
+            .map(|attribute| {
+                (
+                    Arc::<str>::from(attribute.name),
+                    Arc::<str>::from(attribute.value),
+                )
+            })
             .collect(),
         element_index,
         element_count,
@@ -621,11 +627,11 @@ fn basic_element_info(node: &NodeRef<HtmlNodeType>) -> Option<ElementInfo> {
         return None;
     };
     Some(ElementInfo {
-        tag_name: tag_name.clone(),
+        tag_name: tag_name.as_str().into(),
         id: attributes
             .iter()
             .find(|attribute| attribute.name.eq_ignore_ascii_case("id"))
-            .map(|attribute| attribute.value.clone()),
+            .map(|attribute| Arc::from(attribute.value.as_str())),
         classes: attributes
             .iter()
             .find(|attribute| attribute.name.eq_ignore_ascii_case("class"))
@@ -633,13 +639,18 @@ fn basic_element_info(node: &NodeRef<HtmlNodeType>) -> Option<ElementInfo> {
                 attribute
                     .value
                     .split_whitespace()
-                    .map(str::to_string)
+                    .map(Arc::<str>::from)
                     .collect()
             })
             .unwrap_or_default(),
         attributes: attributes
             .iter()
-            .map(|attribute| (attribute.name.clone(), attribute.value.clone()))
+            .map(|attribute| {
+                (
+                    Arc::<str>::from(attribute.name.as_str()),
+                    Arc::<str>::from(attribute.value.as_str()),
+                )
+            })
             .collect(),
         element_index: 1,
         element_count: 1,

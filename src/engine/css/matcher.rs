@@ -7,12 +7,19 @@ use crate::engine::css::parser::AttributeSelectorOperator;
 
 use super::parser::{Combinator, ComplexSelector, PseudoClass, Selector};
 
+/// A single element's identity as the selector matcher sees it.
+///
+/// The string-bearing fields are shared through `Arc` because the same element
+/// is described many times per layout build: once when its parent builds the
+/// sibling list and again inside the ancestor/sibling [`ElementChain`] links.
+/// Cheap `Clone` keeps that repeated description from re-cloning every
+/// attribute string on the hot path.
 #[derive(Debug, Clone, Default)]
 pub struct ElementInfo {
-    pub tag_name: String,
-    pub id: Option<String>,
-    pub classes: Vec<String>,
-    pub attributes: Vec<(String, String)>,
+    pub tag_name: Arc<str>,
+    pub id: Option<Arc<str>>,
+    pub classes: Arc<[Arc<str>]>,
+    pub attributes: Arc<[(Arc<str>, Arc<str>)]>,
     /// One-based index among element siblings.
     pub element_index: usize,
     /// Number of element siblings including this element.
@@ -36,7 +43,7 @@ pub struct ElementInfo {
     pub checked: bool,
     /// The language tag in effect for this element: its own `lang` attribute, or
     /// failing that the nearest ancestor's. `:lang()` matches against this.
-    pub lang: Option<String>,
+    pub lang: Option<Arc<str>>,
     /// Whether this element is `:empty` under the Selectors 4 definition:
     /// no element children, and no text node with non-empty data. Comments and
     /// processing instructions do not count.
@@ -83,12 +90,12 @@ impl ChainSummary {
     }
 
     fn add(&mut self, info: &ElementInfo) {
-        self.tags.insert(info.tag_name.as_str().into());
+        self.tags.insert(info.tag_name.as_ref().into());
         if let Some(id) = &info.id {
-            self.ids.insert(id.as_str().into());
+            self.ids.insert(id.as_ref().into());
         }
-        for class in &info.classes {
-            self.classes.insert(class.as_str().into());
+        for class in info.classes.iter() {
+            self.classes.insert(class.as_ref().into());
         }
     }
 
@@ -235,7 +242,7 @@ impl Selector {
     fn matches_base(&self, element: &ElementInfo) -> bool {
         // tag
         if let Some(tag) = &self.tag
-            && tag != &element.tag_name
+            && tag.as_str() != element.tag_name.as_ref()
         {
             return false;
         }
@@ -250,7 +257,7 @@ impl Selector {
 
         // class
         for class in &self.classes {
-            if !element.classes.iter().any(|c| c == class) {
+            if !element.classes.iter().any(|c| c.as_ref() == class.as_str()) {
                 return false;
             }
         }
@@ -259,7 +266,7 @@ impl Selector {
             let actual = element
                 .attributes
                 .iter()
-                .find(|(name, _)| name.eq_ignore_ascii_case(&expected.name));
+                .find(|(name, _)| name.eq_ignore_ascii_case(expected.name.as_str()));
 
             match (&expected.operator, &expected.value, actual) {
                 (AttributeSelectorOperator::Exists, _, Some(_)) => {}
@@ -267,37 +274,37 @@ impl Selector {
                     AttributeSelectorOperator::Equals,
                     Some(expected_value),
                     Some((_, actual_value)),
-                ) if actual_value == expected_value => {}
+                ) if actual_value.as_ref() == expected_value.as_str() => {}
                 (
                     AttributeSelectorOperator::Includes,
                     Some(expected_value),
                     Some((_, actual_value)),
                 ) if actual_value
                     .split_ascii_whitespace()
-                    .any(|value| value == expected_value) => {}
+                    .any(|value| value == expected_value.as_str()) => {}
                 (
                     AttributeSelectorOperator::DashMatch,
                     Some(expected_value),
                     Some((_, actual_value)),
-                ) if actual_value == expected_value
+                ) if actual_value.as_ref() == expected_value.as_str()
                     || actual_value
-                        .strip_prefix(expected_value)
+                        .strip_prefix(expected_value.as_str())
                         .is_some_and(|rest| rest.starts_with('-')) => {}
                 (
                     AttributeSelectorOperator::Prefix,
                     Some(expected_value),
                     Some((_, actual_value)),
-                ) if actual_value.starts_with(expected_value) => {}
+                ) if actual_value.starts_with(expected_value.as_str()) => {}
                 (
                     AttributeSelectorOperator::Suffix,
                     Some(expected_value),
                     Some((_, actual_value)),
-                ) if actual_value.ends_with(expected_value) => {}
+                ) if actual_value.ends_with(expected_value.as_str()) => {}
                 (
                     AttributeSelectorOperator::Substring,
                     Some(expected_value),
                     Some((_, actual_value)),
-                ) if actual_value.contains(expected_value) => {}
+                ) if actual_value.contains(expected_value.as_str()) => {}
 
                 _ => return false,
             }
@@ -318,7 +325,7 @@ impl Selector {
                         .any(|(attribute, _)| attribute.eq_ignore_ascii_case(name))
                 };
                 let is_form_control = matches!(
-                    element.tag_name.as_str(),
+                    element.tag_name.as_ref(),
                     "button" | "fieldset" | "input" | "optgroup" | "option" | "select" | "textarea"
                 );
                 if pseudo.eq_ignore_ascii_case("root") {
@@ -334,7 +341,7 @@ impl Selector {
                 } else if pseudo.eq_ignore_ascii_case("link")
                     || pseudo.eq_ignore_ascii_case("any-link")
                 {
-                    matches!(element.tag_name.as_str(), "a" | "area") && has_attribute("href")
+                    matches!(element.tag_name.as_ref(), "a" | "area") && has_attribute("href")
                 } else if pseudo.eq_ignore_ascii_case("disabled") {
                     is_form_control && has_attribute("disabled")
                 } else if pseudo.eq_ignore_ascii_case("enabled") {
@@ -344,7 +351,7 @@ impl Selector {
                     // `checked` content attribute alone does not qualify,
                     // because it only sets the default.
                     is_checkable_input(element) && element.checked
-                        || (element.tag_name == "option" && has_attribute("selected"))
+                        || (element.tag_name.as_ref() == "option" && has_attribute("selected"))
                 } else if pseudo.eq_ignore_ascii_case("required") {
                     is_form_control && has_attribute("required")
                 } else if pseudo.eq_ignore_ascii_case("optional") {
@@ -575,7 +582,7 @@ mod tests {
                     is_nesting: false,
                     tag: Some("input".into()),
                     id: None,
-                    classes: Vec::new(),
+                    classes: Vec::<String>::new(),
                     attributes: vec![AttributeSelector {
                         name: "type".into(),
                         operator: match value {
@@ -596,7 +603,7 @@ mod tests {
         ElementInfo {
             tag_name: "input".into(),
             id: None,
-            classes: Vec::new(),
+            classes: Arc::default(),
             attributes: attributes
                 .iter()
                 .map(|(name, value)| ((*name).into(), (*value).into()))
@@ -636,22 +643,22 @@ mod tests {
         let paragraph = ElementInfo {
             tag_name: "p".into(),
             id: None,
-            classes: Vec::new(),
-            attributes: Vec::new(),
+            classes: Arc::default(),
+            attributes: Arc::default(),
             ..ElementInfo::default()
         };
         let section = ElementInfo {
             tag_name: "section".into(),
             id: None,
-            classes: Vec::new(),
-            attributes: Vec::new(),
+            classes: Arc::default(),
+            attributes: Arc::default(),
             ..ElementInfo::default()
         };
         let main = ElementInfo {
             tag_name: "main".into(),
             id: None,
-            classes: Vec::new(),
-            attributes: Vec::new(),
+            classes: Arc::default(),
+            attributes: Arc::default(),
             ..ElementInfo::default()
         };
 
@@ -675,15 +682,15 @@ mod tests {
         let html = ElementInfo {
             tag_name: "html".into(),
             id: None,
-            classes: Vec::new(),
-            attributes: Vec::new(),
+            classes: Arc::default(),
+            attributes: Arc::default(),
             ..ElementInfo::default()
         };
         let body = ElementInfo {
             tag_name: "body".into(),
             id: None,
-            classes: Vec::new(),
-            attributes: Vec::new(),
+            classes: Arc::default(),
+            attributes: Arc::default(),
             ..ElementInfo::default()
         };
 
@@ -710,15 +717,15 @@ mod tests {
         assert!(selector.matches(&chain([ElementInfo {
             tag_name: "a".into(),
             id: None,
-            classes: Vec::new(),
-            attributes: vec![("href".into(), "/next".into())],
+            classes: Arc::default(),
+            attributes: vec![("href".into(), "/next".into())].into(),
             ..ElementInfo::default()
         }])));
         assert!(!selector.matches(&chain([ElementInfo {
             tag_name: "a".into(),
             id: None,
-            classes: Vec::new(),
-            attributes: Vec::new(),
+            classes: Arc::default(),
+            attributes: Arc::default(),
             ..ElementInfo::default()
         }])));
     }
@@ -781,8 +788,8 @@ mod tests {
         let main = ElementInfo {
             tag_name: "main".into(),
             id: Some("app".into()),
-            classes: vec!["root".into()],
-            attributes: Vec::new(),
+            classes: vec!["root".into()].into(),
+            attributes: Arc::default(),
             ..ElementInfo::default()
         };
 
@@ -806,7 +813,7 @@ mod tests {
         // Attribute-only and universal compounds cannot be ruled out by the
         // summary and must still walk the chain.
         let mut hidden_main = main.clone();
-        hidden_main.attributes = vec![("hidden".into(), "true".into())];
+        hidden_main.attributes = vec![("hidden".into(), "true".into())].into();
         assert!(parse_selector("[hidden] span").matches(&chain([
             span.clone(),
             div.clone(),
@@ -850,9 +857,10 @@ mod tests {
         let mut element = element("input", &[], 1, 1, 1, 1);
         element.checked = checked;
         if input_type != "text" {
-            element
-                .attributes
-                .push(("type".to_string(), input_type.to_string()));
+            let mut attributes: Vec<(Arc<str>, Arc<str>)> =
+                element.attributes.iter().cloned().collect();
+            attributes.push(("type".into(), input_type.into()));
+            element.attributes = attributes.into();
         }
         element
     }
@@ -894,16 +902,16 @@ mod tests {
     #[test]
     fn lang_pseudo_class_matches_own_and_inherited_tags() {
         let mut british = element("div", &[], 1, 1, 1, 1);
-        british.lang = Some("en-GB".to_string());
+        british.lang = Some("en-GB".into());
         assert!(parse_selector(":lang(en)").matches(&chain([british.clone()])));
         assert!(parse_selector(":lang(en-GB)").matches(&chain([british.clone()])));
         assert!(!parse_selector(":lang(enx)").matches(&chain([british.clone()])));
 
-        british.lang = Some("fr".to_string());
+        british.lang = Some("fr".into());
         assert!(!parse_selector(":lang(en)").matches(&chain([british.clone()])));
 
         // Case-insensitive, per HTML.
-        british.lang = Some("EN-gb".to_string());
+        british.lang = Some("EN-gb".into());
         assert!(parse_selector(":lang(en)").matches(&chain([british])));
 
         // A missing language never matches.
@@ -917,11 +925,11 @@ mod tests {
         // `language.len()` lands inside a multi-byte character of the tag;
         // this must not panic and must not match.
         let mut subject = element("div", &[], 1, 1, 1, 1);
-        subject.lang = Some("é".to_string());
+        subject.lang = Some("é".into());
         assert!(!parse_selector(":lang(e)").matches(&chain([subject.clone()])));
 
         // A valid ASCII prefix followed by a multi-byte subtag still matches.
-        subject.lang = Some("en-日本語".to_string());
+        subject.lang = Some("en-日本語".into());
         assert!(parse_selector(":lang(en)").matches(&chain([subject])));
     }
 
@@ -943,7 +951,7 @@ mod tests {
 
         // Live checkedness, not the `checked` attribute, decides.
         checkbox.checked = false;
-        checkbox.attributes = vec![("checked".to_string(), String::new())];
+        checkbox.attributes = vec![("checked".into(), "".into())].into();
         assert!(!parse_selector(":checked").matches(&chain([checkbox])));
 
         // A text input is never `:checked`, however its state reads.
