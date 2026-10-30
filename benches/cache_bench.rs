@@ -374,7 +374,7 @@ fn bench_selector_match_cache(c: &mut Criterion) {
         });
     });
 
-    group.bench_function("insert_with_eviction", |b| {
+    group.bench_function("insert_over_capacity", |b| {
         let mut cache = SelectorMatchCache::with_capacity(4096);
         let mut i = 0usize;
         b.iter(|| {
@@ -382,6 +382,33 @@ fn bench_selector_match_cache(c: &mut Criterion) {
             let selector = &selectors[i % selectors.len()];
             let node = (i / selectors.len()) as u32;
             black_box(cache.get_or_insert(selector, node, || true))
+        });
+    });
+
+    group.bench_function("over_capacity_second_pass", |b| {
+        let mut cache = SelectorMatchCache::with_capacity(4096);
+        for (s_idx, selector) in selectors.iter().enumerate() {
+            for node in 0..node_count {
+                cache.get_or_insert(selector, node, || (s_idx as u32 + node).is_multiple_of(2));
+            }
+        }
+        // Fill beyond capacity with different keys to create skips.
+        for (s_idx, selector) in selectors.iter().enumerate() {
+            for node in node_count..(node_count * 2) {
+                cache.get_or_insert(selector, node, || (s_idx as u32 + node).is_multiple_of(2));
+            }
+        }
+
+        let mut i = 0usize;
+        b.iter(|| {
+            let selector = &selectors[i % selectors.len()];
+            let node = (i / selectors.len()) as u32 % node_count;
+            i += 1;
+            black_box(
+                cache.get_or_insert(black_box(selector), black_box(node), || {
+                    unreachable!("entries admitted on pass 1 must remain cached")
+                }),
+            )
         });
     });
 
