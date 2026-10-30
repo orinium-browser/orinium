@@ -58,6 +58,7 @@ fn selector_matches_are_reused_across_builds_of_the_same_snapshot() {
     );
     assert_eq!(second_stats.hits, first_stats.misses);
     assert_eq!(second_stats.evictions, 0);
+    assert_eq!(second_stats.skips, 0);
 
     // Cached matches must not change the cascade result.
     assert_eq!(
