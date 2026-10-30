@@ -16,13 +16,9 @@
 //! The caller owns invalidation. Entries are only valid for one
 //! DOM-snapshot/rule-set epoch, so [`SelectorMatchCache::clear`] must run
 //! whenever either input changes.
-//!
-//! [`RuleSet`]: super::css_resolver::RuleSet
 
-use std::num::NonZeroUsize;
+use std::collections::HashMap;
 use std::sync::Arc;
-
-use lru::LruCache;
 
 use super::dom_snapshot::NodeId;
 use crate::engine::cache_stats::{CacheStats, CacheStatsSnapshot};
@@ -32,14 +28,20 @@ use crate::engine::css::parser::ComplexSelector;
 ///
 /// Entries are a pointer, a node id and a boolean, so this bounds the cache at
 /// a few megabytes even for very large documents.
-pub const DEFAULT_CAPACITY: usize = 65_536;
+pub const DEFAULT_CAPACITY: usize = 131_072;
 
 /// `(selector allocation, element)` identity of one cached match result.
 type MatchKey = (usize, NodeId);
 
 /// Memoizes selector match results for one DOM/rule-set epoch.
+///
+/// Uses an epoch-scoped `HashMap` with an admission cap rather than an LRU.
+/// Once the cache reaches `capacity`, new entries are not inserted and the
+/// lookup is recorded as a skip so we can distinguish capacity pressure from
+/// cache misses that could be served by the map.
 pub struct SelectorMatchCache {
-    entries: LruCache<MatchKey, bool>,
+    entries: HashMap<MatchKey, bool>,
+    capacity: usize,
     stats: CacheStats,
 }
 
@@ -55,9 +57,10 @@ impl SelectorMatchCache {
     }
 
     pub fn with_capacity(capacity: usize) -> Self {
-        let capacity = NonZeroUsize::new(capacity.max(1)).expect("capacity is at least one");
+        let capacity = capacity.max(1);
         Self {
-            entries: LruCache::new(capacity),
+            entries: HashMap::with_capacity(capacity.min(4096)),
+            capacity,
             stats: CacheStats::new("selector_match"),
         }
     }
@@ -78,14 +81,10 @@ impl SelectorMatchCache {
 
         self.stats.record_miss();
         let matched = compute();
-        // `push` reports the evicted entry (unlike `put`), which lets us count
-        // capacity pressure without double counting an existing key.
-        let evicted = self
-            .entries
-            .push(key, matched)
-            .is_some_and(|(evicted_key, _)| evicted_key != key);
-        if evicted {
-            self.stats.record_eviction();
+        if self.entries.len() < self.capacity {
+            self.entries.insert(key, matched);
+        } else {
+            self.stats.record_skip();
         }
         matched
     }
@@ -93,6 +92,7 @@ impl SelectorMatchCache {
     /// Drops every entry. Call when the DOM snapshot or the rule set changes.
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.stats.reset();
     }
 
     pub fn len(&self) -> usize {
@@ -101,6 +101,10 @@ impl SelectorMatchCache {
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity
     }
 
     pub fn stats(&self) -> CacheStatsSnapshot {
@@ -135,7 +139,10 @@ mod tests {
         assert!(second, "the cached result must win over the recomputation");
         assert_eq!(computed, 1);
         let stats = cache.stats();
-        assert_eq!((stats.hits, stats.misses), (1, 1));
+        assert_eq!(
+            (stats.hits, stats.misses, stats.evictions, stats.skips),
+            (1, 1, 0, 0)
+        );
     }
 
     #[test]
@@ -160,11 +167,14 @@ mod tests {
 
         assert_eq!(computed, 3);
         let stats = cache.stats();
-        assert_eq!((stats.hits, stats.misses), (0, 3));
+        assert_eq!(
+            (stats.hits, stats.misses, stats.evictions, stats.skips),
+            (0, 3, 0, 0)
+        );
     }
 
     #[test]
-    fn capacity_pressure_is_counted_as_an_eviction() {
+    fn capacity_pressure_skips_without_eviction() {
         let mut cache = SelectorMatchCache::with_capacity(1);
         let first_selector = selector();
         let second_selector = selector();
@@ -174,11 +184,60 @@ mod tests {
 
         assert_eq!(cache.len(), 1);
         let stats = cache.stats();
-        assert_eq!(stats.evictions, 1);
+        assert_eq!(stats.evictions, 0);
+        assert_eq!(stats.skips, 1);
+        assert_eq!(stats.hits, 0);
+
+        // Existing entries remain cached.
+        let mut computed = 0;
+        let matched = cache.get_or_insert(&first_selector, 1, || {
+            computed += 1;
+            false
+        });
+        assert!(matched);
+        assert_eq!(computed, 0);
+        assert_eq!(cache.stats().hits, 1);
     }
 
     #[test]
-    fn clear_drops_entries_and_keeps_counters() {
+    fn over_capacity_passes_hit_in_the_second_epoch_like_pass() {
+        let mut cache = SelectorMatchCache::with_capacity(4);
+        let selectors: Vec<Arc<ComplexSelector>> = (0..6)
+            .map(|_| Arc::new(ComplexSelector { parts: Vec::new() }))
+            .collect();
+        let mut computed = 0;
+
+        // First pass fills the cache and skips beyond capacity.
+        for sel in &selectors {
+            cache.get_or_insert(sel, 1, || {
+                computed += 1;
+                true
+            });
+        }
+        assert_eq!(cache.len(), 4);
+        let first = cache.stats();
+        assert_eq!(first.misses, 6);
+        assert_eq!(first.skips, 2);
+        assert_eq!(first.evictions, 0);
+        assert_eq!(computed, 6);
+
+        // Second pass over the same keys: entries inserted in pass 1 must hit.
+        // Keys beyond capacity were never stored, so they miss again.
+        for sel in &selectors {
+            cache.get_or_insert(sel, 1, || {
+                computed += 1;
+                false
+            });
+        }
+        let second = cache.stats();
+        assert_eq!(second.misses, 8);
+        assert_eq!(second.hits, 4);
+        assert_eq!(second.skips, 4);
+        assert_eq!(computed, 8);
+    }
+
+    #[test]
+    fn clear_drops_entries_and_resets_counters() {
         let mut cache = SelectorMatchCache::new();
         let selector = selector();
         cache.get_or_insert(&selector, 1, || true);
@@ -186,7 +245,9 @@ mod tests {
 
         assert!(cache.is_empty());
         let stats = cache.stats();
-        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.misses, 0);
         assert_eq!(stats.hits, 0);
+        assert_eq!(stats.evictions, 0);
+        assert_eq!(stats.skips, 0);
     }
 }
