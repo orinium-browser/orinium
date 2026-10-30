@@ -244,11 +244,14 @@ impl LayoutProcessor {
                     profile_log!(
                         target: "LayoutRun",
                         log::Level::Info,
-                        "[LayoutRun] build: total {:?} | ruleset_build: {:?} | cache_hit: {} | {}",
+                        "[LayoutRun] build: total {:?} | ruleset_build: {:?} | cache_hit: {} | {} | selector_match_cache: {}/{} (skips {})",
                         worker_total.elapsed(),
                         ruleset_build_time,
                         cache_hit,
                         cache.match_cache.stats(),
+                        cache.match_cache.len(),
+                        cache.match_cache.capacity(),
+                        cache.match_cache.stats().skips,
                     );
                     Some(SendableResult(Box::into_raw(Box::new(result))))
                 }
