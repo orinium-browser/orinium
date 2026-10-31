@@ -234,6 +234,7 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
             "HTMLUnknownElement",
             "HTMLLinkElement",
             "HTMLStyleElement",
+            "HTMLScriptElement",
             "HTMLHeadElement",
             "HTMLBodyElement",
             "HTMLDivElement",
@@ -529,6 +530,22 @@ fn define_document_interface(document: &mut JSObject) {
         "forms".to_string(),
         read_only_accessor_property(get_document_forms),
     );
+    document.define_property(
+        "scripts".to_string(),
+        read_only_accessor_property(get_document_scripts),
+    );
+    document.define_property(
+        "currentScript".to_string(),
+        read_only_accessor_property(get_document_current_script),
+    );
+    document.define_property(
+        "adoptedStyleSheets".to_string(),
+        accessor_property(get_adopted_style_sheets, set_adopted_style_sheets),
+    );
+    document.define_property(
+        "fonts".to_string(),
+        read_only_accessor_property(get_document_fonts),
+    );
     document.set(
         "createElement".to_string(),
         JSValue::from_native_function(create_element),
@@ -740,6 +757,123 @@ fn document_get_elements_by_class_name(vm: &mut VM, args: Vec<JSValue>) -> JSRes
     }
     let tree = document_tree(vm, args.first().unwrap_or(&JSValue::undefined()));
     Ok(expose_node_list(vm, tree.query_selector_all(&selector)))
+}
+
+/// `document.scripts` — every `<script>` element in document order.
+fn get_document_scripts(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let tree = document_tree(vm, args.first().unwrap_or(&JSValue::undefined()));
+    Ok(expose_node_list(
+        vm,
+        tree.get_elements_by_tag_name("script"),
+    ))
+}
+
+/// `document.currentScript` — the script element being evaluated. Script
+/// execution is driven by the browser thread without a DOM node id, so this is
+/// `null` except when a caller sets it explicitly.
+fn get_document_current_script(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let dom_id = with_host(vm, |host| host.current_script_dom_id).flatten();
+    let Some(node) = dom_id
+        .and_then(|id| with_host(vm, |host| host.refs.get(&id).and_then(|n| n.upgrade())))
+        .flatten()
+    else {
+        return Ok(JSValue::null());
+    };
+    Ok(expose_node(vm, node).unwrap_or(JSValue::null()))
+}
+
+fn get_adopted_style_sheets(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    if let Some(sheets) = with_host(vm, |host| host.adopted_style_sheets.clone()).flatten() {
+        return Ok(sheets);
+    }
+    Ok(vm.array_from_values(Vec::new()))
+}
+
+fn set_adopted_style_sheets(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let value = args.get(1).cloned().unwrap_or(JSValue::undefined());
+    let _ = with_host_mut(vm, |host| host.adopted_style_sheets = Some(value));
+    Ok(JSValue::undefined())
+}
+
+/// `document.fonts` — a stable `FontFaceSet`-shaped object. YouTube only reads
+/// `status`/`ready` and calls `fonts.load()`/`check()`.
+fn get_document_fonts(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    if let Some(fonts) = with_host(vm, |host| host.document_fonts.clone()).flatten() {
+        return Ok(JSValue::from_object(fonts));
+    }
+    let fonts = Rc::new(RefCell::new(make_font_face_set()));
+    let _ = with_host_mut(vm, |host| host.document_fonts = Some(Rc::clone(&fonts)));
+    Ok(JSValue::from_object(fonts))
+}
+
+fn make_font_face_set() -> JSObject {
+    let mut fonts = JSObject::new();
+    fonts.set(
+        "status".to_string(),
+        JSValue::from_string("loaded".to_string()),
+    );
+    fonts.set("size".to_string(), JSValue::from_number(0.0));
+    fonts.set(
+        "ready".to_string(),
+        JSValue::from_object(Rc::new(RefCell::new(make_resolved_thenable()))),
+    );
+    fonts.set(
+        "check".to_string(),
+        JSValue::from_native_function(font_face_set_check),
+    );
+    fonts.set(
+        "load".to_string(),
+        JSValue::from_native_function(font_face_set_load),
+    );
+    for name in ["add", "delete", "clear"] {
+        fonts.set(name.to_string(), JSValue::from_native_function(noop));
+    }
+    fonts.set(
+        "forEach".to_string(),
+        JSValue::from_native_function(font_face_set_for_each),
+    );
+    fonts
+}
+
+fn make_resolved_thenable() -> JSObject {
+    let mut promise = JSObject::new();
+    promise.set(
+        "then".to_string(),
+        JSValue::from_native_function(resolved_then),
+    );
+    promise
+}
+
+fn resolved_then(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let this = args.first().cloned().unwrap_or(JSValue::undefined());
+    let callback = args.get(1).cloned().unwrap_or(JSValue::undefined());
+    if is_callable(&callback) {
+        let _ = vm.call(callback, JSValue::undefined(), vec![this]);
+    }
+    Ok(JSValue::undefined())
+}
+
+fn font_face_set_check(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::from_bool(true))
+}
+
+fn font_face_set_load(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Ok(JSValue::from_object(Rc::new(RefCell::new(
+        make_resolved_thenable(),
+    ))))
+}
+
+fn font_face_set_for_each(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let callback = args.get(1).cloned().unwrap_or(JSValue::undefined());
+    if is_callable(&callback) {
+        let this = args.first().cloned().unwrap_or(JSValue::undefined());
+        let _ = vm.call(
+            callback,
+            JSValue::undefined(),
+            vec![JSValue::undefined(), this],
+        );
+    }
+    Ok(JSValue::undefined())
 }
 
 /// `document.forms` — the collection of `<form>` elements in the document.

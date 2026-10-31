@@ -15,6 +15,7 @@ fn queue_microtask(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
             "queueMicrotask callback must be callable".to_string(),
         ));
     };
+    // Cap queue in pixi_byte already; keep as is.
     vm.enqueue_job(callback, JSValue::undefined(), Vec::new());
     Ok(JSValue::undefined())
 }

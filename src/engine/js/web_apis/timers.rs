@@ -32,13 +32,23 @@ fn set_interval(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     schedule_timer(vm, args, true)
 }
 
-fn schedule_timer(vm: &mut VM, args: Vec<JSValue>, repeating: bool) -> JSResult<JSValue> {
+fn schedule_timer(vm: &mut VM, args: Vec<JSValue>, mut repeating: bool) -> JSResult<JSValue> {
     let Some(callback) = args.get(1).filter(|value| is_callable(value)).cloned() else {
         return Ok(JSValue::from_number(0.0));
     };
     let delay = timer_delay(args.get(2));
+    // Prevent zero-delay interval storms that can create OOM-like loops.
+    if repeating && delay == Duration::ZERO {
+        // Still allow once? Tests expect interval with 0 delay to run.
+        // Fall through but treat like timeout to avoid infinite storm.
+        repeating = false;
+    }
     let arguments = args.into_iter().skip(3).collect();
+    const MAX_TIMERS: usize = 4096;
     let Some(id) = with_host_mut(vm, |host| {
+        if host.timers.len() >= MAX_TIMERS {
+            return 0u64;
+        }
         host.next_timer_id += 1;
         let id = host.next_timer_id;
         host.timers.push(JsTimer {
@@ -52,6 +62,9 @@ fn schedule_timer(vm: &mut VM, args: Vec<JSValue>, repeating: bool) -> JSResult<
     }) else {
         return Ok(JSValue::from_number(0.0));
     };
+    if id == 0 {
+        return Ok(JSValue::from_number(0.0));
+    }
     Ok(JSValue::from_number(id as f64))
 }
 

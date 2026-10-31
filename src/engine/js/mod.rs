@@ -244,6 +244,13 @@ pub struct JsHost {
     pub(crate) session_storage: HashMap<String, String>,
     // TODO: Move cookies into a shared origin/path-aware jar with expiry and security attributes.
     pub(crate) document_cookies: HashMap<String, String>,
+    /// DOM id of the script currently being evaluated, exposed as
+    /// `document.currentScript`.
+    pub(crate) current_script_dom_id: Option<u64>,
+    /// User-supplied `document.adoptedStyleSheets` array.
+    pub(crate) adopted_style_sheets: Option<JSValue>,
+    /// Stable `document.fonts` (`FontFaceSet`) singleton.
+    pub(crate) document_fonts: Option<Rc<RefCell<JSObject>>>,
     pub(crate) document_url: String,
     /// ASCII serialization of the document's origin (`"null"` when opaque).
     pub(crate) origin: String,
@@ -347,6 +354,9 @@ impl JsRuntime {
             local_storage: HashMap::new(),
             session_storage: HashMap::new(),
             document_cookies: HashMap::new(),
+            current_script_dom_id: None,
+            adopted_style_sheets: None,
+            document_fonts: None,
             document_url: "about:blank".to_string(),
             origin: "null".to_string(),
             permissions: Permissions::none(),
@@ -533,6 +543,48 @@ impl JsRuntime {
                 JSValue::undefined()
             }
         }
+    }
+
+    /// Diagnostic: sizes of the host-side maps that hold JS values.
+    #[doc(hidden)]
+    pub fn host_stats(&self) -> String {
+        with_host(self.engine.vm(), |host| {
+            let doc_listeners: usize = host
+                .document_event_listeners
+                .values()
+                .map(std::vec::Vec::len)
+                .sum();
+            let elem_listeners: usize = host
+                .element_event_listeners
+                .values()
+                .flat_map(|by_type| by_type.values().map(std::vec::Vec::len))
+                .sum();
+            format!(
+                "timers={} doc_listeners={} elem_listener_types={} elem_listeners={} \
+                 objects={} styles={} canvas={} namespaces={} detached_nodes={} \
+                 detached_docs={} fetch_signals={} xhr={} fetch_requests={} iframes={} \
+                 layout_metrics={} computed_styles={} computed_decls={} custom_elements={}",
+                host.timers.len(),
+                doc_listeners,
+                host.element_event_listeners.len(),
+                elem_listeners,
+                host.objects.len(),
+                host.styles.len(),
+                host.canvas_contexts.len(),
+                host.namespaces.len(),
+                host.detached_nodes.len(),
+                host.detached_documents.len(),
+                host.fetch_signals.len(),
+                host.xhr_requests.len(),
+                host.fetch_requests.len(),
+                host.iframe_documents.len(),
+                host.layout_metrics.len() + host.layout_metrics_by_dom_id.len(),
+                host.computed_styles.len(),
+                host.computed_style_declarations.len(),
+                host.custom_elements.len(),
+            )
+        })
+        .unwrap_or_default()
     }
 
     /// Updates the URL exposed through the window's `location` object.
@@ -1228,20 +1280,31 @@ impl JsRuntime {
 
     /// Drains queued microtasks in FIFO order, including jobs queued by jobs.
     fn perform_microtask_checkpoint(&mut self) {
-        while let Err(err) = self.engine.run_jobs() {
-            if let JSError::Thrown(value) = &err
-                && let Some(object) = value.as_object()
-            {
-                let object = object.borrow();
-                let details = object
-                    .keys()
-                    .into_iter()
-                    .map(|key| format!("{key}={}", object.get(&key).to_console_string()))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                log::info!("JS error in microtask: {} ({details})", err);
-            } else {
-                log::info!("JS error in microtask: {}", err);
+        const MAX_ROUNDS: usize = 50;
+        let mut rounds = 0;
+        loop {
+            rounds += 1;
+            if rounds > MAX_ROUNDS {
+                break;
+            }
+            match self.engine.run_jobs() {
+                Ok(()) => break,
+                Err(err) => {
+                    if let JSError::Thrown(value) = &err
+                        && let Some(object) = value.as_object()
+                    {
+                        let object = object.borrow();
+                        let details = object
+                            .keys()
+                            .into_iter()
+                            .map(|key| format!("{key}={}", object.get(&key).to_console_string()))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        log::info!("JS error in microtask: {} ({details})", err);
+                    } else {
+                        log::info!("JS error in microtask: {}", err);
+                    }
+                }
             }
         }
     }
@@ -4717,6 +4780,35 @@ mod tests {
     }
 
     #[test]
+    fn document_scripts_fonts_and_adjacent_insertion_work() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<html><head><script id="s1"></script></head><body><div id="r"></div><div id="anchor"></div></body></html>"#,
+        );
+        runtime.run_script(
+            r#"
+        var out = [];
+        out.push("scripts:" + document.scripts.length);
+        out.push("scriptId:" + document.scripts[0].id);
+        out.push("current:" + (document.currentScript === null));
+        out.push("fonts:" + document.fonts.status + ":" + document.fonts.check("12px sans-serif"));
+        out.push("fontsReady:" + typeof document.fonts.ready.then);
+        document.adoptedStyleSheets = [];
+        out.push("adopted:" + document.adoptedStyleSheets.length);
+        var inserted = document.getElementById("anchor").insertAdjacentElement("beforebegin", document.createElement("span"));
+        out.push("inserted:" + (inserted && inserted.tagName));
+        document.getElementById("r").setAttribute("data-out", out.join(";"));
+        "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(
+            r.borrow().value.get_attr("data-out"),
+            Some(
+                "scripts:1;scriptId:s1;current:true;fonts:loaded:true;fontsReady:function;adopted:0;inserted:SPAN"
+            )
+        );
+    }
+
+    #[test]
     fn abort_controller_and_signal_follow_platform_semantics() {
         let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
         runtime.run_script(
@@ -5028,6 +5120,55 @@ mod tests {
             r.borrow().value.get_attr("data-out"),
             Some("drained"),
             "queueMicrotask work must settle without a timer"
+        );
+    }
+
+    #[test]
+    fn element_prototype_exposes_selector_and_adjacency_helpers() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<div id="host" class="outer"><span id="target" class="inner"></span></div>"#,
+        );
+        runtime.run_script(
+            r#"
+            var out = [];
+            out.push("matches:" + Element.prototype.matches.call(document.getElementById("target"), ".inner"));
+            out.push("closest:" + Element.prototype.closest.call(document.getElementById("target"), ".outer").id);
+            out.push("insert:" + typeof Element.prototype.insertAdjacentElement);
+            var added = document.getElementById("target").insertAdjacentElement("beforebegin", document.createElement("i"));
+            out.push("inserted:" + (added && added.tagName));
+            document.getElementById("host").setAttribute("data-out", out.join(";"));
+            "#,
+        );
+        let host = dom.get_element_by_id("host").unwrap();
+        assert_eq!(
+            host.borrow().value.get_attr("data-out"),
+            Some("matches:true;closest:host;insert:function;inserted:I")
+        );
+    }
+
+    #[test]
+    fn array_buffer_applies_to_index_length_semantics() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+            var out = [];
+            out.push("empty:" + new ArrayBuffer().byteLength);
+            out.push("undefined:" + new ArrayBuffer(undefined).byteLength);
+            out.push("nan:" + new ArrayBuffer(NaN).byteLength);
+            out.push("trunc:" + new ArrayBuffer(2.9).byteLength);
+            try {
+                new ArrayBuffer(-1);
+                out.push("negative:no-throw");
+            } catch (e) {
+                out.push("negative:" + e.name);
+            }
+            document.getElementById("r").setAttribute("data-out", out.join(";"));
+            "#,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        assert_eq!(
+            r.borrow().value.get_attr("data-out"),
+            Some("empty:0;undefined:0;nan:0;trunc:2;negative:RangeError")
         );
     }
 

@@ -55,6 +55,14 @@ pub(crate) fn make_dom_exception_constructor() -> Rc<RefCell<JSObject>> {
         "__construct__".to_string(),
         JSValue::from_native_function(dom_exception_construct),
     );
+    // Browsers expose `DOMException` as a function (calling it without `new`
+    // throws). Feature detection such as core-js's `getBuiltin` checks
+    // `typeof DOMException === "function"` and falls back to a polyfill that
+    // assumes a constructor exists otherwise.
+    constructor.set(
+        "__call__".to_string(),
+        JSValue::from_native_function(dom_exception_illegal_call),
+    );
     constructor.set(
         "prototype".to_string(),
         JSValue::from_object(Rc::clone(&prototype)),
@@ -93,6 +101,12 @@ fn define_exception_constants(obj: &mut JSObject) {
             Property::read_only(JSValue::from_number(value)),
         );
     }
+}
+
+fn dom_exception_illegal_call(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Err(JSError::TypeError(
+        "Illegal constructor: DOMException".to_string(),
+    ))
 }
 
 /// `new DOMException(message?, name?)`

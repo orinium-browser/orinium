@@ -31,13 +31,19 @@ pub(crate) const SUSPECT_GLOBALS: &[&str] = &[
     "FormData",
     "HTMLAudioElement",
     "HTMLCanvasElement",
+    "HTMLMediaElement",
+    "HTMLScriptElement",
+    "HTMLSlotElement",
     "HTMLTemplateElement",
     "HTMLVideoElement",
     "Headers",
+    "HTMLElement",
     "IntersectionObserver",
     "KeyboardEvent",
+    "MediaSource",
     "MutationObserver",
     "MouseEvent",
+    "Node",
     "PointerEvent",
     "RegExp",
     "Request",
@@ -46,7 +52,11 @@ pub(crate) const SUSPECT_GLOBALS: &[&str] = &[
     "SVGElement",
     "SVGSVGElement",
     "ShadowRoot",
+    "SourceBuffer",
     "Text",
+    "TextDecoder",
+    "TextEncoder",
+    "URL",
     "URLSearchParams",
     "WheelEvent",
     "XMLHttpRequest",
@@ -54,29 +64,51 @@ pub(crate) const SUSPECT_GLOBALS: &[&str] = &[
     "customElements",
     "getComputedStyle",
     "matchMedia",
+    "performance",
+    "queueMicrotask",
     "requestAnimationFrame",
 ];
 
-/// Methods probed on `document` (object style: `typeof document[name]`).
+/// Members probed on `document` (object style: `typeof document[name]`).
+///
+/// Properties such as `scripts` and `currentScript` live here too: YouTube's
+/// bootstrap reads them before it defines anything of its own.
 pub(crate) const SUSPECT_DOCUMENT_METHODS: &[&str] = &[
+    "adoptedStyleSheets",
+    "body",
+    "createElementNS",
+    "currentScript",
+    "documentElement",
     "elementFromPoint",
     "elementsFromPoint",
     "execCommand",
+    "fonts",
     "getSelection",
+    "head",
+    "importNode",
     "pictureInPictureElement",
+    "scripts",
 ];
 
-/// Methods probed on `Element.prototype` (object style:
+/// Members probed on `Element.prototype` (object style:
 /// `typeof Element.prototype[name]`).
 pub(crate) const SUSPECT_ELEMENT_PROTOTYPE_METHODS: &[&str] = &[
+    "attachShadow",
+    "closest",
     "getAnimations",
+    "getRootNode",
+    "insertAdjacentElement",
+    "matches",
     "requestFullscreen",
     "scrollIntoView",
     "scrollTo",
 ];
 
 /// Builds the JS prologue that reports which APIs are absent.
-fn prologue() -> String {
+///
+/// The browser-layer probes inject it after their console collector so the
+/// report is captured alongside the page's own warnings.
+pub(crate) fn prologue() -> String {
     let mut code = String::new();
     code.push_str("(function(){var missing = [];\n");
     for name in SUSPECT_GLOBALS {

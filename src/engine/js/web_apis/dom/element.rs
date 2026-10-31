@@ -135,6 +135,21 @@ pub(crate) fn make_element_interface() -> (Rc<RefCell<JSObject>>, Rc<RefCell<JSO
         "getBoundingClientRect".to_string(),
         JSValue::from_native_function(get_bounding_client_rect),
     );
+    // Selector and adjacency helpers are also on the interface prototype:
+    // libraries feature-detect them with `Element.prototype.matches` before
+    // using them on individual elements.
+    prototype.set(
+        "closest".to_string(),
+        JSValue::from_native_function(element_closest),
+    );
+    prototype.set(
+        "matches".to_string(),
+        JSValue::from_native_function(element_matches),
+    );
+    prototype.set(
+        "insertAdjacentElement".to_string(),
+        JSValue::from_native_function(element_insert_adjacent_element),
+    );
     prototype.set(
         "getAnimations".to_string(),
         JSValue::from_native_function(element_get_animations),
@@ -647,6 +662,10 @@ pub(crate) fn make_element(
     obj.set(
         "matches".to_string(),
         JSValue::from_native_function(element_matches),
+    );
+    obj.set(
+        "insertAdjacentElement".to_string(),
+        JSValue::from_native_function(element_insert_adjacent_element),
     );
     Rc::new(RefCell::new(obj))
 }
@@ -1635,6 +1654,106 @@ fn element_closest(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         return Ok(JSValue::null());
     };
     Ok(expose_node(vm, closest).unwrap_or(JSValue::null()))
+}
+
+fn element_insert_adjacent_element(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(this_value) = args.first().cloned() else {
+        return Ok(JSValue::null());
+    };
+    let Some(this) = dom_node(vm, &this_value) else {
+        return Ok(JSValue::null());
+    };
+    let position = args
+        .get(1)
+        .and_then(JSValue::as_string)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let Some(child_value) = args.get(2).cloned() else {
+        return Ok(JSValue::null());
+    };
+    if dom_node(vm, &child_value).is_none() {
+        return Ok(JSValue::null());
+    }
+    let Some(parent) = this.borrow().parent() else {
+        return Ok(JSValue::null());
+    };
+    match position.as_str() {
+        "beforebegin" => {
+            insert_before(
+                vm,
+                vec![
+                    expose_node(vm, Rc::clone(&parent)).unwrap_or(JSValue::null()),
+                    child_value.clone(),
+                    this_value,
+                ],
+            )?;
+        }
+        "afterbegin" => {
+            let first = parent.borrow().children().first().cloned();
+            match first {
+                Some(reference) => {
+                    insert_before(
+                        vm,
+                        vec![
+                            expose_node(vm, Rc::clone(&parent)).unwrap_or(JSValue::null()),
+                            child_value.clone(),
+                            expose_node(vm, reference).unwrap_or(JSValue::null()),
+                        ],
+                    )?;
+                }
+                None => {
+                    append_child(
+                        vm,
+                        vec![
+                            expose_node(vm, Rc::clone(&parent)).unwrap_or(JSValue::null()),
+                            child_value.clone(),
+                        ],
+                    )?;
+                }
+            }
+        }
+        "beforeend" => {
+            append_child(
+                vm,
+                vec![
+                    expose_node(vm, Rc::clone(&parent)).unwrap_or(JSValue::null()),
+                    child_value.clone(),
+                ],
+            )?;
+        }
+        "afterend" => {
+            let next = {
+                let siblings = parent.borrow().children().to_vec();
+                siblings
+                    .iter()
+                    .position(|node| Rc::ptr_eq(node, &this))
+                    .and_then(|index| siblings.get(index + 1).cloned())
+            };
+            match next {
+                Some(reference) => {
+                    insert_before(
+                        vm,
+                        vec![
+                            expose_node(vm, Rc::clone(&parent)).unwrap_or(JSValue::null()),
+                            child_value.clone(),
+                            expose_node(vm, reference).unwrap_or(JSValue::null()),
+                        ],
+                    )?;
+                }
+                None => {
+                    append_child(
+                        vm,
+                        vec![
+                            expose_node(vm, Rc::clone(&parent)).unwrap_or(JSValue::null()),
+                            child_value.clone(),
+                        ],
+                    )?;
+                }
+            }
+        }
+        _ => return Ok(JSValue::null()),
+    }
+    Ok(child_value)
 }
 
 fn element_matches(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
