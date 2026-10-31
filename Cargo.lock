@@ -2976,7 +2976,6 @@ dependencies = [
 name = "orinium_browser"
 version = "0.1.0"
 dependencies = [
- "ab_glyph",
  "anyhow",
  "base64",
  "brotli-decompressor",
@@ -2990,7 +2989,6 @@ dependencies = [
  "env_logger",
  "etagere",
  "flate2",
- "fontdue",
  "getrandom 0.4.3",
  "http-body-util",
  "hyper",
@@ -3017,7 +3015,6 @@ dependencies = [
  "ui_layout",
  "url",
  "wgpu",
- "wgpu-types",
  "winit",
 ]
 

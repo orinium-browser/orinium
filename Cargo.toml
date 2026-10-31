@@ -16,7 +16,6 @@ dhat = "0.3.3"
 
 orinium_text = { git = "https://github.com/orinium-browser/orinium_text", rev = "e647a94996f72caacaaa06322ddb75cde06077f5" }
 
-ab_glyph = "0.2"
 anyhow = "1.0"
 base64 = "0.23"
 brotli-decompressor = "6.0"
@@ -27,7 +26,6 @@ entities = "1.0.1"
 env_logger = "0.11.10"
 etagere = "0.3.0"
 flate2 = "1.1.10"
-fontdue = "0.9.3"
 getrandom = "0.4"
 http-body-util = "0.1"
 hyper = { version = "1", features = ["client", "http1", "http2"] }
@@ -52,7 +50,6 @@ ttf-parser = "0.25.1"
 ui_layout = { git = "https://github.com/098orin/ui_layout-rs", rev = "cffdbc4bc0e4f54b9a4466847528fbfa2127648a" }
 url = "2.5"
 wgpu = "30.0.1"
-wgpu-types = "30.0.1"
 winit = "0.30.13"
 
 [dev-dependencies]
