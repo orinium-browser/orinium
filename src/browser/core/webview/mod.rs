@@ -1430,15 +1430,12 @@ impl WebView {
     }
 
     fn run_due_js_timers(&mut self) {
-        if self.js_dom_dirty {
-            // A write-back sync is owed. Pausing pokes keeps a timer snapshot
-            // from racing the pending sync; timers resume once it completes.
+        if self.js_dom_dirty || self.in_flight_timer_version.is_some() {
+            // A write-back sync is owed, or a timer tick is already in flight.
+            // Avoid queuing redundant timer pokes while the JS worker is busy.
             return;
         }
         if let Some(processor) = self.js_processor.as_ref() {
-            // Timer pokes are coalescable: the JS thread skips this one when a
-            // newer task has already been queued. Track the newest poke so the
-            // write-back sync waits until its result has been applied.
             let version = processor.send(JsTask::RunTimers);
             self.in_flight_timer_version = Some(version);
         }
