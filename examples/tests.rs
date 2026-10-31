@@ -687,7 +687,7 @@ const WEBCOMPAT_COLLECTOR: &str = r#"(function () {
   window.__orinium_errors = errors;
   window.__orinium_flush_errors = function () { return errors.join("\n"); };
   window.onerror = function (msg, src, line, col, err) {
-    errors.push("[onerror] " + String(msg || "?"));
+    errors.push("[onerror] " + String(msg || "?") + (src ? " SRC<" + String(src) + ">" : "") + (line != null ? " LINE<" + line + ">" : "") + (col != null ? " COL<" + col + ">" : ""));
     return false;
   };
   window.onunhandledrejection = function (e) {
@@ -1106,6 +1106,41 @@ fn run_webcompat_depth(raw_url: &str, depth: usize) -> Result<()> {
 
     // ---- JavaScript stage ----
     println!("\n{}", "== JavaScript ==".bold());
+    #[cfg(feature = "dhat-heap")]
+    {
+        std::thread::spawn(|| {
+            let mut tick = 0u32;
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                tick += 1;
+                let stats = dhat::HeapStats::get();
+                let rss = std::fs::read_to_string("/proc/self/status")
+                    .ok()
+                    .and_then(|s| {
+                        s.lines()
+                            .find(|l| l.starts_with("VmRSS:"))
+                            .map(|l| l.trim().to_string())
+                    })
+                    .unwrap_or_default();
+                println!(
+                    "  [mem] t={}s live {} B / {} blocks, total {} B, max {} B | {rss} | opcodes={} callables={} dropped_jobs={} | {}",
+                    tick * 5,
+                    stats.curr_bytes,
+                    stats.curr_blocks,
+                    stats.total_bytes,
+                    stats.max_bytes,
+                    pixi_byte::executed_opcodes(),
+                    pixi_byte::cached_callable_objects(),
+                    pixi_byte::dropped_jobs(),
+                    pixi_byte::live_census()
+                );
+                let attribution = pixi_byte::leak_attribution(8);
+                if !attribution.is_empty() {
+                    println!("  [attr]\n{attribution}");
+                }
+            }
+        });
+    }
     let mut js = JsRuntime::new(Rc::clone(&dom));
     js.set_document_url(parsed_url.as_str());
     js.set_page_origin(&format!(
@@ -1125,6 +1160,22 @@ fn run_webcompat_depth(raw_url: &str, depth: usize) -> Result<()> {
     let mut untested_scripts = 0usize;
     let mut script_errors = 0usize;
     for script in &scripts {
+        #[cfg(feature = "dhat-heap")]
+        {
+            let live = dhat::HeapStats::get().curr_bytes;
+            println!(
+                "  [mem] before script {}: live {} B {} | {}",
+                ran_scripts,
+                live,
+                script
+                    .resolved_url
+                    .as_ref()
+                    .map(|url| url.as_str())
+                    .unwrap_or("<inline>"),
+                pixi_byte::live_census()
+            );
+            println!("  [host] {}", js.host_stats());
+        }
         let source = match (&script.inline_source, &script.resolved_url) {
             (Some(source), _) => source.clone(),
             (None, Some(url)) => match script_bodies.get(url) {
@@ -1142,23 +1193,52 @@ fn run_webcompat_depth(raw_url: &str, depth: usize) -> Result<()> {
         };
         ran_scripts += 1;
         let wrapped = format!(
-            "try {{\n{}\n}} catch (e) {{ console.error('[uncaught] MSG<' + (e && e.message) + '> STACK<' + String(e && e.stack) + '>'); }}",
+            "function __try() {{\n{}\n}}\nfunction __wrap(e) {{ console.error('[uncaught] MSG<' + (e && e.message) + '> STACK<' + String(e && e.stack) + '>'); }}\ntry {{ __try(); }} catch (e) {{ if (e instanceof SyntaxError) console.error('[parse] ' + (e instanceof SyntaxError ? 'syntax' : 'err') + ' ' + e.message); else __wrap(e); }}",
             source
         );
         // `try_run_script` surfaces compile failures (a syntax error inside the
         // `<script>` makes even the wrapper unparseable and would otherwise be
         // invisible to the report).
-        if let Err(err) = js.try_run_script(&wrapped) {
-            script_errors += 1;
-            let snippet: String = err.chars().take(200).collect();
-            println!("  [script error] {snippet}");
+        match js.try_run_script(&wrapped) {
+            Err(err) => {
+                script_errors += 1;
+                let snippet: String = err.chars().take(200).collect();
+                println!("  [script error] {snippet}");
+            }
+            Ok(()) => {
+                // Drain any console errors the wrapper forwarded.
+                {
+                    let flush = js.eval_value("__orinium_flush_errors");
+                    let flush_str = flush.to_console_string();
+                    if !flush_str.is_empty() {
+                        for line in flush_str.lines() {
+                            println!("  [console error] {line}");
+                        }
+                    }
+                }
+            }
         }
     }
+    #[cfg(feature = "dhat-heap")]
+    println!(
+        "  [mem] after scripts: live {} B | {}",
+        dhat::HeapStats::get().curr_bytes,
+        pixi_byte::live_census()
+    );
     js.dispatch_dom_content_loaded();
     js.dispatch_window_load();
     for _ in 0..60 {
         js.run_due_timers();
         js.drain_microtasks();
+        #[cfg(feature = "dhat-heap")]
+        if iteration % 10 == 9 {
+            println!(
+                "  [mem] settle1 {}/60: live {} B | {}",
+                iteration + 1,
+                dhat::HeapStats::get().curr_bytes,
+                js.host_stats()
+            );
+        }
     }
     // Give React-style async work (scheduler / rAF / microtask chains) more
     // chances to settle, then re-check whether a framework mounted into the
@@ -1173,9 +1253,18 @@ fn run_webcompat_depth(raw_url: &str, depth: usize) -> Result<()> {
             })()"#,
         )
         .to_console_string();
-    for _ in 0..600 {
+    for _ in 0..200 {
         js.run_due_timers();
         js.drain_microtasks();
+        #[cfg(feature = "dhat-heap")]
+        if iteration % 20 == 19 {
+            println!(
+                "  [mem] settle2 {}/200: live {} B | {}",
+                iteration + 1,
+                dhat::HeapStats::get().curr_bytes,
+                js.host_stats()
+            );
+        }
     }
     let mounted_after = js
         .eval_value(
