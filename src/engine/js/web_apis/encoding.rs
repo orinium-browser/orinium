@@ -100,8 +100,28 @@ pub(crate) fn install_encoding_apis(engine: &mut pixi_byte::JSEngine) {
     register_host_constructor(&mut global, "TextEncoder", text_encoder_constructor);
     register_host_constructor(&mut global, "TextDecoder", text_decoder_constructor);
     register_host_constructor(&mut global, "ArrayBuffer", array_buffer_constructor);
-    register_host_constructor(&mut global, "Uint8Array", uint8_array_constructor);
     register_host_constructor(&mut global, "DataView", data_view_constructor);
+    install_typed_arrays(&mut global);
+    install_array_buffer_members(&mut global);
+}
+
+/// `ArrayBuffer.isView` and `ArrayBuffer.prototype.slice`, which libraries use
+/// to recognise and copy binary views.
+fn install_array_buffer_members(global: &mut JSObject) {
+    let Some(constructor) = global.get("ArrayBuffer").as_object() else {
+        return;
+    };
+    constructor.borrow_mut().set(
+        "isView".to_string(),
+        JSValue::from_native_function(array_buffer_is_view),
+    );
+    if let Some(prototype) = constructor.borrow().get("prototype").as_object() {
+        prototype.borrow_mut().set(
+            "slice".to_string(),
+            JSValue::from_native_function(array_buffer_slice),
+        );
+        ARRAY_BUFFER_PROTOTYPE.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&prototype)));
+    }
 }
 
 fn percent_encode(input: &str, preserve_uri_syntax: bool) -> String {
@@ -194,8 +214,19 @@ fn value_bytes(value: &JSValue) -> Vec<u8> {
     }
 }
 
+thread_local! {
+    /// `ArrayBuffer.prototype` of the most recently installed runtime, so
+    /// buffers created by host helpers (fetch bodies, blobs) inherit methods
+    /// such as `slice` even though those helpers have no VM handle.
+    static ARRAY_BUFFER_PROTOTYPE: RefCell<Option<Rc<RefCell<JSObject>>>> =
+        const { RefCell::new(None) };
+}
+
 fn make_array_buffer(bytes: Vec<u8>) -> JSValue {
     let mut object = JSObject::new();
+    if let Some(prototype) = ARRAY_BUFFER_PROTOTYPE.with(|slot| slot.borrow().clone()) {
+        object.set_prototype(Some(prototype));
+    }
     object.define_property(
         INSTANCE_TAG.to_string(),
         Property::read_only(JSValue::from_string("ArrayBuffer".to_string())),
@@ -215,125 +246,708 @@ pub(crate) fn make_array_buffer_from_value(value: &JSValue) -> JSValue {
 }
 
 fn array_buffer_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let length = args.get(1).map(JSValue::to_number).unwrap_or(0.0);
-    let length = if length.is_finite() && length >= 0.0 {
-        length as usize
-    } else {
-        return Err(JSError::TypeError("Invalid ArrayBuffer length".to_string()));
+    // ToIndex: `new ArrayBuffer()` and `new ArrayBuffer(undefined)` are empty
+    // buffers, fractional lengths truncate, and only negative or non-finite
+    // lengths are a RangeError.
+    let length = match args.get(1) {
+        Some(value) => {
+            let length = value.to_number();
+            if length.is_nan() {
+                0
+            } else if !length.is_finite() || length < 0.0 {
+                return Err(JSError::RangeError(
+                    "Invalid ArrayBuffer length".to_string(),
+                ));
+            } else {
+                length.trunc() as usize
+            }
+        }
+        None => 0,
     };
     Ok(make_array_buffer(vec![0; length]))
 }
 
-fn uint8_array_constructor(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let bytes = match args.get(1) {
-        Some(value) => match value.as_number() {
-            Some(length) if length.is_finite() && length >= 0.0 => {
-                vec![0; length as usize]
-            }
-            _ => {
-                let buffer = value.as_object();
-                let has_offset = args
-                    .get(3)
-                    .map(|item| !matches!(item.kind(), JsValueKind::Undefined))
-                    .unwrap_or(false);
-                if has_offset
-                    && buffer
-                        .is_some_and(|object| !object.borrow().get("byteLength").is_undefined())
-                {
-                    let offset =
-                        args.get(2).map(JSValue::to_number).unwrap_or(0.0).max(0.0) as usize;
-                    let length =
-                        args.get(3).map(JSValue::to_number).unwrap_or(0.0).max(0.0) as usize;
-                    let base = value_bytes(value);
-                    let end = (offset + length).min(base.len());
-                    let slice = base[offset.min(base.len())..end].to_vec();
-                    let array = vm.array_from_values(
-                        slice
-                            .iter()
-                            .copied()
-                            .map(|byte| JSValue::from_number(byte as f64))
-                            .collect(),
-                    );
-                    install_uint8_descriptors(&array, offset, slice.len(), value.clone(), vm);
-                    return Ok(array);
-                } else {
-                    value_bytes(value)
-                }
-            }
-        },
-        None => Vec::new(),
-    };
-    Ok(make_uint8_array(vm, bytes, None))
+// --- Typed arrays -----------------------------------------------------------
+//
+// Every typed array shares one `%TypedArray%` constructor object and one
+// `%TypedArray%.prototype`, mirroring the spec's internal hierarchy. core-js
+// feature-detects exactly that shape (`getPrototypeOf(Int8Array)` must be a
+// callable that is not `Function.prototype`) before deciding whether to install
+// its own typed-array polyfill; a flat set of unrelated constructors makes it
+// install that polyfill over primitives the engine does not support.
+
+#[derive(Clone, Copy)]
+enum TypedArrayType {
+    Int8,
+    Uint8,
+    Uint8Clamped,
+    Int16,
+    Uint16,
+    Int32,
+    Uint32,
+    Float32,
+    Float64,
 }
 
-fn make_uint8_array(vm: &mut VM, bytes: Vec<u8>, buffer: Option<JSValue>) -> JSValue {
-    let array = vm.array_from_values(
-        bytes
-            .iter()
-            .copied()
-            .map(|byte| JSValue::from_number(byte as f64))
-            .collect(),
-    );
-    install_uint8_descriptors(
-        &array,
-        0,
-        bytes.len(),
-        buffer.unwrap_or_else(|| make_array_buffer(bytes.clone())),
-        vm,
-    );
-    array
-}
+impl TypedArrayType {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Int8 => "Int8Array",
+            Self::Uint8 => "Uint8Array",
+            Self::Uint8Clamped => "Uint8ClampedArray",
+            Self::Int16 => "Int16Array",
+            Self::Uint16 => "Uint16Array",
+            Self::Int32 => "Int32Array",
+            Self::Uint32 => "Uint32Array",
+            Self::Float32 => "Float32Array",
+            Self::Float64 => "Float64Array",
+        }
+    }
 
-fn install_uint8_descriptors(
-    array: &JSValue,
-    offset: usize,
-    length: usize,
-    buffer: JSValue,
-    _vm: &mut VM,
-) {
-    if let Some(object) = array.as_object() {
-        object.borrow_mut().define_property(
-            INSTANCE_TAG.to_string(),
-            Property::read_only(JSValue::from_string("Uint8Array".to_string())),
-        );
-        object.borrow_mut().define_property(
-            "byteLength".to_string(),
-            Property::read_only(JSValue::from_number(length as f64)),
-        );
-        object.borrow_mut().define_property(
-            "byteOffset".to_string(),
-            Property::read_only(JSValue::from_number(offset as f64)),
-        );
-        object
-            .borrow_mut()
-            .define_property("buffer".to_string(), Property::read_only(buffer));
-        object.borrow_mut().set(
-            "set".to_string(),
-            JSValue::from_native_function(uint8_array_set),
-        );
+    fn bytes(self) -> usize {
+        match self {
+            Self::Int8 | Self::Uint8 | Self::Uint8Clamped => 1,
+            Self::Int16 | Self::Uint16 => 2,
+            Self::Int32 | Self::Uint32 | Self::Float32 => 4,
+            Self::Float64 => 8,
+        }
+    }
+
+    fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "Int8Array" => Self::Int8,
+            "Uint8Array" => Self::Uint8,
+            "Uint8ClampedArray" => Self::Uint8Clamped,
+            "Int16Array" => Self::Int16,
+            "Uint16Array" => Self::Uint16,
+            "Int32Array" => Self::Int32,
+            "Uint32Array" => Self::Uint32,
+            "Float32Array" => Self::Float32,
+            "Float64Array" => Self::Float64,
+            _ => return None,
+        })
+    }
+
+    /// ToNumber followed by the element type's conversion, so stored values are
+    /// always exactly what the element type can represent.
+    fn convert(self, value: f64) -> f64 {
+        match self {
+            Self::Int8 => to_signed(value, 8) as f64,
+            Self::Uint8 => to_unsigned(value, 8) as f64,
+            Self::Uint8Clamped => to_uint8_clamped(value),
+            Self::Int16 => to_signed(value, 16) as f64,
+            Self::Uint16 => to_unsigned(value, 16) as f64,
+            Self::Int32 => to_signed(value, 32) as f64,
+            Self::Uint32 => to_unsigned(value, 32) as f64,
+            Self::Float32 => value as f32 as f64,
+            Self::Float64 => value,
+        }
     }
 }
 
-fn uint8_array_set(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let Some(receiver) = args.first() else {
-        return Ok(JSValue::undefined());
-    };
-    let Some(target) = args.get(1) else {
-        return Ok(JSValue::undefined());
-    };
-    let output = value_bytes(receiver);
-    let input = value_bytes(target);
-    let offset = args.get(2).map(JSValue::to_number).unwrap_or(0.0).max(0.0) as usize;
-    if let Some(object) = receiver.as_object() {
-        let mut object = object.borrow_mut();
-        for (index, byte) in input.iter().copied().enumerate() {
-            let position = offset + index;
-            if position < output.len() {
-                object.set(position.to_string(), JSValue::from_number(byte as f64));
+/// ToUintN: NaN and infinities become 0, other values wrap modulo 2^N.
+fn to_unsigned(value: f64, bits: u32) -> u64 {
+    if !value.is_finite() {
+        return 0;
+    }
+    let modulo = 2f64.powi(bits as i32);
+    let truncated = value.trunc();
+    let wrapped = truncated - (truncated / modulo).floor() * modulo;
+    wrapped as u64
+}
+
+/// ToIntN: ToUintN then reinterpret the top bit as the sign.
+fn to_signed(value: f64, bits: u32) -> i64 {
+    let unsigned = to_unsigned(value, bits);
+    let sign_bit = 1u64 << (bits - 1);
+    if unsigned >= sign_bit {
+        unsigned as i64 - (1i64 << bits)
+    } else {
+        unsigned as i64
+    }
+}
+
+/// ToUint8Clamp: clamp to [0, 255], rounding halves to even.
+fn to_uint8_clamped(value: f64) -> f64 {
+    if value.is_nan() || value <= 0.0 {
+        return 0.0;
+    }
+    if value >= 255.0 {
+        return 255.0;
+    }
+    let floor = value.floor();
+    let fraction = value - floor;
+    if fraction < 0.5 {
+        floor
+    } else if fraction > 0.5 {
+        floor + 1.0
+    } else if (floor as i64) % 2 == 0 {
+        floor
+    } else {
+        floor + 1.0
+    }
+}
+
+fn decode_elements(ty: TypedArrayType, bytes: &[u8]) -> Vec<f64> {
+    let width = ty.bytes();
+    bytes
+        .chunks_exact(width)
+        .map(|chunk| match ty {
+            TypedArrayType::Int8 => chunk[0] as i8 as f64,
+            TypedArrayType::Uint8 | TypedArrayType::Uint8Clamped => chunk[0] as f64,
+            TypedArrayType::Int16 => i16::from_le_bytes([chunk[0], chunk[1]]) as f64,
+            TypedArrayType::Uint16 => u16::from_le_bytes([chunk[0], chunk[1]]) as f64,
+            TypedArrayType::Int32 => {
+                i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as f64
+            }
+            TypedArrayType::Uint32 => {
+                u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as f64
+            }
+            TypedArrayType::Float32 => {
+                f32::from_bits(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])) as f64
+            }
+            TypedArrayType::Float64 => f64::from_bits(u64::from_le_bytes([
+                chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
+            ])),
+        })
+        .collect()
+}
+
+fn encode_elements(ty: TypedArrayType, values: &[f64]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(values.len() * ty.bytes());
+    for value in values {
+        match ty {
+            TypedArrayType::Int8 => bytes.push(ty.convert(*value) as i8 as u8),
+            TypedArrayType::Uint8 | TypedArrayType::Uint8Clamped => {
+                bytes.push(ty.convert(*value) as u8)
+            }
+            TypedArrayType::Int16 => {
+                bytes.extend_from_slice(&(ty.convert(*value) as i16).to_le_bytes())
+            }
+            TypedArrayType::Uint16 => {
+                bytes.extend_from_slice(&(ty.convert(*value) as u16).to_le_bytes())
+            }
+            TypedArrayType::Int32 => {
+                bytes.extend_from_slice(&(ty.convert(*value) as i32).to_le_bytes())
+            }
+            TypedArrayType::Uint32 => {
+                bytes.extend_from_slice(&(ty.convert(*value) as u32).to_le_bytes())
+            }
+            TypedArrayType::Float32 => {
+                bytes.extend_from_slice(&(ty.convert(*value) as f32).to_bits().to_le_bytes())
+            }
+            TypedArrayType::Float64 => {
+                bytes.extend_from_slice(&ty.convert(*value).to_bits().to_le_bytes())
             }
         }
     }
+    bytes
+}
+
+fn typed_array_of(receiver: &JSValue) -> Option<TypedArrayType> {
+    read_instance_tag(receiver).and_then(|tag| TypedArrayType::from_name(&tag))
+}
+
+fn typed_array_length(receiver: &JSValue) -> usize {
+    receiver
+        .as_object()
+        .map(|object| object.borrow().get("length").to_number().max(0.0) as usize)
+        .unwrap_or(0)
+}
+
+fn typed_array_element(receiver: &JSValue, index: usize) -> f64 {
+    receiver
+        .as_object()
+        .map(|object| object.borrow().get(&index.to_string()).to_number())
+        .unwrap_or(0.0)
+}
+
+/// Elements of an array-like (objects with `length`/indices), a string's code
+/// units, or nothing for other primitives.
+fn array_like_values(value: &JSValue) -> Vec<f64> {
+    if let Some(object) = value.as_object() {
+        let object = object.borrow();
+        let length = object.get("length").to_number().max(0.0) as usize;
+        const MAX: usize = 1 << 20;
+        let length = length.min(MAX);
+        (0..length)
+            .map(|index| object.get(&index.to_string()).to_number())
+            .collect()
+    } else if let Some(text) = value.as_string() {
+        text.chars()
+            .map(|character| character as u32 as f64)
+            .collect()
+    } else {
+        Vec::new()
+    }
+}
+
+/// Resolves a `TypedArray` constructor's arguments into element values plus the
+/// backing buffer they were read from or copied into.
+fn typed_array_source(
+    ty: TypedArrayType,
+    source: &JSValue,
+    offset_arg: Option<&JSValue>,
+    length_arg: Option<&JSValue>,
+) -> JSResult<(Vec<f64>, JSValue, usize)> {
+    if source.is_undefined() || source.is_null() {
+        return Ok((Vec::new(), make_array_buffer(Vec::new()), 0));
+    }
+    if let Some(length) = source.as_number() {
+        if length.is_nan() {
+            return Ok((Vec::new(), make_array_buffer(Vec::new()), 0));
+        }
+        if !length.is_finite() || length < 0.0 {
+            eprintln!("[debug typed array length] {length}");
+            return Err(JSError::RangeError(
+                "Invalid typed array length".to_string(),
+            ));
+        }
+        const MAX_TYPED_ARRAY_LENGTH: usize = 1 << 20;
+        if length.trunc() as usize > MAX_TYPED_ARRAY_LENGTH {
+            return Err(JSError::RangeError(
+                "Invalid typed array length".to_string(),
+            ));
+        }
+        let values = vec![0.0; length.trunc() as usize];
+        let buffer = make_array_buffer(encode_elements(ty, &values));
+        return Ok((values, buffer, 0));
+    }
+    // An ArrayBuffer argument creates a view over its bytes.
+    if read_instance_tag(source).as_deref() == Some("ArrayBuffer") {
+        let bytes = value_bytes(source);
+        let requested_offset = offset_arg.map(JSValue::to_number).unwrap_or(0.0);
+        if !requested_offset.is_finite() || requested_offset < 0.0 {
+            return Err(JSError::RangeError(
+                "Invalid typed array offset".to_string(),
+            ));
+        }
+        let offset = requested_offset.trunc() as usize;
+        let width = ty.bytes();
+        if offset > bytes.len() || !offset.is_multiple_of(width) {
+            return Err(JSError::RangeError(
+                "Invalid typed array offset".to_string(),
+            ));
+        }
+        let available = (bytes.len() - offset) / width;
+        let length = length_arg
+            .map(JSValue::to_number)
+            .filter(|length| length.is_finite())
+            .map(|length| (length.max(0.0).trunc() as usize).min(available))
+            .unwrap_or(available);
+        let values = decode_elements(ty, &bytes[offset..offset + length * width]);
+        return Ok((values, source.clone(), offset));
+    }
+    let values: Vec<f64> = array_like_values(source)
+        .into_iter()
+        .map(|value| ty.convert(value))
+        .collect();
+    let buffer = make_array_buffer(encode_elements(ty, &values));
+    Ok((values, buffer, 0))
+}
+
+fn populate_typed_array(
+    object: &Rc<RefCell<JSObject>>,
+    ty: TypedArrayType,
+    values: &[f64],
+    buffer: JSValue,
+    byte_offset: usize,
+) {
+    let mut object = object.borrow_mut();
+    for (index, value) in values.iter().enumerate() {
+        object.set(index.to_string(), JSValue::from_number(*value));
+    }
+    object.define_property(
+        "length".to_string(),
+        Property::read_only(JSValue::from_number(values.len() as f64)),
+    );
+    object.define_property(
+        "byteLength".to_string(),
+        Property::read_only(JSValue::from_number((values.len() * ty.bytes()) as f64)),
+    );
+    object.define_property(
+        "byteOffset".to_string(),
+        Property::read_only(JSValue::from_number(byte_offset as f64)),
+    );
+    object.define_property("buffer".to_string(), Property::read_only(buffer));
+    object.define_property(
+        INSTANCE_TAG.to_string(),
+        Property::read_only(JSValue::from_string(ty.name().to_string())),
+    );
+}
+
+fn typed_array_construct(args: Vec<JSValue>, ty: TypedArrayType) -> JSResult<JSValue> {
+    let source = args.get(1).cloned().unwrap_or(JSValue::undefined());
+    let (values, buffer, byte_offset) = typed_array_source(ty, &source, args.get(2), args.get(3))?;
+    let object = args
+        .first()
+        .and_then(JSValue::as_object)
+        .unwrap_or_else(|| Rc::new(RefCell::new(JSObject::new())));
+    populate_typed_array(&object, ty, &values, buffer, byte_offset);
+    Ok(JSValue::from_object(object))
+}
+
+macro_rules! typed_array_constructor_fn {
+    ($name:ident, $ty:expr) => {
+        fn $name(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+            typed_array_construct(args, $ty)
+        }
+    };
+}
+
+typed_array_constructor_fn!(int8_array_constructor, TypedArrayType::Int8);
+typed_array_constructor_fn!(uint8_array_constructor, TypedArrayType::Uint8);
+typed_array_constructor_fn!(
+    uint8_clamped_array_constructor,
+    TypedArrayType::Uint8Clamped
+);
+typed_array_constructor_fn!(int16_array_constructor, TypedArrayType::Int16);
+typed_array_constructor_fn!(uint16_array_constructor, TypedArrayType::Uint16);
+typed_array_constructor_fn!(int32_array_constructor, TypedArrayType::Int32);
+typed_array_constructor_fn!(uint32_array_constructor, TypedArrayType::Uint32);
+typed_array_constructor_fn!(float32_array_constructor, TypedArrayType::Float32);
+typed_array_constructor_fn!(float64_array_constructor, TypedArrayType::Float64);
+
+fn typed_array_illegal_invocation(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    eprintln!(
+        "[debug %TypedArray%] stack={:?}",
+        vm.frames
+            .iter()
+            .map(|frame| frame
+                .function_name
+                .as_ref()
+                .map(|name| name.as_str())
+                .unwrap_or_default())
+            .collect::<Vec<_>>()
+    );
+    Err(JSError::TypeError(
+        "%TypedArray% is not directly constructible".to_string(),
+    ))
+}
+
+/// Relative index (Start/End) resolution shared by `subarray` and `slice`.
+fn relative_index(value: Option<&JSValue>, length: usize, default: usize) -> usize {
+    let Some(value) = value else {
+        return default;
+    };
+    if value.is_undefined() {
+        return default;
+    }
+    let index = value.to_number();
+    if index.is_nan() {
+        return 0;
+    }
+    let resolved = if index < 0.0 {
+        (length as f64 + index.trunc()).max(0.0)
+    } else {
+        index.trunc()
+    };
+    resolved.min(length as f64) as usize
+}
+
+fn typed_array_set(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(receiver) = args.first() else {
+        return Err(JSError::TypeError(
+            "set called on a non-typed-array".to_string(),
+        ));
+    };
+    let Some(ty) = typed_array_of(receiver) else {
+        return Err(JSError::TypeError(
+            "set called on a non-typed-array".to_string(),
+        ));
+    };
+    let values: Vec<f64> = array_like_values(args.get(1).unwrap_or(&JSValue::undefined()))
+        .into_iter()
+        .map(|value| ty.convert(value))
+        .collect();
+    let offset = args.get(2).map(JSValue::to_number).unwrap_or(0.0).max(0.0) as usize;
+    let length = typed_array_length(receiver);
+    if offset + values.len() > length {
+        return Err(JSError::RangeError(
+            "source is too large for the target typed array".to_string(),
+        ));
+    }
+    if let Some(object) = receiver.as_object() {
+        let mut object = object.borrow_mut();
+        for (index, value) in values.iter().enumerate() {
+            object.set((offset + index).to_string(), JSValue::from_number(*value));
+        }
+    }
     Ok(JSValue::undefined())
+}
+
+fn typed_array_subarray(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let receiver = args.first().cloned().unwrap_or(JSValue::undefined());
+    let Some(ty) = typed_array_of(&receiver) else {
+        return Err(JSError::TypeError(
+            "subarray called on a non-typed-array".to_string(),
+        ));
+    };
+    let length = typed_array_length(&receiver);
+    let begin = relative_index(args.get(1), length, 0);
+    let end = relative_index(args.get(2), length, length).max(begin);
+    let values: Vec<f64> = (begin..end)
+        .map(|index| typed_array_element(&receiver, index))
+        .collect();
+    let buffer = receiver
+        .as_object()
+        .map(|object| object.borrow().get("buffer"))
+        .unwrap_or_else(|| make_array_buffer(Vec::new()));
+    let byte_offset = receiver
+        .as_object()
+        .map(|object| object.borrow().get("byteOffset").to_number().max(0.0) as usize)
+        .unwrap_or(0)
+        + begin * ty.bytes();
+    let prototype = receiver
+        .as_object()
+        .and_then(|object| object.borrow().get_prototype());
+    let object = Rc::new(RefCell::new(JSObject::with_prototype(prototype)));
+    populate_typed_array(&object, ty, &values, buffer, byte_offset);
+    Ok(JSValue::from_object(object))
+}
+
+fn typed_array_slice(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let receiver = args.first().cloned().unwrap_or(JSValue::undefined());
+    let Some(ty) = typed_array_of(&receiver) else {
+        return Err(JSError::TypeError(
+            "slice called on a non-typed-array".to_string(),
+        ));
+    };
+    let length = typed_array_length(&receiver);
+    let begin = relative_index(args.get(1), length, 0);
+    let end = relative_index(args.get(2), length, length).max(begin);
+    let values: Vec<f64> = (begin..end)
+        .map(|index| typed_array_element(&receiver, index))
+        .collect();
+    let buffer = make_array_buffer(encode_elements(ty, &values));
+    let prototype = receiver
+        .as_object()
+        .and_then(|object| object.borrow().get_prototype());
+    let object = Rc::new(RefCell::new(JSObject::with_prototype(prototype)));
+    populate_typed_array(&object, ty, &values, buffer, 0);
+    Ok(JSValue::from_object(object))
+}
+
+fn typed_array_join(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let receiver = args.first().cloned().unwrap_or(JSValue::undefined());
+    if typed_array_of(&receiver).is_none() {
+        return Err(JSError::TypeError(
+            "join called on a non-typed-array".to_string(),
+        ));
+    }
+    let separator = args
+        .get(1)
+        .filter(|value| !value.is_undefined())
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| ",".to_string());
+    let length = typed_array_length(&receiver);
+    let parts: Vec<String> = (0..length)
+        .map(|index| JSValue::from_number(typed_array_element(&receiver, index)).to_string())
+        .collect();
+    Ok(JSValue::from_string(parts.join(&separator)))
+}
+
+fn typed_array_index_of(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let receiver = args.first().cloned().unwrap_or(JSValue::undefined());
+    let Some(ty) = typed_array_of(&receiver) else {
+        return Err(JSError::TypeError(
+            "indexOf called on a non-typed-array".to_string(),
+        ));
+    };
+    let target = ty.convert(args.get(1).map(JSValue::to_number).unwrap_or(f64::NAN));
+    let length = typed_array_length(&receiver);
+    let begin = relative_index(args.get(2), length, 0).min(length);
+    for index in begin..length {
+        if typed_array_element(&receiver, index) == target {
+            return Ok(JSValue::from_number(index as f64));
+        }
+    }
+    Ok(JSValue::from_number(-1.0))
+}
+
+fn typed_array_fill(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let receiver = args.first().cloned().unwrap_or(JSValue::undefined());
+    let Some(ty) = typed_array_of(&receiver) else {
+        return Err(JSError::TypeError(
+            "fill called on a non-typed-array".to_string(),
+        ));
+    };
+    let value = ty.convert(args.get(1).map(JSValue::to_number).unwrap_or(0.0));
+    let length = typed_array_length(&receiver);
+    let begin = relative_index(args.get(2), length, 0);
+    let end = relative_index(args.get(3), length, length).max(begin);
+    if let Some(object) = receiver.as_object() {
+        let mut object = object.borrow_mut();
+        for index in begin..end {
+            object.set(index.to_string(), JSValue::from_number(value));
+        }
+    }
+    Ok(receiver)
+}
+
+fn register_typed_array(
+    global: &mut JSObject,
+    ty: TypedArrayType,
+    construct: pixi_byte::value::jsvalue::NativeFunctionType,
+    shared_prototype: &Rc<RefCell<JSObject>>,
+    shared_constructor: &Rc<RefCell<JSObject>>,
+) {
+    let mut prototype = JSObject::with_prototype(Some(Rc::clone(shared_prototype)));
+    prototype.define_property(
+        INSTANCE_TAG.to_string(),
+        Property::read_only(JSValue::from_string(ty.name().to_string())),
+    );
+    prototype.define_property(
+        "BYTES_PER_ELEMENT".to_string(),
+        Property::read_only(JSValue::from_number(ty.bytes() as f64)),
+    );
+    let prototype = Rc::new(RefCell::new(prototype));
+
+    let mut constructor = JSObject::with_prototype(Some(Rc::clone(shared_constructor)));
+    constructor.set(
+        "__construct__".to_string(),
+        JSValue::from_native_function(construct),
+    );
+    constructor.define_property(
+        "prototype".to_string(),
+        Property::read_only(JSValue::from_object(Rc::clone(&prototype))),
+    );
+    constructor.define_property(
+        "BYTES_PER_ELEMENT".to_string(),
+        Property::read_only(JSValue::from_number(ty.bytes() as f64)),
+    );
+    constructor.define_property(
+        INSTANCE_TAG.to_string(),
+        Property::read_only(JSValue::from_string(ty.name().to_string())),
+    );
+    constructor.define_property(
+        pixi_byte::value::jsobject::HOST_HAS_INSTANCE.to_string(),
+        internal_property(JSValue::from_native_function(host_has_instance)),
+    );
+    global.set(
+        ty.name().to_string(),
+        JSValue::from_object(Rc::new(RefCell::new(constructor))),
+    );
+}
+
+fn install_typed_arrays(global: &mut JSObject) {
+    let mut shared_prototype = JSObject::new();
+    shared_prototype.set(
+        "set".to_string(),
+        JSValue::from_native_function(typed_array_set),
+    );
+    shared_prototype.set(
+        "subarray".to_string(),
+        JSValue::from_native_function(typed_array_subarray),
+    );
+    shared_prototype.set(
+        "slice".to_string(),
+        JSValue::from_native_function(typed_array_slice),
+    );
+    shared_prototype.set(
+        "join".to_string(),
+        JSValue::from_native_function(typed_array_join),
+    );
+    shared_prototype.set(
+        "indexOf".to_string(),
+        JSValue::from_native_function(typed_array_index_of),
+    );
+    shared_prototype.set(
+        "fill".to_string(),
+        JSValue::from_native_function(typed_array_fill),
+    );
+    let shared_prototype = Rc::new(RefCell::new(shared_prototype));
+
+    let mut shared_constructor = JSObject::new();
+    shared_constructor.set(
+        "__call__".to_string(),
+        JSValue::from_native_function(typed_array_illegal_invocation),
+    );
+    shared_constructor.define_property(
+        "prototype".to_string(),
+        Property::read_only(JSValue::from_object(Rc::clone(&shared_prototype))),
+    );
+    let shared_constructor = Rc::new(RefCell::new(shared_constructor));
+
+    register_typed_array(
+        global,
+        TypedArrayType::Int8,
+        int8_array_constructor,
+        &shared_prototype,
+        &shared_constructor,
+    );
+    register_typed_array(
+        global,
+        TypedArrayType::Uint8,
+        uint8_array_constructor,
+        &shared_prototype,
+        &shared_constructor,
+    );
+    register_typed_array(
+        global,
+        TypedArrayType::Uint8Clamped,
+        uint8_clamped_array_constructor,
+        &shared_prototype,
+        &shared_constructor,
+    );
+    register_typed_array(
+        global,
+        TypedArrayType::Int16,
+        int16_array_constructor,
+        &shared_prototype,
+        &shared_constructor,
+    );
+    register_typed_array(
+        global,
+        TypedArrayType::Uint16,
+        uint16_array_constructor,
+        &shared_prototype,
+        &shared_constructor,
+    );
+    register_typed_array(
+        global,
+        TypedArrayType::Int32,
+        int32_array_constructor,
+        &shared_prototype,
+        &shared_constructor,
+    );
+    register_typed_array(
+        global,
+        TypedArrayType::Uint32,
+        uint32_array_constructor,
+        &shared_prototype,
+        &shared_constructor,
+    );
+    register_typed_array(
+        global,
+        TypedArrayType::Float32,
+        float32_array_constructor,
+        &shared_prototype,
+        &shared_constructor,
+    );
+    register_typed_array(
+        global,
+        TypedArrayType::Float64,
+        float64_array_constructor,
+        &shared_prototype,
+        &shared_constructor,
+    );
+}
+
+fn array_buffer_is_view(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let is_view = args
+        .get(1)
+        .and_then(read_instance_tag)
+        .is_some_and(|tag| tag == "DataView" || TypedArrayType::from_name(&tag).is_some());
+    Ok(JSValue::from_bool(is_view))
+}
+
+fn array_buffer_slice(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let bytes = value_bytes(args.first().unwrap_or(&JSValue::undefined()));
+    let length = bytes.len();
+    let begin = relative_index(args.get(1), length, 0);
+    let end = relative_index(args.get(2), length, length).max(begin);
+    Ok(make_array_buffer(bytes[begin..end].to_vec()))
 }
 
 fn btoa(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
