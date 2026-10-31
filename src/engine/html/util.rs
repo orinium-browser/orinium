@@ -15,12 +15,12 @@
 //!
 
 use entities::{Codepoints, ENTITIES};
-use once_cell::sync::Lazy;
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 pub const MAX_ENTITY_NAME_LEN: usize = 31;
 
-static NAMED_ENTITIES: Lazy<HashMap<&'static str, String>> = Lazy::new(|| {
+static NAMED_ENTITIES: LazyLock<HashMap<&'static str, String>> = LazyLock::new(|| {
     let mut map = HashMap::new();
     for ent in ENTITIES.iter() {
         let key = ent.entity.trim_start_matches('&').trim_end_matches(';');

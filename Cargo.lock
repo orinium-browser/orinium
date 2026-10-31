@@ -2997,7 +2997,6 @@ dependencies = [
  "ipc-channel",
  "log",
  "lru 0.19.0",
- "once_cell",
  "orinium_text",
  "pixi_byte",
  "pollster",
