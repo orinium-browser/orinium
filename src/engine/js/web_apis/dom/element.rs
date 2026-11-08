@@ -555,6 +555,10 @@ pub(crate) fn make_element(
         read_only_accessor_property(get_class_list),
     );
     obj.define_property(
+        "dataset".to_string(),
+        read_only_accessor_property(get_dataset),
+    );
+    obj.define_property(
         "className".to_string(),
         accessor_property(get_class_name, set_class_name),
     );
@@ -3076,6 +3080,38 @@ fn get_element_id(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     };
     let id = node.borrow().value.get_attr("id").unwrap_or("").to_string();
     Ok(JSValue::from_string(id))
+}
+
+/// Returns a DOMStringMap snapshot from the element's `data-*` attributes.
+fn get_dataset(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let mut dataset = JSObject::new();
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::from_object(Rc::new(RefCell::new(dataset))));
+    };
+    let borrowed = node.borrow();
+    let HtmlNodeType::Element { attributes, .. } = &borrowed.value else {
+        return Ok(JSValue::from_object(Rc::new(RefCell::new(dataset))));
+    };
+    for attribute in attributes {
+        let Some(suffix) = attribute.name.strip_prefix("data-") else {
+            continue;
+        };
+        let mut key = String::with_capacity(suffix.len());
+        let mut uppercase_next = false;
+        for character in suffix.chars() {
+            if character == '-' {
+                uppercase_next = true;
+            } else if uppercase_next && character.is_ascii_lowercase() {
+                key.push(character.to_ascii_uppercase());
+                uppercase_next = false;
+            } else {
+                key.push(character);
+                uppercase_next = false;
+            }
+        }
+        dataset.set(key, JSValue::from_string(attribute.value.clone()));
+    }
+    Ok(JSValue::from_object(Rc::new(RefCell::new(dataset))))
 }
 
 fn set_element_id(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
