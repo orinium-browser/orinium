@@ -165,6 +165,12 @@ impl CustomNode for InputCheckboxComponent {
         }
     }
 
+    fn set_checked(&self, checked: bool) {
+        if self.checked.swap(checked, Ordering::Relaxed) != checked {
+            self.dirty.store(true, Ordering::Relaxed);
+        }
+    }
+
     fn is_hovered(&self) -> bool {
         self.hovered.load(Ordering::Relaxed)
     }

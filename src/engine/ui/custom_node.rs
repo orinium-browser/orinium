@@ -176,6 +176,9 @@ pub trait CustomNode: std::fmt::Debug + Send + Sync + 'static {
     /// Updates the hover state for this node.
     fn set_hovered(&self, _hovered: bool) {}
 
+    /// Updates the checked state for checkbox/radio controls.
+    fn set_checked(&self, _checked: bool) {}
+
     /// Returns whether this node is currently hovered.
     fn is_hovered(&self) -> bool {
         false
