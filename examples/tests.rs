@@ -354,6 +354,57 @@ fn main() -> Result<()> {
                     eprintln!("Please provide a URL (URL [WIDTH HEIGHT]).");
                 }
             }
+            "parse_js" => {
+                if args.len() == 3 {
+                    let target = &args[2];
+                    println!("Parsing JS for: {}", target);
+                    let source = if target.starts_with("http://")
+                        || target.starts_with("https://")
+                        || target.starts_with("data:")
+                        || target.starts_with("file://")
+                    {
+                        let net =
+                            NetworkCore::new().expect("Failed to create NetworkCore instance");
+                        let loader = BrowserResourceLoader::with_network(net);
+                        let resp = loader
+                            .fetch_blocking(target.parse()?)
+                            .expect("Failed to fetch JS");
+                        String::from_utf8_lossy(&resp.body).to_string()
+                    } else {
+                        std::fs::read_to_string(target)?
+                    };
+                    println!(
+                        "Source (first 120 chars): {}",
+                        source
+                            .chars()
+                            .take(120)
+                            .collect::<String>()
+                            .replace('\n', "\\n")
+                    );
+                    let parse_result = (|| -> Result<pixi_byte::parser::Program, String> {
+                        let lexer = pixi_byte::Lexer::new(&source);
+                        let mut parser =
+                            pixi_byte::Parser::new(lexer).map_err(|e| e.to_string())?;
+                        parser.parse().map_err(|e| e.to_string())
+                    })();
+                    match parse_result {
+                        Ok(program) => {
+                            println!(
+                                "{} ({} top-level statements)",
+                                "Parse OK".green().bold(),
+                                program.body.len()
+                            );
+                            print_js_program(&program);
+                        }
+                        Err(err) => {
+                            eprintln!("{}: {err}", "Parse error".red().bold());
+                            std::process::exit(1);
+                        }
+                    }
+                } else {
+                    eprintln!("Please provide a URL or file path for parse_js.");
+                }
+            }
             _ => {
                 eprintln!("Unknown argument: {}", args[1]);
                 let commands: Vec<&str> = get_commands().keys().copied().collect();
@@ -1486,6 +1537,385 @@ fn suggest_command<'a>(input: &'a str, commands: &'a [&'a str]) -> Option<&'a st
         })
 }
 
+fn print_js_program(program: &pixi_byte::parser::Program) {
+    println!("JS AST:");
+    print_js_body(&program.body, 1);
+}
+
+fn print_js_body(body: &[pixi_byte::parser::Statement], indent: usize) {
+    let pad = "  ".repeat(indent);
+    if body.is_empty() {
+        println!("{pad}(empty)");
+        return;
+    }
+    for stmt in body {
+        print_js_stmt(stmt, indent);
+    }
+}
+
+fn print_js_stmt(stmt: &pixi_byte::parser::Statement, indent: usize) {
+    use pixi_byte::parser::Statement;
+    let pad = "  ".repeat(indent);
+    match stmt {
+        Statement::Empty => println!("{pad}Empty"),
+        Statement::Block(body) => {
+            println!("{pad}Block");
+            print_js_body(body, indent + 1);
+        }
+        Statement::Labeled { label, body } => {
+            println!("{pad}Labeled {label:?}");
+            print_js_stmt(body, indent + 1);
+        }
+        Statement::Expression(expr) => {
+            println!("{pad}Expression");
+            print_js_expr(expr, indent + 1);
+        }
+        Statement::VariableDeclaration { kind, declarations } => {
+            println!("{pad}VariableDeclaration {kind:?}");
+            for (name, init) in declarations {
+                if let Some(init) = init {
+                    println!("{pad}  {name}");
+                    print_js_expr(init, indent + 2);
+                } else {
+                    println!("{pad}  {name}");
+                }
+            }
+        }
+        Statement::Return(expr) => {
+            println!("{pad}Return");
+            if let Some(expr) = expr {
+                print_js_expr(expr, indent + 1);
+            }
+        }
+        Statement::FunctionDeclaration {
+            name,
+            params,
+            body,
+            is_generator,
+        } => {
+            let g = if *is_generator { "*" } else { "" };
+            println!("{pad}FunctionDeclaration {g}{name}({})", params.join(", "));
+            print_js_body(body, indent + 1);
+        }
+        Statement::If {
+            test,
+            consequent,
+            alternate,
+        } => {
+            println!("{pad}If");
+            println!("{pad}  test:");
+            print_js_expr(test, indent + 2);
+            println!("{pad}  consequent:");
+            print_js_body(consequent, indent + 2);
+            if let Some(alt) = alternate {
+                println!("{pad}  alternate:");
+                print_js_body(alt, indent + 2);
+            }
+        }
+        Statement::While { test, body } => {
+            println!("{pad}While");
+            println!("{pad}  test:");
+            print_js_expr(test, indent + 2);
+            println!("{pad}  body:");
+            print_js_body(body, indent + 2);
+        }
+        Statement::DoWhile { body, test } => {
+            println!("{pad}DoWhile");
+            println!("{pad}  body:");
+            print_js_body(body, indent + 2);
+            println!("{pad}  test:");
+            print_js_expr(test, indent + 2);
+        }
+        Statement::For {
+            init,
+            test,
+            update,
+            body,
+        } => {
+            println!("{pad}For");
+            if let Some(init) = init {
+                println!("{pad}  init:");
+                print_js_stmt(init, indent + 2);
+            }
+            if let Some(test) = test {
+                println!("{pad}  test:");
+                print_js_expr(test, indent + 2);
+            }
+            if !update.is_empty() {
+                println!("{pad}  update:");
+                for u in update {
+                    print_js_expr(u, indent + 2);
+                }
+            }
+            println!("{pad}  body:");
+            print_js_body(body, indent + 2);
+        }
+        Statement::ForIn {
+            binding,
+            kind,
+            right,
+            body,
+        } => {
+            println!("{pad}ForIn kind={kind:?} binding={binding:?}");
+            println!("{pad}  right:");
+            print_js_expr(right, indent + 2);
+            println!("{pad}  body:");
+            print_js_body(body, indent + 2);
+        }
+        Statement::ForOf {
+            binding,
+            kind,
+            right,
+            body,
+        } => {
+            println!("{pad}ForOf kind={kind:?} binding={binding:?}");
+            println!("{pad}  right:");
+            print_js_expr(right, indent + 2);
+            println!("{pad}  body:");
+            print_js_body(body, indent + 2);
+        }
+        Statement::PatternDeclaration {
+            kind,
+            binding,
+            init,
+        } => {
+            println!("{pad}PatternDeclaration {kind:?} {binding:?}");
+            print_js_expr(init, indent + 1);
+        }
+        Statement::Throw(expr) => {
+            println!("{pad}Throw");
+            print_js_expr(expr, indent + 1);
+        }
+        Statement::Try {
+            block,
+            handler,
+            finalizer,
+        } => {
+            println!("{pad}Try");
+            println!("{pad}  block:");
+            print_js_body(block, indent + 2);
+            if let Some((param, body)) = handler {
+                println!("{pad}  catch({})", param.as_deref().unwrap_or("_"));
+                print_js_body(body, indent + 2);
+            }
+            if let Some(fin) = finalizer {
+                println!("{pad}  finally:");
+                print_js_body(fin, indent + 2);
+            }
+        }
+        Statement::Switch {
+            discriminant,
+            cases,
+        } => {
+            println!("{pad}Switch");
+            println!("{pad}  discriminant:");
+            print_js_expr(discriminant, indent + 2);
+            for (test, body) in cases {
+                if let Some(test) = test {
+                    println!("{pad}  case:");
+                    print_js_expr(test, indent + 2);
+                } else {
+                    println!("{pad}  default:");
+                }
+                print_js_body(body, indent + 2);
+            }
+        }
+        Statement::Break(label) => println!("{pad}Break {:?}", label.as_deref()),
+        Statement::Continue(label) => println!("{pad}Continue {:?}", label.as_deref()),
+        Statement::ImportDeclaration {
+            source,
+            default,
+            namespace,
+            named,
+        } => {
+            println!(
+                "{pad}ImportDeclaration from {source:?} default={default:?} namespace={namespace:?} named={named:?}"
+            );
+        }
+        Statement::ExportNamedDeclaration {
+            declaration,
+            specifiers,
+            source,
+        } => {
+            println!("{pad}ExportNamedDeclaration specifiers={specifiers:?} source={source:?}");
+            if let Some(decl) = declaration {
+                print_js_stmt(decl, indent + 1);
+            }
+        }
+        Statement::ExportDefaultDeclaration { declaration } => {
+            println!("{pad}ExportDefaultDeclaration");
+            print_js_stmt(declaration, indent + 1);
+        }
+        Statement::ExportAllDeclaration { source } => {
+            println!("{pad}ExportAllDeclaration from {source:?}");
+        }
+    }
+}
+
+fn print_js_expr(expr: &pixi_byte::parser::Expression, indent: usize) {
+    use pixi_byte::parser::{Expression, Literal};
+    let pad = "  ".repeat(indent);
+    match expr {
+        Expression::Literal(Literal::Null) => println!("{pad}Literal null"),
+        Expression::Literal(Literal::Undefined) => println!("{pad}Literal undefined"),
+        Expression::Literal(Literal::Boolean(v)) => println!("{pad}Literal {v}"),
+        Expression::Literal(Literal::Number(v)) => println!("{pad}Literal {v}"),
+        Expression::Literal(Literal::BigInt(v)) => println!("{pad}Literal {v}n"),
+        Expression::Literal(Literal::String(v)) => println!("{pad}Literal {v:?}"),
+        Expression::Identifier(name) => println!("{pad}Identifier {name:?}"),
+        Expression::This => println!("{pad}This"),
+        Expression::Super => println!("{pad}Super"),
+        Expression::Binary { op, left, right } => {
+            println!("{pad}Binary {op:?}");
+            print_js_expr(left, indent + 1);
+            print_js_expr(right, indent + 1);
+        }
+        Expression::Unary { op, arg } => {
+            println!("{pad}Unary {op:?}");
+            print_js_expr(arg, indent + 1);
+        }
+        Expression::Assignment { left, right } => {
+            println!("{pad}Assignment");
+            print_js_expr(left, indent + 1);
+            print_js_expr(right, indent + 1);
+        }
+        Expression::Update {
+            arg,
+            increment,
+            prefix,
+        } => {
+            let op = if *increment { "++" } else { "--" };
+            let pos = if *prefix { "prefix" } else { "postfix" };
+            println!("{pad}Update {op} {pos}");
+            print_js_expr(arg, indent + 1);
+        }
+        Expression::Conditional {
+            test,
+            consequent,
+            alternate,
+        } => {
+            println!("{pad}Conditional");
+            print_js_expr(test, indent + 1);
+            print_js_expr(consequent, indent + 1);
+            print_js_expr(alternate, indent + 1);
+        }
+        Expression::Sequence(exprs) => {
+            println!("{pad}Sequence");
+            for e in exprs {
+                print_js_expr(e, indent + 1);
+            }
+        }
+        Expression::ArrayLiteral(items) => {
+            println!("{pad}ArrayLiteral");
+            for e in items {
+                print_js_expr(e, indent + 1);
+            }
+        }
+        Expression::ObjectLiteral(props) => {
+            println!("{pad}ObjectLiteral ({} properties)", props.len());
+            for p in props {
+                println!("{pad}  {p:?}");
+            }
+        }
+        Expression::MemberAccess {
+            object,
+            property,
+            computed,
+        } => {
+            println!("{pad}MemberAccess computed={computed}");
+            print_js_expr(object, indent + 1);
+            print_js_expr(property, indent + 1);
+        }
+        Expression::OptionalMemberAccess {
+            object,
+            property,
+            computed,
+        } => {
+            println!("{pad}OptionalMemberAccess computed={computed}");
+            print_js_expr(object, indent + 1);
+            print_js_expr(property, indent + 1);
+        }
+        Expression::Call { callee, args } => {
+            println!("{pad}Call ({} args)", args.len());
+            print_js_expr(callee, indent + 1);
+            for a in args {
+                print_js_expr(a, indent + 1);
+            }
+        }
+        Expression::OptionalCall { callee, args } => {
+            println!("{pad}OptionalCall ({} args)", args.len());
+            print_js_expr(callee, indent + 1);
+            for a in args {
+                print_js_expr(a, indent + 1);
+            }
+        }
+        Expression::New { callee, args } => {
+            println!("{pad}New ({} args)", args.len());
+            print_js_expr(callee, indent + 1);
+            for a in args {
+                print_js_expr(a, indent + 1);
+            }
+        }
+        Expression::Function {
+            name,
+            params,
+            body,
+            is_generator,
+        } => {
+            let g = if *is_generator { "*" } else { "" };
+            println!(
+                "{pad}FunctionExpression {g}{}({})",
+                name.as_deref().unwrap_or("<anon>"),
+                params.join(", ")
+            );
+            print_js_body(body, indent + 1);
+        }
+        Expression::ArrowFunction { params, body } => {
+            println!("{pad}ArrowFunction ({})", params.join(", "));
+            print_js_body(body, indent + 1);
+        }
+        Expression::Yield { value, delegate } => {
+            println!("{pad}Yield delegate={delegate}");
+            print_js_expr(value, indent + 1);
+        }
+        Expression::Spread(inner) => {
+            println!("{pad}Spread");
+            print_js_expr(inner, indent + 1);
+        }
+        Expression::RegExpLiteral { pattern, flags } => {
+            println!("{pad}RegExpLiteral /{pattern}/{flags}");
+        }
+        Expression::TemplateObject { cooked, raw } => {
+            println!("{pad}TemplateObject cooked={cooked:?} raw={raw:?}");
+        }
+        Expression::Class {
+            name,
+            super_class,
+            constructor,
+            methods,
+            fields,
+        } => {
+            println!("{pad}Class {}", name.as_deref().unwrap_or("<anon>"));
+            if let Some(sc) = super_class {
+                println!("{pad}  extends:");
+                print_js_expr(sc, indent + 2);
+            }
+            if constructor.is_some() {
+                println!("{pad}  constructor: <present>");
+            }
+            for m in methods {
+                println!(
+                    "{pad}  method {:?} static={} kind={:?}",
+                    m.name, m.is_static, m.kind
+                );
+            }
+            for f in fields {
+                println!("{pad}  field {:?} static={}", f.name, f.is_static);
+            }
+        }
+    }
+}
+
 use std::collections::HashMap;
 
 #[rustfmt::skip]
@@ -1564,6 +1994,15 @@ fn get_commands<'a>() -> HashMap<&'a str, (&'a str, &'a str, &'a str)> {
             ""
         ),
     );
+    map.insert(
+        "parse_js",
+        (
+            "Parse JavaScript source from a URL or local file path and print the parse result.",
+            "URL_OR_PATH",
+            "Fetches/reads the source, then parses it with pixi_byte (Lexer/Parser). Reports success with the top-level statement count, or prints the parse error.",
+        ),
+    );
+
     map.insert(
         "simple_render",
         (

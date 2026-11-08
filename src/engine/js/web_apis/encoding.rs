@@ -498,7 +498,6 @@ fn typed_array_source(
             return Ok((Vec::new(), make_array_buffer(Vec::new()), 0));
         }
         if !length.is_finite() || length < 0.0 {
-            eprintln!("[debug typed array length] {length}");
             return Err(JSError::RangeError(
                 "Invalid typed array length".to_string(),
             ));
@@ -608,18 +607,7 @@ typed_array_constructor_fn!(uint32_array_constructor, TypedArrayType::Uint32);
 typed_array_constructor_fn!(float32_array_constructor, TypedArrayType::Float32);
 typed_array_constructor_fn!(float64_array_constructor, TypedArrayType::Float64);
 
-fn typed_array_illegal_invocation(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
-    eprintln!(
-        "[debug %TypedArray%] stack={:?}",
-        vm.frames
-            .iter()
-            .map(|frame| frame
-                .function_name
-                .as_ref()
-                .map(|name| name.as_str())
-                .unwrap_or_default())
-            .collect::<Vec<_>>()
-    );
+fn typed_array_illegal_invocation(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     Err(JSError::TypeError(
         "%TypedArray% is not directly constructible".to_string(),
     ))
