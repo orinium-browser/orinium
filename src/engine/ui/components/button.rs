@@ -7,7 +7,7 @@ use crate::engine::layouter::types::TextFlowStyle;
 use crate::engine::{
     bridge::text::{self, TextMeasureRequest},
     layouter::types::{Color, TextStyle},
-    renderer_model::{Brush, DrawCommand, FillRule, Paint, rect_path},
+    renderer_model::DrawCommand,
     ui::custom_node::{ContentSize, CustomNode, PointerEvent},
 };
 
@@ -15,10 +15,11 @@ use crate::engine::{
 const DEFAULT_BUTTON_SIZE: (f32, f32) = (120.0, 36.0);
 
 /// An HTML button rendered by the engine.
+///
+/// Background/hover/active visuals are resolved via UA/CSS and container paint
+/// (phase 1). The component draws label content using inherited text style.
 pub struct ButtonComponent {
     pub label: String,
-    pub button_color: Color,
-    pub label_color: Color,
     measurer: Arc<dyn text::TextMeasurer>,
     measured_cache: Mutex<Option<(f32, f32)>>,
     hovered: AtomicBool,
@@ -31,8 +32,6 @@ impl std::fmt::Debug for ButtonComponent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ButtonComponent")
             .field("label", &self.label)
-            .field("button_color", &self.button_color)
-            .field("label_color", &self.label_color)
             .field("hovered", &self.hovered)
             .field("pressed", &self.pressed)
             .finish_non_exhaustive()
@@ -40,16 +39,9 @@ impl std::fmt::Debug for ButtonComponent {
 }
 
 impl ButtonComponent {
-    pub fn new(
-        label: impl Into<String>,
-        button_color: Color,
-        label_color: Color,
-        measurer: Arc<dyn text::TextMeasurer>,
-    ) -> Self {
+    pub fn new(label: impl Into<String>, measurer: Arc<dyn text::TextMeasurer>) -> Self {
         Self {
             label: label.into(),
-            button_color,
-            label_color,
             measurer,
             measured_cache: Mutex::new(None),
             hovered: AtomicBool::new(false),
@@ -69,33 +61,12 @@ impl CustomNode for ButtonComponent {
         _style: &Style,
         size: ContentSize,
     ) {
-        let base = self.button_color;
-        let bg = if self.pressed.load(Ordering::Relaxed) {
-            shade(base, -30)
-        } else if self.hovered.load(Ordering::Relaxed) {
-            shade(base, 20)
-        } else {
-            base
-        };
-        if bg.3 > 0 {
-            cmd_buf.push(DrawCommand::Fill {
-                path: rect_path(0.0, 0.0, size.width, size.height),
-                rule: FillRule::NonZero,
-                paint: Paint {
-                    brush: Brush::Solid(bg),
-                    opacity: 1.0,
-                },
-            });
-        }
-
-        let mut style = text_style.clone();
-        style.color = self.label_color;
         let y = ((size.height - text_flow_style.font_size) * 0.5).max(0.0);
         cmd_buf.push(DrawCommand::DrawText {
             x: 0.0,
             y,
             text: self.label.as_str().into(),
-            style,
+            style: text_style.clone(),
             flow_style: *text_flow_style,
         });
     }
@@ -200,23 +171,13 @@ impl CustomNode for ButtonComponent {
     }
 }
 
-fn shade(Color(r, g, b, a): Color, amount: i16) -> Color {
-    let clamp = |channel: u8| (channel as i16 + amount).clamp(0, 255) as u8;
-    Color(clamp(r), clamp(g), clamp(b), a)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::engine::bridge::text::FallbackTextMeasurer;
 
     fn component() -> ButtonComponent {
-        ButtonComponent::new(
-            "OK",
-            Color(200, 200, 200, 255),
-            Color(0, 0, 0, 255),
-            Arc::new(FallbackTextMeasurer),
-        )
+        ButtonComponent::new("OK", Arc::new(FallbackTextMeasurer))
     }
 
     #[test]
@@ -264,60 +225,22 @@ mod tests {
     }
 
     #[test]
-    fn background_changes_with_state() {
+    fn draw_emits_label_only_phase1() {
         use crate::engine::layouter::types::TextFlowStyle;
         let button = component();
-        let text_style = TextStyle::default();
-        let flow_style = TextFlowStyle::default();
-
         let mut cmds = Vec::new();
         button.draw_sized(
             &mut cmds,
-            &text_style,
-            &flow_style,
+            &TextStyle::default(),
+            &TextFlowStyle::default(),
             &Style::default(),
             ContentSize {
                 width: 80.0,
                 height: 30.0,
             },
         );
-        let normal = match &cmds[0] {
-            DrawCommand::Fill {
-                paint:
-                    Paint {
-                        brush: Brush::Solid(c),
-                        ..
-                    },
-                ..
-            } => *c,
-            other => panic!("expected Fill, got {other:?}"),
-        };
-
-        button.on_pointer_event(PointerEvent::Down { x: 0.0, y: 0.0 });
-        let mut cmds = Vec::new();
-        button.draw_sized(
-            &mut cmds,
-            &text_style,
-            &flow_style,
-            &Style::default(),
-            ContentSize {
-                width: 80.0,
-                height: 30.0,
-            },
-        );
-        let pressed = match &cmds[0] {
-            DrawCommand::Fill {
-                paint:
-                    Paint {
-                        brush: Brush::Solid(c),
-                        ..
-                    },
-                ..
-            } => *c,
-            other => panic!("expected Fill, got {other:?}"),
-        };
-
-        assert_ne!(normal, pressed);
+        assert!(matches!(cmds.first(), Some(DrawCommand::DrawText { .. })));
+        assert_eq!(cmds.len(), 1);
     }
 
     #[test]

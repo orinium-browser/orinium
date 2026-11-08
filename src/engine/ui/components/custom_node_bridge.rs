@@ -69,6 +69,70 @@ impl CustomNodeBridge {
     }
 }
 
+fn resolve_len(len: &ui_layout::Length, container: Option<f32>, viewport: f32) -> f32 {
+    len.resolve_with(container, viewport, 0.0).unwrap_or(0.0)
+}
+
+fn spacing_px(
+    style: &Style,
+    cw: Option<f32>,
+    ch: Option<f32>,
+    vw: f32,
+    vh: f32,
+) -> (f32, f32, f32, f32, f32, f32, f32, f32) {
+    let cbw = cw.unwrap_or(vw);
+    let cbh = ch.unwrap_or(vh);
+    (
+        resolve_len(&style.spacing.border_left, Some(cbw), vw),
+        resolve_len(&style.spacing.border_top, Some(cbh), vh),
+        resolve_len(&style.spacing.border_right, Some(cbw), vw),
+        resolve_len(&style.spacing.border_bottom, Some(cbh), vh),
+        resolve_len(&style.spacing.padding_left, Some(cbw), vw),
+        resolve_len(&style.spacing.padding_top, Some(cbh), vh),
+        resolve_len(&style.spacing.padding_right, Some(cbw), vw),
+        resolve_len(&style.spacing.padding_bottom, Some(cbh), vh),
+    )
+}
+
+fn make_box_model(
+    x: f32,
+    y: f32,
+    border_w: f32,
+    border_h: f32,
+    style: &Style,
+    cw: Option<f32>,
+    ch: Option<f32>,
+    vw: f32,
+    vh: f32,
+) -> BoxModel {
+    let (bl, bt, br, bb, pl, pt, pr, pb) = spacing_px(style, cw, ch, vw, vh);
+    let border_box = Rect {
+        x,
+        y,
+        width: border_w.max(0.0),
+        height: border_h.max(0.0),
+    };
+    let padding_box = Rect {
+        x: x + bl,
+        y: y + bt,
+        width: (border_w - bl - br).max(0.0),
+        height: (border_h - bt - bb).max(0.0),
+    };
+    let content_box = Rect {
+        x: x + bl + pl,
+        y: y + bt + pt,
+        width: (border_w - bl - br - pl - pr).max(0.0),
+        height: (border_h - bt - bb - pt - pb).max(0.0),
+    };
+    BoxModel {
+        sticky_edges: None,
+        border_box,
+        padding_box,
+        content_box,
+        children_box: content_box,
+    }
+}
+
 impl CustomLayouter for CustomNodeBridge {
     fn layout(&mut self, ctx: &LayoutContext) -> LayoutBox {
         match self.layout_style.display {
@@ -85,21 +149,17 @@ impl CustomLayouter for CustomNodeBridge {
                     ctx.viewport_width,
                     ctx.viewport_height,
                 );
-                let (use_width, use_height) = (resolved.width, resolved.height);
-
-                let rect = Rect {
+                let box_model = make_box_model(
                     x,
                     y,
-                    width: use_width,
-                    height: use_height,
-                };
-                let box_model = BoxModel {
-                    sticky_edges: None,
-                    border_box: rect,
-                    padding_box: rect,
-                    content_box: rect,
-                    children_box: rect,
-                };
+                    resolved.width,
+                    resolved.height,
+                    &self.layout_style,
+                    Some(ctx.available_inline_size),
+                    None,
+                    ctx.viewport_width,
+                    ctx.viewport_height,
+                );
 
                 LayoutBox::InlineBox(InlineBox {
                     box_model,
@@ -120,20 +180,17 @@ impl CustomLayouter for CustomNodeBridge {
                     ctx.viewport_width,
                     ctx.viewport_height,
                 );
-
-                let rect = Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: resolved.width,
-                    height: resolved.height,
-                };
-                let box_model = BoxModel {
-                    sticky_edges: None,
-                    border_box: rect,
-                    padding_box: rect,
-                    content_box: rect,
-                    children_box: rect,
-                };
+                let box_model = make_box_model(
+                    0.0,
+                    0.0,
+                    resolved.width,
+                    resolved.height,
+                    &self.layout_style,
+                    ctx.containing_block_width,
+                    ctx.containing_block_height,
+                    ctx.viewport_width,
+                    ctx.viewport_height,
+                );
 
                 LayoutBox::BlockBox(box_model)
             }

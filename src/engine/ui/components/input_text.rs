@@ -200,15 +200,6 @@ impl CustomNode for InputTextComponent {
         _style: &Style,
         size: ContentSize,
     ) {
-        cmd_buf.push(DrawCommand::Fill {
-            path: rect_path(0.0, 0.0, size.width, size.height),
-            rule: FillRule::NonZero,
-            paint: Paint {
-                brush: Brush::Solid(Color(255, 255, 255, 255)),
-                opacity: 1.0,
-            },
-        });
-
         let state = self.state.lock().unwrap();
         let mut style = text_style.clone();
         let (display_text, placeholder) = if state.value.is_empty() && state.preedit.is_empty() {

@@ -740,18 +740,8 @@ mod tests {
     #[test]
     fn update_hover_switches_target() {
         let measurer: Arc<dyn TextMeasurer> = Arc::new(FallbackTextMeasurer);
-        let a: Arc<dyn CustomNode> = Arc::new(ButtonComponent::new(
-            "A",
-            Color(0, 0, 0, 255),
-            Color(255, 255, 255, 255),
-            Arc::clone(&measurer),
-        ));
-        let b: Arc<dyn CustomNode> = Arc::new(ButtonComponent::new(
-            "B",
-            Color(0, 0, 0, 255),
-            Color(255, 255, 255, 255),
-            measurer,
-        ));
+        let a: Arc<dyn CustomNode> = Arc::new(ButtonComponent::new("A", Arc::clone(&measurer)));
+        let b: Arc<dyn CustomNode> = Arc::new(ButtonComponent::new("B", measurer));
         let info_a = input_info(Arc::clone(&a));
         let info_b = input_info(Arc::clone(&b));
         let layout = LayoutNode::new(ui_layout::Style::default());
@@ -778,12 +768,7 @@ mod tests {
     #[test]
     fn any_custom_node_needs_repaint_tracks_dirty_nodes() {
         let measurer: Arc<dyn TextMeasurer> = Arc::new(FallbackTextMeasurer);
-        let a: Arc<dyn CustomNode> = Arc::new(ButtonComponent::new(
-            "A",
-            Color(0, 0, 0, 255),
-            Color(255, 255, 255, 255),
-            Arc::clone(&measurer),
-        ));
+        let a: Arc<dyn CustomNode> = Arc::new(ButtonComponent::new("A", Arc::clone(&measurer)));
         let info_a = input_info(Arc::clone(&a));
 
         // Fresh nodes are dirty (initial paint).

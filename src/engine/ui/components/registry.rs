@@ -139,18 +139,11 @@ impl CustomNodeFactory for ButtonFactory {
     }
 
     fn create(&self, _tag: &str, ctx: &CustomNodeContext) -> Option<Arc<dyn CustomNode>> {
-        let default_bg = Color(240, 240, 240, 255);
-        let bg = match &ctx.container_style.background {
-            crate::engine::layouter::types::Background::Color(c) => *c,
-            _ => default_bg,
-        };
         let label =
             normalize_whitespace(&ctx.dom_snapshot.inner_text(ctx.dom_id), WhiteSpace::Normal)
                 .into_owned();
         Some(Arc::new(ButtonComponent::new(
             label,
-            bg,
-            ctx.text_style.color,
             Arc::clone(&ctx.measurer),
         )))
     }
@@ -218,15 +211,8 @@ impl CustomNodeFactory for InputTextFactory {
             type_.to_ascii_lowercase().as_str(),
             "button" | "submit" | "reset"
         ) {
-            let default_bg = Color(240, 240, 240, 255);
-            let bg = match &ctx.container_style.background {
-                crate::engine::layouter::types::Background::Color(c) => *c,
-                _ => default_bg,
-            };
             return Some(Arc::new(ButtonComponent::new(
                 value,
-                bg,
-                ctx.text_style.color,
                 Arc::clone(&ctx.measurer),
             )));
         }

@@ -25,8 +25,6 @@ const MIN_WIDTH: f32 = 120.0;
 const INLINE_PADDING: f32 = 6.0;
 /// Width reserved for the drop-down arrow.
 const ARROW_WIDTH: f32 = 24.0;
-/// Box border color.
-const BORDER_COLOR: Color = Color(150, 150, 150, 255);
 /// Popup background color.
 const POPUP_BG: Color = Color(255, 255, 255, 255);
 /// Background of the option row under the cursor.
@@ -292,25 +290,6 @@ impl SelectComponent {
         box_width.max(labels + INLINE_PADDING * 2.0 + ARROW_WIDTH)
     }
 
-    fn push_border(cmd_buf: &mut Vec<DrawCommand>, x: f32, y: f32, width: f32, height: f32) {
-        let paint = Paint {
-            brush: Brush::Solid(BORDER_COLOR),
-            opacity: 1.0,
-        };
-        for rect in [
-            rect_path(x, y, width, 1.0),
-            rect_path(x, y + height - 1.0, width, 1.0),
-            rect_path(x, y, 1.0, height),
-            rect_path(x + width - 1.0, y, 1.0, height),
-        ] {
-            cmd_buf.push(DrawCommand::Fill {
-                path: rect,
-                rule: FillRule::NonZero,
-                paint: paint.clone(),
-            });
-        }
-    }
-
     fn push_fill(cmd_buf: &mut Vec<DrawCommand>, path: Path, color: Color) {
         cmd_buf.push(DrawCommand::Fill {
             path,
@@ -465,23 +444,14 @@ impl CustomNode for SelectComponent {
             *self.last_size.lock().unwrap() = size;
         }
 
-        let bg = if self.disabled {
-            Color(230, 230, 230, 255)
-        } else if self.multiple {
-            POPUP_BG
-        } else if self.open.load(Ordering::Relaxed) {
-            Color(220, 220, 220, 255)
-        } else if self.hovered.load(Ordering::Relaxed) {
-            Color(240, 240, 240, 255)
-        } else {
-            Color(250, 250, 250, 255)
-        };
-        if bg.3 > 0 {
+        // Phase 1: base background/state comes from UA/CSS and container paint.
+        // Multiple <select> and popup chrome remain component-drawn where needed.
+        if self.multiple {
             cmd_buf.push(DrawCommand::Fill {
                 path: rect_path(0.0, 0.0, size.width, size.height),
                 rule: FillRule::NonZero,
                 paint: Paint {
-                    brush: Brush::Solid(bg),
+                    brush: Brush::Solid(POPUP_BG),
                     opacity: 1.0,
                 },
             });
@@ -489,8 +459,28 @@ impl CustomNode for SelectComponent {
 
         if self.multiple {
             let rows = self.popup_rows();
-            Self::push_border(cmd_buf, 0.0, 0.0, size.width, size.height);
             self.push_rows(cmd_buf, &rows, 0.0, size.width, text_style, text_flow_style);
+            // Multiple list border (content-box coordinates).
+            Self::push_fill(
+                cmd_buf,
+                rect_path(0.0, 0.0, size.width, 1.0),
+                Color(118, 118, 118, 255),
+            );
+            Self::push_fill(
+                cmd_buf,
+                rect_path(0.0, size.height - 1.0, size.width, 1.0),
+                Color(118, 118, 118, 255),
+            );
+            Self::push_fill(
+                cmd_buf,
+                rect_path(0.0, 0.0, 1.0, size.height),
+                Color(118, 118, 118, 255),
+            );
+            Self::push_fill(
+                cmd_buf,
+                rect_path(size.width - 1.0, 0.0, 1.0, size.height),
+                Color(118, 118, 118, 255),
+            );
             return;
         }
 
@@ -509,7 +499,19 @@ impl CustomNode for SelectComponent {
             box_style.color = DISABLED_COLOR;
         }
 
-        Self::push_border(cmd_buf, 0.0, 0.0, size.width, size.height);
+        // Open state is component-internal (not a CSS pseudo-class yet), so draw
+        // a border highlight overlay when open. CSS handles :hover/:active.
+        if self.open.load(Ordering::Relaxed) {
+            let open_border = Color(79, 79, 79, 255);
+            for path in [
+                rect_path(0.0, 0.0, size.width, 1.0),
+                rect_path(0.0, size.height - 1.0, size.width, 1.0),
+                rect_path(0.0, 0.0, 1.0, size.height),
+                rect_path(size.width - 1.0, 0.0, 1.0, size.height),
+            ] {
+                Self::push_fill(cmd_buf, path, open_border);
+            }
+        }
 
         let font_size = text_flow_style.font_size;
         let text_y = ((size.height - font_size) * 0.5).max(0.0);
@@ -662,7 +664,16 @@ impl CustomNode for SelectComponent {
             rect_path(0.0, box_height, width, height),
             POPUP_BG,
         );
-        Self::push_border(&mut commands, 0.0, box_height, width, height);
+        // Popup is drawn as a top-layer overlay; give it a UA-like border.
+        let border = Color(118, 118, 118, 255);
+        for path in [
+            rect_path(0.0, box_height, width, 1.0),
+            rect_path(0.0, box_height + height - 1.0, width, 1.0),
+            rect_path(0.0, box_height, 1.0, height),
+            rect_path(width - 1.0, box_height, 1.0, height),
+        ] {
+            Self::push_fill(&mut commands, path, border);
+        }
         self.push_rows(
             &mut commands,
             &rows,

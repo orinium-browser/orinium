@@ -42,9 +42,7 @@ const CHROME_GAP: f32 = 8.0;
 /// Toolbar background color.
 const TOOLBAR_BACKGROUND: Color = Color(210, 210, 214, 255);
 /// Button background color.
-const BUTTON_BACKGROUND: Color = Color(240, 240, 240, 255);
 /// Label color used by toolbar buttons.
-const LABEL_COLOR: Color = Color(20, 20, 20, 255);
 
 /// Identifies the toolbar element under a pointer position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,32 +108,14 @@ impl BrowserToolbar {
     /// Create a new toolbar with placeholder components.
     fn new() -> Self {
         let measurer: Arc<dyn TextMeasurer> = Arc::new(PlatformTextMeasurer::new().unwrap());
-        let back_button = ButtonComponent::new(
-            "← Back",
-            BUTTON_BACKGROUND,
-            LABEL_COLOR,
-            Arc::clone(&measurer),
-        );
-        let reload_button = ButtonComponent::new(
-            "⟳ Reload",
-            BUTTON_BACKGROUND,
-            LABEL_COLOR,
-            Arc::clone(&measurer),
-        );
+        let back_button = ButtonComponent::new("← Back", Arc::clone(&measurer));
+        let reload_button = ButtonComponent::new("⟳ Reload", Arc::clone(&measurer));
         let scripting_button = ButtonComponent::new(
             display_scripting(&ScriptingMode::default()),
-            BUTTON_BACKGROUND,
-            LABEL_COLOR,
             Arc::clone(&measurer),
         );
-        let devtools_button = ButtonComponent::new(
-            "DevTools",
-            BUTTON_BACKGROUND,
-            LABEL_COLOR,
-            Arc::clone(&measurer),
-        );
-        let devtools_orientation_button =
-            ButtonComponent::new("↔", BUTTON_BACKGROUND, LABEL_COLOR, Arc::clone(&measurer));
+        let devtools_button = ButtonComponent::new("DevTools", Arc::clone(&measurer));
+        let devtools_orientation_button = ButtonComponent::new("↔", Arc::clone(&measurer));
         let url_bar = InputTextComponent::new("", "Enter URL", measurer);
         Self {
             back_button,

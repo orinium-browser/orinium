@@ -341,6 +341,7 @@ fn draw_border(
     );
 
     let bc = &style.border_color;
+    let bs = &style.border_style;
     let push_fill = |cmd_buf: &mut Vec<DrawCommand>, path: Path, color: Color| {
         cmd_buf.push(DrawCommand::Fill {
             path,
@@ -354,24 +355,24 @@ fn draw_border(
 
     let has_radius = outer.iter().any(|(rx, ry)| *rx > 0.0 || *ry > 0.0);
     if !has_radius {
-        if bw_top > 0.0 {
+        if bw_top > 0.0 && bs.top != crate::engine::layouter::types::BorderStyle::None {
             push_fill(cmd_buf, rect_path(ox, oy, w, bw_top), bc.top);
         }
-        if bw_bottom > 0.0 {
+        if bw_bottom > 0.0 && bs.bottom != crate::engine::layouter::types::BorderStyle::None {
             push_fill(
                 cmd_buf,
                 rect_path(ox, oy + h - bw_bottom, w, bw_bottom),
                 bc.bottom,
             );
         }
-        if bw_left > 0.0 {
+        if bw_left > 0.0 && bs.left != crate::engine::layouter::types::BorderStyle::None {
             push_fill(
                 cmd_buf,
                 rect_path(ox, oy + bw_top, bw_left, h - bw_top - bw_bottom),
                 bc.left,
             );
         }
-        if bw_right > 0.0 {
+        if bw_right > 0.0 && bs.right != crate::engine::layouter::types::BorderStyle::None {
             push_fill(
                 cmd_buf,
                 rect_path(
@@ -386,7 +387,7 @@ fn draw_border(
         return;
     }
 
-    if bw_top > 0.0 {
+    if bw_top > 0.0 && bs.top != crate::engine::layouter::types::BorderStyle::None {
         push_fill(
             cmd_buf,
             offset_path(
@@ -397,7 +398,7 @@ fn draw_border(
             bc.top,
         );
     }
-    if bw_bottom > 0.0 {
+    if bw_bottom > 0.0 && bs.bottom != crate::engine::layouter::types::BorderStyle::None {
         push_fill(
             cmd_buf,
             offset_path(
@@ -408,14 +409,14 @@ fn draw_border(
             bc.bottom,
         );
     }
-    if bw_left > 0.0 {
+    if bw_left > 0.0 && bs.left != crate::engine::layouter::types::BorderStyle::None {
         push_fill(
             cmd_buf,
             rect_path(ox, oy + outer[0].1, bw_left, h - outer[0].1 - outer[3].1),
             bc.left,
         );
     }
-    if bw_right > 0.0 {
+    if bw_right > 0.0 && bs.right != crate::engine::layouter::types::BorderStyle::None {
         push_fill(
             cmd_buf,
             rect_path(
@@ -1222,7 +1223,7 @@ fn generate_draw_commands_inner(
                     *scroll_offset_y,
                     false,
                     *scroll_x || *scroll_y,
-                    false,
+                    true,
                     !self_hidden,
                     effective_opacity,
                 ));
@@ -1476,7 +1477,7 @@ fn generate_draw_commands_inner(
                                 0.0,
                                 false,
                                 false,
-                                false,
+                                true,
                                 true,
                                 effective_opacity,
                             );
