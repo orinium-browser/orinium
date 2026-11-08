@@ -6,7 +6,7 @@ use ui_layout::Style;
 use crate::engine::layouter::types::TextFlowStyle;
 use crate::engine::{
     bridge::text::{self, TextMeasureRequest},
-    layouter::types::{Color, TextStyle},
+    layouter::types::TextStyle,
     renderer_model::DrawCommand,
     ui::custom_node::{ContentSize, CustomNode, PointerEvent},
 };

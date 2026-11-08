@@ -659,7 +659,7 @@ pub fn any_custom_node_needs_repaint(info: &InfoNode) -> bool {
 mod tests {
     use super::*;
     use crate::engine::bridge::text::{FallbackTextMeasurer, TextMeasurer};
-    use crate::engine::layouter::types::{Color, ContainerRole, ContainerStyle, TextStyle};
+    use crate::engine::layouter::types::{ContainerRole, ContainerStyle, TextStyle};
     use crate::engine::renderer_model::{DrawCommand, Rect};
     use crate::engine::ui::button::ButtonComponent;
     use crate::engine::ui::input_text::InputTextComponent;
