@@ -262,6 +262,7 @@ button {
     display: inline-block;
     font: inherit;
     background-color: #f0f0f0;
+    align-self: start;
 }
 
 input:not([type]),
