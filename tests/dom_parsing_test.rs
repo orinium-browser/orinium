@@ -58,6 +58,7 @@ fn classic_scripts_are_collected_in_document_order() {
         [
             ClassicScriptSource::Inline("window.order = \"inline-1\";".to_string()),
             ClassicScriptSource::External("one.js".to_string()),
+            ClassicScriptSource::External("module.js".to_string()),
             ClassicScriptSource::Inline("window.order = \"inline-2\";".to_string()),
             ClassicScriptSource::External("two.js".to_string()),
         ]

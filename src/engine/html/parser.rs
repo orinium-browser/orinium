@@ -341,10 +341,19 @@ impl DomTree {
                     return None;
                 }
 
+                let is_module = script_type.eq_ignore_ascii_case("module");
                 match n.value.get_attr("src").map(str::trim) {
+                    // TODO: For real ES modules, use module graph loader; collect separately.
                     Some(src) if !src.is_empty() => Some(ClassicScriptDescriptor {
                         source: ClassicScriptSource::External(src.to_string()),
-                        execution: if n.value.has_attr("async") {
+                        execution: if is_module {
+                            if n.value.has_attr("async") {
+                                ClassicScriptExecution::Async
+                            } else {
+                                // HTML modules are deferred by default.
+                                ClassicScriptExecution::Defer
+                            }
+                        } else if n.value.has_attr("async") {
                             ClassicScriptExecution::Async
                         } else if n.value.has_attr("defer") {
                             ClassicScriptExecution::Defer
@@ -353,11 +362,30 @@ impl DomTree {
                         },
                     }),
                     Some(_) => None,
-                    None => Some(ClassicScriptDescriptor {
-                        source: ClassicScriptSource::Inline(DomTree::inner_text(&node)),
-                        // `async` and `defer` have no effect on inline classic scripts.
-                        execution: ClassicScriptExecution::Default,
-                    }),
+                    None => {
+                        let source = DomTree::inner_text(&node);
+                        // Inline module scripts: skip collection when the source
+                        // contains top-level `import`/`export` keywords, since
+                        // feeding ES module syntax to the classic parser would
+                        // raise a SyntaxError.
+                        // TODO: parse modules properly with pixi_byte module support.
+                        if is_module && contains_top_level_module_keyword(&source) {
+                            return None;
+                        }
+                        Some(ClassicScriptDescriptor {
+                            source: ClassicScriptSource::Inline(source),
+                            // `async` and `defer` have no effect on inline classic scripts.
+                            execution: if is_module {
+                                if n.value.has_attr("async") {
+                                    ClassicScriptExecution::Async
+                                } else {
+                                    ClassicScriptExecution::Defer
+                                }
+                            } else {
+                                ClassicScriptExecution::Default
+                            },
+                        })
+                    }
                 }
             })
             .collect()
@@ -664,6 +692,51 @@ fn basic_element_info(node: &NodeRef<HtmlNodeType>) -> Option<ElementInfo> {
     })
 }
 
+/// Heuristic check for top-level ES module `import`/`export` keywords.
+///
+/// Used to skip inline module scripts that cannot be parsed by the classic
+/// script parser. This is a best-effort textual check (not a full parse),
+/// since only inline text is available at collection time.
+fn contains_top_level_module_keyword(source: &str) -> bool {
+    for keyword in ["import", "export"] {
+        let mut search_from = 0;
+        while search_from < source.len() {
+            let Some(pos) = source[search_from..].find(keyword) else {
+                break;
+            };
+            let abs = search_from + pos;
+            let before_ok = abs == 0
+                || !source[..abs]
+                    .chars()
+                    .last()
+                    .map(|c| c.is_alphanumeric() || c == '_')
+                    .unwrap_or(false);
+            let after_abs = abs + keyword.len();
+            let after_char = source[after_abs..].chars().next();
+            let after_ok = after_char
+                .map(|c| !c.is_alphanumeric() && c != '_')
+                .unwrap_or(true);
+            if before_ok && after_ok {
+                // Dynamic `import(...)` is valid in classic scripts, so do not
+                // treat it as an ES module import statement.
+                if keyword == "import" {
+                    let rest = source[after_abs..].trim_start();
+                    if rest.starts_with('(') {
+                        search_from = after_abs;
+                        continue;
+                    }
+                }
+                return true;
+            }
+            search_from = abs + 1;
+        }
+    }
+    false
+}
+
+// TODO: temporary handling of ES modules as classic scripts until real ES
+// module support exists (module graph, import/export, top-level await,
+// strict mode, CORS, etc.). Remove once proper module loading is implemented.
 fn is_classic_javascript_type(script_type: &str) -> bool {
     if script_type.is_empty() {
         return true;
@@ -672,10 +745,12 @@ fn is_classic_javascript_type(script_type: &str) -> bool {
     matches!(
         script_type.to_ascii_lowercase().as_str(),
         "text/javascript"
-            | "application/javascript"
-            | "text/ecmascript"
-            | "application/ecmascript"
-            | "application/x-javascript"
+                | "application/javascript"
+                | "text/ecmascript"
+                | "application/ecmascript"
+                | "application/x-javascript"
+                // TODO: With full ES module support, modules should NOT be treated as classic scripts.
+                | "module"
     )
 }
 
