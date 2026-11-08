@@ -1822,6 +1822,7 @@ impl WebView {
 
         let media_environment =
             layouter::css_resolver::MediaEnvironment::new(self.viewport, self.system_color_scheme);
+        let existing_custom_nodes = self.collect_custom_nodes();
         let task = layouter::LayoutTask {
             snapshot,
             root,
@@ -1847,10 +1848,37 @@ impl WebView {
             version: 0,
             interaction: Arc::clone(&self.interaction_state),
             interaction_version: self.interaction_version,
+            existing_custom_nodes,
         };
         self.layout_dom_refs = dom_refs;
         self.layout_requested_version = self.layout_processor.send(task);
         self.layout_pending = true;
+    }
+
+    fn collect_custom_nodes(
+        &self,
+    ) -> std::collections::HashMap<u32, Arc<dyn crate::engine::ui::custom_node::CustomNode>> {
+        fn walk(
+            info: &InfoNode,
+            out: &mut std::collections::HashMap<
+                u32,
+                Arc<dyn crate::engine::ui::custom_node::CustomNode>,
+            >,
+        ) {
+            if let NodeKind::Custom { node, .. } = &info.kind
+                && let Some(dom_id) = info.dom_id
+            {
+                out.entry(dom_id).or_insert_with(|| Arc::clone(node));
+            }
+            for child in &info.children {
+                walk(child, out);
+            }
+        }
+        let mut out = std::collections::HashMap::new();
+        if let Some((_, info)) = &self.layout_and_info {
+            walk(info, &mut out);
+        }
+        out
     }
 
     /// Takes decoded images from the background thread and triggers a relayout.

@@ -20,6 +20,7 @@ fn build_with_cache<'a>(
         None,
         cache,
         &InteractionState::default(),
+        &std::collections::HashMap::new(),
     )
 }
 

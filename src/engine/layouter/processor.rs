@@ -34,6 +34,7 @@ use crate::engine::layouter::css_resolver::RuleSet;
 use crate::engine::layouter::types::ColorScheme;
 use crate::engine::layouter::types::InteractionState;
 use crate::engine::renderer_model::Image;
+use crate::engine::ui::custom_node::CustomNode;
 use crate::engine::ui::registry::DomWriteBack;
 use crate::{perf_scope, profile_log};
 
@@ -66,6 +67,9 @@ pub struct LayoutTask {
     pub interaction: Arc<InteractionState>,
     /// Monotonic version of `interaction`; selector match results depend on it.
     pub interaction_version: u64,
+    /// Existing custom node instances keyed by snapshot DOM node id, reused
+    /// across relayouts to preserve component-local UI state.
+    pub existing_custom_nodes: HashMap<u32, Arc<dyn CustomNode>>,
 }
 
 /// Per-worker caches reused across layout tasks.
@@ -247,6 +251,7 @@ impl LayoutProcessor {
                         task.write_back_sender,
                         Some(match_cache),
                         &task.interaction,
+                        &task.existing_custom_nodes,
                     );
                     let result = LayoutResult {
                         layout,
@@ -334,6 +339,7 @@ mod tests {
             version: 0,
             interaction: Arc::new(InteractionState::default()),
             interaction_version: 0,
+            existing_custom_nodes: HashMap::new(),
         }
     }
 

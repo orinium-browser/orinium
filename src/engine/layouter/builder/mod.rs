@@ -52,6 +52,7 @@ use crate::engine::layouter::types::WhiteSpace;
 use crate::engine::renderer_model::Image;
 use crate::engine::svg::{SvgContent, collect_svg};
 use crate::engine::tree::NodeRef;
+use crate::engine::ui::custom_node::CustomNode;
 use crate::engine::ui::custom_node_bridge::CustomNodeBridge;
 use crate::engine::ui::registry::{ComponentRegistry, CustomNodeContext, DomWriteBack};
 
@@ -332,6 +333,7 @@ pub fn build_layout_and_info_with_images(
         None,
         None,
         &InteractionState::default(),
+        &HashMap::new(),
     )
 }
 
@@ -363,6 +365,7 @@ pub fn build_layout_and_info_from_snapshot(
     write_back_sender: Option<DomWriteBack>,
     mut match_cache: Option<&mut SelectorMatchCache>,
     interaction: &InteractionState,
+    existing_custom_nodes: &HashMap<u32, Arc<dyn CustomNode>>,
 ) -> (LayoutNode, InfoNode) {
     perf_scope!(total);
 
@@ -779,24 +782,31 @@ pub fn build_layout_and_info_from_snapshot(
                                 .flatten()
                         })
                 });
-                let node = registry
-                    .create(&CustomNodeContext {
-                        tag,
-                        media_source: media_source.as_deref(),
-                        container_style: &container_style,
-                        text_style: &text_style,
-                        measurer: Arc::clone(&measurer),
-                        audio_sinks: &*audio_sinks,
-                        images,
-                        audio,
-                        get_attr: &|name| html_node.get_attr(name).map(str::to_string),
-                        write_back: write_back_sender
-                            .as_ref()
-                            .map(|sender| (sender.clone(), stack[top_idx].dom)),
-                        dom_snapshot: snapshot,
-                        dom_id: stack[top_idx].dom,
-                    })
-                    .expect("registry must handle every tag it reports");
+                let reused = existing_custom_nodes.get(&stack[top_idx].dom).cloned();
+                if let Some(node) = &reused {
+                    let checked = snapshot.node(stack[top_idx].dom).checked;
+                    node.set_checked(checked);
+                }
+                let node = reused.unwrap_or_else(|| {
+                    registry
+                        .create(&CustomNodeContext {
+                            tag,
+                            media_source: media_source.as_deref(),
+                            container_style: &container_style,
+                            text_style: &text_style,
+                            measurer: Arc::clone(&measurer),
+                            audio_sinks: &*audio_sinks,
+                            images,
+                            audio,
+                            get_attr: &|name| html_node.get_attr(name).map(str::to_string),
+                            write_back: write_back_sender
+                                .as_ref()
+                                .map(|sender| (sender.clone(), stack[top_idx].dom)),
+                            dom_snapshot: snapshot,
+                            dom_id: stack[top_idx].dom,
+                        })
+                        .expect("registry must handle every tag it reports")
+                });
 
                 let bridge = CustomNodeBridge::new(Arc::clone(&node), style.clone());
                 let kind = NodeKind::Custom {

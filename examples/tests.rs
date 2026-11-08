@@ -632,6 +632,7 @@ fn bench_layout_cache(raw_url: &str, viewport: (f32, f32)) -> Result<()> {
                 orinium_browser::engine::layouter::types::InteractionState::default(),
             ),
             interaction_version: 0,
+            existing_custom_nodes: std::collections::HashMap::new(),
         };
         let start = std::time::Instant::now();
         processor.send(task);
