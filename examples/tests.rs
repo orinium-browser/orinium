@@ -577,6 +577,10 @@ fn bench_layout_cache(raw_url: &str, viewport: (f32, f32)) -> Result<()> {
             styles_version: 1,
             dom_version,
             version: 0,
+            interaction: Arc::new(
+                orinium_browser::engine::layouter::types::InteractionState::default(),
+            ),
+            interaction_version: 0,
         };
         let start = std::time::Instant::now();
         processor.send(task);

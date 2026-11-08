@@ -851,3 +851,13 @@ impl Default for TextFlowStyle {
         }
     }
 }
+
+/// Pointer interaction state passed into layout/style resolution.
+///
+/// Paths are stored root-to-target and may contain duplicate-free DOM
+/// snapshot node ids for the hit target and its ancestors.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InteractionState {
+    pub hovered_path: Vec<NodeId>,
+    pub active_path: Vec<NodeId>,
+}

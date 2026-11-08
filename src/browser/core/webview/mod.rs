@@ -30,7 +30,7 @@ use crate::engine::{
     layouter::{
         self, InheritedCss, LayoutResult, NodeId,
         dom_snapshot::DomSnapshot,
-        types::{InfoNode, NodeKind},
+        types::{InfoNode, InteractionState, NodeKind},
     },
     origin::Origin,
     permissions::Permissions,
@@ -268,6 +268,8 @@ pub struct WebView {
     positioned_layout: Option<(u64, (f32, f32))>,
     /// Live DOM references for the latest snapshot, used to apply write-backs.
     layout_dom_refs: Vec<Weak<RefCell<TreeNode<HtmlNodeType>>>>,
+    interaction_state: Arc<InteractionState>,
+    interaction_version: u64,
     /// Cached DOM snapshot, reused while the tree's mutation version is
     /// unchanged so that CSS/image-driven relayouts skip the full clone.
     snapshot_cache: Option<SnapshotCache>,
@@ -513,6 +515,8 @@ impl WebView {
             layout_applied_version: 0,
             positioned_layout: None,
             layout_dom_refs: Vec::new(),
+            interaction_state: Arc::new(InteractionState::default()),
+            interaction_version: 0,
             snapshot_cache: None,
             iframe_content: HashMap::new(),
             write_back_tx,
@@ -1841,6 +1845,8 @@ impl WebView {
             styles_version: self.resolved_styles_version,
             dom_version,
             version: 0,
+            interaction: Arc::clone(&self.interaction_state),
+            interaction_version: self.interaction_version,
         };
         self.layout_dom_refs = dom_refs;
         self.layout_requested_version = self.layout_processor.send(task);
@@ -1970,6 +1976,8 @@ impl WebView {
             graft_iframe_documents(&info.dom, &self.js_dom_ids, &self.iframe_content);
             self.snapshot_cache = None;
             self.layout_dom_refs.clear();
+            self.interaction_state = Arc::new(InteractionState::default());
+            self.interaction_version = 0;
 
             self.rebuild_styles_and_layout();
             self.needs_redraw = true;
@@ -2063,6 +2071,8 @@ impl WebView {
         self.layout_applied_version = 0;
         self.positioned_layout = None;
         self.layout_dom_refs.clear();
+        self.interaction_state = Arc::new(InteractionState::default());
+        self.interaction_version = 0;
         self.snapshot_cache = None;
         self.js_processor = None;
         self.js_dom_ids.clear();
@@ -2131,6 +2141,37 @@ impl WebView {
         layouter::resolve_anchor_positioning(layout, info);
 
         self.positioned_layout = Some((self.layout_applied_version, viewport));
+    }
+
+    /// Updates pointer interaction state used for `:hover`/`:active` resolution.
+    ///
+    /// Returns `true` when the state changed and a relayout was requested.
+    pub fn set_interaction_paths(&mut self, hovered_path: Vec<u32>, active_path: Vec<u32>) -> bool {
+        let next = InteractionState {
+            hovered_path,
+            active_path,
+        };
+        if *self.interaction_state == next {
+            return false;
+        }
+        self.interaction_state = Arc::new(next);
+        self.interaction_version = self.interaction_version.saturating_add(1);
+        self.update_layout();
+        true
+    }
+
+    pub fn clear_active_interaction(&mut self) -> bool {
+        if self.interaction_state.active_path.is_empty() {
+            return false;
+        }
+        let next = InteractionState {
+            hovered_path: self.interaction_state.hovered_path.clone(),
+            active_path: Vec::new(),
+        };
+        self.interaction_state = Arc::new(next);
+        self.interaction_version = self.interaction_version.saturating_add(1);
+        self.update_layout();
+        true
     }
 
     pub fn relayout(&mut self, viewport: (f32, f32)) {

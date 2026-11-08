@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>CSS Hover & Active Test</title>
+        <style>
+            * {
+                box-sizing: border-box;
+            }
+
+            body {
+                font-family: sans-serif;
+                margin: 32px;
+                background: #f5f5f5;
+                color: #222;
+            }
+
+            h1 {
+                margin-bottom: 8px;
+            }
+
+            section {
+                margin: 24px 0;
+                padding: 20px;
+                background: white;
+                border: 1px solid #ccc;
+                border-radius: 8px;
+            }
+
+            .hover-box {
+                padding: 20px;
+                background: #eee;
+                border: 2px solid #aaa;
+                transition: none;
+            }
+
+            .hover-box:hover {
+                background: #cce5ff;
+                border-color: blue;
+            }
+
+            .child {
+                margin-top: 12px;
+                padding: 16px;
+                background: white;
+                border: 1px solid #aaa;
+            }
+
+            .child:hover {
+                background: #b8f2c8;
+            }
+
+            .parent-test:hover {
+                outline: 4px solid orange;
+            }
+
+            button {
+                padding: 12px 20px;
+                border: 2px solid #555;
+                border-radius: 6px;
+                background: #eee;
+                cursor: pointer;
+            }
+
+            button:hover {
+                background: #b8d8ff;
+                border-color: blue;
+            }
+
+            button:active {
+                background: #2455aa;
+                color: white;
+                border-color: navy;
+            }
+
+            a {
+                color: #06c;
+            }
+
+            a:hover {
+                color: red;
+                text-decoration: underline;
+            }
+
+            a:active {
+                color: purple;
+            }
+
+            .multi:hover {
+                background: yellow;
+            }
+
+            .multi:active {
+                background: orange;
+            }
+
+            .status {
+                padding: 12px;
+                background: #eee;
+                border-left: 4px solid #777;
+            }
+
+            .status:hover {
+                background: #ddd;
+                border-color: red;
+            }
+
+            input:hover {
+                border: 2px solid blue;
+            }
+
+            .nested:hover .nested-target {
+                color: red;
+                font-weight: bold;
+            }
+
+            .nested-target:hover {
+                background: #ffe0a0;
+            }
+
+            .instructions {
+                color: #555;
+                font-size: 14px;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>CSS Interaction Test</h1>
+        <p>Test page for <code>:hover</code> and <code>:active</code>.</p>
+
+        <section>
+            <h2>1. Basic hover</h2>
+            <p class="instructions">Move the pointer over the box.</p>
+            <div class="hover-box">Hover over this box.</div>
+        </section>
+
+        <section>
+            <h2>2. Nested hover</h2>
+            <p class="instructions">
+                Hover over the child. Both child and parent should react.
+            </p>
+            <div class="hover-box parent-test">
+                Parent element
+                <div class="child">Child element</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>3. Button hover and active</h2>
+            <p class="instructions">
+                Hover over the button, then press and hold it.
+            </p>
+            <button type="button">Press and hold</button>
+        </section>
+
+        <section>
+            <h2>4. Link hover and active</h2>
+            <p class="instructions">
+                Hover and press the link. Navigation is disabled.
+            </p>
+            <a href="#link-test" onclick="return false;"> Test link </a>
+        </section>
+
+        <section>
+            <h2>5. Multiple pseudo-classes</h2>
+            <p class="instructions">Hover and press this element.</p>
+            <div class="status multi">Hover + Active test</div>
+        </section>
+
+        <section>
+            <h2>6. Descendant selector</h2>
+            <p class="instructions">
+                Hover over the parent. The text inside should change.
+            </p>
+            <div class="nested">
+                Parent
+                <p class="nested-target">Descendant target</p>
+            </div>
+        </section>
+
+        <section>
+            <h2>7. Input hover</h2>
+            <p class="instructions">Hover over the input field.</p>
+            <input type="text" placeholder="Hover over me" />
+        </section>
+
+        <section>
+            <h2>8. Pointer lifecycle</h2>
+            <p class="instructions">
+                Test moving the pointer while holding a mouse button, releasing
+                outside an element, and leaving the window.
+            </p>
+            <button type="button">Button A</button>
+            <button type="button">Button B</button>
+        </section>
+    </body>
+</html>

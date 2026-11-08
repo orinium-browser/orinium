@@ -9,6 +9,7 @@ use super::builder::{
 };
 use super::css_resolver::{ResolvedDeclaration, RuleSet, StyleOrigin, resolve_inline_style};
 use super::dom_snapshot::{DomSnapshot, NodeId};
+use super::types::InteractionState;
 use crate::engine::css::matcher::ElementChain;
 use crate::engine::css::values::CssValue;
 
@@ -213,8 +214,12 @@ fn chain_for_node(snapshot: &DomSnapshot, target: NodeId) -> Option<ElementChain
         } else {
             let siblings = snapshot.children(path[depth - 1]);
             let position = siblings.iter().position(|&sibling| sibling == node_id)?;
-            let mut info = element_sibling_infos(snapshot, siblings, langs[depth - 1].as_deref())
-                [position]
+            let mut info = element_sibling_infos(
+                snapshot,
+                siblings,
+                langs[depth - 1].as_deref(),
+                &InteractionState::default(),
+            )[position]
                 .clone();
             if !is_element_node(snapshot, path[depth - 1])
                 && let Some(info) = info.as_mut()

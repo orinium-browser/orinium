@@ -48,6 +48,10 @@ pub struct ElementInfo {
     /// no element children, and no text node with non-empty data. Comments and
     /// processing instructions do not count.
     pub is_empty: bool,
+    /// Whether this element or an ancestor is under the pointer.
+    pub hovered: bool,
+    /// Whether this element or an ancestor is the active (pressed) target.
+    pub active: bool,
 }
 
 /// One link of an [`ElementChain`].
@@ -370,6 +374,10 @@ impl Selector {
                     element.has_parent && element.type_index == element.type_count
                 } else if pseudo.eq_ignore_ascii_case("only-of-type") {
                     element.has_parent && element.type_count == 1
+                } else if pseudo.eq_ignore_ascii_case("hover") {
+                    element.hovered
+                } else if pseudo.eq_ignore_ascii_case("active") {
+                    element.active
                 } else {
                     false
                 }
@@ -988,5 +996,27 @@ mod tests {
             parse_selector("li:not(.hidden):first-child").specificity(),
             (0, 2, 1)
         );
+    }
+
+    #[test]
+    fn hover_and_active_pseudo_classes_match_element_state() {
+        let selector = parse_selector("button:hover");
+        let mut el = element("button", &[], 1, 1, 1, 1);
+        assert!(!selector.matches(&chain([el.clone()])));
+        el.hovered = true;
+        assert!(selector.matches(&chain([el.clone()])));
+
+        let selector = parse_selector("a:active");
+        let mut el = element("a", &[], 1, 1, 1, 1);
+        el.attributes = vec![("href".into(), "/".into())].into();
+        assert!(!selector.matches(&chain([el.clone()])));
+        el.active = true;
+        assert!(selector.matches(&chain([el])));
+    }
+
+    #[test]
+    fn hover_and_active_contribute_to_specificity() {
+        assert_eq!(parse_selector("a:hover").specificity(), (0, 1, 1));
+        assert_eq!(parse_selector("a:active").specificity(), (0, 1, 1));
     }
 }

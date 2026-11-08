@@ -38,6 +38,21 @@ pub fn hit_dom_id(path: &HitPath<'_>) -> Option<u32> {
     path.iter().find_map(|hit| hit.info.dom_id)
 }
 
+/// Returns the root-to-target DOM node id path for the hit, if any.
+///
+/// The path is derived from the hit path (innermost first) and contains every
+/// DOM-backed node id from root to the hit target, preserving ancestor
+/// propagation for pseudo-classes such as `:hover` and `:active`.
+pub fn hit_dom_path(path: &HitPath<'_>) -> Vec<u32> {
+    let mut out: Vec<u32> = path
+        .iter()
+        .rev()
+        .filter_map(|hit| hit.info.dom_id)
+        .collect();
+    out.dedup();
+    out
+}
+
 /// Converts page-space pointer coordinates into the local content-box space of
 /// the custom node at `path[target]`.
 ///

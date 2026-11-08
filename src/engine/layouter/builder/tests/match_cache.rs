@@ -19,6 +19,7 @@ fn build_with_cache<'a>(
         &HashMap::new(),
         None,
         cache,
+        &InteractionState::default(),
     )
 }
 

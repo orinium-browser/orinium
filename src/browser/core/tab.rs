@@ -99,6 +99,10 @@ pub struct Tab {
 
     /// The custom node currently under the pointer, if any.
     hovered: Option<Arc<dyn CustomNode>>,
+    /// DOM path (root-to-target) currently under the pointer.
+    hovered_dom_path: Vec<u32>,
+    /// DOM path (root-to-target) for the active/pressed target.
+    active_dom_path: Vec<u32>,
     /// The DOM node under the pointer when the left button was pressed.
     ///
     /// Used to detect a completed click (press and release on the same node),
@@ -147,6 +151,8 @@ impl Tab {
             history: Vec::new(),
 
             hovered: None,
+            hovered_dom_path: Vec::new(),
+            active_dom_path: Vec::new(),
             pressed_dom_id: None,
         }
     }
@@ -307,7 +313,7 @@ impl Tab {
                 }
                 FetchKind::DynamicScript { node_id } => {
                     let source = String::from_utf8_lossy(&resp.body).to_string();
-                    self.on_fetch_succeeded_dynamic_script(node_id, source);
+                    self.on_fetch_succeeded_dynamic_script(node_id, source, &url);
                 }
                 FetchKind::DynamicCss { node_id } => {
                     let source = String::from_utf8_lossy(&resp.body).to_string();
@@ -482,9 +488,9 @@ impl Tab {
         }
     }
 
-    pub fn on_fetch_succeeded_dynamic_script(&mut self, node_id: u64, source: String) {
+    pub fn on_fetch_succeeded_dynamic_script(&mut self, node_id: u64, source: String, url: &Url) {
         if let Some(webview) = self.webview.as_mut() {
-            webview.on_dynamic_script_fetched(node_id, source);
+            webview.on_dynamic_script_fetched(node_id, source, url);
         }
     }
 
@@ -626,9 +632,18 @@ impl Tab {
                     self.move_to(&href);
                 }
 
+                let active_dom_path = crate::engine::input::hit_dom_path(&path);
+
                 repaint |= input_focused;
 
                 self.pressed_dom_id = dom_id;
+                self.active_dom_path = active_dom_path;
+                if let Some(wv) = self.webview.as_mut() {
+                    repaint |= wv.set_interaction_paths(
+                        self.hovered_dom_path.clone(),
+                        self.active_dom_path.clone(),
+                    );
+                }
             }
 
             ElementState::Released => {
@@ -639,6 +654,12 @@ impl Tab {
                     && pressed == released
                 {
                     repaint |= self.on_js_click(released);
+                }
+                if !self.active_dom_path.is_empty() {
+                    self.active_dom_path.clear();
+                    if let Some(wv) = self.webview.as_mut() {
+                        repaint |= wv.clear_active_interaction();
+                    }
                 }
             }
         }
@@ -659,18 +680,46 @@ impl Tab {
         let input_focused =
             crate::engine::input::dispatch_pointer(&move_path, PointerEvent::Move { x: px, y: py });
 
-        let hover_changed = {
-            let previous = self.hovered.as_ref();
-            crate::engine::input::update_hover(&move_path, previous)
-        };
+        let previous = self.hovered.as_ref();
+        let hover_changed = crate::engine::input::update_hover(&move_path, previous);
+        let next_hovered = crate::engine::input::hit_custom_node(&move_path).cloned();
+        let hovered_dom_path = crate::engine::input::hit_dom_path(&move_path);
 
         let mut repaint = false;
         if hover_changed {
             repaint = true;
-            self.hovered = crate::engine::input::hit_custom_node(&move_path).cloned();
+        }
+        self.hovered = next_hovered;
+
+        if hovered_dom_path != self.hovered_dom_path {
+            self.hovered_dom_path = hovered_dom_path;
+            if let Some(wv) = self.webview.as_mut() {
+                repaint |= wv.set_interaction_paths(
+                    self.hovered_dom_path.clone(),
+                    self.active_dom_path.clone(),
+                );
+            }
         }
 
         (repaint, input_focused)
+    }
+
+    /// Clears pointer interaction state when the pointer leaves the content.
+    pub fn handle_pointer_leave(&mut self) -> bool {
+        let mut repaint = false;
+        if let Some(prev) = self.hovered.take() {
+            prev.set_hovered(false);
+            repaint = true;
+        }
+        if !self.hovered_dom_path.is_empty() || !self.active_dom_path.is_empty() {
+            self.hovered_dom_path.clear();
+            self.active_dom_path.clear();
+            if let Some(wv) = self.webview.as_mut() {
+                repaint |= wv.set_interaction_paths(Vec::new(), Vec::new());
+            }
+        }
+        self.pressed_dom_id = None;
+        repaint
     }
 
     /// Whether a press is waiting for its release to complete a click.
@@ -820,6 +869,10 @@ impl Tab {
         self.state = TabState::Loading;
         self.title = None;
         self.base_url = None;
+        self.hovered = None;
+        self.hovered_dom_path.clear();
+        self.active_dom_path.clear();
+        self.pressed_dom_id = None;
     }
 
     pub fn move_to(&mut self, href: &str) {

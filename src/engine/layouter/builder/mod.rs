@@ -77,8 +77,9 @@ use super::types::{
     Background, BackgroundDimension, BackgroundOffset, BackgroundPosition, BackgroundPositionAxis,
     BackgroundRepeat, BackgroundSize, BorderRadius, BorderStyle, Color, ColorScheme, ColorStop,
     ContainerRole, ContainerStyle, CornerRadius, CssClear, CssFloat, FontStyle, FontWeight,
-    Gradient, GradientKind, InfoNode, LineHeight, NodeKind, Overflow, RadialShape, RadialSizeKind,
-    TextAlign, TextDecoration, TextFlowStyle, TextStyle, TextTransform,
+    Gradient, GradientKind, InfoNode, InteractionState, LineHeight, NodeKind, Overflow,
+    RadialShape, RadialSizeKind, TextAlign, TextDecoration, TextFlowStyle, TextStyle,
+    TextTransform,
 };
 
 pub(crate) const DEFAULT_LINE_FACTOR: f32 = 1.2;
@@ -131,6 +132,8 @@ pub(crate) fn element_info(html_node: &HtmlNodeType) -> Option<ElementInfo> {
         is_empty: false,
         lang: None,
         checked: false,
+        hovered: false,
+        active: false,
     })
 }
 
@@ -170,6 +173,7 @@ pub(crate) fn element_sibling_infos(
     snapshot: &DomSnapshot,
     children: &[NodeId],
     parent_lang: Option<&str>,
+    interaction: &InteractionState,
 ) -> Vec<Option<ElementInfo>> {
     let mut type_counts = HashMap::<Arc<str>, usize>::new();
     for &child in children {
@@ -202,6 +206,8 @@ pub(crate) fn element_sibling_infos(
             // `:lang()` sees the element's own tag, or the one inherited from
             // the nearest ancestor that declares one.
             info.lang = own_lang(snapshot, child).or_else(|| parent_lang.map(Arc::<str>::from));
+            info.hovered = interaction.hovered_path.iter().any(|&id| id == child);
+            info.active = interaction.active_path.iter().any(|&id| id == child);
 
             let mut sibling = info.clone();
             sibling.previous_siblings = ElementChain::default();
@@ -325,6 +331,7 @@ pub fn build_layout_and_info_with_images(
         &HashMap::new(),
         None,
         None,
+        &InteractionState::default(),
     )
 }
 
@@ -355,6 +362,7 @@ pub fn build_layout_and_info_from_snapshot(
     audio: &HashMap<String, Arc<[u8]>>,
     write_back_sender: Option<DomWriteBack>,
     mut match_cache: Option<&mut SelectorMatchCache>,
+    interaction: &InteractionState,
 ) -> (LayoutNode, InfoNode) {
     perf_scope!(total);
 
@@ -399,6 +407,8 @@ pub fn build_layout_and_info_from_snapshot(
         // `:first-child` and friends.
         info.has_parent = false;
         info.is_empty = is_empty_element(snapshot, root);
+        info.hovered = interaction.hovered_path.iter().any(|&id| id == root);
+        info.active = interaction.active_path.iter().any(|&id| id == root);
         chain = chain.prepend(Some(info));
     }
 
@@ -660,13 +670,17 @@ pub fn build_layout_and_info_from_snapshot(
                     CssClear::Both => LayoutClear::Both,
                 };
 
-                // CSS blockifies floats: the outer display becomes block-level
-                // (the inner display is preserved).
                 if style.float != LayoutFloat::None {
-                    style.display = Display::OutsideInner {
-                        outer: OuterDisplay::Block,
-                        inner: style.display.inner().unwrap_or(InnerDisplay::Flow),
-                    };
+                    style.size.auto_behavior = AutoSizeBehavior::ShrinkToFit;
+                    if matches!(
+                        style.display.inner(),
+                        Some(InnerDisplay::Flow) | Some(InnerDisplay::FlowRoot)
+                    ) {
+                        style.display = Display::OutsideInner {
+                            outer: OuterDisplay::Inline,
+                            inner: InnerDisplay::FlowRoot,
+                        };
+                    }
                 }
             }
 
@@ -1101,8 +1115,12 @@ pub fn build_layout_and_info_from_snapshot(
                     .lang
                     .clone()
                     .or_else(|| own_lang(snapshot, stack[top_idx].dom));
-                let mut kid_infos =
-                    element_sibling_infos(snapshot, &kids_for_push, parent_lang.as_deref());
+                let mut kid_infos = element_sibling_infos(
+                    snapshot,
+                    &kids_for_push,
+                    parent_lang.as_deref(),
+                    interaction,
+                );
                 if !is_element_node(snapshot, stack[top_idx].dom) {
                     for info in kid_infos.iter_mut().flatten() {
                         info.has_parent = false;

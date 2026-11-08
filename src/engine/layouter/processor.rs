@@ -32,6 +32,7 @@ use crate::engine::css::matcher::ElementChain;
 use crate::engine::html::ScriptingMode;
 use crate::engine::layouter::css_resolver::RuleSet;
 use crate::engine::layouter::types::ColorScheme;
+use crate::engine::layouter::types::InteractionState;
 use crate::engine::renderer_model::Image;
 use crate::engine::ui::registry::DomWriteBack;
 use crate::{perf_scope, profile_log};
@@ -61,6 +62,10 @@ pub struct LayoutTask {
     /// Monotonic sequence number used to coalesce stale tasks. Assigned by
     /// [`LayoutProcessor::send`], ignore when constructing a task.
     pub version: u64,
+    /// Pointer interaction state (hover/active) for CSS pseudo-class matching.
+    pub interaction: Arc<InteractionState>,
+    /// Monotonic version of `interaction`; selector match results depend on it.
+    pub interaction_version: u64,
 }
 
 /// Per-worker caches reused across layout tasks.
@@ -82,6 +87,8 @@ struct WorkerCache {
     match_cache: SelectorMatchCache,
     /// DOM version the match cache entries are valid for.
     match_cache_dom_version: u64,
+    /// Interaction version the match cache entries are valid for.
+    match_cache_interaction_version: u64,
 }
 
 impl Default for WorkerCache {
@@ -93,6 +100,7 @@ impl Default for WorkerCache {
             have_rule_set: false,
             match_cache: SelectorMatchCache::new(),
             match_cache_dom_version: 0,
+            match_cache_interaction_version: 0,
         }
     }
 }
@@ -209,10 +217,14 @@ impl LayoutProcessor {
 
                     // Selector match results also embed the DOM (ancestors,
                     // siblings, :checked, …), so a new snapshot invalidates
-                    // them even when the rule set is unchanged.
-                    if cache.match_cache_dom_version != task.dom_version {
+                    // them even when the rule set is unchanged. Interaction state
+                    // affects :hover/:active matching, so it must invalidate too.
+                    if cache.match_cache_dom_version != task.dom_version
+                        || cache.match_cache_interaction_version != task.interaction_version
+                    {
                         cache.match_cache.clear();
                         cache.match_cache_dom_version = task.dom_version;
+                        cache.match_cache_interaction_version = task.interaction_version;
                     }
 
                     let WorkerCache {
@@ -234,6 +246,7 @@ impl LayoutProcessor {
                         &task.audio,
                         task.write_back_sender,
                         Some(match_cache),
+                        &task.interaction,
                     );
                     let result = LayoutResult {
                         layout,
@@ -319,6 +332,8 @@ mod tests {
             styles_version: 0,
             dom_version: 0,
             version: 0,
+            interaction: Arc::new(InteractionState::default()),
+            interaction_version: 0,
         }
     }
 

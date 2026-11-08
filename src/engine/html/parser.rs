@@ -630,6 +630,8 @@ fn element_info(node: &NodeRef<HtmlNodeType>) -> Option<ElementInfo> {
         is_empty: is_empty_element(node),
         lang,
         checked,
+        hovered: false,
+        active: false,
     })
 }
 
@@ -689,6 +691,8 @@ fn basic_element_info(node: &NodeRef<HtmlNodeType>) -> Option<ElementInfo> {
         is_empty,
         lang,
         checked,
+        hovered: false,
+        active: false,
     })
 }
 
