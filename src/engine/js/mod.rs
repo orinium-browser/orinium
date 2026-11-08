@@ -27,8 +27,15 @@ pub use processor::{JsProcessor, JsTask, JsTaskResult};
 
 mod common;
 pub(crate) mod runtime;
+mod trace;
+pub use trace::{JsActiveTrace, JsTraceBatch, JsTraceEvent, JsTraceKind};
 pub(crate) mod web_apis;
 pub use web_apis::missing_api_detector;
+
+/// Whether a freshly created runtime records JavaScript execution by default.
+pub fn default_trace_enabled() -> bool {
+    trace::default_enabled()
+}
 
 // Re-export items needed by sibling modules.
 pub(crate) use common::{
@@ -223,6 +230,7 @@ pub struct JsHost {
     pub(crate) dynamic_image_requests: Vec<JsDynamicImageRequest>,
     pub(crate) queued_dynamic_images: HashSet<u64>,
     pub(crate) fetch_capabilities: HashMap<u64, JsFetchCapability>,
+    pub(crate) fetch_urls: HashMap<u64, String>,
     /// `AbortSignal` objects registered by in-flight fetches, keyed by request
     /// id. Held here rather than on [`JsFetchRequest`] so the signal — an
     /// `Rc<RefCell<JSObject>>` that can never leave the JS thread — never
@@ -235,6 +243,7 @@ pub struct JsHost {
     pub(crate) devtools_capabilities: HashMap<u64, devtools::JsDevToolsCapability>,
     pub(crate) constructing_devtools_capability: Option<devtools::JsDevToolsCapability>,
     pub(crate) next_devtools_id: u64,
+    pub(crate) console_results: Vec<(u64, String)>,
     /// Registered custom element definitions keyed by lowercase tag name.
     pub(crate) custom_elements: HashMap<String, CustomElementDefinition>,
     /// Shadow root associations: host_dom_id -> shadow_root_dom_id.
@@ -280,6 +289,8 @@ pub struct JsHost {
     pub(crate) window_load_fired: bool,
     pub(crate) next_id: u64,
     pub(crate) needs_redraw: Rc<Cell<bool>>,
+    /// Bounded JavaScript execution trace shown by the DevTools pane.
+    pub(crate) trace: trace::JsTraceSession,
 }
 
 impl JsHost {
@@ -342,6 +353,7 @@ impl JsRuntime {
             dynamic_image_requests: Vec::new(),
             queued_dynamic_images: HashSet::new(),
             fetch_capabilities: HashMap::new(),
+            fetch_urls: HashMap::new(),
             fetch_signals: HashMap::new(),
             xhr_requests: HashMap::new(),
             constructing_fetch_capability: None,
@@ -349,6 +361,7 @@ impl JsRuntime {
             devtools_capabilities: HashMap::new(),
             constructing_devtools_capability: None,
             next_devtools_id: 0,
+            console_results: Vec::new(),
             custom_elements: HashMap::new(),
             shadow_roots: HashMap::new(),
             local_storage: HashMap::new(),
@@ -375,6 +388,7 @@ impl JsRuntime {
             needs_redraw: Rc::clone(&needs_redraw),
             detached_documents: Vec::new(),
             main_document_dom_id: None,
+            trace: trace::JsTraceSession::new(),
         };
         Self::register_window_event_handlers(&mut host);
 
@@ -384,6 +398,7 @@ impl JsRuntime {
         engine.set_host(host);
 
         web_apis::console::install_console(&mut engine);
+        trace::install_caught_exception_hook(&mut engine);
         web_apis::dom::document::install_document(&mut engine);
 
         web_apis::observers::install_mutation_observer(&mut engine);
@@ -487,9 +502,121 @@ impl JsRuntime {
         );
     }
 
+    /// Starts a traced operation, or returns `None` when tracing is paused.
+    fn begin_trace(
+        &self,
+        kind: JsTraceKind,
+        label: String,
+        detail: String,
+        source: Option<String>,
+    ) -> Option<trace::JsTraceSpan> {
+        if !trace::is_enabled(self.engine.vm()) {
+            return None;
+        }
+        let active_id = trace::begin_active(
+            self.engine.vm(),
+            kind,
+            label.clone(),
+            detail.clone(),
+            source.clone(),
+        );
+        Some(trace::JsTraceSpan {
+            active_id,
+            started: Instant::now(),
+            kind,
+            label,
+            detail,
+            source,
+        })
+    }
+
+    /// Finishes a traced operation and records it in the DevTools stream.
+    fn end_trace(
+        &mut self,
+        span: Option<trace::JsTraceSpan>,
+        error: Option<String>,
+        stack: Vec<String>,
+    ) {
+        let Some(span) = span else {
+            return;
+        };
+        trace::end_active(self.engine.vm(), span.active_id);
+        let duration_us = span.started.elapsed().as_micros() as u64;
+        let variables = if error.is_some() {
+            self.engine.last_error_variables().to_vec()
+        } else {
+            Vec::new()
+        };
+        let program_counter = error.as_ref().and_then(|_| self.engine.last_error_pc());
+        trace::record(
+            self.engine.vm(),
+            span.kind,
+            span.label,
+            span.detail,
+            duration_us,
+            error,
+            stack,
+            span.source,
+            variables,
+            program_counter,
+        );
+    }
+
+    /// Returns the error's JavaScript stack, or an empty stack on success.
+    fn trace_error_stack(&self, error: &Option<String>) -> Vec<String> {
+        if error.is_some() {
+            self.engine.last_error_stack().to_vec()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Drains traced events for transport to the browser thread.
+    pub(crate) fn take_trace_batch(&mut self) -> JsTraceBatch {
+        trace::take_batch(self.engine.vm())
+    }
+
+    /// Enables or disables JavaScript execution tracing.
+    pub(crate) fn set_js_tracing(&mut self, enabled: bool) {
+        trace::set_enabled(self.engine.vm(), enabled);
+    }
+
+    /// Clears the buffered JavaScript execution trace.
+    pub(crate) fn clear_js_trace(&mut self) {
+        trace::clear(self.engine.vm());
+    }
+
+    /// Evaluates a DevTools console expression and queues its printable result.
+    pub(crate) fn evaluate_console(&mut self, id: u64, source: &str) {
+        let result = match self.engine.eval(source) {
+            Ok(value) => trace::format_console_value(&value),
+            Err(error) => format!("Uncaught {error}"),
+        };
+        with_host_mut(self.engine.vm(), |host| {
+            host.console_results.push((id, result))
+        });
+    }
+
+    /// Drains completed DevTools console evaluations.
+    pub(crate) fn take_console_results(&mut self) -> Vec<(u64, String)> {
+        with_host_mut(self.engine.vm(), |host| {
+            std::mem::take(&mut host.console_results)
+        })
+        .unwrap_or_default()
+    }
+
     /// Evaluates a script, logging JS errors instead of crashing the page.
-    pub fn run_script(&mut self, source: &str) {
-        match self.engine.eval(source) {
+    pub fn run_script(&mut self, source: &str, label: Option<&str>) {
+        let display_label = label.unwrap_or("script").to_string();
+        let span = self.begin_trace(
+            JsTraceKind::Script,
+            display_label,
+            trace::source_summary(source),
+            Some(trace::source_preview(source)),
+        );
+        let result = self.engine.eval(source);
+        let error = result.as_ref().err().map(ToString::to_string);
+        match result {
             Ok(_) => {}
             Err(err) => {
                 if let JSError::Thrown(value) = &err
@@ -505,8 +632,9 @@ impl JsRuntime {
                     log::info!("JS error: uncaught object ({details})");
                 }
                 log::info!(
-                    "JS error: {} (source {:?}, pc={:?}, fn={:?}, stack={:?})",
+                    "JS error: {} (label {:?}, source {:?}, pc={:?}, fn={:?}, stack={:?})",
                     err,
+                    label,
                     source.chars().take(60).collect::<String>(),
                     self.engine.last_error_pc(),
                     self.engine.last_error_fn(),
@@ -518,6 +646,8 @@ impl JsRuntime {
                 );
             }
         }
+        let stack = self.trace_error_stack(&error);
+        self.end_trace(span, error, stack);
         self.perform_microtask_checkpoint();
     }
 
@@ -525,8 +655,18 @@ impl JsRuntime {
     /// failure, or an uncaught thrown value). Diagnostic harnesses use this to
     /// distinguish "script ran clean" from "never parsed"; runtime exceptions
     /// that the page itself catches still surface as `Ok`.
-    pub fn try_run_script(&mut self, source: &str) -> Result<(), String> {
+    pub fn try_run_script(&mut self, source: &str, label: Option<&str>) -> Result<(), String> {
+        let display_label = label.unwrap_or("script").to_string();
+        let span = self.begin_trace(
+            JsTraceKind::Script,
+            display_label,
+            trace::source_summary(source),
+            Some(trace::source_preview(source)),
+        );
         let result = self.engine.eval(source);
+        let error = result.as_ref().err().map(ToString::to_string);
+        let stack = self.trace_error_stack(&error);
+        self.end_trace(span, error, stack);
         self.perform_microtask_checkpoint();
         match result {
             Ok(_) => Ok(()),
@@ -638,6 +778,13 @@ impl JsRuntime {
         let Some(document) = document else {
             return true;
         };
+        let span = self.begin_trace(
+            JsTraceKind::Event,
+            "DOMContentLoaded".to_string(),
+            format!("{} listener(s)", listeners.len()),
+            None,
+        );
+        let mut first_error = None;
         for listener in listeners {
             let event = make_event(
                 "DOMContentLoaded",
@@ -650,8 +797,11 @@ impl JsRuntime {
                 vec![JSValue::from_object(event)],
             ) {
                 log::info!("JS error on DOMContentLoaded: {}", err);
+                first_error.get_or_insert_with(|| err.to_string());
             }
         }
+        let stack = self.trace_error_stack(&first_error);
+        self.end_trace(span, first_error, stack);
         self.perform_microtask_checkpoint();
         true
     }
@@ -683,22 +833,40 @@ impl JsRuntime {
         };
 
         let window_object = Rc::clone(self.engine.global_mut());
+        let span = self.begin_trace(
+            JsTraceKind::Event,
+            "load".to_string(),
+            format!("{} listener(s)", listeners.len()),
+            None,
+        );
+        let mut first_error = None;
 
         // The body `onload` is a window-level inline event handler that fires
         // first, as if it had been registered first by the parser.
-        if !body_onload.trim().is_empty() {
-            self.call_inline_load_handler(&window_object, &body_onload, "body onload");
+        if !body_onload.trim().is_empty()
+            && let Some(error) =
+                self.call_inline_load_handler(&window_object, &body_onload, "body onload")
+        {
+            first_error.get_or_insert(error);
         }
 
         let onload = window_object.borrow().get("onload");
-        if is_callable(&onload) {
-            self.call_load_handler(&window_object, onload, "window.onload");
+        if is_callable(&onload)
+            && let Some(error) = self.call_load_handler(&window_object, onload, "window.onload")
+        {
+            first_error.get_or_insert(error);
         }
 
         for listener in listeners {
-            self.call_load_handler(&window_object, listener, "window load listener");
+            if let Some(error) =
+                self.call_load_handler(&window_object, listener, "window load listener")
+            {
+                first_error.get_or_insert(error);
+            }
         }
 
+        let stack = self.trace_error_stack(&first_error);
+        self.end_trace(span, first_error, stack);
         self.perform_microtask_checkpoint();
         true
     }
@@ -711,34 +879,76 @@ impl JsRuntime {
         window: &Rc<RefCell<JSObject>>,
         code: &str,
         label: &str,
-    ) {
+    ) -> Option<String> {
+        let span = self.begin_trace(
+            JsTraceKind::Script,
+            label.to_string(),
+            "inline handler".to_string(),
+            Some(trace::source_preview(code)),
+        );
         let event = make_event("load", Rc::clone(window), Rc::clone(window));
         // Per HTML spec, the inline handler is compiled as a function whose
         // `event` parameter and `this` (the Window) are set; invoking it runs
         // the assigned code (e.g. Acid3's body onload="update()").
         let wrapped = format!("(function(event) {{ {code} \n}})");
-        let handler = self.engine.eval(&wrapped).unwrap_or(JSValue::undefined());
-        if is_callable(&handler)
-            && let Err(err) = self.engine.call(
+        let handler = match self.engine.eval(&wrapped) {
+            Ok(handler) => handler,
+            Err(err) => {
+                let error = err.to_string();
+                log::info!("JS error in {label}: {err}");
+                let stack = self.trace_error_stack(&Some(error.clone()));
+                self.end_trace(span, Some(error.clone()), stack);
+                return Some(error);
+            }
+        };
+        let error = if is_callable(&handler) {
+            match self.engine.call(
                 handler,
                 JSValue::from_object(Rc::clone(window)),
                 vec![JSValue::from_object(event)],
-            )
-        {
-            log::info!("JS error in {label}: {err}");
-        }
+            ) {
+                Ok(_) => None,
+                Err(err) => {
+                    log::info!("JS error in {label}: {err}");
+                    Some(err.to_string())
+                }
+            }
+        } else {
+            None
+        };
+        let stack = self.trace_error_stack(&error);
+        self.end_trace(span, error.clone(), stack);
+        error
     }
 
     /// Invokes a registered window `load` listener with the Window as `this`.
-    fn call_load_handler(&mut self, window: &Rc<RefCell<JSObject>>, handler: JSValue, label: &str) {
+    fn call_load_handler(
+        &mut self,
+        window: &Rc<RefCell<JSObject>>,
+        handler: JSValue,
+        label: &str,
+    ) -> Option<String> {
+        let span = self.begin_trace(
+            JsTraceKind::Event,
+            label.to_string(),
+            "load listener".to_string(),
+            None,
+        );
         let event = make_event("load", Rc::clone(window), Rc::clone(window));
-        if let Err(err) = self.engine.call(
+        let error = match self.engine.call(
             handler,
             JSValue::from_object(Rc::clone(window)),
             vec![JSValue::from_object(event)],
         ) {
-            log::info!("JS error in {label}: {err}");
-        }
+            Ok(_) => None,
+            Err(err) => {
+                log::info!("JS error in {label}: {err}");
+                Some(err.to_string())
+            }
+        };
+        let stack = self.trace_error_stack(&error);
+        self.end_trace(span, error.clone(), stack);
+        error
     }
 
     /// Runs timer callbacks whose deadlines have elapsed.
@@ -758,23 +968,41 @@ impl JsRuntime {
 
                 let callback = host.timers[index].callback.clone();
                 let arguments = host.timers[index].arguments.clone();
+                let is_interval = host.timers[index].interval.is_some();
                 if let Some(interval) = host.timers[index].interval {
                     host.timers[index].deadline = now + interval;
                     index += 1;
                 } else {
                     host.timers.remove(index);
                 }
-                invocations.push((callback, arguments));
+                invocations.push((callback, arguments, is_interval));
             }
             invocations
         })
         .unwrap_or_default();
 
         let ran_callback = !invocations.is_empty();
-        for (callback, arguments) in invocations {
-            if let Err(err) = self.engine.call(callback, JSValue::undefined(), arguments) {
-                log::info!("JS error in timer callback: {}", err);
-            }
+        for (callback, arguments, is_interval) in invocations {
+            let label = if is_interval {
+                "setInterval"
+            } else {
+                "setTimeout"
+            };
+            let span = self.begin_trace(
+                JsTraceKind::Timer,
+                label.to_string(),
+                format!("{} argument(s)", arguments.len()),
+                None,
+            );
+            let error = match self.engine.call(callback, JSValue::undefined(), arguments) {
+                Ok(_) => None,
+                Err(err) => {
+                    log::info!("JS error in timer callback: {}", err);
+                    Some(err.to_string())
+                }
+            };
+            let stack = self.trace_error_stack(&error);
+            self.end_trace(span, error, stack);
             self.perform_microtask_checkpoint();
         }
         ran_callback
@@ -927,6 +1155,13 @@ impl JsRuntime {
         };
         let handler = target.borrow().get(&format!("on{event_type}"));
         let event = make_event(event_type, Rc::clone(&target), Rc::clone(&target));
+        let span = self.begin_trace(
+            JsTraceKind::Event,
+            event_type.to_string(),
+            format!("{} listener(s)", listeners.len()),
+            None,
+        );
+        let mut first_error = None;
         if is_callable(&handler)
             && let Err(error) = self.engine.call(
                 handler,
@@ -935,6 +1170,7 @@ impl JsRuntime {
             )
         {
             log::info!("JS error in on{event_type}: {error}");
+            first_error.get_or_insert_with(|| error.to_string());
         }
         for listener in listeners {
             if event_flag(&event, "__orinium_immediate_propagation_stopped") {
@@ -946,63 +1182,116 @@ impl JsRuntime {
                 vec![JSValue::from_object(Rc::clone(&event))],
             ) {
                 log::info!("JS error in {event_type} listener: {error}");
+                first_error.get_or_insert_with(|| error.to_string());
             }
         }
+        let stack = self.trace_error_stack(&first_error);
+        self.end_trace(span, first_error, stack);
     }
 
     /// Resolves a pending JavaScript fetch and runs its microtask checkpoint.
     pub(crate) fn resolve_fetch(&mut self, id: u64, response: JsFetchResponse) {
+        let url = with_host_mut(self.engine.vm(), |host| host.fetch_urls.remove(&id))
+            .flatten()
+            .unwrap_or_default();
         with_host_mut(self.engine.vm(), |host| {
             host.fetch_signals.remove(&id);
         });
         let capability =
             with_host_mut(self.engine.vm(), |host| host.fetch_capabilities.remove(&id)).flatten();
         if let Some(capability) = capability {
+            let span = self.begin_trace(
+                JsTraceKind::Fetch,
+                "fetch resolve".to_string(),
+                format!("{url} — HTTP {} {}", response.status, response.status_text),
+                None,
+            );
             let response = make_fetch_response(response);
-            if let Err(err) = self.engine.call(
+            let error = match self.engine.call(
                 capability.resolve,
                 JSValue::undefined(),
                 vec![JSValue::from_object(response)],
             ) {
-                log::info!("JS error while resolving fetch: {}", err);
-            }
+                Ok(_) => None,
+                Err(err) => {
+                    log::info!("JS error while resolving fetch: {}", err);
+                    Some(err.to_string())
+                }
+            };
+            let stack = self.trace_error_stack(&error);
+            self.end_trace(span, error, stack);
             self.perform_microtask_checkpoint();
             return;
         }
         let xhr = with_host_mut(self.engine.vm(), |host| host.xhr_requests.remove(&id)).flatten();
         let Some(xhr) = xhr else { return };
+        let span = self.begin_trace(
+            JsTraceKind::Fetch,
+            "XHR load".to_string(),
+            format!("request {id}"),
+            None,
+        );
         resolve_xml_http_request(&mut self.engine, xhr, response);
+        self.end_trace(span, None, Vec::new());
         self.perform_microtask_checkpoint();
     }
 
     /// Rejects a pending JavaScript fetch and runs its microtask checkpoint.
     pub(crate) fn reject_fetch(&mut self, id: u64, reason: String) {
+        let url = with_host_mut(self.engine.vm(), |host| host.fetch_urls.remove(&id))
+            .flatten()
+            .unwrap_or_default();
         with_host_mut(self.engine.vm(), |host| {
             host.fetch_signals.remove(&id);
         });
         let capability =
             with_host_mut(self.engine.vm(), |host| host.fetch_capabilities.remove(&id)).flatten();
         if let Some(capability) = capability {
-            if let Err(err) = self.engine.call(
-                capability.reject,
-                JSValue::undefined(),
-                vec![JSValue::from_string(reason)],
-            ) {
-                log::info!("JS error while rejecting fetch: {}", err);
-            }
+            let span = self.begin_trace(
+                JsTraceKind::Fetch,
+                "fetch reject".to_string(),
+                format!("{url} — {reason}"),
+                None,
+            );
+            let reason_value = JSValue::from_string(reason.clone());
+            let error =
+                match self
+                    .engine
+                    .call(capability.reject, JSValue::undefined(), vec![reason_value])
+                {
+                    Ok(_) => None,
+                    Err(err) => {
+                        log::info!("JS error while rejecting fetch: {}", err);
+                        Some(err.to_string())
+                    }
+                };
+            let stack = self.trace_error_stack(&error);
+            self.end_trace(span, Some(error.unwrap_or(reason)), stack);
             self.perform_microtask_checkpoint();
             return;
         }
         let xhr = with_host_mut(self.engine.vm(), |host| host.xhr_requests.remove(&id)).flatten();
         let Some(xhr) = xhr else { return };
+        let span = self.begin_trace(
+            JsTraceKind::Fetch,
+            "XHR error".to_string(),
+            format!("request {id}"),
+            None,
+        );
         let handler = xhr.borrow().get("onerror");
-        if is_callable(&handler) {
-            let _ = self.engine.call(
+        let error = if is_callable(&handler) {
+            match self.engine.call(
                 handler,
                 JSValue::from_object(Rc::clone(&xhr)),
                 vec![JSValue::from_string(reason)],
-            );
-        }
+            ) {
+                Ok(_) => None,
+                Err(err) => Some(err.to_string()),
+            }
+        } else {
+            None
+        };
+        self.end_trace(span, error, Vec::new());
         self.perform_microtask_checkpoint();
     }
 
@@ -1123,6 +1412,13 @@ impl JsRuntime {
             return false;
         };
 
+        let span = self.begin_trace(
+            JsTraceKind::Event,
+            "click".to_string(),
+            format!("{} target(s)", path.len()),
+            None,
+        );
+        let mut first_error = None;
         let mut ran_handler = false;
         for current_target in path {
             let Some(dom_id) = node_dom_id(&JSValue::from_object(Rc::clone(&current_target)))
@@ -1153,6 +1449,7 @@ impl JsRuntime {
                 )
             {
                 log::info!("JS error in onclick: {}", err);
+                first_error.get_or_insert_with(|| err.to_string());
             }
             if !event_flag(&event, "__orinium_immediate_propagation_stopped") {
                 for listener in listeners {
@@ -1162,6 +1459,7 @@ impl JsRuntime {
                         vec![JSValue::from_object(Rc::clone(&event))],
                     ) {
                         log::info!("JS error in click listener: {}", err);
+                        first_error.get_or_insert_with(|| err.to_string());
                     }
                     if event_flag(&event, "__orinium_immediate_propagation_stopped") {
                         break;
@@ -1172,6 +1470,8 @@ impl JsRuntime {
                 break;
             }
         }
+        let stack = self.trace_error_stack(&first_error);
+        self.end_trace(span, first_error, stack);
         if ran_handler {
             self.perform_microtask_checkpoint();
         }
@@ -1209,6 +1509,13 @@ impl JsRuntime {
             return false;
         };
 
+        let span = self.begin_trace(
+            JsTraceKind::Event,
+            "scroll".to_string(),
+            format!("{} target(s)", path.len()),
+            None,
+        );
+        let mut first_error = None;
         let mut ran_handler = false;
         for current_target in path {
             let Some(dom_id) = node_dom_id(&JSValue::from_object(Rc::clone(&current_target)))
@@ -1239,6 +1546,7 @@ impl JsRuntime {
                 )
             {
                 log::info!("JS error in onscroll: {}", err);
+                first_error.get_or_insert_with(|| err.to_string());
             }
             if !event_flag(&event, "__orinium_immediate_propagation_stopped") {
                 for listener in listeners {
@@ -1248,6 +1556,7 @@ impl JsRuntime {
                         vec![JSValue::from_object(Rc::clone(&event))],
                     ) {
                         log::info!("JS error in scroll listener: {}", err);
+                        first_error.get_or_insert_with(|| err.to_string());
                     }
                     if event_flag(&event, "__orinium_immediate_propagation_stopped") {
                         break;
@@ -1258,6 +1567,8 @@ impl JsRuntime {
                 break;
             }
         }
+        let stack = self.trace_error_stack(&first_error);
+        self.end_trace(span, first_error, stack);
         if ran_handler {
             self.perform_microtask_checkpoint();
         }
@@ -1280,6 +1591,17 @@ impl JsRuntime {
 
     /// Drains queued microtasks in FIFO order, including jobs queued by jobs.
     fn perform_microtask_checkpoint(&mut self) {
+        let span = if self.engine.has_pending_jobs() {
+            self.begin_trace(
+                JsTraceKind::Microtask,
+                "microtasks".to_string(),
+                "checkpoint".to_string(),
+                None,
+            )
+        } else {
+            None
+        };
+        let mut first_error = None;
         const MAX_ROUNDS: usize = 50;
         let mut rounds = 0;
         loop {
@@ -1304,9 +1626,12 @@ impl JsRuntime {
                     } else {
                         log::info!("JS error in microtask: {}", err);
                     }
+                    first_error.get_or_insert_with(|| err.to_string());
                 }
             }
         }
+        let stack = self.trace_error_stack(&first_error);
+        self.end_trace(span, first_error, stack);
     }
 }
 
@@ -1395,6 +1720,7 @@ mod tests {
 
             document.getElementById("result").setAttribute("data-misc", results.join(";"));
             "##,
+            None,
         );
 
         let node = dom.get_element_by_id("result").unwrap();
@@ -1470,8 +1796,7 @@ mod tests {
             results.push("inst:" + typeof t.addEventListener + ":" + typeof t.dispatchEvent);
 
             document.getElementById("result").setAttribute("data-eventtarget", results.join(";"));
-            "##,
-        );
+            "##, None);
 
         let node = dom.get_element_by_id("result").unwrap();
         let data = node
@@ -1507,8 +1832,7 @@ mod tests {
                 x.setAttribute("data-stamped", "yes");
             }
             document.getElementById("result").setAttribute("data-template", results.join(";"));
-            "##,
-        );
+            "##, None);
         let node = dom.get_element_by_id("result").unwrap();
         let data = node
             .borrow()
@@ -1564,8 +1888,7 @@ mod tests {
             results.push("stable:" + (t2.content === t2.content));
 
             document.getElementById("result").setAttribute("data-template", results.join(";"));
-            "##,
-        );
+            "##, None);
         let node = dom.get_element_by_id("result").unwrap();
         let data = node
             .borrow()
@@ -1639,8 +1962,7 @@ mod tests {
             results.push("default-deep:" + def.querySelectorAll("li").length);
 
             document.getElementById("result").setAttribute("data-r", results.join(";"));
-            "##,
-        );
+            "##, None);
         let node = dom.get_element_by_id("result").unwrap();
         let data = node
             .borrow()
@@ -1704,6 +2026,7 @@ mod tests {
 
             document.getElementById("result").setAttribute("data-r", results.join(";"));
             "##,
+            None,
         );
         let node = dom.get_element_by_id("result").unwrap();
         let data = node
@@ -1762,8 +2085,7 @@ mod tests {
             results.push("ce.prop:" + ev.type + ":" + ev.bubbles + ":" + ev.cancelable + ":" + ev.detail.x);
 
             document.getElementById("result").setAttribute("data-node", results.join(";"));
-            "##,
-        );
+            "##, None);
 
         let node = dom.get_element_by_id("result").unwrap();
         let data = node
@@ -1795,6 +2117,7 @@ mod tests {
         let (mut runtime, dom) = runtime_from_html(r#"<div id="hello">before</div>"#);
         runtime.run_script(
             r#"const el = document.getElementById("hello"); el.textContent = "hello from js";"#,
+            None,
         );
         assert!(runtime.needs_redraw());
         assert!(runtime.take_needs_redraw());
@@ -1808,8 +2131,7 @@ mod tests {
         let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
         runtime.set_viewport(1280.0, 720.0);
         runtime.run_script(
-            r#"document.getElementById("result").setAttribute("data-size", innerWidth + ":" + innerHeight);"#,
-        );
+            r#"document.getElementById("result").setAttribute("data-size", innerWidth + ":" + innerHeight);"#, None);
         assert_eq!(
             dom.get_element_by_id("result")
                 .unwrap()
@@ -1819,8 +2141,7 @@ mod tests {
             Some("1280:720")
         );
         runtime.run_script(
-            r#"document.getElementById("result").setAttribute("data-root", document.body.clientWidth + ":" + document.body.clientHeight + ":" + outerWidth + ":" + outerHeight);"#,
-        );
+            r#"document.getElementById("result").setAttribute("data-root", document.body.clientWidth + ":" + document.body.clientHeight + ":" + outerWidth + ":" + outerHeight);"#, None);
         assert_eq!(
             dom.get_element_by_id("result")
                 .unwrap()
@@ -1836,6 +2157,7 @@ mod tests {
         let (mut runtime, dom) = runtime_from_html(r#"<div id="hello"></div>"#);
         runtime.run_script(
             r#"const el = document.getElementById("hello"); el.setAttribute("data-run", "1");"#,
+            None,
         );
 
         let node = dom.get_element_by_id("hello").unwrap();
@@ -1859,8 +2181,7 @@ mod tests {
             results.push(matchMedia("screen and (min-width: 500px) and (max-width: 1200px)").matches);
             results.push(matchMedia("only screen and (max-width: 600px)").matches);
             document.getElementById("result").setAttribute("data-media", results.join(","));
-            "#,
-        );
+            "#, None);
         let data = dom
             .get_element_by_id("result")
             .unwrap()
@@ -1880,8 +2201,7 @@ mod tests {
         let (mut runtime, dom) =
             runtime_from_html(r#"<div id="xm" style="color: red"></div><div id="result"></div>"#);
         runtime.run_script(
-            r#"document.getElementById("result").setAttribute("data-id", String(document.getElementById("xm").__orinium_dom_id));"#,
-        );
+            r#"document.getElementById("result").setAttribute("data-id", String(document.getElementById("xm").__orinium_dom_id));"#, None);
         let dom_id: u64 = dom
             .get_element_by_id("result")
             .unwrap()
@@ -1916,6 +2236,7 @@ mod tests {
             results.push(String(cs) === cs.cssText);
             document.getElementById("result").setAttribute("data-computed", results.join("|"));
             "#,
+            None,
         );
         let data = dom
             .get_element_by_id("result")
@@ -1948,8 +2269,7 @@ mod tests {
                 "data-inline",
                 cs.opacity + ":" + cs.getPropertyValue("margin-left") + ":" + cs.getPropertyValue("color")
             );
-            "#,
-        );
+            "#, None);
         let data = dom
             .get_element_by_id("result")
             .unwrap()
@@ -1987,6 +2307,7 @@ mod tests {
                     new Intl.Locale("und-x-private").toString()
             );
             "#,
+            None,
         );
 
         let node = dom.get_element_by_id("result").unwrap();
@@ -2007,6 +2328,7 @@ mod tests {
                 "data-origins",
                 window.origin + ":" + location.origin + ":" + document.origin
             );"#,
+            None,
         );
 
         let node = dom.get_element_by_id("result").unwrap();
@@ -2025,6 +2347,7 @@ mod tests {
                 "data-origins",
                 window.origin + ":" + location.origin + ":" + document.origin
             );"#,
+            None,
         );
 
         let node = dom.get_element_by_id("result").unwrap();
@@ -2046,6 +2369,7 @@ mod tests {
                     navigator.languages[1] + ":" + navigator.languages[2]
             );
             "#,
+            None,
         );
 
         assert_eq!(
@@ -2069,8 +2393,7 @@ mod tests {
             result.setAttribute("data-cookie", document.cookie);
             document.cookie = "scratchlanguage=; Max-Age=0; Path=/";
             result.setAttribute("data-expired-cookie", document.cookie);
-            "#,
-        );
+            "#, None);
 
         let result = dom.get_element_by_id("result").unwrap();
         let result = result.borrow();
@@ -2097,8 +2420,7 @@ mod tests {
                 asset.origin + ":" + asset.pathname + ":" + asset.searchParams.get("locale") +
                     ":" + params.has("cloud") + ":" + params.toString()
             );
-            "#,
-        );
+            "#, None);
 
         let result = dom.get_element_by_id("result").unwrap();
         assert_eq!(
@@ -2123,6 +2445,7 @@ mod tests {
                     ":" + decodeURIComponent(encodeURIComponent("日本 語"))
             );
             "#,
+            None,
         );
 
         let result = dom.get_element_by_id("result").unwrap();
@@ -2154,6 +2477,7 @@ mod tests {
                 rect.width + ":" + rect.height + ":" + stage.clientWidth + ":" + stage.offsetHeight
             );
             "#,
+            None,
         );
 
         let result = dom.get_element_by_id("result").unwrap();
@@ -2180,6 +2504,7 @@ mod tests {
                     document.getElementById("list").offsetTop
             );
             "#,
+            None,
         );
 
         assert_eq!(
@@ -2225,6 +2550,7 @@ mod tests {
                     rect.left + ":" + rect.top + ":" + rect.right + ":" + rect.bottom
             );
             "#,
+            None,
         );
 
         assert_eq!(
@@ -2247,6 +2573,7 @@ mod tests {
             script.async = true;
             document.head.appendChild(script);
             "#,
+            None,
         );
 
         let requests = runtime.take_dynamic_script_requests();
@@ -2270,6 +2597,7 @@ mod tests {
             link.href = "/static/css/editor.css";
             document.head.appendChild(link);
             "#,
+            None,
         );
 
         let requests = runtime.take_dynamic_style_requests();
@@ -2287,6 +2615,7 @@ mod tests {
             image.src = "/images/scratch-logo.svg";
             document.body.appendChild(image);
             "#,
+            None,
         );
 
         let requests = runtime.take_dynamic_image_requests();
@@ -2309,6 +2638,7 @@ mod tests {
             context.strokeRect(0, 0, 480, 360);
             canvas.setAttribute("data-metrics", context.measureText("Scratch").width);
             "##,
+            None,
         );
 
         let canvas = dom.get_element_by_id("stage").unwrap();
@@ -2343,6 +2673,7 @@ mod tests {
                     gl.getParameter(gl.MAX_TEXTURE_SIZE) + ":" + gl.drawingBufferWidth
             );
             "#,
+            None,
         );
 
         let canvas = dom.get_element_by_id("stage").unwrap();
@@ -2366,6 +2697,7 @@ mod tests {
             observer.disconnect();
             document.getElementById("target").setAttribute("data-records", records.length);
             "#,
+            None,
         );
 
         let node = dom.get_element_by_id("target").unwrap();
@@ -2384,6 +2716,7 @@ mod tests {
             child.setAttribute("id", "second");
             child.setAttribute("data-current-id", child.id);
             "#,
+            None,
         );
 
         let child = dom.get_element_by_id("second").unwrap();
@@ -2411,6 +2744,7 @@ mod tests {
             const select = document.getElementById("select");
             select.multiple = true;
             "#,
+            None,
         );
 
         let field = dom.get_element_by_id("field").unwrap();
@@ -2440,8 +2774,7 @@ mod tests {
             field.setAttribute("data-accessor", typeof descriptor.get + ":" + typeof descriptor.set);
             descriptor.set.call(field, "tracked");
             field.setAttribute("data-read", descriptor.get.call(field));
-            "#,
-        );
+            "#, None);
 
         let field = dom.get_element_by_id("field").unwrap();
         let field = field.borrow();
@@ -2472,6 +2805,7 @@ mod tests {
             child.setAttribute("data-connected", child.isConnected);
             child.setAttribute("data-text-connected", child.firstChild.isConnected);
             "#,
+            None,
         );
 
         let child = dom.get_element_by_id("child").unwrap();
@@ -2492,6 +2826,7 @@ mod tests {
                 document.readyState
             );
             "#,
+            None,
         );
         assert_eq!(
             dom.get_element_by_id("child")
@@ -2514,6 +2849,7 @@ mod tests {
             target.style.marginTop = "4px";
             target.style.removeProperty("background-color");
             "#,
+            None,
         );
 
         let node = dom.get_element_by_id("target").unwrap();
@@ -2537,6 +2873,7 @@ mod tests {
             old.setAttribute("data-detached", "yes");
             document.getElementById("result").setAttribute("data-html", target.innerHTML);
             "#,
+            None,
         );
 
         let target = dom.get_element_by_id("target").unwrap();
@@ -2566,16 +2903,14 @@ mod tests {
     fn get_attribute_reads_dom() {
         let (mut runtime, _dom) = runtime_from_html(r#"<div id="hello" data-x="v"></div>"#);
         runtime.run_script(
-            r#"const el = document.getElementById("hello"); if (el.getAttribute("data-x") !== "v") { throw new Error("mismatch"); }"#,
-        );
+            r#"const el = document.getElementById("hello"); if (el.getAttribute("data-x") !== "v") { throw new Error("mismatch"); }"#, None);
     }
 
     #[test]
     fn missing_id_returns_null() {
         let (mut runtime, _dom) = runtime_from_html(r#"<div id="hello"></div>"#);
         runtime.run_script(
-            r#"const el = document.getElementById("missing"); if (el !== null) { throw new Error("expected null"); }"#,
-        );
+            r#"const el = document.getElementById("missing"); if (el !== null) { throw new Error("expected null"); }"#, None);
     }
 
     #[test]
@@ -2583,21 +2918,21 @@ mod tests {
         let (mut runtime, _dom) = runtime_from_html(r#"<html></html>"#);
         runtime.run_script(
             r#"console.log("a", 1, undefined); console.warn("w"); console.error("e");"#,
+            None,
         );
     }
 
     #[test]
     fn syntax_error_is_logged_not_panicked() {
         let (mut runtime, _dom) = runtime_from_html(r#"<html></html>"#);
-        runtime.run_script("this is not valid js ((");
+        runtime.run_script("this is not valid js ((", None);
     }
 
     #[test]
     fn accessor_reads_text_content() {
         let (mut runtime, _dom) = runtime_from_html(r#"<div id="hello">hi</div>"#);
         runtime.run_script(
-            r#"const el = document.getElementById("hello"); if (el.textContent !== "hi") { throw new Error("mismatch"); }"#,
-        );
+            r#"const el = document.getElementById("hello"); if (el.textContent !== "hi") { throw new Error("mismatch"); }"#, None);
     }
 
     #[test]
@@ -2613,6 +2948,7 @@ mod tests {
                 result.setAttribute("data-clicked", "true");
             };
             "#,
+            None,
         );
 
         let button = dom.get_element_by_id("b").unwrap();
@@ -2628,7 +2964,7 @@ mod tests {
     #[test]
     fn click_without_handler_is_noop() {
         let (mut runtime, dom) = runtime_from_html(r#"<div id="x"></div>"#);
-        runtime.run_script(r#"document.getElementById("x");"#);
+        runtime.run_script(r#"document.getElementById("x");"#, None);
         let node = dom.get_element_by_id("x").unwrap();
         assert!(!runtime.click(&node));
         assert!(!runtime.needs_redraw());
@@ -2652,6 +2988,7 @@ mod tests {
                 result.setAttribute("data-order", order);
             });
             "#,
+            None,
         );
 
         let button = dom.get_element_by_id("button").unwrap();
@@ -2681,6 +3018,7 @@ mod tests {
             button.addEventListener("click", listener);
             button.addEventListener("click", listener);
             "#,
+            None,
         );
 
         let button = dom.get_element_by_id("button").unwrap();
@@ -2694,6 +3032,7 @@ mod tests {
             window.addEventListener("test", listener);
             window.removeEventListener("test", listener);
             "#,
+            None,
         );
         assert!(!runtime.click(&button));
         assert_eq!(result.borrow().value.get_attr("data-count"), Some("1"));
@@ -2709,6 +3048,7 @@ mod tests {
             document.addEventListener("DOMContentLoaded", listener);
             document.removeEventListener("DOMContentLoaded", listener);
             "#,
+            None,
         );
 
         assert!(runtime.dispatch_dom_content_loaded());
@@ -2733,6 +3073,7 @@ mod tests {
                 result.setAttribute("data-prevented", event.defaultPrevented);
             });
             "#,
+            None,
         );
 
         let button = dom.get_element_by_id("button").unwrap();
@@ -2763,6 +3104,7 @@ mod tests {
                 result.setAttribute("data-root", "ran");
             });
             "#,
+            None,
         );
 
         let button = dom.get_element_by_id("button").unwrap();
@@ -2783,6 +3125,7 @@ mod tests {
                 button.setAttribute("data-ran", "yes");
             });
             "#,
+            None,
         );
 
         let button = dom.get_element_by_id("button").unwrap();
@@ -2804,6 +3147,7 @@ mod tests {
                 result.textContent = "scrolled!";
             };
             "#,
+            None,
         );
 
         let s = dom.get_element_by_id("s").unwrap();
@@ -2815,7 +3159,7 @@ mod tests {
     #[test]
     fn scroll_without_handler_is_noop() {
         let (mut runtime, dom) = runtime_from_html(r#"<div id="x"></div>"#);
-        runtime.run_script(r#"document.getElementById("x");"#);
+        runtime.run_script(r#"document.getElementById("x");"#, None);
         let node = dom.get_element_by_id("x").unwrap();
         assert!(!runtime.scroll(&node));
     }
@@ -2838,6 +3182,7 @@ mod tests {
                 result.setAttribute("data-order", order);
             });
             "#,
+            None,
         );
 
         let s = dom.get_element_by_id("s").unwrap();
@@ -2864,6 +3209,7 @@ mod tests {
                 result.setAttribute("data-target", event.target.id);
             });
             "#,
+            None,
         );
 
         let s = dom.get_element_by_id("s").unwrap();
@@ -2883,6 +3229,7 @@ mod tests {
                 s.setAttribute("data-ran", "yes");
             });
             "#,
+            None,
         );
         let s = dom.get_element_by_id("s").unwrap();
         // mirror the browser's mapping: resolve the live node's hidden dom id
@@ -2912,6 +3259,7 @@ mod tests {
                 s.setAttribute("data-ran", "yes");
             });
             "#,
+            None,
         );
 
         let s = dom.get_element_by_id("s").unwrap();
@@ -2929,6 +3277,7 @@ mod tests {
             a.onclick = function () {};
             if (a !== b) { throw new Error("expected the same object"); }
             "#,
+            None,
         );
     }
 
@@ -2943,6 +3292,7 @@ mod tests {
                 result.setAttribute("data-event-type", event.type);
             });
             "#,
+            None,
         );
 
         let result = dom.get_element_by_id("result").unwrap();
@@ -2967,6 +3317,7 @@ mod tests {
                 document.getElementById("result").setAttribute("data-count", dispatchCount);
             });
             "#,
+            None,
         );
 
         assert!(runtime.dispatch_dom_content_loaded());
@@ -2986,6 +3337,7 @@ mod tests {
                 result.setAttribute("data-event-type", event.type);
             };
             "#,
+            None,
         );
 
         let result = dom.get_element_by_id("result").unwrap();
@@ -3009,6 +3361,7 @@ mod tests {
                 document.getElementById("result").setAttribute("data-count", dispatchCount);
             });
             "#,
+            None,
         );
 
         assert!(runtime.dispatch_window_load());
@@ -3052,6 +3405,7 @@ mod tests {
             document.getElementById("result").setAttribute("data-count", items.length);
             document.getElementById("result").setAttribute("data-class-count", classified.length);
             "#,
+            None,
         );
 
         let items = dom.get_elements_by_class_name("item");
@@ -3086,6 +3440,7 @@ mod tests {
             items[1].setAttribute("data-second", "yes");
             scope.setAttribute("data-count", items.length);
             "##,
+            None,
         );
 
         let scope = dom.get_element_by_id("scope").unwrap();
@@ -3129,6 +3484,7 @@ mod tests {
                     root.getElementsByClassName("primary").length + ":" + received + ":" + accepted
             );
             "#,
+            None,
         );
 
         let result = dom.get_element_by_id("result").unwrap();
@@ -3149,6 +3505,7 @@ mod tests {
             item.appendChild(text);
             document.querySelector("#list").appendChild(item);
             "##,
+            None,
         );
 
         let item = dom.query_selector("li.dynamic").unwrap();
@@ -3165,6 +3522,7 @@ mod tests {
             style.append("body { color: red; }");
             document.head.append(style);
             "#,
+            None,
         );
 
         let style = dom.query_selector("head style").unwrap();
@@ -3189,6 +3547,7 @@ mod tests {
             result.setAttribute("data-path-ns", path.namespaceURI);
             result.setAttribute("data-html-ns", result.namespaceURI);
             "##,
+            None,
         );
 
         let path = dom.query_selector("path").unwrap();
@@ -3218,6 +3577,7 @@ mod tests {
             root.setAttribute("data-other", root.contains(other));
             root.setAttribute("data-null", root.contains(null));
             "##,
+            None,
         );
 
         let root = dom.get_element_by_id("root").unwrap();
@@ -3248,6 +3608,7 @@ mod tests {
             result.setAttribute("data-blurred", document.activeElement === document.body);
             result.setAttribute("data-has-focus", document.hasFocus());
             "##,
+            None,
         );
 
         let result = dom.get_element_by_id("result").unwrap();
@@ -3292,6 +3653,7 @@ mod tests {
             result.setAttribute("data-class", root.firstChild.className);
             result.setAttribute("data-removed", root.firstChild.hasAttribute("data-remove"));
             "##,
+            None,
         );
 
         let result = dom.get_element_by_id("result").unwrap();
@@ -3330,6 +3692,7 @@ mod tests {
             result.setAttribute("data-frame", frame instanceof HTMLIFrameElement);
             result.setAttribute("data-body", document.body instanceof HTMLIFrameElement);
             "#,
+            None,
         );
 
         let result = dom.get_element_by_id("result").unwrap();
@@ -3413,6 +3776,7 @@ mod tests {
             moving.remove();
             document.querySelector("#second").appendChild(moving);
             "##,
+            None,
         );
 
         let first = dom.get_element_by_id("first").unwrap();
@@ -3439,6 +3803,7 @@ mod tests {
             first.appendChild(text);
             text.parentNode.setAttribute("data-text-parent", "yes");
             "##,
+            None,
         );
 
         let parent = dom.get_element_by_id("parent").unwrap();
@@ -3473,6 +3838,7 @@ mod tests {
             target.setAttribute("data-forced-off", target.classList.toggle("four", false));
             target.setAttribute("data-forced-on", target.classList.toggle("five", true));
             "##,
+            None,
         );
 
         let target = dom.get_element_by_id("target").unwrap();
@@ -3503,6 +3869,7 @@ mod tests {
             }, 0);
             clearTimeout(cancelled);
             "##,
+            None,
         );
 
         assert!(runtime.run_due_timers());
@@ -3522,6 +3889,7 @@ mod tests {
                 clearInterval(intervalId);
             }, 0);
             "##,
+            None,
         );
 
         assert!(runtime.run_due_timers());
@@ -3542,6 +3910,7 @@ mod tests {
                 typeof first === "number" && second >= first
             );
             "#,
+            None,
         );
 
         let result = dom.get_element_by_id("result").unwrap();
@@ -3564,8 +3933,7 @@ mod tests {
                 });
             });
             result.setAttribute("data-order", "sync");
-            "##,
-        );
+            "##, None);
 
         let result = dom.get_element_by_id("result").unwrap();
         assert_eq!(
@@ -3590,6 +3958,7 @@ mod tests {
                 result.setAttribute("data-observed", result.getAttribute("data-order"));
             }, 0);
             "##,
+            None,
         );
 
         assert!(runtime.run_due_timers());
@@ -3619,6 +3988,7 @@ mod tests {
                 result.setAttribute("data-order", result.getAttribute("data-order") + "-last");
             });
             "##,
+            None,
         );
 
         let result = dom.get_element_by_id("result").unwrap();
@@ -3640,6 +4010,7 @@ mod tests {
                 document.querySelector("#result").setAttribute("data-ran", "yes");
             });
             "##,
+            None,
         );
 
         let result = dom.get_element_by_id("result").unwrap();
@@ -3661,6 +4032,7 @@ mod tests {
                     result.setAttribute("data-catch", reason);
                 });
             "##,
+            None,
         );
 
         let result = dom.get_element_by_id("result").unwrap();
@@ -3689,6 +4061,7 @@ mod tests {
                 update.call(document.querySelector("#other"));
             });
             "##,
+            None,
         );
 
         let target = dom.get_element_by_id("target").unwrap();
@@ -3712,6 +4085,7 @@ mod tests {
                 result.setAttribute("data-microtask", "yes");
             });
             "##,
+            None,
         );
 
         let result = dom.get_element_by_id("result").unwrap();
@@ -3734,6 +4108,7 @@ mod tests {
                 result.setAttribute("data-microtask", "yes");
             });
             "##,
+            None,
         );
 
         let result = dom.get_element_by_id("result").unwrap();
@@ -3764,6 +4139,7 @@ mod tests {
                 document.querySelector("#result").setAttribute("data-text", text);
             });
             "##,
+            None,
         );
 
         let requests = runtime.take_fetch_requests();
@@ -3814,6 +4190,7 @@ mod tests {
                     );
                 });
             "##,
+            None,
         );
 
         let requests = runtime.take_fetch_requests();
@@ -3847,6 +4224,7 @@ mod tests {
                 document.querySelector("#result").setAttribute("data-error", reason);
             });
             "##,
+            None,
         );
 
         let requests = runtime.take_fetch_requests();
@@ -3883,6 +4261,7 @@ mod tests {
                 body: "{\"message\":\"hello\"}"
             });
             "#,
+            None,
         );
 
         let requests = runtime.take_fetch_requests();
@@ -3918,6 +4297,7 @@ mod tests {
             };
             request.send("hello");
             "##,
+            None,
         );
 
         let requests = runtime.take_fetch_requests();
@@ -3974,6 +4354,7 @@ mod tests {
 
             fetch("https://example.test/", { headers: headers });
             "##,
+            None,
         );
 
         let result = dom.get_element_by_id("result").unwrap();
@@ -4007,6 +4388,7 @@ mod tests {
                 result.setAttribute("data-has", response.headers.has("X-Test"));
             });
             "##,
+            None,
         );
 
         let requests = runtime.take_fetch_requests();
@@ -4049,6 +4431,7 @@ mod tests {
             result.setAttribute("data-accept", copied.headers.get("accept"));
             fetch(copied, { method: "put" });
             "##,
+            None,
         );
 
         let result = dom.get_element_by_id("result").unwrap();
@@ -4087,6 +4470,7 @@ mod tests {
                 result.setAttribute("data-empty", value.empty === null);
             });
             "##,
+            None,
         );
 
         let requests = runtime.take_fetch_requests();
@@ -4121,6 +4505,7 @@ mod tests {
                     document.querySelector("#result").setAttribute("data-error", reason);
                 });
             "##,
+            None,
         );
 
         let requests = runtime.take_fetch_requests();
@@ -4156,6 +4541,7 @@ mod tests {
                 document.querySelector("#result").setAttribute("data-error", reason);
             });
             "##,
+            None,
         );
 
         let requests = runtime.take_fetch_requests();
@@ -4186,6 +4572,7 @@ mod tests {
             });
             observer.observe(target);
             "#,
+            None,
         );
 
         let result = dom.get_element_by_id("result").unwrap();
@@ -4221,6 +4608,7 @@ mod tests {
             document.body.appendChild(el);
             document.body.removeChild(el);
             "#,
+            None,
         );
 
         let result = dom.get_element_by_id("result").unwrap();
@@ -4241,8 +4629,7 @@ mod tests {
             customElements.define("my-el", MyEl);
             if (customElements.get("my-el") === undefined) throw new Error("get failed");
             if (customElements.get("no-such") !== undefined) throw new Error("get should be undefined");
-            "#,
-        );
+            "#, None);
     }
 
     #[test]
@@ -4272,14 +4659,14 @@ mod tests {
             document.getElementById("result").setAttribute(
                 "data-wd", wdResolved
             );
-            "#,
-        );
+            "#, None);
 
         // Read the log after microtasks have fired the callbacks.
         runtime.run_script(
             r#"document.getElementById("result").setAttribute(
                 "data-log", globalThis.__attrLog.join("|")
             );"#,
+            None,
         );
 
         let result = dom.get_element_by_id("result").unwrap();
@@ -4299,6 +4686,7 @@ mod tests {
             var host = document.getElementById("host");
             host.setAttribute("data-step1", "ready");
             "##,
+            None,
         );
         let result = dom.get_element_by_id("host").unwrap();
         assert_eq!(result.borrow().value.get_attr("data-step1"), Some("ready"));
@@ -4310,6 +4698,7 @@ mod tests {
             host.attachShadow({ mode: "open" });
             host.setAttribute("data-step2", "shadow-attached");
             "##,
+            None,
         );
         assert_eq!(
             result.borrow().value.get_attr("data-step2"),
@@ -4336,6 +4725,7 @@ mod tests {
                 host.setAttribute("data-error", e.toString());
             }
             "##,
+            None,
         );
         let result = dom.get_element_by_id("host").unwrap();
         let result = result.borrow();
@@ -4355,6 +4745,7 @@ mod tests {
             host.attachShadow({ mode: "closed" });
             host.setAttribute("data-closed", host.shadowRoot === null ? "true" : "false");
             "##,
+            None,
         );
         let result = dom.get_element_by_id("host").unwrap();
         let result = result.borrow();
@@ -4364,7 +4755,7 @@ mod tests {
     #[test]
     fn document_write_inserts_parsed_html_into_body() {
         let (mut runtime, dom) = runtime_from_html(r#"<html><body></body></html>"#);
-        runtime.run_script(r#"document.write("<p>Hello</p>");"#);
+        runtime.run_script(r#"document.write("<p>Hello</p>");"#, None);
         let p = dom.query_selector("body p").unwrap();
         assert_eq!(DomTree::inner_text(&p), "Hello");
         assert!(runtime.needs_redraw());
@@ -4373,7 +4764,7 @@ mod tests {
     #[test]
     fn document_writeln_appends_content_with_newline() {
         let (mut runtime, dom) = runtime_from_html(r#"<html><body></body></html>"#);
-        runtime.run_script(r#"document.writeln("<span>A</span>");"#);
+        runtime.run_script(r#"document.writeln("<span>A</span>");"#, None);
         let span = dom.query_selector("body span").unwrap();
         assert_eq!(DomTree::inner_text(&span), "A");
     }
@@ -4391,6 +4782,7 @@ mod tests {
             document.getElementById("r").setAttribute("data-code", e.code);
         }
         "#,
+            None,
         );
         let r = dom.get_element_by_id("r").unwrap();
         let r = r.borrow();
@@ -4412,6 +4804,7 @@ mod tests {
             DOMException.INVALID_STATE_ERR
         );
         "#,
+            None,
         );
         let r = dom.get_element_by_id("r").unwrap();
         assert_eq!(r.borrow().value.get_attr("data-codes"), Some("12:3:8:11"));
@@ -4425,6 +4818,7 @@ mod tests {
         var e = new DOMException("oops", "NotFoundError");
         document.getElementById("r").setAttribute("data-str", e.toString());
         "#,
+            None,
         );
         let r = dom.get_element_by_id("r").unwrap();
         assert_eq!(
@@ -4445,6 +4839,7 @@ mod tests {
             document.getElementById("r").setAttribute("data-error", e.name);
         }
         "#,
+            None,
         );
         let r = dom.get_element_by_id("r").unwrap();
         assert_eq!(
@@ -4465,6 +4860,7 @@ mod tests {
             document.getElementById("r").setAttribute("data-error", e.name);
         }
         "#,
+            None,
         );
         let r = dom.get_element_by_id("r").unwrap();
         assert_eq!(
@@ -4482,6 +4878,7 @@ mod tests {
         el.id = "created";
         document.body.appendChild(el);
         "#,
+            None,
         );
         assert!(dom.get_element_by_id("created").is_some());
     }
@@ -4498,6 +4895,7 @@ mod tests {
             document.getElementById("r").setAttribute("data-error", e.name);
         }
         "#,
+            None,
         );
         let r = dom.get_element_by_id("r").unwrap();
         assert_eq!(
@@ -4516,6 +4914,7 @@ mod tests {
         document.getElementById("r").setAttribute("data-doc", Node.DOCUMENT_NODE);
         document.getElementById("r").setAttribute("data-frag", Node.DOCUMENT_FRAGMENT_NODE);
         "#,
+            None,
         );
         let r = dom.get_element_by_id("r").unwrap();
         let r = r.borrow();
@@ -4534,8 +4933,7 @@ mod tests {
         document.getElementById("r").setAttribute("data-cmt", document.body.COMMENT_NODE);
         document.getElementById("r").setAttribute("data-txt", document.createTextNode("").ELEMENT_NODE);
         document.getElementById("r").setAttribute("data-frag", document.createElement("div").DOCUMENT_FRAGMENT_NODE);
-        "#,
-        );
+        "#, None);
         let r = dom.get_element_by_id("r").unwrap();
         let r = r.borrow();
         assert_eq!(r.value.get_attr("data-doc-frag"), Some("11"));
@@ -4556,8 +4954,7 @@ mod tests {
         document.getElementById("r").setAttribute("data-doctype-name", document.firstChild.nodeName);
         var span = document.getElementById("r").firstChild;
         document.getElementById("r").setAttribute("data-text-type", span.firstChild.nodeType);
-        "#,
-        );
+        "#, None);
         let r = dom.get_element_by_id("r").unwrap();
         let r = r.borrow();
         assert_eq!(r.value.get_attr("data-doc-type"), Some("9"));
@@ -4577,6 +4974,7 @@ mod tests {
         document.getElementById("r").setAttribute("data-prefix", el.prefix);
         document.getElementById("r").setAttribute("data-ns", el.namespaceURI);
         "#,
+            None,
         );
         let r = dom.get_element_by_id("r").unwrap();
         let r = r.borrow();
@@ -4594,6 +4992,7 @@ mod tests {
         var result = document.close();
         document.getElementById("r").setAttribute("data-close", typeof result);
         "#,
+            None,
         );
         // document.close() returns undefined, and there is no element "r" yet
         // so we test it differently
@@ -4603,6 +5002,7 @@ mod tests {
         document.close();
         document.getElementById("r").setAttribute("data-close", "ok");
         "#,
+            None,
         );
         let r = dom2.get_element_by_id("r").unwrap();
         assert_eq!(r.borrow().value.get_attr("data-close"), Some("ok"));
@@ -4617,6 +5017,7 @@ mod tests {
         document.getElementById("r").setAttribute("data-is-error", e instanceof Error);
         document.getElementById("r").setAttribute("data-is-domexc", e instanceof DOMException);
         "#,
+            None,
         );
         let r = dom.get_element_by_id("r").unwrap();
         let r = r.borrow();
@@ -4634,6 +5035,7 @@ mod tests {
         document.getElementById("r").setAttribute("data-name", c.nodeName);
         document.getElementById("r").setAttribute("data-data", c.data);
         "#,
+            None,
         );
         let r = dom.get_element_by_id("r").unwrap();
         let r = r.borrow();
@@ -4651,6 +5053,7 @@ mod tests {
         document.getElementById("r").setAttribute("data-type", pi.nodeType);
         document.getElementById("r").setAttribute("data-data", pi.data);
         "#,
+            None,
         );
         let r = dom.get_element_by_id("r").unwrap();
         let r = r.borrow();
@@ -4670,6 +5073,7 @@ mod tests {
             document.getElementById("r").setAttribute("data-error", e.name);
         }
         "#,
+            None,
         );
         let r = dom.get_element_by_id("r").unwrap();
         assert_eq!(r.borrow().value.get_attr("data-error"), Some("SyntaxError"));
@@ -4685,7 +5089,7 @@ mod tests {
         document.getElementById("r").setattr || document.getElementById("r").setAttribute("data-tags",
             t.children[0].tagName + ":" + t.children[1].tagName
         );
-        "#);
+        "#, None);
         let r = dom.get_element_by_id("r").unwrap();
         let r = r.borrow();
         assert_eq!(r.value.get_attr("data-count"), Some("2"));
@@ -4717,8 +5121,7 @@ mod tests {
                 missing.push("Element.prototype." + elementMethods[k]);
         }
         document.getElementById("r").setAttribute("data-missing", missing.join(","));
-        "#,
-        );
+        "#, None);
         let r = dom.get_element_by_id("r").unwrap();
         assert_eq!(r.borrow().value.get_attr("data-missing"), Some(""));
     }
@@ -4739,6 +5142,7 @@ mod tests {
         });
         el.setAttribute("data-out", out.join(";"));
         "#,
+            None,
         );
         let r = dom.get_element_by_id("r").unwrap();
         let attrs = r.borrow();
@@ -4769,6 +5173,7 @@ mod tests {
         out.push("stack:" + document.elementsFromPoint(5, 5).length);
         document.getElementById("r").setAttribute("data-out", out.join(";"));
         "#,
+            None,
         );
         let r = dom.get_element_by_id("r").unwrap();
         assert_eq!(
@@ -4797,8 +5202,7 @@ mod tests {
         var inserted = document.getElementById("anchor").insertAdjacentElement("beforebegin", document.createElement("span"));
         out.push("inserted:" + (inserted && inserted.tagName));
         document.getElementById("r").setAttribute("data-out", out.join(";"));
-        "#,
-        );
+        "#, None);
         let r = dom.get_element_by_id("r").unwrap();
         assert_eq!(
             r.borrow().value.get_attr("data-out"),
@@ -4833,6 +5237,7 @@ mod tests {
         out.push("any:" + any.aborted);
         document.getElementById("r").setAttribute("data-out", out.join(";"));
         "#,
+            None,
         );
         runtime.perform_microtask_checkpoint_public();
         let r = dom.get_element_by_id("r").unwrap();
@@ -4859,6 +5264,7 @@ mod tests {
                 document.getElementById("r").setAttribute("data-result", "rejected:" + error.name);
             });
         "#,
+            None,
         );
         runtime.perform_microtask_checkpoint_public();
         let requests = runtime.take_fetch_requests();
@@ -4888,6 +5294,7 @@ mod tests {
             });
         controller.abort();
         "#,
+            None,
         );
         runtime.perform_microtask_checkpoint_public();
         let requests = runtime.take_fetch_requests();
@@ -4924,6 +5331,7 @@ mod tests {
         document.getElementById("r").setAttribute("data-out", out.join(";"));
         window.__blob_out = out;
         "#,
+            None,
         );
         runtime.perform_microtask_checkpoint_public();
         // Re-run to capture the results produced by microtasks.
@@ -4931,6 +5339,7 @@ mod tests {
             r#"
         document.getElementById("r").setAttribute("data-out", window.__blob_out.join(";"));
         "#,
+            None,
         );
         let r = dom.get_element_by_id("r").unwrap();
         let observed = r
@@ -4962,13 +5371,13 @@ mod tests {
         var jsonResponse = new Response("{}", { headers: { "content-type": "application/json" } });
         jsonResponse.json().then(function (value) { out.push("json:" + (typeof value === "object")); });
         window.__response_out = out;
-        "#,
-        );
+        "#, None);
         runtime.perform_microtask_checkpoint_public();
         runtime.run_script(
             r#"
         document.getElementById("r").setAttribute("data-out", window.__response_out.join(";"));
         "#,
+            None,
         );
         let r = dom.get_element_by_id("r").unwrap();
         let observed = r
@@ -5003,6 +5412,7 @@ mod tests {
         catch (e) { out.push("ctor:" + (e instanceof TypeError)); }
         document.getElementById("r").setAttribute("data-out", out.join(";"));
         "#,
+            None,
         );
         let r = dom.get_element_by_id("r").unwrap();
         assert_eq!(
@@ -5039,12 +5449,14 @@ mod tests {
             .finally(function () { log("finallyReject:ran"); })
             .catch(function (e) { log("finallyReject:" + e); });
         "#,
+            None,
         );
         runtime.perform_microtask_checkpoint_public();
         runtime.run_script(
             r#"
         document.getElementById("r").setAttribute("data-out", window.__out.join(";"));
         "#,
+            None,
         );
         let r = dom.get_element_by_id("r").unwrap();
         assert_eq!(
@@ -5076,12 +5488,14 @@ mod tests {
         try { new ShadowRoot(); }
         catch (e) { log("hostType:" + (e instanceof TypeError)); }
         "#,
+            None,
         );
         runtime.perform_microtask_checkpoint_public();
         runtime.run_script(
             r#"
         document.getElementById("r").setAttribute("data-out", window.__out.join(";"));
         "#,
+            None,
         );
         let r = dom.get_element_by_id("r").unwrap();
         assert_eq!(
@@ -5095,14 +5509,14 @@ mod tests {
     #[test]
     fn try_run_script_distinguishes_parse_failures_from_clean_runs() {
         let (mut runtime, _dom) = runtime_from_html(r#""#);
-        assert!(runtime.try_run_script("var x = 1; 1 + 1;").is_ok());
+        assert!(runtime.try_run_script("var x = 1; 1 + 1;", None).is_ok());
         let err = runtime
-            .try_run_script("var x = ;")
+            .try_run_script("var x = ;", None)
             .expect_err("syntax error must surface");
         assert!(!err.is_empty(), "parse error still needs a message");
         // A host error thrown by the script itself also surfaces.
         runtime
-            .try_run_script("throw new TypeError('boom');")
+            .try_run_script("throw new TypeError('boom');", None)
             .expect_err("thrown value must surface");
     }
 
@@ -5113,6 +5527,7 @@ mod tests {
             r#"queueMicrotask(function () {
                 document.getElementById("r").setAttribute("data-out", "drained");
             });"#,
+            None,
         );
         runtime.drain_microtasks();
         let r = dom.get_element_by_id("r").unwrap();
@@ -5137,8 +5552,7 @@ mod tests {
             var added = document.getElementById("target").insertAdjacentElement("beforebegin", document.createElement("i"));
             out.push("inserted:" + (added && added.tagName));
             document.getElementById("host").setAttribute("data-out", out.join(";"));
-            "#,
-        );
+            "#, None);
         let host = dom.get_element_by_id("host").unwrap();
         assert_eq!(
             host.borrow().value.get_attr("data-out"),
@@ -5164,6 +5578,7 @@ mod tests {
             }
             document.getElementById("r").setAttribute("data-out", out.join(";"));
             "#,
+            None,
         );
         let r = dom.get_element_by_id("r").unwrap();
         assert_eq!(
@@ -5192,6 +5607,7 @@ mod tests {
             results.push("plain:" + ({} instanceof TextEncoder));
             document.getElementById("r").setAttribute("data-out", results.join(";"));
             "#,
+            None,
         );
         let r = dom.get_element_by_id("r").unwrap();
         assert_eq!(

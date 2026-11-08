@@ -160,6 +160,7 @@ mod tests {
                 });
             "#
             .to_string(),
+            label: None,
         });
 
         let result = wait_for_result(&processor);
@@ -182,6 +183,7 @@ mod tests {
                 document.body.setAttribute("data-ok", "yes");
             "#
             .to_string(),
+            label: None,
         });
         let final_result = wait_for_result(&processor);
         assert!(
@@ -206,6 +208,7 @@ mod tests {
                 }
             "#
             .to_string(),
+            label: None,
         });
 
         let result = wait_for_result(&processor);

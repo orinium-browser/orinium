@@ -80,9 +80,14 @@ pub(crate) fn install_console(engine: &mut pixi_byte::JSEngine) {
 }
 
 fn console_message(vm: &mut VM, args: Vec<JSValue>, level: log::Level) -> JSResult<JSValue> {
-    let message: Vec<String> = args.iter().skip(1).map(|v| v.to_console_string()).collect();
-    log::log!(target: "Console", level, "{}", message.join(" "));
-    let _ = vm;
+    let message: Vec<String> = args
+        .iter()
+        .skip(1)
+        .map(crate::engine::js::trace::format_console_value)
+        .collect();
+    let text = message.join(" ");
+    log::log!(target: "Console", level, "{}", text);
+    crate::engine::js::trace::record_console(vm, level, &text);
     Ok(JSValue::undefined())
 }
 

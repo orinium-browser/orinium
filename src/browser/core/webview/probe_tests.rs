@@ -421,6 +421,7 @@ impl Probe {
                 Some(r) => self.wv.on_dynamic_script_fetched(
                     node_id,
                     String::from_utf8_lossy(&r.body).to_string(),
+                    &url,
                 ),
                 None => self.wv.on_dynamic_script_fetch_failed(node_id),
             },
@@ -599,6 +600,7 @@ fn send_probe_script(wv: &mut WebView, source: &str) {
     let sent = if let Some(processor) = wv.js_processor.as_ref() {
         processor.send(JsTask::RunScript {
             source: source.to_string(),
+            label: None,
         });
         true
     } else {

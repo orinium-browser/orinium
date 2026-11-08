@@ -45,7 +45,7 @@ fn run_acid3(raw_url: &str) -> Result<()> {
 
     // Execute all inline scripts (the main Acid3 harness among them).
     for script in dom.collect_inline_scripts() {
-        js.run_script(&script);
+        js.run_script(&script, Some("acid3-inline"));
     }
 
     // Confirm the harness globals are present before we drive the loop.

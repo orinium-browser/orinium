@@ -25,7 +25,7 @@ use crate::engine::{
     js::{
         JsDevToolsRequest, JsDynamicImageRequest, JsDynamicScriptRequest, JsDynamicScriptSource,
         JsDynamicStyleRequest, JsFetchRequest, JsFetchResponse, JsIframeFetchRequest,
-        JsLayoutMetrics, JsProcessor, JsTask, JsTaskResult,
+        JsLayoutMetrics, JsProcessor, JsTask, JsTaskResult, JsTraceEvent,
     },
     layouter::{
         self, InheritedCss, LayoutResult, NodeId,
@@ -301,6 +301,18 @@ pub struct WebView {
     pending_js_fetches: Vec<JsFetchRequest>,
     /// DevTools inspection requests collected from applied JS results.
     pending_devtools_requests: Vec<JsDevToolsRequest>,
+    /// JavaScript execution trace events collected from applied JS results.
+    js_trace_events: Vec<JsTraceEvent>,
+    /// JavaScript operations currently in progress (best-effort snapshot).
+    js_trace_active: Vec<crate::engine::js::JsActiveTrace>,
+    /// Whether the JS thread should record execution trace events.
+    js_trace_enabled: bool,
+    /// Total events recorded since the trace was cleared.
+    js_trace_total: u64,
+    /// Events evicted by the JS thread's ring buffer before reaching the UI.
+    js_trace_dropped: u64,
+    /// Results waiting for DevTools console polling.
+    js_console_results: HashMap<u64, String>,
     /// Stable DOM ids for the inspector, assigned lazily over the live tree.
     inspector_ids: RefCell<inspector::DomIdRegistry>,
     /// Dynamically inserted scripts collected from applied JS results.
@@ -318,7 +330,7 @@ pub struct WebView {
     next_script_index: usize,
     pending_script_fetches: HashMap<usize, ClassicScriptExecution>,
     non_blocking_scripts_scheduled: bool,
-    deferred_script_results: HashMap<usize, Option<String>>,
+    deferred_script_results: HashMap<usize, (Option<String>, Option<String>)>,
     next_deferred_script_index: usize,
     /// Fragment to reveal once the document has a completed layout.
     pending_fragment_scroll: Option<String>,
@@ -333,6 +345,15 @@ enum ClassicScript {
         url: Url,
         execution: ClassicScriptExecution,
     },
+}
+
+impl ClassicScript {
+    fn label(&self) -> Option<String> {
+        match self {
+            Self::Inline(_) => Some("inline script".to_string()),
+            Self::External { url, .. } => Some(url.as_str().to_string()),
+        }
+    }
 }
 
 /// A DOM snapshot paired with the tree mutation version it was built from.
@@ -504,6 +525,12 @@ impl WebView {
             window_load_dispatched: false,
             pending_js_fetches: Vec::new(),
             pending_devtools_requests: Vec::new(),
+            js_trace_events: Vec::new(),
+            js_trace_active: Vec::new(),
+            js_trace_enabled: crate::engine::js::default_trace_enabled(),
+            js_trace_total: 0,
+            js_trace_dropped: 0,
+            js_console_results: HashMap::new(),
             inspector_ids: RefCell::new(inspector::DomIdRegistry::default()),
             pending_dynamic_scripts: Vec::new(),
             pending_dynamic_styles: Vec::new(),
@@ -576,6 +603,55 @@ impl WebView {
             self.js_processor = Some(processor);
             self.js_dom_ids = dom_ids;
             self.pending_js_tasks = 5;
+            self.reset_js_trace_buffer();
+            self.sync_initial_js_tracing();
+        }
+    }
+
+    fn reset_js_trace_buffer(&mut self) {
+        self.js_trace_events.clear();
+        self.js_trace_active.clear();
+        self.js_trace_total = 0;
+        self.js_trace_dropped = 0;
+    }
+
+    /// Applies the webview's tracing preference to a freshly created processor.
+    ///
+    /// New runtimes start with [`crate::engine::js::default_trace_enabled()`],
+    /// so a task is only needed when the user has chosen otherwise.
+    fn sync_initial_js_tracing(&mut self) {
+        if self.js_trace_enabled == crate::engine::js::default_trace_enabled() {
+            return;
+        }
+        if let Some(processor) = self.js_processor.as_ref() {
+            processor.send(JsTask::SetTracing {
+                enabled: self.js_trace_enabled,
+            });
+            self.pending_js_tasks += 1;
+        }
+    }
+
+    /// Enables or disables JavaScript execution tracing.
+    ///
+    /// The preference is kept across navigations; buffered events belong to
+    /// the current page and are cleared on load.
+    pub fn set_js_tracing(&mut self, enabled: bool) {
+        if self.js_trace_enabled == enabled {
+            return;
+        }
+        self.js_trace_enabled = enabled;
+        if let Some(processor) = self.js_processor.as_ref() {
+            processor.send(JsTask::SetTracing { enabled });
+            self.pending_js_tasks += 1;
+        }
+    }
+
+    /// Clears the buffered JavaScript execution trace.
+    pub fn clear_js_trace(&mut self) {
+        self.reset_js_trace_buffer();
+        if let Some(processor) = self.js_processor.as_ref() {
+            processor.send(JsTask::ClearTrace);
+            self.pending_js_tasks += 1;
         }
     }
 
@@ -610,6 +686,7 @@ impl WebView {
         self.in_flight_timer_version = None;
         self.pending_js_fetches.clear();
         self.pending_devtools_requests.clear();
+        self.reset_js_trace_buffer();
         self.inspector_ids.borrow_mut().clear();
         self.pending_dynamic_scripts.clear();
         self.pending_dynamic_styles.clear();
@@ -807,6 +884,8 @@ impl WebView {
         self.window_load_dispatched = false;
         self.pending_js_fetches.clear();
         self.pending_devtools_requests.clear();
+        self.reset_js_trace_buffer();
+        self.sync_initial_js_tracing();
         self.inspector_ids.borrow_mut().clear();
         self.pending_dynamic_scripts.clear();
         self.pending_dynamic_styles.clear();
@@ -1083,16 +1162,21 @@ impl WebView {
             return;
         }
         self.pending_script_fetches.remove(&index);
+        let label = self
+            .classic_scripts
+            .get(index)
+            .and_then(ClassicScript::label);
 
         match execution {
             ClassicScriptExecution::Default => {
                 self.next_script_index += 1;
-                self.send_script(&source);
+                self.send_script(&source, label.as_deref());
             }
             ClassicScriptExecution::Defer => {
-                self.deferred_script_results.insert(index, Some(source));
+                self.deferred_script_results
+                    .insert(index, (Some(source), label));
             }
-            ClassicScriptExecution::Async => self.send_script(&source),
+            ClassicScriptExecution::Async => self.send_script(&source, label.as_deref()),
         }
     }
 
@@ -1112,15 +1196,15 @@ impl WebView {
         match execution {
             ClassicScriptExecution::Default => self.next_script_index += 1,
             ClassicScriptExecution::Defer => {
-                self.deferred_script_results.insert(index, None);
+                self.deferred_script_results.insert(index, (None, None));
             }
             ClassicScriptExecution::Async => {}
         }
     }
 
     /// Executes a fetched dynamically inserted script and dispatches `load`.
-    pub fn on_dynamic_script_fetched(&mut self, node_id: u64, source: String) {
-        self.send_script(&source);
+    pub fn on_dynamic_script_fetched(&mut self, node_id: u64, source: String, url: &Url) {
+        self.send_script(&source, Some(url.as_str()));
         self.dispatch_js_element_event(node_id, "load");
     }
 
@@ -1197,6 +1281,28 @@ impl WebView {
         method: &str,
         params: &str,
     ) -> Result<serde_json::Value, String> {
+        if method == "evaluate" {
+            let parsed: serde_json::Value =
+                serde_json::from_str(params).map_err(|error| error.to_string())?;
+            let id = parsed
+                .get("id")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or_else(|| "params must include an integer id".to_string())?;
+            let source = parsed
+                .get("source")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "params must include a source string".to_string())?;
+            let processor = self
+                .js_processor
+                .as_ref()
+                .ok_or_else(|| "page JavaScript runtime is not ready".to_string())?;
+            processor.send(JsTask::EvaluateConsole {
+                id,
+                source: source.to_string(),
+            });
+            self.pending_js_tasks += 1;
+            return Ok(serde_json::json!({"id": id, "pending": true}));
+        }
         inspector::handle(self, method, params)
     }
 
@@ -1301,10 +1407,12 @@ impl WebView {
         self.schedule_non_blocking_scripts(tasks);
 
         while self.next_script_index < self.classic_scripts.len() {
-            match self.classic_scripts[self.next_script_index].clone() {
+            let script = self.classic_scripts[self.next_script_index].clone();
+            let label = script.label();
+            match script {
                 ClassicScript::Inline(source) => {
                     self.next_script_index += 1;
-                    self.send_script(&source);
+                    self.send_script(&source, label.as_deref());
                 }
                 ClassicScript::External { url, execution } => {
                     if execution != ClassicScriptExecution::Default {
@@ -1370,21 +1478,22 @@ impl WebView {
                 return;
             };
 
-            let Some(source) = self.deferred_script_results.remove(&index) else {
+            let Some((source_opt, label)) = self.deferred_script_results.remove(&index) else {
                 return;
             };
             self.next_deferred_script_index = index + 1;
-            if let Some(source) = source {
-                self.send_script(&source);
+            if let Some(source) = source_opt {
+                self.send_script(&source, label.as_deref());
             }
         }
     }
 
     /// Sends a script to the JS thread for ordered execution.
-    fn send_script(&mut self, source: &str) {
+    fn send_script(&mut self, source: &str, label: Option<&str>) {
         if let Some(processor) = self.js_processor.as_ref() {
             processor.send(JsTask::RunScript {
                 source: source.to_string(),
+                label: label.map(str::to_string),
             });
             self.pending_js_tasks += 1;
         }
@@ -1506,7 +1615,8 @@ impl WebView {
         for request in requests {
             match request.source {
                 JsDynamicScriptSource::Inline(source) => {
-                    self.send_script(&source);
+                    let label = format!("dynamic inline script #{}", request.node_id);
+                    self.send_script(&source, Some(&label));
                     self.dispatch_js_element_event(request.node_id, "load");
                 }
                 JsDynamicScriptSource::External(source) => match self.resolve_url(&source) {
@@ -1805,6 +1915,19 @@ impl WebView {
             self.pending_js_fetches.extend(result.fetch_requests);
             self.pending_devtools_requests
                 .extend(result.devtools_requests);
+            let trace = result.js_trace;
+            self.js_trace_total = trace.total;
+            self.js_trace_dropped = trace.dropped;
+            self.js_trace_active = trace.active;
+            if !trace.events.is_empty() {
+                self.js_trace_events.extend(trace.events);
+                const MAX_UI_TRACE_EVENTS: usize = 1024;
+                if self.js_trace_events.len() > MAX_UI_TRACE_EVENTS {
+                    let excess = self.js_trace_events.len() - MAX_UI_TRACE_EVENTS;
+                    self.js_trace_events.drain(..excess);
+                }
+            }
+            self.js_console_results.extend(result.console_results);
             self.pending_dynamic_scripts
                 .extend(result.dynamic_script_requests);
             self.pending_dynamic_styles
@@ -1948,6 +2071,7 @@ impl WebView {
         self.in_flight_timer_version = None;
         self.pending_js_fetches.clear();
         self.pending_devtools_requests.clear();
+        self.reset_js_trace_buffer();
         self.inspector_ids.borrow_mut().clear();
         self.pending_dynamic_scripts.clear();
         self.pending_dynamic_styles.clear();
@@ -4117,6 +4241,7 @@ mod tests {
             style.textContent = ".dynamic { color: red; }";
             document.documentElement.appendChild(style);
             "#,
+            Some("test: inserted style"),
         );
 
         pump_until(
@@ -4219,6 +4344,7 @@ mod tests {
             document.body.appendChild(frame);
             frame.src = "https://example.test/inside.html";
             "#,
+            Some("test: iframe src"),
         );
 
         // The JS thread reports the iframe's src as a fetch request.

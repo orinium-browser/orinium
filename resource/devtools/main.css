@@ -215,6 +215,216 @@ main {
     display: block;
 }
 
+#trace-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+}
+
+#trace-controls button {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 3px 9px;
+    cursor: pointer;
+}
+
+#trace-status {
+    color: var(--muted);
+}
+
+#trace-active-panel {
+    border-bottom: 1px solid var(--border);
+    background: #1b2228;
+}
+
+.pane-subtitle {
+    padding: 4px 10px;
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: var(--muted);
+    background: rgba(255, 255, 255, 0.02);
+    border-bottom: 1px solid var(--border);
+}
+
+#trace-active {
+    max-height: 24vh;
+    overflow: auto;
+    padding: 6px 8px;
+    font: 12px Consolas, monospace;
+}
+
+.trace-active-empty {
+    color: var(--muted);
+    padding: 2px 2px;
+}
+
+.trace-active-item {
+    margin: 0 0 6px 0;
+    padding: 6px 8px;
+    border: 1px solid #35506a;
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+    background: rgba(91, 157, 217, 0.08);
+}
+
+.trace-active-title {
+    color: #9ecbff;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.trace-active-meta,
+.trace-active-stack {
+    margin-top: 4px;
+    color: var(--muted);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.trace-active-source {
+    margin-top: 6px;
+    padding: 6px;
+    max-height: 14vh;
+    overflow: auto;
+    background: rgba(0, 0, 0, 0.2);
+    color: var(--text);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+#trace-events {
+    height: 38vh;
+    min-height: 120px;
+    max-height: 38vh;
+    overflow-x: auto;
+    overflow-y: scroll;
+    font-family: Consolas, monospace;
+}
+
+.trace-row {
+    display: block;
+    width: max-content;
+    min-width: 100%;
+    overflow: visible;
+    padding: 4px 8px;
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    text-align: left;
+    text-overflow: clip;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.trace-row:hover {
+    background: var(--panel);
+}
+.trace-row.trace-error {
+    color: #e06c75;
+}
+
+#trace-detail {
+    padding: 10px;
+    color: var(--muted);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font:
+        12px Consolas,
+        monospace;
+}
+
+#console-output {
+    max-height: 65vh;
+    overflow: auto;
+    padding: 6px 10px;
+    font:
+        12px Consolas,
+        monospace;
+}
+
+.console-entry {
+    padding: 3px 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.console-prompt {
+    color: var(--tag);
+}
+.console-result {
+    color: var(--value);
+}
+.console-error {
+    color: #e06c75;
+}
+
+#console-form {
+    position: sticky;
+    bottom: 0;
+    display: flex;
+    gap: 8px;
+    padding: 8px 10px;
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    color: var(--accent);
+    font:
+        13px Consolas,
+        monospace;
+}
+
+#console-input {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+}
+
+#source-list {
+    max-height: 28vh;
+    overflow: auto;
+    border-bottom: 1px solid var(--border);
+}
+
+.source-row {
+    display: block;
+    width: 100%;
+    overflow: hidden;
+    padding: 5px 9px;
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    background: transparent;
+    color: var(--tag);
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.source-row:hover {
+    background: var(--panel);
+}
+
+#source-detail {
+    padding: 10px;
+    overflow: auto;
+    color: var(--text);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font:
+        12px Consolas,
+        monospace;
+}
+
 .view-empty {
     padding: 10px;
     color: var(--muted);

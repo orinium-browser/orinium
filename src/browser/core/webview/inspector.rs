@@ -357,8 +357,107 @@ fn serialize_layout_info(info: &InfoNode, target: &LayoutTarget<'_>) -> Value {
     })
 }
 
+fn serialize_trace_event(
+    event: &crate::engine::js::JsTraceEvent,
+    fallback_source: Option<&str>,
+) -> Value {
+    let source = event.source.as_deref().or_else(|| {
+        (event.error.is_some() || event.label.starts_with("console."))
+            .then_some(fallback_source)
+            .flatten()
+    });
+    json!({
+        "seq": event.seq,
+        "atMs": event.at_ms,
+        "kind": event.kind.as_str(),
+        "label": &event.label,
+        "detail": &event.detail,
+        "durationUs": event.duration_us,
+        "error": &event.error,
+        "stack": &event.stack,
+        "source": source,
+        "sourceIsFallback": event.source_is_fallback || (event.source.is_none() && source.is_some()),
+        "variables": &event.variables,
+        "programCounter": event.program_counter,
+    })
+}
+
+fn serialize_active_trace(active: &crate::engine::js::JsActiveTrace) -> Value {
+    json!({
+        "kind": active.kind.as_str(),
+        "label": &active.label,
+        "detail": &active.detail,
+        "elapsedMs": active.elapsed_ms,
+        "stack": &active.stack,
+        "source": &active.source,
+    })
+}
+
 /// Answers a DevTools inspection query against this page's state.
 pub(super) fn handle(webview: &mut WebView, method: &str, params: &str) -> Result<Value, String> {
+    // Trace requests are JavaScript-runtime state, not document inspection, and
+    // must keep working while a navigation has temporarily cleared the document.
+    match method {
+        "getConsoleResult" => {
+            let parsed: Value = serde_json::from_str(params).map_err(|error| error.to_string())?;
+            let id = parsed
+                .get("id")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| "params must include an integer id".to_string())?;
+            return Ok(match webview.js_console_results.remove(&id) {
+                Some(value) => json!({"done": true, "value": value}),
+                None => json!({"done": false}),
+            });
+        }
+        "getTrace" => {
+            let fallback_source = webview
+                .document_info()
+                .and_then(|info| info.dom.collect_inline_scripts().into_iter().last());
+            return Ok(json!({
+                "enabled": webview.js_trace_enabled,
+                "total": webview.js_trace_total,
+                "dropped": webview.js_trace_dropped,
+                "pendingTasks": webview.pending_js_tasks,
+                "timerInFlight": webview.in_flight_timer_version.is_some(),
+                "active": webview
+                    .js_trace_active
+                    .iter()
+                    .map(serialize_active_trace)
+                    .collect::<Vec<_>>(),
+                "events": webview
+                    .js_trace_events
+                    .iter()
+                    .map(|event| serialize_trace_event(event, fallback_source.as_deref()))
+                    .collect::<Vec<_>>(),
+            }));
+        }
+        "getActiveScripts" => {
+            return Ok(json!({
+                "pendingTasks": webview.pending_js_tasks,
+                "timerInFlight": webview.in_flight_timer_version.is_some(),
+                "active": webview
+                    .js_trace_active
+                    .iter()
+                    .map(serialize_active_trace)
+                    .collect::<Vec<_>>(),
+            }));
+        }
+        "setTracing" => {
+            let parsed: Value = serde_json::from_str(params).map_err(|e| e.to_string())?;
+            let enabled = parsed
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| "params must include a boolean enabled".to_string())?;
+            webview.set_js_tracing(enabled);
+            return Ok(json!({ "enabled": webview.js_trace_enabled }));
+        }
+        "clearTrace" => {
+            webview.clear_js_trace();
+            return Ok(json!({ "enabled": webview.js_trace_enabled }));
+        }
+        _ => {}
+    }
+
     let Some(info) = webview.docment_info.as_ref() else {
         return Err("no document".to_string());
     };

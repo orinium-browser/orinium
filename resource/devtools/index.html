@@ -19,6 +19,15 @@
             </section>
             <section id="detail-pane">
                 <div id="detail-tabs">
+                    <button class="detail-tab" data-tab="sources" type="button">
+                        Sources
+                    </button>
+                    <button class="detail-tab" data-tab="console" type="button">
+                        Console
+                    </button>
+                    <button class="detail-tab" data-tab="trace" type="button">
+                        Trace
+                    </button>
                     <button
                         class="detail-tab active"
                         data-tab="attributes"
@@ -39,6 +48,38 @@
                     <button class="detail-tab" data-tab="layout" type="button">
                         Layout
                     </button>
+                </div>
+                <div class="detail-view" data-view="sources">
+                    <div id="source-list"></div>
+                    <pre id="source-detail">
+No JavaScript source recorded yet.</pre>
+                </div>
+                <div class="detail-view" data-view="console">
+                    <div id="console-output" aria-live="polite"></div>
+                    <form id="console-form">
+                        <span aria-hidden="true">&gt;</span>
+                        <input
+                            id="console-input"
+                            type="text"
+                            autocomplete="off"
+                            spellcheck="false"
+                            placeholder="Enter JavaScript and press Enter"
+                        />
+                    </form>
+                </div>
+                <div class="detail-view" data-view="trace">
+                    <div id="trace-controls">
+                        <button id="trace-toggle" type="button">Pause</button>
+                        <button id="trace-clear" type="button">Clear</button>
+                        <span id="trace-status"></span>
+                    </div>
+                    <div id="trace-active-panel">
+                        <div class="pane-subtitle">Currently executing</div>
+                        <div id="trace-active">No JavaScript currently executing.</div>
+                    </div>
+                    <div id="trace-events"></div>
+                    <pre id="trace-detail">
+Select an event to inspect its stack and source.</pre>
                 </div>
                 <div class="detail-view active" data-view="attributes">
                     <table id="attributes"></table>

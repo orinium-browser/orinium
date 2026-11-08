@@ -18,7 +18,7 @@ use std::thread;
 use super::{
     IframeContentSnapshot, JsDevToolsRequest, JsDynamicImageRequest, JsDynamicScriptRequest,
     JsDynamicStyleRequest, JsFetchRequest, JsFetchResponse, JsIframeFetchRequest, JsLayoutMetrics,
-    JsRuntime,
+    JsRuntime, JsTraceBatch,
 };
 use crate::engine::layouter::dom_snapshot::DomSnapshot;
 use crate::engine::permissions::Permissions;
@@ -43,7 +43,11 @@ pub enum JsTask {
         computed_styles: HashMap<u64, Vec<(String, String)>>,
     },
     /// Execute a classic (blocking or deferred) script.
-    RunScript { source: String },
+    RunScript {
+        source: String,
+        /// Human-readable source label shown in DevTools (e.g. script URL).
+        label: Option<String>,
+    },
     /// Dispatch `DOMContentLoaded` to document listeners.
     DispatchDomContentLoaded,
     /// Dispatch the window `load` event (fires `window.onload`).
@@ -72,6 +76,12 @@ pub enum JsTask {
     /// Mark an iframe load as failed so later `contentDocument` accesses do not
     /// keep re-queuing a fetch.
     RejectIframe { dom_id: u64 },
+    /// Start or stop JavaScript execution tracing.
+    SetTracing { enabled: bool },
+    /// Clear the buffered JavaScript execution trace.
+    ClearTrace,
+    /// Evaluate a DevTools console expression in the page's JavaScript runtime.
+    EvaluateConsole { id: u64, source: String },
     /// Replace the JS thread's mirror DOM with the UI's tree (write-backs).
     UpdateDom { snapshot: DomSnapshot },
 }
@@ -98,6 +108,10 @@ pub struct JsTaskResult {
     pub iframe_fetch_requests: Vec<JsIframeFetchRequest>,
     /// DevTools inspection requests queued by scripts while running this task.
     pub devtools_requests: Vec<JsDevToolsRequest>,
+    /// JavaScript execution trace events recorded while running this task.
+    pub js_trace: JsTraceBatch,
+    /// Results of DevTools console evaluations completed by this task.
+    pub console_results: Vec<(u64, String)>,
     /// Dynamically inserted script elements discovered while running this task.
     pub(crate) dynamic_script_requests: Vec<JsDynamicScriptRequest>,
     /// Dynamically inserted stylesheet links discovered while running this task.
@@ -181,6 +195,8 @@ impl JsProcessor {
                 let fetch_requests = runtime.take_fetch_requests();
                 let iframe_fetch_requests = runtime.take_iframe_fetch_requests();
                 let devtools_requests = runtime.take_devtools_requests();
+                let js_trace = runtime.take_trace_batch();
+                let console_results = runtime.take_console_results();
                 let dynamic_script_requests = runtime.take_dynamic_script_requests();
                 let dynamic_style_requests = runtime.take_dynamic_style_requests();
                 let dynamic_image_requests = runtime.take_dynamic_image_requests();
@@ -205,6 +221,8 @@ impl JsProcessor {
                     fetch_requests,
                     iframe_fetch_requests,
                     devtools_requests,
+                    js_trace,
+                    console_results,
                     dynamic_script_requests,
                     dynamic_style_requests,
                     dynamic_image_requests,
@@ -282,8 +300,8 @@ fn run_task(runtime: &mut JsRuntime, task: JsTask) -> bool {
             runtime.set_computed_styles_by_dom_id(computed_styles);
             false
         }
-        JsTask::RunScript { source } => {
-            runtime.run_script(&source);
+        JsTask::RunScript { source, label } => {
+            runtime.run_script(&source, label.as_deref());
             true
         }
         JsTask::DispatchDomContentLoaded => runtime.dispatch_dom_content_loaded(),
@@ -313,6 +331,18 @@ fn run_task(runtime: &mut JsRuntime, task: JsTask) -> bool {
         }
         JsTask::RejectIframe { dom_id } => {
             runtime.reject_iframe_fetch(dom_id);
+            true
+        }
+        JsTask::SetTracing { enabled } => {
+            runtime.set_js_tracing(enabled);
+            false
+        }
+        JsTask::ClearTrace => {
+            runtime.clear_js_trace();
+            false
+        }
+        JsTask::EvaluateConsole { id, source } => {
+            runtime.evaluate_console(id, &source);
             true
         }
         JsTask::UpdateDom { snapshot } => {
@@ -370,6 +400,7 @@ mod tests {
             JsProcessor::new(snapshot_of("<html><body><div id='x'></div></body></html>"));
         processor.send(JsTask::RunScript {
             source: r#"document.getElementById("x").setAttribute("data-a", "1");"#.to_string(),
+            label: None,
         });
 
         let result = wait_for_result(&processor);
@@ -386,6 +417,7 @@ mod tests {
             JsProcessor::new(snapshot_of("<html><body><div id='x'></div></body></html>"));
         processor.send(JsTask::RunScript {
             source: r#"globalThis.__s = "a";"#.to_string(),
+            label: None,
         });
         processor.send(JsTask::RunScript {
             source: r#"
@@ -393,6 +425,7 @@ mod tests {
                 document.getElementById("x").setAttribute("data-s", globalThis.__s);
             "#
             .to_string(),
+            label: None,
         });
 
         // Only the last script mutates the DOM; its snapshot must reflect both.
@@ -426,6 +459,7 @@ mod tests {
                 el.setAttribute("data-read", el.getAttribute("data-v"));
             "#
             .to_string(),
+            label: None,
         });
 
         // UpdateDom applies first (FIFO), so the script reads the new value.

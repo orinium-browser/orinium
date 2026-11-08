@@ -145,7 +145,7 @@ pub(crate) fn prologue() -> String {
 /// missing_api_detector::install_missing_api_report(&mut runtime);
 /// ```
 pub fn install_missing_api_report(runtime: &mut JsRuntime) {
-    runtime.run_script(&prologue());
+    runtime.run_script(&prologue(), None);
 }
 
 #[cfg(test)]

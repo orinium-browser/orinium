@@ -10,6 +10,20 @@
   var computedEl = document.getElementById("computed");
   var layoutEl = document.getElementById("layout");
   var detailTabsEl = document.getElementById("detail-tabs");
+  var traceEventsEl = document.getElementById("trace-events");
+  var traceDetailEl = document.getElementById("trace-detail");
+  var traceStatusEl = document.getElementById("trace-status");
+  var traceToggleEl = document.getElementById("trace-toggle");
+  var traceActiveEl = document.getElementById("trace-active");
+  var consoleOutputEl = document.getElementById("console-output");
+  var consoleInputEl = document.getElementById("console-input");
+  var consoleRequestId = 0;
+  var consoleLastTraceSeq = 0;
+  var sourceListEl = document.getElementById("source-list");
+  var sourceDetailEl = document.getElementById("source-detail");
+  var sourceEntries = {};
+  var traceEnabled = true;
+  var traceLastSeq = 0;
   var emptyNotes = {};
   var emptyNoteEls = document.getElementsByClassName("view-empty");
   for (var noteIndex = 0; noteIndex < emptyNoteEls.length; noteIndex += 1) {
@@ -22,7 +36,8 @@
   var tree = null;
   var expanded = {};
   var selectedId = null;
-  var version = "";
+  var domVersion = null;
+  var layoutVersion = null;
 
   function call(method, params) {
     return __orinium_devtools(method, JSON.stringify(params || {})).then(
@@ -515,19 +530,274 @@
     call("getVersion")
       .then(function (data) {
         setStatus("connected");
-        var next = data.domVersion + "/" + data.layoutVersion;
-        if (next !== version) {
-          version = next;
+        var domChanged = data.domVersion !== domVersion;
+        var layoutChanged = data.layoutVersion !== layoutVersion;
+        if (domChanged) {
+          domVersion = data.domVersion;
+          layoutVersion = data.layoutVersion;
           return refresh();
+        } else if (layoutChanged) {
+          layoutVersion = data.layoutVersion;
+          if (selectedId !== null) {
+            if (!findById(tree, selectedId)) {
+              selectedId = null;
+              clearDetails();
+            } else {
+              showComputed(selectedId);
+              showLayout(selectedId);
+            }
+          }
         }
       })
       .catch(function () {
         setStatus("error");
       });
+    if (isTraceActive() || isConsoleActive()) {
+      call("getTrace")
+        .then(function (data) {
+          renderTrace(data);
+          renderConsoleTrace(data.events || []);
+        })
+        .catch(function () {});
+    }
   }
 
+  function isTraceActive() {
+    var tabs = detailTabsEl.getElementsByClassName("detail-tab");
+    for (var i = 0; i < tabs.length; i += 1) {
+      var tabName = tabs[i].getAttribute("data-tab");
+      if ((tabName === "trace" || tabName === "sources") &&
+          tabs[i].getAttribute("class").indexOf("active") !== -1) {
+        return tabs[i].getAttribute("class").indexOf("active") !== -1;
+      }
+    }
+    return false;
+  }
+
+  function isConsoleActive() {
+    var tabs = detailTabsEl.getElementsByClassName("detail-tab");
+    for (var i = 0; i < tabs.length; i += 1) {
+      if (tabs[i].getAttribute("data-tab") === "console" &&
+          tabs[i].getAttribute("class").indexOf("active") !== -1) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function renderConsoleTrace(events) {
+    for (var i = 0; i < events.length; i += 1) {
+      var entry = events[i];
+      if (entry.seq <= consoleLastTraceSeq) continue;
+      consoleLastTraceSeq = entry.seq;
+      if (entry.kind !== "console") continue;
+      var level = (entry.label || "console.log").replace("console.", "");
+      appendConsoleEntry(level === "error" || level === "warn" ? "error" : "result",
+        (entry.label || "console.log") + ": " + (entry.detail || ""));
+    }
+  }
+
+  function renderActive(active, pendingTasks, timerInFlight) {
+    traceActiveEl.textContent = "";
+    var items = active || [];
+    if (!items.length) {
+      var empty = document.createElement("div");
+      empty.setAttribute("class", "trace-active-empty");
+      if (pendingTasks || timerInFlight) {
+        empty.textContent =
+          "JS task queued" +
+          (pendingTasks ? " (pending: " + pendingTasks + ")" : "") +
+          (timerInFlight ? " (timer in flight)" : "") +
+          ". No traced operation boundary captured.";
+      } else {
+        empty.textContent = "No JavaScript currently executing.";
+      }
+      traceActiveEl.appendChild(empty);
+      return;
+    }
+
+    for (var i = 0; i < items.length; i += 1) {
+      var item = items[i];
+      var box = document.createElement("div");
+      box.setAttribute("class", "trace-active-item");
+
+      var title = document.createElement("div");
+      title.setAttribute("class", "trace-active-title");
+      title.textContent =
+        "[" + item.kind + "] " + item.label +
+        "  " + (item.elapsedMs || 0).toFixed(1) + "ms";
+      box.appendChild(title);
+
+      if (item.detail) {
+        var detail = document.createElement("div");
+        detail.setAttribute("class", "trace-active-meta");
+        detail.textContent = item.detail;
+        box.appendChild(detail);
+      }
+
+      if (item.stack && item.stack.length) {
+        var stack = document.createElement("pre");
+        stack.setAttribute("class", "trace-active-stack");
+        stack.textContent = "Stack:\n" + item.stack.join("\n");
+        box.appendChild(stack);
+      }
+
+      if (item.source) {
+        var source = document.createElement("pre");
+        source.setAttribute("class", "trace-active-source");
+        source.textContent = item.source;
+        box.appendChild(source);
+      }
+
+      traceActiveEl.appendChild(box);
+    }
+  }
+
+  function renderTrace(data) {
+    traceEnabled = !!data.enabled;
+    traceToggleEl.textContent = traceEnabled ? "Pause" : "Record";
+    var status = data.total + " events" +
+      (data.dropped ? " · " + data.dropped + " dropped" : "");
+    if (data.active && data.active.length) {
+      status += " · " + data.active.length + " running";
+    } else if (data.pendingTasks) {
+      status += " · " + data.pendingTasks + " queued";
+    }
+    traceStatusEl.textContent = status;
+    renderActive(data.active || [], data.pendingTasks || 0, !!data.timerInFlight);
+    var events = data.events || [];
+    renderSources(events);
+    var precedingSource = null;
+    for (var sourceIndex = 0; sourceIndex < events.length; sourceIndex += 1) {
+      if (events[sourceIndex].source) {
+        precedingSource = events[sourceIndex].source;
+      } else if (events[sourceIndex].error && precedingSource) {
+        events[sourceIndex].source = precedingSource;
+        events[sourceIndex].sourceIsFallback = true;
+      }
+    }
+    if (traceLastSeq > data.total) {
+      traceEventsEl.textContent = "";
+      traceLastSeq = 0;
+    }
+    var appended = false;
+    for (var i = 0; i < events.length; i += 1) {
+      (function (entry) {
+        if (entry.seq <= traceLastSeq) {
+          return;
+        }
+        var row = document.createElement("button");
+        row.setAttribute("class", "trace-row" + (entry.error ? " trace-error" : ""));
+        row.textContent = "#" + entry.seq + "  " + entry.atMs.toFixed(1) + "ms  [" +
+          entry.kind + "] " + (entry.error ? "ERROR: " + entry.error + "  |  " : "") +
+          entry.label + "  " + (entry.detail || "") +
+          (entry.error ? " — " + entry.error : "") +
+          (entry.durationUs ? "  " + entry.durationUs + "µs" : "");
+        row.onclick = function () {
+          traceDetailEl.textContent = [
+            entry.error ? "Error: " + entry.error : "",
+            typeof entry.programCounter === "number"
+              ? "Bytecode position: " + entry.programCounter : "",
+            entry.stack && entry.stack.length ? "Stack:\n" + entry.stack.join("\n") : "",
+            entry.variables && entry.variables.length
+              ? "Variables:\n" + entry.variables.map(function (pair) {
+                  return pair[0] + " = " + pair[1];
+                }).join("\n") : "",
+            entry.source ? (entry.sourceIsFallback
+              ? "Source (last evaluated script; callback source unavailable):\n"
+              : "Source:\n") + entry.source : "",
+          ].filter(Boolean).join("\n\n") || entry.detail || entry.label;
+        };
+        traceEventsEl.appendChild(row);
+        if (entry.label === "caught async exception") {
+          row.click();
+        }
+        traceLastSeq = entry.seq;
+        appended = true;
+      })(events[i]);
+    }
+    if (appended) {
+      traceEventsEl.scrollTop = traceEventsEl.scrollHeight;
+    }
+  }
+
+  function renderSources(events) {
+    for (var i = 0; i < events.length; i += 1) {
+      var entry = events[i];
+      if (!entry.source) continue;
+      var key = entry.label + "\n" + entry.source;
+      if (sourceEntries[key]) continue;
+      sourceEntries[key] = true;
+      var button = document.createElement("button");
+      button.setAttribute("class", "source-row");
+      button.textContent = entry.label + " — " + entry.detail;
+      button.onclick = function (source, label) {
+        return function () {
+          sourceDetailEl.textContent = "// " + label + "\n" + source;
+        };
+      }(entry.source, entry.label);
+      sourceListEl.appendChild(button);
+    }
+  }
+
+  traceToggleEl.onclick = function () {
+    call("setTracing", { enabled: !traceEnabled }).then(renderTrace);
+  };
+  document.getElementById("trace-clear").onclick = function () {
+    call("clearTrace").then(function (data) {
+      traceLastSeq = 0;
+      consoleLastTraceSeq = 0;
+      traceEventsEl.textContent = "";
+      sourceEntries = {};
+      sourceListEl.textContent = "";
+      sourceDetailEl.textContent = "No JavaScript source recorded yet.";
+      traceDetailEl.textContent = "Select an event to inspect its stack and source.";
+      renderTrace({ enabled: data.enabled, total: 0, dropped: 0, events: [] });
+    });
+  };
+
+  function appendConsoleEntry(kind, text) {
+    var line = document.createElement("div");
+    line.setAttribute("class", "console-entry console-" + kind);
+    line.textContent = text;
+    consoleOutputEl.appendChild(line);
+    consoleOutputEl.scrollTop = consoleOutputEl.scrollHeight;
+  }
+
+  function pollConsoleResult(id, source, attempts) {
+    attempts = attempts || 0;
+    call("getConsoleResult", { id: id }).then(function (data) {
+      if (data.done) {
+        var value = String(data.value);
+        appendConsoleEntry(value.indexOf("Uncaught ") === 0 ? "error" : "result", value);
+      } else if (attempts >= 100) {
+        appendConsoleEntry("error", "Console evaluation timed out: " + source);
+      } else {
+        setTimeout(function () { pollConsoleResult(id, source, attempts + 1); }, 50);
+      }
+    }).catch(function (error) {
+      appendConsoleEntry("error", error.message);
+    });
+  }
+
+  document.getElementById("console-form").onsubmit = function (event) {
+    if (event.preventDefault) event.preventDefault();
+    var source = consoleInputEl.value;
+    if (!source.trim()) return false;
+    consoleInputEl.value = "";
+    appendConsoleEntry("prompt", "> " + source);
+    var id = ++consoleRequestId;
+    call("evaluate", { id: id, source: source }).then(function () {
+      pollConsoleResult(id, source);
+    }).catch(function (error) {
+      appendConsoleEntry("error", error.message);
+    });
+    return false;
+  };
+
   refreshEl.onclick = function () {
-    version = "";
+    domVersion = null;
+    layoutVersion = null;
     poll();
   };
 
@@ -539,6 +809,11 @@
     var tabName = target.getAttribute("data-tab");
     if (tabName) {
       activateTab(tabName);
+      if (tabName === "console") {
+        call("getTrace").then(function (data) {
+          renderConsoleTrace(data.events || []);
+        }).catch(function () {});
+      }
     }
   };
 

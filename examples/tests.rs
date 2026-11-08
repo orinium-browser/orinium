@@ -255,7 +255,7 @@ fn main() -> Result<()> {
                     // Run inline scripts so DOM mutations are inspectable.
                     let mut js_runtime = JsRuntime::new(Rc::clone(&dom));
                     for script in dom.collect_inline_scripts() {
-                        js_runtime.run_script(&script);
+                        js_runtime.run_script(&script, Some("inline script"));
                     }
 
                     println!("DOM Tree:\n{}", dom);
@@ -405,7 +405,7 @@ fn build_layout_info_inner(
     let mut js_runtime = JsRuntime::new(Rc::clone(&dom));
     js_runtime.set_document_url(parsed_url.as_str());
     for script in dom.collect_inline_scripts() {
-        js_runtime.run_script(&script);
+        js_runtime.run_script(&script, Some("inline script"));
     }
     js_runtime.dispatch_dom_content_loaded();
     // Script-initiated top-level navigations (anti-bot challenge pages):
@@ -1148,7 +1148,7 @@ fn run_webcompat_depth(raw_url: &str, depth: usize) -> Result<()> {
         parsed_url.scheme(),
         parsed_url.host_str().unwrap_or("")
     ));
-    js.run_script(WEBCOMPAT_COLLECTOR);
+    js.run_script(WEBCOMPAT_COLLECTOR, None);
     missing_api_detector::install_missing_api_report(&mut js);
 
     // Classic script execution follows document order: each `<script>` (inline
@@ -1192,28 +1192,23 @@ fn run_webcompat_depth(raw_url: &str, depth: usize) -> Result<()> {
             (None, None) => continue,
         };
         ran_scripts += 1;
-        let wrapped = format!(
-            "function __try() {{\n{}\n}}\nfunction __wrap(e) {{ console.error('[uncaught] MSG<' + (e && e.message) + '> STACK<' + String(e && e.stack) + '>'); }}\ntry {{ __try(); }} catch (e) {{ if (e instanceof SyntaxError) console.error('[parse] ' + (e instanceof SyntaxError ? 'syntax' : 'err') + ' ' + e.message); else __wrap(e); }}",
-            source
-        );
-        // `try_run_script` surfaces compile failures (a syntax error inside the
-        // `<script>` makes even the wrapper unparseable and would otherwise be
-        // invisible to the report).
-        match js.try_run_script(&wrapped) {
+        match js.try_run_script(&source, script.resolved_url.as_ref().map(|u| u.as_str())) {
             Err(err) => {
                 script_errors += 1;
                 let snippet: String = err.chars().take(200).collect();
-                println!("  [script error] {snippet}");
+                let label = script
+                    .resolved_url
+                    .as_ref()
+                    .map(|url| url.as_str())
+                    .unwrap_or("<inline>");
+                println!("  [script error] {label}: {snippet}");
             }
             Ok(()) => {
-                // Drain any console errors the wrapper forwarded.
-                {
-                    let flush = js.eval_value("__orinium_flush_errors");
-                    let flush_str = flush.to_console_string();
-                    if !flush_str.is_empty() {
-                        for line in flush_str.lines() {
-                            println!("  [console error] {line}");
-                        }
+                let flush = js.eval_value("__orinium_flush_errors");
+                let flush_str = flush.to_console_string();
+                if !flush_str.is_empty() {
+                    for line in flush_str.lines() {
+                        println!("  [console error] {line}");
                     }
                 }
             }
