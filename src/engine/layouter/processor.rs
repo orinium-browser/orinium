@@ -375,7 +375,7 @@ mod tests {
 
     #[test]
     fn input_edits_are_reported_through_write_back_channel() {
-        let (tx, rx) = mpsc::channel::<(u32, String)>();
+        let (tx, rx) = mpsc::channel::<(u32, crate::engine::ui::registry::DomWrite)>();
         let processor = LayoutProcessor::new();
         processor.send(sample_task(Some(tx)));
 
@@ -385,10 +385,13 @@ mod tests {
 
         input.handle_text_input(InputTextEvent::Insert("hello".into()));
 
-        let (node_id, value) = rx
+        let (node_id, write) = rx
             .recv_timeout(Duration::from_secs(5))
             .expect("write-back was never sent");
         assert!(node_id > 0, "input node id is invalid");
-        assert_eq!(value, "ahello");
+        assert_eq!(
+            write,
+            crate::engine::ui::registry::DomWrite::Value("ahello".into())
+        );
     }
 }

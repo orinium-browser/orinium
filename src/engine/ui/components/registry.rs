@@ -12,7 +12,10 @@ use crate::engine::renderer_model::Image;
 use crate::engine::ui::audio::AudioComponent;
 use crate::engine::ui::button::ButtonComponent;
 use crate::engine::ui::canvas::CanvasComponent;
+use crate::engine::ui::components::input_checkbox::InputCheckboxComponent;
 use crate::engine::ui::components::input_hidden::InputHiddenComponent;
+use crate::engine::ui::components::input_radio::InputRadioComponent;
+use crate::engine::ui::components::input_range::InputRangeComponent;
 use crate::engine::ui::custom_node::CustomNode;
 use crate::engine::ui::image::ImageComponent;
 use crate::engine::ui::input_text::InputTextComponent;
@@ -25,7 +28,13 @@ use crate::engine::ui::select::{OnSelectChange, SelectComponent, SelectOption};
 /// builder cannot touch the real DOM. Text inputs instead report
 /// `(snapshot node id, new value)` through this channel; the UI thread drains
 /// it and applies the value to the live tree.
-pub type DomWriteBack = mpsc::Sender<(u32, String)>;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DomWrite {
+    Value(String),
+    Checked(bool),
+}
+
+pub type DomWriteBack = mpsc::Sender<(u32, DomWrite)>;
 
 /// Context handed to a [`CustomNodeFactory`] to construct a component.
 pub struct CustomNodeContext<'a> {
@@ -205,6 +214,71 @@ impl CustomNodeFactory for InputTextFactory {
             return Some(Arc::new(InputHiddenComponent::new(value)));
         }
 
+        if type_.eq_ignore_ascii_case("checkbox") {
+            let checked = ctx.dom_snapshot.node(ctx.dom_id).checked;
+            let disabled = (ctx.get_attr)("disabled").is_some();
+            let on_change = ctx.write_back.as_ref().map(|(sender, node_id)| {
+                let sender = sender.clone();
+                let node_id = *node_id;
+                Arc::new(move |checked: bool| {
+                    let _ = sender.send((node_id, DomWrite::Checked(checked)));
+                })
+                    as Arc<crate::engine::ui::components::input_checkbox::OnCheckedChange>
+            });
+            return Some(Arc::new(if let Some(on_change) = on_change {
+                InputCheckboxComponent::with_on_change(checked, disabled, on_change)
+            } else {
+                InputCheckboxComponent::new(checked, disabled)
+            }));
+        }
+
+        if type_.eq_ignore_ascii_case("radio") {
+            let checked = ctx.dom_snapshot.node(ctx.dom_id).checked;
+            let disabled = (ctx.get_attr)("disabled").is_some();
+            let on_select = ctx.write_back.as_ref().map(|(sender, node_id)| {
+                let sender = sender.clone();
+                let node_id = *node_id;
+                Arc::new(move || {
+                    let _ = sender.send((node_id, DomWrite::Checked(true)));
+                }) as Arc<crate::engine::ui::components::input_radio::OnRadioSelect>
+            });
+            return Some(Arc::new(if let Some(on_select) = on_select {
+                InputRadioComponent::with_on_select(checked, disabled, on_select)
+            } else {
+                InputRadioComponent::new(checked, disabled)
+            }));
+        }
+
+        if type_.eq_ignore_ascii_case("range") {
+            let disabled = (ctx.get_attr)("disabled").is_some();
+            let parse = |name: &str| (ctx.get_attr)(name).and_then(|v| v.parse::<f64>().ok());
+            let on_change = ctx.write_back.as_ref().map(|(sender, node_id)| {
+                let sender = sender.clone();
+                let node_id = *node_id;
+                Arc::new(move |new_value: &str| {
+                    let _ = sender.send((node_id, DomWrite::Value(new_value.to_string())));
+                }) as Arc<crate::engine::ui::components::input_range::OnRangeChange>
+            });
+            return Some(Arc::new(if let Some(on_change) = on_change {
+                InputRangeComponent::with_on_change(
+                    parse("value"),
+                    parse("min"),
+                    parse("max"),
+                    parse("step"),
+                    disabled,
+                    on_change,
+                )
+            } else {
+                InputRangeComponent::new(
+                    parse("value"),
+                    parse("min"),
+                    parse("max"),
+                    parse("step"),
+                    disabled,
+                )
+            }));
+        }
+
         // `<input type="button|submit|reset">` renders as a button, using the
         // `value` attribute as its label.
         if matches!(
@@ -221,7 +295,7 @@ impl CustomNodeFactory for InputTextFactory {
             let sender = sender.clone();
             let node_id = *node_id;
             Arc::new(move |new_value: &str| {
-                let _ = sender.send((node_id, new_value.to_string()));
+                let _ = sender.send((node_id, DomWrite::Value(new_value.to_string())));
             }) as Arc<OnValueChange>
         });
 
@@ -248,7 +322,7 @@ impl CustomNodeFactory for SelectFactory {
             let sender = sender.clone();
             let node_id = *node_id;
             Arc::new(move |new_value: &str| {
-                let _ = sender.send((node_id, new_value.to_string()));
+                let _ = sender.send((node_id, DomWrite::Value(new_value.to_string())));
             }) as Arc<OnSelectChange>
         });
 

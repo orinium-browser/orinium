@@ -275,6 +275,23 @@ input[type="number"] {
     background-color: #ffffff;
 }
 
+input[type="checkbox"],
+input[type="radio"] {
+    display: inline-block;
+    box-sizing: border-box;
+    width: 13px;
+    height: 13px;
+    background-color: #ffffff;
+}
+
+input[type="range"] {
+    display: inline-block;
+    box-sizing: border-box;
+    width: 160px;
+    height: 16px;
+    background-color: transparent;
+}
+
 button,
 select {
     box-sizing: border-box;

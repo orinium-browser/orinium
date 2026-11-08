@@ -654,7 +654,10 @@ impl Tab {
             }
 
             ElementState::Released => {
-                crate::engine::input::dispatch_pointer(&path, PointerEvent::Up { x: px, y: py });
+                repaint |= crate::engine::input::dispatch_pointer(
+                    &path,
+                    PointerEvent::Up { x: px, y: py },
+                );
 
                 let pressed = self.pressed_dom_id.take();
                 if let (Some(pressed), Some(released)) = (pressed, dom_id)

@@ -277,8 +277,8 @@ pub struct WebView {
     /// by the iframe's JS-facing dom id. Used by layout to render them nested.
     iframe_content: HashMap<u64, DomSnapshot>,
     /// Channel on which text inputs report value write-backs (received here).
-    write_back_tx: mpsc::Sender<(u32, String)>,
-    write_back_rx: mpsc::Receiver<(u32, String)>,
+    write_back_tx: mpsc::Sender<(u32, crate::engine::ui::registry::DomWrite)>,
+    write_back_rx: mpsc::Receiver<(u32, crate::engine::ui::registry::DomWrite)>,
     /// JS runtime on a background thread, sharing a mirror of the current
     /// document's DOM. Results are applied in [`WebView::try_apply_js_results`].
     js_processor: Option<JsProcessor>,
@@ -2010,28 +2010,88 @@ impl WebView {
         self.js_dom_dirty = false;
     }
 
-    /// Applies value write-backs reported by text inputs to the live DOM.
+    /// Applies form-control write-backs reported by custom components to the live DOM.
     fn drain_write_backs(&mut self) {
+        use crate::engine::ui::registry::DomWrite;
         let mut applied = false;
-        while let Ok((node_id, value)) = self.write_back_rx.try_recv() {
+        while let Ok((node_id, write)) = self.write_back_rx.try_recv() {
             if let Some(weak) = self.layout_dom_refs.get(node_id as usize)
                 && let Some(node) = weak.upgrade()
             {
-                node.borrow_mut().value.set_attr("value", value);
+                match write {
+                    DomWrite::Value(value) => node.borrow_mut().value.set_attr("value", value),
+                    DomWrite::Checked(checked) => {
+                        if checked
+                            && node.borrow().value.tag_name() == Some("input")
+                            && node
+                                .borrow()
+                                .value
+                                .get_attr("type")
+                                .is_some_and(|t| t.eq_ignore_ascii_case("radio"))
+                        {
+                            Self::select_radio_group(&node);
+                        } else {
+                            node.borrow().set_checkedness(checked);
+                        }
+                    }
+                }
                 applied = true;
             }
             self.needs_redraw = true;
         }
 
+        if applied {
+            self.update_layout();
+        }
         // The DOM mutated, so the cached snapshot is stale and must be rebuilt
         // on the next relayout. Future JS mutations must also bump the version.
         if applied && let Some(doc_info) = self.docment_info.as_mut() {
             doc_info.dom.mark_dirty();
         }
-        // The JS thread's mirror must reflect the new input value; synced once
+        // The JS thread's mirror must reflect the new state; synced once
         // the in-flight JS tasks have all been applied.
         if applied {
             self.js_dom_dirty = true;
+        }
+    }
+
+    fn select_radio_group(node: &NodeRef<HtmlNodeType>) {
+        let name = node.borrow().value.get_attr("name").map(str::to_owned);
+        if let Some(name) = name {
+            let root = Self::tree_root_of(node);
+            let mut stack = vec![root];
+            while let Some(current) = stack.pop() {
+                let children = current.borrow().children().to_vec();
+                for child in children {
+                    let borrow = child.borrow();
+                    let is_radio = borrow.value.tag_name() == Some("input")
+                        && borrow
+                            .value
+                            .get_attr("type")
+                            .is_some_and(|t| t.eq_ignore_ascii_case("radio"))
+                        && borrow.value.get_attr("name") == Some(name.as_str());
+                    drop(borrow);
+                    if is_radio {
+                        child
+                            .borrow()
+                            .set_checkedness(std::rc::Rc::ptr_eq(&child, node));
+                    }
+                    stack.push(child);
+                }
+            }
+        } else {
+            node.borrow().set_checkedness(true);
+        }
+    }
+
+    fn tree_root_of(node: &NodeRef<HtmlNodeType>) -> NodeRef<HtmlNodeType> {
+        let mut current = std::rc::Rc::clone(node);
+        loop {
+            let parent = current.borrow().parent();
+            match parent {
+                Some(p) => current = p,
+                None => return current,
+            }
         }
     }
 
