@@ -1232,20 +1232,47 @@ fn generate_draw_commands_inner(
             // `display: none` / `display: contents` custom elements have no
             // laid-out box (`LayoutBox::None`); render nothing rather than
             // falling back to the component's intrinsic size.
-            let Some(size) = layout
-                .layout_box
-                .iter()
-                .next()
-                .map(|box_model| ContentSize {
-                    width: box_model.content_box.width,
-                    height: box_model.content_box.height,
-                })
-            else {
+            let base_box = match &layout.layout_box {
+                ui_layout::LayoutBox::BlockBox(bm) => Some(bm.clone()),
+                ui_layout::LayoutBox::InlineBox(ib) => Some(ib.box_model.clone()),
+                _ => None,
+            };
+            let Some(size) = base_box.as_ref().map(|bm| ContentSize {
+                width: bm.content_box.width,
+                height: bm.content_box.height,
+            }) else {
                 break 'custom;
             };
             let culled = box_states.iter().any(|s| s.cull);
+            // Inline custom boxes do not push a content transform (mirroring
+            // `push_box_model`), so their draw commands are emitted in
+            // border-box coordinates. Push a content-box offset here so the
+            // component's content (text/graphics) lands inside the padding,
+            // matching the block path where the content transform is pushed.
+            let inline_content_offset = if is_inline {
+                base_box.as_ref().map(|bm| {
+                    (
+                        bm.content_box.x - bm.border_box.x,
+                        bm.content_box.y - bm.border_box.y,
+                    )
+                })
+            } else {
+                None
+            };
+            let pushed_inline_offset =
+                inline_content_offset.is_some_and(|(dx, dy)| dx != 0.0 || dy != 0.0);
+            if pushed_inline_offset {
+                if let Some((dx, dy)) = inline_content_offset {
+                    cmd_buf.push(DrawCommand::PushTransform {
+                        transform: AffineTransform::translate(dx, dy),
+                    });
+                }
+            }
             if !self_hidden && !culled {
                 node.draw_sized(cmd_buf, text_style, text_flow_style, layout_style, size);
+            }
+            if pushed_inline_offset {
+                cmd_buf.push(DrawCommand::PopTransform);
             }
             // Collect open popups so they render above every other box,
             // outside all ancestor clips and transforms.
