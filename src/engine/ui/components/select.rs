@@ -515,27 +515,20 @@ impl CustomNode for SelectComponent {
 
         let font_size = text_flow_style.font_size;
         let text_y = ((size.height - font_size) * 0.5).max(0.0);
-        let arrow_x = (size.width - INLINE_PADDING - font_size).max(0.0);
+        let arrow_x = (size.width - ARROW_WIDTH).max(0.0);
 
         // Drop-down arrow on the right.
         push_text(cmd_buf, arrow_x, text_y, "▾", &box_style, *text_flow_style);
 
         // The label is clipped so it never runs under the arrow.
-        let label_width = (arrow_x - INLINE_PADDING).max(0.0);
+        let label_width = arrow_x.max(0.0);
         if label_width > 0.0 {
             cmd_buf.push(DrawCommand::PushClip {
-                path: rect_path(INLINE_PADDING, 0.0, label_width, size.height),
+                path: rect_path(0.0, 0.0, label_width, size.height),
                 rule: FillRule::NonZero,
             });
         }
-        push_text(
-            cmd_buf,
-            INLINE_PADDING,
-            text_y,
-            &label,
-            &box_style,
-            *text_flow_style,
-        );
+        push_text(cmd_buf, 0.0, text_y, &label, &box_style, *text_flow_style);
         if label_width > 0.0 {
             cmd_buf.push(DrawCommand::PopClip);
         }
@@ -545,14 +538,12 @@ impl CustomNode for SelectComponent {
         if self.multiple {
             let rows = self.popup_rows();
             return ContentSize {
-                width: self.widest_label(&TextStyle::default())
-                    + INLINE_PADDING * 2.0
-                    + ARROW_WIDTH,
+                width: self.widest_label(&TextStyle::default()) + ARROW_WIDTH + 8.0,
                 height: rows.iter().map(Self::row_height).sum(),
             };
         }
         ContentSize {
-            width: self.widest_label(&TextStyle::default()) + INLINE_PADDING * 2.0 + ARROW_WIDTH,
+            width: self.widest_label(&TextStyle::default()) + ARROW_WIDTH + 8.0,
             height: ROW_HEIGHT,
         }
     }

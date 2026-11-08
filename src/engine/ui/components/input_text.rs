@@ -17,8 +17,6 @@ use crate::engine::ui::custom_node::{ContentSize, CustomNode};
 /// Callback invoked when the text input's value changes.
 pub type OnValueChange = dyn Fn(&str) + Send + Sync;
 
-const INLINE_PADDING: f32 = 4.0;
-
 /// Snapshot of the editing state used for undo/redo.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EditSnapshot {
@@ -227,16 +225,16 @@ impl CustomNode for InputTextComponent {
             &*self.measurer,
             cmd_buf,
             display_text,
-            INLINE_PADDING,
+            0.0,
             ((size.height - text_flow_style.font_size) * 0.5).max(0.0),
             &style,
             text_flow_style,
             caret,
             preedit,
             text_style.color,
-            INLINE_PADDING,
-            (size.height - INLINE_PADDING * 2.0).max(0.0),
-            (size.height - 3.0).max(0.0),
+            0.0,
+            size.height.max(0.0),
+            (size.height - 1.0).max(0.0),
         );
     }
 
@@ -388,7 +386,7 @@ impl CustomNode for InputTextComponent {
             width += fragment.width;
         }
         let start_x = start_x.unwrap_or(width);
-        Some((start_x, 0.0, preedit_width.max(0.0), 1.0))
+        Some((start_x, 0.0, preedit_width.max(0.0), 28.0_f32.max(0.0)))
     }
 
     fn role(&self) -> Option<&'static str> {
