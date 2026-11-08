@@ -603,7 +603,15 @@ impl Tab {
 
         match state {
             ElementState::Pressed => {
-                crate::engine::input::dismiss_open_popups(info, &path);
+                let dismiss_path = path.clone();
+                let popup_consumed = crate::engine::input::dispatch_pointer(
+                    &path,
+                    PointerEvent::Down { x: px, y: py },
+                );
+                if !popup_consumed {
+                    repaint |=
+                        crate::engine::input::dismiss_open_popups(info, &dismiss_path, px, py);
+                }
 
                 let input_target = path.iter().find_map(|hit| {
                     if let layouter::types::NodeKind::Custom { node, .. } = &hit.info.kind
@@ -618,9 +626,7 @@ impl Tab {
                 let input_focused =
                     crate::engine::input::focus_text_input(info, input_target.as_ref());
 
-                crate::engine::input::dispatch_pointer(&path, PointerEvent::Down { x: px, y: py });
-
-                if let Some(href) = path.iter().find_map(|hit| {
+                let href = path.iter().find_map(|hit| {
                     if let layouter::types::NodeKind::Container { role, .. } = &hit.info.kind
                         && let layouter::types::ContainerRole::Link { href } = role
                     {
@@ -628,13 +634,14 @@ impl Tab {
                     } else {
                         None
                     }
-                }) {
-                    self.move_to(&href);
-                }
-
+                });
                 let active_dom_path = crate::engine::input::hit_dom_path(&path);
 
-                repaint |= input_focused;
+                repaint |= input_focused | popup_consumed;
+
+                if let Some(href) = href {
+                    self.move_to(&href);
+                }
 
                 self.pressed_dom_id = dom_id;
                 self.active_dom_path = active_dom_path;

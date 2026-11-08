@@ -163,24 +163,43 @@ pub fn dispatch_pointer(path: &HitPath<'_>, event: PointerEvent) -> bool {
 /// popup's owner is that owner's responsibility (the event is routed to the
 /// popup, or to the owning box which closes it), while every other open popup
 /// is closed. Returns whether any popup was dismissed.
-pub fn dismiss_open_popups(info: &InfoNode, path: &HitPath<'_>) -> bool {
+pub fn dismiss_open_popups(info: &InfoNode, path: &HitPath<'_>, px: f32, py: f32) -> bool {
     let mut dismissed = false;
-    dismiss_open_popups_inner(info, path, &mut dismissed);
+    dismiss_open_popups_inner(info, path, px, py, &mut dismissed);
     dismissed
 }
 
-fn dismiss_open_popups_inner(info: &InfoNode, path: &HitPath<'_>, dismissed: &mut bool) {
+fn dismiss_open_popups_inner(
+    info: &InfoNode,
+    path: &HitPath<'_>,
+    px: f32,
+    py: f32,
+    dismissed: &mut bool,
+) {
     if let NodeKind::Custom { node, .. } = &info.kind
-        && node.popup(&TextStyle::default(), &TextFlowStyle::default()).is_some()
-        && !path.iter().any(|hit| {
-            matches!(&hit.info.kind, NodeKind::Custom { node: owner, .. } if Arc::ptr_eq(node, owner))
-        })
+        && let Some(popup) = node.popup(&TextStyle::default(), &TextFlowStyle::default())
     {
-        node.dismiss_popup();
-        *dismissed = true;
+        let owner_in_path = path.iter().any(|hit| {
+            matches!(&hit.info.kind, NodeKind::Custom { node: owner, .. } if Arc::ptr_eq(node, owner))
+        });
+        let press_in_popup = if let Some((target, _)) = path.iter().enumerate().find(|(_, hit)| {
+            matches!(&hit.info.kind, NodeKind::Custom { node: owner, .. } if Arc::ptr_eq(node, owner))
+        }) {
+            let (lx, ly) = local_pointer_coords(path, target, px, py);
+            lx >= popup.rect.x
+                && ly >= popup.rect.y
+                && lx <= popup.rect.x + popup.rect.width
+                && ly <= popup.rect.y + popup.rect.height
+        } else {
+            false
+        };
+        if !owner_in_path && !press_in_popup {
+            node.dismiss_popup();
+            *dismissed = true;
+        }
     }
     for child in &info.children {
-        dismiss_open_popups_inner(child, path, dismissed);
+        dismiss_open_popups_inner(child, path, px, py, dismissed);
     }
 }
 
@@ -1448,7 +1467,7 @@ mod tests {
         let (root_layout, root_info, node) = make_tree(0.0);
         // (10,25) lands on the container, outside the custom box and popup.
         let path = hit_test(&root_layout, &root_info, 10.0, 25.0);
-        assert!(dismiss_open_popups(&root_info, &path));
+        assert!(dismiss_open_popups(&root_info, &path, 50.0, 50.0));
         assert!(node.dismissed.load(Ordering::Relaxed));
     }
 
@@ -1457,7 +1476,7 @@ mod tests {
         let (root_layout, root_info, node) = make_tree(0.0);
         // Press on the open popup itself.
         let path = hit_test(&root_layout, &root_info, 20.0, 60.0);
-        assert!(!dismiss_open_popups(&root_info, &path));
+        assert!(!dismiss_open_popups(&root_info, &path, 50.0, 50.0));
         assert!(!node.dismissed.load(Ordering::Relaxed));
     }
 
@@ -1467,7 +1486,7 @@ mod tests {
         // Press on the owning box (not the popup): the owner closes it itself,
         // so no separate dismissal happens.
         let path = hit_test(&root_layout, &root_info, 20.0, 30.0);
-        assert!(!dismiss_open_popups(&root_info, &path));
+        assert!(!dismiss_open_popups(&root_info, &path, 50.0, 50.0));
         assert!(!node.dismissed.load(Ordering::Relaxed));
     }
 
@@ -1476,7 +1495,7 @@ mod tests {
         let (root_layout, root_info, node) = make_tree(0.0);
         node.popup_open.store(false, Ordering::Relaxed);
         let path = hit_test(&root_layout, &root_info, 10.0, 25.0);
-        assert!(!dismiss_open_popups(&root_info, &path));
+        assert!(!dismiss_open_popups(&root_info, &path, 50.0, 50.0));
         assert!(!node.dismissed.load(Ordering::Relaxed));
     }
 
