@@ -226,6 +226,13 @@ impl Tab {
     ///
     /// - WebView.tick() を呼び出す
     /// - 発生した Task を BrowserApp に返す
+
+    pub(crate) fn set_animation_visible(&mut self, visible: bool) {
+        if let Some(wv) = self.webview.as_mut() {
+            wv.set_animation_visible(visible);
+        }
+    }
+
     pub fn tick(&mut self) -> Vec<TabTask> {
         let mut tasks = Vec::new();
         let page_origin = self.root_origin();

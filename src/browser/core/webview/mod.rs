@@ -4,8 +4,10 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::{Rc, Weak};
 use std::sync::{Arc, mpsc};
+use std::time::Instant;
 
 use crate::engine::bridge::audio::AudioSinkFactory;
+use crate::engine::animation::{AnimatedOverrides, AnimationRuntime};
 use crate::engine::image_decoder::ImageDecoder;
 use crate::engine::layouter::types::{
     Background, Color, ColorScheme, ContainerStyle, CursorStyle, FontStyle, TextAlign,
@@ -225,6 +227,8 @@ pub struct WebView {
     audio: HashMap<String, Arc<[u8]>>,
 
     resolved_styles: Arc<layouter::css_resolver::ResolvedStyles>,
+    /// Parsed `@keyframes` rules available to the animation runtime.
+    resolved_keyframes: Arc<layouter::css_resolver::KeyframesRegistry>,
     /// Monotonic version of `resolved_styles`, bumped on every in-place or
     /// wholesale mutation so the layout processor can detect stale rule sets.
     resolved_styles_version: u64,
@@ -276,6 +280,19 @@ pub struct WebView {
     /// The most recent serialized content documents of any `<iframe>`s, keyed
     /// by the iframe's JS-facing dom id. Used by layout to render them nested.
     iframe_content: HashMap<u64, DomSnapshot>,
+
+    /// Engine animation runtime (clock-injected, sampled from tick).
+    animation_runtime: AnimationRuntime,
+    /// Last instant used to advance the animation clock while visible.
+    animation_last_tick: Option<Instant>,
+    /// Accumulated animation time in milliseconds (advances only while visible).
+    animation_time_ms: f64,
+    /// Current per-element animated style overrides applied to layout builds.
+    animated_overrides: AnimatedOverrides,
+    /// Whether the hosting view is visible; when hidden, timelines are paused.
+    animation_visible: bool,
+    /// Latest per-element animation inputs from layout build.
+    latest_animation_inputs: crate::engine::animation::AnimationInputs,
     /// Channel on which text inputs report value write-backs (received here).
     write_back_tx: mpsc::Sender<(u32, crate::engine::ui::registry::DomWrite)>,
     write_back_rx: mpsc::Receiver<(u32, crate::engine::ui::registry::DomWrite)>,
@@ -489,6 +506,7 @@ impl WebView {
             audio: HashMap::new(),
 
             resolved_styles: Arc::new(layouter::css_resolver::ResolvedStyles::default()),
+            resolved_keyframes: Arc::new(layouter::css_resolver::KeyframesRegistry::new()),
             resolved_styles_version: 0,
             layout_and_info: None,
 
@@ -519,6 +537,13 @@ impl WebView {
             interaction_version: 0,
             snapshot_cache: None,
             iframe_content: HashMap::new(),
+
+            animation_runtime: AnimationRuntime::new(),
+            animation_last_tick: None,
+            animation_time_ms: 0.0,
+            animated_overrides: HashMap::new(),
+            animation_visible: true,
+            latest_animation_inputs: std::collections::HashMap::new(),
             write_back_tx,
             write_back_rx,
             js_processor: None,
@@ -715,14 +740,15 @@ impl WebView {
 
         match self.phase {
             PagePhase::Init => {
-                let ua_styles = layouter::css_resolver::CssResolver::resolve_with_origin(
+                let ua_styles = layouter::css_resolver::CssResolver::resolve_stylesheet_with_origin(
                     &CssParser::new(USER_AGENT_CSS).parse().unwrap(),
                     layouter::css_resolver::StyleOrigin::UserAgent,
                 );
                 layouter::css_resolver::append_resolved_styles(
                     Arc::make_mut(&mut self.resolved_styles),
-                    ua_styles,
+                    ua_styles.declarations,
                 );
+                Arc::make_mut(&mut self.resolved_keyframes).extend(ua_styles.keyframes);
                 self.resolved_styles_version += 1;
 
                 tasks.push(WebViewTask::AskTabHtml);
@@ -810,6 +836,8 @@ impl WebView {
         self.try_apply_layout_results();
         self.drain_write_backs();
         self.sync_dom_to_worker();
+
+        self.sample_animation_runtime();
 
         // Window `load` fires once the page is stable: after DOMContentLoaded
         // (phase `ScriptApplied`), with no JS-visible subresource work still in
@@ -911,10 +939,12 @@ impl WebView {
         for inline_css in &parsed.inline_styles {
             self.queue_css_images(inline_css, &css_base_url);
             let sheet = CssParser::new(inline_css).parse_lossy();
+            let resolved = layouter::css_resolver::CssResolver::resolve_stylesheet(&sheet);
             layouter::css_resolver::append_resolved_styles(
                 Arc::make_mut(&mut self.resolved_styles),
-                layouter::css_resolver::CssResolver::resolve(&sheet),
+                resolved.declarations,
             );
+            Arc::make_mut(&mut self.resolved_keyframes).extend(resolved.keyframes);
             self.resolved_styles_version += 1;
         }
         self.phase = PagePhase::HtmlParsed;
@@ -1328,12 +1358,13 @@ impl WebView {
 
     fn apply_resolved_styles_and_relayout(
         &mut self,
-        resolved: layouter::css_resolver::ResolvedStyles,
+        resolved: layouter::css_resolver::StylesheetResolution,
     ) {
         layouter::css_resolver::append_resolved_styles(
             Arc::make_mut(&mut self.resolved_styles),
-            resolved,
+            resolved.declarations,
         );
+        Arc::make_mut(&mut self.resolved_keyframes).extend(resolved.keyframes);
         self.resolved_styles_version += 1;
         self.update_layout();
     }
@@ -1344,25 +1375,19 @@ impl WebView {
             return;
         };
         perf_scope!(resolve_styles);
-        let mut resolved = layouter::css_resolver::CssResolver::resolve_with_origin(
+        let mut resolved = layouter::css_resolver::CssResolver::resolve_stylesheet_with_origin(
             &CssParser::new(USER_AGENT_CSS).parse().unwrap(),
             layouter::css_resolver::StyleOrigin::UserAgent,
         );
         let mut stylesheet_count = 1;
         for source in &self.linked_css {
             let sheet = CssParser::new(source).parse_lossy();
-            layouter::css_resolver::append_resolved_styles(
-                &mut resolved,
-                layouter::css_resolver::CssResolver::resolve(&sheet),
-            );
+            resolved.append(layouter::css_resolver::CssResolver::resolve_stylesheet(&sheet));
             stylesheet_count += 1;
         }
         for source in document.dom.collect_text_by_tag("style") {
             let sheet = CssParser::new(&source).parse_lossy();
-            layouter::css_resolver::append_resolved_styles(
-                &mut resolved,
-                layouter::css_resolver::CssResolver::resolve(&sheet),
-            );
+            resolved.append(layouter::css_resolver::CssResolver::resolve_stylesheet(&sheet));
             stylesheet_count += 1;
         }
         #[cfg(any(feature = "profile", debug_assertions))]
@@ -1374,7 +1399,8 @@ impl WebView {
             resolve_styles_time,
             stylesheet_count,
         );
-        self.resolved_styles = Arc::new(resolved);
+        self.resolved_styles = Arc::new(resolved.declarations);
+        self.resolved_keyframes = Arc::new(resolved.keyframes);
         self.resolved_styles_version += 1;
         self.update_layout();
     }
@@ -1849,6 +1875,7 @@ impl WebView {
             interaction: Arc::clone(&self.interaction_state),
             interaction_version: self.interaction_version,
             existing_custom_nodes,
+            animated_overrides: self.animated_overrides.clone(),
         };
         self.layout_dom_refs = dom_refs;
         self.layout_requested_version = self.layout_processor.send(task);
@@ -1902,6 +1929,7 @@ impl WebView {
             let LayoutResult {
                 layout,
                 mut info,
+                animation_inputs,
                 version,
             } = result;
             if version < self.layout_requested_version {
@@ -1918,6 +1946,7 @@ impl WebView {
             }
 
             self.layout_and_info = Some((layout, info));
+            self.latest_animation_inputs = animation_inputs;
             self.layout_applied_version = version;
             self.layout_pending = false;
             self.needs_redraw = true;
@@ -2145,6 +2174,7 @@ impl WebView {
         self.images.clear();
         self.audio.clear();
         Arc::make_mut(&mut self.resolved_styles).clear();
+        Arc::make_mut(&mut self.resolved_keyframes).clear();
         self.layout_and_info = None;
 
         self.needs_redraw = false;
@@ -2162,6 +2192,13 @@ impl WebView {
         self.interaction_state = Arc::new(InteractionState::default());
         self.interaction_version = 0;
         self.snapshot_cache = None;
+
+        self.animation_runtime.clear();
+        self.animation_last_tick = None;
+        self.animation_time_ms = 0.0;
+        self.animated_overrides.clear();
+        self.animation_visible = true;
+        self.latest_animation_inputs.clear();
         self.js_processor = None;
         self.js_dom_ids.clear();
         self.pending_js_tasks = 0;
@@ -2359,6 +2396,53 @@ impl WebView {
 
     pub fn base_url(&self) -> Option<&Url> {
         self.docment_info.as_ref().map(|info| &info.base_url)
+    }
+
+
+    /// Sets whether this view is visible for animation timing.
+    ///
+    /// When hidden, animation timelines are paused and no continuous redraw is
+    /// requested. Visibility changes take effect on the next tick/sample.
+    pub fn set_animation_visible(&mut self, visible: bool) {
+        if self.animation_visible == visible {
+            return;
+        }
+        self.animation_visible = visible;
+        // Reset tick marker so visibility transitions do not create a time jump.
+        self.animation_last_tick = None;
+    }
+
+    fn sample_animation_runtime(&mut self) {
+        if self.animation_visible {
+            let now = Instant::now();
+            if let Some(last) = self.animation_last_tick {
+                self.animation_time_ms += now.duration_since(last).as_secs_f64() * 1000.0;
+            }
+            // Avoid counting time spent before first visible sample and prevent
+            // large first-frame deltas after (re)becoming visible.
+            self.animation_last_tick = Some(now);
+        } else {
+            self.animation_last_tick = None;
+        }
+
+        let sample = self.animation_runtime.sample(
+            self.animation_time_ms,
+            self.animation_visible,
+            &self.latest_animation_inputs,
+            &self.resolved_keyframes,
+            self.system_color_scheme,
+        );
+
+        // Apply override changes even when runtime reports idle (e.g. final frame
+        // clears overrides after a transition/animation completes).
+        if sample.dirty || sample.overrides != self.animated_overrides {
+            self.animated_overrides = sample.overrides;
+            // Rebuild layout so animated values flow into layout/paint trees.
+            self.update_layout();
+            self.needs_redraw = true;
+        } else if sample.active {
+            self.needs_redraw = true;
+        }
     }
 
     pub fn needs_redraw(&self) -> bool {

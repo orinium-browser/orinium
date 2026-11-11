@@ -284,9 +284,11 @@ impl BrowserUi {
         let tab_ids: Vec<_> = self.tabs.keys().copied().collect();
 
         for tab_id in &tab_ids {
+            let is_active = self.active_tab_id().is_some_and(|active| active == *tab_id);
             let Some(tab) = self.tab_mut(tab_id) else {
                 continue;
             };
+            tab.set_animation_visible(is_active);
             for task in tab.tick() {
                 match task {
                     TabTask::Fetch {
