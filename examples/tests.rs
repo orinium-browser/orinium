@@ -1668,8 +1668,10 @@ fn print_js_stmt(stmt: &pixi_byte::parser::Statement, indent: usize) {
             kind,
             right,
             body,
+            is_await,
         } => {
-            println!("{pad}ForOf kind={kind:?} binding={binding:?}");
+            let label = if *is_await { "ForAwaitOf" } else { "ForOf" };
+            println!("{pad}{label} kind={kind:?} binding={binding:?}");
             println!("{pad}  right:");
             print_js_expr(right, indent + 2);
             println!("{pad}  body:");
@@ -1721,6 +1723,13 @@ fn print_js_stmt(stmt: &pixi_byte::parser::Statement, indent: usize) {
                 print_js_body(body, indent + 2);
             }
         }
+        Statement::With { object, body } => {
+            println!("{pad}With");
+            println!("{pad}  object:");
+            print_js_expr(object, indent + 2);
+            println!("{pad}  body:");
+            print_js_stmt(body, indent + 2);
+        }
         Statement::Break(label) => println!("{pad}Break {:?}", label.as_deref()),
         Statement::Continue(label) => println!("{pad}Continue {:?}", label.as_deref()),
         Statement::ImportDeclaration {
@@ -1750,6 +1759,9 @@ fn print_js_stmt(stmt: &pixi_byte::parser::Statement, indent: usize) {
         Statement::ExportAllDeclaration { source } => {
             println!("{pad}ExportAllDeclaration from {source:?}");
         }
+        Statement::Debugger => {
+            println!("{pad}Debugger");
+        }
     }
 }
 
@@ -1766,6 +1778,9 @@ fn print_js_expr(expr: &pixi_byte::parser::Expression, indent: usize) {
         Expression::Identifier(name) => println!("{pad}Identifier {name:?}"),
         Expression::This => println!("{pad}This"),
         Expression::Super => println!("{pad}Super"),
+        Expression::MetaProperty { meta, property } => {
+            println!("{pad}MetaProperty {meta:?} {property:?}");
+        }
         Expression::Binary { op, left, right } => {
             println!("{pad}Binary {op:?}");
             print_js_expr(left, indent + 1);
