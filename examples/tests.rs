@@ -633,6 +633,7 @@ fn bench_layout_cache(raw_url: &str, viewport: (f32, f32)) -> Result<()> {
             ),
             interaction_version: 0,
             existing_custom_nodes: std::collections::HashMap::new(),
+            animated_overrides: std::collections::HashMap::new(),
         };
         let start = std::time::Instant::now();
         processor.send(task);

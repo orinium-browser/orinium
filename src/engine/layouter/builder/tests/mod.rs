@@ -147,7 +147,7 @@ fn layout_and_info_for(html: &str, css: &str) -> (LayoutNode, InfoNode) {
         let sheet = CssParser::new(css).parse().unwrap();
         resolved.extend(CssResolver::resolve(&sheet));
     }
-    build_layout_and_info(
+    let (layout, info) = build_layout_and_info(
         &dom.root,
         &resolved,
         Arc::new(FallbackTextMeasurer),
@@ -157,7 +157,8 @@ fn layout_and_info_for(html: &str, css: &str) -> (LayoutNode, InfoNode) {
         ColorScheme::Light,
         ScriptingMode::default(),
         (0.0, 0.0),
-    )
+    );
+    (layout, info)
 }
 
 fn text_content(info: &InfoNode) -> String {

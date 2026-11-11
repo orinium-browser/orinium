@@ -5,7 +5,7 @@ fn build_with_cache<'a>(
     rule_set: &'a RuleSet,
     cache: Option<&'a mut SelectorMatchCache>,
 ) -> (LayoutNode, InfoNode) {
-    build_layout_and_info_from_snapshot(
+    let (layout, info, _) = build_layout_and_info_from_snapshot(
         snapshot,
         snapshot.roots()[0],
         rule_set,
@@ -21,7 +21,9 @@ fn build_with_cache<'a>(
         cache,
         &InteractionState::default(),
         &std::collections::HashMap::new(),
-    )
+        &std::collections::HashMap::new(),
+    );
+    (layout, info)
 }
 
 #[test]

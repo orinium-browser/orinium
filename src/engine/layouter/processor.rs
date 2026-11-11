@@ -70,6 +70,8 @@ pub struct LayoutTask {
     /// Existing custom node instances keyed by snapshot DOM node id, reused
     /// across relayouts to preserve component-local UI state.
     pub existing_custom_nodes: HashMap<u32, Arc<dyn CustomNode>>,
+    /// Per-element animated style overrides applied on top of cascaded/base styles.
+    pub animated_overrides: HashMap<NodeId, HashMap<String, crate::engine::css::values::CssValue>>,
 }
 
 /// Per-worker caches reused across layout tasks.
@@ -113,6 +115,8 @@ impl Default for WorkerCache {
 pub struct LayoutResult {
     pub layout: LayoutNode,
     pub info: InfoNode,
+    /// Per-element animation inputs collected during style build.
+    pub animation_inputs: crate::engine::animation::AnimationInputs,
     /// Sequence number of the task that produced this result.
     pub version: u64,
 }
@@ -185,7 +189,7 @@ impl LayoutProcessor {
                     if task.version < latest_clone.load(Ordering::SeqCst) {
                         return None;
                     }
-                    let version = task.version;
+                    let _version = task.version;
                     perf_scope!(worker_total);
 
                     let mut cache = cache.lock().expect("layout worker cache poisoned");
@@ -236,7 +240,7 @@ impl LayoutProcessor {
                         match_cache,
                         ..
                     } = &mut *cache;
-                    let (layout, info) = build_layout_and_info_from_snapshot(
+                    let (layout, info, animation_inputs) = build_layout_and_info_from_snapshot(
                         &task.snapshot,
                         task.root,
                         rule_set,
@@ -252,11 +256,13 @@ impl LayoutProcessor {
                         Some(match_cache),
                         &task.interaction,
                         &task.existing_custom_nodes,
+                        &task.animated_overrides,
                     );
                     let result = LayoutResult {
                         layout,
                         info,
-                        version,
+                        animation_inputs,
+                        version: task.version,
                     };
 
                     profile_log!(
@@ -340,6 +346,7 @@ mod tests {
             interaction: Arc::new(InteractionState::default()),
             interaction_version: 0,
             existing_custom_nodes: HashMap::new(),
+            animated_overrides: HashMap::new(),
         }
     }
 

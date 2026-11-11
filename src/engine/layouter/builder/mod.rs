@@ -1,5 +1,8 @@
 //! Layout builder, which transforms a DOM tree into a UI layout.
 
+use crate::engine::animation::{parse as anim_parse, AnimationInputs, ElementAnimationState};
+use crate::engine::css::values::CssValue;
+
 mod args;
 #[macro_use]
 mod munch;
@@ -40,7 +43,7 @@ use crate::engine::bridge::audio::AudioSinkFactory;
 use crate::engine::bridge::text::{self, GlyphCluster};
 use crate::engine::css::{
     matcher::{ElementChain, ElementInfo},
-    values::{CssValue, Unit},
+    values::Unit,
 };
 use crate::engine::html::util::split_html_space;
 use crate::engine::html::{HtmlNodeType, ScriptingMode};
@@ -318,7 +321,7 @@ pub fn build_layout_and_info_with_images(
     let (snapshot, _dom_refs) = DomSnapshot::from_tree(dom);
     let media_environment = MediaEnvironment::new(viewport, system_color_scheme);
     let rule_set = RuleSet::from_declarations(resolved_styles, &media_environment);
-    build_layout_and_info_from_snapshot(
+    let (layout, info, _) = build_layout_and_info_from_snapshot(
         &snapshot,
         snapshot.roots()[0],
         &rule_set,
@@ -334,7 +337,9 @@ pub fn build_layout_and_info_with_images(
         None,
         &InteractionState::default(),
         &HashMap::new(),
-    )
+        &HashMap::new(),
+    );
+    (layout, info)
 }
 
 /// Builds layout and render trees from a [`DomSnapshot`].
@@ -366,7 +371,8 @@ pub fn build_layout_and_info_from_snapshot(
     mut match_cache: Option<&mut SelectorMatchCache>,
     interaction: &InteractionState,
     existing_custom_nodes: &HashMap<u32, Arc<dyn CustomNode>>,
-) -> (LayoutNode, InfoNode) {
+    animated_overrides: &HashMap<NodeId, HashMap<String, CssValue>>,
+) -> (LayoutNode, InfoNode, crate::engine::animation::AnimationInputs) {
     perf_scope!(total);
 
     #[cfg(any(feature = "profile", debug_assertions))]
@@ -432,6 +438,7 @@ pub fn build_layout_and_info_from_snapshot(
     });
 
     let mut results: HashMap<NodeId, (LayoutNode, InfoNode)> = HashMap::new();
+    let mut animation_inputs: AnimationInputs = HashMap::new();
 
     // We use an index instead of .last_mut() so that push/pop don't conflict
     // with the mutable reference to the current frame.
@@ -530,6 +537,9 @@ pub fn build_layout_and_info_from_snapshot(
 
             // Apply CSS declarations.
             perf_scope!(apply_decl);
+            let mut anim_effective: std::collections::HashMap<String, CssValue> = std::collections::HashMap::new();
+            let mut anim_transition = anim_parse::TransitionInputs::default();
+            let mut anim_animation = anim_parse::AnimationInputs::default();
             if let Some(candidates) = &candidates {
                 // The candidates map dedupes per property name (cascade winner),
                 // but a shorthand and its longhand (e.g. `padding` and
@@ -563,6 +573,13 @@ pub fn build_layout_and_info_from_snapshot(
                         &parent_text_flow_style,
                         &mut overflow,
                         used_color_scheme,
+                    );
+                    collect_animation_decl(
+                        &declaration.name,
+                        &value,
+                        &mut anim_effective,
+                        &mut anim_transition,
+                        &mut anim_animation,
                     );
                 }
             }
@@ -622,6 +639,13 @@ pub fn build_layout_and_info_from_snapshot(
                         &mut overflow,
                         used_color_scheme,
                     );
+                    collect_animation_decl(
+                        &name,
+                        &value,
+                        &mut anim_effective,
+                        &mut anim_transition,
+                        &mut anim_animation,
+                    );
                 }
             }
 
@@ -652,6 +676,111 @@ pub fn build_layout_and_info_from_snapshot(
             #[cfg(any(feature = "profile", debug_assertions))]
             {
                 apply_decl_time += apply_decl.elapsed();
+            }
+
+            // Record animation inputs for this element (base values + resolved specs).
+            if matches!(html_node, HtmlNodeType::Element { .. }) {
+                let transitions = anim_parse::build_transition_specs(&anim_transition);
+                let animations = anim_parse::build_animation_specs(&anim_animation);
+                let has_animation = animations
+                    .iter()
+                    .any(|a| a.name != "none" && !a.name.is_empty());
+                if !transitions.is_empty() || has_animation {
+                    let mut base_values = std::collections::HashMap::new();
+                    for key in [
+                        "opacity",
+                        "width",
+                        "height",
+                        "top",
+                        "right",
+                        "bottom",
+                        "left",
+                        "margin-top",
+                        "margin-right",
+                        "margin-bottom",
+                        "margin-left",
+                        "padding-top",
+                        "padding-right",
+                        "padding-bottom",
+                        "padding-left",
+                        "font-size",
+                        "line-height",
+                        "color",
+                        "background-color",
+                        "border-top-color",
+                        "border-right-color",
+                        "border-bottom-color",
+                        "border-left-color",
+                    ] {
+                        if let Some(v) = anim_effective.get(key) {
+                            base_values.insert(key.to_string(), v.clone());
+                        }
+                    }
+
+                    // Fallback/computed base values to improve transition detection.
+                    base_values
+                        .entry("opacity".to_string())
+                        .or_insert(CssValue::Number(container_style.opacity));
+                    base_values
+                        .entry("color".to_string())
+                        .or_insert_with(|| {
+                            CssValue::Color(format!(
+                                "{:02x}{:02x}{:02x}{:02x}",
+                                text_style.color.0,
+                                text_style.color.1,
+                                text_style.color.2,
+                                text_style.color.3
+                            ))
+                        });
+                    if let crate::engine::layouter::types::Background::Color(c) =
+                        &container_style.background
+                    {
+                        base_values
+                            .entry("background-color".to_string())
+                            .or_insert_with(|| {
+                                CssValue::Color(format!(
+                                    "{:02x}{:02x}{:02x}{:02x}",
+                                    c.0, c.1, c.2, c.3
+                                ))
+                            });
+                    }
+
+                    animation_inputs.insert(
+                        node_id,
+                        ElementAnimationState {
+                            transitions,
+                            animations,
+                            base_values,
+                        },
+                    );
+                }
+            }
+
+            // Apply animated overrides (runtime overlay) on top of base/inline styles.
+            if let Some(overrides) = animated_overrides.get(&stack[top_idx].dom) {
+                for (name, value) in overrides {
+                    let Some(value) = DeclarationResolver::resolve_var(
+                        value,
+                        &custom_properties,
+                        &mut HashSet::new(),
+                    ) else {
+                        continue;
+                    };
+                    apply_declaration(
+                        name,
+                        &value,
+                        &mut style,
+                        &mut container_style,
+                        &mut text_style,
+                        &mut text_flow_style,
+                        &parent_style,
+                        &parent_container_style,
+                        &parent_text_style,
+                        &parent_text_flow_style,
+                        &mut overflow,
+                        used_color_scheme,
+                    );
+                }
             }
 
             if let Background::Image { source, image, .. } = &mut container_style.background {
@@ -809,6 +938,7 @@ pub fn build_layout_and_info_from_snapshot(
                 });
 
                 let bridge = CustomNodeBridge::new(Arc::clone(&node), style.clone());
+                let container_opacity = container_style.opacity;
                 let kind = NodeKind::Custom {
                     node,
                     scroll_x: overflow.x,
@@ -874,6 +1004,66 @@ pub fn build_layout_and_info_from_snapshot(
                     dom_id: Some(stack[top_idx].dom),
                 };
                 let ptr = stack[top_idx].dom;
+                // Ensure animation inputs exist for custom/replaced elements.
+                if !animation_inputs.contains_key(&ptr) {
+                    let transitions = anim_parse::build_transition_specs(&anim_transition);
+                    let animations = anim_parse::build_animation_specs(&anim_animation);
+                    let has_animation = animations.iter().any(|a| a.name != "none" && !a.name.is_empty());
+                    if !transitions.is_empty() || has_animation {
+                        let mut base_values = std::collections::HashMap::new();
+                        for key in [
+                            "opacity",
+                            "width",
+                            "height",
+                            "top",
+                            "right",
+                            "bottom",
+                            "left",
+                            "margin-top",
+                            "margin-right",
+                            "margin-bottom",
+                            "margin-left",
+                            "padding-top",
+                            "padding-right",
+                            "padding-bottom",
+                            "padding-left",
+                            "font-size",
+                            "line-height",
+                            "color",
+                            "background-color",
+                            "border-top-color",
+                            "border-right-color",
+                            "border-bottom-color",
+                            "border-left-color",
+                        ] {
+                            if let Some(v) = anim_effective.get(key) {
+                                base_values.insert(key.to_string(), v.clone());
+                            }
+                        }
+                        base_values
+                            .entry("opacity".to_string())
+                            .or_insert(CssValue::Number(container_opacity));
+                        base_values
+                            .entry("color".to_string())
+                            .or_insert_with(|| {
+                                CssValue::Color(format!(
+                                    "{:02x}{:02x}{:02x}{:02x}",
+                                    text_style.color.0,
+                                    text_style.color.1,
+                                    text_style.color.2,
+                                    text_style.color.3
+                                ))
+                            });
+                        animation_inputs.insert(
+                            ptr,
+                            ElementAnimationState {
+                                transitions,
+                                animations,
+                                base_values,
+                            },
+                        );
+                    }
+                }
                 results.insert(ptr, (layout, info));
                 #[cfg(any(feature = "profile", debug_assertions))]
                 {
@@ -1395,10 +1585,226 @@ pub fn build_layout_and_info_from_snapshot(
         ),
     );
 
-    results
+    let (layout, info_node) = results
         .remove(&root)
-        .expect("root must have been processed")
+        .expect("root must have been processed");
+    (layout, info_node, animation_inputs)
 }
+
+
+
+fn collect_animation_decl(
+    name: &str,
+    value: &CssValue,
+    effective: &mut std::collections::HashMap<String, CssValue>,
+    transition: &mut anim_parse::TransitionInputs,
+    animation: &mut anim_parse::AnimationInputs,
+) {
+    let lname = name.to_ascii_lowercase();
+    match lname.as_str() {
+        "transition-property" => transition.property = Some(value.clone()),
+        "transition-duration" => transition.duration = Some(value.clone()),
+        "transition-delay" => transition.delay = Some(value.clone()),
+        "transition-timing-function" => transition.timing_function = Some(value.clone()),
+        "transition" => {
+            // MVP shorthand: per-comma group parse property, times, easing.
+            let groups = split_css_comma_groups(value);
+            let mut props: Vec<CssValue> = Vec::new();
+            let mut durs: Vec<CssValue> = Vec::new();
+            let mut delays: Vec<CssValue> = Vec::new();
+            let mut easings: Vec<CssValue> = Vec::new();
+            for group in groups {
+                let mut prop: Option<CssValue> = None;
+                let mut times: Vec<CssValue> = Vec::new();
+                let mut easing: Option<CssValue> = None;
+                for item in flatten_css_value_items(&group) {
+                    if anim_parse::parse_time_ms(&item).is_some() {
+                        if times.len() < 2 {
+                            times.push(item);
+                        }
+                        continue;
+                    }
+                    if easing.is_none() && anim_parse::parse_easing(&item).is_some() {
+                        easing = Some(item);
+                        continue;
+                    }
+                    if prop.is_none() {
+                        if let CssValue::Keyword(_) | CssValue::String(_) = item {
+                            prop = Some(item);
+                        }
+                    }
+                }
+                props.push(prop.unwrap_or_else(|| CssValue::Keyword("all".into())));
+                durs.push(times.first().cloned().unwrap_or(CssValue::Length(0.0, Unit::S)));
+                delays.push(times.get(1).cloned().unwrap_or(CssValue::Length(0.0, Unit::S)));
+                easings.push(easing.unwrap_or_else(|| CssValue::Keyword("ease".into())));
+            }
+            if !props.is_empty() {
+                transition.property = Some(join_css_comma_groups(props));
+                transition.duration = Some(join_css_comma_groups(durs));
+                transition.delay = Some(join_css_comma_groups(delays));
+                transition.timing_function = Some(join_css_comma_groups(easings));
+            }
+        }
+        "animation-name" => animation.name = Some(value.clone()),
+        "animation-duration" => animation.duration = Some(value.clone()),
+        "animation-delay" => animation.delay = Some(value.clone()),
+        "animation-timing-function" => animation.timing_function = Some(value.clone()),
+        "animation-iteration-count" => animation.iteration_count = Some(value.clone()),
+        "animation-direction" => animation.direction = Some(value.clone()),
+        "animation-fill-mode" => animation.fill_mode = Some(value.clone()),
+        "animation-play-state" => animation.play_state = Some(value.clone()),
+        "animation" => {
+            // MVP shorthand: parse common tokens per comma group.
+            let groups = split_css_comma_groups(value);
+            let mut names: Vec<CssValue> = Vec::new();
+            let mut durs: Vec<CssValue> = Vec::new();
+            let mut delays: Vec<CssValue> = Vec::new();
+            let mut easings: Vec<CssValue> = Vec::new();
+            let mut iters: Vec<CssValue> = Vec::new();
+            let mut dirs: Vec<CssValue> = Vec::new();
+            let mut fills: Vec<CssValue> = Vec::new();
+            let mut states: Vec<CssValue> = Vec::new();
+            for group in groups {
+                let mut name: Option<CssValue> = None;
+                let mut times: Vec<CssValue> = Vec::new();
+                let mut easing: Option<CssValue> = None;
+                let mut iter: Option<CssValue> = None;
+                let mut dir: Option<CssValue> = None;
+                let mut fill: Option<CssValue> = None;
+                let mut state: Option<CssValue> = None;
+                for item in flatten_css_value_items(&group) {
+                    if anim_parse::parse_time_ms(&item).is_some() {
+                        if times.len() < 2 {
+                            times.push(item);
+                            continue;
+                        }
+                    }
+                    if easing.is_none() && anim_parse::parse_easing(&item).is_some() {
+                        easing = Some(item);
+                        continue;
+                    }
+                    if iter.is_none() && anim_parse::parse_iteration_count(&item).is_some() {
+                        iter = Some(item);
+                        continue;
+                    }
+                    if dir.is_none() && anim_parse::parse_direction(&item).is_some() {
+                        dir = Some(item);
+                        continue;
+                    }
+                    if fill.is_none() && anim_parse::parse_fill_mode(&item).is_some() {
+                        fill = Some(item);
+                        continue;
+                    }
+                    if state.is_none() && anim_parse::parse_play_state(&item).is_some() {
+                        state = Some(item);
+                        continue;
+                    }
+                    if name.is_none() {
+                        if let CssValue::Keyword(_) | CssValue::String(_) = item {
+                            name = Some(item);
+                        }
+                    }
+                }
+                names.push(name.unwrap_or_else(|| CssValue::Keyword("none".into())));
+                durs.push(times.first().cloned().unwrap_or(CssValue::Length(0.0, Unit::S)));
+                delays.push(times.get(1).cloned().unwrap_or(CssValue::Length(0.0, Unit::S)));
+                easings.push(easing.unwrap_or_else(|| CssValue::Keyword("ease".into())));
+                iters.push(iter.unwrap_or(CssValue::Number(1.0)));
+                dirs.push(dir.unwrap_or_else(|| CssValue::Keyword("normal".into())));
+                fills.push(fill.unwrap_or_else(|| CssValue::Keyword("none".into())));
+                states.push(state.unwrap_or_else(|| CssValue::Keyword("running".into())));
+            }
+            if !names.is_empty() {
+                animation.name = Some(join_css_comma_groups(names));
+                animation.duration = Some(join_css_comma_groups(durs));
+                animation.delay = Some(join_css_comma_groups(delays));
+                animation.timing_function = Some(join_css_comma_groups(easings));
+                animation.iteration_count = Some(join_css_comma_groups(iters));
+                animation.direction = Some(join_css_comma_groups(dirs));
+                animation.fill_mode = Some(join_css_comma_groups(fills));
+                animation.play_state = Some(join_css_comma_groups(states));
+            }
+        }
+        _ => {}
+    }
+
+    if matches!(
+        lname.as_str(),
+        "opacity"
+            | "width"
+            | "height"
+            | "top"
+            | "right"
+            | "bottom"
+            | "left"
+            | "margin-top"
+            | "margin-right"
+            | "margin-bottom"
+            | "margin-left"
+            | "padding-top"
+            | "padding-right"
+            | "padding-bottom"
+            | "padding-left"
+            | "font-size"
+            | "line-height"
+            | "color"
+            | "background-color"
+            | "border-top-color"
+            | "border-right-color"
+            | "border-bottom-color"
+            | "border-left-color"
+    ) {
+        effective.insert(lname, value.clone());
+    }
+}
+
+fn split_css_comma_groups(value: &CssValue) -> Vec<Vec<CssValue>> {
+    match value {
+        CssValue::List(items) => {
+            let mut groups: Vec<Vec<CssValue>> = vec![Vec::new()];
+            for item in items {
+                if matches!(item, CssValue::Keyword(k) if k == ",") {
+                    groups.push(Vec::new());
+                } else {
+                    groups.last_mut().unwrap().push(item.clone());
+                }
+            }
+            if groups.is_empty() {
+                vec![vec![]]
+            } else {
+                groups
+            }
+        }
+        other => vec![vec![other.clone()]],
+    }
+}
+
+fn flatten_css_value_items(items: &[CssValue]) -> Vec<CssValue> {
+    let mut out = Vec::new();
+    for item in items {
+        match item {
+            CssValue::List(inner) => out.extend(inner.clone()),
+            _ => out.push(item.clone()),
+        }
+    }
+    out
+}
+
+fn join_css_comma_groups(groups: Vec<CssValue>) -> CssValue {
+    if groups.len() <= 1 {
+        return groups.into_iter().next().unwrap_or(CssValue::Keyword("none".into()));
+    }
+    let mut out: Vec<CssValue> = Vec::new();
+    for (i, g) in groups.into_iter().enumerate() {
+        if i > 0 {
+            out.push(CssValue::Keyword(",".into()));
+        }
+        out.push(g);
+    }
+    CssValue::List(out)
+}
+
 
 // ── Whitespace helpers ──────────────────────────────────────────────────────
 
