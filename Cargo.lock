@@ -3152,6 +3152,7 @@ dependencies = [
 [[package]]
 name = "pixi_byte"
 version = "0.1.0"
+source = "git+https://github.com/orinium-browser/pixi_byte?rev=9ed5c11a85fee478bc9741a85a9a29de77d2f52c#9ed5c11a85fee478bc9741a85a9a29de77d2f52c"
 dependencies = [
  "fancy-regex",
  "num-bigint 0.5.1",
