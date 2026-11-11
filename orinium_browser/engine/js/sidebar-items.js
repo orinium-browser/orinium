@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["devtools","missing_api_detector","processor"],"struct":["IframeContentSnapshot","JsFetchRequest","JsFetchResponse","JsHost","JsIframeFetchRequest","JsLayoutMetrics","JsRuntime"]};
+window.SIDEBAR_ITEMS = {"enum":["JsTraceKind"],"fn":["default_trace_enabled"],"mod":["devtools","missing_api_detector","processor"],"struct":["IframeContentSnapshot","JsActiveTrace","JsFetchRequest","JsFetchResponse","JsHost","JsIframeFetchRequest","JsLayoutMetrics","JsRuntime","JsTraceBatch","JsTraceEvent"]};

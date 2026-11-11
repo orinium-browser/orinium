@@ -176,44 +176,47 @@
 <a href=#176 id=176 data-nosnippet>176</a>    <span class="doccomment">/// Updates the hover state for this node.
 <a href=#177 id=177 data-nosnippet>177</a>    </span><span class="kw">fn </span>set_hovered(<span class="kw-2">&amp;</span><span class="self">self</span>, _hovered: bool) {}
 <a href=#178 id=178 data-nosnippet>178</a>
-<a href=#179 id=179 data-nosnippet>179</a>    <span class="doccomment">/// Returns whether this node is currently hovered.
-<a href=#180 id=180 data-nosnippet>180</a>    </span><span class="kw">fn </span>is_hovered(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#181 id=181 data-nosnippet>181</a>        <span class="bool-val">false
-<a href=#182 id=182 data-nosnippet>182</a>    </span>}
-<a href=#183 id=183 data-nosnippet>183</a>
-<a href=#184 id=184 data-nosnippet>184</a>    <span class="doccomment">/// Whether this node changed its visual state since the last check.
-<a href=#185 id=185 data-nosnippet>185</a>    ///
-<a href=#186 id=186 data-nosnippet>186</a>    /// Consumes the flag: calling it again without an intervening state
-<a href=#187 id=187 data-nosnippet>187</a>    /// change returns `false`. The engine uses this to skip full redraws
-<a href=#188 id=188 data-nosnippet>188</a>    /// when no custom node is dirty.
-<a href=#189 id=189 data-nosnippet>189</a>    </span><span class="kw">fn </span>needs_repaint(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#190 id=190 data-nosnippet>190</a>        <span class="bool-val">false
-<a href=#191 id=191 data-nosnippet>191</a>    </span>}
-<a href=#192 id=192 data-nosnippet>192</a>
-<a href=#193 id=193 data-nosnippet>193</a>    <span class="doccomment">/// Screen rectangle of the active IME composition underline, in content-box
-<a href=#194 id=194 data-nosnippet>194</a>    /// coordinates `(x, y, width, height)`. `None` when nothing is composing.
-<a href=#195 id=195 data-nosnippet>195</a>    </span><span class="kw">fn </span>composition_rect(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;(f32, f32, f32, f32)&gt; {
-<a href=#196 id=196 data-nosnippet>196</a>        <span class="prelude-val">None
-<a href=#197 id=197 data-nosnippet>197</a>    </span>}
-<a href=#198 id=198 data-nosnippet>198</a>
-<a href=#199 id=199 data-nosnippet>199</a>    <span class="doccomment">/// Accessibility role for this node (e.g. `"button"`, `"textbox"`, `"img"`).
-<a href=#200 id=200 data-nosnippet>200</a>    </span><span class="kw">fn </span>role(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>str&gt; {
-<a href=#201 id=201 data-nosnippet>201</a>        <span class="prelude-val">None
-<a href=#202 id=202 data-nosnippet>202</a>    </span>}
-<a href=#203 id=203 data-nosnippet>203</a>
-<a href=#204 id=204 data-nosnippet>204</a>    <span class="doccomment">/// Accessibility label (accessible name).
-<a href=#205 id=205 data-nosnippet>205</a>    </span><span class="kw">fn </span>label(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;String&gt; {
-<a href=#206 id=206 data-nosnippet>206</a>        <span class="prelude-val">None
-<a href=#207 id=207 data-nosnippet>207</a>    </span>}
-<a href=#208 id=208 data-nosnippet>208</a>
-<a href=#209 id=209 data-nosnippet>209</a>    <span class="doccomment">/// Current value for editable/stateful nodes.
-<a href=#210 id=210 data-nosnippet>210</a>    </span><span class="kw">fn </span>value(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;String&gt; {
-<a href=#211 id=211 data-nosnippet>211</a>        <span class="prelude-val">None
-<a href=#212 id=212 data-nosnippet>212</a>    </span>}
-<a href=#213 id=213 data-nosnippet>213</a>
-<a href=#214 id=214 data-nosnippet>214</a>    <span class="doccomment">/// Whether this node is disabled and must not receive input.
-<a href=#215 id=215 data-nosnippet>215</a>    </span><span class="kw">fn </span>is_disabled(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#216 id=216 data-nosnippet>216</a>        <span class="bool-val">false
-<a href=#217 id=217 data-nosnippet>217</a>    </span>}
-<a href=#218 id=218 data-nosnippet>218</a>}
+<a href=#179 id=179 data-nosnippet>179</a>    <span class="doccomment">/// Updates the checked state for checkbox/radio controls.
+<a href=#180 id=180 data-nosnippet>180</a>    </span><span class="kw">fn </span>set_checked(<span class="kw-2">&amp;</span><span class="self">self</span>, _checked: bool) {}
+<a href=#181 id=181 data-nosnippet>181</a>
+<a href=#182 id=182 data-nosnippet>182</a>    <span class="doccomment">/// Returns whether this node is currently hovered.
+<a href=#183 id=183 data-nosnippet>183</a>    </span><span class="kw">fn </span>is_hovered(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#184 id=184 data-nosnippet>184</a>        <span class="bool-val">false
+<a href=#185 id=185 data-nosnippet>185</a>    </span>}
+<a href=#186 id=186 data-nosnippet>186</a>
+<a href=#187 id=187 data-nosnippet>187</a>    <span class="doccomment">/// Whether this node changed its visual state since the last check.
+<a href=#188 id=188 data-nosnippet>188</a>    ///
+<a href=#189 id=189 data-nosnippet>189</a>    /// Consumes the flag: calling it again without an intervening state
+<a href=#190 id=190 data-nosnippet>190</a>    /// change returns `false`. The engine uses this to skip full redraws
+<a href=#191 id=191 data-nosnippet>191</a>    /// when no custom node is dirty.
+<a href=#192 id=192 data-nosnippet>192</a>    </span><span class="kw">fn </span>needs_repaint(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#193 id=193 data-nosnippet>193</a>        <span class="bool-val">false
+<a href=#194 id=194 data-nosnippet>194</a>    </span>}
+<a href=#195 id=195 data-nosnippet>195</a>
+<a href=#196 id=196 data-nosnippet>196</a>    <span class="doccomment">/// Screen rectangle of the active IME composition underline, in content-box
+<a href=#197 id=197 data-nosnippet>197</a>    /// coordinates `(x, y, width, height)`. `None` when nothing is composing.
+<a href=#198 id=198 data-nosnippet>198</a>    </span><span class="kw">fn </span>composition_rect(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;(f32, f32, f32, f32)&gt; {
+<a href=#199 id=199 data-nosnippet>199</a>        <span class="prelude-val">None
+<a href=#200 id=200 data-nosnippet>200</a>    </span>}
+<a href=#201 id=201 data-nosnippet>201</a>
+<a href=#202 id=202 data-nosnippet>202</a>    <span class="doccomment">/// Accessibility role for this node (e.g. `"button"`, `"textbox"`, `"img"`).
+<a href=#203 id=203 data-nosnippet>203</a>    </span><span class="kw">fn </span>role(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>str&gt; {
+<a href=#204 id=204 data-nosnippet>204</a>        <span class="prelude-val">None
+<a href=#205 id=205 data-nosnippet>205</a>    </span>}
+<a href=#206 id=206 data-nosnippet>206</a>
+<a href=#207 id=207 data-nosnippet>207</a>    <span class="doccomment">/// Accessibility label (accessible name).
+<a href=#208 id=208 data-nosnippet>208</a>    </span><span class="kw">fn </span>label(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;String&gt; {
+<a href=#209 id=209 data-nosnippet>209</a>        <span class="prelude-val">None
+<a href=#210 id=210 data-nosnippet>210</a>    </span>}
+<a href=#211 id=211 data-nosnippet>211</a>
+<a href=#212 id=212 data-nosnippet>212</a>    <span class="doccomment">/// Current value for editable/stateful nodes.
+<a href=#213 id=213 data-nosnippet>213</a>    </span><span class="kw">fn </span>value(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;String&gt; {
+<a href=#214 id=214 data-nosnippet>214</a>        <span class="prelude-val">None
+<a href=#215 id=215 data-nosnippet>215</a>    </span>}
+<a href=#216 id=216 data-nosnippet>216</a>
+<a href=#217 id=217 data-nosnippet>217</a>    <span class="doccomment">/// Whether this node is disabled and must not receive input.
+<a href=#218 id=218 data-nosnippet>218</a>    </span><span class="kw">fn </span>is_disabled(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#219 id=219 data-nosnippet>219</a>        <span class="bool-val">false
+<a href=#220 id=220 data-nosnippet>220</a>    </span>}
+<a href=#221 id=221 data-nosnippet>221</a>}
 </code></pre></div></section></main></body></html>

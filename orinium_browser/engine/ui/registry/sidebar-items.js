@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["ComponentRegistry","CustomNodeContext"],"trait":["CustomNodeFactory"],"type":["DomWriteBack"]};
+window.SIDEBAR_ITEMS = {"enum":["DomWrite"],"struct":["ComponentRegistry","CustomNodeContext"],"trait":["CustomNodeFactory"],"type":["DomWriteBack"]};

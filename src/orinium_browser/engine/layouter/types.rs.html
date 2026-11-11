@@ -851,4 +851,14 @@
 <a href=#851 id=851 data-nosnippet>851</a>        }
 <a href=#852 id=852 data-nosnippet>852</a>    }
 <a href=#853 id=853 data-nosnippet>853</a>}
+<a href=#854 id=854 data-nosnippet>854</a>
+<a href=#855 id=855 data-nosnippet>855</a><span class="doccomment">/// Pointer interaction state passed into layout/style resolution.
+<a href=#856 id=856 data-nosnippet>856</a>///
+<a href=#857 id=857 data-nosnippet>857</a>/// Paths are stored root-to-target and may contain duplicate-free DOM
+<a href=#858 id=858 data-nosnippet>858</a>/// snapshot node ids for the hit target and its ancestors.
+<a href=#859 id=859 data-nosnippet>859</a></span><span class="attr">#[derive(Debug, Clone, Default, PartialEq, Eq)]
+<a href=#860 id=860 data-nosnippet>860</a></span><span class="kw">pub struct </span>InteractionState {
+<a href=#861 id=861 data-nosnippet>861</a>    <span class="kw">pub </span>hovered_path: Vec&lt;NodeId&gt;,
+<a href=#862 id=862 data-nosnippet>862</a>    <span class="kw">pub </span>active_path: Vec&lt;NodeId&gt;,
+<a href=#863 id=863 data-nosnippet>863</a>}
 </code></pre></div></section></main></body></html>
