@@ -46,6 +46,12 @@ pub enum CssNodeType {
         params: AtQuery,
     },
 
+    /// `@keyframes` rule with parsed keyframe stops.
+    Keyframes {
+        name: String,
+        stops: Vec<KeyframeStop>,
+    },
+
     /// Declaration inside a rule block (e.g. `color: red`)
     Declaration {
         /// Property name
@@ -54,6 +60,18 @@ pub enum CssNodeType {
         value: CssValue,
     },
 }
+
+/// A selector/offset for a keyframe stop (e.g. `0%`, `100%`, `from`, `to`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeyframeSelector(pub CssValue);
+
+/// A parsed keyframe stop inside `@keyframes`.
+#[derive(Debug, Clone)]
+pub struct KeyframeStop {
+    pub selectors: Vec<KeyframeSelector>,
+    pub declarations: Vec<(String, CssValue, bool)>,
+}
+
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AtQuery {
@@ -672,6 +690,37 @@ impl<'a> Parser<'a> {
         })?;
 
         // 4. Block vs semicolon
+        if at_name.eq_ignore_ascii_case("keyframes") {
+            if self.peek_token() != &Token::Delim('{') {
+                // Consume optional semicolon for malformed cases.
+                if self.peek_token() == &Token::Delim(';') {
+                    self.consume_token();
+                }
+                let name = Self::at_rule_name_from_params(&params).unwrap_or_default();
+                return Ok(CssNode {
+                    node: CssNodeType::Keyframes {
+                        name,
+                        stops: vec![],
+                    },
+                    children: vec![],
+                });
+            }
+            self.consume_token(); // '{'
+            self.brace_depth += 1;
+            let stops = self.parse_keyframes_block().map_err(|e| {
+                e.with_context("parse_at_rule: failed to parse @keyframes block")
+            })?;
+            if self.peek_token() == &Token::Delim('}') {
+                self.consume_token();
+                self.brace_depth = self.brace_depth.saturating_sub(1);
+            }
+            let name = Self::at_rule_name_from_params(&params).unwrap_or_default();
+            return Ok(CssNode {
+                node: CssNodeType::Keyframes { name, stops },
+                children: vec![],
+            });
+        }
+
         let children = if self.peek_token() == &Token::Delim('{') {
             self.consume_token();
             self.brace_depth += 1;
@@ -758,6 +807,132 @@ impl<'a> Parser<'a> {
             },
             children,
         })
+    }
+
+
+    fn at_rule_name_from_params(params: &AtQuery) -> Option<String> {
+        fn from_query(query: &AtQuery) -> Option<String> {
+            match query {
+                AtQuery::Keyword(name) => Some(name.clone()),
+                AtQuery::Group(items) => items.iter().find_map(from_query),
+                _ => None,
+            }
+        }
+        from_query(params)
+    }
+
+    fn parse_keyframes_block(&mut self) -> ParseResult<Vec<KeyframeStop>> {
+        let mut stops = Vec::new();
+        while self.peek_token() != &Token::Delim('}') {
+            match self.peek_token() {
+                Token::EOF => {
+                    return Err(ParserError {
+                        kind: ParserErrorKind::UnexpectedEOF,
+                        context: vec!["parse_keyframes_block".into()],
+                    });
+                }
+                Token::Whitespace | Token::Comment(_) => {
+                    self.consume_token();
+                }
+                _ => {
+                    // Parse selector list until '{'
+                    let mut selectors: Vec<KeyframeSelector> = Vec::new();
+                    loop {
+                        match self.peek_token() {
+                            Token::Delim('{') | Token::EOF | Token::Delim('}') => break,
+                            Token::Whitespace | Token::Comment(_) => {
+                                self.consume_token();
+                            }
+                            Token::Delim(',') => {
+                                self.consume_token();
+                            }
+                            Token::Ident(name) => {
+                                selectors.push(KeyframeSelector(CssValue::Keyword(
+                                    name.clone().into_owned().into(),
+                                )));
+                                self.consume_token();
+                            }
+                            Token::Number(n) => {
+                                let n = *n;
+                                self.consume_token();
+                                // accept bare number as percentage-like offset (treat as %)
+                                selectors.push(KeyframeSelector(CssValue::Length(n, Unit::Percent)));
+                            }
+                            Token::Dimension(n, unit) => {
+                                let value = if unit.as_ref() == "%" {
+                                    CssValue::Length(*n, Unit::Percent)
+                                } else {
+                                    CssValue::Length(*n, match unit.as_ref() {
+                                        "px" => Unit::Px,
+                                        _ => Unit::Unknown,
+                                    })
+                                };
+                                selectors.push(KeyframeSelector(value));
+                                self.consume_token();
+                            }
+                            _ => {
+                                self.consume_token();
+                            }
+                        }
+                    }
+                    if self.peek_token() != &Token::Delim('{') {
+                        // Recovery: skip unexpected token
+                        if self.peek_token() != &Token::EOF && self.peek_token() != &Token::Delim('}') {
+                            self.consume_token();
+                        }
+                        continue;
+                    }
+                    self.consume_token(); // '{'
+                    self.brace_depth += 1;
+                    let declaration_nodes = self.parse_declaration_and_nested_rule_list().map_err(|e| {
+                        e.with_context("parse_keyframes_block: failed to parse stop declarations")
+                    })?;
+                    if self.peek_token() == &Token::Delim('}') {
+                        self.consume_token();
+                        self.brace_depth = self.brace_depth.saturating_sub(1);
+                    }
+                    if !selectors.is_empty() {
+                        let mut declarations = Vec::new();
+                        for node in declaration_nodes {
+                            if let CssNodeType::Declaration { name, value } = node.node {
+                                let (value, important) = Self::extract_important_value(&value);
+                                declarations.push((name, value, important));
+                            }
+                        }
+                        stops.push(KeyframeStop {
+                            selectors,
+                            declarations,
+                        });
+                    }
+                }
+            }
+        }
+        Ok(stops)
+    }
+
+
+    fn extract_important_value(value: &CssValue) -> (CssValue, bool) {
+        match value {
+            CssValue::List(list) if list.len() >= 2 => {
+                let len = list.len();
+                let is_important = matches!(
+                    (&list[len - 2], &list[len - 1]),
+                    (CssValue::Keyword(bang), CssValue::Keyword(ident))
+                    if bang == "!" && ident.eq_ignore_ascii_case("important")
+                );
+                if is_important {
+                    let value = if len - 2 == 1 {
+                        list[0].clone()
+                    } else {
+                        CssValue::List(list[..len - 2].to_vec())
+                    };
+                    (value, true)
+                } else {
+                    (value.clone(), false)
+                }
+            }
+            _ => (value.clone(), false),
+        }
     }
 
     fn parse_at_query(tokens: Vec<Token<'_>>) -> ParseResult<AtQuery> {
@@ -1740,6 +1915,8 @@ impl<'a> Parser<'a> {
                         "rad" => Unit::Rad,
                         "grad" => Unit::Grad,
                         "turn" => Unit::Turn,
+                        "s" => Unit::S,
+                        "ms" => Unit::Ms,
                         "fr" => Unit::Fr,
                         _ => Unit::Unknown,
                     };
@@ -1975,6 +2152,31 @@ mod tests {
             panic!("expected a rule");
         };
         assert_eq!(selectors[0].to_string(), "ul li ~ a[rel=\"tag\"]");
+    }
+
+
+    #[test]
+    fn parses_keyframes_rule() {
+        let css = "@keyframes fade { from { opacity: 0; } 50% { opacity: 0.5; } to { opacity: 1 !important; } }";
+        let sheet = Parser::new(css).parse().unwrap();
+        assert_eq!(sheet.children().len(), 1);
+        let CssNodeType::Keyframes { name, stops } = sheet.children()[0].node() else {
+            panic!("expected keyframes node");
+        };
+        assert_eq!(name, "fade");
+        assert_eq!(stops.len(), 3);
+
+        assert_eq!(stops[0].selectors.len(), 1);
+        assert_eq!(stops[0].declarations.len(), 1);
+        assert_eq!(stops[0].declarations[0].0, "opacity");
+        assert!(!stops[0].declarations[0].2);
+
+        assert_eq!(stops[1].selectors.len(), 1);
+        assert_eq!(stops[1].declarations[0].0, "opacity");
+
+        assert_eq!(stops[2].selectors.len(), 1);
+        assert_eq!(stops[2].declarations[0].0, "opacity");
+        assert!(stops[2].declarations[0].2);
     }
 
     #[test]

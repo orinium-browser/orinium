@@ -186,6 +186,14 @@ fn resolve_length(
             );
             None
         }
+        Unit::S | Unit::Ms => {
+            log::error!(
+                target: "Layouter",
+                "Unexpected time unit for `{}` (expected length)",
+                name
+            );
+            None
+        }
         Unit::Fr => {
             log::error!(
                 target: "Layouter",

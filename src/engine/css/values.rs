@@ -25,6 +25,10 @@ pub enum Unit {
     Rad,
     Grad,
     Turn,
+
+    S,
+    Ms,
+
     Fr,
     Unknown,
 }
@@ -80,6 +84,10 @@ impl Unit {
             Unit::Rad => "rad",
             Unit::Grad => "grad",
             Unit::Turn => "turn",
+
+            Unit::S => "s",
+            Unit::Ms => "ms",
+
             Unit::Fr => "fr",
             Unit::Unknown => "unknown",
         }
