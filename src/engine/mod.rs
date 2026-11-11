@@ -6,6 +6,7 @@ pub mod background_worker;
 pub mod bridge;
 pub mod cache_stats;
 pub mod css;
+pub mod animation;
 pub mod html;
 pub mod image_decoder;
 pub mod input;

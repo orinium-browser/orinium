@@ -1,6 +1,8 @@
 //! A CSS resolver that handles selector matching and value resolution.
 
 use super::builder::resolve_css_len;
+use crate::engine::animation::types::KeyframesRule as RuntimeKeyframesRule;
+use crate::engine::animation::types::KeyframeStop as RuntimeKeyframeStop;
 use crate::engine::css::parser::{AtQuery, ComplexSelector, CssNode, CssNodeType, RangeOperator};
 use crate::engine::css::values::{CssIdent, CssValue};
 use crate::engine::layouter::types::ColorScheme;
@@ -85,6 +87,27 @@ pub struct ResolvedDeclaration {
 }
 
 pub type ResolvedStyles = Vec<ResolvedDeclaration>;
+
+/// Registry of `@keyframes` rules keyed by animation name.
+pub type KeyframesRegistry = HashMap<String, RuntimeKeyframesRule>;
+
+/// Result of resolving a stylesheet: cascaded declarations plus keyframes.
+#[derive(Debug, Clone, Default)]
+pub struct StylesheetResolution {
+    pub declarations: ResolvedStyles,
+    pub keyframes: KeyframesRegistry,
+}
+
+impl StylesheetResolution {
+    pub fn append(&mut self, mut other: StylesheetResolution) {
+        append_resolved_styles(&mut self.declarations, std::mem::take(&mut other.declarations));
+        // Later keyframes with the same name override earlier ones (last wins),
+        // matching common author expectations for MVP.
+        for (name, rule) in other.keyframes {
+            self.keyframes.insert(name, rule);
+        }
+    }
+}
 
 /// Indexed collection of resolved CSS declarations partitioned by selector subject.
 ///
@@ -420,22 +443,40 @@ pub struct CssResolver;
 impl CssResolver {
     /// Resolves an author stylesheet into declarations used by layout.
     pub fn resolve(stylesheet: &CssNode) -> ResolvedStyles {
-        Self::resolve_with_origin(stylesheet, StyleOrigin::Author)
+        Self::resolve_stylesheet(stylesheet).declarations
     }
 
     /// Resolves a stylesheet using the supplied cascade origin.
     pub fn resolve_with_origin(stylesheet: &CssNode, origin: StyleOrigin) -> ResolvedStyles {
+        Self::resolve_stylesheet_with_origin(stylesheet, origin).declarations
+    }
+
+    /// Resolves an author stylesheet into declarations and keyframes.
+    pub fn resolve_stylesheet(stylesheet: &CssNode) -> StylesheetResolution {
+        Self::resolve_stylesheet_with_origin(stylesheet, StyleOrigin::Author)
+    }
+
+    /// Resolves a stylesheet using the supplied cascade origin.
+    pub fn resolve_stylesheet_with_origin(
+        stylesheet: &CssNode,
+        origin: StyleOrigin,
+    ) -> StylesheetResolution {
         let mut styles = Vec::new();
+        let mut keyframes = KeyframesRegistry::new();
         let mut order = 0;
         Self::walk(
             stylesheet,
             &mut styles,
+            &mut keyframes,
             &mut order,
             origin,
             &mut Vec::new(),
             &[],
         );
-        styles
+        StylesheetResolution {
+            declarations: styles,
+            keyframes,
+        }
     }
 
     /// Parses declarations from an HTML `style` attribute.
@@ -459,34 +500,52 @@ impl CssResolver {
     fn walk(
         node: &CssNode,
         styles: &mut ResolvedStyles,
+        keyframes: &mut KeyframesRegistry,
         order: &mut usize,
         origin: StyleOrigin,
         media_queries: &mut Vec<AtQuery>,
         parent_selectors: &[ComplexSelector],
     ) {
-        if let CssNodeType::AtRule { name, params } = node.node() {
-            if name.eq_ignore_ascii_case("supports") && !SupportsEvaluator::evaluate(params) {
+        match node.node() {
+            CssNodeType::Keyframes { name, stops } => {
+                if !name.is_empty() {
+                    let runtime_stops = Self::convert_keyframe_stops(stops);
+                    keyframes.insert(
+                        name.clone(),
+                        RuntimeKeyframesRule {
+                            name: name.clone(),
+                            stops: runtime_stops,
+                        },
+                    );
+                }
                 return;
             }
+            CssNodeType::AtRule { name, params } => {
+                if name.eq_ignore_ascii_case("supports") && !SupportsEvaluator::evaluate(params) {
+                    return;
+                }
 
-            let is_media = name.eq_ignore_ascii_case("media");
-            if is_media {
-                media_queries.push(params.clone());
+                let is_media = name.eq_ignore_ascii_case("media");
+                if is_media {
+                    media_queries.push(params.clone());
+                }
+                for child in node.children() {
+                    Self::walk(
+                        child,
+                        styles,
+                        keyframes,
+                        order,
+                        origin,
+                        media_queries,
+                        parent_selectors,
+                    );
+                }
+                if is_media {
+                    media_queries.pop();
+                }
+                return;
             }
-            for child in node.children() {
-                Self::walk(
-                    child,
-                    styles,
-                    order,
-                    origin,
-                    media_queries,
-                    parent_selectors,
-                );
-            }
-            if is_media {
-                media_queries.pop();
-            }
-            return;
+            _ => {}
         }
 
         let resolved_selectors =
@@ -496,11 +555,51 @@ impl CssResolver {
             Self::walk(
                 child,
                 styles,
+                keyframes,
                 order,
                 origin,
                 media_queries,
                 &resolved_selectors,
             );
+        }
+    }
+
+    fn convert_keyframe_stops(
+        stops: &[crate::engine::css::parser::KeyframeStop],
+    ) -> Vec<RuntimeKeyframeStop> {
+        let mut out = Vec::new();
+        for stop in stops {
+            let declarations: Vec<(String, CssValue)> = stop
+                .declarations
+                .iter()
+                .filter(|(_, _, important)| !*important)
+                .map(|(name, value, _)| (name.clone(), value.clone()))
+                .collect();
+            for selector in &stop.selectors {
+                if let Some(offset) = Self::keyframe_selector_offset(&selector.0) {
+                    out.push(RuntimeKeyframeStop {
+                        offset,
+                        declarations: declarations.clone(),
+                    });
+                }
+            }
+        }
+        out.sort_by(|a, b| a.offset.partial_cmp(&b.offset).unwrap_or(std::cmp::Ordering::Equal));
+        out
+    }
+
+    fn keyframe_selector_offset(value: &CssValue) -> Option<f32> {
+        match value {
+            CssValue::Keyword(k) if k.eq_ignore_ascii_case("from") => Some(0.0),
+            CssValue::Keyword(k) if k.eq_ignore_ascii_case("to") => Some(1.0),
+            CssValue::Length(v, crate::engine::css::values::Unit::Percent) => {
+                Some((*v / 100.0).clamp(0.0, 1.0))
+            }
+            CssValue::Number(v) => {
+                // tolerate bare 0/1
+                if *v <= 1.0 { Some(v.clamp(0.0, 1.0)) } else { Some((v / 100.0).clamp(0.0, 1.0)) }
+            }
+            _ => None,
         }
     }
 

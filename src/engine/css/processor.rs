@@ -1,6 +1,6 @@
 use super::parser::Parser as CssParser;
 use crate::engine::background_worker::BackgroundWorker;
-use crate::engine::layouter::css_resolver::{CssResolver, ResolvedStyles, append_resolved_styles};
+use crate::engine::layouter::css_resolver::{CssResolver, StylesheetResolution};
 use crate::{perf_scope, profile_log};
 
 enum CssCommand {
@@ -9,7 +9,7 @@ enum CssCommand {
 
 #[derive(Debug)]
 pub struct CssProcessor {
-    worker: BackgroundWorker<CssCommand, ResolvedStyles>,
+    worker: BackgroundWorker<CssCommand, StylesheetResolution>,
 }
 
 impl Default for CssProcessor {
@@ -34,13 +34,13 @@ impl CssProcessor {
     }
 
     /// Poll for a completed result. Returns `None` if no result is ready yet.
-    pub fn try_receive(&self) -> Option<ResolvedStyles> {
+    pub fn try_receive(&self) -> Option<StylesheetResolution> {
         self.worker.try_receive()
     }
 
-    fn process_all(css_sources: &[String]) -> ResolvedStyles {
+    fn process_all(css_sources: &[String]) -> StylesheetResolution {
         perf_scope!(total);
-        let mut resolved = ResolvedStyles::default();
+        let mut resolved = StylesheetResolution::default();
 
         #[cfg(any(feature = "profile", debug_assertions))]
         let mut parse_time = std::time::Duration::ZERO;
@@ -56,13 +56,13 @@ impl CssProcessor {
             }
 
             perf_scope!(resolve);
-            let resolved_sheet = CssResolver::resolve(&sheet);
+            let resolved_sheet = CssResolver::resolve_stylesheet(&sheet);
             #[cfg(any(feature = "profile", debug_assertions))]
             {
                 resolve_time += resolve.elapsed();
             }
 
-            append_resolved_styles(&mut resolved, resolved_sheet);
+            resolved.append(resolved_sheet);
         }
 
         profile_log!(
