@@ -2,11 +2,11 @@
 //! including the bridge, CSS handling, HTML parsing, input processing,
 //! layout management, rendering model, and tree structure.
 
+pub mod animation;
 pub mod background_worker;
 pub mod bridge;
 pub mod cache_stats;
 pub mod css;
-pub mod animation;
 pub mod html;
 pub mod image_decoder;
 pub mod input;

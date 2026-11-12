@@ -1,8 +1,8 @@
 //! A CSS resolver that handles selector matching and value resolution.
 
 use super::builder::resolve_css_len;
-use crate::engine::animation::types::KeyframesRule as RuntimeKeyframesRule;
 use crate::engine::animation::types::KeyframeStop as RuntimeKeyframeStop;
+use crate::engine::animation::types::KeyframesRule as RuntimeKeyframesRule;
 use crate::engine::css::parser::{AtQuery, ComplexSelector, CssNode, CssNodeType, RangeOperator};
 use crate::engine::css::values::{CssIdent, CssValue};
 use crate::engine::layouter::types::ColorScheme;
@@ -100,7 +100,10 @@ pub struct StylesheetResolution {
 
 impl StylesheetResolution {
     pub fn append(&mut self, mut other: StylesheetResolution) {
-        append_resolved_styles(&mut self.declarations, std::mem::take(&mut other.declarations));
+        append_resolved_styles(
+            &mut self.declarations,
+            std::mem::take(&mut other.declarations),
+        );
         // Later keyframes with the same name override earlier ones (last wins),
         // matching common author expectations for MVP.
         for (name, rule) in other.keyframes {
@@ -584,7 +587,11 @@ impl CssResolver {
                 }
             }
         }
-        out.sort_by(|a, b| a.offset.partial_cmp(&b.offset).unwrap_or(std::cmp::Ordering::Equal));
+        out.sort_by(|a, b| {
+            a.offset
+                .partial_cmp(&b.offset)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         out
     }
 
@@ -597,7 +604,11 @@ impl CssResolver {
             }
             CssValue::Number(v) => {
                 // tolerate bare 0/1
-                if *v <= 1.0 { Some(v.clamp(0.0, 1.0)) } else { Some((v / 100.0).clamp(0.0, 1.0)) }
+                if *v <= 1.0 {
+                    Some(v.clamp(0.0, 1.0))
+                } else {
+                    Some((v / 100.0).clamp(0.0, 1.0))
+                }
             }
             _ => None,
         }

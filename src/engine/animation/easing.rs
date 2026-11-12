@@ -76,16 +76,30 @@ fn sample_derivative(a: f32, b: f32, t: f32) -> f32 {
 
 /// Interpolate between two CSS values for supported animatable properties.
 /// Returns `None` when interpolation is not supported (caller should snap).
-pub fn interpolate_value(from: &CssValue, to: &CssValue, t: f32, color_scheme: ColorScheme) -> Option<CssValue> {
+pub fn interpolate_value(
+    from: &CssValue,
+    to: &CssValue,
+    t: f32,
+    color_scheme: ColorScheme,
+) -> Option<CssValue> {
     let t = t.clamp(0.0, 1.0);
     match (from, to) {
         (CssValue::Number(a), CssValue::Number(b)) => Some(CssValue::Number(a + (b - a) * t)),
         (CssValue::Length(a, ua), CssValue::Length(b, ub)) if ua == ub => {
             Some(CssValue::Length(a + (b - a) * t, *ua))
         }
-        (CssValue::Length(_, Unit::Px), CssValue::Number(_)) | (CssValue::Number(_), CssValue::Length(_, Unit::Px)) => {
-            let av = match from { CssValue::Length(v, _) => *v, CssValue::Number(v) => *v, _ => 0.0 };
-            let bv = match to { CssValue::Length(v, _) => *v, CssValue::Number(v) => *v, _ => 0.0 };
+        (CssValue::Length(_, Unit::Px), CssValue::Number(_))
+        | (CssValue::Number(_), CssValue::Length(_, Unit::Px)) => {
+            let av = match from {
+                CssValue::Length(v, _) => *v,
+                CssValue::Number(v) => *v,
+                _ => 0.0,
+            };
+            let bv = match to {
+                CssValue::Length(v, _) => *v,
+                CssValue::Number(v) => *v,
+                _ => 0.0,
+            };
             Some(CssValue::Length(av + (bv - av) * t, Unit::Px))
         }
         _ => {
@@ -104,7 +118,10 @@ pub fn interpolate_value(from: &CssValue, to: &CssValue, t: f32, color_scheme: C
                 ];
                 let c = crate::engine::layouter::types::Color::from_linear_f32_array(mixed);
                 // resolve_css_color accepts CssValue::Color as hex (with or without alpha).
-                Some(CssValue::Color(format!("{:02x}{:02x}{:02x}{:02x}", c.0, c.1, c.2, c.3)))
+                Some(CssValue::Color(format!(
+                    "{:02x}{:02x}{:02x}{:02x}",
+                    c.0, c.1, c.2, c.3
+                )))
             } else {
                 None
             }
@@ -125,7 +142,13 @@ mod tests {
 
     #[test]
     fn easing_ease_endpoints() {
-        for e in [Easing::Ease, Easing::EaseIn, Easing::EaseOut, Easing::EaseInOut, Easing::CubicBezier(0.4, 0.0, 0.2, 1.0)] {
+        for e in [
+            Easing::Ease,
+            Easing::EaseIn,
+            Easing::EaseOut,
+            Easing::EaseInOut,
+            Easing::CubicBezier(0.4, 0.0, 0.2, 1.0),
+        ] {
             assert!((apply_easing(0.0, e) - 0.0).abs() < 1e-3, "{e:?}");
             assert!((apply_easing(1.0, e) - 1.0).abs() < 1e-3, "{e:?}");
         }
@@ -133,9 +156,21 @@ mod tests {
 
     #[test]
     fn interpolate_numbers_and_lengths() {
-        let n = interpolate_value(&CssValue::Number(0.0), &CssValue::Number(10.0), 0.5, ColorScheme::Light).unwrap();
+        let n = interpolate_value(
+            &CssValue::Number(0.0),
+            &CssValue::Number(10.0),
+            0.5,
+            ColorScheme::Light,
+        )
+        .unwrap();
         assert_eq!(n, CssValue::Number(5.0));
-        let l = interpolate_value(&CssValue::Length(0.0, Unit::Px), &CssValue::Length(100.0, Unit::Px), 0.25, ColorScheme::Light).unwrap();
+        let l = interpolate_value(
+            &CssValue::Length(0.0, Unit::Px),
+            &CssValue::Length(100.0, Unit::Px),
+            0.25,
+            ColorScheme::Light,
+        )
+        .unwrap();
         assert_eq!(l, CssValue::Length(25.0, Unit::Px));
     }
 }

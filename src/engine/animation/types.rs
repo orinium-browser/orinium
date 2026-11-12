@@ -94,7 +94,6 @@ pub struct KeyframesRule {
     pub stops: Vec<KeyframeStop>,
 }
 
-
 /// A resolved CSS transition specification for one property slot.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TransitionSpec {

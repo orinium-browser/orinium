@@ -72,7 +72,6 @@ pub struct KeyframeStop {
     pub declarations: Vec<(String, CssValue, bool)>,
 }
 
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum AtQuery {
     Keyword(String), // screen, and, not
@@ -707,9 +706,9 @@ impl<'a> Parser<'a> {
             }
             self.consume_token(); // '{'
             self.brace_depth += 1;
-            let stops = self.parse_keyframes_block().map_err(|e| {
-                e.with_context("parse_at_rule: failed to parse @keyframes block")
-            })?;
+            let stops = self
+                .parse_keyframes_block()
+                .map_err(|e| e.with_context("parse_at_rule: failed to parse @keyframes block"))?;
             if self.peek_token() == &Token::Delim('}') {
                 self.consume_token();
                 self.brace_depth = self.brace_depth.saturating_sub(1);
@@ -809,7 +808,6 @@ impl<'a> Parser<'a> {
         })
     }
 
-
     fn at_rule_name_from_params(params: &AtQuery) -> Option<String> {
         fn from_query(query: &AtQuery) -> Option<String> {
             match query {
@@ -856,16 +854,20 @@ impl<'a> Parser<'a> {
                                 let n = *n;
                                 self.consume_token();
                                 // accept bare number as percentage-like offset (treat as %)
-                                selectors.push(KeyframeSelector(CssValue::Length(n, Unit::Percent)));
+                                selectors
+                                    .push(KeyframeSelector(CssValue::Length(n, Unit::Percent)));
                             }
                             Token::Dimension(n, unit) => {
                                 let value = if unit.as_ref() == "%" {
                                     CssValue::Length(*n, Unit::Percent)
                                 } else {
-                                    CssValue::Length(*n, match unit.as_ref() {
-                                        "px" => Unit::Px,
-                                        _ => Unit::Unknown,
-                                    })
+                                    CssValue::Length(
+                                        *n,
+                                        match unit.as_ref() {
+                                            "px" => Unit::Px,
+                                            _ => Unit::Unknown,
+                                        },
+                                    )
                                 };
                                 selectors.push(KeyframeSelector(value));
                                 self.consume_token();
@@ -877,16 +879,21 @@ impl<'a> Parser<'a> {
                     }
                     if self.peek_token() != &Token::Delim('{') {
                         // Recovery: skip unexpected token
-                        if self.peek_token() != &Token::EOF && self.peek_token() != &Token::Delim('}') {
+                        if self.peek_token() != &Token::EOF
+                            && self.peek_token() != &Token::Delim('}')
+                        {
                             self.consume_token();
                         }
                         continue;
                     }
                     self.consume_token(); // '{'
                     self.brace_depth += 1;
-                    let declaration_nodes = self.parse_declaration_and_nested_rule_list().map_err(|e| {
-                        e.with_context("parse_keyframes_block: failed to parse stop declarations")
-                    })?;
+                    let declaration_nodes =
+                        self.parse_declaration_and_nested_rule_list().map_err(|e| {
+                            e.with_context(
+                                "parse_keyframes_block: failed to parse stop declarations",
+                            )
+                        })?;
                     if self.peek_token() == &Token::Delim('}') {
                         self.consume_token();
                         self.brace_depth = self.brace_depth.saturating_sub(1);
@@ -909,7 +916,6 @@ impl<'a> Parser<'a> {
         }
         Ok(stops)
     }
-
 
     fn extract_important_value(value: &CssValue) -> (CssValue, bool) {
         match value {
@@ -2153,7 +2159,6 @@ mod tests {
         };
         assert_eq!(selectors[0].to_string(), "ul li ~ a[rel=\"tag\"]");
     }
-
 
     #[test]
     fn parses_keyframes_rule() {

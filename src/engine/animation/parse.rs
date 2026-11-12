@@ -136,7 +136,9 @@ pub fn parse_easing_list(value: &CssValue) -> Vec<Easing> {
 
 pub fn parse_iteration_count(value: &CssValue) -> Option<IterationCount> {
     match value {
-        CssValue::Keyword(k) if k.eq_ignore_ascii_case("infinite") => Some(IterationCount::Infinite),
+        CssValue::Keyword(k) if k.eq_ignore_ascii_case("infinite") => {
+            Some(IterationCount::Infinite)
+        }
         CssValue::Number(n) if *n >= 0.0 => Some(IterationCount::Finite(*n)),
         _ => None,
     }
@@ -170,7 +172,12 @@ pub fn parse_direction(value: &CssValue) -> Option<AnimationDirection> {
 pub fn parse_direction_list(value: &CssValue) -> Vec<AnimationDirection> {
     split_comma_list(value)
         .into_iter()
-        .map(|g| flatten_group(&g).into_iter().find_map(|v| parse_direction(&v)).unwrap_or_default())
+        .map(|g| {
+            flatten_group(&g)
+                .into_iter()
+                .find_map(|v| parse_direction(&v))
+                .unwrap_or_default()
+        })
         .collect()
 }
 
@@ -190,7 +197,12 @@ pub fn parse_fill_mode(value: &CssValue) -> Option<AnimationFillMode> {
 pub fn parse_fill_mode_list(value: &CssValue) -> Vec<AnimationFillMode> {
     split_comma_list(value)
         .into_iter()
-        .map(|g| flatten_group(&g).into_iter().find_map(|v| parse_fill_mode(&v)).unwrap_or_default())
+        .map(|g| {
+            flatten_group(&g)
+                .into_iter()
+                .find_map(|v| parse_fill_mode(&v))
+                .unwrap_or_default()
+        })
         .collect()
 }
 
@@ -208,7 +220,12 @@ pub fn parse_play_state(value: &CssValue) -> Option<AnimationPlayState> {
 pub fn parse_play_state_list(value: &CssValue) -> Vec<AnimationPlayState> {
     split_comma_list(value)
         .into_iter()
-        .map(|g| flatten_group(&g).into_iter().find_map(|v| parse_play_state(&v)).unwrap_or_default())
+        .map(|g| {
+            flatten_group(&g)
+                .into_iter()
+                .find_map(|v| parse_play_state(&v))
+                .unwrap_or_default()
+        })
         .collect()
 }
 
@@ -298,13 +315,41 @@ pub fn build_animation_specs(input: &AnimationInputs) -> Vec<AnimationSpec> {
         .as_ref()
         .map(parse_animation_name_list)
         .unwrap_or_else(|| vec!["none".to_string()]);
-    let durations = input.duration.as_ref().map(parse_time_list).unwrap_or_else(|| vec![0.0]);
-    let delays = input.delay.as_ref().map(parse_time_list).unwrap_or_else(|| vec![0.0]);
-    let easings = input.timing_function.as_ref().map(parse_easing_list).unwrap_or_else(|| vec![Easing::Ease]);
-    let iterations = input.iteration_count.as_ref().map(parse_iteration_count_list).unwrap_or_else(|| vec![IterationCount::Finite(1.0)]);
-    let directions = input.direction.as_ref().map(parse_direction_list).unwrap_or_else(|| vec![AnimationDirection::Normal]);
-    let fills = input.fill_mode.as_ref().map(parse_fill_mode_list).unwrap_or_else(|| vec![AnimationFillMode::None]);
-    let states = input.play_state.as_ref().map(parse_play_state_list).unwrap_or_else(|| vec![AnimationPlayState::Running]);
+    let durations = input
+        .duration
+        .as_ref()
+        .map(parse_time_list)
+        .unwrap_or_else(|| vec![0.0]);
+    let delays = input
+        .delay
+        .as_ref()
+        .map(parse_time_list)
+        .unwrap_or_else(|| vec![0.0]);
+    let easings = input
+        .timing_function
+        .as_ref()
+        .map(parse_easing_list)
+        .unwrap_or_else(|| vec![Easing::Ease]);
+    let iterations = input
+        .iteration_count
+        .as_ref()
+        .map(parse_iteration_count_list)
+        .unwrap_or_else(|| vec![IterationCount::Finite(1.0)]);
+    let directions = input
+        .direction
+        .as_ref()
+        .map(parse_direction_list)
+        .unwrap_or_else(|| vec![AnimationDirection::Normal]);
+    let fills = input
+        .fill_mode
+        .as_ref()
+        .map(parse_fill_mode_list)
+        .unwrap_or_else(|| vec![AnimationFillMode::None]);
+    let states = input
+        .play_state
+        .as_ref()
+        .map(parse_play_state_list)
+        .unwrap_or_else(|| vec![AnimationPlayState::Running]);
 
     let count = names.len().max(1);
     (0..count)

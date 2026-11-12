@@ -278,13 +278,19 @@ fn sample_animation(
     if duration <= 0.0 {
         // Duration 0: apply fill/endpoint as appropriate
         if local < delay {
-            if matches!(spec.fill_mode, AnimationFillMode::Backwards | AnimationFillMode::Both) {
+            if matches!(
+                spec.fill_mode,
+                AnimationFillMode::Backwards | AnimationFillMode::Both
+            ) {
                 let vals = sample_keyframes(rule, 0.0, spec.direction, 0, color_scheme);
                 return Some((false, vals));
             }
             return None;
         } else {
-            if matches!(spec.fill_mode, AnimationFillMode::Forwards | AnimationFillMode::Both) {
+            if matches!(
+                spec.fill_mode,
+                AnimationFillMode::Forwards | AnimationFillMode::Both
+            ) {
                 let vals = sample_keyframes(rule, 1.0, spec.direction, 0, color_scheme);
                 return Some((false, vals));
             }
@@ -293,7 +299,10 @@ fn sample_animation(
     }
 
     if local < delay {
-        if matches!(spec.fill_mode, AnimationFillMode::Backwards | AnimationFillMode::Both) {
+        if matches!(
+            spec.fill_mode,
+            AnimationFillMode::Backwards | AnimationFillMode::Both
+        ) {
             // progress at start of first iteration considering direction
             let p = iteration_progress(0.0, spec.direction, 0);
             let vals = sample_keyframes(rule, p, spec.direction, 0, color_scheme);
@@ -323,7 +332,10 @@ fn sample_animation(
     };
 
     if finished {
-        if matches!(spec.fill_mode, AnimationFillMode::Forwards | AnimationFillMode::Both) {
+        if matches!(
+            spec.fill_mode,
+            AnimationFillMode::Forwards | AnimationFillMode::Both
+        ) {
             // final iteration progress
             let last_iter = match spec.iteration_count {
                 IterationCount::Finite(c) if c > 0.0 => (c.ceil() as u32).saturating_sub(1),
@@ -344,7 +356,13 @@ fn sample_animation(
     }
 
     let directed = iteration_progress(within.clamp(0.0, 1.0), spec.direction, iteration_index);
-    let vals = sample_keyframes(rule, directed, spec.direction, iteration_index, color_scheme);
+    let vals = sample_keyframes(
+        rule,
+        directed,
+        spec.direction,
+        iteration_index,
+        color_scheme,
+    );
     Some((true, vals))
 }
 
@@ -354,10 +372,18 @@ fn iteration_progress(t: f32, direction: AnimationDirection, iteration: u32) -> 
         AnimationDirection::Normal => t,
         AnimationDirection::Reverse => 1.0 - t,
         AnimationDirection::Alternate => {
-            if iteration % 2 == 0 { t } else { 1.0 - t }
+            if iteration % 2 == 0 {
+                t
+            } else {
+                1.0 - t
+            }
         }
         AnimationDirection::AlternateReverse => {
-            if iteration % 2 == 0 { 1.0 - t } else { t }
+            if iteration % 2 == 0 {
+                1.0 - t
+            } else {
+                t
+            }
         }
     }
 }
@@ -373,7 +399,11 @@ fn sample_keyframes(
     if stops.is_empty() {
         return HashMap::new();
     }
-    stops.sort_by(|a, b| a.offset.partial_cmp(&b.offset).unwrap_or(std::cmp::Ordering::Equal));
+    stops.sort_by(|a, b| {
+        a.offset
+            .partial_cmp(&b.offset)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // Collect properties
     let mut props: Vec<String> = Vec::new();
@@ -422,9 +452,8 @@ fn sample_keyframes(
                 let span = (*o1 - *o0).max(f32::EPSILON);
                 let local = ((p - *o0) / span).clamp(0.0, 1.0);
                 let eased = apply_easing(local, Easing::Linear); // keyframe-level easing not modeled in MVP
-                let val = interpolate_value(v0, v1, eased, color_scheme).unwrap_or_else(|| {
-                    if eased >= 0.5 { v1.clone() } else { v0.clone() }
-                });
+                let val = interpolate_value(v0, v1, eased, color_scheme)
+                    .unwrap_or_else(|| if eased >= 0.5 { v1.clone() } else { v0.clone() });
                 chosen = Some(val);
                 break;
             }
@@ -472,7 +501,13 @@ mod tests {
         let mut rt = AnimationRuntime::new();
         let node = 1u32;
         let kf = KeyframesRegistry::new();
-        let _ = rt.sample(0.0, true, &inputs_with_opacity(node, 0.0, true), &kf, ColorScheme::Light);
+        let _ = rt.sample(
+            0.0,
+            true,
+            &inputs_with_opacity(node, 0.0, true),
+            &kf,
+            ColorScheme::Light,
+        );
         let res = rt.sample(
             50.0,
             true,
@@ -491,7 +526,13 @@ mod tests {
         let mut rt = AnimationRuntime::new();
         let node = 1u32;
         let kf = KeyframesRegistry::new();
-        let _ = rt.sample(0.0, true, &inputs_with_opacity(node, 0.0, true), &kf, ColorScheme::Light);
+        let _ = rt.sample(
+            0.0,
+            true,
+            &inputs_with_opacity(node, 0.0, true),
+            &kf,
+            ColorScheme::Light,
+        );
         let res = rt.sample(
             50.0,
             false,
@@ -513,8 +554,14 @@ mod tests {
             KeyframesRule {
                 name: "fade".to_string(),
                 stops: vec![
-                    KeyframeStop { offset: 0.0, declarations: vec![("opacity".into(), CssValue::Number(0.0))] },
-                    KeyframeStop { offset: 1.0, declarations: vec![("opacity".into(), CssValue::Number(1.0))] },
+                    KeyframeStop {
+                        offset: 0.0,
+                        declarations: vec![("opacity".into(), CssValue::Number(0.0))],
+                    },
+                    KeyframeStop {
+                        offset: 1.0,
+                        declarations: vec![("opacity".into(), CssValue::Number(1.0))],
+                    },
                 ],
             },
         );
@@ -539,7 +586,11 @@ mod tests {
         let r0 = rt.sample(0.0, true, &map, &kf, ColorScheme::Light);
         assert!(r0.active);
         let r1 = rt.sample(50.0, true, &map, &kf, ColorScheme::Light);
-        let v = r1.overrides.get(&node).and_then(|m| m.get("opacity")).cloned();
+        let v = r1
+            .overrides
+            .get(&node)
+            .and_then(|m| m.get("opacity"))
+            .cloned();
         match v {
             Some(CssValue::Number(n)) => assert!(n > 0.0 && n < 1.0, "got {n}"),
             other => panic!("unexpected {other:?}"),
@@ -556,8 +607,14 @@ mod tests {
             KeyframesRule {
                 name: "fade".to_string(),
                 stops: vec![
-                    KeyframeStop { offset: 0.0, declarations: vec![("opacity".into(), CssValue::Number(0.0))] },
-                    KeyframeStop { offset: 1.0, declarations: vec![("opacity".into(), CssValue::Number(1.0))] },
+                    KeyframeStop {
+                        offset: 0.0,
+                        declarations: vec![("opacity".into(), CssValue::Number(0.0))],
+                    },
+                    KeyframeStop {
+                        offset: 1.0,
+                        declarations: vec![("opacity".into(), CssValue::Number(1.0))],
+                    },
                 ],
             },
         );
@@ -581,7 +638,11 @@ mod tests {
         );
         let _ = rt.sample(0.0, true, &map, &kf, ColorScheme::Light);
         let r_end = rt.sample(150.0, true, &map, &kf, ColorScheme::Light);
-        let v = r_end.overrides.get(&node).and_then(|m| m.get("opacity")).cloned();
+        let v = r_end
+            .overrides
+            .get(&node)
+            .and_then(|m| m.get("opacity"))
+            .cloned();
         assert_eq!(v, Some(CssValue::Number(1.0)));
     }
 
@@ -645,8 +706,14 @@ mod tests {
             KeyframesRule {
                 name: "fade".to_string(),
                 stops: vec![
-                    KeyframeStop { offset: 0.0, declarations: vec![("opacity".into(), CssValue::Number(0.0))] },
-                    KeyframeStop { offset: 1.0, declarations: vec![("opacity".into(), CssValue::Number(1.0))] },
+                    KeyframeStop {
+                        offset: 0.0,
+                        declarations: vec![("opacity".into(), CssValue::Number(0.0))],
+                    },
+                    KeyframeStop {
+                        offset: 1.0,
+                        declarations: vec![("opacity".into(), CssValue::Number(1.0))],
+                    },
                 ],
             },
         );
