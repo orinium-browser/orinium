@@ -6,8 +6,8 @@
 //! returned [`LayoutBox`].
 
 use ui_layout::{
-    BoxModel, CustomLayouter, Display, InlineBox, LayoutBox, LayoutContext, OuterDisplay, Rect,
-    Style,
+    AutoSizeBehavior, BoxModel, CustomLayouter, Display, InlineBox, LayoutBox, LayoutContext,
+    OuterDisplay, Rect, SizeStyle, Style,
 };
 
 use crate::engine::ui::custom_node::{ContentSize, CustomNode};
@@ -41,6 +41,21 @@ pub struct CustomNodeBridge {
 impl CustomNodeBridge {
     pub fn new(node: std::sync::Arc<dyn CustomNode>, layout_style: Style) -> Self {
         Self { node, layout_style }
+    }
+
+    /// Builds the intrinsic-content child of a styled custom element.
+    ///
+    /// The containing `LayoutNode` owns the element's CSS sizing and spacing;
+    /// applying them again to this bridge would duplicate padding and borders.
+    pub fn new_content(node: std::sync::Arc<dyn CustomNode>, element_style: &Style) -> Self {
+        let mut content_style = element_style.clone();
+        content_style.size = SizeStyle {
+            auto_behavior: AutoSizeBehavior::ShrinkToFit,
+            ..Default::default()
+        };
+        content_style.box_sizing = Default::default();
+        content_style.spacing = Default::default();
+        Self::new(node, content_style)
     }
 
     /// Returns the resolved [`Style`] that drives this element's layout.
@@ -340,6 +355,52 @@ mod tests {
                 assert_eq!(inline.box_model.border_box.width, 200.0);
                 assert_eq!(inline.box_model.border_box.height, 100.0);
                 assert!(inline.line_spans.is_empty());
+            }
+            other => panic!("expected InlineBox, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn content_bridge_does_not_apply_element_spacing_or_size_twice() {
+        use ui_layout::{Length, LengthOrAuto};
+
+        let style = Style {
+            display: Display::OutsideInner {
+                outer: OuterDisplay::Inline,
+                inner: InnerDisplay::FlowRoot,
+            },
+            size: SizeStyle {
+                width: LengthOrAuto::Length(Length::Px(300.0)),
+                height: LengthOrAuto::Length(Length::Px(200.0)),
+                ..Default::default()
+            },
+            spacing: ui_layout::Spacing {
+                padding_left: Length::Px(13.0),
+                padding_right: Length::Px(13.0),
+                border_left: Length::Px(1.0),
+                border_right: Length::Px(1.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut bridge = CustomNodeBridge::new_content(
+            std::sync::Arc::new(TestNode {
+                width: 40.0,
+                height: 20.0,
+            }),
+            &style,
+        );
+        let ctx = LayoutContext {
+            available_inline_size: 500.0,
+            viewport_width: 800.0,
+            viewport_height: 600.0,
+            ..LayoutContext::default()
+        };
+
+        match bridge.layout(&ctx) {
+            LayoutBox::InlineBox(inline) => {
+                assert_eq!(inline.box_model.border_box.size(), (40.0, 20.0));
+                assert_eq!(inline.box_model.content_box.size(), (40.0, 20.0));
             }
             other => panic!("expected InlineBox, got {:?}", other),
         }

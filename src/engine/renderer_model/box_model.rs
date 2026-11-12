@@ -1244,35 +1244,8 @@ fn generate_draw_commands_inner(
                 break 'custom;
             };
             let culled = box_states.iter().any(|s| s.cull);
-            // Inline custom boxes do not push a content transform (mirroring
-            // `push_box_model`), so their draw commands are emitted in
-            // border-box coordinates. Push a content-box offset here so the
-            // component's content (text/graphics) lands inside the padding,
-            // matching the block path where the content transform is pushed.
-            let inline_content_offset = if is_inline {
-                base_box.as_ref().map(|bm| {
-                    (
-                        bm.content_box.x - bm.border_box.x,
-                        bm.content_box.y - bm.border_box.y,
-                    )
-                })
-            } else {
-                None
-            };
-            let pushed_inline_offset =
-                inline_content_offset.is_some_and(|(dx, dy)| dx != 0.0 || dy != 0.0);
-            if pushed_inline_offset {
-                if let Some((dx, dy)) = inline_content_offset {
-                    cmd_buf.push(DrawCommand::PushTransform {
-                        transform: AffineTransform::translate(dx, dy),
-                    });
-                }
-            }
             if !self_hidden && !culled {
                 node.draw_sized(cmd_buf, text_style, text_flow_style, layout_style, size);
-            }
-            if pushed_inline_offset {
-                cmd_buf.push(DrawCommand::PopTransform);
             }
             // Collect open popups so they render above every other box,
             // outside all ancestor clips and transforms.
@@ -1496,6 +1469,20 @@ fn generate_draw_commands_inner(
                                 content_box: bm.content_box,
                                 children_box: bm.children_box,
                             };
+                            let size = layout
+                                .layout_box
+                                .iter()
+                                .next()
+                                .map(|box_model| ContentSize {
+                                    width: box_model.content_box.width,
+                                    height: box_model.content_box.height,
+                                })
+                                .unwrap_or(ContentSize {
+                                    width: rect.content_box.width,
+                                    height: rect.content_box.height,
+                                });
+                            // The parent custom element owns CSS box painting;
+                            // this bridge box only positions its intrinsic content.
                             let state = push_box_model(
                                 cmd_buf,
                                 &rect,
@@ -1504,8 +1491,8 @@ fn generate_draw_commands_inner(
                                 0.0,
                                 false,
                                 false,
-                                true,
-                                true,
+                                false,
+                                false,
                                 effective_opacity,
                             );
                             node.draw_sized(
@@ -1513,10 +1500,7 @@ fn generate_draw_commands_inner(
                                 text_style,
                                 text_flow_style,
                                 layout_style,
-                                ContentSize {
-                                    width: rect.content_box.width,
-                                    height: rect.content_box.height,
-                                },
+                                size,
                             );
                             pop_box_model(cmd_buf, state);
                         }
@@ -1642,6 +1626,123 @@ mod tests {
             width: w,
             height: h,
         }
+    }
+
+    #[derive(Debug)]
+    struct DrawingNode;
+
+    impl CustomNode for DrawingNode {
+        fn draw_sized(
+            &self,
+            cmd_buf: &mut Vec<DrawCommand>,
+            _text_style: &TextStyle,
+            _text_flow_style: &TextFlowStyle,
+            _style: &Style,
+            size: ContentSize,
+        ) {
+            cmd_buf.push(DrawCommand::Fill {
+                path: rect_path(0.0, 0.0, size.width, size.height),
+                rule: FillRule::NonZero,
+                paint: Paint {
+                    brush: Brush::Solid(Color(255, 0, 0, 255)),
+                    opacity: 1.0,
+                },
+            });
+        }
+
+        fn intrinsic_size(&self) -> ContentSize {
+            ContentSize {
+                width: 10.0,
+                height: 10.0,
+            }
+        }
+    }
+
+    #[test]
+    fn inline_custom_content_uses_its_flow_root_position_once() {
+        let mut root = LayoutNode::new(Style::default());
+        root.layout_box = ui_layout::LayoutBox::BlockBox(ui_layout::BoxModel {
+            sticky_edges: None,
+            border_box: ui_rect(0.0, 0.0, 200.0, 200.0),
+            padding_box: ui_rect(0.0, 0.0, 200.0, 200.0),
+            content_box: ui_rect(0.0, 0.0, 200.0, 200.0),
+            children_box: ui_rect(0.0, 0.0, 200.0, 200.0),
+        });
+
+        let inline_style = Style {
+            display: ui_layout::Display::parse("inline-block").unwrap(),
+            ..Style::default()
+        };
+        let mut custom = LayoutNode::new(inline_style.clone());
+        custom.layout_box = ui_layout::LayoutBox::InlineBox(ui_layout::InlineBox {
+            box_model: ui_layout::BoxModel {
+                sticky_edges: None,
+                border_box: ui_rect(3.0, 10.0, 20.0, 20.0),
+                padding_box: ui_rect(4.0, 11.0, 18.0, 18.0),
+                content_box: ui_rect(8.0, 15.0, 10.0, 10.0),
+                children_box: ui_rect(8.0, 15.0, 10.0, 10.0),
+            },
+            line_spans: vec![ui_layout::LineSpan {
+                x_range: 0.0..10.0,
+                line_pos: (3.0, 10.0),
+                line_index: 0,
+            }],
+        });
+        root.children = vec![LayoutChild::Node(Box::new(custom))];
+
+        let root_info = mk_info_node(
+            NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: ContainerStyle::default(),
+                role: ContainerRole::Normal,
+            },
+            vec![mk_info_node(
+                NodeKind::Custom {
+                    node: Arc::new(DrawingNode),
+                    scroll_x: false,
+                    scroll_y: false,
+                    scroll_offset_x: 0.0,
+                    scroll_offset_y: 0.0,
+                    style: ContainerStyle::default(),
+                    layout_style: inline_style,
+                    text_style: TextStyle::default(),
+                    text_flow_style: TextFlowStyle::default(),
+                },
+                Vec::new(),
+            )],
+        );
+
+        let mut commands = Vec::new();
+        generate_draw_commands(&mut commands, &root, &root_info, (200.0, 200.0));
+        assert!(count_balanced(&commands));
+
+        let mut translations = Vec::new();
+        for command in commands {
+            match command {
+                DrawCommand::PushTransform { transform } => {
+                    translations.push(transform.apply(0.0, 0.0));
+                }
+                DrawCommand::Fill { paint, .. } => {
+                    if !matches!(paint.brush, Brush::Solid(Color(255, 0, 0, 255))) {
+                        translations.clear();
+                        continue;
+                    }
+                    assert_eq!(translations, [(3.0, 10.0), (5.0, 5.0)]);
+                    assert_eq!(
+                        translations
+                            .iter()
+                            .fold((0.0, 0.0), |(x, y), (dx, dy)| { (x + dx, y + dy) }),
+                        (8.0, 15.0)
+                    );
+                    return;
+                }
+                _ => {}
+            }
+        }
+        panic!("custom content fill was not emitted");
     }
 
     #[test]

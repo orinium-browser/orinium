@@ -157,12 +157,12 @@ fn correct_atomic_inline_spacing_impl(node: &mut LayoutNode, info: Option<&InfoN
                     let margin_width = margin_left + rect.width + margin_right;
                     let aligned_x = containing_rect.map_or(rect.x, |containing| {
                         let free_space = (containing.width - margin_width).max(0.0);
-                        containing.x
-                            + match text_align {
-                                TextAlign::Left => 0.0,
-                                TextAlign::Center => free_space / 2.0,
-                                TextAlign::Right => free_space,
-                            }
+                        // Child coordinates are already relative to this content origin.
+                        match text_align {
+                            TextAlign::Left => 0.0,
+                            TextAlign::Center => free_space / 2.0,
+                            TextAlign::Right => free_space,
+                        }
                     });
                     aligned_x + margin_left
                 }

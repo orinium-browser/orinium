@@ -6,8 +6,8 @@ use std::rc::{Rc, Weak};
 use std::sync::{Arc, mpsc};
 use std::time::Instant;
 
-use crate::engine::bridge::audio::AudioSinkFactory;
 use crate::engine::animation::{AnimatedOverrides, AnimationRuntime};
+use crate::engine::bridge::audio::AudioSinkFactory;
 use crate::engine::image_decoder::ImageDecoder;
 use crate::engine::layouter::types::{
     Background, Color, ColorScheme, ContainerStyle, CursorStyle, FontStyle, TextAlign,
@@ -1382,12 +1382,16 @@ impl WebView {
         let mut stylesheet_count = 1;
         for source in &self.linked_css {
             let sheet = CssParser::new(source).parse_lossy();
-            resolved.append(layouter::css_resolver::CssResolver::resolve_stylesheet(&sheet));
+            resolved.append(layouter::css_resolver::CssResolver::resolve_stylesheet(
+                &sheet,
+            ));
             stylesheet_count += 1;
         }
         for source in document.dom.collect_text_by_tag("style") {
             let sheet = CssParser::new(&source).parse_lossy();
-            resolved.append(layouter::css_resolver::CssResolver::resolve_stylesheet(&sheet));
+            resolved.append(layouter::css_resolver::CssResolver::resolve_stylesheet(
+                &sheet,
+            ));
             stylesheet_count += 1;
         }
         #[cfg(any(feature = "profile", debug_assertions))]
@@ -2397,7 +2401,6 @@ impl WebView {
     pub fn base_url(&self) -> Option<&Url> {
         self.docment_info.as_ref().map(|info| &info.base_url)
     }
-
 
     /// Sets whether this view is visible for animation timing.
     ///
@@ -3671,6 +3674,75 @@ mod tests {
         assert_eq!(info["width"], "100");
         assert_eq!(info["height"], "50");
         assert_eq!(info["scroll"], json!([0.0, 0.0]));
+    }
+
+    #[test]
+    fn devtools_positions_match_rendered_inline_buttons() {
+        let mut webview = WebView::default();
+        webview.tick();
+        webview.viewport = (720.0, 2200.0);
+        webview.on_html_fetched(
+            r#"<html><head><style>
+                body { margin: 0; padding: 32px; }
+                section { border: 1px solid; padding: 22px; }
+                .grid { display: grid; grid-template-columns: 297px 297px; gap: 16px; }
+                .card { border: 1px solid; padding: 16px; }
+                button { margin: 3px; padding: 8px 13px; border: 1px solid; }
+            </style></head><body><section><div class="grid">
+                <div class="card"><button id="first">Toggle</button><div>first</div></div>
+                <div class="card"><button id="second">Toggle</button><div>second</div></div>
+            </div></section></body></html>"#
+                .to_string(),
+            Url::parse("https://example.test/").unwrap(),
+        );
+        webview.rebuild_styles_and_layout();
+        pump_until(
+            &mut webview,
+            |webview| webview.layout_and_info.is_some(),
+            "the inline button layout",
+        );
+        webview.relayout((720.0, 2200.0));
+
+        let first = dom_id_for_attribute(&mut webview, "id", "first");
+        let second = dom_id_for_attribute(&mut webview, "id", "second");
+        let position = |webview: &mut WebView, dom_id| {
+            webview
+                .inspect("getBoxModel", &format!(r#"{{"domId":{dom_id}}}"#))
+                .expect("box model")["model"]["position"]
+                .clone()
+        };
+
+        let (layout, info) = webview.layout_and_info().expect("positioned layout");
+        let mut commands = Vec::new();
+        crate::engine::renderer_model::generate_draw_commands(
+            &mut commands,
+            layout,
+            info,
+            (720.0, 2200.0),
+        );
+        let mut transforms = vec![crate::engine::renderer_model::AffineTransform::identity()];
+        let mut toggle_text_x = Vec::new();
+        for command in commands {
+            match command {
+                crate::engine::renderer_model::DrawCommand::PushTransform { transform } => {
+                    let composed = transforms.last().unwrap().then(&transform);
+                    transforms.push(composed);
+                }
+                crate::engine::renderer_model::DrawCommand::PopTransform => {
+                    transforms.pop().expect("balanced transform stack");
+                }
+                crate::engine::renderer_model::DrawCommand::DrawText { x, text, .. }
+                    if text.as_str() == "Toggle" =>
+                {
+                    toggle_text_x.push(transforms.last().unwrap().apply(x, 0.0).0);
+                }
+                _ => {}
+            }
+        }
+
+        assert_eq!(position(&mut webview, first)[0], 75.0);
+        assert_eq!(position(&mut webview, second)[0], 388.0);
+        assert_eq!(&toggle_text_x[..2], &[89.0, 402.0]);
     }
 
     #[test]

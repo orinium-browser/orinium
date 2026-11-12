@@ -1,6 +1,6 @@
 //! Layout builder, which transforms a DOM tree into a UI layout.
 
-use crate::engine::animation::{parse as anim_parse, AnimationInputs, ElementAnimationState};
+use crate::engine::animation::{AnimationInputs, ElementAnimationState, parse as anim_parse};
 use crate::engine::css::values::CssValue;
 
 mod args;
@@ -372,7 +372,11 @@ pub fn build_layout_and_info_from_snapshot(
     interaction: &InteractionState,
     existing_custom_nodes: &HashMap<u32, Arc<dyn CustomNode>>,
     animated_overrides: &HashMap<NodeId, HashMap<String, CssValue>>,
-) -> (LayoutNode, InfoNode, crate::engine::animation::AnimationInputs) {
+) -> (
+    LayoutNode,
+    InfoNode,
+    crate::engine::animation::AnimationInputs,
+) {
     perf_scope!(total);
 
     #[cfg(any(feature = "profile", debug_assertions))]
@@ -537,7 +541,8 @@ pub fn build_layout_and_info_from_snapshot(
 
             // Apply CSS declarations.
             perf_scope!(apply_decl);
-            let mut anim_effective: std::collections::HashMap<String, CssValue> = std::collections::HashMap::new();
+            let mut anim_effective: std::collections::HashMap<String, CssValue> =
+                std::collections::HashMap::new();
             let mut anim_transition = anim_parse::TransitionInputs::default();
             let mut anim_animation = anim_parse::AnimationInputs::default();
             if let Some(candidates) = &candidates {
@@ -721,17 +726,15 @@ pub fn build_layout_and_info_from_snapshot(
                     base_values
                         .entry("opacity".to_string())
                         .or_insert(CssValue::Number(container_style.opacity));
-                    base_values
-                        .entry("color".to_string())
-                        .or_insert_with(|| {
-                            CssValue::Color(format!(
-                                "{:02x}{:02x}{:02x}{:02x}",
-                                text_style.color.0,
-                                text_style.color.1,
-                                text_style.color.2,
-                                text_style.color.3
-                            ))
-                        });
+                    base_values.entry("color".to_string()).or_insert_with(|| {
+                        CssValue::Color(format!(
+                            "{:02x}{:02x}{:02x}{:02x}",
+                            text_style.color.0,
+                            text_style.color.1,
+                            text_style.color.2,
+                            text_style.color.3
+                        ))
+                    });
                     if let crate::engine::layouter::types::Background::Color(c) =
                         &container_style.background
                     {
@@ -937,7 +940,7 @@ pub fn build_layout_and_info_from_snapshot(
                         .expect("registry must handle every tag it reports")
                 });
 
-                let bridge = CustomNodeBridge::new(Arc::clone(&node), style.clone());
+                let bridge = CustomNodeBridge::new_content(Arc::clone(&node), &style);
                 let container_opacity = container_style.opacity;
                 let kind = NodeKind::Custom {
                     node,
@@ -1008,7 +1011,9 @@ pub fn build_layout_and_info_from_snapshot(
                 if !animation_inputs.contains_key(&ptr) {
                     let transitions = anim_parse::build_transition_specs(&anim_transition);
                     let animations = anim_parse::build_animation_specs(&anim_animation);
-                    let has_animation = animations.iter().any(|a| a.name != "none" && !a.name.is_empty());
+                    let has_animation = animations
+                        .iter()
+                        .any(|a| a.name != "none" && !a.name.is_empty());
                     if !transitions.is_empty() || has_animation {
                         let mut base_values = std::collections::HashMap::new();
                         for key in [
@@ -1043,17 +1048,15 @@ pub fn build_layout_and_info_from_snapshot(
                         base_values
                             .entry("opacity".to_string())
                             .or_insert(CssValue::Number(container_opacity));
-                        base_values
-                            .entry("color".to_string())
-                            .or_insert_with(|| {
-                                CssValue::Color(format!(
-                                    "{:02x}{:02x}{:02x}{:02x}",
-                                    text_style.color.0,
-                                    text_style.color.1,
-                                    text_style.color.2,
-                                    text_style.color.3
-                                ))
-                            });
+                        base_values.entry("color".to_string()).or_insert_with(|| {
+                            CssValue::Color(format!(
+                                "{:02x}{:02x}{:02x}{:02x}",
+                                text_style.color.0,
+                                text_style.color.1,
+                                text_style.color.2,
+                                text_style.color.3
+                            ))
+                        });
                         animation_inputs.insert(
                             ptr,
                             ElementAnimationState {
@@ -1591,8 +1594,6 @@ pub fn build_layout_and_info_from_snapshot(
     (layout, info_node, animation_inputs)
 }
 
-
-
 fn collect_animation_decl(
     name: &str,
     value: &CssValue,
@@ -1635,8 +1636,18 @@ fn collect_animation_decl(
                     }
                 }
                 props.push(prop.unwrap_or_else(|| CssValue::Keyword("all".into())));
-                durs.push(times.first().cloned().unwrap_or(CssValue::Length(0.0, Unit::S)));
-                delays.push(times.get(1).cloned().unwrap_or(CssValue::Length(0.0, Unit::S)));
+                durs.push(
+                    times
+                        .first()
+                        .cloned()
+                        .unwrap_or(CssValue::Length(0.0, Unit::S)),
+                );
+                delays.push(
+                    times
+                        .get(1)
+                        .cloned()
+                        .unwrap_or(CssValue::Length(0.0, Unit::S)),
+                );
                 easings.push(easing.unwrap_or_else(|| CssValue::Keyword("ease".into())));
             }
             if !props.is_empty() {
@@ -1707,8 +1718,18 @@ fn collect_animation_decl(
                     }
                 }
                 names.push(name.unwrap_or_else(|| CssValue::Keyword("none".into())));
-                durs.push(times.first().cloned().unwrap_or(CssValue::Length(0.0, Unit::S)));
-                delays.push(times.get(1).cloned().unwrap_or(CssValue::Length(0.0, Unit::S)));
+                durs.push(
+                    times
+                        .first()
+                        .cloned()
+                        .unwrap_or(CssValue::Length(0.0, Unit::S)),
+                );
+                delays.push(
+                    times
+                        .get(1)
+                        .cloned()
+                        .unwrap_or(CssValue::Length(0.0, Unit::S)),
+                );
                 easings.push(easing.unwrap_or_else(|| CssValue::Keyword("ease".into())));
                 iters.push(iter.unwrap_or(CssValue::Number(1.0)));
                 dirs.push(dir.unwrap_or_else(|| CssValue::Keyword("normal".into())));
@@ -1793,7 +1814,10 @@ fn flatten_css_value_items(items: &[CssValue]) -> Vec<CssValue> {
 
 fn join_css_comma_groups(groups: Vec<CssValue>) -> CssValue {
     if groups.len() <= 1 {
-        return groups.into_iter().next().unwrap_or(CssValue::Keyword("none".into()));
+        return groups
+            .into_iter()
+            .next()
+            .unwrap_or(CssValue::Keyword("none".into()));
     }
     let mut out: Vec<CssValue> = Vec::new();
     for (i, g) in groups.into_iter().enumerate() {
@@ -1804,7 +1828,6 @@ fn join_css_comma_groups(groups: Vec<CssValue>) -> CssValue {
     }
     CssValue::List(out)
 }
-
 
 // ── Whitespace helpers ──────────────────────────────────────────────────────
 
