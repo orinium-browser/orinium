@@ -16,7 +16,7 @@ use orinium_browser::{
             },
             types::{TextFlowStyle, TextStyle},
         },
-        renderer_model::generate_draw_commands,
+        renderer_model::{AffineTransform, DrawCommand, Rect as DrawRect, generate_draw_commands},
         tree::NodeRef,
     },
     platform::{
@@ -30,7 +30,7 @@ use colored::*;
 
 use anyhow::Result;
 use std::{env, rc::Rc, sync::Arc};
-use ui_layout::{LayoutEngine, LayoutNode};
+use ui_layout::{LayoutBox, LayoutChild, LayoutEngine, LayoutNode};
 
 fn main() -> Result<()> {
     #[cfg(feature = "dhat-heap")]
@@ -279,6 +279,21 @@ fn main() -> Result<()> {
                     );
                 }
             }
+            "dump_layout_geometry" => {
+                if args.len() == 3 || args.len() == 5 {
+                    let raw_url = &args[2];
+                    let (viewport_w, viewport_h) = viewport_args(&args, 800.0, 600.0)?;
+                    println!("Dumping layout box geometry for URL: {}", raw_url);
+
+                    let mut ctx = build_layout_info(raw_url, (viewport_w, viewport_h))?;
+                    LayoutEngine::layout(&mut ctx.layout, viewport_w, viewport_h);
+                    dump_dom_layout_geometry(&ctx.info, &ctx.layout, &ctx.dom_labels);
+                } else {
+                    eprintln!(
+                        "Please provide a URL and optional viewport size (URL [WIDTH HEIGHT])."
+                    );
+                }
+            }
             "dump_draw_command" => {
                 if args.len() == 3 || args.len() == 5 {
                     let raw_url = &args[2];
@@ -300,6 +315,52 @@ fn main() -> Result<()> {
                     for (i, cmd) in draw_commands.iter().enumerate() {
                         println!("  [{:>3}] {:?}", i, cmd);
                     }
+                } else {
+                    eprintln!(
+                        "Please provide a URL and optional viewport size (URL [WIDTH HEIGHT])."
+                    );
+                }
+            }
+            "dump_relative_draw_tree" => {
+                if args.len() == 3 || args.len() == 5 {
+                    let raw_url = &args[2];
+                    let (viewport_w, viewport_h) = viewport_args(&args, 800.0, 600.0)?;
+                    println!("Dumping relative draw tree for URL: {}", raw_url);
+
+                    let mut ctx = build_layout_info(raw_url, (viewport_w, viewport_h))?;
+                    LayoutEngine::layout(&mut ctx.layout, viewport_w, viewport_h);
+
+                    let mut draw_commands = Vec::new();
+                    generate_draw_commands(
+                        &mut draw_commands,
+                        &ctx.layout,
+                        &ctx.info,
+                        (viewport_w, viewport_h),
+                    );
+                    dump_relative_draw_tree(&draw_commands)?;
+                } else {
+                    eprintln!(
+                        "Please provide a URL and optional viewport size (URL [WIDTH HEIGHT])."
+                    );
+                }
+            }
+            "dump_absolute_draw_positions" => {
+                if args.len() == 3 || args.len() == 5 {
+                    let raw_url = &args[2];
+                    let (viewport_w, viewport_h) = viewport_args(&args, 800.0, 600.0)?;
+                    println!("Dumping absolute draw positions for URL: {}", raw_url);
+
+                    let mut ctx = build_layout_info(raw_url, (viewport_w, viewport_h))?;
+                    LayoutEngine::layout(&mut ctx.layout, viewport_w, viewport_h);
+
+                    let mut draw_commands = Vec::new();
+                    generate_draw_commands(
+                        &mut draw_commands,
+                        &ctx.layout,
+                        &ctx.info,
+                        (viewport_w, viewport_h),
+                    );
+                    dump_absolute_draw_positions(&draw_commands)?;
                 } else {
                     eprintln!(
                         "Please provide a URL and optional viewport size (URL [WIDTH HEIGHT])."
@@ -422,13 +483,485 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-use orinium_browser::engine::layouter::types::InfoNode;
+use orinium_browser::engine::layouter::{DomSnapshot, types::InfoNode};
 
 /// Result of building layout for a page, keeping the DOM and JS runtime alive
 /// so callers can dispatch clicks and inspect the mutated tree.
 struct LayoutInfo {
     layout: LayoutNode,
     info: InfoNode,
+    dom_labels: Vec<String>,
+}
+
+#[derive(Debug)]
+struct DrawTreeNode {
+    label: String,
+    children: Vec<DrawTreeNode>,
+}
+
+fn dump_relative_draw_tree(commands: &[DrawCommand]) -> Result<()> {
+    let mut index = 0;
+    let tree = parse_draw_tree_level(commands, &mut index, false)?;
+    if index != commands.len() {
+        anyhow::bail!("unexpected trailing draw commands at index {index}");
+    }
+
+    println!("Draw tree (coordinates are relative to enclosing Transform nodes):");
+    print_draw_tree(&tree, 0);
+    Ok(())
+}
+
+fn dump_absolute_draw_positions(commands: &[DrawCommand]) -> Result<()> {
+    let mut index = 0;
+    let tree = parse_absolute_draw_level(commands, &mut index, false, AffineTransform::identity())?;
+    if index != commands.len() {
+        anyhow::bail!("unexpected trailing draw commands at index {index}");
+    }
+
+    println!("Draw tree (positions include the full enclosing transform stack):");
+    print_draw_tree(&tree, 0);
+    Ok(())
+}
+
+fn parse_absolute_draw_level(
+    commands: &[DrawCommand],
+    index: &mut usize,
+    nested: bool,
+    parent_transform: AffineTransform,
+) -> Result<Vec<DrawTreeNode>> {
+    let mut nodes = Vec::new();
+    while let Some(command) = commands.get(*index) {
+        match command {
+            DrawCommand::PushTransform { transform } => {
+                let local = *transform;
+                let transform_index = *index;
+                let absolute = parent_transform.then(&local);
+                *index += 1;
+                let children = parse_absolute_draw_level(commands, index, true, absolute)?;
+                nodes.push(DrawTreeNode {
+                    label: format!(
+                        "[{transform_index}] Transform local=({:.2}, {:.2}), absolute_origin=({:.2}, {:.2})",
+                        local.dx,
+                        local.dy,
+                        absolute.dx,
+                        absolute.dy
+                    ),
+                    children,
+                });
+            }
+            DrawCommand::PopTransform => {
+                if !nested {
+                    anyhow::bail!("unbalanced PopTransform at draw command {}", *index);
+                }
+                *index += 1;
+                return Ok(nodes);
+            }
+            DrawCommand::Fill { path, .. } => {
+                let command_index = *index;
+                *index += 1;
+                if let Some(bounds) = path.bounding_box() {
+                    let absolute = transformed_rect_bounds(&parent_transform, bounds);
+                    nodes.push(DrawTreeNode {
+                        label: format!(
+                            "[{command_index}] Fill absolute @({:.2}, {:.2}) {:.2}x{:.2}",
+                            absolute.x, absolute.y, absolute.width, absolute.height
+                        ),
+                        children: Vec::new(),
+                    });
+                }
+            }
+            DrawCommand::DrawText { x, y, text, .. } => {
+                let (absolute_x, absolute_y) = parent_transform.apply(*x, *y);
+                nodes.push(DrawTreeNode {
+                    label: format!(
+                        "[{}] Text absolute @({absolute_x:.2}, {absolute_y:.2}): {text:?}",
+                        *index
+                    ),
+                    children: Vec::new(),
+                });
+                *index += 1;
+            }
+            DrawCommand::SystemUi { kind, rect } => {
+                let absolute = transformed_rect_bounds(&parent_transform, *rect);
+                nodes.push(DrawTreeNode {
+                    label: format!(
+                        "[{}] {kind:?} absolute @({:.2}, {:.2}) {:.2}x{:.2}",
+                        *index, absolute.x, absolute.y, absolute.width, absolute.height
+                    ),
+                    children: Vec::new(),
+                });
+                *index += 1;
+            }
+            DrawCommand::PushClip { path, .. } => {
+                let label = path.bounding_box().map_or_else(
+                    || format!("[{}] PushClip (empty)", *index),
+                    |bounds| {
+                        let absolute = transformed_rect_bounds(&parent_transform, bounds);
+                        format!(
+                            "[{}] PushClip absolute @({:.2}, {:.2}) {:.2}x{:.2}",
+                            *index, absolute.x, absolute.y, absolute.width, absolute.height
+                        )
+                    },
+                );
+                nodes.push(DrawTreeNode {
+                    label,
+                    children: Vec::new(),
+                });
+                *index += 1;
+            }
+            DrawCommand::PopClip => {
+                nodes.push(DrawTreeNode {
+                    label: format!("[{}] PopClip", *index),
+                    children: Vec::new(),
+                });
+                *index += 1;
+            }
+        }
+    }
+    if nested {
+        anyhow::bail!("missing PopTransform before end of draw commands");
+    }
+    Ok(nodes)
+}
+
+fn transformed_rect_bounds(transform: &AffineTransform, rect: DrawRect) -> DrawRect {
+    let corners = [
+        transform.apply(rect.x, rect.y),
+        transform.apply(rect.x + rect.width, rect.y),
+        transform.apply(rect.x, rect.y + rect.height),
+        transform.apply(rect.x + rect.width, rect.y + rect.height),
+    ];
+    let min_x = corners
+        .iter()
+        .map(|point| point.0)
+        .fold(f32::INFINITY, f32::min);
+    let max_x = corners
+        .iter()
+        .map(|point| point.0)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let min_y = corners
+        .iter()
+        .map(|point| point.1)
+        .fold(f32::INFINITY, f32::min);
+    let max_y = corners
+        .iter()
+        .map(|point| point.1)
+        .fold(f32::NEG_INFINITY, f32::max);
+    DrawRect {
+        x: min_x,
+        y: min_y,
+        width: max_x - min_x,
+        height: max_y - min_y,
+    }
+}
+
+fn parse_draw_tree_level(
+    commands: &[DrawCommand],
+    index: &mut usize,
+    nested: bool,
+) -> Result<Vec<DrawTreeNode>> {
+    let mut nodes = Vec::new();
+    while let Some(command) = commands.get(*index) {
+        match command {
+            DrawCommand::PushTransform { transform } => {
+                let transform = *transform;
+                let transform_index = *index;
+                *index += 1;
+                let children = parse_draw_tree_level(commands, index, true)?;
+                nodes.push(DrawTreeNode {
+                    label: format!(
+                        "[{transform_index}] Transform(m11={:.3}, m12={:.3}, m21={:.3}, m22={:.3}, dx={:.2}, dy={:.2})",
+                        transform.m11,
+                        transform.m12,
+                        transform.m21,
+                        transform.m22,
+                        transform.dx,
+                        transform.dy
+                    ),
+                    children,
+                });
+            }
+            DrawCommand::PopTransform => {
+                if !nested {
+                    anyhow::bail!("unbalanced PopTransform at draw command {}", *index);
+                }
+                *index += 1;
+                return Ok(nodes);
+            }
+            DrawCommand::Fill { path, .. } => {
+                let command_index = *index;
+                *index += 1;
+                if let Some(bounds) = path.bounding_box() {
+                    nodes.push(DrawTreeNode {
+                        label: format!(
+                            "[{command_index}] Fill @({:.2}, {:.2}) {:.2}x{:.2}",
+                            bounds.x, bounds.y, bounds.width, bounds.height
+                        ),
+                        children: Vec::new(),
+                    });
+                }
+            }
+            DrawCommand::DrawText { x, y, text, .. } => {
+                nodes.push(DrawTreeNode {
+                    label: format!("[{}] Text @({x:.2}, {y:.2}): {text:?}", *index),
+                    children: Vec::new(),
+                });
+                *index += 1;
+            }
+            DrawCommand::SystemUi { kind, rect } => {
+                nodes.push(DrawTreeNode {
+                    label: format!(
+                        "[{}] {kind:?} @({:.2}, {:.2}) {:.2}x{:.2}",
+                        *index, rect.x, rect.y, rect.width, rect.height
+                    ),
+                    children: Vec::new(),
+                });
+                *index += 1;
+            }
+            DrawCommand::PushClip { path, .. } => {
+                let label = path.bounding_box().map_or_else(
+                    || format!("[{}] PushClip (empty)", *index),
+                    |bounds| {
+                        format!(
+                            "[{}] PushClip @({:.2}, {:.2}) {:.2}x{:.2}",
+                            *index, bounds.x, bounds.y, bounds.width, bounds.height
+                        )
+                    },
+                );
+                nodes.push(DrawTreeNode {
+                    label,
+                    children: Vec::new(),
+                });
+                *index += 1;
+            }
+            DrawCommand::PopClip => {
+                nodes.push(DrawTreeNode {
+                    label: format!("[{}] PopClip", *index),
+                    children: Vec::new(),
+                });
+                *index += 1;
+            }
+        }
+    }
+    if nested {
+        anyhow::bail!("missing PopTransform before end of draw commands");
+    }
+    Ok(nodes)
+}
+
+fn dump_dom_layout_geometry(info: &InfoNode, layout: &LayoutNode, dom_labels: &[String]) {
+    println!("DOM-aligned layout tree (local and accumulated border-box origins):");
+    dump_dom_layout_node(info, layout, dom_labels, 0, (0.0, 0.0));
+}
+
+fn dump_dom_layout_node(
+    info: &InfoNode,
+    layout: &LayoutNode,
+    dom_labels: &[String],
+    depth: usize,
+    parent_content_origin: (f32, f32),
+) {
+    let indent = "|   ".repeat(depth);
+    let connector = if depth == 0 { "" } else { "|-- " };
+    println!("{indent}{connector}{}", dom_node_label(info, dom_labels));
+    println!("{indent}|   display={:?}", layout.style.display);
+    println!(
+        "{indent}|   margin: left={:?}, top={:?}, right={:?}, bottom={:?}",
+        layout.style.spacing.margin_left,
+        layout.style.spacing.margin_top,
+        layout.style.spacing.margin_right,
+        layout.style.spacing.margin_bottom
+    );
+    dump_layout_box_geometry(&layout.layout_box, &indent);
+    let child_parent_content_origin = layout.layout_box.iter().next().map_or(
+        parent_content_origin,
+        |box_model| {
+            let absolute_border_x = parent_content_origin.0 + box_model.border_box.x;
+            let absolute_border_y = parent_content_origin.1 + box_model.border_box.y;
+            let absolute_content_origin = (
+                parent_content_origin.0 + box_model.content_box.x,
+                parent_content_origin.1 + box_model.content_box.y,
+            );
+            println!(
+                "{indent}|   absolute border origin=({absolute_border_x:.2}, {absolute_border_y:.2}), content origin=({:.2}, {:.2})",
+                absolute_content_origin.0, absolute_content_origin.1
+            );
+            absolute_content_origin
+        },
+    );
+
+    if info.children.len() != layout.children.len() {
+        println!(
+            "{indent}|   CHILD COUNT MISMATCH: DOM={} layout={}",
+            info.children.len(),
+            layout.children.len()
+        );
+    }
+
+    for index in 0..info.children.len().max(layout.children.len()) {
+        match (info.children.get(index), layout.children.get(index)) {
+            (Some(child_info), Some(LayoutChild::Node(child_layout))) => {
+                dump_dom_layout_node(
+                    child_info,
+                    child_layout,
+                    dom_labels,
+                    depth + 1,
+                    child_parent_content_origin,
+                );
+            }
+            (Some(child_info), Some(LayoutChild::Custom(custom))) => {
+                let child_indent = "|   ".repeat(depth + 1);
+                println!(
+                    "{child_indent}|-- {}",
+                    dom_node_label(child_info, dom_labels)
+                );
+                println!("{child_indent}|   custom layout result:");
+                if let Some(result) = custom.result() {
+                    dump_box_model_geometry(&result.box_model, &child_indent);
+                    for (span_index, span) in result.spans.iter().enumerate() {
+                        println!(
+                            "{child_indent}|   span[{span_index}]: line_pos=({:.2}, {:.2}), x_range={:.2}..{:.2}",
+                            span.line_pos.0, span.line_pos.1, span.x_range.start, span.x_range.end
+                        );
+                    }
+                } else {
+                    println!("{child_indent}|   no layout result");
+                }
+            }
+            (Some(child_info), Some(LayoutChild::Fragment(fragment))) => {
+                let child_indent = "|   ".repeat(depth + 1);
+                println!(
+                    "{child_indent}|-- {}",
+                    dom_node_label(child_info, dom_labels)
+                );
+                println!(
+                    "{child_indent}|   fragment placement=({:.2}, {:.2}), line={}",
+                    fragment.placement.offset.0,
+                    fragment.placement.offset.1,
+                    fragment.placement.line_index
+                );
+            }
+            (Some(child_info), None) => {
+                println!(
+                    "{}|-- {} [MISSING LAYOUT CHILD]",
+                    "|   ".repeat(depth + 1),
+                    dom_node_label(child_info, dom_labels)
+                );
+            }
+            (None, Some(_)) => {
+                println!("{indent}|-- [LAYOUT CHILD {index} HAS NO DOM NODE]");
+            }
+            (None, None) => unreachable!(),
+        }
+    }
+}
+
+fn dom_node_label(info: &InfoNode, dom_labels: &[String]) -> String {
+    if let Some(dom_id) = info.dom_id {
+        return dom_labels
+            .get(dom_id as usize)
+            .cloned()
+            .unwrap_or_else(|| format!("[dom:{dom_id}] <unknown>"));
+    }
+
+    match &info.kind {
+        orinium_browser::engine::layouter::types::NodeKind::Text { text, .. } => {
+            format!("[generated text] {:?}", text.trim())
+        }
+        orinium_browser::engine::layouter::types::NodeKind::LineBreak => {
+            "[generated line break]".to_string()
+        }
+        _ => "[generated layout slot]".to_string(),
+    }
+}
+
+fn dump_layout_box_geometry(layout_box: &LayoutBox, prefix: &str) {
+    match layout_box {
+        LayoutBox::None => println!("{prefix}|   LayoutBox::None"),
+        LayoutBox::BlockBox(box_model) => dump_box_model_geometry(box_model, prefix),
+        LayoutBox::InlineBox(inline) => {
+            dump_box_model_geometry(&inline.box_model, prefix);
+            let first_span_matches_border_origin = inline.line_spans.first().map_or(true, |span| {
+                span.line_pos.0 == inline.box_model.border_box.x
+                    && span.line_pos.1 == inline.box_model.border_box.y
+            });
+            println!(
+                "{prefix}|   first_span_matches_border_origin={first_span_matches_border_origin}"
+            );
+            for (index, span) in inline.line_spans.iter().enumerate() {
+                println!(
+                    "{prefix}|   span[{index}]: line_pos=({:.2}, {:.2}), x_range={:.2}..{:.2}",
+                    span.line_pos.0, span.line_pos.1, span.x_range.start, span.x_range.end
+                );
+            }
+            for (index, box_model) in layout_box.iter().enumerate() {
+                println!("{prefix}|   painted box[{index}]:");
+                dump_box_model_geometry(&box_model, prefix);
+            }
+        }
+    }
+}
+
+fn dump_box_model_geometry(box_model: &ui_layout::BoxModel, prefix: &str) {
+    println!("{prefix}|   border_box: {:?}", box_model.border_box);
+    println!("{prefix}|   padding_box: {:?}", box_model.padding_box);
+    println!("{prefix}|   content_box: {:?}", box_model.content_box);
+}
+
+fn collect_dom_labels(
+    root: &orinium_browser::engine::tree::NodeRef<
+        orinium_browser::engine::html::parser::HtmlNodeType,
+    >,
+) -> Vec<String> {
+    let (snapshot, _) = DomSnapshot::from_tree(root);
+    snapshot
+        .nodes()
+        .iter()
+        .enumerate()
+        .map(|(id, node)| {
+            use orinium_browser::engine::html::parser::HtmlNodeType;
+            match &node.kind {
+                HtmlNodeType::Element { tag_name, .. } => {
+                    let mut label = format!("[dom:{id}] <{tag_name}");
+                    if let Some(element_id) = node.kind.get_attr("id") {
+                        label.push_str(&format!(" id=\"{element_id}\""));
+                    }
+                    if let Some(class) = node.kind.get_attr("class") {
+                        label.push_str(&format!(" class=\"{class}\""));
+                    }
+                    label.push('>');
+                    label
+                }
+                HtmlNodeType::Text(text) => {
+                    format!("[dom:{id}] #text {:?}", text.trim())
+                }
+                HtmlNodeType::Document => format!("[dom:{id}] #document"),
+                HtmlNodeType::DocumentFragment => format!("[dom:{id}] #document-fragment"),
+                HtmlNodeType::ShadowRoot { .. } => format!("[dom:{id}] #shadow-root"),
+                HtmlNodeType::Comment(text) => format!("[dom:{id}] <!--{text}-->"),
+                HtmlNodeType::Doctype { name, .. } => {
+                    format!("[dom:{id}] <!DOCTYPE {}>", name.as_deref().unwrap_or(""))
+                }
+                HtmlNodeType::ProcessingInstruction { target, .. } => {
+                    format!("[dom:{id}] <?{target}?>")
+                }
+                HtmlNodeType::InvalidNode(_, description) => {
+                    format!("[dom:{id}] <invalid: {description}>")
+                }
+            }
+        })
+        .collect()
+}
+
+fn print_draw_tree(nodes: &[DrawTreeNode], depth: usize) {
+    for (index, node) in nodes.iter().enumerate() {
+        let is_last = index + 1 == nodes.len();
+        let connector = if is_last { "\\-- " } else { "|-- " };
+        println!("{}{}{}", "|   ".repeat(depth), connector, node.label);
+        if !node.children.is_empty() {
+            print_draw_tree(&node.children, depth + 1);
+        }
+    }
 }
 
 fn build_layout_info(raw_url: &str, viewport: (f32, f32)) -> Result<LayoutInfo> {
@@ -554,7 +1087,12 @@ fn build_layout_info_inner(
         viewport,
     );
 
-    Ok(LayoutInfo { layout, info })
+    let dom_labels = collect_dom_labels(&dom.root);
+    Ok(LayoutInfo {
+        layout,
+        info,
+        dom_labels,
+    })
 }
 
 /// Builds layout from a live (post-JS-mutation) DOM and stylesheet bodies
@@ -712,7 +1250,12 @@ fn build_layout_for_dom(
         viewport,
     );
 
-    Ok(LayoutInfo { layout, info })
+    let dom_labels = collect_dom_labels(&dom.root);
+    Ok(LayoutInfo {
+        layout,
+        info,
+        dom_labels,
+    })
 }
 
 /// JS prologue that intercepts `console.*` and records `warn`/`error` messages
@@ -1996,11 +2539,35 @@ fn get_commands<'a>() -> HashMap<&'a str, (&'a str, &'a str, &'a str)> {
         ),
     );
     map.insert(
+        "dump_layout_geometry",
+        (
+            "Print DOM-id-aligned box models, inline spans, margins, and per-line paint boxes.",
+            "URL [WIDTH HEIGHT]",
+            "Use this to compare LayoutBox base geometry and the boxes yielded to the renderer.",
+        ),
+    );
+    map.insert(
         "dump_draw_command",
         (
             "Fetch HTML and CSS, build layout tree, run layout engine, and generate draw commands.",
             "URL [WIDTH HEIGHT]",
             "The optional WIDTH HEIGHT specify the layout viewport size; it defaults to 800x600.",
+        ),
+    );
+    map.insert(
+        "dump_relative_draw_tree",
+        (
+            "Generate a nested draw-command tree with coordinates relative to each transform.",
+            "URL [WIDTH HEIGHT]",
+            "Primitive coordinates remain local; each Transform node describes the offset/matrix applied to descendants.",
+        ),
+    );
+    map.insert(
+        "dump_absolute_draw_positions",
+        (
+            "Generate a draw-command tree with positions after composing all enclosing transforms.",
+            "URL [WIDTH HEIGHT]",
+            "Use this to compare final draw-command coordinates with the DOM-aligned layout geometry.",
         ),
     );
     map.insert(
