@@ -304,8 +304,7 @@ fn parse_transform_function(
             let sx = transform_length_px(name, flat.first()?, text_flow_style, element_size, true)?;
             let sy = flat
                 .get(1)
-                .map(|v| transform_length_px(name, v, text_flow_style, element_size, true))
-                .flatten()
+                .and_then(|v| transform_length_px(name, v, text_flow_style, element_size, true))
                 .unwrap_or(sx);
             Some(AffineTransform::scale(sx, sy))
         }
@@ -314,8 +313,7 @@ fn parse_transform_function(
             let tx = transform_length_px(name, flat.first()?, text_flow_style, element_size, true)?;
             let ty = flat
                 .get(1)
-                .map(|v| transform_length_px(name, v, text_flow_style, element_size, false))
-                .flatten()
+                .and_then(|v| transform_length_px(name, v, text_flow_style, element_size, false))
                 .unwrap_or(0.0);
             Some(AffineTransform::translate(tx, ty))
         }
@@ -345,7 +343,7 @@ fn parse_transform(
     text_flow_style: &TextFlowStyle,
 ) -> Option<AffineTransform> {
     match value {
-        CssValue::Keyword(k) if k.eq_ignore_ascii_case("none") => return None,
+        CssValue::Keyword(k) if k.eq_ignore_ascii_case("none") => None,
 
         CssValue::List(funcs) => {
             let mut accumulated = AffineTransform::identity();
@@ -2173,8 +2171,12 @@ pub fn apply_declaration(
 
         ("flex-basis", value) => {
             style.item_style.flex_basis = match value {
-                CssValue::Keyword(k) if k == "initial" => DEFAULT_STYLE.item_style.flex_basis.clone(),
-                CssValue::Keyword(k) if k == "inherit" => parent_style.item_style.flex_basis.clone(),
+                CssValue::Keyword(k) if k == "initial" => {
+                    DEFAULT_STYLE.item_style.flex_basis.clone()
+                }
+                CssValue::Keyword(k) if k == "inherit" => {
+                    parent_style.item_style.flex_basis.clone()
+                }
                 CssValue::Keyword(k) if k == "unset" => DEFAULT_STYLE.item_style.flex_basis.clone(),
                 _ => resolve_css_len_auto(name, value, text_flow_style)?,
             };
@@ -2340,21 +2342,19 @@ fn parse_cursor_value(value: &CssValue, _font_size: f32) -> CursorStyle {
 
     for item in items {
         match item {
-            CssValue::Function(fn_name, args)
-                if fn_name.eq_ignore_ascii_case("url") =>
-            {
-                let source = args
-                    .iter()
-                    .flatten()
-                    .find_map(|v| match v {
-                        CssValue::String(s) => Some(s.clone()),
-                        CssValue::Keyword(s) => Some(s.to_string()),
-                        _ => None,
-                    });
+            CssValue::Function(fn_name, args) if fn_name.eq_ignore_ascii_case("url") => {
+                let source = args.iter().flatten().find_map(|v| match v {
+                    CssValue::String(s) => Some(s.clone()),
+                    CssValue::Keyword(s) => Some(s.to_string()),
+                    _ => None,
+                });
                 if let Some(src) = source {
                     // Look for hotspot coordinates: two numbers after the url args.
                     let hotspot = parse_cursor_hotspot(args);
-                    images.push(CustomCursor { source: src, hotspot });
+                    images.push(CustomCursor {
+                        source: src,
+                        hotspot,
+                    });
                 }
             }
             CssValue::Keyword(kw) => {

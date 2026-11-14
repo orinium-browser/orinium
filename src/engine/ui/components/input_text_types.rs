@@ -25,7 +25,10 @@ pub enum InputTextEvent {
     CancelComposition,
     /// Select a range `[start, end)` of byte offsets into `value`.
     /// `None` clears the selection.
-    Select { start: Option<usize>, end: Option<usize> },
+    Select {
+        start: Option<usize>,
+        end: Option<usize>,
+    },
     Copy,
     Cut,
     SelectAll,

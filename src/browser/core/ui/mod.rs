@@ -850,15 +850,12 @@ impl BrowserUi {
         // the DOM tree. When no page is loaded yet, return a minimal response
         // so the DevTools pane can connect and show "connected" status.
         if method == "getVersion" {
-            if let Some(target_tab) = self.active_tab_mut() {
-                match target_tab.inspect("getVersion", "{}") {
-                    Ok(data) => {
-                        let response = serde_json::json!({ "ok": true, "data": data }).to_string();
-                        self.renderer.chrome.on_devtools_response(id, response);
-                        return;
-                    }
-                    Err(_) => {}
-                }
+            if let Some(target_tab) = self.active_tab_mut()
+                && let Ok(data) = target_tab.inspect("getVersion", "{}")
+            {
+                let response = serde_json::json!({ "ok": true, "data": data }).to_string();
+                self.renderer.chrome.on_devtools_response(id, response);
+                return;
             }
             let response = serde_json::json!({
                 "ok": true,

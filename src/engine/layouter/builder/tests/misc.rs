@@ -203,19 +203,28 @@ fn is_collapsible_whitespace_info_preserves_pre_modes() {
     };
 
     // Normal and Nowrap collapse whitespace-only text.
-    assert!(is_collapsible_whitespace_info(&text_info(WhiteSpace::Normal), WhiteSpace::Normal));
-    assert!(
-        is_collapsible_whitespace_info(&text_info(WhiteSpace::Nowrap), WhiteSpace::Nowrap)
-    );
+    assert!(is_collapsible_whitespace_info(
+        &text_info(WhiteSpace::Normal),
+        WhiteSpace::Normal
+    ));
+    assert!(is_collapsible_whitespace_info(
+        &text_info(WhiteSpace::Nowrap),
+        WhiteSpace::Nowrap
+    ));
 
     // Preserved-whitespace modes keep whitespace even when it is whitespace-only.
-    assert!(!is_collapsible_whitespace_info(&text_info(WhiteSpace::Pre), WhiteSpace::Pre));
-    assert!(
-        !is_collapsible_whitespace_info(&text_info(WhiteSpace::PreWrap), WhiteSpace::PreWrap)
-    );
-    assert!(
-        !is_collapsible_whitespace_info(&text_info(WhiteSpace::BreakSpaces), WhiteSpace::BreakSpaces)
-    );
+    assert!(!is_collapsible_whitespace_info(
+        &text_info(WhiteSpace::Pre),
+        WhiteSpace::Pre
+    ));
+    assert!(!is_collapsible_whitespace_info(
+        &text_info(WhiteSpace::PreWrap),
+        WhiteSpace::PreWrap
+    ));
+    assert!(!is_collapsible_whitespace_info(
+        &text_info(WhiteSpace::BreakSpaces),
+        WhiteSpace::BreakSpaces
+    ));
     // PreLine also preserves whitespace (segment breaks are preserved).
     assert!(!is_collapsible_whitespace_info(
         &text_info(WhiteSpace::PreLine),
@@ -244,5 +253,8 @@ fn is_collapsible_whitespace_info_non_text_is_not_collapsible() {
         &container_info,
         WhiteSpace::Normal
     ));
-    assert!(!is_collapsible_whitespace_info(&container_info, WhiteSpace::Pre));
+    assert!(!is_collapsible_whitespace_info(
+        &container_info,
+        WhiteSpace::Pre
+    ));
 }

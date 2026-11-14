@@ -77,7 +77,7 @@ fn sample_derivative(a: f32, b: f32, t: f32) -> f32 {
 /// Extract the angle (in radians) from a `rotate()` function's parsed args.
 /// Args shape: `vec![vec![Length(angle, unit)]]` (or a bare Number treated as radians).
 fn transform_function_angle(args: &[Vec<CssValue>]) -> Option<f32> {
-    let v = args.get(0)?.first()?;
+    let v = args.first()?.first()?;
     match *v {
         CssValue::Length(val, Unit::Deg) => Some(val.to_radians()),
         CssValue::Length(val, Unit::Rad) => Some(val),
@@ -300,9 +300,9 @@ pub fn interpolate_value(
             }
             let mut result = Vec::with_capacity(from_list.len());
             for (from_fn, to_fn) in from_list.iter().zip(to_list.iter()) {
-                match interpolate_value(from_fn, to_fn, t, color_scheme) {
-                    Some(v) => result.push(v),
-                    None => return None,
+                {
+                    let v = interpolate_value(from_fn, to_fn, t, color_scheme)?;
+                    result.push(v)
                 }
             }
             Some(CssValue::List(result))

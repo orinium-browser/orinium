@@ -881,7 +881,7 @@ fn dump_layout_box_geometry(layout_box: &LayoutBox, prefix: &str) {
         LayoutBox::BlockBox(box_model) => dump_box_model_geometry(box_model, prefix),
         LayoutBox::InlineBox(inline) => {
             dump_box_model_geometry(&inline.box_model, prefix);
-            let first_span_matches_border_origin = inline.line_spans.first().map_or(true, |span| {
+            let first_span_matches_border_origin = inline.line_spans.first().is_none_or(|span| {
                 span.line_pos.0 == inline.box_model.border_box.x
                     && span.line_pos.1 == inline.box_model.border_box.y
             });

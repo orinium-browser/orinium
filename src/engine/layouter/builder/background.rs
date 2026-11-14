@@ -59,7 +59,7 @@ fn split_on_separator<'a>(value: &'a CssValue) -> Option<Vec<Vec<&'a CssValue>>>
 
 /// Like [`split_on_separator`] but returns `Some(vec![value])` for non-List
 /// values, so callers can uniformly handle both single and multi-layer values.
-fn split_on_separator_or_single<'a>(value: &'a CssValue) -> Vec<Vec<&'a CssValue>> {
+fn split_on_separator_or_single(value: &CssValue) -> Vec<Vec<&CssValue>> {
     match value {
         CssValue::List(_) => split_on_separator(value).unwrap_or_default(),
         _ => vec![vec![value]],
@@ -75,16 +75,16 @@ pub fn parse_background_size(value: &CssValue, font_size: f32) -> Vec<Background
     // (two dimensions → [width, height] for one layer).
     if groups.len() == 1 {
         let items = &groups[0];
-        if items.len() == 2 {
-            if let (Some(w), Some(h)) = (
+        if items.len() == 2
+            && let (Some(w), Some(h)) = (
                 background_dimension(items[0], font_size),
                 background_dimension(items[1], font_size),
-            ) {
-                return vec![BackgroundSize::Explicit {
-                    width: w,
-                    height: h,
-                }];
-            }
+            )
+        {
+            return vec![BackgroundSize::Explicit {
+                width: w,
+                height: h,
+            }];
         }
         return items
             .iter()
@@ -97,16 +97,16 @@ pub fn parse_background_size(value: &CssValue, font_size: f32) -> Vec<Background
         .map(|group| {
             // A group like [width, height] → Explicit; [size] → Explicit with
             // height Auto; [keyword] → Contain/Cover/Auto.
-            if group.len() == 2 {
-                if let (Some(w), Some(h)) = (
+            if group.len() == 2
+                && let (Some(w), Some(h)) = (
                     background_dimension(group[0], font_size),
                     background_dimension(group[1], font_size),
-                ) {
-                    return BackgroundSize::Explicit {
-                        width: w,
-                        height: h,
-                    };
-                }
+                )
+            {
+                return BackgroundSize::Explicit {
+                    width: w,
+                    height: h,
+                };
             }
             if group.len() == 1 {
                 return parse_single_background_size(group[0], font_size)
@@ -391,13 +391,10 @@ pub fn apply_background_shorthand_geometry(
     {
         // Per-layer repeat from url() sublists.
         for (i, arg_group) in args.iter().enumerate() {
-            if let Some(repeat) = arg_group
-                .iter()
-                .find_map(|v| parse_single_background_repeat(v))
+            if let Some(repeat) = arg_group.iter().find_map(parse_single_background_repeat)
+                && let Some(layer) = container_style.background.layers.get_mut(i)
             {
-                if let Some(layer) = container_style.background.layers.get_mut(i) {
-                    layer.repeat = repeat;
-                }
+                layer.repeat = repeat;
             }
         }
         // Per-layer size from url() sublists (after slash within each sublist).
@@ -429,7 +426,7 @@ pub fn apply_background_shorthand_geometry(
                     };
                     let sizes = parse_background_size(&size_value, font_size);
                     if let Some(layer) = container_style.background.layers.get_mut(i) {
-                        layer.size = sizes.get(0).copied().unwrap_or_default();
+                        layer.size = sizes.first().copied().unwrap_or_default();
                     }
                 }
             }
@@ -462,7 +459,7 @@ pub fn apply_background_shorthand_geometry(
                 };
                 let positions = parse_background_position(&pos_value, font_size);
                 if let Some(layer) = container_style.background.layers.get_mut(i) {
-                    layer.position = positions.get(0).copied().unwrap_or_default();
+                    layer.position = positions.first().copied().unwrap_or_default();
                 }
             }
         }
@@ -475,10 +472,10 @@ pub fn apply_background_shorthand_geometry(
     // Per-layer repeat: parse repeat from each group.
     for (i, group) in groups.iter().enumerate() {
         let repeat = group.iter().find_map(|v| parse_single_background_repeat(v));
-        if let Some(r) = repeat {
-            if let Some(layer) = container_style.background.layers.get_mut(i) {
-                layer.repeat = r;
-            }
+        if let Some(r) = repeat
+            && let Some(layer) = container_style.background.layers.get_mut(i)
+        {
+            layer.repeat = r;
         }
     }
 
@@ -511,7 +508,7 @@ pub fn apply_background_shorthand_geometry(
                 };
                 let sizes = parse_background_size(&size_value, font_size);
                 if let Some(layer) = container_style.background.layers.get_mut(i) {
-                    layer.size = sizes.get(0).copied().unwrap_or_default();
+                    layer.size = sizes.first().copied().unwrap_or_default();
                 }
             }
         }
@@ -545,7 +542,7 @@ pub fn apply_background_shorthand_geometry(
             };
             let positions = parse_background_position(&pos_value, font_size);
             if let Some(layer) = container_style.background.layers.get_mut(i) {
-                layer.position = positions.get(0).copied().unwrap_or_default();
+                layer.position = positions.first().copied().unwrap_or_default();
             }
         }
     }

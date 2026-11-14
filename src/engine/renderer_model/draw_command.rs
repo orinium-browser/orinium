@@ -108,24 +108,6 @@ impl Image {
     }
 }
 
-#[cfg(test)]
-mod image_tests {
-    use super::Image;
-
-    #[test]
-    fn image_decode_rasterizes_svg_assets() {
-        let image = Image::decode(
-            br##"<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8">
-                <rect width="12" height="8" fill="#ff0000"/>
-            </svg>"##,
-        )
-        .expect("SVG decodes");
-        assert_eq!(image.width(), 12);
-        assert_eq!(image.height(), 8);
-        assert_eq!(&image.rgba()[0..4], &[255, 0, 0, 255]);
-    }
-}
-
 /// How a path is painted: the brush plus an opacity multiplier.
 #[derive(Debug, Clone)]
 pub struct Paint {
@@ -188,4 +170,22 @@ pub enum SystemUiKind {
         value: SmolStr,
         placeholder: SmolStr,
     },
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::Image;
+
+    #[test]
+    fn image_decode_rasterizes_svg_assets() {
+        let image = Image::decode(
+            br##"<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8">
+                <rect width="12" height="8" fill="#ff0000"/>
+            </svg>"##,
+        )
+        .expect("SVG decodes");
+        assert_eq!(image.width(), 12);
+        assert_eq!(image.height(), 8);
+        assert_eq!(&image.rgba()[0..4], &[255, 0, 0, 255]);
+    }
 }

@@ -87,14 +87,11 @@ impl CustomNode for ButtonComponent {
                     flow_style: TextFlowStyle::default(),
                 },
             });
-            let (label_width, label_height) = measured.map_or_else(
-                |_| DEFAULT_BUTTON_SIZE,
-                |fragments| {
-                    let width: f32 = fragments.iter().map(|f| f.width).sum();
-                    let height = fragments.iter().map(|f| f.height).fold(0.0, f32::max);
-                    (width, height)
-                },
-            );
+            let (label_width, label_height) = measured.map_or(DEFAULT_BUTTON_SIZE, |fragments| {
+                let width: f32 = fragments.iter().map(|f| f.width).sum();
+                let height = fragments.iter().map(|f| f.height).fold(0.0, f32::max);
+                (width, height)
+            });
 
             if let Ok(mut cache) = self.measured_cache.lock() {
                 *cache = Some((label_width, label_height));

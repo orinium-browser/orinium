@@ -18,7 +18,7 @@ fn take_number<'a, I: Iterator<Item = &'a CssValue>>(iter: &mut I) -> Option<f32
 #[allow(dead_code)]
 fn take_keyword<'a, I: Iterator<Item = &'a CssValue>>(iter: &mut I) -> Option<String> {
     match iter.next() {
-        Some(CssValue::Keyword(k)) => Some(k.to_ascii_lowercase().to_string()),
+        Some(CssValue::Keyword(k)) => Some(k.to_ascii_lowercase()),
         _ => None,
     }
 }

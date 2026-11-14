@@ -264,41 +264,38 @@ fn local_pointer_coords(path: &HitPath<'_>, target: usize, x: f32, y: f32) -> (f
             p.0 -= accumulated_scroll.0;
             p.1 -= accumulated_scroll.1;
         }
-        if is_sticky && !is_fixed {
-            if let Some(bm) = hit.layout.layout_box.iter().next() {
-                if let Some(edges) = bm.sticky_edges {
-                    let (dx, dy) = sticky_offset(&edges, &bm.border_box, viewport, containing);
-                    p.0 -= dx;
-                    p.1 -= dy;
-                }
-            }
+        if is_sticky
+            && !is_fixed
+            && let Some(bm) = hit.layout.layout_box.iter().next()
+            && let Some(edges) = bm.sticky_edges
+        {
+            let (dx, dy) = sticky_offset(&edges, &bm.border_box, viewport, containing);
+            p.0 -= dx;
+            p.1 -= dy;
         }
 
         let own_scroll = hit.info.kind.scroll_offsets();
         let style = node_style(hit.info);
 
         if index == target {
-            if !shares_parent_layout && !inline_container {
-                if let Some(bm) = hit.layout.layout_box.iter().next() {
-                    if let Some(lp) =
-                        map_to_content_local(p, &bm, &style, own_scroll, is_inline(hit.layout))
-                    {
-                        p = lp;
-                    }
-                }
+            if !shares_parent_layout
+                && !inline_container
+                && let Some(bm) = hit.layout.layout_box.iter().next()
+                && let Some(lp) =
+                    map_to_content_local(p, &bm, &style, own_scroll, is_inline(hit.layout))
+            {
+                p = lp;
             }
             return p;
         }
 
         // Descend into this node's child space.
-        if !shares_parent_layout && !inline_container {
-            if let Some(bm) = hit.layout.layout_box.iter().next() {
-                if let Some(lp) =
-                    map_to_box_local(p, &bm, &style, own_scroll, is_inline(hit.layout))
-                {
-                    p = lp;
-                }
-            }
+        if !shares_parent_layout
+            && !inline_container
+            && let Some(bm) = hit.layout.layout_box.iter().next()
+            && let Some(lp) = map_to_box_local(p, &bm, &style, own_scroll, is_inline(hit.layout))
+        {
+            p = lp;
         }
 
         let next_index = index - 1;
@@ -509,14 +506,14 @@ fn hit_test_inner<'a>(
     }
     let is_sticky = layout.style.position.kind == Position::Sticky;
     let mut sticky_shift = (0.0, 0.0);
-    if is_sticky && !is_fixed {
-        if let Some(bm) = layout.layout_box.iter().next() {
-            if let Some(edges) = bm.sticky_edges {
-                sticky_shift = sticky_offset(&edges, &bm.border_box, viewport, containing);
-                p.0 -= sticky_shift.0;
-                p.1 -= sticky_shift.1;
-            }
-        }
+    if is_sticky
+        && !is_fixed
+        && let Some(bm) = layout.layout_box.iter().next()
+        && let Some(edges) = bm.sticky_edges
+    {
+        sticky_shift = sticky_offset(&edges, &bm.border_box, viewport, containing);
+        p.0 -= sticky_shift.0;
+        p.1 -= sticky_shift.1;
     }
 
     let own_scroll = info.kind.scroll_offsets();
@@ -654,14 +651,14 @@ fn hit_test_popup_inner<'a>(
         p.1 -= accumulated_scroll.1;
     }
     let is_sticky = layout.style.position.kind == Position::Sticky;
-    if is_sticky && !is_fixed {
-        if let Some(bm) = layout.layout_box.iter().next() {
-            if let Some(edges) = bm.sticky_edges {
-                let (dx, dy) = sticky_offset(&edges, &bm.border_box, viewport, containing);
-                p.0 -= dx;
-                p.1 -= dy;
-            }
-        }
+    if is_sticky
+        && !is_fixed
+        && let Some(bm) = layout.layout_box.iter().next()
+        && let Some(edges) = bm.sticky_edges
+    {
+        let (dx, dy) = sticky_offset(&edges, &bm.border_box, viewport, containing);
+        p.0 -= dx;
+        p.1 -= dy;
     }
 
     let own_scroll = info.kind.scroll_offsets();
@@ -706,10 +703,11 @@ fn hit_test_popup_inner<'a>(
     // child space for descendants
     let mut child_x = if inline_container { p.0 } else { local_x };
     let child_y = if inline_container { p.1 } else { local_y };
-    if establishes_inline_box_space(layout) && !inline_container {
-        if let Some(bm) = layout.layout_box.iter().next() {
-            child_x -= bm.content_box.x;
-        }
+    if establishes_inline_box_space(layout)
+        && !inline_container
+        && let Some(bm) = layout.layout_box.iter().next()
+    {
+        child_x -= bm.content_box.x;
     }
 
     prefix.push(HitItem { layout, info });
@@ -799,14 +797,14 @@ fn scroll_at_inner(
         p.1 -= accumulated_scroll.1;
     }
     let is_sticky = layout.style.position.kind == Position::Sticky;
-    if is_sticky && !is_fixed {
-        if let Some(bm) = layout.layout_box.iter().next() {
-            if let Some(edges) = bm.sticky_edges {
-                let (sdx, sdy) = sticky_offset(&edges, &bm.border_box, viewport, containing);
-                p.0 -= sdx;
-                p.1 -= sdy;
-            }
-        }
+    if is_sticky
+        && !is_fixed
+        && let Some(bm) = layout.layout_box.iter().next()
+        && let Some(edges) = bm.sticky_edges
+    {
+        let (sdx, sdy) = sticky_offset(&edges, &bm.border_box, viewport, containing);
+        p.0 -= sdx;
+        p.1 -= sdy;
     }
 
     let own_scroll = info.kind.scroll_offsets();

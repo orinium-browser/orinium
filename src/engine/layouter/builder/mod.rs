@@ -210,8 +210,8 @@ pub(crate) fn element_sibling_infos(
             // `:lang()` sees the element's own tag, or the one inherited from
             // the nearest ancestor that declares one.
             info.lang = own_lang(snapshot, child).or_else(|| parent_lang.map(Arc::<str>::from));
-            info.hovered = interaction.hovered_path.iter().any(|&id| id == child);
-            info.active = interaction.active_path.iter().any(|&id| id == child);
+            info.hovered = interaction.hovered_path.contains(&child);
+            info.active = interaction.active_path.contains(&child);
 
             let mut sibling = info.clone();
             sibling.previous_siblings = ElementChain::default();
@@ -420,8 +420,8 @@ pub fn build_layout_and_info_from_snapshot(
         // `:first-child` and friends.
         info.has_parent = false;
         info.is_empty = is_empty_element(snapshot, root);
-        info.hovered = interaction.hovered_path.iter().any(|&id| id == root);
-        info.active = interaction.active_path.iter().any(|&id| id == root);
+        info.hovered = interaction.hovered_path.contains(&root);
+        info.active = interaction.active_path.contains(&root);
         chain = chain.prepend(Some(info));
     }
 
@@ -1022,7 +1022,7 @@ pub fn build_layout_and_info_from_snapshot(
                 };
                 let ptr = stack[top_idx].dom;
                 // Ensure animation inputs exist for custom/replaced elements.
-                if !animation_inputs.contains_key(&ptr) {
+                if let std::collections::hash_map::Entry::Vacant(e) = animation_inputs.entry(ptr) {
                     let transitions = anim_parse::build_transition_specs(&anim_transition);
                     let animations = anim_parse::build_animation_specs(&anim_animation);
                     let has_animation = animations
@@ -1075,14 +1075,11 @@ pub fn build_layout_and_info_from_snapshot(
                         base_values
                             .entry("transform".to_string())
                             .or_insert(CssValue::Keyword("none".into()));
-                        animation_inputs.insert(
-                            ptr,
-                            ElementAnimationState {
-                                transitions,
-                                animations,
-                                base_values,
-                            },
-                        );
+                        e.insert(ElementAnimationState {
+                            transitions,
+                            animations,
+                            base_values,
+                        });
                     }
                 }
                 results.insert(ptr, (layout, info));
@@ -1461,8 +1458,7 @@ pub fn build_layout_and_info_from_snapshot(
                         NodeKind::Text { flow_style, .. } => flow_style.white_space,
                         _ => WhiteSpace::Normal,
                     };
-                    let collapsible =
-                        is_collapsible_whitespace_info(&all_info[index], white_space);
+                    let collapsible = is_collapsible_whitespace_info(&all_info[index], white_space);
                     let next_to_block = index == 0
                         || index + 1 == all_layout.len()
                         || index
@@ -1652,10 +1648,10 @@ fn collect_animation_decl(
                         easing = Some(item);
                         continue;
                     }
-                    if prop.is_none() {
-                        if let CssValue::Keyword(_) | CssValue::String(_) = item {
-                            prop = Some(item);
-                        }
+                    if prop.is_none()
+                        && let CssValue::Keyword(_) | CssValue::String(_) = item
+                    {
+                        prop = Some(item);
                     }
                 }
                 props.push(prop.unwrap_or_else(|| CssValue::Keyword("all".into())));
@@ -1708,11 +1704,9 @@ fn collect_animation_decl(
                 let mut fill: Option<CssValue> = None;
                 let mut state: Option<CssValue> = None;
                 for item in flatten_css_value_items(&group) {
-                    if anim_parse::parse_time_ms(&item).is_some() {
-                        if times.len() < 2 {
-                            times.push(item);
-                            continue;
-                        }
+                    if anim_parse::parse_time_ms(&item).is_some() && times.len() < 2 {
+                        times.push(item);
+                        continue;
                     }
                     if easing.is_none() && anim_parse::parse_easing(&item).is_some() {
                         easing = Some(item);
@@ -1734,10 +1728,10 @@ fn collect_animation_decl(
                         state = Some(item);
                         continue;
                     }
-                    if name.is_none() {
-                        if let CssValue::Keyword(_) | CssValue::String(_) = item {
-                            name = Some(item);
-                        }
+                    if name.is_none()
+                        && let CssValue::Keyword(_) | CssValue::String(_) = item
+                    {
+                        name = Some(item);
                     }
                 }
                 names.push(name.unwrap_or_else(|| CssValue::Keyword("none".into())));

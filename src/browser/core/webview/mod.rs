@@ -11,8 +11,7 @@ use crate::engine::bridge::audio::AudioSinkFactory;
 use crate::engine::image_decoder::ImageDecoder;
 use crate::engine::layouter::types::{
     Color, ColorScheme, ContainerStyle, CursorKeyword, CursorStyle, FontStyle, TextAlign,
-    TextFlowStyle,
-    TextStyle, Visibility, WhiteSpace,
+    TextFlowStyle, TextStyle, Visibility, WhiteSpace,
 };
 use crate::engine::{
     css::{
@@ -25,6 +24,7 @@ use crate::engine::{
     html::parser::{
         ClassicScriptExecution, ClassicScriptSource, DomTree, Parser as HtmlParser, ScriptingMode,
     },
+    input::hit_test,
     js::{
         JsDevToolsRequest, JsDynamicImageRequest, JsDynamicScriptRequest, JsDynamicScriptSource,
         JsDynamicStyleRequest, JsFetchRequest, JsFetchResponse, JsIframeFetchRequest,
@@ -35,7 +35,6 @@ use crate::engine::{
         dom_snapshot::DomSnapshot,
         types::{InfoNode, InteractionState, NodeKind},
     },
-    input::hit_test,
     origin::Origin,
     permissions::Permissions,
     renderer_model::{Image, StickyViewport, is_scrollport, sticky_offset},
@@ -781,7 +780,12 @@ impl WebView {
                 for (source, url) in std::mem::take(&mut self.pending_images) {
                     log::info!("Image fetch requested in WebView: url={}", url);
                     if let Some(cb) = &self.on_fetch {
-                        cb(&url, FetchKind::Image { source: source.clone() });
+                        cb(
+                            &url,
+                            FetchKind::Image {
+                                source: source.clone(),
+                            },
+                        );
                     }
                     tasks.push(WebViewTask::Fetch {
                         url,
@@ -792,7 +796,12 @@ impl WebView {
                 for (source, url) in std::mem::take(&mut self.pending_audio) {
                     log::info!("Audio fetch requested in WebView: url={}", url);
                     if let Some(cb) = &self.on_fetch {
-                        cb(&url, FetchKind::Audio { source: source.clone() });
+                        cb(
+                            &url,
+                            FetchKind::Audio {
+                                source: source.clone(),
+                            },
+                        );
                     }
                     tasks.push(WebViewTask::Fetch {
                         url,
@@ -1615,12 +1624,15 @@ impl WebView {
             match self.resolve_url(&request.url) {
                 Ok(url) => {
                     if let Some(cb) = &self.on_fetch {
-                        cb(&url, FetchKind::JavaScript {
-                            request_id: request.id,
-                            method: request.method.clone(),
-                            headers: request.headers.clone(),
-                            body: request.body.clone(),
-                        });
+                        cb(
+                            &url,
+                            FetchKind::JavaScript {
+                                request_id: request.id,
+                                method: request.method.clone(),
+                                headers: request.headers.clone(),
+                                body: request.body.clone(),
+                            },
+                        );
                     }
                     tasks.push(WebViewTask::Fetch {
                         url,
@@ -1666,7 +1678,12 @@ impl WebView {
                 Ok(url) => {
                     log::info!("Iframe fetch requested in WebView: url={}", url);
                     if let Some(cb) = &self.on_fetch {
-                        cb(&url, FetchKind::Iframe { dom_id: request.dom_id });
+                        cb(
+                            &url,
+                            FetchKind::Iframe {
+                                dom_id: request.dom_id,
+                            },
+                        );
                     }
                     tasks.push(WebViewTask::Fetch {
                         url,
@@ -1696,9 +1713,12 @@ impl WebView {
                 JsDynamicScriptSource::External(source) => match self.resolve_url(&source) {
                     Ok(url) => {
                         if let Some(cb) = &self.on_fetch {
-                            cb(&url, FetchKind::DynamicScript {
-                                node_id: request.node_id,
-                            });
+                            cb(
+                                &url,
+                                FetchKind::DynamicScript {
+                                    node_id: request.node_id,
+                                },
+                            );
                         }
                         tasks.push(WebViewTask::Fetch {
                             url,
@@ -1723,9 +1743,12 @@ impl WebView {
             match self.resolve_url(&request.url) {
                 Ok(url) => {
                     if let Some(cb) = &self.on_fetch {
-                        cb(&url, FetchKind::DynamicCss {
-                            node_id: request.node_id,
-                        });
+                        cb(
+                            &url,
+                            FetchKind::DynamicCss {
+                                node_id: request.node_id,
+                            },
+                        );
                     }
                     tasks.push(WebViewTask::Fetch {
                         url,
@@ -1749,9 +1772,12 @@ impl WebView {
             match self.resolve_url(&request.source) {
                 Ok(url) => {
                     if let Some(cb) = &self.on_fetch {
-                        cb(&url, FetchKind::Image {
-                            source: request.source.clone(),
-                        });
+                        cb(
+                            &url,
+                            FetchKind::Image {
+                                source: request.source.clone(),
+                            },
+                        );
                     }
                     tasks.push(WebViewTask::Fetch {
                         url,

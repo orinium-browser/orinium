@@ -294,7 +294,7 @@ fn sample_animation(
                 let iter_progress_total = active_time / duration;
                 let within = match spec.iteration_count {
                     IterationCount::Infinite => {
-                        (iter_progress_total - iter_progress_total.floor() as f64) as f32
+                        (iter_progress_total - iter_progress_total.floor()) as f32
                     }
                     IterationCount::Finite(count) => {
                         if count <= 0.0 {
@@ -302,12 +302,12 @@ fn sample_animation(
                         } else if iter_progress_total >= count as f64 {
                             // 完了時は最終イテレーションの進捗
                             if count.fract() > 0.0 {
-                                count.fract() as f32
+                                count.fract()
                             } else {
                                 1.0
                             }
                         } else {
-                            (iter_progress_total - iter_progress_total.floor() as f64) as f32
+                            (iter_progress_total - iter_progress_total.floor()) as f32
                         }
                     }
                 };
@@ -315,14 +315,7 @@ fn sample_animation(
                 within
             }
         };
-        let vals = sample_keyframes(
-            rule,
-            progress,
-            spec.direction,
-            0,
-            spec.easing,
-            color_scheme,
-        );
+        let vals = sample_keyframes(rule, progress, spec.direction, 0, spec.easing, color_scheme);
         return Some((false, vals));
     }
 
@@ -385,7 +378,7 @@ fn sample_animation(
             } else if iter_progress_total >= count as f64 {
                 // 完了時は正しい最終進捗を保持（整数なら 1.0、小数ならその余り）
                 let within = if count.fract() > 0.0 {
-                    count.fract() as f32
+                    count.fract()
                 } else {
                     1.0f32
                 };

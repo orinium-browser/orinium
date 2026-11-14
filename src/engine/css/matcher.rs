@@ -1004,7 +1004,7 @@ mod tests {
         let mut el = element("button", &[], 1, 1, 1, 1);
         assert!(!selector.matches(&chain([el.clone()])));
         el.hovered = true;
-        assert!(selector.matches(&chain([el.clone()])));
+        assert!(selector.matches(&chain([el])));
 
         let selector = parse_selector("a:active");
         let mut el = element("a", &[], 1, 1, 1, 1);

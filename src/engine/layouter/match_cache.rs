@@ -98,13 +98,13 @@ impl SelectorMatchCache {
         compute: impl FnOnce() -> bool,
     ) -> bool {
         let key = (Arc::as_ptr(selector) as usize, node_id);
-        if let Some(&(matched, entry_epoch)) = self.entries.get(&key) {
-            if entry_epoch == self.epoch {
-                self.stats.record_hit();
-                return matched;
-            }
-            // Stale entry from a previous epoch: fall through to recompute.
+        if let Some(&(matched, entry_epoch)) = self.entries.get(&key)
+            && entry_epoch == self.epoch
+        {
+            self.stats.record_hit();
+            return matched;
         }
+        // Stale entry from a previous epoch: fall through to recompute.
 
         self.stats.record_miss();
         let matched = compute();

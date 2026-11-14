@@ -550,7 +550,7 @@ pub(crate) fn parse_svg_url(value: &str) -> Option<String> {
         return None;
     }
     // The fragment is either an unquoted identifier or a quoted string.
-    let fragment = args.first()?.as_slice().iter().find_map(|arg| match arg {
+    let fragment = args.first()?.iter().find_map(|arg| match arg {
         CssValue::Keyword(kw) => Some(kw.to_string()),
         CssValue::String(s) => Some(s.clone()),
         _ => None,

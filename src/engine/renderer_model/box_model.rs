@@ -2947,7 +2947,7 @@ mod tests {
 
         // Canvas paints body's red, then html paints (none), then body paints red again.
         assert!(
-            fills.iter().any(|c| *c == Color(255, 0, 0, 255)),
+            fills.contains(&Color(255, 0, 0, 255)),
             "canvas should paint body's red background, got {fills:?}"
         );
     }
@@ -3027,7 +3027,7 @@ mod tests {
             .collect();
 
         assert!(
-            fills.iter().any(|c| *c == Color(0, 255, 0, 255)),
+            fills.contains(&Color(0, 255, 0, 255)),
             "canvas should paint html's green background, got {fills:?}"
         );
         assert!(

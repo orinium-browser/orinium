@@ -324,7 +324,7 @@ fn trace_caught_exception(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> 
         Some(error.clone()),
         stack,
         None,
-        vec![(catch_name, error.clone())],
+        vec![(catch_name, error)],
         None,
     );
     Ok(JSValue::undefined())

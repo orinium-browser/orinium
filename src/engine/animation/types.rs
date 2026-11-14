@@ -6,9 +6,10 @@ use crate::engine::css::values::CssValue;
 pub type TimeMs = f64;
 
 /// Supported easing functions for MVP.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum Easing {
     Linear,
+    #[default]
     Ease,
     EaseIn,
     EaseOut,
@@ -17,25 +18,14 @@ pub enum Easing {
     Steps(u32, StepPosition),
 }
 
-impl Default for Easing {
-    fn default() -> Self {
-        Self::Ease
-    }
-}
-
 /// Step position for `steps()` timing functions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StepPosition {
     JumpStart,
+    #[default]
     JumpEnd,
     JumpNone,
     JumpBoth,
-}
-
-impl Default for StepPosition {
-    fn default() -> Self {
-        Self::JumpEnd
-    }
 }
 
 /// Animation iteration count.

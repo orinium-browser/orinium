@@ -201,10 +201,8 @@ impl InputTextComponent {
                 );
             }
             InputTextKey::Right => {
-                state.caret = Self::clamp_caret(
-                    &state.value,
-                    Self::next_boundary(&state.value, state.caret),
-                );
+                state.caret =
+                    Self::clamp_caret(&state.value, Self::next_boundary(&state.value, state.caret));
             }
             InputTextKey::Home => state.caret = 0,
             InputTextKey::End => state.caret = state.value.len(),
@@ -289,7 +287,8 @@ impl CustomNode for InputTextComponent {
             let mut last_toggle = self.blink_last_toggle.lock().unwrap();
             let should_toggle = match *last_toggle {
                 Some(last)
-                    if now.duration_since(last) >= Duration::from_millis(CARET_BLINK_INTERVAL_MS) =>
+                    if now.duration_since(last)
+                        >= Duration::from_millis(CARET_BLINK_INTERVAL_MS) =>
                 {
                     *last_toggle = Some(now);
                     true
@@ -301,8 +300,10 @@ impl CustomNode for InputTextComponent {
                 _ => false,
             };
             if should_toggle {
-                self.blink_visible
-                    .store(!self.blink_visible.load(Ordering::Relaxed), Ordering::Relaxed);
+                self.blink_visible.store(
+                    !self.blink_visible.load(Ordering::Relaxed),
+                    Ordering::Relaxed,
+                );
             }
             if self.blink_visible.load(Ordering::Relaxed) {
                 Some(state.caret + state.preedit.len())
@@ -471,10 +472,10 @@ impl CustomNode for InputTextComponent {
                 if let (Some(start), Some(end)) = (state.selection_start, state.selection_end) {
                     let start = Self::clamp_caret(&state.value, start);
                     let end = Self::clamp_caret(&state.value, end);
-                    if end > start {
-                        if let Some(ref cb) = self.on_copy {
-                            cb(&state.value[start..end]);
-                        }
+                    if end > start
+                        && let Some(ref cb) = self.on_copy
+                    {
+                        cb(&state.value[start..end]);
                     }
                 }
             }
@@ -1021,7 +1022,10 @@ mod tests {
     #[test]
     fn partial_selection_insert_replaces_range() {
         let input = make_component("hello", "");
-        input.handle_text_input(InputTextEvent::Select { start: Some(1), end: Some(4) });
+        input.handle_text_input(InputTextEvent::Select {
+            start: Some(1),
+            end: Some(4),
+        });
         input.handle_text_input(InputTextEvent::Insert("X".into()));
         let state = input.state();
         assert_eq!(state.value, "hXo");
