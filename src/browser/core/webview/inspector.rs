@@ -474,7 +474,9 @@ pub(super) fn handle(webview: &mut WebView, method: &str, params: &str) -> Resul
         })),
         "getDocument" => {
             let root = Rc::clone(&info.dom.root);
-            Ok(webview.inspector_ids.borrow_mut().serialize_subtree(&root))
+            let mut registry = webview.inspector_ids.borrow_mut();
+            registry.clear();
+            Ok(registry.serialize_subtree(&root))
         }
         "getAttributes" => {
             let parsed: Value = serde_json::from_str(params).map_err(|e| e.to_string())?;
