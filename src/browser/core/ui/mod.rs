@@ -17,11 +17,12 @@ use std::collections::HashMap;
 
 use url::Url;
 use winit::event::{ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::window::CursorIcon;
 
 use crate::browser::Tab;
 use crate::browser::core::resource_loader::{BrowserNetworkError, BrowserResponse};
 use crate::browser::core::tab::{FetchKind, TabTask};
-use crate::engine::layouter::types::ColorScheme;
+use crate::engine::layouter::types::{ColorScheme, CursorKeyword, CursorStyle};
 use crate::engine::origin::Origin;
 use crate::engine::permissions::Permissions;
 use crate::engine::renderer_model::{DrawCommand, Rect};
@@ -132,6 +133,8 @@ pub struct BrowserUi {
     next_tab_id: TabId,
     renderer: BrowserRenderer,
     input: InputState,
+    /// Pending cursor icon to apply to the window on the next frame.
+    pending_cursor: Option<winit::window::CursorIcon>,
 
     /// ToDo: add set color scheme event
     system_color_scheme: ColorScheme,
@@ -140,6 +143,25 @@ pub struct BrowserUi {
 impl Default for BrowserUi {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn cursor_style_to_icon(style: &CursorStyle) -> CursorIcon {
+    match style {
+        CursorStyle::Keyword(kw) => match kw {
+            CursorKeyword::Auto => CursorIcon::Default,
+            CursorKeyword::Default => CursorIcon::Default,
+            CursorKeyword::None => CursorIcon::Default,
+            CursorKeyword::Pointer => CursorIcon::Pointer,
+            CursorKeyword::Text => CursorIcon::Text,
+            CursorKeyword::Move => CursorIcon::Move,
+            CursorKeyword::NotAllowed => CursorIcon::NotAllowed,
+            CursorKeyword::Wait => CursorIcon::Wait,
+            CursorKeyword::Crosshair => CursorIcon::Crosshair,
+            CursorKeyword::Grab => CursorIcon::Grab,
+            CursorKeyword::Grabbing => CursorIcon::Grabbing,
+        },
+        CursorStyle::Custom { .. } => CursorIcon::Default,
     }
 }
 
@@ -179,6 +201,7 @@ impl BrowserUi {
                 log::error!("Failed to detect system color scheme, using default: {e}");
                 Default::default()
             }),
+            pending_cursor: None,
         }
     }
 
@@ -207,6 +230,7 @@ impl BrowserUi {
             renderer: BrowserRenderer::with_chrome_and_menu(chrome, menu),
             input: InputState::default(),
             system_color_scheme,
+            pending_cursor: None,
         }
     }
 
@@ -428,9 +452,15 @@ impl BrowserUi {
             WindowEvent::CursorMoved { position, .. } => {
                 self.input.mouse_position = (position.x, position.y);
                 if self.handle_pointer_move(position.x, position.y) {
-                    BrowserCommand::RequestRedraw
+                    self.pending_cursor
+                        .take()
+                        .map(BrowserCommand::SetCursorIcon)
+                        .unwrap_or(BrowserCommand::RequestRedraw)
                 } else {
-                    BrowserCommand::None
+                    self.pending_cursor
+                        .take()
+                        .map(BrowserCommand::SetCursorIcon)
+                        .unwrap_or(BrowserCommand::None)
                 }
             }
 
@@ -765,6 +795,12 @@ impl BrowserUi {
             .active_tab_mut()
             .is_some_and(|tab| tab.handle_pointer_move(px, py).0);
 
+        // Update the pending cursor from the element under the pointer.
+        self.pending_cursor = self
+            .active_tab_mut()
+            .and_then(|tab| tab.cursor_at(px, py))
+            .map(|cs| cursor_style_to_icon(&cs));
+
         tab_repaint || self.renderer.chrome.needs_repaint()
     }
 
@@ -902,7 +938,6 @@ fn logical_key_to_special_event(key: &winit::keyboard::Key, ctrl: bool) -> Optio
 mod tests {
     use super::*;
     use crate::browser::core::webview::JsPolicy;
-    use crate::engine::layouter::types::ColorScheme;
     use crate::engine::renderer_model::DrawCommand;
 
     fn ui_with_one_tab() -> BrowserUi {

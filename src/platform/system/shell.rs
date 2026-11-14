@@ -14,7 +14,7 @@
 //! That way the event loop can hold any [`BrowserHost`] — including one
 //! living in another process — without naming a single browser type.
 use winit::event::WindowEvent;
-use winit::window::WindowId;
+use winit::window::{CursorIcon, WindowId};
 
 use crate::platform::renderer::draw_sink::DrawSink;
 
@@ -33,6 +33,8 @@ pub enum ShellCommand {
     OpenNewWindow,
     /// Enable or disable OS IME input near the last click position.
     SetImeAllowed { allowed: bool, position: (f64, f64) },
+    /// Set the mouse cursor icon for the window.
+    SetCursorIcon(CursorIcon),
 }
 
 /// The properties the shell needs to realise a window.

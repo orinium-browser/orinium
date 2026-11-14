@@ -13,7 +13,7 @@ use crate::{
         js::JsFetchResponse,
         layouter::{
             self,
-            types::{ColorScheme, ContainerRole, InfoNode, NodeKind},
+            types::{ColorScheme, ContainerRole, CursorStyle, InfoNode, NodeKind},
         },
         origin::Origin,
         permissions::Permissions,
@@ -840,6 +840,13 @@ impl Tab {
     pub fn on_fetch_failed(&mut self, err: BrowserNetworkError, failed_url: Url) {
         self.navigate("resource:///error.html".parse().unwrap());
         self.state = TabState::Error(TabError::NetworkError(err), Some(failed_url));
+    }
+
+    /// Returns the cursor style for the element under the given point, if any.
+    ///
+    /// The point is in CSS pixels relative to the viewport origin.
+    pub fn cursor_at(&self, x: f32, y: f32) -> Option<CursorStyle> {
+        self.webview.as_ref().and_then(|wv| wv.cursor_at(x, y))
     }
 
     pub fn navigate(&mut self, url: Url) {

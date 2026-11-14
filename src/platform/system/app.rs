@@ -13,7 +13,7 @@ use std::sync::Arc;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
-use winit::window::{Window, WindowId};
+use winit::window::{Cursor, Window, WindowId};
 
 use crate::platform::renderer::draw_sink::DrawSink;
 use crate::platform::renderer::gpu::GpuRenderer;
@@ -156,6 +156,11 @@ impl ApplicationHandler for App {
                         );
                     }
                     state.window.request_redraw();
+                }
+            }
+            ShellCommand::SetCursorIcon(icon) => {
+                if let Some(state) = self.windows.get(&window_id) {
+                    state.window.set_cursor(Cursor::from(icon));
                 }
             }
             ShellCommand::None => {}
