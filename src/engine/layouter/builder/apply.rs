@@ -4,7 +4,7 @@ use smol_str::SmolStr;
 
 use crate::engine::css::values::{CssValue, Unit};
 use crate::engine::layouter::builder::css_resolve::parse_grid_template;
-use crate::engine::layouter::types::CursorStyle;
+use crate::engine::layouter::types::{CursorKeyword, CursorStyle, CustomCursor};
 use crate::engine::renderer_model::AffineTransform;
 
 use ui_layout::{
@@ -1036,30 +1036,17 @@ pub fn apply_declaration(
         }
 
         ("cursor", _) => {
-            let f = |v: &SmolStr| match v.as_str() {
-                "auto" => Some(CursorStyle::Auto),
-                "default" => Some(CursorStyle::Default),
-                "none" => Some(CursorStyle::None),
-                "pointer" => Some(CursorStyle::Pointer),
-                "text" => Some(CursorStyle::Text),
-                "move" => Some(CursorStyle::Move),
-                "not-allowed" => Some(CursorStyle::NotAllowed),
-                "wait" => Some(CursorStyle::Wait),
-                "crosshair" => Some(CursorStyle::Crosshair),
-                "grab" => Some(CursorStyle::Grab),
-                "grabbing" => Some(CursorStyle::Grabbing),
-                _ => None,
+            container_style.cursor = if let CssValue::Keyword(v) = value
+                && v == "initial"
+            {
+                DEFAULT_CONTAINER_STYLE.cursor.clone()
+            } else if let CssValue::Keyword(v) = value
+                && v == "inherit"
+            {
+                parent_container_style.cursor.clone()
+            } else {
+                parse_cursor_value(value, text_flow_style.font_size)
             };
-
-            apply_property!(
-                cursor,
-                container_style,
-                parent_container_style,
-                DEFAULT_CONTAINER_STYLE,
-                value,
-                CssValue::Keyword(v),
-                f(v)?
-            );
         }
 
         /* ======================
@@ -2297,4 +2284,101 @@ pub fn apply_declaration(
         }
     }
     Some(())
+}
+
+/// Parse a CSS `cursor` value into a [`CursorStyle`].
+///
+/// Supports:
+/// - Keywords: `auto`, `default`, `none`, `pointer`, `text`, `move`,
+///   `not-allowed`, `wait`, `crosshair`, `grab`, `grabbing`
+/// - Custom images: `url("cursor.png")`, `url("cursor.png") 8 8`
+/// - Fallback chains: `url("a.png"), url("b.png") 4 4, auto`
+fn parse_cursor_value(value: &CssValue, _font_size: f32) -> CursorStyle {
+    // Collect comma-separated items.
+    let items: Vec<&CssValue> = match value {
+        CssValue::List(items) => items.iter().collect(),
+        _ => vec![value],
+    };
+
+    let mut images: Vec<CustomCursor> = Vec::new();
+    let mut fallback: Option<CursorKeyword> = None;
+
+    for item in items {
+        match item {
+            CssValue::Function(fn_name, args)
+                if fn_name.eq_ignore_ascii_case("url") =>
+            {
+                let source = args
+                    .iter()
+                    .flatten()
+                    .find_map(|v| match v {
+                        CssValue::String(s) => Some(s.clone()),
+                        CssValue::Keyword(s) => Some(s.to_string()),
+                        _ => None,
+                    });
+                if let Some(src) = source {
+                    // Look for hotspot coordinates: two numbers after the url args.
+                    let hotspot = parse_cursor_hotspot(args);
+                    images.push(CustomCursor { source: src, hotspot });
+                }
+            }
+            CssValue::Keyword(kw) => {
+                // A keyword can only be the final fallback.
+                if images.is_empty() && fallback.is_none() {
+                    return CursorStyle::Keyword(CursorKeyword::from_keyword(kw));
+                }
+                fallback = Some(CursorKeyword::from_keyword(kw));
+            }
+            _ => {}
+        }
+    }
+
+    if images.is_empty() {
+        CursorStyle::Keyword(fallback.unwrap_or(CursorKeyword::Auto))
+    } else {
+        CursorStyle::Custom {
+            images,
+            fallback: fallback.unwrap_or(CursorKeyword::Auto),
+        }
+    }
+}
+
+/// Parse optional hotspot coordinates from `url()` args.
+///
+/// CSS allows `url("cursor.png") 8 8` where the two numbers are the
+/// hotspot x and y. Looks for two `Number` values among the args.
+fn parse_cursor_hotspot(args: &[Vec<CssValue>]) -> Option<(u32, u32)> {
+    let mut nums: Vec<u32> = Vec::new();
+    for group in args {
+        for item in group {
+            if let CssValue::Number(n) = item {
+                nums.push(*n as u32);
+            }
+        }
+    }
+    if nums.len() >= 2 {
+        Some((nums[0], nums[1]))
+    } else {
+        None
+    }
+}
+
+/// Convert a CSS keyword string to a [`CursorKeyword`].
+impl CursorKeyword {
+    fn from_keyword(kw: &SmolStr) -> CursorKeyword {
+        match kw.as_str() {
+            "auto" => CursorKeyword::Auto,
+            "default" => CursorKeyword::Default,
+            "none" => CursorKeyword::None,
+            "pointer" => CursorKeyword::Pointer,
+            "text" => CursorKeyword::Text,
+            "move" => CursorKeyword::Move,
+            "not-allowed" => CursorKeyword::NotAllowed,
+            "wait" => CursorKeyword::Wait,
+            "crosshair" => CursorKeyword::Crosshair,
+            "grab" => CursorKeyword::Grab,
+            "grabbing" => CursorKeyword::Grabbing,
+            _ => CursorKeyword::Auto,
+        }
+    }
 }

@@ -142,6 +142,18 @@ impl NodeKind {
         }
     }
 
+    /// このノードの `cursor` プロパティ値を返す。
+    /// コンテナ・カスタム・SVG ノードは `ContainerStyle.cursor` を持ち、
+    /// テキスト・改行ノードはカーソルを持たない。
+    pub fn cursor(&self) -> Option<&CursorStyle> {
+        match self {
+            NodeKind::Container { style, .. }
+            | NodeKind::Custom { style, .. }
+            | NodeKind::Svg { style, .. } => Some(&style.cursor),
+            _ => None,
+        }
+    }
+
     pub fn scroll_offsets(&self) -> (f32, f32) {
         match self {
             NodeKind::Container {
@@ -252,8 +264,17 @@ impl TryFrom<(u8, u8, u8, f32)> for Color {
 //          Cursor
 // =========================
 
+/// A custom cursor image with an optional hotspot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CustomCursor {
+    /// Image source URL.
+    pub source: String,
+    /// Optional hotspot coordinates (x, y) in pixels.
+    pub hotspot: Option<(u32, u32)>,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum CursorStyle {
+pub enum CursorKeyword {
     #[default]
     Auto,
     /// Platform default
@@ -267,6 +288,24 @@ pub enum CursorStyle {
     Crosshair,
     Grab,
     Grabbing,
+}
+
+/// A resolved CSS `cursor` value: either a keyword or a list of custom cursor
+/// images with an optional fallback keyword. Per CSS, the first loadable image
+/// wins; if none load, the fallback keyword is used.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CursorStyle {
+    Keyword(CursorKeyword),
+    Custom {
+        images: Vec<CustomCursor>,
+        fallback: CursorKeyword,
+    },
+}
+
+impl Default for CursorStyle {
+    fn default() -> Self {
+        Self::Keyword(CursorKeyword::Auto)
+    }
 }
 
 // =========================
