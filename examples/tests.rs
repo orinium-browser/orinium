@@ -1822,14 +1822,14 @@ fn run_webcompat_depth(raw_url: &str, depth: usize) -> Result<()> {
     );
     js.dispatch_dom_content_loaded();
     js.dispatch_window_load();
-    for iteration in 0..60 {
+    for _iteration in 0..60 {
         js.run_due_timers();
         js.drain_microtasks();
         #[cfg(feature = "dhat-heap")]
-        if iteration % 10 == 9 {
+        if _iteration % 10 == 9 {
             println!(
                 "  [mem] settle1 {}/60: live {} B | {}",
-                iteration + 1,
+                _iteration + 1,
                 dhat::HeapStats::get().curr_bytes,
                 js.host_stats()
             );
@@ -1848,14 +1848,14 @@ fn run_webcompat_depth(raw_url: &str, depth: usize) -> Result<()> {
             })()"#,
         )
         .to_console_string();
-    for iteration in 0..200 {
+    for _iteration in 0..200 {
         js.run_due_timers();
         js.drain_microtasks();
         #[cfg(feature = "dhat-heap")]
-        if iteration % 20 == 19 {
+        if _iteration % 20 == 19 {
             println!(
                 "  [mem] settle2 {}/200: live {} B | {}",
-                iteration + 1,
+                _iteration + 1,
                 dhat::HeapStats::get().curr_bytes,
                 js.host_stats()
             );
