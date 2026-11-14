@@ -48,6 +48,12 @@ pub enum CssValue {
     /// holds the whitespace-separated components of that argument.
     Function(String, Vec<Vec<CssValue>>),
     List(Vec<CssValue>), // e.g. 100px auto
+    /// Marks a comma separator within a `CssValue::List`, preserving comma-group
+    /// structure for multi-layer properties like `background`, `font-family`,
+    /// `transition`, etc. Consumers that don't need comma grouping can skip
+    /// separators; consumers that do can split on `Separator` to get per-group
+    /// slices.
+    Separator,
 }
 
 impl CssValue {
@@ -126,6 +132,7 @@ impl std::fmt::Display for CssValue {
                     .join(" ");
                 f.write_str(&values)
             }
+            CssValue::Separator => f.write_str(", "),
         }
     }
 }

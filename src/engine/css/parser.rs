@@ -1846,8 +1846,10 @@ impl<'a> Parser<'a> {
                 Token::Ident(s) => values.push(CssValue::Keyword(s.into_owned().into())),
 
                 Token::Delim(',') => {
-                    // List separator
-                    continue;
+                    // Preserve comma as a Separator so consumers can split
+                    // multi-layer value lists (e.g. background, font-family)
+                    // into per-layer groups instead of relying on heuristics.
+                    values.push(CssValue::Separator);
                 }
 
                 Token::Delim('(') => {
