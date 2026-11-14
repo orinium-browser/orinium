@@ -2,6 +2,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use smol_str::SmolStr;
 use ui_layout::Style;
@@ -13,6 +14,9 @@ use crate::engine::ui::components::input_text_types::{
     InputTextEvent, InputTextKey, InputTextState,
 };
 use crate::engine::ui::custom_node::{ContentSize, CustomNode};
+
+/// Caret blink interval in milliseconds.
+const CARET_BLINK_INTERVAL_MS: u64 = 500;
 
 /// Callback invoked when the text input's value changes.
 pub type OnValueChange = dyn Fn(&str) + Send + Sync;
@@ -33,6 +37,8 @@ pub struct InputTextComponent {
     undo_stack: Mutex<Vec<EditSnapshot>>,
     redo_stack: Mutex<Vec<EditSnapshot>>,
     dirty: AtomicBool,
+    blink_visible: AtomicBool,
+    blink_last_toggle: Mutex<Option<Instant>>,
     on_value_change: Option<Arc<OnValueChange>>,
     on_enter: Option<Arc<OnValueChange>>,
 }
@@ -67,6 +73,8 @@ impl InputTextComponent {
             undo_stack: Mutex::new(Vec::new()),
             redo_stack: Mutex::new(Vec::new()),
             dirty: AtomicBool::new(true),
+            blink_visible: AtomicBool::new(true),
+            blink_last_toggle: Mutex::new(None),
             on_value_change: None,
             on_enter: None,
         }
@@ -127,27 +135,55 @@ impl InputTextComponent {
             .map_or(value.len(), |(offset, _)| caret + offset)
     }
 
+    /// Clamp `caret` to a valid UTF-8 character boundary within `[0, value.len()]`.
+    ///
+    /// If `caret` is beyond the string length it is clamped to `value.len()`.
+    /// If `caret` falls inside a multi-byte character it is moved to the
+    /// preceding character boundary. Returns `0` for an empty string.
+    fn clamp_caret(value: &str, caret: usize) -> usize {
+        let len = value.len();
+        if caret >= len {
+            return len;
+        }
+        let mut last_boundary = 0;
+        for (i, _) in value.char_indices() {
+            if i > caret {
+                break;
+            }
+            last_boundary = i;
+        }
+        last_boundary
+    }
+
     fn handle_key(state: &mut InputTextState, key: InputTextKey) {
         match key {
             InputTextKey::Backspace if state.caret > 0 => {
                 let previous = Self::previous_boundary(&state.value, state.caret);
                 state.value.replace_range(previous..state.caret, "");
-                state.caret = previous;
+                state.caret = Self::clamp_caret(&state.value, previous);
             }
             InputTextKey::Delete if state.caret < state.value.len() => {
                 let next = Self::next_boundary(&state.value, state.caret);
                 state.value.replace_range(state.caret..next, "");
+                state.caret = Self::clamp_caret(&state.value, state.caret);
             }
             InputTextKey::Left => {
-                state.caret = Self::previous_boundary(&state.value, state.caret);
+                state.caret = Self::clamp_caret(
+                    &state.value,
+                    Self::previous_boundary(&state.value, state.caret),
+                );
             }
             InputTextKey::Right => {
-                state.caret = Self::next_boundary(&state.value, state.caret);
+                state.caret = Self::clamp_caret(
+                    &state.value,
+                    Self::next_boundary(&state.value, state.caret),
+                );
             }
             InputTextKey::Home => state.caret = 0,
             InputTextKey::End => state.caret = state.value.len(),
             InputTextKey::Backspace | InputTextKey::Delete => {}
         }
+        state.caret = Self::clamp_caret(&state.value, state.caret);
     }
 
     fn snapshot(&self) -> EditSnapshot {
@@ -171,7 +207,7 @@ impl InputTextComponent {
         self.redo_stack.lock().unwrap().push(self.snapshot());
         let mut state = self.state.lock().unwrap();
         state.value = snapshot.value;
-        state.caret = snapshot.caret;
+        state.caret = Self::clamp_caret(&state.value, snapshot.caret);
         state.preedit = snapshot.preedit;
         self.dirty.store(true, Ordering::Relaxed);
     }
@@ -183,7 +219,7 @@ impl InputTextComponent {
         self.undo_stack.lock().unwrap().push(self.snapshot());
         let mut state = self.state.lock().unwrap();
         state.value = snapshot.value;
-        state.caret = snapshot.caret;
+        state.caret = Self::clamp_caret(&state.value, snapshot.caret);
         state.preedit = snapshot.preedit;
         self.dirty.store(true, Ordering::Relaxed);
     }
@@ -219,7 +255,36 @@ impl CustomNode for InputTextComponent {
 
         let preedit =
             (!state.preedit.is_empty()).then_some((state.caret, state.caret + state.preedit.len()));
-        let caret = state.focused.then_some(state.caret + state.preedit.len());
+        // Caret blink animation: toggle visibility every CARET_BLINK_INTERVAL_MS
+        // while focused. When unfocused the caret is hidden.
+        let caret = if state.focused {
+            let now = Instant::now();
+            let mut last_toggle = self.blink_last_toggle.lock().unwrap();
+            let should_toggle = match *last_toggle {
+                Some(last)
+                    if now.duration_since(last) >= Duration::from_millis(CARET_BLINK_INTERVAL_MS) =>
+                {
+                    *last_toggle = Some(now);
+                    true
+                }
+                None => {
+                    *last_toggle = Some(now);
+                    true
+                }
+                _ => false,
+            };
+            if should_toggle {
+                self.blink_visible
+                    .store(!self.blink_visible.load(Ordering::Relaxed), Ordering::Relaxed);
+            }
+            if self.blink_visible.load(Ordering::Relaxed) {
+                Some(state.caret + state.preedit.len())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         draw_text_input(
             &*self.measurer,
@@ -276,9 +341,9 @@ impl CustomNode for InputTextComponent {
                 }
                 self.push_undo(self.snapshot());
                 let mut state = self.state.lock().unwrap();
-                let caret = state.caret;
+                let caret = Self::clamp_caret(&state.value, state.caret);
                 state.value.insert_str(caret, &text);
-                state.caret += text.len();
+                state.caret = Self::clamp_caret(&state.value, caret + text.len());
                 state.preedit.clear();
                 let value = state.value.clone();
                 drop(state);
@@ -343,6 +408,11 @@ impl CustomNode for InputTextComponent {
     }
 
     fn needs_repaint(&self) -> bool {
+        // When focused, always request repaint so the caret blink animation
+        // continues. When unfocused, only repaint on explicit dirtiness.
+        if self.is_focused() {
+            return true;
+        }
         self.dirty.swap(false, Ordering::Relaxed)
     }
 
@@ -614,5 +684,99 @@ mod tests {
         assert_eq!(state.value, "new value");
         assert_eq!(state.caret, "new value".len());
         assert!(input.needs_repaint());
+    }
+
+    #[test]
+    fn caret_clamped_after_backspace_at_start() {
+        let input = make_component("abc", "");
+        input.handle_text_input(InputTextEvent::Key(InputTextKey::Backspace));
+        input.handle_text_input(InputTextEvent::Key(InputTextKey::Backspace));
+        input.handle_text_input(InputTextEvent::Key(InputTextKey::Backspace));
+        let state = input.state();
+        assert_eq!(state.value, "");
+        assert_eq!(state.caret, 0);
+    }
+
+    #[test]
+    fn caret_clamped_after_delete_at_end() {
+        let input = make_component("abc", "");
+        // Delete at end does nothing (nothing after caret)
+        input.handle_text_input(InputTextEvent::Key(InputTextKey::Delete));
+        let state = input.state();
+        assert_eq!(state.value, "abc");
+        assert_eq!(state.caret, 3);
+
+        // Move left, then delete removes characters
+        input.handle_text_input(InputTextEvent::Key(InputTextKey::Left));
+        input.handle_text_input(InputTextEvent::Key(InputTextKey::Delete));
+        input.handle_text_input(InputTextEvent::Key(InputTextKey::Left));
+        input.handle_text_input(InputTextEvent::Key(InputTextKey::Delete));
+        input.handle_text_input(InputTextEvent::Key(InputTextKey::Left));
+        input.handle_text_input(InputTextEvent::Key(InputTextKey::Delete));
+        let state = input.state();
+        assert_eq!(state.value, "");
+        assert_eq!(state.caret, 0);
+    }
+
+    #[test]
+    fn caret_clamped_after_set_value_shortens_text() {
+        let input = make_component("hello world", "");
+        input.set_value("hi");
+        let state = input.state();
+        assert_eq!(state.value, "hi");
+        assert_eq!(state.caret, 2);
+    }
+
+    #[test]
+    fn caret_clamped_after_undo_from_stale_snapshot() {
+        let input = make_component("abc", "");
+        input.handle_text_input(InputTextEvent::Insert("日".into()));
+        assert_eq!(input.state().value, "abc日");
+        assert_eq!(input.state().caret, 6);
+
+        // Undo should restore "abc" with caret clamped to 3
+        input.handle_text_input(InputTextEvent::Undo);
+        let state = input.state();
+        assert_eq!(state.value, "abc");
+        assert_eq!(state.caret, 3);
+    }
+
+    #[test]
+    fn caret_clamped_after_redo_from_stale_snapshot() {
+        let input = make_component("abc", "");
+        input.handle_text_input(InputTextEvent::Insert("日".into()));
+        input.handle_text_input(InputTextEvent::Undo);
+        let state = input.state();
+        assert_eq!(state.value, "abc");
+        assert_eq!(state.caret, 3);
+
+        // Redo should restore "abc日" with caret at 6
+        input.handle_text_input(InputTextEvent::Redo);
+        let state = input.state();
+        assert_eq!(state.value, "abc日");
+        assert_eq!(state.caret, 6);
+    }
+
+    #[test]
+    fn caret_stays_at_utf8_boundary_with_multibyte_chars() {
+        let input = make_component("a日b", "");
+        // Move caret left from end (6) to before 'b' (4)
+        input.handle_text_input(InputTextEvent::Key(InputTextKey::Left));
+        assert_eq!(input.state().caret, 4);
+        // Move left again to before '日' (1)
+        input.handle_text_input(InputTextEvent::Key(InputTextKey::Left));
+        assert_eq!(input.state().caret, 1);
+        // Move left again to before 'a' (0)
+        input.handle_text_input(InputTextEvent::Key(InputTextKey::Left));
+        assert_eq!(input.state().caret, 0);
+        // Move right to before '日' (1)
+        input.handle_text_input(InputTextEvent::Key(InputTextKey::Right));
+        assert_eq!(input.state().caret, 1);
+        // Move right to before 'b' (4)
+        input.handle_text_input(InputTextEvent::Key(InputTextKey::Right));
+        assert_eq!(input.state().caret, 4);
+        // Move right to end (5)
+        input.handle_text_input(InputTextEvent::Key(InputTextKey::Right));
+        assert_eq!(input.state().caret, 5);
     }
 }
