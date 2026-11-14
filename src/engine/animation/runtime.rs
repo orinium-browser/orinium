@@ -7,7 +7,7 @@ use crate::engine::animation::types::{
     AnimationDirection, AnimationFillMode, AnimationPlayState, AnimationSpec, Easing,
     IterationCount, KeyframesRule, TransitionSpec,
 };
-use crate::engine::css::values::CssValue;
+use crate::engine::css::values::{CssValue, Unit};
 use crate::engine::layouter::css_resolver::KeyframesRegistry;
 use crate::engine::layouter::dom_snapshot::NodeId;
 use crate::engine::layouter::types::ColorScheme;
@@ -282,7 +282,8 @@ fn sample_animation(
                 spec.fill_mode,
                 AnimationFillMode::Backwards | AnimationFillMode::Both
             ) {
-                let vals = sample_keyframes(rule, 0.0, spec.direction, 0, color_scheme);
+                let vals =
+                    sample_keyframes(rule, 0.0, spec.direction, 0, spec.easing, color_scheme);
                 return Some((false, vals));
             }
             return None;
@@ -291,7 +292,8 @@ fn sample_animation(
                 spec.fill_mode,
                 AnimationFillMode::Forwards | AnimationFillMode::Both
             ) {
-                let vals = sample_keyframes(rule, 1.0, spec.direction, 0, color_scheme);
+                let vals =
+                    sample_keyframes(rule, 1.0, spec.direction, 0, spec.easing, color_scheme);
                 return Some((false, vals));
             }
             return None;
@@ -305,7 +307,7 @@ fn sample_animation(
         ) {
             // progress at start of first iteration considering direction
             let p = iteration_progress(0.0, spec.direction, 0);
-            let vals = sample_keyframes(rule, p, spec.direction, 0, color_scheme);
+            let vals = sample_keyframes(rule, p, spec.direction, 0, spec.easing, color_scheme);
             return Some((false, vals));
         }
         return Some((true, HashMap::new())); // waiting in delay
@@ -342,7 +344,14 @@ fn sample_animation(
                 _ => 0,
             };
             let p = iteration_progress(1.0, spec.direction, last_iter);
-            let vals = sample_keyframes(rule, p, spec.direction, last_iter, color_scheme);
+            let vals = sample_keyframes(
+                rule,
+                p,
+                spec.direction,
+                last_iter,
+                spec.easing,
+                color_scheme,
+            );
             return Some((false, vals));
         }
         return None;
@@ -351,7 +360,14 @@ fn sample_animation(
     if spec.play_state == AnimationPlayState::Paused {
         // MVP: treat as not actively progressing; no time accumulation model yet.
         let p = iteration_progress(0.0, spec.direction, iteration_index);
-        let vals = sample_keyframes(rule, p, spec.direction, iteration_index, color_scheme);
+        let vals = sample_keyframes(
+            rule,
+            p,
+            spec.direction,
+            iteration_index,
+            spec.easing,
+            color_scheme,
+        );
         return Some((false, vals));
     }
 
@@ -361,6 +377,7 @@ fn sample_animation(
         directed,
         spec.direction,
         iteration_index,
+        spec.easing,
         color_scheme,
     );
     Some((true, vals))
@@ -393,6 +410,7 @@ fn sample_keyframes(
     progress: f32,
     _direction: AnimationDirection,
     _iteration: u32,
+    easing: Easing,
     color_scheme: ColorScheme,
 ) -> HashMap<String, CssValue> {
     let mut stops = rule.stops.clone();
@@ -451,7 +469,7 @@ fn sample_keyframes(
             if p >= *o0 && p <= *o1 {
                 let span = (*o1 - *o0).max(f32::EPSILON);
                 let local = ((p - *o0) / span).clamp(0.0, 1.0);
-                let eased = apply_easing(local, Easing::Linear); // keyframe-level easing not modeled in MVP
+                let eased = apply_easing(local, easing); // keyframe-level easing not modeled in MVP
                 let val = interpolate_value(v0, v1, eased, color_scheme)
                     .unwrap_or_else(|| if eased >= 0.5 { v1.clone() } else { v0.clone() });
                 chosen = Some(val);
@@ -697,6 +715,155 @@ mod tests {
     }
 
     #[test]
+    fn keyframes_animation_interpolates_transform_rotate() {
+        let mut rt = AnimationRuntime::new();
+        let node = 6u32;
+        let mut kf = KeyframesRegistry::new();
+        kf.insert(
+            "spin".to_string(),
+            KeyframesRule {
+                name: "spin".to_string(),
+                stops: vec![
+                    KeyframeStop {
+                        offset: 0.0,
+                        declarations: vec![(
+                            "transform".into(),
+                            CssValue::Function(
+                                "rotate".into(),
+                                vec![vec![CssValue::Length(0.0, Unit::Deg)]],
+                            ),
+                        )],
+                    },
+                    KeyframeStop {
+                        offset: 1.0,
+                        declarations: vec![(
+                            "transform".into(),
+                            CssValue::Function(
+                                "rotate".into(),
+                                vec![vec![CssValue::Length(360.0, Unit::Deg)]],
+                            ),
+                        )],
+                    },
+                ],
+            },
+        );
+        let mut map = AnimationInputs::new();
+        map.insert(
+            node,
+            ElementAnimationState {
+                transitions: vec![],
+                animations: vec![AnimationSpec {
+                    name: "spin".into(),
+                    duration_ms: 100.0,
+                    delay_ms: 0.0,
+                    easing: Easing::Linear,
+                    iteration_count: IterationCount::Finite(1.0),
+                    direction: AnimationDirection::Normal,
+                    fill_mode: AnimationFillMode::None,
+                    play_state: AnimationPlayState::Running,
+                }],
+                base_values: HashMap::new(),
+            },
+        );
+        let _ = rt.sample(0.0, true, &map, &kf, ColorScheme::Light);
+        let r_mid = rt.sample(50.0, true, &map, &kf, ColorScheme::Light);
+        let v = r_mid
+            .overrides
+            .get(&node)
+            .and_then(|m| m.get("transform"))
+            .cloned();
+        match v {
+            Some(CssValue::Function(name, args)) if name == "rotate" => {
+                let CssValue::Length(deg, Unit::Deg) = args[0][0] else {
+                    panic!("expected Length deg, got {args:?}")
+                };
+                assert!((deg - 180.0).abs() < 1e-4, "expected 180deg, got {deg}");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn keyframes_animation_interpolates_transform_translate() {
+        let mut rt = AnimationRuntime::new();
+        let node = 7u32;
+        let mut kf = KeyframesRegistry::new();
+        kf.insert(
+            "slide".to_string(),
+            KeyframesRule {
+                name: "slide".to_string(),
+                stops: vec![
+                    KeyframeStop {
+                        offset: 0.0,
+                        declarations: vec![(
+                            "transform".into(),
+                            CssValue::Function(
+                                "translate".into(),
+                                vec![vec![
+                                    CssValue::Length(0.0, Unit::Px),
+                                    CssValue::Length(0.0, Unit::Px),
+                                ]],
+                            ),
+                        )],
+                    },
+                    KeyframeStop {
+                        offset: 1.0,
+                        declarations: vec![(
+                            "transform".into(),
+                            CssValue::Function(
+                                "translate".into(),
+                                vec![vec![
+                                    CssValue::Length(200.0, Unit::Px),
+                                    CssValue::Length(100.0, Unit::Px),
+                                ]],
+                            ),
+                        )],
+                    },
+                ],
+            },
+        );
+        let mut map = AnimationInputs::new();
+        map.insert(
+            node,
+            ElementAnimationState {
+                transitions: vec![],
+                animations: vec![AnimationSpec {
+                    name: "slide".into(),
+                    duration_ms: 100.0,
+                    delay_ms: 0.0,
+                    easing: Easing::Linear,
+                    iteration_count: IterationCount::Finite(1.0),
+                    direction: AnimationDirection::Normal,
+                    fill_mode: AnimationFillMode::None,
+                    play_state: AnimationPlayState::Running,
+                }],
+                base_values: HashMap::new(),
+            },
+        );
+        let _ = rt.sample(0.0, true, &map, &kf, ColorScheme::Light);
+        let r_mid = rt.sample(50.0, true, &map, &kf, ColorScheme::Light);
+        let v = r_mid
+            .overrides
+            .get(&node)
+            .and_then(|m| m.get("transform"))
+            .cloned();
+        match v {
+            Some(CssValue::Function(name, args)) if name == "translate" => {
+                assert_eq!(args.len(), 1);
+                let CssValue::Length(x, Unit::Px) = args[0][0] else {
+                    panic!("expected Length px, got {args:?}")
+                };
+                let CssValue::Length(y, Unit::Px) = args[0][1] else {
+                    panic!("expected Length px, got {args:?}")
+                };
+                assert!((x - 100.0).abs() < 1e-4, "expected 100px, got {x}");
+                assert!((y - 50.0).abs() < 1e-4, "expected 50px, got {y}");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
     fn animation_alternate_reverses_second_iteration() {
         let mut rt = AnimationRuntime::new();
         let node = 5u32;
@@ -751,5 +918,108 @@ mod tests {
         assert!(v1 > 0.3 && v1 < 0.7, "v1={v1}");
         assert!(v2 > 0.3 && v2 < 0.7, "v2={v2}");
         // alternate means iteration 2 goes 1->0, so at midpoint value ~0.5 but direction reversed; values should be similar magnitude
+    }
+
+    #[test]
+    fn keyframes_animation_honors_timing_function() {
+        let mut rt = AnimationRuntime::new();
+        let node = 8u32;
+        let mut kf = KeyframesRegistry::new();
+        kf.insert(
+            "fade".to_string(),
+            KeyframesRule {
+                name: "fade".to_string(),
+                stops: vec![
+                    KeyframeStop {
+                        offset: 0.0,
+                        declarations: vec![("opacity".into(), CssValue::Number(0.0))],
+                    },
+                    KeyframeStop {
+                        offset: 1.0,
+                        declarations: vec![("opacity".into(), CssValue::Number(1.0))],
+                    },
+                ],
+            },
+        );
+        let mut map = AnimationInputs::new();
+        map.insert(
+            node,
+            ElementAnimationState {
+                transitions: vec![],
+                animations: vec![AnimationSpec {
+                    name: "fade".into(),
+                    duration_ms: 100.0,
+                    delay_ms: 0.0,
+                    easing: Easing::Ease,
+                    iteration_count: IterationCount::Finite(1.0),
+                    direction: AnimationDirection::Normal,
+                    fill_mode: AnimationFillMode::None,
+                    play_state: AnimationPlayState::Running,
+                }],
+                base_values: HashMap::new(),
+            },
+        );
+        let _ = rt.sample(0.0, true, &map, &kf, ColorScheme::Light);
+        let mid = rt.sample(50.0, true, &map, &kf, ColorScheme::Light);
+        match mid.overrides.get(&node).and_then(|m| m.get("opacity")) {
+            // CSS `ease` is already well past linear halfway through the segment.
+            Some(CssValue::Number(v)) => assert!(*v > 0.7, "expected eased progress, got {v}"),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn transform_transition_from_none_interpolates_from_identity() {
+        let mut rt = AnimationRuntime::new();
+        let node = 9u32;
+        let kf = KeyframesRegistry::new();
+        let transition = vec![TransitionSpec {
+            property: "transform".to_string(),
+            duration_ms: 100.0,
+            delay_ms: 0.0,
+            easing: Easing::Linear,
+        }];
+
+        let mut base0 = HashMap::new();
+        base0.insert("transform".to_string(), CssValue::Keyword("none".into()));
+        let mut map0 = AnimationInputs::new();
+        map0.insert(
+            node,
+            ElementAnimationState {
+                transitions: transition.clone(),
+                animations: vec![],
+                base_values: base0,
+            },
+        );
+        let _ = rt.sample(0.0, true, &map0, &kf, ColorScheme::Light);
+
+        let mut base1 = HashMap::new();
+        base1.insert(
+            "transform".to_string(),
+            CssValue::Function(
+                "translateX".into(),
+                vec![vec![CssValue::Length(100.0, Unit::Px)]],
+            ),
+        );
+        let mut map1 = AnimationInputs::new();
+        map1.insert(
+            node,
+            ElementAnimationState {
+                transitions: transition,
+                animations: vec![],
+                base_values: base1,
+            },
+        );
+        let _ = rt.sample(50.0, true, &map1, &kf, ColorScheme::Light);
+        let mid = rt.sample(100.0, true, &map1, &kf, ColorScheme::Light);
+        match mid.overrides.get(&node).and_then(|m| m.get("transform")) {
+            Some(CssValue::Function(name, args)) if name == "translate" => {
+                let CssValue::Length(x, Unit::Px) = args[0][0] else {
+                    panic!("expected Length px, got {args:?}")
+                };
+                assert!((x - 50.0).abs() < 1e-3, "expected 50px, got {x}");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
     }
 }

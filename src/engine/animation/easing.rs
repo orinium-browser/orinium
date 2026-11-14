@@ -74,6 +74,126 @@ fn sample_derivative(a: f32, b: f32, t: f32) -> f32 {
     3.0 * mt * mt * a + 6.0 * mt * t * (b - a) + 3.0 * t * t * (1.0 - b)
 }
 
+/// Extract the angle (in radians) from a `rotate()` function's parsed args.
+/// Args shape: `vec![vec![Length(angle, unit)]]` (or a bare Number treated as radians).
+fn transform_function_angle(args: &[Vec<CssValue>]) -> Option<f32> {
+    let v = args.get(0)?.first()?;
+    match *v {
+        CssValue::Length(val, Unit::Deg) => Some(val.to_radians()),
+        CssValue::Length(val, Unit::Rad) => Some(val),
+        CssValue::Length(val, Unit::Grad) => Some(val * std::f32::consts::PI / 200.0),
+        CssValue::Length(val, Unit::Turn) => Some(val * 2.0 * std::f32::consts::PI),
+        CssValue::Number(n) => Some(n.to_radians()),
+        _ => None,
+    }
+}
+
+/// Extract `(sx, sy)` from a `scale()` function's parsed args.
+/// Missing `sy` defaults to `sx` (CSS `scale(s)` === `scale(s, s)`).
+fn transform_function_scale(args: &[Vec<CssValue>]) -> Option<(f32, f32)> {
+    let flat: Vec<&CssValue> = args.iter().flatten().collect();
+    let sx = match flat.first()? {
+        CssValue::Number(n) => *n,
+        _ => return None,
+    };
+    let sy = match flat.get(1).copied() {
+        Some(CssValue::Number(n)) => *n,
+        _ => sx,
+    };
+    Some((sx, sy))
+}
+
+/// Extract `(tx, ty)` from a translate-family function's parsed args.
+///
+/// - `translate(tx, ty?)` → `(tx, ty)` with `ty` defaulting to `0`
+/// - `translateX(tx)` → `(tx, 0)`
+/// - `translateY(ty)` → `(0, ty)`
+///
+/// Lengths are resolved to pixels; bare numbers are treated as pixels.
+/// Percentage/viewport lengths are context-dependent and not interpolable here.
+fn transform_function_translate(fn_name: &str, args: &[Vec<CssValue>]) -> Option<(f32, f32)> {
+    let flat: Vec<&CssValue> = args.iter().flatten().collect();
+    let to_px = |v: &CssValue| -> Option<f32> {
+        match v {
+            CssValue::Number(n) => Some(*n),
+            CssValue::Length(val, Unit::Px) => Some(*val),
+            _ => None,
+        }
+    };
+    let first = flat.first()?;
+    let tx_val = to_px(first)?;
+    let ty_val = match flat.get(1).copied() {
+        Some(CssValue::Number(n)) => *n,
+        Some(CssValue::Length(val, Unit::Px)) => *val,
+        _ => 0.0,
+    };
+    match fn_name {
+        "translatex" => Some((tx_val, 0.0)),
+        "translatey" => Some((0.0, tx_val)),
+        "translate" => Some((tx_val, ty_val)),
+        _ => None,
+    }
+}
+
+/// Whether a `CssValue` could possibly resolve to a color. Used to avoid
+/// calling `resolve_css_color` (and logging errors) on non-color values such
+/// as transform functions and lists.
+fn could_be_css_color(value: &CssValue) -> bool {
+    match value {
+        CssValue::Color(_) => true,
+        CssValue::Keyword(_) => true,
+        CssValue::Function(name, _) => matches!(
+            name.to_ascii_lowercase().as_str(),
+            "rgb"
+                | "rgba"
+                | "hsl"
+                | "hsla"
+                | "lab"
+                | "lch"
+                | "oklab"
+                | "oklch"
+                | "color-mix"
+                | "light-dark"
+                | "hwb"
+                | "color"
+        ),
+        _ => false,
+    }
+}
+
+/// Build an identity transform matching `value`'s transform functions, so
+/// `none` ↔ `transform` transitions can interpolate instead of snapping.
+fn transform_identity_like(value: &CssValue) -> Option<CssValue> {
+    match value {
+        CssValue::Function(name, _) => {
+            let identity = match name.to_ascii_lowercase().as_str() {
+                "translate" | "translatex" | "translatey" => CssValue::Function(
+                    "translate".into(),
+                    vec![vec![
+                        CssValue::Length(0.0, Unit::Px),
+                        CssValue::Length(0.0, Unit::Px),
+                    ]],
+                ),
+                "scale" => CssValue::Function("scale".into(), vec![vec![CssValue::Number(1.0)]]),
+                "rotate" => CssValue::Function(
+                    "rotate".into(),
+                    vec![vec![CssValue::Length(0.0, Unit::Deg)]],
+                ),
+                _ => return None,
+            };
+            Some(identity)
+        }
+        CssValue::List(items) => {
+            let identities = items
+                .iter()
+                .map(transform_identity_like)
+                .collect::<Option<Vec<_>>>()?;
+            Some(CssValue::List(identities))
+        }
+        _ => None,
+    }
+}
+
 /// Interpolate between two CSS values for supported animatable properties.
 /// Returns `None` when interpolation is not supported (caller should snap).
 pub fn interpolate_value(
@@ -83,6 +203,16 @@ pub fn interpolate_value(
     color_scheme: ColorScheme,
 ) -> Option<CssValue> {
     let t = t.clamp(0.0, 1.0);
+    if matches!(from, CssValue::Keyword(value) if value.eq_ignore_ascii_case("none"))
+        && let Some(identity) = transform_identity_like(to)
+    {
+        return interpolate_value(&identity, to, t, color_scheme);
+    }
+    if matches!(to, CssValue::Keyword(value) if value.eq_ignore_ascii_case("none"))
+        && let Some(identity) = transform_identity_like(from)
+    {
+        return interpolate_value(from, &identity, t, color_scheme);
+    }
     match (from, to) {
         (CssValue::Number(a), CssValue::Number(b)) => Some(CssValue::Number(a + (b - a) * t)),
         (CssValue::Length(a, ua), CssValue::Length(b, ub)) if ua == ub => {
@@ -102,7 +232,89 @@ pub fn interpolate_value(
             };
             Some(CssValue::Length(av + (bv - av) * t, Unit::Px))
         }
+        // CSS transform functions: interpolate matching transform functions.
+        // Translate-family functions (translate/translateX/translateY) are
+        // interchangeable and all resolve to a (tx, ty) pair.
+        (CssValue::Function(from_name, from_args), CssValue::Function(to_name, to_args)) => {
+            let f = from_name.to_ascii_lowercase();
+            let g = to_name.to_ascii_lowercase();
+            let same_group = match f.as_str() {
+                "rotate" => g == "rotate",
+                "scale" => g == "scale",
+                "translate" | "translatex" | "translatey" => {
+                    matches!(g.as_str(), "translate" | "translatex" | "translatey")
+                }
+                _ => false,
+            };
+            if !same_group {
+                return None;
+            }
+            match f.as_str() {
+                "rotate" => {
+                    let a0 = transform_function_angle(from_args)?;
+                    let a1 = transform_function_angle(to_args)?;
+                    let interp = a0 + (a1 - a0) * t;
+                    Some(CssValue::Function(
+                        "rotate".into(),
+                        vec![vec![CssValue::Length(interp.to_degrees(), Unit::Deg)]],
+                    ))
+                }
+                "scale" => {
+                    let (sx0, sy0) = transform_function_scale(from_args)?;
+                    let (sx1, sy1) = transform_function_scale(to_args)?;
+                    let sx = sx0 + (sx1 - sx0) * t;
+                    let sy = sy0 + (sy1 - sy0) * t;
+                    if (sx - sy).abs() < f32::EPSILON {
+                        Some(CssValue::Function(
+                            "scale".into(),
+                            vec![vec![CssValue::Number(sx)]],
+                        ))
+                    } else {
+                        Some(CssValue::Function(
+                            "scale".into(),
+                            vec![vec![CssValue::Number(sx)], vec![CssValue::Number(sy)]],
+                        ))
+                    }
+                }
+                "translate" | "translatex" | "translatey" => {
+                    let (tx0, ty0) = transform_function_translate(&f, from_args)?;
+                    let (tx1, ty1) = transform_function_translate(&g, to_args)?;
+                    let tx = tx0 + (tx1 - tx0) * t;
+                    let ty = ty0 + (ty1 - ty0) * t;
+                    Some(CssValue::Function(
+                        "translate".into(),
+                        vec![vec![
+                            CssValue::Length(tx, Unit::Px),
+                            CssValue::Length(ty, Unit::Px),
+                        ]],
+                    ))
+                }
+                _ => None,
+            }
+        }
+        // Transform function lists (e.g. `translateX(0) scale(1)` → `translateX(50) scale(1.5)`):
+        // interpolate element-wise when both sides have the same number of functions.
+        (CssValue::List(from_list), CssValue::List(to_list)) => {
+            if from_list.is_empty() || from_list.len() != to_list.len() {
+                return None;
+            }
+            let mut result = Vec::with_capacity(from_list.len());
+            for (from_fn, to_fn) in from_list.iter().zip(to_list.iter()) {
+                match interpolate_value(from_fn, to_fn, t, color_scheme) {
+                    Some(v) => result.push(v),
+                    None => return None,
+                }
+            }
+            Some(CssValue::List(result))
+        }
         _ => {
+            // Only attempt color resolution for values that could be colors.
+            // Transform values (lists, rotate/scale/translate functions) are not colors;
+            // calling resolve_css_color on them produces spurious error logs.
+            // The caller handles None by snapping to an endpoint.
+            if !could_be_css_color(from) || !could_be_css_color(to) {
+                return None;
+            }
             // Try color interpolation
             if let (Some(ca), Some(cb)) = (
                 resolve_css_color("animation", from, color_scheme),
@@ -172,5 +384,328 @@ mod tests {
         )
         .unwrap();
         assert_eq!(l, CssValue::Length(25.0, Unit::Px));
+    }
+
+    fn rotate_fn(deg: f32) -> CssValue {
+        CssValue::Function(
+            "rotate".into(),
+            vec![vec![CssValue::Length(deg, Unit::Deg)]],
+        )
+    }
+
+    fn scale_fn(sx: f32, sy: f32) -> CssValue {
+        CssValue::Function(
+            "scale".into(),
+            vec![vec![CssValue::Number(sx)], vec![CssValue::Number(sy)]],
+        )
+    }
+
+    #[test]
+    fn interpolate_rotate_degrees() {
+        let v =
+            interpolate_value(&rotate_fn(0.0), &rotate_fn(90.0), 0.5, ColorScheme::Light).unwrap();
+        match v {
+            CssValue::Function(name, args) if name == "rotate" => {
+                let CssValue::Length(deg, Unit::Deg) = args[0][0] else {
+                    panic!("expected Length deg, got {args:?}")
+                };
+                assert!((deg - 45.0).abs() < 1e-4, "got {deg}");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn interpolate_rotate_wraps_turns_and_degs() {
+        // 0.5turn = 180deg; interpolate to 90deg => 135deg
+        let from = CssValue::Function(
+            "rotate".into(),
+            vec![vec![CssValue::Length(0.5, Unit::Turn)]],
+        );
+        let to = rotate_fn(90.0);
+        let v = interpolate_value(&from, &to, 0.5, ColorScheme::Light).unwrap();
+        match v {
+            CssValue::Function(name, args) if name == "rotate" => {
+                let CssValue::Length(deg, Unit::Deg) = args[0][0] else {
+                    panic!("expected Length deg, got {args:?}")
+                };
+                assert!((deg - 135.0).abs() < 1e-4, "got {deg}");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn interpolate_scale_uniform() {
+        let v = interpolate_value(
+            &scale_fn(1.0, 1.0),
+            &scale_fn(2.0, 2.0),
+            0.25,
+            ColorScheme::Light,
+        )
+        .unwrap();
+        match v {
+            CssValue::Function(name, args) if name == "scale" => {
+                assert_eq!(args.len(), 1);
+                let CssValue::Number(s) = args[0][0] else {
+                    panic!("expected Number, got {args:?}")
+                };
+                assert!((s - 1.25).abs() < 1e-4, "got {s}");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn interpolate_scale_non_uniform() {
+        let v = interpolate_value(
+            &scale_fn(1.0, 2.0),
+            &scale_fn(3.0, 4.0),
+            0.5,
+            ColorScheme::Light,
+        )
+        .unwrap();
+        match v {
+            CssValue::Function(name, args) if name == "scale" => {
+                assert_eq!(args.len(), 2);
+                let CssValue::Number(sx) = args[0][0] else {
+                    panic!("expected Number, got {args:?}")
+                };
+                let CssValue::Number(sy) = args[1][0] else {
+                    panic!("expected Number, got {args:?}")
+                };
+                assert!((sx - 2.0).abs() < 1e-4, "got {sx}");
+                assert!((sy - 3.0).abs() < 1e-4, "got {sy}");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn interpolate_mismatched_transform_functions_returns_none() {
+        let v = interpolate_value(
+            &rotate_fn(0.0),
+            &scale_fn(1.0, 1.0),
+            0.5,
+            ColorScheme::Light,
+        );
+        assert!(v.is_none());
+    }
+
+    #[test]
+    fn interpolate_single_arg_scale_defaults_sy() {
+        let from = CssValue::Function("scale".into(), vec![vec![CssValue::Number(1.0)]]);
+        let to = CssValue::Function("scale".into(), vec![vec![CssValue::Number(3.0)]]);
+        let v = interpolate_value(&from, &to, 0.5, ColorScheme::Light).unwrap();
+        match v {
+            CssValue::Function(name, args) if name == "scale" => {
+                assert_eq!(args.len(), 1);
+                let CssValue::Number(s) = args[0][0] else {
+                    panic!("expected Number, got {args:?}")
+                };
+                assert!((s - 2.0).abs() < 1e-4, "got {s}");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    fn translate_fn(tx: f32, ty: f32) -> CssValue {
+        CssValue::Function(
+            "translate".into(),
+            vec![vec![
+                CssValue::Length(tx, Unit::Px),
+                CssValue::Length(ty, Unit::Px),
+            ]],
+        )
+    }
+
+    fn translatex_fn(tx: f32) -> CssValue {
+        CssValue::Function(
+            "translateX".into(),
+            vec![vec![CssValue::Length(tx, Unit::Px)]],
+        )
+    }
+
+    fn translatey_fn(ty: f32) -> CssValue {
+        CssValue::Function(
+            "translateY".into(),
+            vec![vec![CssValue::Length(ty, Unit::Px)]],
+        )
+    }
+
+    #[test]
+    fn interpolate_translate() {
+        let v = interpolate_value(
+            &translate_fn(0.0, 0.0),
+            &translate_fn(100.0, 200.0),
+            0.25,
+            ColorScheme::Light,
+        )
+        .unwrap();
+        match v {
+            CssValue::Function(name, args) if name == "translate" => {
+                assert_eq!(args.len(), 1);
+                let CssValue::Length(x, Unit::Px) = args[0][0] else {
+                    panic!("expected Length px, got {args:?}")
+                };
+                let CssValue::Length(y, Unit::Px) = args[0][1] else {
+                    panic!("expected Length px, got {args:?}")
+                };
+                assert!((x - 25.0).abs() < 1e-4, "got {x}");
+                assert!((y - 50.0).abs() < 1e-4, "got {y}");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn interpolate_translatex() {
+        let v = interpolate_value(
+            &translatex_fn(0.0),
+            &translatex_fn(100.0),
+            0.5,
+            ColorScheme::Light,
+        )
+        .unwrap();
+        match v {
+            CssValue::Function(name, args) if name == "translate" => {
+                let CssValue::Length(x, Unit::Px) = args[0][0] else {
+                    panic!("expected Length px, got {args:?}")
+                };
+                let CssValue::Length(y, Unit::Px) = args[0][1] else {
+                    panic!("expected Length px, got {args:?}")
+                };
+                assert!((x - 50.0).abs() < 1e-4, "got {x}");
+                assert_eq!(y, 0.0);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn interpolate_translatey() {
+        let v = interpolate_value(
+            &translatey_fn(0.0),
+            &translatey_fn(100.0),
+            0.5,
+            ColorScheme::Light,
+        )
+        .unwrap();
+        match v {
+            CssValue::Function(name, args) if name == "translate" => {
+                let CssValue::Length(x, Unit::Px) = args[0][0] else {
+                    panic!("expected Length px, got {args:?}")
+                };
+                let CssValue::Length(y, Unit::Px) = args[0][1] else {
+                    panic!("expected Length px, got {args:?}")
+                };
+                assert_eq!(x, 0.0);
+                assert!((y - 50.0).abs() < 1e-4, "got {y}");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn interpolate_translate_family_mixed_names() {
+        // translateX(0) animating to translate(100, 200) should still interpolate
+        let v = interpolate_value(
+            &translatex_fn(0.0),
+            &translate_fn(100.0, 200.0),
+            0.5,
+            ColorScheme::Light,
+        )
+        .unwrap();
+        match v {
+            CssValue::Function(name, args) if name == "translate" => {
+                let CssValue::Length(x, Unit::Px) = args[0][0] else {
+                    panic!("expected Length px, got {args:?}")
+                };
+                let CssValue::Length(y, Unit::Px) = args[0][1] else {
+                    panic!("expected Length px, got {args:?}")
+                };
+                assert!((x - 50.0).abs() < 1e-4, "got {x}");
+                assert!((y - 100.0).abs() < 1e-4, "got {y}");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn interpolate_translate_vs_scale_returns_none() {
+        let v = interpolate_value(
+            &translate_fn(0.0, 0.0),
+            &CssValue::Function("scale".into(), vec![vec![CssValue::Number(2.0)]]),
+            0.5,
+            ColorScheme::Light,
+        );
+        assert!(v.is_none());
+    }
+
+    fn transform_list(functions: Vec<CssValue>) -> CssValue {
+        CssValue::List(functions)
+    }
+
+    #[test]
+    fn interpolate_transform_list_element_wise() {
+        let from = transform_list(vec![
+            translatex_fn(0.0),
+            CssValue::Function("scale".into(), vec![vec![CssValue::Number(1.0)]]),
+        ]);
+        let to = transform_list(vec![
+            translatex_fn(100.0),
+            CssValue::Function("scale".into(), vec![vec![CssValue::Number(3.0)]]),
+        ]);
+        let v = interpolate_value(&from, &to, 0.5, ColorScheme::Light).unwrap();
+        match v {
+            CssValue::List(items) => {
+                assert_eq!(items.len(), 2);
+                match &items[0] {
+                    CssValue::Function(name, args) if name == "translate" => {
+                        let CssValue::Length(x, Unit::Px) = args[0][0] else {
+                            panic!("expected Length px, got {args:?}")
+                        };
+                        assert!((x - 50.0).abs() < 1e-4, "got {x}");
+                    }
+                    other => panic!("expected translate function, got {other:?}"),
+                }
+                match &items[1] {
+                    CssValue::Function(name, args) if name == "scale" => {
+                        let CssValue::Number(s) = args[0][0] else {
+                            panic!("expected Number, got {args:?}")
+                        };
+                        assert!((s - 2.0).abs() < 1e-4, "got {s}");
+                    }
+                    other => panic!("expected scale function, got {other:?}"),
+                }
+            }
+            other => panic!("expected List, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn interpolate_transform_list_mismatched_length_returns_none() {
+        let from = transform_list(vec![translatex_fn(0.0)]);
+        let to = transform_list(vec![translatex_fn(0.0), translatex_fn(100.0)]);
+        let v = interpolate_value(&from, &to, 0.5, ColorScheme::Light);
+        assert!(v.is_none());
+    }
+
+    #[test]
+    fn interpolate_transform_list_non_color_values_do_not_log_error() {
+        // Both are non-color Lists; must return None without calling
+        // resolve_css_color (which would log an error).
+        let from = CssValue::Keyword("red".into());
+        let to = transform_list(vec![translatex_fn(0.0), translatex_fn(100.0)]);
+        let v = interpolate_value(&from, &to, 0.5, ColorScheme::Light);
+        assert!(v.is_none());
+    }
+
+    #[test]
+    fn interpolate_empty_transform_list_returns_none() {
+        let from = CssValue::List(vec![]);
+        let to = CssValue::List(vec![]);
+        let v = interpolate_value(&from, &to, 0.5, ColorScheme::Light);
+        assert!(v.is_none());
     }
 }

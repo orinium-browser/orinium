@@ -71,7 +71,7 @@ fn split_comma_list(value: &CssValue) -> Vec<Vec<CssValue>> {
         CssValue::List(items) => {
             let mut groups: Vec<Vec<CssValue>> = vec![Vec::new()];
             for item in items {
-                if matches!(item, CssValue::Keyword(k) if k == ",") {
+                if matches!(item, CssValue::Separator) {
                     groups.push(Vec::new());
                 } else {
                     groups.last_mut().unwrap().push(item.clone());
