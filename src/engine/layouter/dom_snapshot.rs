@@ -30,6 +30,10 @@ pub struct SnapNode {
     /// was taken: the explicit state if the script set one, otherwise the
     /// `checked` content attribute (i.e. `defaultChecked`).
     pub checked: bool,
+    /// The live value of an input/textarea element, resolved when the snapshot
+    /// was taken: the `value` content attribute or the live property value if
+    /// the user/script mutated it.
+    pub value: Option<String>,
 }
 
 /// An owned snapshot of a DOM subtree.
@@ -71,14 +75,17 @@ impl DomSnapshot {
             dom_ids: &HashMap<usize, u64>,
         ) -> NodeId {
             let id = snapshot.nodes.len() as NodeId;
+            let node_borrow = node.borrow();
+            let value = node_borrow.value.get_attr("value").map(|s| s.to_string());
             snapshot.nodes.push(SnapNode {
-                kind: node.borrow().value.clone(),
+                kind: node_borrow.value.clone(),
                 children: Vec::new(),
                 dom_id: dom_ids
                     .get(&(Rc::as_ptr(node) as usize))
                     .copied()
                     .unwrap_or(0),
                 checked: crate::engine::html::parser::checkedness(node),
+                value,
             });
             let children: Vec<NodeId> = node
                 .borrow()
@@ -130,11 +137,14 @@ impl DomSnapshot {
         dom_refs: &mut Vec<Weak<RefCell<TreeNode<HtmlNodeType>>>>,
     ) -> NodeId {
         let id = self.nodes.len() as NodeId;
+        let node_borrow = node.borrow();
+        let value = node_borrow.value.get_attr("value").map(|s| s.to_string());
         self.nodes.push(SnapNode {
-            kind: node.borrow().value.clone(),
+            kind: node_borrow.value.clone(),
             children: Vec::new(),
             dom_id: 0,
             checked: crate::engine::html::parser::checkedness(node),
+            value,
         });
         dom_refs.push(Rc::downgrade(node));
         let children: Vec<NodeId> = node
