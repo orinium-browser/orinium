@@ -5,6 +5,7 @@ use smol_str::SmolStr;
 use crate::engine::css::values::{CssValue, Unit};
 use crate::engine::layouter::builder::css_resolve::parse_grid_template;
 use crate::engine::layouter::types::CursorStyle;
+use crate::engine::renderer_model::AffineTransform;
 
 use ui_layout::{
     AlignContent, AlignItems, BoxSizing, Display, FlexDirection, FlexWrap, JustifyContent,
@@ -190,6 +191,168 @@ fn resolve_align_items(keyword: &str) -> Option<AlignItems> {
         "flex-end" | "end" => Some(AlignItems::End),
         _ => None,
     }
+}
+
+/// Convert an angle-valued `CssValue` to radians.
+fn transform_angle_radians(value: &CssValue) -> Option<f32> {
+    match value {
+        CssValue::Length(v, Unit::Deg) => Some(v.to_radians()),
+        CssValue::Length(v, Unit::Rad) => Some(*v),
+        CssValue::Length(v, Unit::Grad) => Some(v * std::f32::consts::PI / 200.0),
+        CssValue::Length(v, Unit::Turn) => Some(v * 2.0 * std::f32::consts::PI),
+        CssValue::Number(n) => Some(n.to_radians()),
+        _ => None,
+    }
+}
+
+/// Resolve a length-ish transform argument to pixels, falling back to the raw
+/// value for unitless numbers.
+///
+/// `element_size` is the element's resolved (width, height) in pixels when
+/// known. Per CSS Transforms, `translate` percentages resolve against the
+/// element's own box dimensions on the appropriate axis, not against font-size.
+/// When `element_size` is `None`, fall back to `font_size` for compatibility.
+fn transform_length_px(
+    name: &str,
+    value: &CssValue,
+    text_flow_style: &TextFlowStyle,
+    element_size: Option<(f32, f32)>,
+    is_x: bool,
+) -> Option<f32> {
+    match value {
+        CssValue::Number(n) => Some(*n),
+        _ => {
+            let len = resolve_css_len(name, std::slice::from_ref(value), text_flow_style)?;
+            match len {
+                Length::Px(v) => Some(v),
+                Length::Percent(p) => {
+                    let base = if is_x {
+                        element_size.map(|(w, _)| w).unwrap_or(text_flow_style.font_size)
+                    } else {
+                        element_size.map(|(_, h)| h).unwrap_or(text_flow_style.font_size)
+                    };
+                    Some(base * p / 100.0)
+                }
+                _ => Some(length_to_px(&len, text_flow_style.font_size)),
+            }
+        }
+    }
+}
+
+/// Flatten the comma-separated argument groups of a transform function into a
+/// single component list, e.g. `scale(1.5, 2)` and `scale(1.5 2)` both yield
+/// `[Number(1.5), Number(2)]`.
+fn flatten_function_args(args: &[Vec<CssValue>]) -> Vec<&CssValue> {
+    args.iter().flatten().collect()
+}
+
+/// Parse a single CSS `transform()` function into an [`AffineTransform`].
+///
+/// CSS composes transform functions left-to-right (the first listed function is
+/// applied first), so callers compose results with
+/// `accumulated.then(&next)`.
+///
+/// `style` provides the element's resolved width/height so that `translate`
+/// percentages can resolve against the element's own box dimensions per CSS
+/// Transforms.
+fn parse_transform_function(
+    name: &str,
+    func: &CssValue,
+    style: &Style,
+    text_flow_style: &TextFlowStyle,
+) -> Option<AffineTransform> {
+    let CssValue::Function(fn_name, args) = func else {
+        return None;
+    };
+    let flat = flatten_function_args(args);
+
+    let element_width = match style.size.width {
+        LengthOrAuto::Length(Length::Px(v)) => Some(v),
+        _ => None,
+    };
+    let element_height = match style.size.height {
+        LengthOrAuto::Length(Length::Px(v)) => Some(v),
+        _ => None,
+    };
+    let element_size = match (element_width, element_height) {
+        (Some(w), Some(h)) => Some((w, h)),
+        _ => None,
+    };
+
+    match fn_name.to_ascii_lowercase().as_str() {
+        "none" => Some(AffineTransform::identity()),
+
+        "rotate" => {
+            let angle = transform_angle_radians(flat.first()?)?;
+            Some(AffineTransform::rotate(angle))
+        }
+
+        "scale" => {
+            let sx = transform_length_px(name, flat.first()?, text_flow_style, element_size, true)?;
+            let sy = flat
+                .get(1)
+                .map(|v| transform_length_px(name, v, text_flow_style, element_size, true))
+                .flatten()
+                .unwrap_or(sx);
+            Some(AffineTransform::scale(sx, sy))
+        }
+
+        "translate" => {
+            let tx = transform_length_px(name, flat.first()?, text_flow_style, element_size, true)?;
+            let ty = flat
+                .get(1)
+                .map(|v| transform_length_px(name, v, text_flow_style, element_size, false))
+                .flatten()
+                .unwrap_or(0.0);
+            Some(AffineTransform::translate(tx, ty))
+        }
+
+        "translatex" => {
+            let tx = transform_length_px(name, flat.first()?, text_flow_style, element_size, true)?;
+            Some(AffineTransform::translate(tx, 0.0))
+        }
+
+        "translatey" => {
+            let ty = transform_length_px(name, flat.first()?, text_flow_style, element_size, false)?;
+            Some(AffineTransform::translate(0.0, ty))
+        }
+
+        _ => None,
+    }
+}
+
+/// Parse the full `transform` property value into a single composed
+/// [`AffineTransform`]. Returns `None` for `none` (identity, no transform) or
+/// when the value cannot be parsed.
+fn parse_transform(
+    name: &str,
+    value: &CssValue,
+    style: &Style,
+    text_flow_style: &TextFlowStyle,
+) -> Option<AffineTransform> {
+    match value {
+        CssValue::Keyword(k) if k.eq_ignore_ascii_case("none") => return None,
+
+        CssValue::List(funcs) => {
+            let mut accumulated = AffineTransform::identity();
+            for func in funcs {
+                let t = parse_transform_function(name, func, style, text_flow_style)?;
+                accumulated = accumulated.then(&t);
+            }
+            (!accumulated.eq(&AffineTransform::identity())).then_some(accumulated)
+        }
+        CssValue::Function(..) => {
+            let t = parse_transform_function(name, value, style, text_flow_style)?;
+            (!t.eq(&AffineTransform::identity())).then_some(t)
+        }
+        _ => None,
+    }
+}
+
+/// Apply `background-color` without touching image/gradient layers. The
+/// solid color is stored as the independent bottom color of `Background`.
+fn set_background_color(container_style: &mut ContainerStyle, color: Color) {
+    container_style.background.color = Some(color);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -910,57 +1073,67 @@ pub fn apply_declaration(
                 }
                 _ => resolve_css_color(name, value, color_scheme)?,
             };
-            match &mut container_style.background {
-                Background::Image {
-                    color: image_color, ..
-                } => *image_color = color,
-                _ => container_style.background = Background::Color(color),
-            };
+            set_background_color(container_style, color);
         }
 
         ("background", _) => {
             container_style.background =
-                parse_background_shorthand(name, value, text_style, text_flow_style, color_scheme)?;
+                parse_background_shorthand(name, value, text_style, text_flow_style, color_scheme);
             apply_background_shorthand_geometry(value, text_flow_style.font_size, container_style);
         }
 
         ("background-image", _) => {
-            let existing_color = match &container_style.background {
-                Background::Color(color) | Background::Image { color, .. } => *color,
-                Background::Gradient(_) => Color(0, 0, 0, 0),
-            };
+            let existing_color = container_style.background.color;
             let parsed =
-                parse_background_shorthand(name, value, text_style, text_flow_style, color_scheme)?;
-            container_style.background = match parsed {
-                Background::Image { source, image, .. } => Background::Image {
-                    source,
-                    image,
+                parse_background_shorthand(name, value, text_style, text_flow_style, color_scheme);
+            if !parsed.layers.is_empty() {
+                container_style.background = Background {
                     color: existing_color,
-                },
-                Background::Color(Color(_, _, _, 0)) => Background::Color(existing_color),
-                other => other,
-            };
+                    layers: parsed.layers,
+                };
+            }
         }
 
         ("background-repeat", _) => {
-            apply_property!(
-                background_repeat,
-                container_style,
-                parent_container_style,
-                DEFAULT_CONTAINER_STYLE,
-                value,
-                parse_background_repeat(value)?
-            );
+            let repeats = parse_background_repeat(value);
+            if repeats.len() == 1 {
+                let r = repeats[0];
+                for layer in &mut container_style.background.layers {
+                    layer.repeat = r;
+                }
+            } else {
+                for (i, layer) in container_style.background.layers.iter_mut().enumerate() {
+                    layer.repeat = repeats.get(i).copied().unwrap_or_default();
+                }
+            }
         }
 
         ("background-size", _) => {
-            container_style.background_size =
-                parse_background_size(value, text_flow_style.font_size)?;
+            let sizes = parse_background_size(value, text_flow_style.font_size);
+            if sizes.len() == 1 {
+                let s = sizes[0];
+                for layer in &mut container_style.background.layers {
+                    layer.size = s;
+                }
+            } else {
+                for (i, layer) in container_style.background.layers.iter_mut().enumerate() {
+                    layer.size = sizes.get(i).copied().unwrap_or_default();
+                }
+            }
         }
 
         ("background-position", _) => {
-            container_style.background_position =
-                parse_background_position(value, text_flow_style.font_size)?;
+            let positions = parse_background_position(value, text_flow_style.font_size);
+            if positions.len() == 1 {
+                let p = positions[0];
+                for layer in &mut container_style.background.layers {
+                    layer.position = p;
+                }
+            } else {
+                for (i, layer) in container_style.background.layers.iter_mut().enumerate() {
+                    layer.position = positions.get(i).copied().unwrap_or_default();
+                }
+            }
         }
 
         ("color", _) => {
@@ -1449,6 +1622,10 @@ pub fn apply_declaration(
 
         ("clip-path", _) => {
             container_style.clip_path = parse_clip_path(name, value, text_flow_style)?;
+        }
+
+        ("transform", _) => {
+            container_style.transform = parse_transform(name, value, style, text_flow_style);
         }
 
         ("border-style", v) => {

@@ -467,6 +467,9 @@ pub fn build_layout_and_info_from_snapshot(
             let mut text_style = child_css.text_style.clone();
             let mut text_flow_style = child_css.text_flow_style;
             let mut container_style = ContainerStyle::default();
+            if let HtmlNodeType::Element { tag_name, .. } = html_node {
+                container_style.tag = Some(tag_name.clone());
+            }
             let mut style = Style::default();
             let mut overflow = Overflow::default();
             let parent_style = stack[top_idx].parent_style.clone();
@@ -537,6 +540,34 @@ pub fn build_layout_and_info_from_snapshot(
             #[cfg(any(feature = "profile", debug_assertions))]
             {
                 enter_prep_time += enter_prep.elapsed();
+            }
+
+            // Apply presentational HTML attribute sizing (width/height
+            // attributes). Presentational hints have the lowest priority in the
+            // CSS cascade, below author stylesheets and inline declarations, so
+            // they are applied first and can be overridden by CSS.
+            for attr in ["width", "height"] {
+                if let Some(value) = html_node.get_attr(attr)
+                    && let Some(mut value) = resolve_inline_value(value)
+                {
+                    if let CssValue::Number(v) = value {
+                        value = CssValue::Length(v, Unit::Px);
+                    }
+                    apply_declaration(
+                        attr,
+                        &value,
+                        &mut style,
+                        &mut container_style,
+                        &mut text_style,
+                        &mut text_flow_style,
+                        &parent_style,
+                        &parent_container_style,
+                        &parent_text_style,
+                        &parent_text_flow_style,
+                        &mut overflow,
+                        used_color_scheme,
+                    );
+                }
             }
 
             // Apply CSS declarations.
@@ -653,31 +684,6 @@ pub fn build_layout_and_info_from_snapshot(
                     );
                 }
             }
-
-            // Apply attribute sizing
-            for attr in ["width", "height"] {
-                if let Some(value) = html_node.get_attr(attr)
-                    && let Some(mut value) = resolve_inline_value(value)
-                {
-                    if let CssValue::Number(v) = value {
-                        value = CssValue::Length(v, Unit::Px);
-                    }
-                    apply_declaration(
-                        attr,
-                        &value,
-                        &mut style,
-                        &mut container_style,
-                        &mut text_style,
-                        &mut text_flow_style,
-                        &parent_style,
-                        &parent_container_style,
-                        &parent_text_style,
-                        &parent_text_flow_style,
-                        &mut overflow,
-                        used_color_scheme,
-                    );
-                }
-            }
             #[cfg(any(feature = "profile", debug_assertions))]
             {
                 apply_decl_time += apply_decl.elapsed();
@@ -711,6 +717,7 @@ pub fn build_layout_and_info_from_snapshot(
                         "font-size",
                         "line-height",
                         "color",
+                        "transform",
                         "background-color",
                         "border-top-color",
                         "border-right-color",
@@ -735,15 +742,17 @@ pub fn build_layout_and_info_from_snapshot(
                             text_style.color.3
                         ))
                     });
-                    if let crate::engine::layouter::types::Background::Color(c) =
-                        &container_style.background
+                    base_values
+                        .entry("transform".to_string())
+                        .or_insert(CssValue::Keyword("none".into()));
+                    if let Some(color) = container_style.background.color
                     {
                         base_values
                             .entry("background-color".to_string())
                             .or_insert_with(|| {
                                 CssValue::Color(format!(
                                     "{:02x}{:02x}{:02x}{:02x}",
-                                    c.0, c.1, c.2, c.3
+                                    color.0, color.1, color.2, color.3
                                 ))
                             });
                     }
@@ -786,8 +795,12 @@ pub fn build_layout_and_info_from_snapshot(
                 }
             }
 
-            if let Background::Image { source, image, .. } = &mut container_style.background {
-                *image = images.get(source).cloned();
+            for layer in &mut container_style.background.layers {
+                if let Some(crate::engine::layouter::types::BackgroundImage::Image { source, image }) =
+                    &mut layer.image
+                {
+                    *image = images.get(source).cloned();
+                }
             }
 
             // `float` and `clear` only apply to in-flow boxes; out-of-flow
@@ -1035,6 +1048,7 @@ pub fn build_layout_and_info_from_snapshot(
                             "font-size",
                             "line-height",
                             "color",
+                            "transform",
                             "background-color",
                             "border-top-color",
                             "border-right-color",
@@ -1057,6 +1071,9 @@ pub fn build_layout_and_info_from_snapshot(
                                 text_style.color.3
                             ))
                         });
+                        base_values
+                            .entry("transform".to_string())
+                            .or_insert(CssValue::Keyword("none".into()));
                         animation_inputs.insert(
                             ptr,
                             ElementAnimationState {
@@ -1770,6 +1787,7 @@ fn collect_animation_decl(
             | "font-size"
             | "line-height"
             | "color"
+            | "transform"
             | "background-color"
             | "border-top-color"
             | "border-right-color"
@@ -2272,7 +2290,12 @@ fn build_pseudo_slot(
         Some(_) => String::new(),
     };
 
-    let has_styling = !matches!(container_style.background, Background::Color(c) if c.3 == 0)
+    let has_styling = container_style.background.color.is_some_and(|c| c.3 > 0)
+        || container_style
+            .background
+            .layers
+            .iter()
+            .any(|layer| layer.image.is_some())
         || matches!(
             (&style.size.width, &style.size.height),
             (LengthOrAuto::Length(l), _) | (_, LengthOrAuto::Length(l))
@@ -2303,8 +2326,12 @@ fn build_pseudo_slot(
     };
 
     // Attach the decoded background image, mirroring element handling.
-    if let Background::Image { source, image, .. } = &mut container_style.background {
-        *image = images.get(source).cloned();
+    for layer in &mut container_style.background.layers {
+        if let Some(crate::engine::layouter::types::BackgroundImage::Image { source, image }) =
+            &mut layer.image
+        {
+            *image = images.get(source).cloned();
+        }
     }
 
     // The generated box is an inline-level flow root (inline-block): it sits

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::engine::renderer_model::Image;
+use crate::engine::renderer_model::{AffineTransform, Image};
 use crate::engine::svg::SvgShape;
 use crate::engine::ui::custom_node::CustomNode;
 
@@ -115,11 +115,19 @@ impl NodeKind {
 
     pub fn is_container_with_transparent_bg(&self) -> bool {
         matches!(self, NodeKind::Container { style, .. }
-            if style.background == Background::Color(Color(0, 0, 0, 0)))
+            if style.background.color.is_none()
+                || style.background.color == Some(Color(0, 0, 0, 0))
+                && style.background.layers.iter().all(|layer| {
+                    matches!(&layer.image, Some(BackgroundImage::Gradient(_)))
+                        || matches!(&layer.image, Some(BackgroundImage::Image { image, .. }) if image.is_none())
+                }))
     }
 
     pub fn container_bg(&self) -> Option<&Background> {
         if let NodeKind::Container { style, .. } = self {
+            if style.background.color.is_some_and(|c| c.3 > 0) {
+                return Some(&style.background);
+            }
             Some(&style.background)
         } else {
             None
@@ -265,21 +273,34 @@ pub enum CursorStyle {
 //        Background
 // =========================
 
+/// A single CSS background image layer: either a gradient or a referenced image.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Background {
-    Color(Color),
+pub enum BackgroundImage {
     Gradient(Gradient),
     Image {
         source: String,
         image: Option<Image>,
-        color: Color,
     },
 }
 
-impl Default for Background {
-    fn default() -> Self {
-        Self::Color(Color(0, 0, 0, 0))
-    }
+/// One background layer: an image/gradient plus its own geometry.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct BackgroundLayer {
+    pub image: Option<BackgroundImage>,
+    pub position: BackgroundPosition,
+    pub size: BackgroundSize,
+    pub repeat: BackgroundRepeat,
+}
+
+/// The whole background for an element: an independent bottom-most color plus
+/// zero or more image/gradient layers stacked on top of it.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Background {
+    /// Bottom-most background color, painted beneath all image/gradient layers.
+    /// `None` means transparent (no color layer).
+    pub color: Option<Color>,
+    /// Image/gradient layers, stored bottom-to-top in CSS order.
+    pub layers: Vec<BackgroundLayer>,
 }
 
 /// How a CSS background image is repeated inside its painting area.
@@ -660,10 +681,8 @@ impl AnchorStyle {
 pub struct ContainerStyle {
     pub cursor: CursorStyle,
 
+    /// The whole background: independent bottom-most color plus image/gradient layers.
     pub background: Background,
-    pub background_repeat: BackgroundRepeat,
-    pub background_size: BackgroundSize,
-    pub background_position: BackgroundPosition,
     /// Integer stacking level. `None` represents CSS `auto`.
     pub z_index: Option<i32>,
     pub visibility: Visibility,
@@ -685,6 +704,11 @@ pub struct ContainerStyle {
     pub writing_mode: WritingMode,
     /// CSS Anchor Positioning declarations.
     pub anchor: AnchorStyle,
+    /// CSS `transform` applied to the element's border box.
+    pub transform: Option<AffineTransform>,
+    /// HTML tag name (e.g. "html", "body", "div"), used for canvas background
+    /// inheritance (root element → body) and other tag-specific behaviors.
+    pub tag: Option<String>,
 }
 
 impl Default for ContainerStyle {
@@ -692,9 +716,6 @@ impl Default for ContainerStyle {
         Self {
             cursor: Default::default(),
             background: Default::default(),
-            background_repeat: Default::default(),
-            background_size: Default::default(),
-            background_position: Default::default(),
             z_index: Default::default(),
             visibility: Default::default(),
             opacity: 1.0,
@@ -708,6 +729,8 @@ impl Default for ContainerStyle {
             direction: Default::default(),
             writing_mode: Default::default(),
             anchor: Default::default(),
+            transform: None,
+            tag: None,
         }
     }
 }

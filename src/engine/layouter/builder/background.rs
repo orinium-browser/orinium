@@ -3,9 +3,10 @@ use crate::engine::css::values::{CssValue, Unit};
 use super::css_resolve::round_to_step;
 use super::{resolve_css_color, resolve_css_len};
 use crate::engine::layouter::types::{
-    Background, BackgroundDimension, BackgroundOffset, BackgroundPosition, BackgroundPositionAxis,
-    BackgroundRepeat, BackgroundSize, Color, ColorScheme, ColorStop, ContainerStyle, Gradient,
-    GradientKind, GradientSpread, RadialShape, RadialSizeKind, TextFlowStyle, TextStyle,
+    Background, BackgroundDimension, BackgroundImage, BackgroundLayer, BackgroundOffset,
+    BackgroundPosition, BackgroundPositionAxis, BackgroundRepeat, BackgroundSize, Color,
+    ColorScheme, ColorStop, ContainerStyle, Gradient, GradientKind, GradientSpread, RadialShape,
+    RadialSizeKind, TextFlowStyle, TextStyle,
 };
 
 use ui_layout::Length;
@@ -26,7 +27,94 @@ fn background_dimension(value: &CssValue, font_size: f32) -> Option<BackgroundDi
     }
 }
 
-pub fn parse_background_size(value: &CssValue, font_size: f32) -> Option<BackgroundSize> {
+/// Split a `CssValue::List` into comma-separated groups. Returns `None` if the
+/// value is not a `List`. Each group is a `Vec<&CssValue>` of the items between
+/// `Separator` entries. A single value without commas yields one group with all
+/// items.
+fn split_on_separator<'a>(value: &'a CssValue) -> Option<Vec<Vec<&'a CssValue>>> {
+    let items: Vec<&'a CssValue> = match value {
+        CssValue::List(values) => values.iter().collect(),
+        _ => return None,
+    };
+    let mut groups: Vec<Vec<&'a CssValue>> = Vec::new();
+    let mut current: Vec<&'a CssValue> = Vec::new();
+    for item in items {
+        if matches!(item, CssValue::Separator) {
+            if !current.is_empty() {
+                groups.push(current);
+                current = Vec::new();
+            }
+        } else {
+            current.push(item);
+        }
+    }
+    if !current.is_empty() {
+        groups.push(current);
+    }
+    if groups.is_empty() {
+        groups.push(Vec::new());
+    }
+    Some(groups)
+}
+
+/// Like [`split_on_separator`] but returns `Some(vec![value])` for non-List
+/// values, so callers can uniformly handle both single and multi-layer values.
+fn split_on_separator_or_single<'a>(value: &'a CssValue) -> Vec<Vec<&'a CssValue>> {
+    match value {
+        CssValue::List(_) => split_on_separator(value).unwrap_or_default(),
+        _ => vec![vec![value]],
+    }
+}
+
+pub fn parse_background_size(value: &CssValue, font_size: f32) -> Vec<BackgroundSize> {
+    let groups = split_on_separator_or_single(value);
+    if groups.is_empty() {
+        return vec![];
+    }
+    // If there's exactly one group, try the existing single-layer heuristic
+    // (two dimensions → [width, height] for one layer).
+    if groups.len() == 1 {
+        let items = &groups[0];
+        if items.len() == 2 {
+            if let (Some(w), Some(h)) = (
+                background_dimension(items[0], font_size),
+                background_dimension(items[1], font_size),
+            ) {
+                return vec![BackgroundSize::Explicit {
+                    width: w,
+                    height: h,
+                }];
+            }
+        }
+        return items
+            .iter()
+            .filter_map(|v| parse_single_background_size(v, font_size))
+            .collect();
+    }
+    // Multiple comma-separated groups: parse each as one layer's size.
+    groups
+        .iter()
+        .map(|group| {
+            // A group like [width, height] → Explicit; [size] → Explicit with
+            // height Auto; [keyword] → Contain/Cover/Auto.
+            if group.len() == 2 {
+                if let (Some(w), Some(h)) = (
+                    background_dimension(group[0], font_size),
+                    background_dimension(group[1], font_size),
+                ) {
+                    return BackgroundSize::Explicit { width: w, height: h };
+                }
+            }
+            if group.len() == 1 {
+                return parse_single_background_size(group[0], font_size)
+                    .unwrap_or(BackgroundSize::Auto);
+            }
+            BackgroundSize::Auto
+        })
+        .collect()
+}
+
+fn parse_single_background_size(value: &CssValue, font_size: f32) -> Option<BackgroundSize> {
     match value {
         CssValue::Keyword(keyword) if keyword.eq_ignore_ascii_case("contain") => {
             Some(BackgroundSize::Contain)
@@ -37,19 +125,8 @@ pub fn parse_background_size(value: &CssValue, font_size: f32) -> Option<Backgro
         CssValue::Keyword(keyword) if keyword.eq_ignore_ascii_case("auto") => {
             Some(BackgroundSize::Auto)
         }
-        CssValue::List(values) => match values.as_slice() {
-            [width] => Some(BackgroundSize::Explicit {
-                width: background_dimension(width, font_size)?,
-                height: BackgroundDimension::Auto,
-            }),
-            [width, height] => Some(BackgroundSize::Explicit {
-                width: background_dimension(width, font_size)?,
-                height: background_dimension(height, font_size)?,
-            }),
-            _ => None,
-        },
-        _ => Some(BackgroundSize::Explicit {
-            width: background_dimension(value, font_size)?,
+        _ => background_dimension(value, font_size).map(|width| BackgroundSize::Explicit {
+            width,
             height: BackgroundDimension::Auto,
         }),
     }
@@ -63,7 +140,57 @@ fn background_offset(value: &CssValue, font_size: f32) -> Option<BackgroundOffse
     }
 }
 
-pub fn parse_background_position(value: &CssValue, font_size: f32) -> Option<BackgroundPosition> {
+pub fn parse_background_position(value: &CssValue, font_size: f32) -> Vec<BackgroundPosition> {
+    let groups = split_on_separator_or_single(value);
+    if groups.is_empty() {
+        return vec![];
+    }
+    // Multiple comma-separated groups: parse each as one layer's position.
+    if groups.len() > 1 {
+        return groups
+            .iter()
+            .map(|group| {
+                let group_value = if group.len() == 1 {
+                    group[0].clone()
+                } else {
+                    CssValue::List(group.iter().map(|v| (*v).clone()).collect())
+                };
+                parse_single_position(&group_value, font_size).unwrap_or_default()
+            })
+            .collect();
+    }
+    // Single group: existing single-layer logic.
+    let items = &groups[0];
+    // First try parsing as a single position (existing behavior)
+    if let Some(pos) = parse_single_position(
+        &CssValue::List(items.iter().map(|v| (*v).clone()).collect()),
+        font_size,
+    ) {
+        return vec![pos];
+    }
+    // If that fails, split dimension items into pairs for multiple layers
+    // (e.g. `0 0, 8px 8px` → [(0,0), (8px,8px)]).
+    if items.len() < 4 || items.len() % 2 != 0 {
+        return vec![];
+    }
+    if !items
+        .iter()
+        .all(|v| matches!(v, CssValue::Length(_, _)) || matches!(v, CssValue::Number(0.0)))
+    {
+        return vec![];
+    }
+    let mut positions = Vec::with_capacity(items.len() / 2);
+    for chunk in items.chunks(2) {
+        let Some(pos) = parse_position_from_lengths(chunk[0], chunk[1], font_size) else {
+            return vec![];
+        };
+        positions.push(pos);
+    }
+    positions
+}
+
+/// Parse a single background position from the full value (existing logic).
+fn parse_single_position(value: &CssValue, font_size: f32) -> Option<BackgroundPosition> {
     let values: Vec<&CssValue> = match value {
         CssValue::List(values) => values.iter().collect(),
         _ => vec![value],
@@ -192,7 +319,51 @@ pub fn parse_background_position(value: &CssValue, font_size: f32) -> Option<Bac
     }
 }
 
-pub fn parse_background_repeat(value: &CssValue) -> Option<BackgroundRepeat> {
+/// Parse a position from two length values (x, y).
+fn parse_position_from_lengths(
+    x_val: &CssValue,
+    y_val: &CssValue,
+    font_size: f32,
+) -> Option<BackgroundPosition> {
+    let x_offset = match x_val {
+        CssValue::Number(0.0) => BackgroundOffset::Length(0.0),
+        _ => background_offset(x_val, font_size)?,
+    };
+    let y_offset = match y_val {
+        CssValue::Number(0.0) => BackgroundOffset::Length(0.0),
+        _ => background_offset(y_val, font_size)?,
+    };
+    Some(BackgroundPosition {
+        x: BackgroundPositionAxis::Start(x_offset),
+        y: BackgroundPositionAxis::Start(y_offset),
+    })
+}
+
+pub fn parse_background_repeat(value: &CssValue) -> Vec<BackgroundRepeat> {
+    let groups = split_on_separator_or_single(value);
+    groups
+        .iter()
+        .filter_map(|group| {
+            // A group may be a single keyword or two keywords (repeat-x repeat-y).
+            if group.len() == 1 {
+                parse_single_background_repeat(group[0])
+            } else if group.len() == 2 {
+                // Two-value syntax: [repeat-x, repeat-y]
+                let rx = parse_single_background_repeat(group[0]);
+                let ry = parse_single_background_repeat(group[1]);
+                match (rx, ry) {
+                    (Some(r), _) => Some(r),
+                    (None, Some(r)) => Some(r),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn parse_single_background_repeat(value: &CssValue) -> Option<BackgroundRepeat> {
     let keyword = match value {
         CssValue::Keyword(keyword) => keyword.as_str(),
         _ => return None,
@@ -211,203 +382,401 @@ pub fn apply_background_shorthand_geometry(
     font_size: f32,
     container_style: &mut ContainerStyle,
 ) {
-    container_style.background_repeat = BackgroundRepeat::default();
-    container_style.background_size = BackgroundSize::default();
-    container_style.background_position = BackgroundPosition::default();
-
-    let values: Vec<&CssValue> = match value {
-        CssValue::List(values) => values.iter().collect(),
-        _ => vec![value],
-    };
-    if let Some(repeat) = values
-        .iter()
-        .find_map(|value| parse_background_repeat(value))
+    // Handle url() function: each arg sublist is already a per-layer group.
+    if let CssValue::Function(fn_name, args) = value
+        && fn_name.eq_ignore_ascii_case("url")
     {
-        container_style.background_repeat = repeat;
+        // Per-layer repeat from url() sublists.
+        for (i, arg_group) in args.iter().enumerate() {
+            if let Some(repeat) = arg_group.iter().find_map(|v| parse_single_background_repeat(v))
+            {
+                if let Some(layer) = container_style.background.layers.get_mut(i) {
+                    layer.repeat = repeat;
+                }
+            }
+        }
+        // Per-layer size from url() sublists (after slash within each sublist).
+        for (i, arg_group) in args.iter().enumerate() {
+            if let Some(slash) = arg_group.iter().position(|v| {
+                matches!(v, CssValue::Keyword(keyword) if keyword.as_str() == "/")
+            }) {
+                let size_values: Vec<CssValue> = arg_group[slash + 1..]
+                    .iter()
+                    .take_while(|v| {
+                        background_dimension(v, font_size).is_some()
+                            || matches!(
+                                v,
+                                CssValue::Keyword(keyword)
+                                    if matches!(
+                                        keyword.to_ascii_lowercase().as_str(),
+                                        "contain" | "cover" | "auto"
+                                    )
+                            )
+                    })
+                    .map(|v| (*v).clone())
+                    .collect();
+                if !size_values.is_empty() {
+                    let size_value = if size_values.len() == 1 {
+                        size_values[0].clone()
+                    } else {
+                        CssValue::List(size_values)
+                    };
+                    let sizes = parse_background_size(&size_value, font_size);
+                    if let Some(layer) = container_style.background.layers.get_mut(i) {
+                        layer.size = sizes.get(0).copied().unwrap_or_default();
+                    }
+                }
+            }
+        }
+        // Per-layer position from url() sublists (before slash).
+        for (i, arg_group) in args.iter().enumerate() {
+            let slash = arg_group.iter().position(|v| {
+                matches!(v, CssValue::Keyword(keyword) if keyword.as_str() == "/")
+            });
+            let pos_items: Vec<CssValue> = arg_group[..slash.unwrap_or(arg_group.len())]
+                .iter()
+                .filter(|v| {
+                    background_offset(v, font_size).is_some()
+                        || matches!(
+                            v,
+                            CssValue::Keyword(keyword)
+                                if matches!(
+                                    keyword.to_ascii_lowercase().as_str(),
+                                    "left" | "right" | "top" | "bottom" | "center"
+                                )
+                        )
+                })
+                .map(|v| (*v).clone())
+                .collect();
+            if !pos_items.is_empty() {
+                let pos_value = if pos_items.len() == 1 {
+                    pos_items[0].clone()
+                } else {
+                    CssValue::List(pos_items)
+                };
+                let positions = parse_background_position(&pos_value, font_size);
+                if let Some(layer) = container_style.background.layers.get_mut(i) {
+                    layer.position = positions.get(0).copied().unwrap_or_default();
+                }
+            }
+        }
+        return;
     }
 
-    let slash = values
-        .iter()
-        .position(|value| matches!(value, CssValue::Keyword(keyword) if keyword.as_str() == "/"));
-    if let Some(slash) = slash {
-        let size_values: Vec<CssValue> = values[slash + 1..]
-            .iter()
-            .take_while(|value| {
-                background_dimension(value, font_size).is_some()
-                    || matches!(value, CssValue::Keyword(keyword) if matches!(keyword.to_ascii_lowercase().as_str(), "contain" | "cover" | "auto"))
-            })
-            .map(|value| (*value).clone())
-            .collect();
-        let size_value = match size_values.as_slice() {
-            [value] => Some(value.clone()),
-            [] => None,
-            _ => Some(CssValue::List(size_values)),
-        };
-        if let Some(size) = size_value
-            .as_ref()
-            .and_then(|value| parse_background_size(value, font_size))
-        {
-            container_style.background_size = size;
+    // Top-level list: split on comma Separator into per-layer groups.
+    let groups = split_on_separator_or_single(value);
+
+    // Per-layer repeat: parse repeat from each group.
+    for (i, group) in groups.iter().enumerate() {
+        let repeat = group.iter().find_map(|v| parse_single_background_repeat(v));
+        if let Some(r) = repeat {
+            if let Some(layer) = container_style.background.layers.get_mut(i) {
+                layer.repeat = r;
+            }
         }
     }
 
-    let position_values: Vec<CssValue> = values[..slash.unwrap_or(values.len())]
-        .iter()
-        .filter(|value| {
-            background_offset(value, font_size).is_some()
-                || matches!(
-                    value,
-                    CssValue::Keyword(keyword)
-                        if matches!(keyword.to_ascii_lowercase().as_str(), "left" | "right" | "top" | "bottom" | "center")
-                )
-        })
-        .map(|value| (*value).clone())
-        .collect();
-    let position_value = match position_values.as_slice() {
-        [value] => Some(value.clone()),
-        [] => None,
-        _ => Some(CssValue::List(position_values)),
-    };
-    if let Some(position) = position_value
-        .as_ref()
-        .and_then(|value| parse_background_position(value, font_size))
-    {
-        container_style.background_position = position;
+    // Per-layer size: find slash within each group.
+    for (i, group) in groups.iter().enumerate() {
+        if let Some(slash) = group.iter().position(|v| {
+            matches!(v, CssValue::Keyword(keyword) if keyword.as_str() == "/")
+        }) {
+            let size_values: Vec<CssValue> = group[slash + 1..]
+                .iter()
+                .take_while(|v| {
+                    background_dimension(v, font_size).is_some()
+                        || matches!(
+                            v,
+                            CssValue::Keyword(keyword)
+                                if matches!(
+                                    keyword.to_ascii_lowercase().as_str(),
+                                    "contain" | "cover" | "auto"
+                                )
+                        )
+                })
+                .map(|v| (*v).clone())
+                .collect();
+            if !size_values.is_empty() {
+                let size_value = if size_values.len() == 1 {
+                    size_values[0].clone()
+                } else {
+                    CssValue::List(size_values)
+                };
+                let sizes = parse_background_size(&size_value, font_size);
+                if let Some(layer) = container_style.background.layers.get_mut(i) {
+                    layer.size = sizes.get(0).copied().unwrap_or_default();
+                }
+            }
+        }
+    }
+
+    // Per-layer position: position values before slash within each group.
+    for (i, group) in groups.iter().enumerate() {
+        let slash = group.iter().position(|v| {
+            matches!(v, CssValue::Keyword(keyword) if keyword.as_str() == "/")
+        });
+        let pos_items: Vec<CssValue> = group[..slash.unwrap_or(group.len())]
+            .iter()
+            .filter(|v| {
+                background_offset(v, font_size).is_some()
+                    || matches!(
+                        v,
+                        CssValue::Keyword(keyword)
+                            if matches!(
+                                keyword.to_ascii_lowercase().as_str(),
+                                "left" | "right" | "top" | "bottom" | "center"
+                            )
+                    )
+            })
+            .map(|v| (*v).clone())
+            .collect();
+        if !pos_items.is_empty() {
+            let pos_value = if pos_items.len() == 1 {
+                pos_items[0].clone()
+            } else {
+                CssValue::List(pos_items)
+            };
+            let positions = parse_background_position(&pos_value, font_size);
+            if let Some(layer) = container_style.background.layers.get_mut(i) {
+                layer.position = positions.get(0).copied().unwrap_or_default();
+            }
+        }
     }
 }
 
 pub fn parse_background_shorthand(
-    name: &str,
+    _name: &str,
     value: &CssValue,
     text_style: &TextStyle,
     text_flow_style: &TextFlowStyle,
     color_scheme: ColorScheme,
-) -> Option<Background> {
-    let items: Vec<&CssValue> = match value {
-        CssValue::List(values) => values.iter().collect(),
-        _ => vec![value],
-    };
+) -> Background {
+    let mut color: Option<Color> = None;
+    let mut layers: Vec<BackgroundLayer> = Vec::new();
 
-    let mut maybe_color: Option<Color> = None;
-    let mut maybe_gradient: Option<Gradient> = None;
-    let mut maybe_image: Option<String> = None;
+    match value {
+        CssValue::List(items) => {
+            for v in items {
+                parse_shorthand_item(
+                    v,
+                    text_style,
+                    text_flow_style,
+                    color_scheme,
+                    &mut color,
+                    &mut layers,
+                );
+            }
+        }
+        CssValue::Function(fn_name, args) if fn_name.eq_ignore_ascii_case("url") => {
+            // CSS パーサーは url(...) の中にカンマ区切りの複数グループを
+            // サブリストとして保持する。各サブリストを別レイヤーとして処理。
+            for arg_group in args.iter() {
+                parse_url_layer_group(arg_group, &mut color, &mut layers);
+            }
+        }
+        _ => {
+            parse_shorthand_item(
+                value,
+                text_style,
+                text_flow_style,
+                color_scheme,
+                &mut color,
+                &mut layers,
+            );
+        }
+    }
 
-    for v in items {
-        // inherit
-        if let CssValue::Keyword(kw) = v {
-            if kw.eq_ignore_ascii_case("inherit") {
-                maybe_color = Some(text_style.color);
-                continue;
+    Background { color, layers }
+}
+
+/// Parse a single top-level shorthand item into either a background color or
+/// an image/gradient layer.
+fn parse_shorthand_item(
+    v: &CssValue,
+    text_style: &TextStyle,
+    text_flow_style: &TextFlowStyle,
+    color_scheme: ColorScheme,
+    color: &mut Option<Color>,
+    layers: &mut Vec<BackgroundLayer>,
+) {
+    if let Some(layer) = parse_single_background_layer(
+        "", v, text_style, text_flow_style, color_scheme,
+    ) {
+        match layer {
+            ParsedLayer::Color(c) => *color = Some(c),
+            ParsedLayer::Image(layer) => layers.push(layer),
+        }
+    }
+}
+
+/// Parse one comma-separated group from inside a `url(...)` call. Each group
+/// may contain an image source (String), a background color (Color), or nested
+/// url() calls. Keywords (repeat/size/position) are handled later by
+/// `apply_background_shorthand_geometry`.
+fn parse_url_layer_group(
+    group: &[CssValue],
+    color: &mut Option<Color>,
+    layers: &mut Vec<BackgroundLayer>,
+) {
+    let mut source: Option<String> = None;
+    for item in group.iter() {
+        match item {
+            CssValue::String(s) => {
+                source = Some(s.clone());
             }
-            if kw.eq_ignore_ascii_case("currentColor") {
-                maybe_color = Some(text_style.color);
-                continue;
+            CssValue::Color(c) => {
+                if let Some((r, g, b, a)) = CssValue::Color(c.clone()).to_rgba_tuple() {
+                    *color = Some(Color(r, g, b, a));
+                }
             }
-            if kw.eq_ignore_ascii_case("none")
-                || kw.eq_ignore_ascii_case("initial")
-                || kw.eq_ignore_ascii_case("unset")
+            CssValue::Function(fn_name, args)
+                if fn_name.eq_ignore_ascii_case("url") =>
             {
-                maybe_color = Some(Color(0, 0, 0, 0));
-                continue;
+                // Nested url() call: extract the image source recursively.
+                for nested_group in args.iter() {
+                    for nested_item in nested_group.iter() {
+                        if let CssValue::String(s) = nested_item {
+                            source = Some(s.clone());
+                        }
+                    }
+                }
             }
+            _ => {}
         }
+    }
+    if let Some(src) = source {
+        layers.push(BackgroundLayer {
+            image: Some(BackgroundImage::Image {
+                source: src,
+                image: None,
+            }),
+            position: Default::default(),
+            size: Default::default(),
+            repeat: Default::default(),
+        });
+    }
+}
 
-        if let CssValue::Number(0.0) = v {
-            maybe_color = Some(Color(0, 0, 0, 0));
-            continue;
+/// Result of parsing a single shorthand item: either a background color or an image layer.
+enum ParsedLayer {
+    Color(Color),
+    Image(BackgroundLayer),
+}
+
+fn parse_single_background_layer(
+    name: &str,
+    v: &CssValue,
+    text_style: &TextStyle,
+    text_flow_style: &TextFlowStyle,
+    color_scheme: ColorScheme,
+) -> Option<ParsedLayer> {
+    // inherit
+    if let CssValue::Keyword(kw) = v {
+        if kw.eq_ignore_ascii_case("inherit") {
+            return Some(ParsedLayer::Color(text_style.color));
         }
-
-        // gradient
-        if let CssValue::Function(fn_name, args) = v
-            && matches!(
-                fn_name.as_str(),
-                "linear-gradient"
-                    | "repeating-linear-gradient"
-                    | "radial-gradient"
-                    | "repeating-radial-gradient"
-                    | "conic-gradient"
-                    | "repeating-conic-gradient"
-            )
+        if kw.eq_ignore_ascii_case("currentColor") {
+            return Some(ParsedLayer::Color(text_style.color));
+        }
+        if kw.eq_ignore_ascii_case("none")
+            || kw.eq_ignore_ascii_case("initial")
+            || kw.eq_ignore_ascii_case("unset")
         {
-            maybe_gradient = Some(parse_gradient(
+            return Some(ParsedLayer::Color(Color(0, 0, 0, 0)));
+        }
+    }
+
+    if let CssValue::Number(0.0) = v {
+        return Some(ParsedLayer::Color(Color(0, 0, 0, 0)));
+    }
+
+    // gradient
+    if let CssValue::Function(fn_name, args) = v
+        && matches!(
+            fn_name.as_str(),
+            "linear-gradient"
+                | "repeating-linear-gradient"
+                | "radial-gradient"
+                | "repeating-radial-gradient"
+                | "conic-gradient"
+                | "repeating-conic-gradient"
+        )
+    {
+        return Some(ParsedLayer::Image(BackgroundLayer {
+            image: Some(BackgroundImage::Gradient(parse_gradient(
                 fn_name,
                 args,
                 text_style,
                 text_flow_style,
                 color_scheme,
-            )?);
-            continue;
-        }
-
-        if let CssValue::Function(fn_name, args) = v
-            && fn_name.eq_ignore_ascii_case("url")
-        {
-            maybe_image = args.iter().flatten().find_map(|value| match value {
-                CssValue::String(source) => Some(source.clone()),
-                CssValue::Keyword(source) => Some(source.to_string()),
-                _ => None,
-            });
-            continue;
-        }
-
-        // Only color-shaped values should reach the color resolver. A
-        // background shorthand also contains image, repeat, attachment,
-        // position, size and box tokens, none of which are color errors.
-        let is_color_value = matches!(v, CssValue::Color(_))
-            || matches!(
-                v,
-                CssValue::Function(function, _)
-                    if matches!(
-                        function.as_str(),
-                        "rgb" | "rgba" | "hsl" | "hsla" | "light-dark" | "color-mix"
-                    )
-            )
-            || matches!(
-                v,
-                CssValue::Keyword(keyword)
-                    if !matches!(
-                        keyword.to_ascii_lowercase().as_str(),
-                        "none"
-                            | "repeat"
-                            | "repeat-x"
-                            | "repeat-y"
-                            | "no-repeat"
-                            | "space"
-                            | "round"
-                            | "scroll"
-                            | "fixed"
-                            | "local"
-                            | "left"
-                            | "right"
-                            | "top"
-                            | "bottom"
-                            | "center"
-                            | "cover"
-                            | "contain"
-                            | "auto"
-                            | "border-box"
-                            | "padding-box"
-                            | "content-box"
-                            | "/"
-                    )
-            );
-        if is_color_value && let Some(c) = resolve_css_color(name, v, color_scheme) {
-            maybe_color = Some(c);
-        }
+            )?)),
+            position: Default::default(),
+            size: Default::default(),
+            repeat: Default::default(),
+        }));
     }
 
-    if let Some(g) = maybe_gradient {
-        return Some(Background::Gradient(g));
+    if let CssValue::Function(fn_name, args) = v
+        && fn_name.eq_ignore_ascii_case("url")
+    {
+        let source = args.iter().flatten().find_map(|value| match value {
+            CssValue::String(source) => Some(source.clone()),
+            CssValue::Keyword(source) => Some(source.to_string()),
+            _ => None,
+        })?;
+        return Some(ParsedLayer::Image(BackgroundLayer {
+            image: Some(BackgroundImage::Image {
+                source,
+                image: None,
+            }),
+            position: Default::default(),
+            size: Default::default(),
+            repeat: Default::default(),
+        }));
     }
-    if let Some(source) = maybe_image {
-        return Some(Background::Image {
-            source,
-            image: None,
-            color: maybe_color.unwrap_or(Color(0, 0, 0, 0)),
-        });
-    }
-    if let Some(c) = maybe_color {
-        return Some(Background::Color(c));
+
+    // Only color-shaped values should reach the color resolver.
+    let is_color_value = matches!(v, CssValue::Color(_))
+        || matches!(
+            v,
+            CssValue::Function(function, _)
+                if matches!(
+                    function.as_str(),
+                    "rgb" | "rgba" | "hsl" | "hsla" | "light-dark" | "color-mix"
+                )
+        )
+        || matches!(
+            v,
+            CssValue::Keyword(keyword)
+                if !matches!(
+                    keyword.to_ascii_lowercase().as_str(),
+                    "none"
+                        | "repeat"
+                        | "repeat-x"
+                        | "repeat-y"
+                        | "no-repeat"
+                        | "space"
+                        | "round"
+                        | "scroll"
+                        | "fixed"
+                        | "local"
+                        | "left"
+                        | "right"
+                        | "top"
+                        | "bottom"
+                        | "center"
+                        | "cover"
+                        | "contain"
+                        | "auto"
+                        | "border-box"
+                        | "padding-box"
+                        | "content-box"
+                        | "/"
+                )
+        );
+    if is_color_value {
+        return resolve_css_color(name, v, color_scheme)
+            .map(ParsedLayer::Color);
     }
 
     None

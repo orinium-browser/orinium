@@ -112,6 +112,34 @@ fn apply_container_property(name: &str, value: CssValue) -> ContainerStyle {
     container_style
 }
 
+/// Apply several declarations in order to one container style so shorthand and
+/// longhand interactions are observable. Returns `None` when a declaration is
+/// rejected.
+fn apply_container_declarations(declarations: &[(&str, CssValue)]) -> Option<ContainerStyle> {
+    let mut style = Style::default();
+    let mut container_style = ContainerStyle::default();
+    let mut text_style = TextStyle::default();
+    let mut text_flow_style = TextFlowStyle::default();
+    let mut overflow = Overflow::default();
+    for (name, value) in declarations {
+        apply_declaration(
+            name,
+            value,
+            &mut style,
+            &mut container_style,
+            &mut text_style,
+            &mut text_flow_style,
+            &Style::default(),
+            &ContainerStyle::default(),
+            &TextStyle::default(),
+            &TextFlowStyle::default(),
+            &mut overflow,
+            ColorScheme::Light,
+        )?;
+    }
+    Some(container_style)
+}
+
 fn apply_overflow(value: CssValue) -> Overflow {
     let mut style = Style::default();
     let mut container_style = ContainerStyle::default();
@@ -409,3 +437,4 @@ mod misc;
 mod overflow;
 mod position_calc;
 mod pseudo;
+mod transform;
