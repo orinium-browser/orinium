@@ -1,6 +1,6 @@
 //! Range slider component for `input[type="range"]`.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ui_layout::Style;
@@ -24,6 +24,8 @@ pub struct InputRangeComponent {
     dragging: AtomicBool,
     hovered: AtomicBool,
     dirty: AtomicBool,
+    last_width: AtomicU32,
+    last_height: AtomicU32,
     on_change: Option<Arc<OnRangeChange>>,
 }
 
@@ -67,6 +69,8 @@ impl InputRangeComponent {
             dragging: AtomicBool::new(false),
             hovered: AtomicBool::new(false),
             dirty: AtomicBool::new(true),
+            last_width: AtomicU32::new(DEFAULT_WIDTH.to_bits()),
+            last_height: AtomicU32::new(DEFAULT_HEIGHT.to_bits()),
             on_change: None,
         }
     }
@@ -109,8 +113,18 @@ impl InputRangeComponent {
         }
     }
 
-    fn set_from_x(&self, x: f32, width: f32) -> bool {
-        let thumb_r = (DEFAULT_HEIGHT * 0.38).max(5.0);
+    fn pointer_width(&self) -> f32 {
+        let width = f32::from_bits(self.last_width.load(Ordering::Relaxed));
+        if width > 0.0 { width } else { DEFAULT_WIDTH }
+    }
+
+    fn pointer_height(&self) -> f32 {
+        let height = f32::from_bits(self.last_height.load(Ordering::Relaxed));
+        if height > 0.0 { height } else { DEFAULT_HEIGHT }
+    }
+
+    fn set_from_x(&self, x: f32, width: f32, height: f32) -> bool {
+        let thumb_r = (height * 0.38).max(5.0);
         let left = thumb_r;
         let right = (width - thumb_r).max(left);
         let span = (right - left).max(f32::EPSILON);
@@ -140,6 +154,10 @@ impl CustomNode for InputRangeComponent {
         _style: &Style,
         size: ContentSize,
     ) {
+        self.last_width
+            .store(size.width.max(0.0).to_bits(), Ordering::Relaxed);
+        self.last_height
+            .store(size.height.max(0.0).to_bits(), Ordering::Relaxed);
         let value = *self.value.lock().unwrap();
         let span = (self.max - self.min).max(f64::EPSILON);
         let t = ((value - self.min) / span).clamp(0.0, 1.0) as f32;
@@ -231,13 +249,13 @@ impl CustomNode for InputRangeComponent {
                     self.dirty.store(true, Ordering::Relaxed);
                 }
                 if self.dragging.load(Ordering::Relaxed) {
-                    let _ = self.set_from_x(x, DEFAULT_WIDTH);
+                    let _ = self.set_from_x(x, self.pointer_width(), self.pointer_height());
                 }
                 true
             }
             PointerEvent::Down { x, .. } => {
                 self.dragging.store(true, Ordering::Relaxed);
-                let _ = self.set_from_x(x, DEFAULT_WIDTH);
+                let _ = self.set_from_x(x, self.pointer_width(), self.pointer_height());
                 true
             }
             PointerEvent::Up { .. } => {
@@ -308,5 +326,23 @@ mod tests {
         assert_eq!(c.role(), Some("slider"));
         assert!(c.value().is_some());
         assert!(!seen.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn range_pointer_mapping_uses_drawn_width() {
+        let c = InputRangeComponent::new(Some(0.0), Some(0.0), Some(100.0), Some(1.0), false);
+        let mut cmd_buf = Vec::new();
+        c.draw_sized(
+            &mut cmd_buf,
+            &TextStyle::default(),
+            &TextFlowStyle::default(),
+            &Style::default(),
+            ContentSize {
+                width: 300.0,
+                height: 20.0,
+            },
+        );
+        c.on_pointer_event(PointerEvent::Down { x: 150.0, y: 10.0 });
+        assert_eq!(c.value().as_deref(), Some("50"));
     }
 }

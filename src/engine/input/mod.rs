@@ -4,11 +4,12 @@ use std::sync::Arc;
 
 use crate::engine::layouter::types::TextFlowStyle;
 
-use super::layouter::types::{InfoNode, NodeKind, TextStyle};
+use super::layouter::types::{ContainerStyle, InfoNode, NodeKind, TextStyle};
+use super::renderer_model::{AffineTransform, StickyViewport, is_scrollport, sticky_offset};
 use super::ui::PointerEvent;
 use super::ui::custom_node::CustomNode;
 use super::ui::input_text_types::InputTextEvent;
-use ui_layout::{LayoutNode, Position};
+use ui_layout::{BoxModel, LayoutNode, Position};
 /// ヒットしたノード情報
 #[derive(Clone, Debug)]
 pub struct HitItem<'a> {
@@ -53,46 +54,268 @@ pub fn hit_dom_path(path: &HitPath<'_>) -> Vec<u32> {
     out
 }
 
+fn is_inline(layout: &LayoutNode) -> bool {
+    matches!(layout.layout_box, ui_layout::LayoutBox::InlineBox(_))
+}
+
+fn is_inline_container(layout: &LayoutNode, info: &InfoNode) -> bool {
+    is_inline(layout) && matches!(&info.kind, NodeKind::Container { .. })
+}
+
+fn node_style(info: &InfoNode) -> ContainerStyle {
+    match &info.kind {
+        NodeKind::Container { style, .. }
+        | NodeKind::Custom { style, .. }
+        | NodeKind::Svg { style, .. } => style.clone(),
+        _ => ContainerStyle::default(),
+    }
+}
+
+fn establishes_inline_box_space(layout: &LayoutNode) -> bool {
+    is_inline(layout)
+        && layout.style.display.outer() == Some(ui_layout::OuterDisplay::Inline)
+        && layout.style.display.inner() == Some(ui_layout::InnerDisplay::FlowRoot)
+}
+
+
+fn child_viewport(layout: &LayoutNode, info: &InfoNode, parent_viewport: StickyViewport, is_root: bool) -> StickyViewport {
+    if is_root || is_scrollport(&info.kind) {
+        let bm = layout.layout_box.iter().next();
+        let (scroll_x, scroll_y) = info.kind.scroll_offsets();
+        StickyViewport {
+            top_left: bm.as_ref().map_or((0.0, 0.0), |b| {
+                (
+                    b.padding_box.x - b.content_box.x - scroll_x,
+                    b.padding_box.y - b.content_box.y + scroll_y,
+                )
+            }),
+            size: if is_root {
+                parent_viewport.size
+            } else {
+                bm.map_or(parent_viewport.size, |b| (b.padding_box.width, b.padding_box.height))
+            },
+        }
+    } else {
+        let bm = layout.layout_box.iter().next();
+        StickyViewport {
+            top_left: bm.map_or(parent_viewport.top_left, |b| {
+                (
+                    parent_viewport.top_left.0 - b.content_box.x,
+                    parent_viewport.top_left.1 - b.content_box.y,
+                )
+            }),
+            size: parent_viewport.size,
+        }
+    }
+}
+
+fn child_containing(layout: &LayoutNode, parent_containing: (f32, f32)) -> (f32, f32) {
+    layout
+        .layout_box
+        .iter()
+        .next()
+        .map_or(parent_containing, |b| (b.content_box.width, b.content_box.height))
+}
+
+fn element_transform(style: &ContainerStyle, border_box: &ui_layout::Rect) -> Option<AffineTransform> {
+    let t = style.transform?;
+    if t == AffineTransform::identity() {
+        return None;
+    }
+    let center_x = border_box.width / 2.0;
+    let center_y = border_box.height / 2.0;
+    Some(
+        AffineTransform::translate(center_x, center_y)
+            .then(&t)
+            .then(&AffineTransform::translate(-center_x, -center_y)),
+    )
+}
+
+/// Maps a point from a box's parent-content space into the space where the
+/// box's children/custom content live, mirroring renderer `push_box_model`
+/// transform order (border translate, element CSS transform, content translate,
+/// scroll translate). Returns `None` when the point is outside the box's
+/// interactive padding box in visual space or when a transform is
+/// non-invertible.
+fn map_to_box_local(
+    point: (f32, f32),
+    box_model: &BoxModel,
+    style: &ContainerStyle,
+    scroll: (f32, f32),
+    is_inline_box: bool,
+) -> Option<(f32, f32)> {
+    let mut p = point;
+    if !is_inline_box {
+        // border translate
+        p.0 -= box_model.border_box.x;
+        p.1 -= box_model.border_box.y;
+        // element CSS transform (centered in border-box space)
+        if let Some(t) = element_transform(style, &box_model.border_box) {
+            let inv = t.inverse()?;
+            p = inv.apply(p.0, p.1);
+        }
+    }
+    // padding-box hit area in this (possibly transformed) border-box-local space
+    let rect = if is_inline_box {
+        box_model.padding_box
+    } else {
+        ui_layout::Rect {
+            x: box_model.padding_box.x - box_model.border_box.x,
+            y: box_model.padding_box.y - box_model.border_box.y,
+            width: box_model.padding_box.width,
+            height: box_model.padding_box.height,
+        }
+    };
+    if p.0 < rect.x || p.1 < rect.y || p.0 > rect.x + rect.width || p.1 > rect.y + rect.height {
+        return None;
+    }
+    if is_inline_box {
+        Some(p)
+    } else {
+        // content translate + scroll translate
+        let dx = box_model.content_box.x - box_model.border_box.x;
+        let dy = box_model.content_box.y - box_model.border_box.y;
+        Some((p.0 - dx + scroll.0, p.1 - dy + scroll.1))
+    }
+}
+
+/// Map a point into a custom node's content-box local space for
+/// pointer/popup dispatch, including border/content/scroll/transform but not
+/// padding-box hit rejection (caller decides containment).
+fn map_to_content_local(
+    point: (f32, f32),
+    box_model: &BoxModel,
+    style: &ContainerStyle,
+    scroll: (f32, f32),
+    is_inline_box: bool,
+) -> Option<(f32, f32)> {
+    let mut p = point;
+    if !is_inline_box {
+        p.0 -= box_model.border_box.x;
+        p.1 -= box_model.border_box.y;
+        if let Some(t) = element_transform(style, &box_model.border_box) {
+            let inv = t.inverse()?;
+            p = inv.apply(p.0, p.1);
+        }
+        let dx = box_model.content_box.x - box_model.border_box.x;
+        let dy = box_model.content_box.y - box_model.border_box.y;
+        p.0 = p.0 - dx + scroll.0;
+        p.1 = p.1 - dy + scroll.1;
+    }
+    Some(p)
+}
+
 /// Converts page-space pointer coordinates into the local content-box space of
 /// the custom node at `path[target]`.
 ///
-/// The hit path is ordered child→parent, so each entry's `content_box` origin
-/// is expressed in its *parent's* coordinate space. Mirroring
-/// [`hit_test_inner`], the chain is walked outermost→innermost, subtracting
-/// each level's content-box origin and adding its scroll offsets.
-///
-/// Entries that share their `LayoutNode` with the next outer entry (the
-/// synthetic items `hit_test_inner` emits for an inline custom object) have
-/// no coordinate frame of their own: the object was tested in its parent's
-/// local coordinates, so they contribute no offset.
+/// Mirrors renderer traversal/order: fixed scroll cancellation, sticky offsets,
+/// border/content/scroll transforms and CSS element transforms.
 fn local_pointer_coords(path: &HitPath<'_>, target: usize, x: f32, y: f32) -> (f32, f32) {
-    let mut lx = x;
-    let mut ly = y;
-    for (offset, hit) in path.iter().rev().take(path.len() - target).enumerate() {
-        let index = path.len() - 1 - offset;
+    let mut p = (x, y);
+    let mut accumulated_scroll = (0.0f32, 0.0f32);
+    let mut viewport = StickyViewport {
+        top_left: (0.0, 0.0),
+        size: (f32::INFINITY, f32::INFINITY),
+    };
+    let mut containing = (f32::INFINITY, f32::INFINITY);
+    if let Some(root) = path.last() {
+        let size = root.layout.layout_box.iter().next().map_or(
+            (f32::INFINITY, f32::INFINITY),
+            |b| (b.content_box.width, b.content_box.height),
+        );
+        let (sx, sy) = root.info.kind.scroll_offsets();
+        viewport = StickyViewport {
+            top_left: (-sx, sy),
+            size,
+        };
+        containing = size;
+    }
+
+    // Walk root -> ... -> target, transforming `p` into each level's space.
+    for step in 0..path.len() {
+        let index = path.len() - 1 - step; // root-first
+        if index < target {
+            break;
+        }
+        let hit = &path[index];
+        let is_root = step == 0;
+        let is_fixed = hit.layout.style.position.kind == Position::Fixed;
+        let is_sticky = hit.layout.style.position.kind == Position::Sticky;
         let shares_parent_layout =
             index + 1 < path.len() && std::ptr::eq(hit.layout, path[index + 1].layout);
-        // Inline Container boxes live in the parent's coordinate space and
-        // push no transform (mirroring `push_box_model`), so they contribute
-        // no offset of their own. Inline Custom nodes always push a transform,
-        // so they must apply the offset.
-        let is_inline_container =
-            matches!(hit.layout.layout_box, ui_layout::LayoutBox::InlineBox(_))
-                && matches!(&hit.info.kind, NodeKind::Container { .. });
-        if shares_parent_layout || is_inline_container {
-            continue;
+        let inline_container = is_inline_container(hit.layout, hit.info);
+
+        if is_fixed {
+            p.0 -= accumulated_scroll.0;
+            p.1 -= accumulated_scroll.1;
         }
-        let (cx, cy) = hit
-            .layout
-            .layout_box
-            .iter()
-            .next()
-            .map_or((0.0, 0.0), |b| (b.content_box.x, b.content_box.y));
-        let (sx, sy) = hit.info.kind.scroll_offsets();
-        lx += sx - cx;
-        ly += sy - cy;
+        if is_sticky && !is_fixed {
+            if let Some(bm) = hit.layout.layout_box.iter().next() {
+                if let Some(edges) = bm.sticky_edges {
+                    let (dx, dy) = sticky_offset(&edges, &bm.border_box, viewport, containing);
+                    p.0 -= dx;
+                    p.1 -= dy;
+                }
+            }
+        }
+
+        let own_scroll = hit.info.kind.scroll_offsets();
+        let style = node_style(hit.info);
+
+        if index == target {
+            if !shares_parent_layout && !inline_container {
+                if let Some(bm) = hit.layout.layout_box.iter().next() {
+                    if let Some(lp) = map_to_content_local(
+                        p,
+                        &bm,
+                        &style,
+                        own_scroll,
+                        is_inline(hit.layout),
+                    ) {
+                        p = lp;
+                    }
+                }
+            }
+            return p;
+        }
+
+        // Descend into this node's child space.
+        if !shares_parent_layout && !inline_container {
+            if let Some(bm) = hit.layout.layout_box.iter().next() {
+                if let Some(lp) = map_to_box_local(p, &bm, &style, own_scroll, is_inline(hit.layout)) {
+                    p = lp;
+                }
+            }
+        }
+
+        let next_index = index - 1;
+        if next_index < target {
+            break;
+        }
+        let next = &path[next_index];
+        let next_shares = std::ptr::eq(next.layout, hit.layout);
+        if !next_shares && establishes_inline_box_space(hit.layout) {
+            // flow-root inline: renderer translates descendants by box X offset
+            if let Some(bm) = hit.layout.layout_box.iter().next() {
+                p.0 -= bm.content_box.x;
+            }
+        }
+
+        let child_scroll = if is_fixed {
+            own_scroll
+        } else {
+            (
+                accumulated_scroll.0 + own_scroll.0,
+                accumulated_scroll.1 + own_scroll.1,
+            )
+        };
+        viewport = child_viewport(hit.layout, hit.info, viewport, is_root);
+        containing = child_containing(hit.layout, containing);
+        accumulated_scroll = child_scroll;
+        let _ = next;
     }
-    (lx, ly)
+
+    p
 }
 
 /// Dispatches a pointer event to the innermost custom node on the hit path.
@@ -233,27 +456,58 @@ pub fn hit_test<'a>(layout: &'a LayoutNode, info: &'a InfoNode, x: f32, y: f32) 
     if let Some(path) = hit_test_popup(layout, info, x, y) {
         return path;
     }
-    hit_test_inner(layout, info, x, y, (0.0, 0.0))
+    let size = layout.layout_box.iter().next().map_or((f32::INFINITY, f32::INFINITY), |b| {
+        (b.content_box.width, b.content_box.height)
+    });
+    let (sx, sy) = info.kind.scroll_offsets();
+    let root_viewport = StickyViewport {
+        top_left: (-sx, sy),
+        size,
+    };
+    hit_test_inner(
+        layout,
+        info,
+        (x, y),
+        (0.0, 0.0),
+        root_viewport,
+        size,
+        true,
+    )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn hit_test_inner<'a>(
     layout: &'a LayoutNode,
     info: &'a InfoNode,
-    mut x: f32,
-    mut y: f32,
+    point: (f32, f32),
     accumulated_scroll: (f32, f32),
+    viewport: StickyViewport,
+    containing: (f32, f32),
+    is_root: bool,
 ) -> HitPath<'a> {
-    // layout_boxes が空なら何もヒットしない
     if layout.layout_box.is_empty() {
         return Vec::new();
     }
 
-    let is_inline = matches!(layout.layout_box, ui_layout::LayoutBox::InlineBox(_));
+    let inline = is_inline(layout);
+    let inline_container = is_inline_container(layout, info);
 
     let is_fixed = layout.style.position.kind == Position::Fixed;
+    let mut p = point;
     if is_fixed {
-        x -= accumulated_scroll.0;
-        y -= accumulated_scroll.1;
+        p.0 -= accumulated_scroll.0;
+        p.1 -= accumulated_scroll.1;
+    }
+    let is_sticky = layout.style.position.kind == Position::Sticky;
+    let mut sticky_shift = (0.0, 0.0);
+    if is_sticky && !is_fixed {
+        if let Some(bm) = layout.layout_box.iter().next() {
+            if let Some(edges) = bm.sticky_edges {
+                sticky_shift = sticky_offset(&edges, &bm.border_box, viewport, containing);
+                p.0 -= sticky_shift.0;
+                p.1 -= sticky_shift.1;
+            }
+        }
     }
 
     let own_scroll = info.kind.scroll_offsets();
@@ -265,56 +519,49 @@ fn hit_test_inner<'a>(
             accumulated_scroll.1 + own_scroll.1,
         )
     };
+    let child_vp = child_viewport(layout, info, viewport, is_root);
+    let child_cont = child_containing(layout, containing);
+    let style = node_style(info);
 
-    for box_model in layout
-        .layout_box
-        .iter()
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-    {
-        // 後ろの box が前面
-        let rect = box_model.padding_box;
-
-        // 1. rect 外なら次の box へ
-        if x < rect.x || y < rect.y || x > rect.x + rect.width || y > rect.y + rect.height {
+    // Walk boxes in reverse (front to back).
+    let boxes: Vec<_> = layout.layout_box.iter().collect();
+    for box_model in boxes.into_iter().rev() {
+        let Some((local_x, local_y)) =
+            map_to_box_local(p, &box_model, &style, own_scroll, inline)
+        else {
             continue;
-        }
-
-        // 2. ローカル座標に変換（スクロールオフセット考慮）。
-        // Inline Container boxes live in the parent's coordinate space and
-        // push no transform (mirroring `push_box_model`), so their children
-        // keep the incoming coordinates untouched. Inline Custom nodes always
-        // push a transform, so they apply the content-box offset.
-        let is_inline_container = is_inline && matches!(&info.kind, NodeKind::Container { .. });
-        let (local_x, local_y) = if is_inline_container {
-            (x, y)
-        } else {
-            (
-                x - box_model.content_box.x + own_scroll.0,
-                y - box_model.content_box.y + own_scroll.1,
-            )
         };
 
-        // 3. 子ノードを前面から探索
+        // Inline containers push no transform and live in parent's coordinates.
+        let mut child_x = if inline_container { p.0 } else { local_x };
+        let child_y = if inline_container { p.1 } else { local_y };
+
+        if establishes_inline_box_space(layout) && !inline_container {
+            child_x -= box_model.content_box.x;
+        }
+
+        // 3. Children in front-to-back order.
         for (child_layout, child_info) in layout.children.iter().zip(&info.children).rev() {
             if let Some(child_node) = child_layout.node() {
-                let mut path =
-                    hit_test_inner(child_node, child_info, local_x, local_y, child_scroll);
+                let mut path = hit_test_inner(
+                    child_node,
+                    child_info,
+                    (child_x, child_y),
+                    child_scroll,
+                    child_vp,
+                    child_cont,
+                    false,
+                );
                 if !path.is_empty() {
-                    // 子がヒット → 自分を末尾に追加
                     path.push(HitItem { layout, info });
                     return path;
                 }
             } else if let Some(result) = child_layout.custom_result()
                 && result.spans.iter().any(|span| {
-                    // `line_pos` positions the line in the parent's coordinate
-                    // space (where inline content is laid out); `x_range` is
-                    // only used for its width.
-                    local_x >= span.line_pos.0
-                        && local_x <= span.line_pos.0 + span.width()
-                        && local_y >= span.line_pos.1
-                        && local_y <= span.line_pos.1 + result.box_model.content_box.height
+                    child_x >= span.line_pos.0
+                        && child_x <= span.line_pos.0 + span.width()
+                        && child_y >= span.line_pos.1
+                        && child_y <= span.line_pos.1 + result.box_model.content_box.height
                 })
             {
                 return vec![
@@ -327,22 +574,16 @@ fn hit_test_inner<'a>(
             }
         }
 
-        // 4. 子ノードに当たらなければこの box がヒット
+        // 4. No child hit -> this box.
+        let _ = sticky_shift;
         return vec![HitItem { layout, info }];
     }
 
-    // どの box にもヒットしなかった
     Vec::new()
 }
 
 /// Returns the hit path (child→parent) of the topmost open popup containing
 /// `(x, y)`, or `None`.
-///
-/// Popups are top-layer overlays: they render above every box and escape all
-/// ancestor clips, so they are hit-tested independently of box containment.
-/// The scan mirrors [`hit_test_inner`]'s coordinate descent but skips the
-/// padding-box checks; when several popups overlap, the one later in tree
-/// order wins because it renders on top.
 fn hit_test_popup<'a>(
     layout: &'a LayoutNode,
     info: &'a InfoNode,
@@ -351,18 +592,39 @@ fn hit_test_popup<'a>(
 ) -> Option<HitPath<'a>> {
     let mut best: Option<HitPath<'a>> = None;
     let mut prefix: HitPath<'a> = Vec::new();
-    hit_test_popup_inner(layout, info, x, y, (0.0, 0.0), &mut prefix, &mut best);
+    let size = layout.layout_box.iter().next().map_or((f32::INFINITY, f32::INFINITY), |b| {
+        (b.content_box.width, b.content_box.height)
+    });
+    let (sx, sy) = info.kind.scroll_offsets();
+    let root_viewport = StickyViewport {
+        top_left: (-sx, sy),
+        size,
+    };
+    hit_test_popup_inner(
+        layout,
+        info,
+        (x, y),
+        (0.0, 0.0),
+        root_viewport,
+        size,
+        true,
+        &mut prefix,
+        &mut best,
+    );
     best
 }
 
 /// Recursive top-layer popup scan. `prefix` holds the root→current hit path;
 /// matches recorded later (tree order) overwrite earlier ones.
+#[allow(clippy::too_many_arguments)]
 fn hit_test_popup_inner<'a>(
     layout: &'a LayoutNode,
     info: &'a InfoNode,
-    mut x: f32,
-    mut y: f32,
+    point: (f32, f32),
     accumulated_scroll: (f32, f32),
+    viewport: StickyViewport,
+    containing: (f32, f32),
+    is_root: bool,
     prefix: &mut HitPath<'a>,
     best: &mut Option<HitPath<'a>>,
 ) {
@@ -370,12 +632,24 @@ fn hit_test_popup_inner<'a>(
         return;
     }
 
-    let is_inline = matches!(layout.layout_box, ui_layout::LayoutBox::InlineBox(_));
+    let inline = is_inline(layout);
+    let inline_container = is_inline_container(layout, info);
 
     let is_fixed = layout.style.position.kind == Position::Fixed;
+    let mut p = point;
     if is_fixed {
-        x -= accumulated_scroll.0;
-        y -= accumulated_scroll.1;
+        p.0 -= accumulated_scroll.0;
+        p.1 -= accumulated_scroll.1;
+    }
+    let is_sticky = layout.style.position.kind == Position::Sticky;
+    if is_sticky && !is_fixed {
+        if let Some(bm) = layout.layout_box.iter().next() {
+            if let Some(edges) = bm.sticky_edges {
+                let (dx, dy) = sticky_offset(&edges, &bm.border_box, viewport, containing);
+                p.0 -= dx;
+                p.1 -= dy;
+            }
+        }
     }
 
     let own_scroll = info.kind.scroll_offsets();
@@ -387,21 +661,16 @@ fn hit_test_popup_inner<'a>(
             accumulated_scroll.1 + own_scroll.1,
         )
     };
+    let child_vp = child_viewport(layout, info, viewport, is_root);
+    let child_cont = child_containing(layout, containing);
+    let style = node_style(info);
 
-    // The popup rect lives in the node's content-box space, the same space as
-    // `draw_sized`, which is anchored to the first layout box. Inline
-    // Container boxes push no transform, so their content stays in the
-    // parent's coordinate space. Inline Custom nodes always push a transform.
-    let is_inline_container = is_inline && matches!(&info.kind, NodeKind::Container { .. });
-    let (local_x, local_y) = if is_inline_container {
-        (x, y)
+    let (local_x, local_y) = if inline_container {
+        p
+    } else if let Some(bm) = layout.layout_box.iter().next() {
+        map_to_content_local(p, &bm, &style, own_scroll, inline).unwrap_or(p)
     } else {
-        layout.layout_box.iter().next().map_or((x, y), |b| {
-            (
-                x - b.content_box.x + own_scroll.0,
-                y - b.content_box.y + own_scroll.1,
-            )
-        })
+        p
     };
 
     if let NodeKind::Custom {
@@ -422,15 +691,26 @@ fn hit_test_popup_inner<'a>(
         *best = Some(path);
     }
 
+    // child space for descendants
+    let mut child_x = if inline_container { p.0 } else { local_x };
+    let child_y = if inline_container { p.1 } else { local_y };
+    if establishes_inline_box_space(layout) && !inline_container {
+        if let Some(bm) = layout.layout_box.iter().next() {
+            child_x -= bm.content_box.x;
+        }
+    }
+
     prefix.push(HitItem { layout, info });
     for (child_layout, child_info) in layout.children.iter().zip(&info.children) {
         if let Some(child_node) = child_layout.node() {
             hit_test_popup_inner(
                 child_node,
                 child_info,
-                local_x,
-                local_y,
+                (child_x, child_y),
                 child_scroll,
+                child_vp,
+                child_cont,
+                false,
                 prefix,
                 best,
             );
@@ -445,19 +725,6 @@ fn hit_test_popup_inner<'a>(
 pub const NO_SCROLL_DOM_ID: u32 = u32::MAX;
 
 /// Scrolls the innermost scrollable container under `(x, y)` by `(dx, dy)`.
-///
-/// Mirrors [`hit_test`]: boxes are tested front-to-back and children are
-/// visited before the node itself, so the innermost container wins. Only
-/// nodes whose [`NodeKind::Container`] / [`NodeKind::Custom`] flags enable
-/// scrolling for an axis are scrolled, clamped to the scrollable range
-/// (`children_box` extent minus the visible `content_box`).
-///
-/// Returns `Some(dom_id)` when any scroll offset actually changed, where
-/// `dom_id` names the scrollable container that absorbed the scroll. The value
-/// is [`NO_SCROLL_DOM_ID`] when the scrolled container had no snapshot dom id
-/// (used to trigger a redraw without dispatching a `scroll` event); `None` when
-/// nothing scrolled, so a caller can chain the wheel event to an ancestor
-/// (e.g. the root).
 pub fn scroll_at(
     layout: &LayoutNode,
     info: &mut InfoNode,
@@ -467,30 +734,63 @@ pub fn scroll_at(
     dx: f32,
     dy: f32,
 ) -> Option<u32> {
-    scroll_at_inner(layout, info, viewport, x, y, dx, dy, (0.0, 0.0))
+    let size = layout.layout_box.iter().next().map_or((f32::INFINITY, f32::INFINITY), |b| {
+        (b.content_box.width, b.content_box.height)
+    });
+    let (sx, sy) = info.kind.scroll_offsets();
+    let root_viewport = StickyViewport {
+        top_left: (-sx, sy),
+        size,
+    };
+    scroll_at_inner(
+        layout,
+        info,
+        viewport,
+        (x, y),
+        dx,
+        dy,
+        (0.0, 0.0),
+        root_viewport,
+        size,
+        true,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
 fn scroll_at_inner(
     layout: &LayoutNode,
     info: &mut InfoNode,
-    viewport: (f32, f32),
-    mut x: f32,
-    mut y: f32,
+    window_viewport: (f32, f32),
+    point: (f32, f32),
     dx: f32,
     dy: f32,
     accumulated_scroll: (f32, f32),
+    viewport: StickyViewport,
+    containing: (f32, f32),
+    is_root: bool,
 ) -> Option<u32> {
     if layout.layout_box.is_empty() {
         return None;
     }
 
-    let is_inline = matches!(layout.layout_box, ui_layout::LayoutBox::InlineBox(_));
+    let inline = is_inline(layout);
+    let inline_container = is_inline_container(layout, info);
 
     let is_fixed = layout.style.position.kind == Position::Fixed;
+    let mut p = point;
     if is_fixed {
-        x -= accumulated_scroll.0;
-        y -= accumulated_scroll.1;
+        p.0 -= accumulated_scroll.0;
+        p.1 -= accumulated_scroll.1;
+    }
+    let is_sticky = layout.style.position.kind == Position::Sticky;
+    if is_sticky && !is_fixed {
+        if let Some(bm) = layout.layout_box.iter().next() {
+            if let Some(edges) = bm.sticky_edges {
+                let (sdx, sdy) = sticky_offset(&edges, &bm.border_box, viewport, containing);
+                p.0 -= sdx;
+                p.1 -= sdy;
+            }
+        }
     }
 
     let own_scroll = info.kind.scroll_offsets();
@@ -502,46 +802,42 @@ fn scroll_at_inner(
             accumulated_scroll.1 + own_scroll.1,
         )
     };
+    let child_vp = child_viewport(layout, info, viewport, is_root);
+    let child_cont = child_containing(layout, containing);
+    let style = node_style(info);
 
-    for box_model in layout
-        .layout_box
-        .iter()
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-    {
-        let rect = box_model.padding_box;
-        if x < rect.x || y < rect.y || x > rect.x + rect.width || y > rect.y + rect.height {
+    let boxes: Vec<_> = layout.layout_box.iter().collect();
+    for box_model in boxes.into_iter().rev() {
+        let Some((local_x, local_y)) = map_to_box_local(p, &box_model, &style, own_scroll, inline)
+        else {
             continue;
+        };
+        let mut child_x = if inline_container { p.0 } else { local_x };
+        let child_y = if inline_container { p.1 } else { local_y };
+
+        if establishes_inline_box_space(layout) && !inline_container {
+            child_x -= box_model.content_box.x;
         }
 
-        // Inline Container boxes live in the parent's coordinate space and push
-        // no transform (mirroring `push_box_model`), so their children keep
-        // the incoming coordinates untouched. Inline Custom nodes always push
-        // a transform, so they apply the content-box offset.
-        let is_inline_container = is_inline && matches!(&info.kind, NodeKind::Container { .. });
-        let (local_x, local_y) = if is_inline_container {
-            (x, y)
-        } else {
-            (
-                x - box_model.content_box.x + own_scroll.0,
-                y - box_model.content_box.y + own_scroll.1,
-            )
-        };
-
-        for (child_layout, child_info) in layout.children.iter().zip(&mut info.children).rev() {
-            if let Some(child_node) = child_layout.node()
-                && let Some(scrolled_id) = scroll_at_inner(
-                    child_node,
-                    child_info,
-                    viewport,
-                    local_x,
-                    local_y,
-                    dx,
-                    dy,
-                    child_scroll,
-                )
-            {
+        // children front-to-back
+        let mut i = info.children.len();
+        while i > 0 {
+            i -= 1;
+            let Some(child_node) = layout.children.get(i).and_then(|c| c.node()) else {
+                continue;
+            };
+            if let Some(scrolled_id) = scroll_at_inner(
+                child_node,
+                &mut info.children[i],
+                window_viewport,
+                (child_x, child_y),
+                dx,
+                dy,
+                child_scroll,
+                child_vp,
+                child_cont,
+                false,
+            ) {
                 return Some(scrolled_id);
             }
         }
@@ -562,13 +858,12 @@ fn scroll_at_inner(
                 ..
             } => {
                 let mut changed = false;
-
-                let (vw, vh) = viewport;
+                let (vw, vh) = window_viewport;
 
                 if *scroll_y {
                     let max_scroll = (box_model.children_box.height
                         - box_model.content_box.height.min(vh))
-                    .max(0.0);
+                        .max(0.0);
                     let next = (*scroll_offset_y + dy).clamp(0.0, max_scroll);
                     if (next - *scroll_offset_y).abs() > f32::EPSILON {
                         changed = true;
@@ -578,7 +873,7 @@ fn scroll_at_inner(
                 if *scroll_x {
                     let max_scroll = (box_model.children_box.width
                         - box_model.content_box.width.min(vw))
-                    .max(0.0);
+                        .max(0.0);
                     let next = (*scroll_offset_x + dx).clamp(0.0, max_scroll);
                     if (next - *scroll_offset_x).abs() > f32::EPSILON {
                         changed = true;
@@ -1615,5 +1910,311 @@ mod tests {
         // The child under the cursor scrolls; the block parent does not.
         assert_eq!(scroll_offset_y_of(&b_info.children[0].children[0]), 10.0);
         assert_eq!(scroll_offset_y_of(&b_info), 0.0);
+    }
+
+    fn sticky_box_model(
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        children_width: f32,
+        children_height: f32,
+        edges: ui_layout::EdgeOption,
+    ) -> ui_layout::BoxModel {
+        let mut bm = box_model(x, y, width, height, children_width, children_height);
+        bm.sticky_edges = Some(edges);
+        bm
+    }
+
+    #[test]
+    fn hit_test_sticky_element_uses_visual_position() {
+        // Scrollable container (scrolled 100px, viewport height 150) -> sticky child
+        // naturally at y=80 with top:0. Sticky offset dy=20 => child content-space
+        // y becomes 100..130, which appears at visual/screen y = 0..30 due to the
+        // container scroll transform.
+        let mut container_layout = LayoutNode::with_children(
+            ui_layout::Style::default(),
+            [LayoutNode::new({
+                let mut s = ui_layout::Style::default();
+                s.position.kind = Position::Sticky;
+                s
+            })],
+        );
+        container_layout.layout_box =
+            ui_layout::LayoutBox::BlockBox(box_model(0.0, 0.0, 200.0, 150.0, 200.0, 400.0));
+        let mut child_layout = LayoutNode::new({
+            let mut s = ui_layout::Style::default();
+            s.position.kind = Position::Sticky;
+            s
+        });
+        child_layout.layout_box = ui_layout::LayoutBox::BlockBox(sticky_box_model(
+            10.0,
+            80.0,
+            40.0,
+            30.0,
+            40.0,
+            30.0,
+            ui_layout::EdgeOption {
+                top: Some(0.0),
+                right: None,
+                bottom: None,
+                left: None,
+            },
+        ));
+        container_layout.children[0] = ui_layout::LayoutChild::Node(Box::new(child_layout));
+
+        let mut root_layout = LayoutNode::with_children(ui_layout::Style::default(), [container_layout]);
+        root_layout.layout_box =
+            ui_layout::LayoutBox::BlockBox(box_model(0.0, 0.0, 200.0, 150.0, 200.0, 150.0));
+
+        let mut scroll_container_info = scrollable_info();
+        set_vertical_scroll(&mut scroll_container_info, 100.0);
+        let mut child_info = container_info_child(Some(77));
+        if let NodeKind::Container { scroll_y, .. } = &mut child_info.kind {
+            *scroll_y = false;
+        }
+        scroll_container_info.children = vec![child_info];
+        let mut root_info = container_info(false, None);
+        root_info.children = vec![scroll_container_info];
+
+        // Natural/layout position (y=80) is off-screen at scroll 100.
+        let natural = hit_test(&root_layout, &root_info, 20.0, 90.0);
+        assert_ne!(hit_dom_id(&natural), Some(77));
+        // Visual stuck position appears near top of scrollport.
+        let visual = hit_test(&root_layout, &root_info, 20.0, 15.0);
+        assert_eq!(hit_dom_id(&visual), Some(77));
+    }
+
+    fn container_info_child(dom_id: Option<u32>) -> InfoNode {
+        InfoNode {
+            kind: NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: ContainerStyle::default(),
+                role: ContainerRole::Normal,
+            },
+            children: Vec::new(),
+            dom_id,
+        }
+    }
+
+    #[test]
+    fn scroll_at_sticky_element_uses_visual_position() {
+        let mut container_layout = LayoutNode::with_children(
+            ui_layout::Style::default(),
+            [LayoutNode::new({
+                let mut s = ui_layout::Style::default();
+                s.position.kind = Position::Sticky;
+                s
+            })],
+        );
+        container_layout.layout_box =
+            ui_layout::LayoutBox::BlockBox(box_model(0.0, 0.0, 200.0, 150.0, 200.0, 400.0));
+        let mut child_layout = LayoutNode::new({
+            let mut s = ui_layout::Style::default();
+            s.position.kind = Position::Sticky;
+            s
+        });
+        child_layout.layout_box = ui_layout::LayoutBox::BlockBox(sticky_box_model(
+            10.0,
+            80.0,
+            40.0,
+            30.0,
+            40.0,
+            120.0,
+            ui_layout::EdgeOption {
+                top: Some(0.0),
+                right: None,
+                bottom: None,
+                left: None,
+            },
+        ));
+        container_layout.children[0] = ui_layout::LayoutChild::Node(Box::new(child_layout));
+
+        let mut root_layout = LayoutNode::with_children(ui_layout::Style::default(), [container_layout]);
+        root_layout.layout_box =
+            ui_layout::LayoutBox::BlockBox(box_model(0.0, 0.0, 200.0, 150.0, 200.0, 150.0));
+
+        let mut scroll_container_info = scrollable_info();
+        set_vertical_scroll(&mut scroll_container_info, 100.0);
+        let child_info = container_info(true, Some(77));
+        scroll_container_info.children = vec![child_info];
+        let mut root_info = container_info(false, None);
+        root_info.children = vec![scroll_container_info];
+
+        // Scroll at stuck visual position should target the sticky child.
+        let scrolled = scroll_at(
+            &root_layout,
+            &mut root_info,
+            (VIEWPORT_WIDTH, VIEWPORT_HEIGHT),
+            20.0,
+            15.0,
+            0.0,
+            10.0,
+        );
+        assert_eq!(scrolled, Some(77));
+        assert_eq!(scroll_offset_y_of(&root_info.children[0].children[0]), 10.0);
+        assert_eq!(scroll_offset_y_of(&root_info.children[0]), 100.0);
+    }
+
+    fn transformed_container_info(transform: crate::engine::renderer_model::AffineTransform) -> InfoNode {
+        InfoNode {
+            kind: NodeKind::Container {
+                scroll_x: false,
+                scroll_y: true,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: ContainerStyle {
+                    transform: Some(transform),
+                    ..ContainerStyle::default()
+                },
+                role: ContainerRole::Normal,
+            },
+            children: Vec::new(),
+            dom_id: None,
+        }
+    }
+
+    #[test]
+    fn hit_test_and_scroll_translated_element_use_visual_position() {
+        // Child block at (50,50,40,30) translated by (60,0) => visual (110,50).
+        let mut root_layout = LayoutNode::with_children(
+            ui_layout::Style::default(),
+            [LayoutNode::new(ui_layout::Style::default())],
+        );
+        root_layout.layout_box =
+            ui_layout::LayoutBox::BlockBox(box_model(0.0, 0.0, 300.0, 200.0, 300.0, 200.0));
+        let mut child_layout = LayoutNode::new(ui_layout::Style::default());
+        child_layout.layout_box =
+            ui_layout::LayoutBox::BlockBox(box_model(50.0, 50.0, 40.0, 30.0, 40.0, 120.0));
+        root_layout.children[0] = ui_layout::LayoutChild::Node(Box::new(child_layout));
+
+        let mut root_info = container_info(false, None);
+        let mut child_info = transformed_container_info(
+            crate::engine::renderer_model::AffineTransform::translate(60.0, 0.0),
+        );
+        child_info.dom_id = Some(88);
+        root_info.children.push(child_info);
+
+        // Natural position misses transformed visual placement.
+        assert_ne!(hit_dom_id(&hit_test(&root_layout, &root_info, 60.0, 60.0)), Some(88));
+        // Visual position hits.
+        assert_eq!(hit_dom_id(&hit_test(&root_layout, &root_info, 120.0, 60.0)), Some(88));
+
+        let scrolled = scroll_at(
+            &root_layout,
+            &mut root_info,
+            (VIEWPORT_WIDTH, VIEWPORT_HEIGHT),
+            120.0,
+            60.0,
+            0.0,
+            10.0,
+        );
+        assert_eq!(scrolled, Some(88));
+        assert_eq!(scroll_offset_y_of(&root_info.children[0]), 10.0);
+    }
+
+    #[test]
+    fn dispatch_pointer_to_translated_custom_uses_visual_inverse() {
+        let node: Arc<RecordingNode> = Arc::new(RecordingNode::new(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        }));
+        node.popup_open.store(false, Ordering::Relaxed);
+        let mut custom_info = input_info(Arc::clone(&node) as Arc<dyn CustomNode>);
+        if let NodeKind::Custom { style, .. } = &mut custom_info.kind {
+            style.transform = Some(crate::engine::renderer_model::AffineTransform::translate(60.0, 0.0));
+        }
+
+        let mut root_layout = LayoutNode::with_children(
+            ui_layout::Style::default(),
+            [LayoutNode::new(ui_layout::Style::default())],
+        );
+        root_layout.layout_box =
+            ui_layout::LayoutBox::BlockBox(box_model(0.0, 0.0, 300.0, 200.0, 300.0, 200.0));
+        let mut child_layout = LayoutNode::new(ui_layout::Style::default());
+        child_layout.layout_box =
+            ui_layout::LayoutBox::BlockBox(box_model(50.0, 50.0, 40.0, 30.0, 40.0, 30.0));
+        root_layout.children[0] = ui_layout::LayoutChild::Node(Box::new(child_layout));
+        let mut root_info = container_info(false, None);
+        root_info.children.push(custom_info);
+
+        let path = hit_test(&root_layout, &root_info, 120.0, 60.0);
+        assert!(hit_custom_node(&path).is_some());
+        dispatch_pointer(&path, PointerEvent::Down { x: 120.0, y: 60.0 });
+        // Visual (120,60) is local (10,10) inside the 40x30 box at content origin.
+        assert_eq!(node.events(), vec![PointerEvent::Down { x: 10.0, y: 10.0 }]);
+    }
+
+    #[test]
+    fn hit_test_scaled_element_uses_visual_inverse() {
+        // Box at (100,100,40,40), center (120,120). scale(2) makes visual (80,80)-(160,160).
+        let mut root_layout = LayoutNode::with_children(
+            ui_layout::Style::default(),
+            [LayoutNode::new(ui_layout::Style::default())],
+        );
+        root_layout.layout_box =
+            ui_layout::LayoutBox::BlockBox(box_model(0.0, 0.0, 300.0, 300.0, 300.0, 300.0));
+        let mut child_layout = LayoutNode::new(ui_layout::Style::default());
+        child_layout.layout_box =
+            ui_layout::LayoutBox::BlockBox(box_model(100.0, 100.0, 40.0, 40.0, 40.0, 40.0));
+        root_layout.children[0] = ui_layout::LayoutChild::Node(Box::new(child_layout));
+
+        let mut root_info = container_info(false, None);
+        let mut child_info = transformed_container_info(
+            crate::engine::renderer_model::AffineTransform::scale(2.0, 2.0),
+        );
+        child_info.dom_id = Some(99);
+        // make non-scrollable for simple hit
+        if let NodeKind::Container { scroll_y, .. } = &mut child_info.kind {
+            *scroll_y = false;
+        }
+        root_info.children.push(child_info);
+
+        // (90,120) is outside natural box (100..140) but inside scaled visual box.
+        assert_eq!(hit_dom_id(&hit_test(&root_layout, &root_info, 90.0, 120.0)), Some(99));
+        // (170,120) is outside scaled visual box.
+        assert_ne!(hit_dom_id(&hit_test(&root_layout, &root_info, 170.0, 120.0)), Some(99));
+    }
+
+    #[test]
+    fn popup_hit_and_dispatch_on_translated_custom_use_visual_coords() {
+        // Custom box at (50,50,40,30), translated +60x. Popup at local (0,30,40,20)
+        // should be hittable/dispatchable at translated visual position.
+        let node: Arc<RecordingNode> = Arc::new(RecordingNode::new(Rect {
+            x: 0.0,
+            y: 30.0,
+            width: 40.0,
+            height: 20.0,
+        }));
+        let mut custom_info = input_info(Arc::clone(&node) as Arc<dyn CustomNode>);
+        if let NodeKind::Custom { style, .. } = &mut custom_info.kind {
+            style.transform = Some(crate::engine::renderer_model::AffineTransform::translate(60.0, 0.0));
+        }
+
+        let mut root_layout = LayoutNode::with_children(
+            ui_layout::Style::default(),
+            [LayoutNode::new(ui_layout::Style::default())],
+        );
+        root_layout.layout_box =
+            ui_layout::LayoutBox::BlockBox(box_model(0.0, 0.0, 300.0, 200.0, 300.0, 200.0));
+        let mut child_layout = LayoutNode::new(ui_layout::Style::default());
+        child_layout.layout_box =
+            ui_layout::LayoutBox::BlockBox(box_model(50.0, 50.0, 40.0, 30.0, 40.0, 30.0));
+        root_layout.children[0] = ui_layout::LayoutChild::Node(Box::new(child_layout));
+        let mut root_info = container_info(false, None);
+        root_info.children.push(custom_info);
+
+        // Visual popup area: local popup (0,30)-(40,50) -> box local (50,80)-(90,100)
+        // -> translated to (110,80)-(150,100).
+        let path = hit_test(&root_layout, &root_info, 120.0, 90.0);
+        assert!(hit_custom_node(&path).is_some());
+        dispatch_pointer(&path, PointerEvent::Down { x: 120.0, y: 90.0 });
+        assert_eq!(node.popup_events(), vec![PointerEvent::Down { x: 10.0, y: 10.0 }]);
+        assert!(node.events().is_empty());
     }
 }
