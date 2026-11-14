@@ -10,7 +10,8 @@ use crate::engine::animation::{AnimatedOverrides, AnimationRuntime};
 use crate::engine::bridge::audio::AudioSinkFactory;
 use crate::engine::image_decoder::ImageDecoder;
 use crate::engine::layouter::types::{
-    Color, ColorScheme, ContainerStyle, CursorStyle, FontStyle, TextAlign, TextFlowStyle,
+    Color, ColorScheme, ContainerStyle, CursorKeyword, CursorStyle, FontStyle, TextAlign,
+    TextFlowStyle,
     TextStyle, Visibility, WhiteSpace,
 };
 use crate::engine::{
@@ -34,6 +35,7 @@ use crate::engine::{
         dom_snapshot::DomSnapshot,
         types::{InfoNode, InteractionState, NodeKind},
     },
+    input::hit_test,
     origin::Origin,
     permissions::Permissions,
     renderer_model::{Image, StickyViewport, is_scrollport, sticky_offset},
@@ -355,6 +357,14 @@ pub struct WebView {
     pending_fragment_scroll: Option<String>,
     /// Layout generation that contains every initially linked stylesheet.
     fragment_ready_version: Option<u64>,
+
+    /// Embedder-provided callbacks for events the WebView cannot handle itself.
+    /// When `None`, the corresponding `WebViewTask` is still emitted from
+    /// [`tick`](Self::tick) for the in-tree browser core to handle.
+    on_navigation: Option<Box<dyn Fn(&Url)>>,
+    on_fetch: Option<Box<dyn Fn(&Url, FetchKind)>>,
+    on_console: Option<Box<dyn Fn(u32, &str)>>,
+    on_inspect_request: Option<Box<dyn Fn(u64, &str, &str)>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -574,6 +584,11 @@ impl WebView {
             next_deferred_script_index: 0,
             pending_fragment_scroll: None,
             fragment_ready_version: None,
+
+            on_navigation: None,
+            on_fetch: None,
+            on_console: None,
+            on_inspect_request: None,
         }
     }
 
@@ -765,6 +780,9 @@ impl WebView {
 
                 for (source, url) in std::mem::take(&mut self.pending_images) {
                     log::info!("Image fetch requested in WebView: url={}", url);
+                    if let Some(cb) = &self.on_fetch {
+                        cb(&url, FetchKind::Image { source: source.clone() });
+                    }
                     tasks.push(WebViewTask::Fetch {
                         url,
                         kind: FetchKind::Image { source },
@@ -773,6 +791,9 @@ impl WebView {
 
                 for (source, url) in std::mem::take(&mut self.pending_audio) {
                     log::info!("Audio fetch requested in WebView: url={}", url);
+                    if let Some(cb) = &self.on_fetch {
+                        cb(&url, FetchKind::Audio { source: source.clone() });
+                    }
                     tasks.push(WebViewTask::Fetch {
                         url,
                         kind: FetchKind::Audio { source },
@@ -786,6 +807,9 @@ impl WebView {
                 } else {
                     for url in &self.pending_css_urls {
                         log::info!("Fetch requested in WebView: url={}", url);
+                        if let Some(cb) = &self.on_fetch {
+                            cb(url, FetchKind::Css);
+                        }
                         tasks.push(WebViewTask::Fetch {
                             url: url.clone(),
                             kind: FetchKind::Css,
@@ -1589,15 +1613,25 @@ impl WebView {
 
         for request in requests {
             match self.resolve_url(&request.url) {
-                Ok(url) => tasks.push(WebViewTask::Fetch {
-                    url,
-                    kind: FetchKind::JavaScript {
-                        request_id: request.id,
-                        method: request.method,
-                        headers: request.headers,
-                        body: request.body,
-                    },
-                }),
+                Ok(url) => {
+                    if let Some(cb) = &self.on_fetch {
+                        cb(&url, FetchKind::JavaScript {
+                            request_id: request.id,
+                            method: request.method.clone(),
+                            headers: request.headers.clone(),
+                            body: request.body.clone(),
+                        });
+                    }
+                    tasks.push(WebViewTask::Fetch {
+                        url,
+                        kind: FetchKind::JavaScript {
+                            request_id: request.id,
+                            method: request.method,
+                            headers: request.headers,
+                            body: request.body,
+                        },
+                    });
+                }
                 Err(error) => self
                     .on_js_fetch_failed(request.id, format!("Failed to parse fetch URL: {error}")),
             }
@@ -1612,6 +1646,9 @@ impl WebView {
             match self.resolve_url(&url_text) {
                 Ok(url) => {
                     log::info!("Script navigation requested: {url}");
+                    if let Some(cb) = &self.on_navigation {
+                        cb(&url);
+                    }
                     tasks.push(WebViewTask::Navigate { url });
                 }
                 Err(error) => {
@@ -1628,6 +1665,9 @@ impl WebView {
             match Url::parse(&request.url) {
                 Ok(url) => {
                     log::info!("Iframe fetch requested in WebView: url={}", url);
+                    if let Some(cb) = &self.on_fetch {
+                        cb(&url, FetchKind::Iframe { dom_id: request.dom_id });
+                    }
                     tasks.push(WebViewTask::Fetch {
                         url,
                         kind: FetchKind::Iframe {
@@ -1654,12 +1694,19 @@ impl WebView {
                     self.dispatch_js_element_event(request.node_id, "load");
                 }
                 JsDynamicScriptSource::External(source) => match self.resolve_url(&source) {
-                    Ok(url) => tasks.push(WebViewTask::Fetch {
-                        url,
-                        kind: FetchKind::DynamicScript {
-                            node_id: request.node_id,
-                        },
-                    }),
+                    Ok(url) => {
+                        if let Some(cb) = &self.on_fetch {
+                            cb(&url, FetchKind::DynamicScript {
+                                node_id: request.node_id,
+                            });
+                        }
+                        tasks.push(WebViewTask::Fetch {
+                            url,
+                            kind: FetchKind::DynamicScript {
+                                node_id: request.node_id,
+                            },
+                        });
+                    }
                     Err(error) => {
                         log::warn!("Failed to resolve dynamic script URL: {error}");
                         self.on_dynamic_script_fetch_failed(request.node_id);
@@ -1674,12 +1721,19 @@ impl WebView {
 
         for request in requests {
             match self.resolve_url(&request.url) {
-                Ok(url) => tasks.push(WebViewTask::Fetch {
-                    url,
-                    kind: FetchKind::DynamicCss {
-                        node_id: request.node_id,
-                    },
-                }),
+                Ok(url) => {
+                    if let Some(cb) = &self.on_fetch {
+                        cb(&url, FetchKind::DynamicCss {
+                            node_id: request.node_id,
+                        });
+                    }
+                    tasks.push(WebViewTask::Fetch {
+                        url,
+                        kind: FetchKind::DynamicCss {
+                            node_id: request.node_id,
+                        },
+                    });
+                }
                 Err(error) => {
                     log::warn!("Failed to resolve dynamic stylesheet URL: {error}");
                     self.on_dynamic_style_fetch_failed(request.node_id);
@@ -1693,12 +1747,19 @@ impl WebView {
 
         for request in requests {
             match self.resolve_url(&request.source) {
-                Ok(url) => tasks.push(WebViewTask::Fetch {
-                    url,
-                    kind: FetchKind::Image {
-                        source: request.source,
-                    },
-                }),
+                Ok(url) => {
+                    if let Some(cb) = &self.on_fetch {
+                        cb(&url, FetchKind::Image {
+                            source: request.source.clone(),
+                        });
+                    }
+                    tasks.push(WebViewTask::Fetch {
+                        url,
+                        kind: FetchKind::Image {
+                            source: request.source,
+                        },
+                    });
+                }
                 Err(error) => log::warn!("Failed to resolve dynamic image URL: {error}"),
             }
         }
@@ -2156,8 +2217,92 @@ impl WebView {
         }
     }
 
+    /// Returns the cursor style for the element under the given point, if any.
+    ///
+    /// The point is in CSS pixels relative to the viewport origin.
+    ///
+    /// Walks the hit path from innermost to outermost. The first node with an
+    /// explicit `cursor` (anything other than `auto`) wins. If every node is
+    /// `auto`, text nodes get `text` (I-beam) and everything else gets
+    /// `default`.
+    pub fn cursor_at(&self, x: f32, y: f32) -> Option<CursorStyle> {
+        let (layout, info) = self.layout_and_info.as_ref()?;
+        let path = hit_test(layout, info, x, y);
+
+        let mut has_text_node = false;
+        for hit in path.iter() {
+            match &hit.info.kind {
+                NodeKind::Text { .. } => {
+                    has_text_node = true;
+                }
+                NodeKind::Container { style, .. }
+                | NodeKind::Custom { style, .. }
+                | NodeKind::Svg { style, .. } => match &style.cursor {
+                    CursorStyle::Keyword(CursorKeyword::Auto) => continue,
+                    other => return Some(other.clone()),
+                },
+                _ => continue,
+            }
+        }
+
+        if has_text_node {
+            Some(CursorStyle::Keyword(CursorKeyword::Text))
+        } else {
+            Some(CursorStyle::Keyword(CursorKeyword::Default))
+        }
+    }
+
     pub fn navigate(&mut self) {
         self.reset_for_navigation();
+    }
+
+    /// Loads a URL, resetting the WebView state and notifying the embedder via
+    /// [`on_navigation`](Self::set_on_navigation).
+    ///
+    /// The embedder is responsible for fetching the document and calling
+    /// [`on_html_fetched`](Self::on_html_fetched) with the result. If no
+    /// `on_navigation` callback is set, this method only resets internal state
+    /// without requesting a fetch.
+    pub fn load_url(&mut self, url: &Url) {
+        if let Some(cb) = &self.on_navigation {
+            cb(url);
+        } else {
+            // No embedder callback: just reset state, waiting for explicit
+            // on_html_fetched from the in-tree browser core.
+            self.reset_for_navigation();
+        }
+    }
+
+    /// Sets the callback invoked when the WebView requests navigation to a URL.
+    pub fn set_on_navigation<F>(&mut self, cb: F)
+    where
+        F: Fn(&Url) + 'static,
+    {
+        self.on_navigation = Some(Box::new(cb));
+    }
+
+    /// Sets the callback invoked when the WebView needs to fetch a resource.
+    pub fn set_on_fetch<F>(&mut self, cb: F)
+    where
+        F: Fn(&Url, FetchKind) + 'static,
+    {
+        self.on_fetch = Some(Box::new(cb));
+    }
+
+    /// Sets the callback invoked when a page script logs a console message.
+    pub fn set_on_console<F>(&mut self, cb: F)
+    where
+        F: Fn(u32, &str) + 'static,
+    {
+        self.on_console = Some(Box::new(cb));
+    }
+
+    /// Sets the callback invoked when page script requests DevTools inspection.
+    pub fn set_on_inspect_request<F>(&mut self, cb: F)
+    where
+        F: Fn(u64, &str, &str) + 'static,
+    {
+        self.on_inspect_request = Some(Box::new(cb));
     }
 
     fn reset_for_navigation(&mut self) {
@@ -2799,7 +2944,7 @@ fn push_container_computed(declarations: &mut Vec<(String, String)>, style: &Con
             .map(|z| z.to_string())
             .unwrap_or_else(|| "auto".to_string()),
     ));
-    declarations.push(("cursor".into(), css_cursor(style.cursor)));
+    declarations.push(("cursor".into(), css_cursor(style.cursor.clone())));
     declarations.push(("text-align".into(), css_text_align(style.text_align)));
     if !style.anchor.anchors.is_empty() {
         declarations.push(("anchor-name".into(), style.anchor.anchors.join(", ")));
@@ -2882,17 +3027,26 @@ fn css_visibility(visibility: Visibility) -> String {
 
 fn css_cursor(cursor: CursorStyle) -> String {
     match cursor {
-        CursorStyle::Auto => "auto".to_string(),
-        CursorStyle::Default => "default".to_string(),
-        CursorStyle::None => "none".to_string(),
-        CursorStyle::Pointer => "pointer".to_string(),
-        CursorStyle::Text => "text".to_string(),
-        CursorStyle::Move => "move".to_string(),
-        CursorStyle::NotAllowed => "not-allowed".to_string(),
-        CursorStyle::Wait => "wait".to_string(),
-        CursorStyle::Crosshair => "crosshair".to_string(),
-        CursorStyle::Grab => "grab".to_string(),
-        CursorStyle::Grabbing => "grabbing".to_string(),
+        CursorStyle::Keyword(kw) => match kw {
+            CursorKeyword::Auto => "auto".to_string(),
+            CursorKeyword::Default => "default".to_string(),
+            CursorKeyword::None => "none".to_string(),
+            CursorKeyword::Pointer => "pointer".to_string(),
+            CursorKeyword::Text => "text".to_string(),
+            CursorKeyword::Move => "move".to_string(),
+            CursorKeyword::NotAllowed => "not-allowed".to_string(),
+            CursorKeyword::Wait => "wait".to_string(),
+            CursorKeyword::Crosshair => "crosshair".to_string(),
+            CursorKeyword::Grab => "grab".to_string(),
+            CursorKeyword::Grabbing => "grabbing".to_string(),
+        },
+        CursorStyle::Custom { images, .. } => {
+            if let Some(img) = images.first() {
+                format!("url(\"{}\")", img.source)
+            } else {
+                "auto".to_string()
+            }
+        }
     }
 }
 
