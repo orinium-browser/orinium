@@ -7,9 +7,9 @@ use ui_layout::{
 
 use crate::engine::layouter::text_layouter::TextFlowLayouter;
 use crate::engine::layouter::types::{
-    Background, BackgroundDimension, BackgroundOffset, BackgroundPositionAxis, BackgroundRepeat,
-    BackgroundSize, BorderRadius, ClipPath, Color, ContainerStyle, CornerRadius, InfoNode,
-    NodeKind, TextDecoration, TextFlowStyle, TextStyle, Visibility,
+    Background, BackgroundDimension, BackgroundImage, BackgroundOffset, BackgroundPositionAxis,
+    BackgroundRepeat, BackgroundSize, BorderRadius, ClipPath, Color, ContainerStyle, CornerRadius,
+    InfoNode, NodeKind, TextDecoration, TextFlowStyle, TextStyle, Visibility,
 };
 use crate::engine::renderer_model::draw_command::{Brush, DrawCommand, FillRule, Paint};
 use crate::engine::renderer_model::geom::AffineTransform;
@@ -24,6 +24,8 @@ use crate::engine::ui::ContentSize;
 #[derive(Default, Clone, Copy)]
 struct BoxPushState {
     border: bool,
+    /// Whether the element's CSS `transform` was pushed.
+    transform: bool,
     clip_path: bool,
     overflow_clip: bool,
     content: bool,
@@ -470,98 +472,105 @@ fn draw_background(
         inner[2],
         inner[3],
     );
-    match &style.background {
-        Background::Color(c) if c.3 > 0 => {
-            cmd_buf.push(DrawCommand::Fill {
-                path,
-                rule: FillRule::NonZero,
-                paint: Paint {
-                    brush: Brush::Solid(*c),
-                    opacity,
-                },
-            });
-        }
-        Background::Gradient(g) => {
-            cmd_buf.push(DrawCommand::Fill {
-                path,
-                rule: FillRule::NonZero,
-                paint: Paint {
-                    brush: Brush::Gradient(g.clone()),
-                    opacity,
-                },
-            });
-        }
-        Background::Image { image, color, .. } => {
-            if color.3 > 0 {
+    // CSS paints the background color beneath every image/gradient layer.
+    if let Some(color) = style.background.color
+        && color.3 > 0
+    {
+        cmd_buf.push(DrawCommand::Fill {
+            path: path.clone(),
+            rule: FillRule::NonZero,
+            paint: Paint {
+                brush: Brush::Solid(color),
+                opacity,
+            },
+        });
+    }
+
+    // Image/gradient layers are stored bottom-to-top; paint top-to-bottom.
+    // Each layer carries its own position/size/repeat geometry.
+    for layer in style.background.layers.iter().rev() {
+        let layer_repeat = layer.repeat;
+        let layer_size = layer.size;
+        let layer_position = layer.position;
+
+        match &layer.image {
+            Some(BackgroundImage::Gradient(g)) => {
                 cmd_buf.push(DrawCommand::Fill {
                     path: path.clone(),
                     rule: FillRule::NonZero,
                     paint: Paint {
-                        brush: Brush::Solid(*color),
+                        brush: Brush::Gradient(g.clone()),
                         opacity,
                     },
                 });
             }
-            if let Some(image) = image {
-                let (image_width, image_height) = resolve_background_image_size(
-                    image.width() as f32,
-                    image.height() as f32,
-                    padding_box.width,
-                    padding_box.height,
-                    style.background_size,
-                );
-                if image_width > 0.0 && image_height > 0.0 {
-                    let image_x = resolve_background_axis(
+            Some(BackgroundImage::Image { source: _, image }) => {
+                if let Some(image) = image {
+                    let (image_width, image_height) = resolve_background_image_size(
+                        image.width() as f32,
+                        image.height() as f32,
                         padding_box.width,
-                        image_width,
-                        style.background_position.x,
-                    );
-                    let image_y = resolve_background_axis(
                         padding_box.height,
-                        image_height,
-                        style.background_position.y,
+                        layer_size,
                     );
-                    let repeat_x = matches!(
-                        style.background_repeat,
-                        BackgroundRepeat::Repeat | BackgroundRepeat::RepeatX
-                    );
-                    let repeat_y = matches!(
-                        style.background_repeat,
-                        BackgroundRepeat::Repeat | BackgroundRepeat::RepeatY
-                    );
-                    let xs = background_tile_positions(
-                        image_x,
-                        image_width,
-                        padding_box.width,
-                        repeat_x,
-                    );
-                    let ys = background_tile_positions(
-                        image_y,
-                        image_height,
-                        padding_box.height,
-                        repeat_y,
-                    );
-                    cmd_buf.push(DrawCommand::PushClip {
-                        path,
-                        rule: FillRule::NonZero,
-                    });
-                    for tile_y in ys {
-                        for tile_x in &xs {
-                            cmd_buf.push(DrawCommand::Fill {
-                                path: rect_path(x + *tile_x, y + tile_y, image_width, image_height),
-                                rule: FillRule::NonZero,
-                                paint: Paint {
-                                    brush: Brush::Image(image.clone()),
-                                    opacity,
-                                },
-                            });
+                    if image_width > 0.0 && image_height > 0.0 {
+                        let image_x = resolve_background_axis(
+                            padding_box.width,
+                            image_width,
+                            layer_position.x,
+                        );
+                        let image_y = resolve_background_axis(
+                            padding_box.height,
+                            image_height,
+                            layer_position.y,
+                        );
+                        let repeat_x = matches!(
+                            layer_repeat,
+                            BackgroundRepeat::Repeat | BackgroundRepeat::RepeatX
+                        );
+                        let repeat_y = matches!(
+                            layer_repeat,
+                            BackgroundRepeat::Repeat | BackgroundRepeat::RepeatY
+                        );
+                        let xs = background_tile_positions(
+                            image_x,
+                            image_width,
+                            padding_box.width,
+                            repeat_x,
+                        );
+                        let ys = background_tile_positions(
+                            image_y,
+                            image_height,
+                            padding_box.height,
+                            repeat_y,
+                        );
+                        cmd_buf.push(DrawCommand::PushClip {
+                            path: path.clone(),
+                            rule: FillRule::NonZero,
+                        });
+                        for tile_y in ys {
+                            for tile_x in &xs {
+                                cmd_buf.push(DrawCommand::Fill {
+                                    path: rect_path(
+                                        x + *tile_x,
+                                        y + tile_y,
+                                        image_width,
+                                        image_height,
+                                    ),
+                                    rule: FillRule::NonZero,
+                                    paint: Paint {
+                                        brush: Brush::Image(image.clone()),
+                                        opacity,
+                                    },
+                                });
+                            }
                         }
+                        cmd_buf.push(DrawCommand::PopClip);
                     }
-                    cmd_buf.push(DrawCommand::PopClip);
                 }
             }
+            None => {}
         }
-        _ => {}
     }
 }
 
@@ -736,6 +745,27 @@ fn push_box_model(
     // line boxes would displace the inline content.
     let border = !is_inline && push_transform(cmd_buf, border_box.x, border_box.y);
 
+    // Apply the element's CSS `transform` about the element's center
+    // (CSS `transform-origin` defaults to `50% 50%`). The border translation
+    // above moved the origin to the border-box top-left, so we sandwich the
+    // transform with a translate to/from the center.
+    let transform = !is_inline
+        && style
+            .transform
+            .is_some_and(|t| t != AffineTransform::identity())
+        && {
+            let center_x = border_box.width / 2.0;
+            let center_y = border_box.height / 2.0;
+            let t = style.transform.expect("checked above");
+            let centered = AffineTransform::translate(center_x, center_y)
+                .then(&t)
+                .then(&AffineTransform::translate(-center_x, -center_y));
+            cmd_buf.push(DrawCommand::PushTransform {
+                transform: centered,
+            });
+            true
+        };
+
     // When no transform is pushed (inline), draw commands must use absolute
     // coordinates; otherwise they are already relative to the border-box
     // origin thanks to the transform above.
@@ -803,6 +833,7 @@ fn push_box_model(
 
     BoxPushState {
         border,
+        transform,
         clip_path: clip_path_pushed,
         overflow_clip,
         content,
@@ -824,6 +855,9 @@ fn pop_box_model(cmd_buf: &mut Vec<DrawCommand>, state: BoxPushState) {
     }
     if state.clip_path {
         cmd_buf.push(DrawCommand::PopClip);
+    }
+    if state.transform {
+        cmd_buf.push(DrawCommand::PopTransform);
     }
     if state.border {
         cmd_buf.push(DrawCommand::PopTransform);
@@ -902,19 +936,84 @@ fn draw_text(
 /// propagated; the element still paints gradient/image backgrounds on its own
 /// box.
 fn emit_canvas_background(cmd_buf: &mut Vec<DrawCommand>, info: &InfoNode, viewport: (f32, f32)) {
-    let background = match info.kind.container_bg() {
-        Some(Background::Color(color)) if color.3 == 0 => {
+    /// Check if a background has any visible content (non-transparent color
+    /// or any image/gradient layers).
+    fn has_visible_background(bg: &Background) -> bool {
+        bg.color.is_some_and(|c| c.3 > 0) || !bg.layers.is_empty()
+    }
+
+    /// Resolve the canvas background per CSS 2.1 §14.2 / CSS Backgrounds 3:
+    /// if the root element (html) has no visible background, the canvas
+    /// background is the first body child's background.
+    fn resolve_canvas_background(info: &InfoNode) -> Option<&Background> {
+        // Find the html element: first Container child with tag "html".
+        let html = info.children.iter().find_map(|child| {
+            if let NodeKind::Container { style, .. } = &child.kind {
+                (style.tag.as_deref() == Some("html")).then_some(child)
+            } else {
+                None
+            }
+        });
+
+        match html {
+            Some(html_info) => {
+                let html_bg = html_info.kind.container_bg();
+                if html_bg.is_some_and(has_visible_background) {
+                    html_bg
+                } else {
+                    // Fall back to the first body child's background.
+                    html_info.children.iter().find_map(|child| {
+                        if let NodeKind::Container { style, .. } = &child.kind {
+                            (style.tag.as_deref() == Some("body"))
+                                .then_some(child.kind.container_bg())
+                                .flatten()
+                        } else {
+                            None
+                        }
+                    })
+                }
+            }
+            None => {
+                // No html element found; fall back to the first visible
+                // background color in the tree (root, then children).
+                let solid_color = |bg: Option<&Background>| match bg {
+                    Some(bg) if bg.color.is_some_and(|c| c.3 > 0) => Some(bg.color.unwrap()),
+                    _ => None,
+                };
+                let child_bg = || {
+                    info.children
+                        .iter()
+                        .find_map(|child| solid_color(child.kind.container_bg()))
+                };
+                solid_color(info.kind.container_bg()).or_else(child_bg).and_then(|_| {
+                    // Return a reference to the first background with visible color.
+                    info.kind.container_bg()                                .filter(|bg| has_visible_background(bg)).or_else(|| {
+                        info.children.iter().find_map(|child| {
+                            child.kind.container_bg()                                .filter(|bg| has_visible_background(bg))
+                        })
+                    })
+                })
+            }
+        }
+    }
+
+    let background = resolve_canvas_background(info);
+    let Some(bg) = background else {
+        // Fall back to the previous behavior: first solid color found in the
+        // tree (root, then children).
+        let solid_color = |bg: Option<&Background>| match bg {
+            Some(bg) if bg.color.is_some_and(|c| c.3 > 0) => Some(bg.color.unwrap()),
+            _ => None,
+        };
+        let child_bg = || {
             info.children
                 .iter()
-                .find_map(|child| match child.kind.container_bg() {
-                    Some(Background::Color(color)) if color.3 > 0 => Some(*color),
-                    _ => None,
-                })
-        }
-        Some(Background::Color(color)) => Some(*color),
-        _ => None,
-    };
-    if let Some(color) = background {
+                .find_map(|child| solid_color(child.kind.container_bg()))
+        };
+        let background = solid_color(info.kind.container_bg()).or_else(child_bg);
+        let Some(color) = background else {
+            return;
+        };
         cmd_buf.push(DrawCommand::Fill {
             path: rect_path(0.0, 0.0, viewport.0, viewport.1),
             rule: FillRule::NonZero,
@@ -923,6 +1022,48 @@ fn emit_canvas_background(cmd_buf: &mut Vec<DrawCommand>, info: &InfoNode, viewp
                 opacity: 1.0,
             },
         });
+        return;
+    };
+
+    // Paint solid color first (bottom-most layer).
+    if let Some(color) = bg.color.filter(|c| c.3 > 0) {
+        cmd_buf.push(DrawCommand::Fill {
+            path: rect_path(0.0, 0.0, viewport.0, viewport.1),
+            rule: FillRule::NonZero,
+            paint: Paint {
+                brush: Brush::Solid(color),
+                opacity: 1.0,
+            },
+        });
+    }
+
+    // Paint image/gradient layers bottom-to-top, each covering the viewport.
+    for layer in bg.layers.iter().rev() {
+        match &layer.image {
+            Some(BackgroundImage::Gradient(g)) => {
+                cmd_buf.push(DrawCommand::Fill {
+                    path: rect_path(0.0, 0.0, viewport.0, viewport.1),
+                    rule: FillRule::NonZero,
+                    paint: Paint {
+                        brush: Brush::Gradient(g.clone()),
+                        opacity: 1.0,
+                    },
+                });
+            }
+            Some(BackgroundImage::Image { image, .. }) => {
+                if let Some(image) = image {
+                    cmd_buf.push(DrawCommand::Fill {
+                        path: rect_path(0.0, 0.0, viewport.0, viewport.1),
+                        rule: FillRule::NonZero,
+                        paint: Paint {
+                            brush: Brush::Image(image.clone()),
+                            opacity: 1.0,
+                        },
+                    });
+                }
+            }
+            None => {}
+        }
     }
 }
 
@@ -1541,7 +1682,9 @@ fn generate_draw_commands_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::layouter::types::ContainerRole;
+    use crate::engine::layouter::types::{
+        BackgroundLayer, ContainerRole,
+    };
     use crate::engine::renderer_model::geom::AffineTransform;
     use crate::engine::ui::custom_node::{CustomNode, Popup};
     use std::sync::Arc;
@@ -1616,6 +1759,124 @@ mod tests {
         assert_eq!(
             resolve_background_image_size(200.0, 100.0, 300.0, 300.0, BackgroundSize::Cover),
             (600.0, 300.0)
+        );
+    }
+
+    #[test]
+    fn background_color_is_painted_below_gradient_layers() {
+        use crate::engine::layouter::types::{Gradient, GradientKind, GradientSpread};
+
+        let gradient = Gradient {
+            kind: GradientKind::Linear { angle: 0.0 },
+            stops: Vec::new(),
+            spread: GradientSpread::Pad,
+        };
+        let style = ContainerStyle {
+            background: Background {
+                color: Some(Color(255, 0, 0, 255)),
+                layers: vec![BackgroundLayer {
+                    image: Some(crate::engine::layouter::types::BackgroundImage::Gradient(
+                        gradient,
+                    )),
+                    position: Default::default(),
+                    size: Default::default(),
+                    repeat: Default::default(),
+                }],
+            },
+            ..ContainerStyle::default()
+        };
+        let rect = ui_rect(0.0, 0.0, 100.0, 50.0);
+        let mut cmd_buf = Vec::new();
+        draw_background(&mut cmd_buf, &rect, &rect, &style, 0.0, 0.0, 1.0);
+
+        let mut brushes = cmd_buf.iter().filter_map(|cmd| match cmd {
+            DrawCommand::Fill { paint, .. } => Some(paint.brush.clone()),
+            _ => None,
+        });
+        assert!(matches!(
+            brushes.next(),
+            Some(Brush::Solid(Color(255, 0, 0, 255)))
+        ));
+        assert!(matches!(brushes.next(), Some(Brush::Gradient(_))));
+    }
+
+    #[test]
+    fn background_geometry_uses_the_original_layer_index() {
+        use crate::engine::renderer_model::draw_command::Image;
+        use crate::engine::renderer_model::path::PathCommand;
+
+        let path_size = |path: &Path| {
+            let mut max = (0.0f32, 0.0f32);
+            for command in &path.commands {
+                match command {
+                    PathCommand::MoveTo { x, y } | PathCommand::LineTo { x, y } => {
+                        max.0 = max.0.max(*x);
+                        max.1 = max.1.max(*y);
+                    }
+                    _ => {}
+                }
+            }
+            max
+        };
+
+        let top = Image::from_rgba(1, 1, vec![0, 0, 0, 0]).expect("top image");
+        let bottom = Image::from_rgba(2, 1, vec![0; 8]).expect("bottom image");
+        let top_id = top.id();
+        let bottom_id = bottom.id();
+        let style = ContainerStyle {
+            background: Background {
+                color: None,
+                layers: vec![
+                    BackgroundLayer {
+                        image: Some(crate::engine::layouter::types::BackgroundImage::Image {
+                            source: "top".into(),
+                            image: Some(top),
+                        }),
+                        position: Default::default(),
+                        size: BackgroundSize::Explicit {
+                            width: BackgroundDimension::Length(10.0),
+                            height: BackgroundDimension::Length(10.0),
+                        },
+                        repeat: BackgroundRepeat::NoRepeat,
+                    },
+                    BackgroundLayer {
+                        image: Some(crate::engine::layouter::types::BackgroundImage::Image {
+                            source: "bottom".into(),
+                            image: Some(bottom),
+                        }),
+                        position: Default::default(),
+                        size: BackgroundSize::Explicit {
+                            width: BackgroundDimension::Length(20.0),
+                            height: BackgroundDimension::Length(20.0),
+                        },
+                        repeat: BackgroundRepeat::NoRepeat,
+                    },
+                ],
+            },
+            ..ContainerStyle::default()
+        };
+        let rect = ui_rect(0.0, 0.0, 100.0, 100.0);
+        let mut cmd_buf = Vec::new();
+        draw_background(&mut cmd_buf, &rect, &rect, &style, 0.0, 0.0, 1.0);
+
+        let fills: Vec<(u64, (f32, f32))> = cmd_buf
+            .iter()
+            .filter_map(|cmd| match cmd {
+                DrawCommand::Fill {
+                    path,
+                    paint:
+                        Paint {
+                            brush: Brush::Image(image),
+                            ..
+                        },
+                    ..
+                } => Some((image.id(), path_size(path))),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            fills,
+            vec![(bottom_id, (20.0, 20.0)), (top_id, (10.0, 10.0))]
         );
     }
 
@@ -1769,6 +2030,51 @@ mod tests {
     }
 
     #[test]
+    fn transform_origin_is_element_center() {
+        let box_model = ui_layout::BoxModel {
+            sticky_edges: None,
+            border_box: ui_rect(10.0, 20.0, 100.0, 50.0),
+            padding_box: ui_rect(12.0, 22.0, 96.0, 46.0),
+            content_box: ui_rect(12.0, 22.0, 96.0, 46.0),
+            children_box: ui_rect(12.0, 22.0, 96.0, 46.0),
+        };
+        let mut style = ContainerStyle::default();
+        style.transform = Some(AffineTransform::rotate(std::f32::consts::FRAC_PI_2));
+        let mut buf = Vec::new();
+        let state = push_box_model(
+            &mut buf, &box_model, &style, 0.0, 0.0, false, true, true, true, 1.0,
+        );
+        pop_box_model(&mut buf, state);
+
+        // Commands: [border translate(10,20), centered transform, content translate(..)].
+        let transforms: Vec<&AffineTransform> = buf
+            .iter()
+            .filter_map(|cmd| match cmd {
+                DrawCommand::PushTransform { transform } => Some(transform),
+                _ => None,
+            })
+            .collect();
+        assert!(transforms.len() >= 2);
+        let centered = transforms[1];
+
+        // Expected: translate(50, 25) * rotate(90deg) * translate(-50, -25).
+        let expected = AffineTransform::translate(50.0, 25.0)
+            .then(&AffineTransform::rotate(std::f32::consts::FRAC_PI_2))
+            .then(&AffineTransform::translate(-50.0, -25.0));
+        assert!((centered.m11 - expected.m11).abs() < 1e-5);
+        assert!((centered.m12 - expected.m12).abs() < 1e-5);
+        assert!((centered.m21 - expected.m21).abs() < 1e-5);
+        assert!((centered.m22 - expected.m22).abs() < 1e-5);
+        assert!((centered.dx - expected.dx).abs() < 1e-5);
+        assert!((centered.dy - expected.dy).abs() < 1e-5);
+
+        // The element's center (local (50, 25)) must stay fixed under rotation.
+        let (cx, cy) = centered.apply(50.0, 25.0);
+        assert!((cx - 50.0).abs() < 1e-5, "center x = {cx}");
+        assert!((cy - 25.0).abs() < 1e-5, "center y = {cy}");
+    }
+
+    #[test]
     fn visible_overflow_does_not_clip_block_contents() {
         let box_model = ui_layout::BoxModel {
             sticky_edges: None,
@@ -1877,7 +2183,10 @@ mod tests {
 
     fn visible_container_info(children: Vec<InfoNode>) -> InfoNode {
         let style = ContainerStyle {
-            background: Background::Color(Color(255, 0, 0, 255)),
+            background: Background {
+                color: Some(Color(255, 0, 0, 255)),
+                layers: Vec::new(),
+            },
             ..ContainerStyle::default()
         };
         mk_info_node(
@@ -2083,7 +2392,10 @@ mod tests {
                     scroll_offset_x: 0.0,
                     scroll_offset_y: 0.0,
                     style: ContainerStyle {
-                        background: Background::Color(color),
+                        background: Background {
+                            color: Some(color),
+                            layers: Vec::new(),
+                        },
                         z_index,
                         ..ContainerStyle::default()
                     },
@@ -2553,6 +2865,288 @@ mod tests {
                 .filter(|cmd| matches!(cmd, DrawCommand::Fill { .. }))
                 .count(),
             0
+        );
+    }
+
+    #[test]
+    fn canvas_background_inherits_from_body_when_html_has_none() {
+        // html has no background, body has red → canvas paints red.
+        let body_info = mk_info_node(
+            NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: ContainerStyle {
+                    background: Background {
+                        color: Some(Color(255, 0, 0, 255)),
+                        layers: Vec::new(),
+                    },
+                    tag: Some("body".to_string()),
+                    ..ContainerStyle::default()
+                },
+                role: ContainerRole::Normal,
+            },
+            Vec::new(),
+        );
+        let html_info = mk_info_node(
+            NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: ContainerStyle {
+                    background: Background::default(),
+                    tag: Some("html".to_string()),
+                    ..ContainerStyle::default()
+                },
+                role: ContainerRole::Normal,
+            },
+            vec![body_info],
+        );
+        let root_info = mk_info_node(
+            NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: ContainerStyle::default(),
+                role: ContainerRole::Normal,
+            },
+            vec![html_info],
+        );
+
+        let mut commands = Vec::new();
+        generate_draw_commands(&mut commands, &LayoutNode::new(Style::default()), &root_info, (100.0, 100.0));
+
+        let fills: Vec<_> = commands
+            .iter()
+            .filter_map(|cmd| match cmd {
+                DrawCommand::Fill {
+                    paint:
+                        Paint {
+                            brush: Brush::Solid(color),
+                            ..
+                        },
+                    ..
+                } => Some(*color),
+                _ => None,
+            })
+            .collect();
+
+        // Canvas paints body's red, then html paints (none), then body paints red again.
+        assert!(
+            fills.iter().any(|c| *c == Color(255, 0, 0, 255)),
+            "canvas should paint body's red background, got {fills:?}"
+        );
+    }
+
+    #[test]
+    fn canvas_background_uses_html_when_both_specified() {
+        // html has green, body has red → canvas paints html's green (html wins).
+        let body_info = mk_info_node(
+            NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: ContainerStyle {
+                    background: Background {
+                        color: Some(Color(255, 0, 0, 255)),
+                        layers: Vec::new(),
+                    },
+                    tag: Some("body".to_string()),
+                    ..ContainerStyle::default()
+                },
+                role: ContainerRole::Normal,
+            },
+            Vec::new(),
+        );
+        let html_info = mk_info_node(
+            NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: ContainerStyle {
+                    background: Background {
+                        color: Some(Color(0, 255, 0, 255)),
+                        layers: Vec::new(),
+                    },
+                    tag: Some("html".to_string()),
+                    ..ContainerStyle::default()
+                },
+                role: ContainerRole::Normal,
+            },
+            vec![body_info],
+        );
+        let root_info = mk_info_node(
+            NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: ContainerStyle::default(),
+                role: ContainerRole::Normal,
+            },
+            vec![html_info],
+        );
+
+        let mut commands = Vec::new();
+        generate_draw_commands(&mut commands, &LayoutNode::new(Style::default()), &root_info, (100.0, 100.0));
+
+        let fills: Vec<_> = commands
+            .iter()
+            .filter_map(|cmd| match cmd {
+                DrawCommand::Fill {
+                    paint:
+                        Paint {
+                            brush: Brush::Solid(color),
+                            ..
+                        },
+                    ..
+                } => Some(*color),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            fills.iter().any(|c| *c == Color(0, 255, 0, 255)),
+            "canvas should paint html's green background, got {fills:?}"
+        );
+        assert!(
+            fills[0] == Color(0, 255, 0, 255),
+            "first canvas fill should be html's green background"
+        );
+    }
+
+    #[test]
+    fn canvas_background_transparent_when_neither_html_nor_body_has_background() {
+        let body_info = mk_info_node(
+            NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: ContainerStyle {
+                    tag: Some("body".to_string()),
+                    ..ContainerStyle::default()
+                },
+                role: ContainerRole::Normal,
+            },
+            Vec::new(),
+        );
+        let html_info = mk_info_node(
+            NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: ContainerStyle {
+                    tag: Some("html".to_string()),
+                    ..ContainerStyle::default()
+                },
+                role: ContainerRole::Normal,
+            },
+            vec![body_info],
+        );
+        let root_info = mk_info_node(
+            NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: ContainerStyle::default(),
+                role: ContainerRole::Normal,
+            },
+            vec![html_info],
+        );
+
+        let mut commands = Vec::new();
+        generate_draw_commands(&mut commands, &LayoutNode::new(Style::default()), &root_info, (100.0, 100.0));
+
+        let fill_count = commands
+            .iter()
+            .filter(|cmd| matches!(cmd, DrawCommand::Fill { .. }))
+            .count();
+        assert_eq!(
+            fill_count, 0,
+            "no canvas background fill when neither html nor body has background"
+        );
+    }
+
+    #[test]
+    fn canvas_background_inherits_body_gradient_when_html_has_none() {
+        use crate::engine::layouter::types::{Gradient, GradientKind, GradientSpread};
+
+        let gradient = Gradient {
+            kind: GradientKind::Linear { angle: 0.0 },
+            stops: Vec::new(),
+            spread: GradientSpread::Pad,
+        };
+        let body_info = mk_info_node(
+            NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: ContainerStyle {
+                    background: Background {
+                        color: None,
+                        layers: vec![crate::engine::layouter::types::BackgroundLayer {
+                            image: Some(crate::engine::layouter::types::BackgroundImage::Gradient(
+                                gradient,
+                            )),
+                            position: Default::default(),
+                            size: Default::default(),
+                            repeat: Default::default(),
+                        }],
+                    },
+                    tag: Some("body".to_string()),
+                    ..ContainerStyle::default()
+                },
+                role: ContainerRole::Normal,
+            },
+            Vec::new(),
+        );
+        let html_info = mk_info_node(
+            NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: ContainerStyle {
+                    background: Background::default(),
+                    tag: Some("html".to_string()),
+                    ..ContainerStyle::default()
+                },
+                role: ContainerRole::Normal,
+            },
+            vec![body_info],
+        );
+        let root_info = mk_info_node(
+            NodeKind::Container {
+                scroll_x: false,
+                scroll_y: false,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+                style: ContainerStyle::default(),
+                role: ContainerRole::Normal,
+            },
+            vec![html_info],
+        );
+
+        let mut commands = Vec::new();
+        generate_draw_commands(&mut commands, &LayoutNode::new(Style::default()), &root_info, (100.0, 100.0));
+
+        let gradient_count = commands
+            .iter()
+            .filter(|cmd| matches!(cmd, DrawCommand::Fill { paint: Paint { brush: Brush::Gradient(_), .. }, .. }))
+            .count();
+
+        assert!(
+            gradient_count > 0,
+            "canvas should paint body's gradient layer"
         );
     }
 }
