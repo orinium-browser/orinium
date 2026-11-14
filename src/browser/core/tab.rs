@@ -296,6 +296,10 @@ impl Tab {
     /// This is shared by regular browser tabs and the DevTools tab embedded in
     /// the browser chrome so both follow the same loading and error handling
     /// path.
+    ///
+    /// `generation` identifies the document that issued the fetch. Results from
+    /// a previous navigation (generation mismatch) are dropped so stale
+    /// resources cannot mutate the current document state.
     pub(crate) fn deliver_fetch(
         &mut self,
         kind: FetchKind,
@@ -303,7 +307,17 @@ impl Tab {
         origin: Origin,
         permissions: Permissions,
         response: Result<BrowserResponse, BrowserNetworkError>,
+        generation: u64,
     ) {
+        if generation != self.document_generation {
+            log::info!(
+                "Dropping stale fetch delivery for generation={} (current={}) url={}",
+                generation,
+                self.document_generation,
+                url
+            );
+            return;
+        }
         match response {
             Ok(resp) => match kind {
                 FetchKind::Html => {
@@ -611,14 +625,14 @@ impl Tab {
         match state {
             ElementState::Pressed => {
                 let dismiss_path = path.clone();
-                let popup_consumed = crate::engine::input::dispatch_pointer(
+                let pointer_consumed = crate::engine::input::dispatch_pointer(
                     &path,
                     PointerEvent::Down { x: px, y: py },
                 );
-                if !popup_consumed {
-                    repaint |=
-                        crate::engine::input::dismiss_open_popups(info, &dismiss_path, px, py);
-                }
+                // Popup dismissal is decided by hit-testing, not by whether an
+                // arbitrary custom node consumed the event. Presses inside the
+                // popup (or on its owner) are preserved by the hit path check.
+                repaint |= crate::engine::input::dismiss_open_popups(info, &dismiss_path, px, py);
 
                 let input_target = path.iter().find_map(|hit| {
                     if let layouter::types::NodeKind::Custom { node, .. } = &hit.info.kind
@@ -644,7 +658,7 @@ impl Tab {
                 });
                 let active_dom_path = crate::engine::input::hit_dom_path(&path);
 
-                repaint |= input_focused | popup_consumed;
+                repaint |= input_focused | pointer_consumed;
 
                 if let Some(href) = href {
                     self.move_to(&href);

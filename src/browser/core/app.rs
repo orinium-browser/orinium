@@ -430,7 +430,7 @@ impl BrowserApp {
                     continue;
                 }
             }
-            ui.deliver_fetch(&tab_id, kind, url, origin, permissions, msg.response);
+            ui.deliver_fetch(&tab_id, kind, url, origin, permissions, msg.response, generation);
         }
     }
 }

@@ -485,9 +485,10 @@ impl Chrome for BasicChrome {
         origin: crate::engine::origin::Origin,
         permissions: crate::engine::permissions::Permissions,
         response: Result<BrowserResponse, BrowserNetworkError>,
+        generation: u64,
     ) {
         self.debug_pane
-            .deliver_fetch(kind, url, origin, permissions, response);
+            .deliver_fetch(kind, url, origin, permissions, response, generation);
     }
 
     fn sync_url(&mut self, url: Option<&str>) {
@@ -1110,6 +1111,7 @@ mod tests {
                 crate::engine::origin::Origin::internal(),
                 crate::engine::permissions::Permissions::chrome(),
                 Ok(response(&format!("<html><body>{pane_body}</body></html>"))),
+                chrome.debug_pane.document_generation(),
             );
 
             let mut pane_buf = Vec::new();

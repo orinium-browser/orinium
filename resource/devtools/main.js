@@ -25,6 +25,7 @@
   var traceEnabled = true;
   var traceLastSeq = 0;
   var emptyNotes = {};
+  var targetUrl = null;
   var emptyNoteEls = document.getElementsByClassName("view-empty");
   for (var noteIndex = 0; noteIndex < emptyNoteEls.length; noteIndex += 1) {
     emptyNotes[emptyNoteEls[noteIndex].getAttribute("data-for")] =
@@ -232,7 +233,6 @@
         head.appendChild(valueHeader);
         attributesEl.appendChild(head);
 
-        targetEl.textContent = "<" + data.tag + ">";
         var attributes = data.attributes || [];
         for (var i = 0; i < attributes.length; i += 1) {
           var tr = document.createElement("tr");
@@ -530,9 +530,21 @@
     call("getVersion")
       .then(function (data) {
         setStatus("connected");
+        var navigated = data.url !== targetUrl;
         var domChanged = data.domVersion !== domVersion;
         var layoutChanged = data.layoutVersion !== layoutVersion;
-        if (domChanged) {
+        if (navigated) {
+          // Cross-document navigation: the inspected page changed. Reset the
+          // version trackers so a stale version number cannot mask the new
+          // document, drop the selection, and reload the whole tree.
+          targetUrl = data.url;
+          targetEl.textContent = targetUrl;
+          domVersion = null;
+          layoutVersion = null;
+          selectedId = null;
+          clearDetails();
+          return refresh();
+        } else if (domChanged) {
           domVersion = data.domVersion;
           layoutVersion = data.layoutVersion;
           return refresh();

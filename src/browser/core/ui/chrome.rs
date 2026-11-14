@@ -93,6 +93,7 @@ pub trait Chrome: std::fmt::Debug {
         origin: crate::engine::origin::Origin,
         permissions: crate::engine::permissions::Permissions,
         response: Result<BrowserResponse, BrowserNetworkError>,
+        generation: u64,
     );
 
     /// Reflects the active tab's URL, if the chrome shows one.

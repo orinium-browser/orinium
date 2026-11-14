@@ -10,7 +10,7 @@ use crate::engine::animation::{AnimatedOverrides, AnimationRuntime};
 use crate::engine::bridge::audio::AudioSinkFactory;
 use crate::engine::image_decoder::ImageDecoder;
 use crate::engine::layouter::types::{
-    Background, Color, ColorScheme, ContainerStyle, CursorStyle, FontStyle, TextAlign,
+    Color, ColorScheme, ContainerStyle, CursorStyle, FontStyle, TextAlign,
     TextFlowStyle, TextStyle, Visibility, WhiteSpace,
 };
 use crate::engine::{
@@ -2807,11 +2807,10 @@ fn push_container_computed(declarations: &mut Vec<(String, String)>, style: &Con
     if let Some(ref name) = style.anchor.position_anchor {
         declarations.push(("position-anchor".into(), name.clone()));
     }
-    match &style.background {
-        Background::Color(color) | Background::Image { color, .. } if color.3 > 0 => {
-            declarations.push(("background-color".into(), css_color(color)));
-        }
-        _ => {}
+    if let Some(color) = style.background.color
+        && color.3 > 0
+    {
+        declarations.push(("background-color".into(), css_color(&color)));
     }
 }
 

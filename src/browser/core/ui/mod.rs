@@ -369,11 +369,12 @@ impl BrowserUi {
         origin: Origin,
         permissions: Permissions,
         response: Result<BrowserResponse, BrowserNetworkError>,
+        generation: u64,
     ) {
         if tab_id == &TabId(0) {
             self.renderer
                 .chrome
-                .deliver_fetch(kind, url, origin, permissions, response);
+                .deliver_fetch(kind, url, origin, permissions, response, generation);
             return;
         }
 
@@ -383,7 +384,7 @@ impl BrowserUi {
         };
 
         log::info!("Delivering fetch result in BrowserUi for tab_id={}", tab_id);
-        tab.deliver_fetch(kind, url, origin, permissions, response);
+        tab.deliver_fetch(kind, url, origin, permissions, response, generation);
     }
 
     /// Handles a `winit` window event for this window and returns a `BrowserCommand`.
@@ -803,6 +804,35 @@ impl BrowserUi {
     }
 
     fn handle_devtools_request(&mut self, id: u64, method: String, params: String) {
+        // getVersion does not strictly require a page tab: when a page is
+        // loaded, return its real version info so the DevTools pane can load
+        // the DOM tree. When no page is loaded yet, return a minimal response
+        // so the DevTools pane can connect and show "connected" status.
+        if method == "getVersion" {
+            if let Some(target_tab) = self.active_tab_mut() {
+                match target_tab.inspect("getVersion", "{}") {
+                    Ok(data) => {
+                        let response =
+                            serde_json::json!({ "ok": true, "data": data }).to_string();
+                        self.renderer.chrome.on_devtools_response(id, response);
+                        return;
+                    }
+                    Err(_) => {}
+                }
+            }
+            let response = serde_json::json!({
+                "ok": true,
+                "data": {
+                    "domVersion": 0,
+                    "layoutVersion": 0,
+                    "url": null,
+                }
+            })
+            .to_string();
+            self.renderer.chrome.on_devtools_response(id, response);
+            return;
+        }
+
         let response = match self.active_tab_mut() {
             Some(target_tab) => match target_tab.inspect(&method, &params) {
                 Ok(data) => serde_json::json!({ "ok": true, "data": data }).to_string(),
@@ -1054,6 +1084,36 @@ mod tests {
                 .iter()
                 .any(|child| child["type"] == "element" && child["tag"] == "html"),
             "document root must expose the <html> element: {doc}"
+        );
+    }
+
+    #[test]
+    fn get_version_reports_document_url() {
+        let mut ui = ui_with_one_tab();
+        ui.active_tab_mut()
+            .unwrap()
+            .navigate("https://example.test/index.html".parse().expect("url"));
+        ui.active_tab_mut()
+            .unwrap()
+            .on_fetch_succeeded_html("<html><body>hi</body></html>".to_string());
+
+        let version = ui
+            .active_tab_mut()
+            .unwrap()
+            .inspect("getVersion", "{}")
+            .expect("version payload");
+        assert_eq!(
+            version["url"].as_str(),
+            Some("https://example.test/index.html"),
+            "getVersion must expose the inspected document URL: {version}"
+        );
+        assert!(
+            version["domVersion"].is_u64(),
+            "domVersion must be a number: {version}"
+        );
+        assert!(
+            version["layoutVersion"].is_u64(),
+            "layoutVersion must be a number: {version}"
         );
     }
 }

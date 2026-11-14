@@ -465,9 +465,12 @@ pub(super) fn handle(webview: &mut WebView, method: &str, params: &str) -> Resul
         "getVersion" => Ok(json!({
             // The DOM version resets when a script mutation commits a rebuilt
             // tree, so pair it with the monotonic layout version to detect
-            // every kind of change from the frontend's polling loop.
+            // every kind of change from the frontend's polling loop. The URL
+            // lets the frontend detect cross-document navigation even when the
+            // version counters happen to coincide.
             "domVersion": info.dom.version(),
             "layoutVersion": webview.layout_applied_version,
+            "url": info.document_url.to_string(),
         })),
         "getDocument" => {
             let root = Rc::clone(&info.dom.root);
