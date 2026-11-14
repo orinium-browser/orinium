@@ -41,6 +41,8 @@ pub struct InputTextComponent {
     blink_last_toggle: Mutex<Option<Instant>>,
     on_value_change: Option<Arc<OnValueChange>>,
     on_enter: Option<Arc<OnValueChange>>,
+    on_copy: Option<Arc<OnValueChange>>,
+    on_cut: Option<Arc<OnValueChange>>,
 }
 
 impl std::fmt::Debug for InputTextComponent {
@@ -67,6 +69,8 @@ impl InputTextComponent {
                 preedit: String::new(),
                 caret,
                 focused: false,
+                selection_start: None,
+                selection_end: None,
             }),
             placeholder: placeholder.into(),
             measurer,
@@ -77,6 +81,8 @@ impl InputTextComponent {
             blink_last_toggle: Mutex::new(None),
             on_value_change: None,
             on_enter: None,
+            on_copy: None,
+            on_cut: None,
         }
     }
 
@@ -113,6 +119,8 @@ impl InputTextComponent {
         state.value = value;
         state.caret = state.value.len();
         state.preedit.clear();
+        state.selection_start = None;
+        state.selection_end = None;
         self.dirty.store(true, Ordering::Relaxed);
     }
 
@@ -156,6 +164,25 @@ impl InputTextComponent {
     }
 
     fn handle_key(state: &mut InputTextState, key: InputTextKey) {
+        // If a selection is active, Backspace/Delete removes the selected range
+        // instead of a single character.
+        if let (Some(start), Some(end)) = (state.selection_start, state.selection_end) {
+            match key {
+                InputTextKey::Backspace | InputTextKey::Delete => {
+                    let start = Self::clamp_caret(&state.value, start);
+                    let end = Self::clamp_caret(&state.value, end);
+                    if end > start {
+                        state.value.replace_range(start..end, "");
+                    }
+                    state.selection_start = None;
+                    state.selection_end = None;
+                    state.caret = Self::clamp_caret(&state.value, start);
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         match key {
             InputTextKey::Backspace if state.caret > 0 => {
                 let previous = Self::previous_boundary(&state.value, state.caret);
@@ -341,6 +368,17 @@ impl CustomNode for InputTextComponent {
                 }
                 self.push_undo(self.snapshot());
                 let mut state = self.state.lock().unwrap();
+                // If a selection is active, replace it with the inserted text.
+                if let (Some(start), Some(end)) = (state.selection_start, state.selection_end) {
+                    let start = Self::clamp_caret(&state.value, start);
+                    let end = Self::clamp_caret(&state.value, end);
+                    if end > start {
+                        state.value.replace_range(start..end, "");
+                        state.selection_start = None;
+                        state.selection_end = None;
+                        state.caret = Self::clamp_caret(&state.value, start);
+                    }
+                }
                 let caret = Self::clamp_caret(&state.value, state.caret);
                 state.value.insert_str(caret, &text);
                 state.caret = Self::clamp_caret(&state.value, caret + text.len());
@@ -398,6 +436,87 @@ impl CustomNode for InputTextComponent {
                     state.preedit.clear();
                     self.dirty.store(true, Ordering::Relaxed);
                 }
+            }
+            InputTextEvent::Select { start, end } => {
+                let mut state = self.state.lock().unwrap();
+                let len = state.value.len();
+                let start = start.map(|s| Self::clamp_caret(&state.value, s));
+                let end = end.map(|e| Self::clamp_caret(&state.value, e));
+                match (start, end) {
+                    (Some(s), Some(e)) if s <= e => {
+                        state.selection_start = Some(s);
+                        state.selection_end = Some(e);
+                        state.caret = Self::clamp_caret(&state.value, e);
+                    }
+                    (Some(s), None) => {
+                        state.selection_start = Some(s);
+                        state.selection_end = Some(len);
+                        state.caret = Self::clamp_caret(&state.value, len);
+                    }
+                    (None, Some(e)) => {
+                        state.selection_start = Some(0);
+                        state.selection_end = Some(e);
+                        state.caret = Self::clamp_caret(&state.value, e);
+                    }
+                    _ => {
+                        // Both None or invalid: clear selection.
+                        state.selection_start = None;
+                        state.selection_end = None;
+                    }
+                }
+                self.dirty.store(true, Ordering::Relaxed);
+            }
+            InputTextEvent::Copy => {
+                let state = self.state.lock().unwrap();
+                if let (Some(start), Some(end)) = (state.selection_start, state.selection_end) {
+                    let start = Self::clamp_caret(&state.value, start);
+                    let end = Self::clamp_caret(&state.value, end);
+                    if end > start {
+                        if let Some(ref cb) = self.on_copy {
+                            cb(&state.value[start..end]);
+                        }
+                    }
+                }
+            }
+            InputTextEvent::Cut => {
+                self.push_undo(self.snapshot());
+                let mut state = self.state.lock().unwrap();
+                if let (Some(start), Some(end)) = (state.selection_start, state.selection_end) {
+                    let start = Self::clamp_caret(&state.value, start);
+                    let end = Self::clamp_caret(&state.value, end);
+                    if end > start {
+                        let selected = state.value[start..end].to_string();
+                        state.value.replace_range(start..end, "");
+                        state.selection_start = None;
+                        state.selection_end = None;
+                        state.caret = Self::clamp_caret(&state.value, start);
+                        self.dirty.store(true, Ordering::Relaxed);
+                        if let Some(ref cb) = self.on_copy {
+                            cb(&selected);
+                        }
+                        if let Some(ref cb) = self.on_cut {
+                            cb(&selected);
+                        }
+                        return true;
+                    }
+                }
+                state.selection_start = None;
+                state.selection_end = None;
+                self.dirty.store(true, Ordering::Relaxed);
+            }
+            InputTextEvent::SelectAll => {
+                let mut state = self.state.lock().unwrap();
+                let len = state.value.len();
+                if len > 0 {
+                    state.selection_start = Some(0);
+                    state.selection_end = Some(len);
+                    state.caret = len;
+                } else {
+                    state.selection_start = None;
+                    state.selection_end = None;
+                    state.caret = 0;
+                }
+                self.dirty.store(true, Ordering::Relaxed);
             }
         }
         true
@@ -778,5 +897,136 @@ mod tests {
         // Move right to end (5)
         input.handle_text_input(InputTextEvent::Key(InputTextKey::Right));
         assert_eq!(input.state().caret, 5);
+    }
+
+    #[test]
+    fn select_all_selects_entire_text() {
+        let input = make_component("abc", "");
+        input.handle_text_input(InputTextEvent::SelectAll);
+        let state = input.state();
+        assert_eq!(state.selection_start, Some(0));
+        assert_eq!(state.selection_end, Some(3));
+        assert_eq!(state.caret, 3);
+    }
+
+    #[test]
+    fn select_all_on_empty_clears_selection() {
+        let input = make_component("", "");
+        input.handle_text_input(InputTextEvent::SelectAll);
+        let state = input.state();
+        assert_eq!(state.selection_start, None);
+        assert_eq!(state.selection_end, None);
+        assert_eq!(state.caret, 0);
+    }
+
+    #[test]
+    fn select_none_clears_selection() {
+        let input = make_component("abc", "");
+        input.handle_text_input(InputTextEvent::SelectAll);
+        assert!(input.state().selection_start.is_some());
+        input.handle_text_input(InputTextEvent::Select {
+            start: None,
+            end: None,
+        });
+        let state = input.state();
+        assert_eq!(state.selection_start, None);
+        assert_eq!(state.selection_end, None);
+    }
+
+    #[test]
+    fn typing_with_selection_replaces_selection() {
+        let input = make_component("abc", "");
+        input.handle_text_input(InputTextEvent::SelectAll);
+        input.handle_text_input(InputTextEvent::Insert("X".into()));
+        let state = input.state();
+        assert_eq!(state.value, "X");
+        assert_eq!(state.caret, 1);
+        assert_eq!(state.selection_start, None);
+        assert_eq!(state.selection_end, None);
+    }
+
+    #[test]
+    fn backspace_with_selection_deletes_selection() {
+        let input = make_component("abc", "");
+        input.handle_text_input(InputTextEvent::SelectAll);
+        input.handle_text_input(InputTextEvent::Key(InputTextKey::Backspace));
+        let state = input.state();
+        assert_eq!(state.value, "");
+        assert_eq!(state.caret, 0);
+        assert_eq!(state.selection_start, None);
+        assert_eq!(state.selection_end, None);
+    }
+
+    #[test]
+    fn delete_with_selection_deletes_selection() {
+        let input = make_component("abc", "");
+        input.handle_text_input(InputTextEvent::SelectAll);
+        input.handle_text_input(InputTextEvent::Key(InputTextKey::Delete));
+        let state = input.state();
+        assert_eq!(state.value, "");
+        assert_eq!(state.caret, 0);
+        assert_eq!(state.selection_start, None);
+        assert_eq!(state.selection_end, None);
+    }
+
+    #[test]
+    fn copy_fires_callback_with_selected_text() {
+        use std::sync::{Arc, Mutex};
+        let received: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let received_clone = Arc::clone(&received);
+        let cb: Arc<OnValueChange> = Arc::new(move |v: &str| {
+            received_clone.lock().unwrap().push(v.to_string());
+        });
+        let mut input = make_component("abc", "");
+        input.on_copy = Some(cb);
+        input.handle_text_input(InputTextEvent::SelectAll);
+        input.handle_text_input(InputTextEvent::Copy);
+        assert_eq!(*received.lock().unwrap(), vec!["abc"]);
+    }
+
+    #[test]
+    fn cut_fires_callbacks_and_removes_selection() {
+        use std::sync::{Arc, Mutex};
+        let received: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let received_clone = Arc::clone(&received);
+        let cb: Arc<OnValueChange> = Arc::new(move |v: &str| {
+            received_clone.lock().unwrap().push(v.to_string());
+        });
+        let mut input = make_component("abc", "");
+        input.on_copy = Some(cb.clone());
+        input.on_cut = Some(cb);
+        input.handle_text_input(InputTextEvent::SelectAll);
+        input.handle_text_input(InputTextEvent::Cut);
+        assert_eq!(*received.lock().unwrap(), vec!["abc", "abc"]);
+        let state = input.state();
+        assert_eq!(state.value, "");
+        assert_eq!(state.caret, 0);
+        assert_eq!(state.selection_start, None);
+        assert_eq!(state.selection_end, None);
+    }
+
+    #[test]
+    fn set_value_clears_selection() {
+        let input = make_component("abc", "");
+        input.handle_text_input(InputTextEvent::SelectAll);
+        assert!(input.state().selection_start.is_some());
+        input.set_value("xyz");
+        let state = input.state();
+        assert_eq!(state.value, "xyz");
+        assert_eq!(state.caret, 3);
+        assert_eq!(state.selection_start, None);
+        assert_eq!(state.selection_end, None);
+    }
+
+    #[test]
+    fn partial_selection_insert_replaces_range() {
+        let input = make_component("hello", "");
+        input.handle_text_input(InputTextEvent::Select { start: Some(1), end: Some(4) });
+        input.handle_text_input(InputTextEvent::Insert("X".into()));
+        let state = input.state();
+        assert_eq!(state.value, "hXo");
+        assert_eq!(state.caret, 2);
+        assert_eq!(state.selection_start, None);
+        assert_eq!(state.selection_end, None);
     }
 }
