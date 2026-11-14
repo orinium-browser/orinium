@@ -7,7 +7,7 @@ use crate::engine::animation::types::{
     AnimationDirection, AnimationFillMode, AnimationPlayState, AnimationSpec, Easing,
     IterationCount, KeyframesRule, TransitionSpec,
 };
-use crate::engine::css::values::{CssValue, Unit};
+use crate::engine::css::values::CssValue;
 use crate::engine::layouter::css_resolver::KeyframesRegistry;
 use crate::engine::layouter::dom_snapshot::NodeId;
 use crate::engine::layouter::types::ColorScheme;
@@ -486,8 +486,18 @@ fn sample_keyframes(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::engine::animation::types::{Easing, KeyframeStop, TransitionSpec};
+    use super::{AnimationInputs, AnimationRuntime, ElementAnimationState};
+
+    use std::collections::HashMap;
+
+    use crate::engine::animation::types::{
+        AnimationDirection, AnimationFillMode, AnimationPlayState, AnimationSpec, Easing,
+        IterationCount, KeyframeStop, KeyframesRule, TransitionSpec,
+    };
+    use crate::engine::css::values::{CssValue, Unit};
+    use crate::engine::layouter::css_resolver::KeyframesRegistry;
+    use crate::engine::layouter::dom_snapshot::NodeId;
+    use crate::engine::layouter::types::ColorScheme;
 
     fn inputs_with_opacity(node: NodeId, opacity: f32, transition: bool) -> AnimationInputs {
         let mut base = HashMap::new();

@@ -745,8 +745,7 @@ pub fn build_layout_and_info_from_snapshot(
                     base_values
                         .entry("transform".to_string())
                         .or_insert(CssValue::Keyword("none".into()));
-                    if let Some(color) = container_style.background.color
-                    {
+                    if let Some(color) = container_style.background.color {
                         base_values
                             .entry("background-color".to_string())
                             .or_insert_with(|| {
@@ -796,8 +795,10 @@ pub fn build_layout_and_info_from_snapshot(
             }
 
             for layer in &mut container_style.background.layers {
-                if let Some(crate::engine::layouter::types::BackgroundImage::Image { source, image }) =
-                    &mut layer.image
+                if let Some(crate::engine::layouter::types::BackgroundImage::Image {
+                    source,
+                    image,
+                }) = &mut layer.image
                 {
                     *image = images.get(source).cloned();
                 }

@@ -102,7 +102,10 @@ pub fn parse_background_size(value: &CssValue, font_size: f32) -> Vec<Background
                     background_dimension(group[0], font_size),
                     background_dimension(group[1], font_size),
                 ) {
-                    return BackgroundSize::Explicit { width: w, height: h };
+                    return BackgroundSize::Explicit {
+                        width: w,
+                        height: h,
+                    };
                 }
             }
             if group.len() == 1 {
@@ -388,7 +391,9 @@ pub fn apply_background_shorthand_geometry(
     {
         // Per-layer repeat from url() sublists.
         for (i, arg_group) in args.iter().enumerate() {
-            if let Some(repeat) = arg_group.iter().find_map(|v| parse_single_background_repeat(v))
+            if let Some(repeat) = arg_group
+                .iter()
+                .find_map(|v| parse_single_background_repeat(v))
             {
                 if let Some(layer) = container_style.background.layers.get_mut(i) {
                     layer.repeat = repeat;
@@ -397,9 +402,10 @@ pub fn apply_background_shorthand_geometry(
         }
         // Per-layer size from url() sublists (after slash within each sublist).
         for (i, arg_group) in args.iter().enumerate() {
-            if let Some(slash) = arg_group.iter().position(|v| {
-                matches!(v, CssValue::Keyword(keyword) if keyword.as_str() == "/")
-            }) {
+            if let Some(slash) = arg_group
+                .iter()
+                .position(|v| matches!(v, CssValue::Keyword(keyword) if keyword.as_str() == "/"))
+            {
                 let size_values: Vec<CssValue> = arg_group[slash + 1..]
                     .iter()
                     .take_while(|v| {
@@ -430,9 +436,9 @@ pub fn apply_background_shorthand_geometry(
         }
         // Per-layer position from url() sublists (before slash).
         for (i, arg_group) in args.iter().enumerate() {
-            let slash = arg_group.iter().position(|v| {
-                matches!(v, CssValue::Keyword(keyword) if keyword.as_str() == "/")
-            });
+            let slash = arg_group
+                .iter()
+                .position(|v| matches!(v, CssValue::Keyword(keyword) if keyword.as_str() == "/"));
             let pos_items: Vec<CssValue> = arg_group[..slash.unwrap_or(arg_group.len())]
                 .iter()
                 .filter(|v| {
@@ -478,9 +484,10 @@ pub fn apply_background_shorthand_geometry(
 
     // Per-layer size: find slash within each group.
     for (i, group) in groups.iter().enumerate() {
-        if let Some(slash) = group.iter().position(|v| {
-            matches!(v, CssValue::Keyword(keyword) if keyword.as_str() == "/")
-        }) {
+        if let Some(slash) = group
+            .iter()
+            .position(|v| matches!(v, CssValue::Keyword(keyword) if keyword.as_str() == "/"))
+        {
             let size_values: Vec<CssValue> = group[slash + 1..]
                 .iter()
                 .take_while(|v| {
@@ -512,9 +519,9 @@ pub fn apply_background_shorthand_geometry(
 
     // Per-layer position: position values before slash within each group.
     for (i, group) in groups.iter().enumerate() {
-        let slash = group.iter().position(|v| {
-            matches!(v, CssValue::Keyword(keyword) if keyword.as_str() == "/")
-        });
+        let slash = group
+            .iter()
+            .position(|v| matches!(v, CssValue::Keyword(keyword) if keyword.as_str() == "/"));
         let pos_items: Vec<CssValue> = group[..slash.unwrap_or(group.len())]
             .iter()
             .filter(|v| {
@@ -599,9 +606,9 @@ fn parse_shorthand_item(
     color: &mut Option<Color>,
     layers: &mut Vec<BackgroundLayer>,
 ) {
-    if let Some(layer) = parse_single_background_layer(
-        "", v, text_style, text_flow_style, color_scheme,
-    ) {
+    if let Some(layer) =
+        parse_single_background_layer("", v, text_style, text_flow_style, color_scheme)
+    {
         match layer {
             ParsedLayer::Color(c) => *color = Some(c),
             ParsedLayer::Image(layer) => layers.push(layer),
@@ -629,9 +636,7 @@ fn parse_url_layer_group(
                     *color = Some(Color(r, g, b, a));
                 }
             }
-            CssValue::Function(fn_name, args)
-                if fn_name.eq_ignore_ascii_case("url") =>
-            {
+            CssValue::Function(fn_name, args) if fn_name.eq_ignore_ascii_case("url") => {
                 // Nested url() call: extract the image source recursively.
                 for nested_group in args.iter() {
                     for nested_item in nested_group.iter() {
@@ -775,8 +780,7 @@ fn parse_single_background_layer(
                 )
         );
     if is_color_value {
-        return resolve_css_color(name, v, color_scheme)
-            .map(ParsedLayer::Color);
+        return resolve_css_color(name, v, color_scheme).map(ParsedLayer::Color);
     }
 
     None

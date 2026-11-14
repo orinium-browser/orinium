@@ -10,8 +10,8 @@ use crate::engine::animation::{AnimatedOverrides, AnimationRuntime};
 use crate::engine::bridge::audio::AudioSinkFactory;
 use crate::engine::image_decoder::ImageDecoder;
 use crate::engine::layouter::types::{
-    Color, ColorScheme, ContainerStyle, CursorStyle, FontStyle, TextAlign,
-    TextFlowStyle, TextStyle, Visibility, WhiteSpace,
+    Color, ColorScheme, ContainerStyle, CursorStyle, FontStyle, TextAlign, TextFlowStyle,
+    TextStyle, Visibility, WhiteSpace,
 };
 use crate::engine::{
     css::{

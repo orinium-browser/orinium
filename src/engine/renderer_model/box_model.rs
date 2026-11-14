@@ -985,14 +985,22 @@ fn emit_canvas_background(cmd_buf: &mut Vec<DrawCommand>, info: &InfoNode, viewp
                         .iter()
                         .find_map(|child| solid_color(child.kind.container_bg()))
                 };
-                solid_color(info.kind.container_bg()).or_else(child_bg).and_then(|_| {
-                    // Return a reference to the first background with visible color.
-                    info.kind.container_bg()                                .filter(|bg| has_visible_background(bg)).or_else(|| {
-                        info.children.iter().find_map(|child| {
-                            child.kind.container_bg()                                .filter(|bg| has_visible_background(bg))
-                        })
+                solid_color(info.kind.container_bg())
+                    .or_else(child_bg)
+                    .and_then(|_| {
+                        // Return a reference to the first background with visible color.
+                        info.kind
+                            .container_bg()
+                            .filter(|bg| has_visible_background(bg))
+                            .or_else(|| {
+                                info.children.iter().find_map(|child| {
+                                    child
+                                        .kind
+                                        .container_bg()
+                                        .filter(|bg| has_visible_background(bg))
+                                })
+                            })
                     })
-                })
             }
         }
     }
@@ -1682,9 +1690,7 @@ fn generate_draw_commands_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::layouter::types::{
-        BackgroundLayer, ContainerRole,
-    };
+    use crate::engine::layouter::types::{BackgroundLayer, ContainerRole};
     use crate::engine::renderer_model::geom::AffineTransform;
     use crate::engine::ui::custom_node::{CustomNode, Popup};
     use std::sync::Arc;
@@ -2917,7 +2923,12 @@ mod tests {
         );
 
         let mut commands = Vec::new();
-        generate_draw_commands(&mut commands, &LayoutNode::new(Style::default()), &root_info, (100.0, 100.0));
+        generate_draw_commands(
+            &mut commands,
+            &LayoutNode::new(Style::default()),
+            &root_info,
+            (100.0, 100.0),
+        );
 
         let fills: Vec<_> = commands
             .iter()
@@ -2993,7 +3004,12 @@ mod tests {
         );
 
         let mut commands = Vec::new();
-        generate_draw_commands(&mut commands, &LayoutNode::new(Style::default()), &root_info, (100.0, 100.0));
+        generate_draw_commands(
+            &mut commands,
+            &LayoutNode::new(Style::default()),
+            &root_info,
+            (100.0, 100.0),
+        );
 
         let fills: Vec<_> = commands
             .iter()
@@ -3063,7 +3079,12 @@ mod tests {
         );
 
         let mut commands = Vec::new();
-        generate_draw_commands(&mut commands, &LayoutNode::new(Style::default()), &root_info, (100.0, 100.0));
+        generate_draw_commands(
+            &mut commands,
+            &LayoutNode::new(Style::default()),
+            &root_info,
+            (100.0, 100.0),
+        );
 
         let fill_count = commands
             .iter()
@@ -3137,11 +3158,27 @@ mod tests {
         );
 
         let mut commands = Vec::new();
-        generate_draw_commands(&mut commands, &LayoutNode::new(Style::default()), &root_info, (100.0, 100.0));
+        generate_draw_commands(
+            &mut commands,
+            &LayoutNode::new(Style::default()),
+            &root_info,
+            (100.0, 100.0),
+        );
 
         let gradient_count = commands
             .iter()
-            .filter(|cmd| matches!(cmd, DrawCommand::Fill { paint: Paint { brush: Brush::Gradient(_), .. }, .. }))
+            .filter(|cmd| {
+                matches!(
+                    cmd,
+                    DrawCommand::Fill {
+                        paint: Paint {
+                            brush: Brush::Gradient(_),
+                            ..
+                        },
+                        ..
+                    }
+                )
+            })
             .count();
 
         assert!(

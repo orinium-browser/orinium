@@ -78,9 +78,11 @@ fn background_position_applies_per_layer() {
         "background-image: linear-gradient(45deg, red, blue), linear-gradient(135deg, green, black);",
     );
     let pos_css = declaration_value("background-position: 0 0, 8px 8px;");
-    let cs =
-        apply_container_declarations(&[("background-image", image_css), ("background-position", pos_css)])
-            .expect("declarations apply");
+    let cs = apply_container_declarations(&[
+        ("background-image", image_css),
+        ("background-position", pos_css),
+    ])
+    .expect("declarations apply");
     assert_eq!(cs.background.layers.len(), 2);
     match cs.background.layers[0].position.x {
         BackgroundPositionAxis::Start(BackgroundOffset::Length(v)) => v,
@@ -103,9 +105,11 @@ fn background_size_single_value_replicated_to_all_layers() {
         "background-image: linear-gradient(45deg, red, blue), linear-gradient(135deg, green, black);",
     );
     let size_css = declaration_value("background-size: 16px 16px;");
-    let cs =
-        apply_container_declarations(&[("background-image", image_css), ("background-size", size_css)])
-            .expect("declarations apply");
+    let cs = apply_container_declarations(&[
+        ("background-image", image_css),
+        ("background-size", size_css),
+    ])
+    .expect("declarations apply");
     assert_eq!(cs.background.layers.len(), 2);
     for layer in &cs.background.layers {
         match layer.size {
@@ -128,9 +132,11 @@ fn background_size_multiple_values_per_layer() {
         "background-image: linear-gradient(45deg, red, blue), linear-gradient(135deg, green, black);",
     );
     let size_css = declaration_value("background-size: 16px, cover;");
-    let cs =
-        apply_container_declarations(&[("background-image", image_css), ("background-size", size_css)])
-            .expect("declarations apply");
+    let cs = apply_container_declarations(&[
+        ("background-image", image_css),
+        ("background-size", size_css),
+    ])
+    .expect("declarations apply");
     assert_eq!(cs.background.layers.len(), 2);
     match cs.background.layers[0].size {
         BackgroundSize::Explicit {
@@ -141,10 +147,7 @@ fn background_size_multiple_values_per_layer() {
         }
         _ => panic!("expected explicit 16px auto"),
     }
-    assert_eq!(
-        cs.background.layers[1].size,
-        BackgroundSize::Cover
-    );
+    assert_eq!(cs.background.layers[1].size, BackgroundSize::Cover);
 }
 
 #[test]
@@ -153,9 +156,11 @@ fn background_repeat_per_layer() {
         "background-image: linear-gradient(45deg, red, blue), linear-gradient(135deg, green, black);",
     );
     let repeat_css = declaration_value("background-repeat: repeat, no-repeat;");
-    let cs =
-        apply_container_declarations(&[("background-image", image_css), ("background-repeat", repeat_css)])
-            .expect("declarations apply");
+    let cs = apply_container_declarations(&[
+        ("background-image", image_css),
+        ("background-repeat", repeat_css),
+    ])
+    .expect("declarations apply");
     assert_eq!(cs.background.layers.len(), 2);
     assert_eq!(cs.background.layers[0].repeat, BackgroundRepeat::Repeat);
     assert_eq!(cs.background.layers[1].repeat, BackgroundRepeat::NoRepeat);
@@ -309,9 +314,10 @@ fn css_parser_preserves_comma_in_shorthand_value() {
 
     // `url("a.png") no-repeat, url("b.png") repeat` → Comma groups are preserved
     // as separate argument sublists within the url() Function.
-    let sheet = CssParser::new(".t { background: url(\"a.png\") no-repeat, url(\"b.png\") repeat; }")
-        .parse()
-        .unwrap();
+    let sheet =
+        CssParser::new(".t { background: url(\"a.png\") no-repeat, url(\"b.png\") repeat; }")
+            .parse()
+            .unwrap();
     let node = sheet.children()[0].children()[0].node();
     let CssNodeType::Declaration { value, .. } = node else {
         panic!("expected a declaration");
@@ -323,8 +329,16 @@ fn css_parser_preserves_comma_in_shorthand_value() {
     // Two comma-separated groups: [String("a.png"), Keyword("no-repeat")] and
     // [Function("url", ...), Keyword("repeat")]
     assert_eq!(args.len(), 2);
-    assert!(args[0].iter().any(|v| matches!(v, CssValue::Keyword(k) if k == "no-repeat")));
-    assert!(args[1].iter().any(|v| matches!(v, CssValue::Keyword(k) if k == "repeat")));
+    assert!(
+        args[0]
+            .iter()
+            .any(|v| matches!(v, CssValue::Keyword(k) if k == "no-repeat"))
+    );
+    assert!(
+        args[1]
+            .iter()
+            .any(|v| matches!(v, CssValue::Keyword(k) if k == "repeat"))
+    );
 }
 
 #[test]
@@ -354,9 +368,11 @@ fn background_multi_layer_differing_sizes() {
     // `background-image: url("a.png"), url("b.png"); background-size: 10px 10px, 20px 20px;`
     let image_css = declaration_value(r#"background-image: url("a.png"), url("b.png");"#);
     let size_css = declaration_value("background-size: 10px 10px, 20px 20px;");
-    let cs =
-        apply_container_declarations(&[("background-image", image_css), ("background-size", size_css)])
-            .expect("declarations apply");
+    let cs = apply_container_declarations(&[
+        ("background-image", image_css),
+        ("background-size", size_css),
+    ])
+    .expect("declarations apply");
     assert_eq!(cs.background.layers.len(), 2);
     match cs.background.layers[0].size {
         crate::engine::layouter::types::BackgroundSize::Explicit {
@@ -385,9 +401,11 @@ fn background_multi_layer_differing_positions() {
     // `background-image: url("a.png"), url("b.png"); background-position: 0 0, 10px 10px;`
     let image_css = declaration_value(r#"background-image: url("a.png"), url("b.png");"#);
     let pos_css = declaration_value("background-position: 0 0, 10px 10px;");
-    let cs =
-        apply_container_declarations(&[("background-image", image_css), ("background-position", pos_css)])
-            .expect("declarations apply");
+    let cs = apply_container_declarations(&[
+        ("background-image", image_css),
+        ("background-position", pos_css),
+    ])
+    .expect("declarations apply");
     assert_eq!(cs.background.layers.len(), 2);
     match cs.background.layers[0].position.x {
         crate::engine::layouter::types::BackgroundPositionAxis::Start(
@@ -408,9 +426,11 @@ fn background_multi_layer_differing_repeats() {
     // `background-image: url("a.png"), url("b.png"); background-repeat: no-repeat, repeat;`
     let image_css = declaration_value(r#"background-image: url("a.png"), url("b.png");"#);
     let repeat_css = declaration_value("background-repeat: no-repeat, repeat;");
-    let cs =
-        apply_container_declarations(&[("background-image", image_css), ("background-repeat", repeat_css)])
-            .expect("declarations apply");
+    let cs = apply_container_declarations(&[
+        ("background-image", image_css),
+        ("background-repeat", repeat_css),
+    ])
+    .expect("declarations apply");
     assert_eq!(cs.background.layers.len(), 2);
     assert_eq!(cs.background.layers[0].repeat, BackgroundRepeat::NoRepeat);
     assert_eq!(cs.background.layers[1].repeat, BackgroundRepeat::Repeat);

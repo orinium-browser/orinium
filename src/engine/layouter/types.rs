@@ -115,12 +115,12 @@ impl NodeKind {
 
     pub fn is_container_with_transparent_bg(&self) -> bool {
         matches!(self, NodeKind::Container { style, .. }
-            if style.background.color.is_none()
-                || style.background.color == Some(Color(0, 0, 0, 0))
-                && style.background.layers.iter().all(|layer| {
-                    matches!(&layer.image, Some(BackgroundImage::Gradient(_)))
-                        || matches!(&layer.image, Some(BackgroundImage::Image { image, .. }) if image.is_none())
-                }))
+        if style.background.color.is_none()
+            || style.background.color == Some(Color(0, 0, 0, 0))
+            && style.background.layers.iter().all(|layer| {
+                matches!(&layer.image, Some(BackgroundImage::Gradient(_)))
+                    || matches!(&layer.image, Some(BackgroundImage::Image { image, .. }) if image.is_none())
+            }))
     }
 
     pub fn container_bg(&self) -> Option<&Background> {

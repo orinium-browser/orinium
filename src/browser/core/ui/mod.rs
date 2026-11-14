@@ -372,9 +372,14 @@ impl BrowserUi {
         generation: u64,
     ) {
         if tab_id == &TabId(0) {
-            self.renderer
-                .chrome
-                .deliver_fetch(kind, url, origin, permissions, response, generation);
+            self.renderer.chrome.deliver_fetch(
+                kind,
+                url,
+                origin,
+                permissions,
+                response,
+                generation,
+            );
             return;
         }
 
@@ -812,8 +817,7 @@ impl BrowserUi {
             if let Some(target_tab) = self.active_tab_mut() {
                 match target_tab.inspect("getVersion", "{}") {
                     Ok(data) => {
-                        let response =
-                            serde_json::json!({ "ok": true, "data": data }).to_string();
+                        let response = serde_json::json!({ "ok": true, "data": data }).to_string();
                         self.renderer.chrome.on_devtools_response(id, response);
                         return;
                     }

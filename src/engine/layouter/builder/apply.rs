@@ -227,9 +227,13 @@ fn transform_length_px(
                 Length::Px(v) => Some(v),
                 Length::Percent(p) => {
                     let base = if is_x {
-                        element_size.map(|(w, _)| w).unwrap_or(text_flow_style.font_size)
+                        element_size
+                            .map(|(w, _)| w)
+                            .unwrap_or(text_flow_style.font_size)
                     } else {
-                        element_size.map(|(_, h)| h).unwrap_or(text_flow_style.font_size)
+                        element_size
+                            .map(|(_, h)| h)
+                            .unwrap_or(text_flow_style.font_size)
                     };
                     Some(base * p / 100.0)
                 }
@@ -313,7 +317,8 @@ fn parse_transform_function(
         }
 
         "translatey" => {
-            let ty = transform_length_px(name, flat.first()?, text_flow_style, element_size, false)?;
+            let ty =
+                transform_length_px(name, flat.first()?, text_flow_style, element_size, false)?;
             Some(AffineTransform::translate(0.0, ty))
         }
 
