@@ -165,6 +165,16 @@ fn cursor_style_to_icon(style: &CursorStyle) -> CursorIcon {
     }
 }
 
+/// Parameters for delivering a fetched resource to a tab.
+pub(crate) struct FetchParams {
+    pub(crate) kind: FetchKind,
+    pub(crate) url: Url,
+    pub(crate) origin: Origin,
+    pub(crate) permissions: Permissions,
+    pub(crate) response: Result<BrowserResponse, BrowserNetworkError>,
+    pub(crate) generation: u64,
+}
+
 impl BrowserUi {
     /// Creates a UI with the default [`BasicChrome`], the default
     /// [`BasicContextMenu`] and no tabs.
@@ -385,16 +395,15 @@ impl BrowserUi {
     }
 
     /// Delivers a fetched resource to the target tab.
-    pub(crate) fn deliver_fetch(
-        &mut self,
-        tab_id: &TabId,
-        kind: FetchKind,
-        url: Url,
-        origin: Origin,
-        permissions: Permissions,
-        response: Result<BrowserResponse, BrowserNetworkError>,
-        generation: u64,
-    ) {
+    pub(crate) fn deliver_fetch(&mut self, tab_id: &TabId, params: FetchParams) {
+        let FetchParams {
+            kind,
+            url,
+            origin,
+            permissions,
+            response,
+            generation,
+        } = params;
         if tab_id == &TabId(0) {
             self.renderer.chrome.deliver_fetch(
                 kind,

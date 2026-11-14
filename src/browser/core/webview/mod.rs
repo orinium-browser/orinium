@@ -203,6 +203,11 @@ enum PagePhase {
     ScriptApplied,
 }
 
+type NavigationCb = Box<dyn Fn(&Url)>;
+type FetchCb = Box<dyn Fn(&Url, FetchKind)>;
+type ConsoleCb = Box<dyn Fn(u32, &str)>;
+type InspectRequestCb = Box<dyn Fn(u64, &str, &str)>;
+
 pub struct WebView {
     phase: PagePhase,
 
@@ -360,10 +365,10 @@ pub struct WebView {
     /// Embedder-provided callbacks for events the WebView cannot handle itself.
     /// When `None`, the corresponding `WebViewTask` is still emitted from
     /// [`tick`](Self::tick) for the in-tree browser core to handle.
-    on_navigation: Option<Box<dyn Fn(&Url)>>,
-    on_fetch: Option<Box<dyn Fn(&Url, FetchKind)>>,
-    on_console: Option<Box<dyn Fn(u32, &str)>>,
-    on_inspect_request: Option<Box<dyn Fn(u64, &str, &str)>>,
+    on_navigation: Option<NavigationCb>,
+    on_fetch: Option<FetchCb>,
+    on_console: Option<ConsoleCb>,
+    on_inspect_request: Option<InspectRequestCb>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

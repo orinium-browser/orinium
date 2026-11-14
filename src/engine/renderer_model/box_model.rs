@@ -504,71 +504,62 @@ fn draw_background(
                     },
                 });
             }
-            Some(BackgroundImage::Image { source: _, image }) => {
-                if let Some(image) = image {
-                    let (image_width, image_height) = resolve_background_image_size(
-                        image.width() as f32,
-                        image.height() as f32,
-                        padding_box.width,
-                        padding_box.height,
-                        layer_size,
+            Some(BackgroundImage::Image {
+                source: _,
+                image: Some(image),
+            }) => {
+                let (image_width, image_height) = resolve_background_image_size(
+                    image.width() as f32,
+                    image.height() as f32,
+                    padding_box.width,
+                    padding_box.height,
+                    layer_size,
+                );
+                if image_width > 0.0 && image_height > 0.0 {
+                    let image_x =
+                        resolve_background_axis(padding_box.width, image_width, layer_position.x);
+                    let image_y =
+                        resolve_background_axis(padding_box.height, image_height, layer_position.y);
+                    let repeat_x = matches!(
+                        layer_repeat,
+                        BackgroundRepeat::Repeat | BackgroundRepeat::RepeatX
                     );
-                    if image_width > 0.0 && image_height > 0.0 {
-                        let image_x = resolve_background_axis(
-                            padding_box.width,
-                            image_width,
-                            layer_position.x,
-                        );
-                        let image_y = resolve_background_axis(
-                            padding_box.height,
-                            image_height,
-                            layer_position.y,
-                        );
-                        let repeat_x = matches!(
-                            layer_repeat,
-                            BackgroundRepeat::Repeat | BackgroundRepeat::RepeatX
-                        );
-                        let repeat_y = matches!(
-                            layer_repeat,
-                            BackgroundRepeat::Repeat | BackgroundRepeat::RepeatY
-                        );
-                        let xs = background_tile_positions(
-                            image_x,
-                            image_width,
-                            padding_box.width,
-                            repeat_x,
-                        );
-                        let ys = background_tile_positions(
-                            image_y,
-                            image_height,
-                            padding_box.height,
-                            repeat_y,
-                        );
-                        cmd_buf.push(DrawCommand::PushClip {
-                            path: path.clone(),
-                            rule: FillRule::NonZero,
-                        });
-                        for tile_y in ys {
-                            for tile_x in &xs {
-                                cmd_buf.push(DrawCommand::Fill {
-                                    path: rect_path(
-                                        x + *tile_x,
-                                        y + tile_y,
-                                        image_width,
-                                        image_height,
-                                    ),
-                                    rule: FillRule::NonZero,
-                                    paint: Paint {
-                                        brush: Brush::Image(image.clone()),
-                                        opacity,
-                                    },
-                                });
-                            }
+                    let repeat_y = matches!(
+                        layer_repeat,
+                        BackgroundRepeat::Repeat | BackgroundRepeat::RepeatY
+                    );
+                    let xs = background_tile_positions(
+                        image_x,
+                        image_width,
+                        padding_box.width,
+                        repeat_x,
+                    );
+                    let ys = background_tile_positions(
+                        image_y,
+                        image_height,
+                        padding_box.height,
+                        repeat_y,
+                    );
+                    cmd_buf.push(DrawCommand::PushClip {
+                        path: path.clone(),
+                        rule: FillRule::NonZero,
+                    });
+                    for tile_y in ys {
+                        for tile_x in &xs {
+                            cmd_buf.push(DrawCommand::Fill {
+                                path: rect_path(x + *tile_x, y + tile_y, image_width, image_height),
+                                rule: FillRule::NonZero,
+                                paint: Paint {
+                                    brush: Brush::Image(image.clone()),
+                                    opacity,
+                                },
+                            });
                         }
-                        cmd_buf.push(DrawCommand::PopClip);
                     }
+                    cmd_buf.push(DrawCommand::PopClip);
                 }
             }
+            Some(BackgroundImage::Image { image: None, .. }) => {}
             None => {}
         }
     }
@@ -947,11 +938,11 @@ fn emit_canvas_background(cmd_buf: &mut Vec<DrawCommand>, info: &InfoNode, viewp
     /// background is the first body child's background.
     fn resolve_canvas_background(info: &InfoNode) -> Option<&Background> {
         // Find the html element: first Container child with tag "html".
-        let html = info.children.iter().find_map(|child| {
+        let html = info.children.iter().find(|child| {
             if let NodeKind::Container { style, .. } = &child.kind {
-                (style.tag.as_deref() == Some("html")).then_some(child)
+                style.tag.as_deref() == Some("html")
             } else {
-                None
+                false
             }
         });
 
@@ -1058,18 +1049,19 @@ fn emit_canvas_background(cmd_buf: &mut Vec<DrawCommand>, info: &InfoNode, viewp
                     },
                 });
             }
-            Some(BackgroundImage::Image { image, .. }) => {
-                if let Some(image) = image {
-                    cmd_buf.push(DrawCommand::Fill {
-                        path: rect_path(0.0, 0.0, viewport.0, viewport.1),
-                        rule: FillRule::NonZero,
-                        paint: Paint {
-                            brush: Brush::Image(image.clone()),
-                            opacity: 1.0,
-                        },
-                    });
-                }
+            Some(BackgroundImage::Image {
+                image: Some(image), ..
+            }) => {
+                cmd_buf.push(DrawCommand::Fill {
+                    path: rect_path(0.0, 0.0, viewport.0, viewport.1),
+                    rule: FillRule::NonZero,
+                    paint: Paint {
+                        brush: Brush::Image(image.clone()),
+                        opacity: 1.0,
+                    },
+                });
             }
+            Some(BackgroundImage::Image { image: None, .. }) => {}
             None => {}
         }
     }
@@ -2044,8 +2036,10 @@ mod tests {
             content_box: ui_rect(12.0, 22.0, 96.0, 46.0),
             children_box: ui_rect(12.0, 22.0, 96.0, 46.0),
         };
-        let mut style = ContainerStyle::default();
-        style.transform = Some(AffineTransform::rotate(std::f32::consts::FRAC_PI_2));
+        let style = ContainerStyle {
+            transform: Some(AffineTransform::rotate(std::f32::consts::FRAC_PI_2)),
+            ..Default::default()
+        };
         let mut buf = Vec::new();
         let state = push_box_model(
             &mut buf, &box_model, &style, 0.0, 0.0, false, true, true, true, 1.0,

@@ -195,7 +195,7 @@ impl AnimationRuntime {
                         paused_progress: None,
                     })
                     .collect();
-                state.prev_animation_specs = input.animations.clone();
+                state.prev_animation_specs.clone_from(&input.animations);
             }
 
             for inst in state.animations.iter_mut() {
@@ -219,7 +219,7 @@ impl AnimationRuntime {
                 overrides.insert(*node_id, node_overrides);
             }
 
-            state.prev_base = input.base_values.clone();
+            state.prev_base.clone_from(&input.base_values);
         }
 
         // Mark dirty when there are overrides or any active timelines; this is

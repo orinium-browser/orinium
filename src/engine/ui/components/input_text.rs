@@ -994,7 +994,7 @@ mod tests {
             received_clone.lock().unwrap().push(v.to_string());
         });
         let mut input = make_component("abc", "");
-        input.on_copy = Some(cb.clone());
+        input.on_copy = Some(Arc::clone(&cb));
         input.on_cut = Some(cb);
         input.handle_text_input(InputTextEvent::SelectAll);
         input.handle_text_input(InputTextEvent::Cut);

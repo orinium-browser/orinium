@@ -41,8 +41,7 @@ fn split_on_separator<'a>(value: &'a CssValue) -> Option<Vec<Vec<&'a CssValue>>>
     for item in items {
         if matches!(item, CssValue::Separator) {
             if !current.is_empty() {
-                groups.push(current);
-                current = Vec::new();
+                groups.push(std::mem::take(&mut current));
             }
         } else {
             current.push(item);

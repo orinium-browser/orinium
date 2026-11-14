@@ -39,7 +39,7 @@ use winit::event::WindowEvent;
 use winit::window::WindowId;
 
 use super::tab::FetchKind;
-use super::ui::BrowserUi;
+use super::ui::{BrowserUi, FetchParams};
 use super::{BrowserCommand, resource_loader::BrowserResourceLoader};
 use crate::browser::core::ui::TabId;
 use crate::engine::origin::Origin;
@@ -432,12 +432,14 @@ impl BrowserApp {
             }
             ui.deliver_fetch(
                 &tab_id,
-                kind,
-                url,
-                origin,
-                permissions,
-                msg.response,
-                generation,
+                FetchParams {
+                    kind,
+                    url,
+                    origin,
+                    permissions,
+                    response: msg.response,
+                    generation,
+                },
             );
         }
     }

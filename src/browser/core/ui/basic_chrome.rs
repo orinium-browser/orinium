@@ -43,7 +43,6 @@ const CHROME_GAP: f32 = 8.0;
 const TOOLBAR_BACKGROUND: Color = Color(210, 210, 214, 255);
 /// Button background color.
 /// Label color used by toolbar buttons.
-
 /// Identifies the toolbar element under a pointer position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ChromeHit {

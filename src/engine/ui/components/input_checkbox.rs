@@ -108,12 +108,14 @@ impl CustomNode for InputCheckboxComponent {
         }
 
         if checked {
-            let mut style = TextStyle::default();
-            style.font_weight = FontWeight(700);
-            style.color = if self.disabled {
-                Color(120, 120, 120, 255)
-            } else {
-                Color(30, 30, 30, 255)
+            let style = TextStyle {
+                font_weight: FontWeight(700),
+                color: if self.disabled {
+                    Color(120, 120, 120, 255)
+                } else {
+                    Color(30, 30, 30, 255)
+                },
+                ..Default::default()
             };
             let mut flow = *text_flow_style;
             flow.font_size = (size.height * 0.85).max(10.0);

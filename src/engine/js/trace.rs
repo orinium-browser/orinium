@@ -516,15 +516,9 @@ pub(crate) fn begin_active(
     detail: String,
     source: Option<String>,
 ) -> Option<usize> {
-    let Some(host) = vm.host.as_ref() else {
-        return None;
-    };
-    let Ok(mut host_ref) = host.try_borrow_mut() else {
-        return None;
-    };
-    let Some(js_host) = (&mut *host_ref as &mut dyn Any).downcast_mut::<JsHost>() else {
-        return None;
-    };
+    let host = vm.host.as_ref()?;
+    let mut host_ref = host.try_borrow_mut().ok()?;
+    let js_host = (&mut *host_ref as &mut dyn Any).downcast_mut::<JsHost>()?;
     js_host.trace.begin_active(kind, label, detail, source)
 }
 

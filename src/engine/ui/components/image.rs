@@ -130,7 +130,7 @@ impl ImageComponent {
                     style: style.clone(),
                     flow_style: *text_flow_style,
                 });
-                line = String::new();
+                line.clear();
                 y += text_flow_style.font_size + 2.0;
             }
             if ch != '\n' {

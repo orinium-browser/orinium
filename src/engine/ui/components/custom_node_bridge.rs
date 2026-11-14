@@ -109,35 +109,38 @@ fn spacing_px(
     )
 }
 
-fn make_box_model(
+/// Geometry parameters for building a box model.
+struct BoxGeometry {
     x: f32,
     y: f32,
     border_w: f32,
     border_h: f32,
-    style: &Style,
     cw: Option<f32>,
     ch: Option<f32>,
     vw: f32,
     vh: f32,
-) -> BoxModel {
-    let (bl, bt, br, bb, pl, pt, pr, pb) = spacing_px(style, cw, ch, vw, vh);
+}
+
+fn make_box_model(geometry: &BoxGeometry, style: &Style) -> BoxModel {
+    let (bl, bt, br, bb, pl, pt, pr, pb) =
+        spacing_px(style, geometry.cw, geometry.ch, geometry.vw, geometry.vh);
     let border_box = Rect {
-        x,
-        y,
-        width: border_w.max(0.0),
-        height: border_h.max(0.0),
+        x: geometry.x,
+        y: geometry.y,
+        width: geometry.border_w.max(0.0),
+        height: geometry.border_h.max(0.0),
     };
     let padding_box = Rect {
-        x: x + bl,
-        y: y + bt,
-        width: (border_w - bl - br).max(0.0),
-        height: (border_h - bt - bb).max(0.0),
+        x: geometry.x + bl,
+        y: geometry.y + bt,
+        width: (geometry.border_w - bl - br).max(0.0),
+        height: (geometry.border_h - bt - bb).max(0.0),
     };
     let content_box = Rect {
-        x: x + bl + pl,
-        y: y + bt + pt,
-        width: (border_w - bl - br - pl - pr).max(0.0),
-        height: (border_h - bt - bb - pt - pb).max(0.0),
+        x: geometry.x + bl + pl,
+        y: geometry.y + bt + pt,
+        width: (geometry.border_w - bl - br - pl - pr).max(0.0),
+        height: (geometry.border_h - bt - bb - pt - pb).max(0.0),
     };
     BoxModel {
         sticky_edges: None,
@@ -165,15 +168,17 @@ impl CustomLayouter for CustomNodeBridge {
                     ctx.viewport_height,
                 );
                 let box_model = make_box_model(
-                    x,
-                    y,
-                    resolved.width,
-                    resolved.height,
+                    &BoxGeometry {
+                        x,
+                        y,
+                        border_w: resolved.width,
+                        border_h: resolved.height,
+                        cw: Some(ctx.available_inline_size),
+                        ch: None,
+                        vw: ctx.viewport_width,
+                        vh: ctx.viewport_height,
+                    },
                     &self.layout_style,
-                    Some(ctx.available_inline_size),
-                    None,
-                    ctx.viewport_width,
-                    ctx.viewport_height,
                 );
 
                 LayoutBox::InlineBox(InlineBox {
@@ -196,15 +201,17 @@ impl CustomLayouter for CustomNodeBridge {
                     ctx.viewport_height,
                 );
                 let box_model = make_box_model(
-                    0.0,
-                    0.0,
-                    resolved.width,
-                    resolved.height,
+                    &BoxGeometry {
+                        x: 0.0,
+                        y: 0.0,
+                        border_w: resolved.width,
+                        border_h: resolved.height,
+                        cw: ctx.containing_block_width,
+                        ch: ctx.containing_block_height,
+                        vw: ctx.viewport_width,
+                        vh: ctx.viewport_height,
+                    },
                     &self.layout_style,
-                    ctx.containing_block_width,
-                    ctx.containing_block_height,
-                    ctx.viewport_width,
-                    ctx.viewport_height,
                 );
 
                 LayoutBox::BlockBox(box_model)
