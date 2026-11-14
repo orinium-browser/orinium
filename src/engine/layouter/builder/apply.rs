@@ -37,6 +37,10 @@ macro_rules! apply_property {
             && v == "inherit"
         {
             $parent.$field.clone()
+        } else if let CssValue::Keyword(v) = $value
+            && v == "unset"
+        {
+            $default.$field.clone()
         } else {
             $parse
         };
@@ -51,6 +55,10 @@ macro_rules! apply_property {
             && v == "inherit"
         {
             $parent.$field.clone()
+        } else if let CssValue::Keyword(v) = $value
+            && v == "unset"
+        {
+            $default.$field.clone()
         } else if let $pattern = $value {
             $parse
         } else {
@@ -87,6 +95,7 @@ fn resolve_flex_shorthand(
             "none" => Some((0.0, 0.0, LengthOrAuto::Auto)),
             "auto" => Some((1.0, 1.0, LengthOrAuto::Auto)),
             "initial" => Some((0.0, 1.0, LengthOrAuto::Auto)),
+            "unset" => Some((0.0, 1.0, LengthOrAuto::Auto)),
             _ => None,
         },
         CssValue::Number(grow) if *grow >= 0.0 => Some((*grow, 1.0, zero_basis)),
@@ -2152,25 +2161,51 @@ pub fn apply_declaration(
             style.item_style.flex_basis = basis;
         }
 
-        ("flex-grow", CssValue::Number(v)) => {
-            if *v < 0.0 {
-                return None;
-            }
-            style.item_style.flex_grow = *v;
+        ("flex-grow", value) => {
+            style.item_style.flex_grow = match value {
+                CssValue::Keyword(k) if k == "initial" => DEFAULT_STYLE.item_style.flex_grow,
+                CssValue::Keyword(k) if k == "inherit" => parent_style.item_style.flex_grow,
+                CssValue::Keyword(k) if k == "unset" => DEFAULT_STYLE.item_style.flex_grow,
+                CssValue::Number(v) if *v >= 0.0 => *v,
+                _ => return None,
+            };
         }
 
-        ("flex-basis", _) => {
-            style.item_style.flex_basis = resolve_css_len_auto(name, value, text_flow_style)?;
+        ("flex-basis", value) => {
+            style.item_style.flex_basis = match value {
+                CssValue::Keyword(k) if k == "initial" => DEFAULT_STYLE.item_style.flex_basis.clone(),
+                CssValue::Keyword(k) if k == "inherit" => parent_style.item_style.flex_basis.clone(),
+                CssValue::Keyword(k) if k == "unset" => DEFAULT_STYLE.item_style.flex_basis.clone(),
+                _ => resolve_css_len_auto(name, value, text_flow_style)?,
+            };
         }
 
-        ("flex-shrink", CssValue::Number(v)) => {
-            if *v < 0.0 {
-                return None;
-            }
-            style.item_style.flex_shrink = *v;
+        ("flex-shrink", value) => {
+            style.item_style.flex_shrink = match value {
+                CssValue::Keyword(k) if k == "initial" => DEFAULT_STYLE.item_style.flex_shrink,
+                CssValue::Keyword(k) if k == "inherit" => parent_style.item_style.flex_shrink,
+                CssValue::Keyword(k) if k == "unset" => DEFAULT_STYLE.item_style.flex_shrink,
+                CssValue::Number(v) if *v >= 0.0 => *v,
+                _ => return None,
+            };
         }
 
         ("place-self", value) => {
+            match value {
+                CssValue::Keyword(k) if k == "initial" => {
+                    style.item_style.align_self = DEFAULT_STYLE.item_style.align_self;
+                    style.item_style.justify_self = DEFAULT_STYLE.item_style.justify_self;
+                }
+                CssValue::Keyword(k) if k == "inherit" => {
+                    style.item_style.align_self = parent_style.item_style.align_self;
+                    style.item_style.justify_self = parent_style.item_style.justify_self;
+                }
+                CssValue::Keyword(k) if k == "unset" => {
+                    style.item_style.align_self = DEFAULT_STYLE.item_style.align_self;
+                    style.item_style.justify_self = DEFAULT_STYLE.item_style.justify_self;
+                }
+                _ => {}
+            }
             let values = match value {
                 CssValue::Keyword(_) => std::slice::from_ref(value),
                 CssValue::List(values) if (1..=2).contains(&values.len()) => values.as_slice(),

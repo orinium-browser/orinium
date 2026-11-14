@@ -2145,12 +2145,6 @@ pub fn normalize_whitespace(text: &str, white_space: WhiteSpace) -> Cow<'_, str>
         }
     }
 
-    if white_space == WhiteSpace::PreLine {
-        while result.ends_with('\n') {
-            result.pop();
-        }
-    }
-
     Cow::Owned(result)
 }
 

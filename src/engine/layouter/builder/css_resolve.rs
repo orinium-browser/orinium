@@ -1088,10 +1088,11 @@ fn parse_grid_track_list(
     if matches!(values, [CssValue::Keyword(keyword)] if keyword == "none") {
         return Some(Vec::new());
     }
-    values
+    let tracks: Vec<GridTrack> = values
         .iter()
-        .map(|value| parse_grid_track(name, value, text_flow_style))
-        .collect()
+        .filter_map(|value| parse_grid_track(name, value, text_flow_style))
+        .collect();
+    Some(tracks)
 }
 
 pub fn parse_grid_placement(value: &CssValue) -> Option<GridPlacement> {

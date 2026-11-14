@@ -24,12 +24,12 @@ fn normalize_whitespace_normalizes_segment_breaks() {
 }
 
 #[test]
-fn normalize_whitespace_pre_line_drops_trailing_newline() {
+fn normalize_whitespace_pre_line_keeps_trailing_newline() {
     let pre_line = |s| normalize_whitespace(s, WhiteSpace::PreLine);
-    assert_eq!(pre_line("a\nb\n"), "a\nb");
-    assert_eq!(pre_line("a\nb\n\n"), "a\nb");
-    assert_eq!(pre_line("\n"), "");
-    assert_eq!(pre_line("a  b\nc\n"), "a b\nc");
+    assert_eq!(pre_line("a\nb\n"), "a\nb\n");
+    assert_eq!(pre_line("a\nb\n\n"), "a\nb\n\n");
+    assert_eq!(pre_line("\n"), "\n");
+    assert_eq!(pre_line("a  b\nc\n"), "a b\nc\n");
 }
 
 #[test]
@@ -178,12 +178,6 @@ fn reference_normalize_whitespace(text: &str, white_space: WhiteSpace) -> String
                     prev_was_space = false;
                 }
             }
-        }
-    }
-
-    if white_space == WhiteSpace::PreLine {
-        while result.ends_with('\n') {
-            result.pop();
         }
     }
 
