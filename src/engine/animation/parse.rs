@@ -6,6 +6,23 @@ use crate::engine::animation::types::{
 };
 use crate::engine::css::values::{CssValue, Unit};
 
+/// CSS ファンクションの引数リストから、順番に指定された型の値を取り出すヘルパー。
+/// 各引数は `CssValue` のバリアントにマッチし、不一致の場合は `None` を返す。
+fn take_number<'a, I: Iterator<Item = &'a CssValue>>(iter: &mut I) -> Option<f32> {
+    match iter.next() {
+        Some(CssValue::Number(n)) => Some(*n),
+        _ => None,
+    }
+}
+
+#[allow(dead_code)]
+fn take_keyword<'a, I: Iterator<Item = &'a CssValue>>(iter: &mut I) -> Option<String> {
+    match iter.next() {
+        Some(CssValue::Keyword(k)) => Some(k.to_ascii_lowercase().to_string()),
+        _ => None,
+    }
+}
+
 pub fn parse_time_ms(value: &CssValue) -> Option<TimeMs> {
     match value {
         CssValue::Length(v, Unit::S) => Some((*v as f64) * 1000.0),
@@ -28,19 +45,13 @@ pub fn parse_easing(value: &CssValue) -> Option<Easing> {
             _ => None,
         },
         CssValue::Function(name, args) if name.eq_ignore_ascii_case("cubic-bezier") => {
-            let nums: Vec<f32> = args
-                .iter()
-                .flatten()
-                .filter_map(|v| match v {
-                    CssValue::Number(n) => Some(*n),
-                    _ => None,
-                })
-                .collect();
-            if nums.len() == 4 {
-                Some(Easing::CubicBezier(nums[0], nums[1], nums[2], nums[3]))
-            } else {
-                None
-            }
+            let mut iter = args.iter().flatten();
+            Some(Easing::CubicBezier(
+                take_number(&mut iter)?,
+                take_number(&mut iter)?,
+                take_number(&mut iter)?,
+                take_number(&mut iter)?,
+            ))
         }
         CssValue::Function(name, args) if name.eq_ignore_ascii_case("steps") => {
             let mut count: Option<u32> = None;
@@ -364,4 +375,105 @@ pub fn build_animation_specs(input: &AnimationInputs) -> Vec<AnimationSpec> {
             play_state: list_nth(&states, i, AnimationPlayState::Running),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_easing_step_start() {
+        let v = CssValue::Keyword("step-start".into());
+        assert_eq!(
+            parse_easing(&v),
+            Some(Easing::Steps(1, StepPosition::JumpStart))
+        );
+    }
+
+    #[test]
+    fn parse_easing_step_end() {
+        let v = CssValue::Keyword("step-end".into());
+        assert_eq!(
+            parse_easing(&v),
+            Some(Easing::Steps(1, StepPosition::JumpEnd))
+        );
+    }
+
+    #[test]
+    fn parse_easing_steps_jump_end() {
+        let v = CssValue::Function(
+            "steps".into(),
+            vec![vec![
+                CssValue::Number(4.0),
+                CssValue::Keyword("jump-end".into()),
+            ]],
+        );
+        assert_eq!(
+            parse_easing(&v),
+            Some(Easing::Steps(4, StepPosition::JumpEnd))
+        );
+    }
+
+    #[test]
+    fn parse_easing_steps_jump_start() {
+        let v = CssValue::Function(
+            "steps".into(),
+            vec![vec![
+                CssValue::Number(3.0),
+                CssValue::Keyword("jump-start".into()),
+            ]],
+        );
+        assert_eq!(
+            parse_easing(&v),
+            Some(Easing::Steps(3, StepPosition::JumpStart))
+        );
+    }
+
+    #[test]
+    fn parse_easing_steps_jump_none() {
+        let v = CssValue::Function(
+            "steps".into(),
+            vec![vec![
+                CssValue::Number(5.0),
+                CssValue::Keyword("jump-none".into()),
+            ]],
+        );
+        assert_eq!(
+            parse_easing(&v),
+            Some(Easing::Steps(5, StepPosition::JumpNone))
+        );
+    }
+
+    #[test]
+    fn parse_easing_steps_jump_both() {
+        let v = CssValue::Function(
+            "steps".into(),
+            vec![vec![
+                CssValue::Number(2.0),
+                CssValue::Keyword("jump-both".into()),
+            ]],
+        );
+        assert_eq!(
+            parse_easing(&v),
+            Some(Easing::Steps(2, StepPosition::JumpBoth))
+        );
+    }
+
+    #[test]
+    fn parse_easing_steps_defaults_to_jump_end() {
+        let v = CssValue::Function("steps".into(), vec![vec![CssValue::Number(3.0)]]);
+        assert_eq!(
+            parse_easing(&v),
+            Some(Easing::Steps(3, StepPosition::JumpEnd))
+        );
+    }
+
+    #[test]
+    fn parse_easing_steps_clamp_zero_to_one() {
+        let v = CssValue::Function("steps".into(), vec![vec![CssValue::Number(0.0)]]);
+        assert_eq!(
+            parse_easing(&v),
+            Some(Easing::Steps(1, StepPosition::JumpEnd))
+        );
+    }
 }

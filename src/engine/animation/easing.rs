@@ -708,4 +708,55 @@ mod tests {
         let v = interpolate_value(&from, &to, 0.5, ColorScheme::Light);
         assert!(v.is_none());
     }
+
+    #[test]
+    fn steps_easing_jump_end() {
+        // 4 steps, jump-end: 0, 0.25, 0.5, 0.75, 1.0
+        assert!((steps_easing(4, StepPosition::JumpEnd, 0.0) - 0.0).abs() < 1e-6);
+        assert!((steps_easing(4, StepPosition::JumpEnd, 0.25) - 0.25).abs() < 1e-6);
+        assert!((steps_easing(4, StepPosition::JumpEnd, 0.5) - 0.5).abs() < 1e-6);
+        assert!((steps_easing(4, StepPosition::JumpEnd, 0.75) - 0.75).abs() < 1e-6);
+        assert!((steps_easing(4, StepPosition::JumpEnd, 1.0) - 1.0).abs() < 1e-6);
+        // Between steps: stays at previous step
+        assert!((steps_easing(4, StepPosition::JumpEnd, 0.1) - 0.0).abs() < 1e-6);
+        assert!((steps_easing(4, StepPosition::JumpEnd, 0.3) - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn steps_easing_jump_start() {
+        // 4 steps, jump-start: 0.25, 0.5, 0.75, 1.0, 1.0
+        assert!((steps_easing(4, StepPosition::JumpStart, 0.0) - 0.25).abs() < 1e-6);
+        assert!((steps_easing(4, StepPosition::JumpStart, 0.25) - 0.5).abs() < 1e-6);
+        assert!((steps_easing(4, StepPosition::JumpStart, 0.5) - 0.75).abs() < 1e-6);
+        assert!((steps_easing(4, StepPosition::JumpStart, 1.0) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn steps_easing_jump_none() {
+        // 4 steps, jump-none: 0, 1/3, 2/3, 1 (n-1 jumps, no jump at either end)
+        assert!((steps_easing(4, StepPosition::JumpNone, 0.0) - 0.0).abs() < 1e-6);
+        assert!((steps_easing(4, StepPosition::JumpNone, 0.25) - 0.0).abs() < 1e-6);
+        assert!((steps_easing(4, StepPosition::JumpNone, 0.5) - 1.0 / 3.0).abs() < 1e-6);
+        assert!((steps_easing(4, StepPosition::JumpNone, 1.0) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn steps_easing_jump_both() {
+        // 4 steps, jump-both: 1/4, 2/4, 3/4, 4/4 (jump at both ends)
+        assert!((steps_easing(4, StepPosition::JumpBoth, 0.0) - 0.25).abs() < 1e-6);
+        assert!((steps_easing(4, StepPosition::JumpBoth, 0.25) - 0.5).abs() < 1e-6);
+        assert!((steps_easing(4, StepPosition::JumpBoth, 0.5) - 0.75).abs() < 1e-6);
+        assert!((steps_easing(4, StepPosition::JumpBoth, 1.0) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn steps_easing_apply_easing_integration() {
+        // apply_easing wraps steps_easing
+        let easing = Easing::Steps(4, StepPosition::JumpEnd);
+        assert!((apply_easing(0.0, easing) - 0.0).abs() < 1e-6);
+        assert!((apply_easing(0.25, easing) - 0.25).abs() < 1e-6);
+        assert!((apply_easing(0.5, easing) - 0.5).abs() < 1e-6);
+        assert!((apply_easing(0.75, easing) - 0.75).abs() < 1e-6);
+        assert!((apply_easing(1.0, easing) - 1.0).abs() < 1e-6);
+    }
 }

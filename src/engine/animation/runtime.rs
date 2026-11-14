@@ -38,6 +38,8 @@ struct TransitionInstance {
 struct AnimationInstance {
     spec: AnimationSpec,
     start_ms: f64,
+    /// Paused 時の進捗（0.0〜1.0）。None の場合は start_ms から経過時間で計算。
+    paused_progress: Option<f32>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -190,12 +192,13 @@ impl AnimationRuntime {
                     .map(|spec| AnimationInstance {
                         spec: spec.clone(),
                         start_ms: now_ms,
+                        paused_progress: None,
                     })
                     .collect();
                 state.prev_animation_specs = input.animations.clone();
             }
 
-            for inst in &state.animations {
+            for inst in state.animations.iter_mut() {
                 let Some(rule) = keyframes.get(&inst.spec.name) else {
                     continue;
                 };
@@ -259,17 +262,72 @@ fn sample_transition_value(
 }
 
 fn sample_animation(
-    inst: &AnimationInstance,
+    inst: &mut AnimationInstance,
     rule: &KeyframesRule,
     now_ms: f64,
     color_scheme: ColorScheme,
 ) -> Option<(bool, HashMap<String, CssValue>)> {
     let spec = &inst.spec;
     if spec.play_state == AnimationPlayState::Paused {
-        // MVP: paused animations hold at initial progress (0/local start behavior)
-        // without accumulating time; treat as inactive for now.
-        // Better pause handling can track paused elapsed time.
+        // Paused 状態では進捗を固定。初回は現在時刻から進捗を計算し保存、
+        // 2回目以降は保存済みの値を使って時間経過を無視する。
+        let progress = match inst.paused_progress {
+            Some(p) => p,
+            None => {
+                let duration = spec.duration_ms.max(0.0);
+                let delay = spec.delay_ms;
+                let local = now_ms - inst.start_ms;
+                if local < delay {
+                    // ディレイ中はまだ開始していない
+                    if matches!(
+                        spec.fill_mode,
+                        AnimationFillMode::Backwards | AnimationFillMode::Both
+                    ) {
+                        let p = iteration_progress(0.0, spec.direction, 0);
+                        let vals =
+                            sample_keyframes(rule, p, spec.direction, 0, spec.easing, color_scheme);
+                        return Some((false, vals));
+                    }
+                    return Some((true, HashMap::new()));
+                }
+                let active_time = local - delay;
+                let iter_progress_total = active_time / duration;
+                let within = match spec.iteration_count {
+                    IterationCount::Infinite => {
+                        (iter_progress_total - iter_progress_total.floor() as f64) as f32
+                    }
+                    IterationCount::Finite(count) => {
+                        if count <= 0.0 {
+                            0.0
+                        } else if iter_progress_total >= count as f64 {
+                            // 完了時は最終イテレーションの進捗
+                            if count.fract() > 0.0 {
+                                count.fract() as f32
+                            } else {
+                                1.0
+                            }
+                        } else {
+                            (iter_progress_total - iter_progress_total.floor() as f64) as f32
+                        }
+                    }
+                };
+                inst.paused_progress = Some(within);
+                within
+            }
+        };
+        let vals = sample_keyframes(
+            rule,
+            progress,
+            spec.direction,
+            0,
+            spec.easing,
+            color_scheme,
+        );
+        return Some((false, vals));
     }
+
+    // 通常の実行時は paused_progress をリセット
+    inst.paused_progress = None;
 
     let duration = spec.duration_ms.max(0.0);
     let delay = spec.delay_ms;
@@ -325,7 +383,13 @@ fn sample_animation(
             if count <= 0.0 {
                 (0u32, 0.0f32, true)
             } else if iter_progress_total >= count as f64 {
-                (count.ceil() as u32, 1.0f32, true)
+                // 完了時は正しい最終進捗を保持（整数なら 1.0、小数ならその余り）
+                let within = if count.fract() > 0.0 {
+                    count.fract() as f32
+                } else {
+                    1.0f32
+                };
+                (count.floor() as u32, within, true)
             } else {
                 let idx = iter_progress_total.floor() as u32;
                 (idx, (iter_progress_total - idx as f64) as f32, false)
