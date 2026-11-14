@@ -216,6 +216,7 @@ impl ApplicationHandler for MultiWindowApp {
                 }
             }
             BrowserCommand::None => {}
+            BrowserCommand::SetCursorIcon(_) => {}
         }
     }
 }

@@ -1822,7 +1822,7 @@ fn run_webcompat_depth(raw_url: &str, depth: usize) -> Result<()> {
     );
     js.dispatch_dom_content_loaded();
     js.dispatch_window_load();
-    for _ in 0..60 {
+    for iteration in 0..60 {
         js.run_due_timers();
         js.drain_microtasks();
         #[cfg(feature = "dhat-heap")]
@@ -1848,7 +1848,7 @@ fn run_webcompat_depth(raw_url: &str, depth: usize) -> Result<()> {
             })()"#,
         )
         .to_console_string();
-    for _ in 0..200 {
+    for iteration in 0..200 {
         js.run_due_timers();
         js.drain_microtasks();
         #[cfg(feature = "dhat-heap")]
