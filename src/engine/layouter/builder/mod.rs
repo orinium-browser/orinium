@@ -1457,7 +1457,12 @@ pub fn build_layout_and_info_from_snapshot(
             // below the viewport.
             let keep: Vec<bool> = (0..all_layout.len())
                 .map(|index| {
-                    let collapsible = is_collapsible_whitespace_info(&all_info[index]);
+                    let white_space = match &all_info[index].kind {
+                        NodeKind::Text { flow_style, .. } => flow_style.white_space,
+                        _ => WhiteSpace::Normal,
+                    };
+                    let collapsible =
+                        is_collapsible_whitespace_info(&all_info[index], white_space);
                     let next_to_block = index == 0
                         || index + 1 == all_layout.len()
                         || index

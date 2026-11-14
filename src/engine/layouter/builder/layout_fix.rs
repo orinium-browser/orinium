@@ -1,6 +1,6 @@
 use crate::engine::layouter::shift::shift_box;
 use crate::engine::layouter::text_layouter::TextFlowLayouter;
-use crate::engine::layouter::types::{InfoNode, NodeKind, TextAlign};
+use crate::engine::layouter::types::{InfoNode, NodeKind, TextAlign, WhiteSpace};
 use ui_layout::{
     AutoSizeBehavior, Display, GridTrack, InnerDisplay, LayoutChild, LayoutNode, Length,
     LengthOrAuto, OuterDisplay,
@@ -12,7 +12,15 @@ use ui_layout::{
 
 /// Returns `true` when `info` represents a whitespace-only text node that
 /// renders as a single collapsible space.
-pub fn is_collapsible_whitespace_info(info: &InfoNode) -> bool {
+///
+/// `white_space` is the computed `white-space` of the element that owns the
+/// text. Per CSS, `pre`, `pre-wrap`, and `break-spaces` preserve whitespace
+/// and must not be collapsed even at block boundaries.
+pub fn is_collapsible_whitespace_info(info: &InfoNode, white_space: WhiteSpace) -> bool {
+    // Preserved-whitespace modes keep all whitespace, including at boundaries.
+    if !matches!(white_space, WhiteSpace::Normal | WhiteSpace::Nowrap) {
+        return false;
+    }
     matches!(&info.kind, NodeKind::Text { text, .. } if text.trim().is_empty())
 }
 

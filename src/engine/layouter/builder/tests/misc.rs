@@ -189,3 +189,66 @@ fn reference_normalize_whitespace(text: &str, white_space: WhiteSpace) -> String
 
     result
 }
+
+#[test]
+fn is_collapsible_whitespace_info_preserves_pre_modes() {
+    use crate::engine::layouter::types::{InfoNode, NodeKind, TextFlowStyle};
+
+    let text_info = |white_space: WhiteSpace| InfoNode {
+        kind: NodeKind::Text {
+            text: "  \n  ".to_string(),
+            style: Default::default(),
+            flow_style: TextFlowStyle {
+                white_space,
+                ..Default::default()
+            },
+            text_id: 0,
+        },
+        children: Vec::new(),
+        dom_id: None,
+    };
+
+    // Normal and Nowrap collapse whitespace-only text.
+    assert!(is_collapsible_whitespace_info(&text_info(WhiteSpace::Normal), WhiteSpace::Normal));
+    assert!(
+        is_collapsible_whitespace_info(&text_info(WhiteSpace::Nowrap), WhiteSpace::Nowrap)
+    );
+
+    // Preserved-whitespace modes keep whitespace even when it is whitespace-only.
+    assert!(!is_collapsible_whitespace_info(&text_info(WhiteSpace::Pre), WhiteSpace::Pre));
+    assert!(
+        !is_collapsible_whitespace_info(&text_info(WhiteSpace::PreWrap), WhiteSpace::PreWrap)
+    );
+    assert!(
+        !is_collapsible_whitespace_info(&text_info(WhiteSpace::BreakSpaces), WhiteSpace::BreakSpaces)
+    );
+    // PreLine also preserves whitespace (segment breaks are preserved).
+    assert!(!is_collapsible_whitespace_info(
+        &text_info(WhiteSpace::PreLine),
+        WhiteSpace::PreLine
+    ));
+}
+
+#[test]
+fn is_collapsible_whitespace_info_non_text_is_not_collapsible() {
+    use crate::engine::layouter::types::{InfoNode, NodeKind, WhiteSpace};
+
+    let container_info = InfoNode {
+        kind: NodeKind::Container {
+            scroll_x: false,
+            scroll_y: false,
+            scroll_offset_x: 0.0,
+            scroll_offset_y: 0.0,
+            style: Default::default(),
+            role: ContainerRole::Normal,
+        },
+        children: Vec::new(),
+        dom_id: None,
+    };
+
+    assert!(!is_collapsible_whitespace_info(
+        &container_info,
+        WhiteSpace::Normal
+    ));
+    assert!(!is_collapsible_whitespace_info(&container_info, WhiteSpace::Pre));
+}
