@@ -5,4 +5,5 @@ pub(crate) mod dom_exception;
 pub(crate) mod element;
 pub(crate) mod events;
 pub(crate) mod node_iterator;
+pub(crate) mod parent_node;
 pub(crate) mod shadow_dom;
