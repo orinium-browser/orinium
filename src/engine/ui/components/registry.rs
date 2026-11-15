@@ -342,8 +342,14 @@ impl CustomNodeFactory for SelectFactory {
                             value: child_node
                                 .kind
                                 .get_attr("value")
-                                .unwrap_or_default()
-                                .to_string(),
+                                .map(str::to_string)
+                                .unwrap_or_else(|| {
+                                    normalize_whitespace(
+                                        &ctx.dom_snapshot.inner_text(*child),
+                                        WhiteSpace::Pre,
+                                    )
+                                    .into_owned()
+                                }),
                             label: normalize_whitespace(
                                 &ctx.dom_snapshot.inner_text(*child),
                                 WhiteSpace::Pre,
@@ -355,17 +361,24 @@ impl CustomNodeFactory for SelectFactory {
                         });
                     }
                 }
-                Some("option") => options.push(SelectOption {
-                    value: node.kind.get_attr("value").unwrap_or_default().to_string(),
-                    label: normalize_whitespace(
+                Some("option") => {
+                    let label = normalize_whitespace(
                         &ctx.dom_snapshot.inner_text(*id),
                         WhiteSpace::Normal,
                     )
-                    .into_owned(),
-                    selected: node.kind.has_attr("selected"),
-                    disabled: node.kind.has_attr("disabled"),
-                    group: None,
-                }),
+                    .into_owned();
+                    options.push(SelectOption {
+                        value: node
+                            .kind
+                            .get_attr("value")
+                            .map(str::to_string)
+                            .unwrap_or_else(|| label.clone()),
+                        label,
+                        selected: node.kind.has_attr("selected"),
+                        disabled: node.kind.has_attr("disabled"),
+                        group: None,
+                    });
+                }
                 _ => {}
             }
         }
