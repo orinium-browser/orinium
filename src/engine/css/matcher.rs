@@ -420,12 +420,14 @@ impl Selector {
         if !self.matches_base(element) || !self.matches_pseudo_classes(cursor, is_root) {
             return false;
         }
-        if let Some(_pseudo) = &self.pseudo_element {
-            // TODO
-            return false;
+        if let Some(pseudo) = &self.pseudo_element {
+            // ::before / ::after pseudo-elements always match their originating
+            // element. Other pseudo-elements are not yet supported.
+            let pseudo_lower = pseudo.to_ascii_lowercase();
+            pseudo_lower == "before" || pseudo_lower == "after"
+        } else {
+            true
         }
-
-        true
     }
 }
 
