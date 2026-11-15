@@ -10,17 +10,19 @@
 //! are anti-aliased with 4× vertical supersampling. `stroke` colors are
 //! resolved from a `stroke` attribute or a `style=` declaration, with the
 //! `stroke-width`/cap/join/miter-limit/dash parameters inherited down
-//! containers. Gradients, masks, `<defs>`/`<use>`, and text are out of scope.
+//! containers. Gradients, masks, `<clipPath>`, and text are out of scope.
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::engine::html::xml::XmlElement;
 use crate::engine::layouter::types::{Color, ColorScheme, Gradient};
 use crate::engine::renderer_model::{AffineTransform, FillRule, Path};
 use crate::engine::svg::{
-    PaintState, SvgStroke, ViewBox, element_shape, numeric_presentation_value, parse_len,
-    parse_transform, parse_view_box, viewbox_meet_transform, with_alpha,
+    parse_use_ref, resolve_fill_rule, ClipPath, PaintState, SvgStroke, ViewBox, element_shape,
+    numeric_presentation_value, parse_len, parse_transform, parse_view_box,
+    viewbox_meet_transform, with_alpha,
 };
 use crate::engine::tree::NodeRef;
 
@@ -92,7 +94,12 @@ pub fn rasterize(markup: &str, target: Option<(u32, u32)>) -> Result<RasterResul
 
     let base = viewbox_meet_transform(view_box.unwrap_or((0.0, 0.0, 0.0, 0.0)), vw, vh);
     let gradients = HashMap::new();
+    let mut id_map: HashMap<String, NodeRef<XmlElement>> = HashMap::new();
+    collect_tree_id_map(&tree.root, &mut id_map);
+    let mut clip_paths: HashMap<String, ClipPath> = HashMap::new();
+    collect_tree_clip_paths(&tree.root, &mut clip_paths);
     let mut rgba = vec![0u8; buffer_len];
+    let mut use_stack: Vec<usize> = Vec::new();
     for child in root.children() {
         process_element(
             child,
@@ -100,6 +107,9 @@ pub fn rasterize(markup: &str, target: Option<(u32, u32)>) -> Result<RasterResul
             1.0,
             PaintState::new(),
             &gradients,
+            &id_map,
+            &clip_paths,
+            &mut use_stack,
             width,
             height,
             &mut rgba,
@@ -111,6 +121,79 @@ pub fn rasterize(markup: &str, target: Option<(u32, u32)>) -> Result<RasterResul
         height,
         rgba,
     })
+}
+
+/// Builds a map of `id` attribute values to node refs for all elements under
+/// `root`, so `<use href="#id">` can resolve its target in the standalone
+/// rasterizer (which walks `Tree<XmlElement>` rather than `DomSnapshot`).
+fn collect_tree_id_map(
+    root: &NodeRef<XmlElement>,
+    out: &mut HashMap<String, NodeRef<XmlElement>>,
+) {
+    let el = root.borrow();
+    if let Some(id_value) = el.value.attr("id")
+        && !id_value.is_empty()
+    {
+        out.entry(id_value.to_owned()).or_insert(Rc::clone(root));
+    }
+    drop(el);
+    for child in root.borrow().children() {
+        collect_tree_id_map(child, out);
+    }
+}
+
+/// Collects `<clipPath>` definitions under `root` into `out`, keyed by their
+/// `id` attribute. All shape descendants of a `<clipPath>` are combined into a
+/// single path (transformed by the clipPath element's `transform` attribute).
+fn collect_tree_clip_paths(
+    root: &NodeRef<XmlElement>,
+    out: &mut HashMap<String, ClipPath>,
+) {
+    let el = root.borrow();
+    if el.value.name == "clipPath"
+        && let Some(clip_id) = el.value.attr("id").filter(|id| !id.is_empty())
+    {
+            let transform = match el.value.attr("transform") {
+                Some(value) => parse_transform(value).unwrap_or(AffineTransform::identity()),
+                None => AffineTransform::identity(),
+            };
+            let rule = resolve_fill_rule(&el.value);
+            let mut path = Path::new();
+            collect_tree_clip_path_shapes(root, &transform, &mut path);
+            if !path.commands().is_empty() {
+                out.entry(clip_id.to_owned()).or_insert(ClipPath { path, rule });
+            }
+    }
+    drop(el);
+    for child in root.borrow().children() {
+        collect_tree_clip_paths(child, out);
+    }
+}
+
+/// Recursively collects all shape descendants under `root` into `path`,
+/// applying `transform` to each shape's geometry.
+fn collect_tree_clip_path_shapes(
+    root: &NodeRef<XmlElement>,
+    transform: &AffineTransform,
+    path: &mut Path,
+) {
+    let el = root.borrow();
+    if let Some(shape_path) = element_shape(&el.value) {
+        let transformed = crate::engine::renderer_model::transform_path(&shape_path, transform);
+        for subpath in transformed.subpaths() {
+            if let Some(&first) = subpath.first() {
+                path.move_to(first.0, first.1);
+                for &(x, y) in &subpath[1..] {
+                    path.line_to(x, y);
+                }
+                path.close();
+            }
+        }
+    }
+    drop(el);
+    for child in root.borrow().children() {
+        collect_tree_clip_path_shapes(child, transform, path);
+    }
 }
 
 /// Resolves the intrinsic viewport size of an `<svg>`: the `width`/`height`
@@ -144,6 +227,9 @@ fn process_element(
     opacity: f32,
     mut paint: PaintState,
     gradients: &HashMap<String, Gradient>,
+    id_map: &HashMap<String, NodeRef<XmlElement>>,
+    clip_paths: &HashMap<String, ClipPath>,
+    use_stack: &mut Vec<usize>,
     width: u32,
     height: u32,
     rgba: &mut [u8],
@@ -171,11 +257,49 @@ fn process_element(
                     opacity,
                     paint.clone(),
                     gradients,
+                    id_map,
+                    clip_paths,
+                    use_stack,
                     width,
                     height,
                     rgba,
                     depth + 1,
                 )?;
+            }
+        }
+        "use" => {
+            // `<use href="#id">` clones the referenced element's content at the
+            // use element's position, with x/y translating the content.
+            let href = el
+                .value
+                .attr("href")
+                .or_else(|| el.value.attr("xlink:href"));
+            let target_node = href
+                .and_then(parse_use_ref)
+                .and_then(|frag| id_map.get(&frag).cloned());
+            if let Some(target) = target_node {
+                let target_ptr = Rc::as_ptr(&target) as usize;
+                if !use_stack.contains(&target_ptr) {
+                    let x = el.value.attr("x").and_then(parse_len).unwrap_or(0.0);
+                    let y = el.value.attr("y").and_then(parse_len).unwrap_or(0.0);
+                    let use_transform = eff.then(&AffineTransform::translate(x, y));
+                    use_stack.push(target_ptr);
+                    process_element(
+                        &target,
+                        use_transform,
+                        opacity,
+                        paint.clone(),
+                        gradients,
+                        id_map,
+                        clip_paths,
+                        use_stack,
+                        width,
+                        height,
+                        rgba,
+                        depth + 1,
+                    )?;
+                    use_stack.pop();
+                }
             }
         }
         "path" | "rect" | "circle" | "ellipse" | "polygon" | "polyline" | "line" => {
@@ -196,12 +320,33 @@ fn process_element(
                 }
                 stroke
             });
+            let clip_mask = el
+                .value
+                .attr("clip-path")
+                .and_then(parse_use_ref)
+                .and_then(|frag| clip_paths.get(&frag))
+                .map(|clip| {
+                    let mut buf = vec![0u8; (width as usize) * (height as usize) * 4];
+                    let transformed =
+                        crate::engine::renderer_model::transform_path(&clip.path, &eff);
+                    fill_path_into(
+                        &mut buf,
+                        width,
+                        height,
+                        &transformed,
+                        Color(255, 255, 255, 255),
+                        clip.rule,
+                        None,
+                    );
+                    buf
+                });
             render_shape(
                 &path,
                 eff,
                 fill,
                 paint.rule,
                 stroke.as_ref(),
+                clip_mask.as_deref(),
                 width,
                 height,
                 rgba,
@@ -230,6 +375,9 @@ fn solid_fallback_paint(paint: &PaintState, opacity: f32) -> Color {
 /// honoring `rule`, then paints the resolved stroke outline on top the same
 /// way the inline pipeline does: expand the outline in the already-transformed
 /// space and fill it with the nonzero rule.
+///
+/// `clip` is an optional alpha mask (width × height bytes) produced by
+/// rasterizing a `<clipPath>`; both the fill and stroke are masked by it.
 #[allow(clippy::too_many_arguments)]
 fn render_shape(
     path: &Path,
@@ -237,12 +385,13 @@ fn render_shape(
     fill: Color,
     rule: FillRule,
     stroke: Option<&SvgStroke>,
+    clip: Option<&[u8]>,
     width: u32,
     height: u32,
     rgba: &mut [u8],
 ) {
     let transformed = crate::engine::renderer_model::transform_path(path, &eff);
-    fill_path_into(rgba, width, height, &transformed, fill, rule);
+    fill_path_into(rgba, width, height, &transformed, fill, rule, clip);
     if let Some(stroke) = stroke {
         let outline = crate::engine::renderer_model::stroke_path(&transformed, &stroke.to_stroke());
         fill_path_into(
@@ -252,6 +401,7 @@ fn render_shape(
             &outline,
             stroke.color,
             FillRule::NonZero,
+            clip,
         );
     }
 }
@@ -266,6 +416,11 @@ const AA_SUBSAMPLES: u32 = 4;
 /// covered pixel columns are tallied, so boundary pixels blend into fractional
 /// alpha instead of a hard on/off edge. Fully interior pixels keep their exact
 /// fill alpha.
+///
+/// When `clip` is `Some`, it points to a `width * height` alpha mask produced
+/// by rasterizing a `<clipPath>`. Each output pixel's alpha is multiplied by
+/// the corresponding mask value, effectively clipping the fill to the clip
+/// region.
 pub(crate) fn fill_path_into(
     rgba: &mut [u8],
     width: u32,
@@ -273,6 +428,7 @@ pub(crate) fn fill_path_into(
     path: &Path,
     fill: Color,
     rule: FillRule,
+    clip: Option<&[u8]>,
 ) {
     if fill.3 == 0 || width == 0 || height == 0 {
         return;
@@ -314,7 +470,11 @@ pub(crate) fn fill_path_into(
                 continue;
             }
             let covers = *hits as f32 / AA_SUBSAMPLES as f32;
-            let alpha = (fill.3 as f32 * covers).round() as u8;
+            let mut alpha = (fill.3 as f32 * covers).round() as u8;
+            if let Some(clip_mask) = clip {
+                let clip_alpha = clip_mask[(row_offset + column) * 4 + 3] as f32 / 255.0;
+                alpha = (alpha as f32 * clip_alpha).round() as u8;
+            }
             blend_pixel(
                 rgba,
                 row_offset + column,

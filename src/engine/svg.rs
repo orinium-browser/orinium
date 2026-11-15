@@ -46,13 +46,23 @@ pub type ViewBox = (f32, f32, f32, f32);
 
 /// A single shape inside an inline SVG: a viewBox-space path, its paint
 /// (solid color or gradient), and the fill rule (default nonzero). `stroke`
-/// is `None` when the shape has no stroke.
+/// is `None` when the shape has no stroke. `clip_path` optionally references a
+/// clip path that masks this shape.
 #[derive(Debug, Clone)]
 pub struct SvgShape {
     pub path: Path,
     pub fill: Brush,
     pub rule: FillRule,
     pub stroke: Option<SvgStroke>,
+    pub clip_path: Option<ClipPath>,
+}
+
+/// A clipping path: a viewBox-space path plus its fill rule, used to mask
+/// shapes that reference it via `clip-path="url(#id)"`.
+#[derive(Debug, Clone)]
+pub struct ClipPath {
+    pub path: Path,
+    pub rule: FillRule,
 }
 
 /// A resolved SVG stroke: paint color plus the geometry parameters that
@@ -365,9 +375,11 @@ fn append_arc(
                 sin_phi * px + cos_phi * py + cy,
             )
         };
+        // The last segment ends exactly at `to` to avoid a gap from floating
+        // point drift in the trigonometric end-point computation.
+        let (p3x, p3y) = if i + 1 == segments { to } else { world((rx * cos_b, ry * sin_b)) };
         let (p1x, p1y) = world((rx * (cos_a - k * sin_a), ry * (sin_a + k * cos_a)));
         let (p2x, p2y) = world((rx * (cos_b + k * sin_b), ry * (sin_b - k * cos_b)));
-        let (p3x, p3y) = world((rx * cos_b, ry * sin_b));
         path.cubic_to((p1x, p1y), (p2x, p2y), (p3x, p3y));
     }
 }
@@ -559,6 +571,16 @@ pub(crate) fn parse_svg_url(value: &str) -> Option<String> {
     (!fragment.is_empty()).then(|| fragment.to_owned())
 }
 
+/// Parses a `<use href="...">` reference, accepting both `#id` (bare hash) and
+/// `url(#id)` forms. Returns the referenced fragment id.
+pub(crate) fn parse_use_ref(value: &str) -> Option<String> {
+    let value = value.trim();
+    if let Some(id) = value.strip_prefix('#') {
+        return (!id.is_empty()).then_some(id.to_owned());
+    }
+    parse_svg_url(value)
+}
+
 fn is_transparent_keyword(keyword: &str) -> bool {
     keyword.eq_ignore_ascii_case("none")
         || keyword.eq_ignore_ascii_case("transparent")
@@ -612,7 +634,6 @@ pub(crate) fn resolve_shape_fill(
 
 /// Resolves the `fill-rule` presentation value (`attribute` first, then the
 /// `style` declaration), defaulting to nonzero winding.
-#[cfg(test)]
 pub(crate) fn resolve_fill_rule(el: &impl SvgElement) -> FillRule {
     match presentation_value(el, "fill-rule") {
         Some(value) if value.eq_ignore_ascii_case("evenodd") => FillRule::EvenOdd,
@@ -848,7 +869,16 @@ pub fn collect_svg(
     for &child in snapshot.children(svg_id) {
         collect_gradient_defs(snapshot, child, color_scheme, text_color, &mut gradients);
     }
+    let mut id_map = HashMap::new();
+    for &child in snapshot.children(svg_id) {
+        collect_id_map(snapshot, child, &mut id_map);
+    }
+    let mut clip_paths = HashMap::new();
+    for &child in snapshot.children(svg_id) {
+        collect_clip_path_defs(snapshot, child, &mut clip_paths);
+    }
     let mut shapes = Vec::new();
+    let mut use_stack: Vec<NodeId> = Vec::new();
     for &child in snapshot.children(svg_id) {
         collect_content(
             snapshot,
@@ -859,6 +889,9 @@ pub fn collect_svg(
             text_color,
             PaintState::new(),
             &gradients,
+            &id_map,
+            &clip_paths,
+            &mut use_stack,
             &mut shapes,
         );
     }
@@ -866,6 +899,79 @@ pub fn collect_svg(
         return None;
     }
     Some(SvgContent { view_box, shapes })
+}
+
+/// Collects `<clipPath>` definitions under `root` into `out`, keyed by their
+/// `id` attribute. All shape descendants of a `<clipPath>` are combined into a
+/// single path (transformed by the clipPath element's `transform` attribute).
+fn collect_clip_path_defs(
+    snapshot: &DomSnapshot,
+    id: NodeId,
+    out: &mut HashMap<String, ClipPath>,
+) {
+    let el = &snapshot.node(id).kind;
+    if el.tag_name() == Some("clipPath")
+        && let Some(clip_id) = el.get_attr("id").filter(|id| !id.is_empty())
+    {
+        let mut path = Path::new();
+        let transform = match el.get_attr("transform") {
+            Some(value) => parse_transform(value).unwrap_or(AffineTransform::identity()),
+            None => AffineTransform::identity(),
+        };
+        let rule = resolve_fill_rule(el);
+        collect_clip_path_shapes(snapshot, id, &transform, &mut path);
+        if !path.commands().is_empty() {
+            out.entry(clip_id.to_owned()).or_insert(ClipPath { path, rule });
+        }
+    }
+    for &child in snapshot.children(id) {
+        collect_clip_path_defs(snapshot, child, out);
+    }
+}
+
+/// Recursively collects all shape descendants under `id` into `path`, applying
+/// `transform` to each shape's geometry.
+fn collect_clip_path_shapes(
+    snapshot: &DomSnapshot,
+    id: NodeId,
+    transform: &AffineTransform,
+    path: &mut Path,
+) {
+    let el = &snapshot.node(id).kind;
+    if let Some(shape_path) = element_shape(el) {
+        let transformed = transform_path(&shape_path, transform);
+        // Append the transformed subpaths into the combined path.
+        for subpath in transformed.subpaths() {
+            if let Some(&first) = subpath.first() {
+                path.move_to(first.0, first.1);
+                for &(x, y) in &subpath[1..] {
+                    path.line_to(x, y);
+                }
+                path.close();
+            }
+        }
+    }
+    for &child in snapshot.children(id) {
+        collect_clip_path_shapes(snapshot, child, transform, path);
+    }
+}
+
+/// Builds a map of `id` attribute values to node ids for all elements under
+/// `root`, so `<use href="#id">` can resolve its target.
+pub(crate) fn collect_id_map(
+    snapshot: &DomSnapshot,
+    id: NodeId,
+    out: &mut HashMap<String, NodeId>,
+) {
+    let el = &snapshot.node(id).kind;
+    if let Some(id_value) = el.get_attr("id")
+        && !id_value.is_empty()
+    {
+        out.entry(id_value.to_owned()).or_insert(id);
+    }
+    for &child in snapshot.children(id) {
+        collect_id_map(snapshot, child, out);
+    }
 }
 
 /// Collects the `<linearGradient>`/`<radialGradient>` definitions reachable
@@ -1030,6 +1136,9 @@ fn collect_content(
     text_color: Color,
     mut paint: PaintState,
     gradients: &HashMap<String, Gradient>,
+    id_map: &HashMap<String, NodeId>,
+    clip_paths: &HashMap<String, ClipPath>,
+    use_stack: &mut Vec<NodeId>,
     shapes: &mut Vec<SvgShape>,
 ) {
     let el = &snapshot.node(id).kind;
@@ -1056,8 +1165,46 @@ fn collect_content(
                     text_color,
                     paint.clone(),
                     gradients,
+                    id_map,
+                    clip_paths,
+                    use_stack,
                     shapes,
                 );
+            }
+        }
+        Some("use") => {
+            // `<use href="#id">` clones the referenced element's content at the
+            // use element's position, with x/y translating the content.
+            let href = el
+                .svg_attr("href")
+                .or_else(|| el.svg_attr("xlink:href"));
+            let target_id = href
+                .and_then(parse_use_ref)
+                .and_then(|frag| id_map.get(&frag).copied());
+            if let Some(target) = target_id {
+                // Circular reference detection: bail out if the target is
+                // already being expanded by an ancestor `<use>`.
+                if !use_stack.contains(&target) {
+                    let x = el.svg_attr("x").and_then(parse_len).unwrap_or(0.0);
+                    let y = el.svg_attr("y").and_then(parse_len).unwrap_or(0.0);
+                    let use_transform = eff.then(&AffineTransform::translate(x, y));
+                    use_stack.push(target);
+                    collect_content(
+                        snapshot,
+                        target,
+                        &use_transform,
+                        opacity,
+                        color_scheme,
+                        text_color,
+                        paint.clone(),
+                        gradients,
+                        id_map,
+                        clip_paths,
+                        use_stack,
+                        shapes,
+                    );
+                    use_stack.pop();
+                }
             }
         }
         Some("path" | "rect" | "circle" | "ellipse" | "polygon" | "polyline" | "line") => {
@@ -1084,11 +1231,16 @@ fn collect_content(
                 }
                 stroke
             });
+            let clip_path = el
+                .svg_attr("clip-path")
+                .and_then(parse_use_ref)
+                .and_then(|frag| clip_paths.get(&frag).cloned());
             shapes.push(SvgShape {
                 path,
                 fill,
                 rule: paint.rule,
                 stroke,
+                clip_path,
             });
         }
         _ => {}
@@ -1227,6 +1379,12 @@ pub fn emit_commands(
     transform.dy += oy;
     cmd_buf.push(DrawCommand::PushTransform { transform });
     for shape in shapes {
+        if let Some(clip) = &shape.clip_path {
+            cmd_buf.push(DrawCommand::PushClip {
+                path: clip.path.clone(),
+                rule: clip.rule,
+            });
+        }
         cmd_buf.push(DrawCommand::Fill {
             path: shape.path.clone(),
             paint: Paint {
@@ -1248,6 +1406,9 @@ pub fn emit_commands(
                 paint: Paint { brush, opacity },
                 rule: FillRule::NonZero,
             });
+        }
+        if shape.clip_path.is_some() {
+            cmd_buf.push(DrawCommand::PopClip);
         }
     }
     cmd_buf.push(DrawCommand::PopTransform);
@@ -1860,6 +2021,7 @@ mod tests {
             fill: Brush::Solid(Color(255, 0, 0, 255)),
             rule: FillRule::EvenOdd,
             stroke: None,
+            clip_path: None,
         };
         let mut buf = Vec::new();
         emit_commands(
@@ -1891,6 +2053,7 @@ mod tests {
             fill: Brush::Solid(Color(255, 0, 0, 255)),
             rule: FillRule::NonZero,
             stroke: None,
+            clip_path: None,
         };
         let mut buf = Vec::new();
         emit_commands(
@@ -1915,6 +2078,7 @@ mod tests {
             fill: Brush::Solid(Color(255, 0, 0, 255)),
             rule: FillRule::NonZero,
             stroke: None,
+            clip_path: None,
         };
         let mut buf = Vec::new();
         emit_commands(
@@ -2150,6 +2314,7 @@ mod tests {
                 dash: None,
                 dash_offset: 0.0,
             }),
+            clip_path: None,
         };
         let mut buf = Vec::new();
         emit_commands(
@@ -2210,6 +2375,7 @@ mod tests {
     fn rasterize_commands(commands: &[DrawCommand], width: u32, height: u32) -> Vec<u8> {
         let mut rgba = vec![0u8; width as usize * height as usize * 4];
         let mut stack = vec![AffineTransform::identity()];
+        let mut clip_stack: Vec<(Path, FillRule)> = Vec::new();
         for command in commands {
             match command {
                 DrawCommand::PushTransform { transform } => {
@@ -2219,12 +2385,43 @@ mod tests {
                 DrawCommand::PopTransform => {
                     stack.pop();
                 }
+                DrawCommand::PushClip { path, rule } => {
+                    clip_stack.push((path.clone(), *rule));
+                }
+                DrawCommand::PopClip => {
+                    clip_stack.pop();
+                }
                 DrawCommand::Fill { path, paint, rule } => {
                     let Brush::Solid(color) = &paint.brush else {
                         continue;
                     };
                     let fill = with_alpha(*color, paint.opacity);
                     let transformed = transform_path(path, stack.last().unwrap());
+                    let clip_mask = if !clip_stack.is_empty() {
+                        let mut combined = vec![255u8; (width as usize) * (height as usize) * 4];
+                        for (clip_path, clip_rule) in &clip_stack {
+                            let mut tmp = vec![0u8; (width as usize) * (height as usize) * 4];
+                            let clip_transformed =
+                                transform_path(clip_path, stack.last().unwrap());
+                            super::rasterize::fill_path_into(
+                                &mut tmp,
+                                width,
+                                height,
+                                &clip_transformed,
+                                Color(255, 255, 255, 255),
+                                *clip_rule,
+                                None,
+                            );
+                            // Intersect: combined alpha *= tmp alpha.
+                            for i in (3..combined.len()).step_by(4) {
+                                combined[i] =
+                                    ((combined[i] as u16 * tmp[i] as u16) / 255) as u8;
+                            }
+                        }
+                        Some(combined)
+                    } else {
+                        None
+                    };
                     super::rasterize::fill_path_into(
                         &mut rgba,
                         width,
@@ -2232,6 +2429,7 @@ mod tests {
                         &transformed,
                         fill,
                         *rule,
+                        clip_mask.as_deref(),
                     );
                 }
                 _ => {}
@@ -2503,6 +2701,7 @@ mod tests {
                 dash: None,
                 dash_offset: 0.0,
             }),
+            clip_path: None,
         };
         let mut buf = Vec::new();
         emit_commands(
@@ -2647,6 +2846,365 @@ mod tests {
         assert!(
             inline_pixels.chunks(4).any(|p| p[3] != 0),
             "expected non-transparent pixels"
+        );
+    }
+
+    /// Converts a parsed [`XmlElement`] tree into an [`HtmlNodeType`] tree so
+    /// the inline SVG pipeline can process real SVG documents.
+    fn xml_to_html_tree(
+        node: &crate::engine::tree::NodeRef<crate::engine::html::xml::XmlElement>,
+    ) -> crate::engine::tree::NodeRef<crate::engine::html::HtmlNodeType> {
+        let el = node.borrow();
+        let html_value = crate::engine::html::HtmlNodeType::Element {
+            tag_name: el.value.name.clone(),
+            attributes: el
+                .value
+                .attributes
+                .iter()
+                .map(|attr| crate::engine::html::tokenizer::Attribute {
+                    name: attr.name.clone(),
+                    value: attr.value.clone(),
+                })
+                .collect(),
+        };
+        let html_node = TreeNode::new(html_value);
+        for child in el.children() {
+            TreeNode::add_child(&html_node, xml_to_html_tree(child));
+        }
+        html_node
+    }
+
+    /// Real-world icon SVGs must rasterize identically through the inline
+    /// (`collect_svg` → `emit_commands`) and standalone (`rasterize_from_bytes`)
+    /// pipelines.
+    #[test]
+    fn icon_svg_inline_matches_standalone() {
+        fn run_icon_test(file_path: &str, target_size: (u32, u32)) {
+            let svg_bytes = std::fs::read(file_path).expect("read icon svg");
+            let markup = std::str::from_utf8(&svg_bytes).expect("valid UTF-8");
+
+            // Standalone rasterization.
+            let standalone = super::rasterize::rasterize(markup, Some(target_size))
+                .expect("rasterizes standalone");
+
+            // Inline pipeline: parse XML → HtmlNodeType tree → DomSnapshot →
+            // collect_svg → emit_commands → software fill.
+            let tree =
+                crate::engine::html::xml::parse(markup).expect("parses SVG XML");
+            let root = tree.root.borrow();
+            assert_eq!(root.value.name, "svg");
+            let html_root = xml_to_html_tree(&tree.root);
+            let (snapshot, _refs) = DomSnapshot::from_tree(&html_root);
+
+            let content = collect_svg(&snapshot, 0, ColorScheme::Light, Color::default())
+                .expect("collects inline SVG");
+            let mut commands = Vec::new();
+            emit_commands(
+                &mut commands,
+                (0.0, 0.0, target_size.0 as f32, target_size.1 as f32),
+                false,
+                content.view_box,
+                &content.shapes,
+                1.0,
+            );
+            let inline_pixels = rasterize_commands(&commands, target_size.0, target_size.1);
+
+            assert_eq!(
+                inline_pixels, standalone.rgba,
+                "inline and standalone SVG rasterization differ for {file_path}"
+            );
+            assert!(
+                inline_pixels.chunks(4).any(|p| p[3] != 0),
+                "expected non-transparent pixels for {file_path}"
+            );
+        }
+
+        run_icon_test("resource/icons/audio_play.svg", (256, 256));
+        run_icon_test("resource/icons/audio_stop.svg", (256, 256));
+        run_icon_test("resource/icon.svg", (512, 512));
+    }
+
+    /// Truncated path data (a command letter with missing coordinates) must not
+    /// panic; the incomplete command is skipped defensively.
+    #[test]
+    fn path_from_d_truncated_command_does_not_panic() {
+        // `M` with no following coordinates: nothing to move to.
+        let path = path_from_d("M");
+        assert!(path.commands().is_empty());
+        // `L` with no coordinates: nothing to draw.
+        let path = path_from_d("M 0 0 L");
+        assert_eq!(path.subpaths(), vec![vec![(0.0, 0.0)]]);
+        // Truncated cubic: missing control/end points.
+        let path = path_from_d("M 0 0 C 10 10");
+        assert_eq!(path.subpaths(), vec![vec![(0.0, 0.0)]]);
+    }
+
+    /// An invalid `transform` attribute on a shape element must not crash; the
+    /// element inherits the parent's transform unchanged.
+    #[test]
+    fn collect_svg_invalid_transform_is_ignored() {
+        let svg = TreeNode::new(element("svg", &[("viewBox", "0 0 10 10")]));
+        let g = TreeNode::new(element(
+            "g",
+            &[("transform", "not-a-valid-transform")],
+        ));
+        TreeNode::add_child(&svg, Rc::clone(&g));
+        TreeNode::add_child(
+            &g,
+            TreeNode::new(element(
+                "rect",
+                &[
+                    ("x", "0"),
+                    ("y", "0"),
+                    ("width", "5"),
+                    ("height", "5"),
+                    ("fill", "#ff0000"),
+                ],
+            )),
+        );
+
+        let (snapshot, _refs) = DomSnapshot::from_tree(&svg);
+        let content = collect_svg(&snapshot, 0, ColorScheme::Light, Color::default()).unwrap();
+        assert_eq!(content.shapes.len(), 1);
+        // Invalid transform is ignored: rect stays at (0,0)×(5,5).
+        let bb = content.shapes[0].path.bounding_box().unwrap();
+        assert!((bb.x - 0.0).abs() < 1e-6);
+        assert!((bb.y - 0.0).abs() < 1e-6);
+        assert!((bb.width - 5.0).abs() < 1e-6);
+        assert!((bb.height - 5.0).abs() < 1e-6);
+    }
+
+    /// A `<path>` without a `d` attribute produces no shape.
+    #[test]
+    fn element_shape_missing_d_attribute_returns_none() {
+        let el = element("path", &[("fill", "#ff0000")]);
+        assert!(crate::engine::svg::element_shape(&el).is_none());
+    }
+
+    /// Malformed SVG markup is rejected by the standalone rasterizer instead of
+    /// crashing or producing garbage pixels.
+    #[test]
+    fn rasterize_malformed_svg_returns_error() {
+        assert!(super::rasterize::rasterize("<svg><unclosed>", None).is_err());
+        assert!(super::rasterize::rasterize("<notsvg></notsvg>", None).is_err());
+        // Extremely large viewport is rejected, not allocated.
+        assert!(super::rasterize::rasterize(
+            r##"<svg width="1e300" height="10"></svg>"##,
+            None
+        )
+        .is_err());
+    }
+
+    /// `<use href="#id">` clones the referenced element's content at the use
+    /// element's position.
+    #[test]
+    fn collect_svg_use_element_references_target() {
+        let svg = TreeNode::new(element("svg", &[("viewBox", "0 0 10 10")]));
+        let defs = TreeNode::new(element("defs", &[]));
+        TreeNode::add_child(&svg, Rc::clone(&defs));
+        let rect = TreeNode::new(element(
+            "rect",
+            &[
+                ("id", "myRect"),
+                ("x", "1"),
+                ("y", "1"),
+                ("width", "3"),
+                ("height", "3"),
+                ("fill", "#ff0000"),
+            ],
+        ));
+        TreeNode::add_child(&defs, Rc::clone(&rect));
+        TreeNode::add_child(
+            &svg,
+            TreeNode::new(element(
+                "use",
+                &[("href", "#myRect"), ("x", "5"), ("y", "5")],
+            )),
+        );
+
+        let (snapshot, _refs) = DomSnapshot::from_tree(&svg);
+        let content = collect_svg(&snapshot, 0, ColorScheme::Light, Color::default()).unwrap();
+        assert_eq!(content.shapes.len(), 1);
+        // The rect is translated by x=5,y=5: from (1,1)×(3,3) to (6,6)×(3,3).
+        let bb = content.shapes[0].path.bounding_box().unwrap();
+        assert!((bb.x - 6.0).abs() < 1e-6);
+        assert!((bb.y - 6.0).abs() < 1e-6);
+        assert!((bb.width - 3.0).abs() < 1e-6);
+        assert!((bb.height - 3.0).abs() < 1e-6);
+        assert_eq!(content.shapes[0].fill, Brush::Solid(Color(255, 0, 0, 255)));
+    }
+
+    /// `<use>` referencing a `<g>` clones all of the group's children.
+    #[test]
+    fn collect_svg_use_element_references_group() {
+        let svg = TreeNode::new(element("svg", &[("viewBox", "0 0 20 10")]));
+        let defs = TreeNode::new(element("defs", &[]));
+        TreeNode::add_child(&svg, Rc::clone(&defs));
+        let g = TreeNode::new(element("g", &[("id", "myGroup")]));
+        TreeNode::add_child(
+            &g,
+            TreeNode::new(element(
+                "rect",
+                &[("x", "0"), ("y", "0"), ("width", "2"), ("height", "2"), ("fill", "#ff0000")],
+            )),
+        );
+        TreeNode::add_child(
+            &g,
+            TreeNode::new(element(
+                "circle",
+                &[("cx", "5"), ("cy", "5"), ("r", "2"), ("fill", "#00ff00")],
+            )),
+        );
+        TreeNode::add_child(&defs, Rc::clone(&g));
+        TreeNode::add_child(
+            &svg,
+            TreeNode::new(element("use", &[("href", "#myGroup")])),
+        );
+
+        let (snapshot, _refs) = DomSnapshot::from_tree(&svg);
+        let content = collect_svg(&snapshot, 0, ColorScheme::Light, Color::default()).unwrap();
+        assert_eq!(content.shapes.len(), 2);
+        assert_eq!(content.shapes[0].fill, Brush::Solid(Color(255, 0, 0, 255)));
+        assert_eq!(content.shapes[1].fill, Brush::Solid(Color(0, 255, 0, 255)));
+    }
+
+    /// Circular `<use>` references do not cause infinite recursion.
+    #[test]
+    fn collect_svg_use_circular_reference() {
+        let svg = TreeNode::new(element("svg", &[("viewBox", "0 0 10 10")]));
+        let use_a = TreeNode::new(element("use", &[("id", "a"), ("href", "#b")]));
+        let use_b = TreeNode::new(element("use", &[("id", "b"), ("href", "#a")]));
+        TreeNode::add_child(&svg, Rc::clone(&use_a));
+        TreeNode::add_child(&use_a, Rc::clone(&use_b));
+
+        let (snapshot, _refs) = DomSnapshot::from_tree(&svg);
+        let content = collect_svg(&snapshot, 0, ColorScheme::Light, Color::default());
+        // Circular reference is detected: no shapes are produced.
+        assert!(content.is_none());
+    }
+
+    /// `<use>` SVG rasterizes identically through inline and standalone pipelines.
+    #[test]
+    fn use_svg_inline_matches_standalone() {
+        let markup = r##"<svg width="20" height="10" viewBox="0 0 20 10">
+            <defs>
+                <rect id="r1" x="0" y="0" width="4" height="4" fill="#ff0000"/>
+                <circle id="c1" cx="8" cy="5" r="2" fill="#00ff00"/>
+            </defs>
+            <use href="#r1" x="2" y="2"/>
+            <use href="#c1" x="4" y="0"/>
+        </svg>"##;
+
+        // Standalone rasterization.
+        let standalone = super::rasterize::rasterize(markup, Some((20, 10)))
+            .expect("rasterizes standalone");
+
+        // Inline pipeline.
+        let tree =
+            crate::engine::html::xml::parse(markup).expect("parses SVG XML");
+        let html_root = xml_to_html_tree(&tree.root);
+        let (snapshot, _refs) = DomSnapshot::from_tree(&html_root);
+
+        let content = collect_svg(&snapshot, 0, ColorScheme::Light, Color::default())
+            .expect("collects inline SVG");
+        let mut commands = Vec::new();
+        emit_commands(
+            &mut commands,
+            (0.0, 0.0, 20.0, 10.0),
+            false,
+            content.view_box,
+            &content.shapes,
+            1.0,
+        );
+        let inline_pixels = rasterize_commands(&commands, 20, 10);
+
+        assert_eq!(
+            inline_pixels, standalone.rgba,
+            "inline and standalone SVG rasterization differ for <use>"
+        );
+        assert!(
+            inline_pixels.chunks(4).any(|p| p[3] != 0),
+            "expected non-transparent pixels"
+        );
+    }
+
+    /// `<clipPath id="...">` collects its shape descendants into a clip path
+    /// that shapes can reference via `clip-path="url(#id)"`.
+    #[test]
+    fn collect_svg_clip_path() {
+        let svg = TreeNode::new(element("svg", &[("viewBox", "0 0 10 10")]));
+        let clip = TreeNode::new(element("clipPath", &[("id", "myClip")]));
+        TreeNode::add_child(
+            &clip,
+            TreeNode::new(element(
+                "rect",
+                &[("x", "2"), ("y", "2"), ("width", "4"), ("height", "4")],
+            )),
+        );
+        TreeNode::add_child(&svg, Rc::clone(&clip));
+        TreeNode::add_child(
+            &svg,
+            TreeNode::new(element(
+                "rect",
+                &[
+                    ("x", "0"),
+                    ("y", "0"),
+                    ("width", "10"),
+                    ("height", "10"),
+                    ("fill", "#ff0000"),
+                    ("clip-path", "#myClip"),
+                ],
+            )),
+        );
+
+        let (snapshot, _refs) = DomSnapshot::from_tree(&svg);
+        let content = collect_svg(&snapshot, 0, ColorScheme::Light, Color::default()).unwrap();
+        assert_eq!(content.shapes.len(), 1);
+        let shape = &content.shapes[0];
+        assert!(shape.clip_path.is_some());
+        let clip = shape.clip_path.as_ref().unwrap();
+        // The clip rect is (2,2)×(4,4).
+        let bb = clip.path.bounding_box().unwrap();
+        assert!((bb.x - 2.0).abs() < 1e-6);
+        assert!((bb.y - 2.0).abs() < 1e-6);
+        assert!((bb.width - 4.0).abs() < 1e-6);
+        assert!((bb.height - 4.0).abs() < 1e-6);
+    }
+
+    /// `<clipPath>` rasterizes identically through inline and standalone pipelines.
+    #[test]
+    fn clip_path_svg_inline_matches_standalone() {
+        let markup = r##"<svg width="10" height="10" viewBox="0 0 10 10">
+            <clipPath id="c1">
+                <rect x="2" y="2" width="4" height="4"/>
+            </clipPath>
+            <rect x="0" y="0" width="10" height="10" fill="#ff0000" clip-path="#c1"/>
+        </svg>"##;
+
+        let standalone = super::rasterize::rasterize(markup, Some((10, 10)))
+            .expect("rasterizes standalone");
+
+        let tree =
+            crate::engine::html::xml::parse(markup).expect("parses SVG XML");
+        let html_root = xml_to_html_tree(&tree.root);
+        let (snapshot, _refs) = DomSnapshot::from_tree(&html_root);
+
+        let content = collect_svg(&snapshot, 0, ColorScheme::Light, Color::default())
+            .expect("collects inline SVG");
+        let mut commands = Vec::new();
+        emit_commands(
+            &mut commands,
+            (0.0, 0.0, 10.0, 10.0),
+            false,
+            content.view_box,
+            &content.shapes,
+            1.0,
+        );
+        let inline_pixels = rasterize_commands(&commands, 10, 10);
+
+        assert_eq!(
+            inline_pixels, standalone.rgba,
+            "inline and standalone SVG rasterization differ for <clipPath>"
         );
     }
 }
