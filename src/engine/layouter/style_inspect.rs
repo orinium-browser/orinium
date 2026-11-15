@@ -5,7 +5,8 @@
 use std::collections::HashMap;
 
 use super::builder::{
-    element_info, element_sibling_infos, is_element_node, is_empty_element, own_lang,
+    element_info, element_sibling_infos, enclosing_shadow_root_id, is_element_node,
+    is_empty_element, own_lang,
 };
 use super::css_resolver::{ResolvedDeclaration, RuleSet, StyleOrigin, resolve_inline_style};
 use super::dom_snapshot::{DomSnapshot, NodeId};
@@ -209,6 +210,9 @@ fn chain_for_node(snapshot: &DomSnapshot, target: NodeId) -> Option<ElementChain
                 info.has_parent = false;
                 info.is_empty = is_empty_element(snapshot, node_id);
                 info.lang.clone_from(&langs[0]);
+                // Shadow DOM encapsulation: mark the target as inside a shadow
+                // tree so external selectors are blocked at the boundary.
+                info.shadow_root_id = enclosing_shadow_root_id(snapshot, node_id);
             }
             info
         } else {

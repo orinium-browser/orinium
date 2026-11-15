@@ -138,6 +138,7 @@ pub(crate) fn element_info(html_node: &HtmlNodeType) -> Option<ElementInfo> {
         checked: false,
         hovered: false,
         active: false,
+        shadow_root_id: None,
     })
 }
 
@@ -212,6 +213,7 @@ pub(crate) fn element_sibling_infos(
             info.lang = own_lang(snapshot, child).or_else(|| parent_lang.map(Arc::<str>::from));
             info.hovered = interaction.hovered_path.contains(&child);
             info.active = interaction.active_path.contains(&child);
+            info.shadow_root_id = enclosing_shadow_root_id(snapshot, child);
 
             let mut sibling = info.clone();
             sibling.previous_siblings = ElementChain::default();
@@ -236,6 +238,40 @@ pub struct InheritedCss {
     pub text_style: TextStyle,
     pub text_flow_style: TextFlowStyle,
     pub color_scheme: ColorScheme,
+}
+
+/// Find the shadow root ID that encloses the given snapshot node, if any.
+/// Walks up the parent chain looking for a `ShadowRoot` node and returns its
+/// stable DOM ID (assigned when the node was first exposed to JS). Returns
+/// `None` when the node is not inside any shadow tree.
+pub(crate) fn enclosing_shadow_root_id(snapshot: &DomSnapshot, mut child: NodeId) -> Option<u64> {
+    loop {
+        let node = &snapshot.node(child);
+        if let HtmlNodeType::ShadowRoot { .. } = &node.kind {
+            return Some(node.dom_id);
+        }
+        // Walk up to the parent. The snapshot stores children as Vec<NodeId>,
+        // but we need parent links. Rebuild by scanning from the root.
+        let parent = find_parent(snapshot, snapshot.roots()[0], child);
+        let Some(parent) = parent else {
+            return None;
+        };
+        child = parent;
+    }
+}
+
+/// Find the parent node ID of `target` by scanning from `root`.
+fn find_parent(snapshot: &DomSnapshot, root: NodeId, target: NodeId) -> Option<NodeId> {
+    let mut stack = vec![root];
+    while let Some(current) = stack.pop() {
+        for &child in snapshot.children(current) {
+            if child == target {
+                return Some(current);
+            }
+            stack.push(child);
+        }
+    }
+    None
 }
 
 /// Convert a resolved `Length` to an absolute pixel value for `LineHeight::Px`.
@@ -1010,7 +1046,8 @@ pub fn build_layout_and_info_from_snapshot(
                      layout_children: &mut Vec<LayoutChild>,
                      info_children: &mut Vec<InfoNode>| {
                         let dom_node = &snapshot.node(stack[top_idx].dom);
-                        let get_attr = |name: &str| dom_node.kind.get_attr(name).map(|s| s.to_string());
+                        let get_attr =
+                            |name: &str| dom_node.kind.get_attr(name).map(|s| s.to_string());
                         if let Some(ChildSlot::Inline(fragment, pseudo_info)) = build_pseudo_slot(
                             pseudo,
                             &child_css.custom_props,
@@ -1209,8 +1246,7 @@ pub fn build_layout_and_info_from_snapshot(
                         images,
                         &get_attr,
                         &stack[top_idx].counter_state,
-                    )
-                    {
+                    ) {
                         child_slots.push(slot);
                         #[cfg(any(feature = "profile", debug_assertions))]
                         {
@@ -1219,69 +1255,200 @@ pub fn build_layout_and_info_from_snapshot(
                     }
                 }
                 let parent_tag_name = snapshot.node(stack[top_idx].dom).kind.tag_name();
-                for &child in snapshot.children(stack[top_idx].dom) {
-                    let child_node = &snapshot.node(child).kind;
-                    if let HtmlNodeType::Text(t) = child_node {
-                        let t = if parent_tag_name == Some("pre") {
-                            let t = t.strip_prefix('\n').unwrap_or(t);
-                            normalize_whitespace(t, text_flow_style.white_space)
-                        } else if t.chars().all(is_css_newline)
-                            && matches!(
-                                text_flow_style.white_space,
-                                WhiteSpace::Normal | WhiteSpace::Nowrap
-                            )
-                        {
-                            continue;
-                        } else {
-                            normalize_whitespace(t, text_flow_style.white_space)
-                        };
 
-                        let t = match text_style.text_transform {
-                            TextTransform::None => t.into_owned(),
-                            TextTransform::Uppercase => t.to_ascii_uppercase(),
-                            TextTransform::Lowercase => t.to_ascii_lowercase(),
-                        };
-                        perf_scope!(text_layout);
-                        let (layouter, kind) =
-                            create_text_node(t, text_style.clone(), text_flow_style, &*measurer);
-                        #[cfg(any(feature = "profile", debug_assertions))]
+                // ── Shadow DOM content projection ──
+                // When the current element hosts a shadow root, light DOM children
+                // are not rendered directly. Instead, they are projected into
+                // `<slot>` positions inside the shadow tree. Unassigned light DOM
+                // children are not rendered at all.
+                let shadow_root_opt = snapshot
+                    .children(stack[top_idx].dom)
+                    .iter()
+                    .find(|&&cid| {
+                        matches!(snapshot.node(cid).kind, HtmlNodeType::ShadowRoot { .. })
+                    })
+                    .copied();
+
+                if let Some(shadow_root_id) = shadow_root_opt {
+                    // Collect light DOM children (everything except the shadow root).
+                    let light_children: Vec<NodeId> = snapshot
+                        .children(stack[top_idx].dom)
+                        .iter()
+                        .filter(|&&cid| cid != shadow_root_id)
+                        .copied()
+                        .collect();
+
+                    // Shadow root's children in document order.
+                    let shadow_children: Vec<NodeId> = snapshot.children(shadow_root_id).to_vec();
+
+                    // Identify all `<slot>` elements and their names. Also find the
+                    // default slot (first slot without a `name` attribute).
+                    let mut slot_infos: Vec<(Option<String>, usize)> = Vec::new();
+                    let mut default_slot_pos: Option<usize> = None;
+
+                    for (pos, &sc) in shadow_children.iter().enumerate() {
+                        if let HtmlNodeType::Element {
+                            tag_name,
+                            attributes,
+                        } = &snapshot.node(sc).kind
                         {
-                            text_layout_time += text_layout.elapsed();
-                            node_count += 1;
+                            if tag_name.eq_ignore_ascii_case("slot") {
+                                let name = attributes
+                                    .iter()
+                                    .find(|a| a.name == "name")
+                                    .map(|a| a.value.clone());
+                                if name.is_none() && default_slot_pos.is_none() {
+                                    default_slot_pos = Some(slot_infos.len());
+                                }
+                                slot_infos.push((name, pos));
+                            }
                         }
-                        let mut inline_style = style.clone();
-                        inline_style.display = Display::OutsideInner {
-                            outer: OuterDisplay::Inline,
-                            inner: InnerDisplay::Flow,
-                        };
-                        child_slots.push(ChildSlot::Inline(
-                            (inline_style, layouter).into(),
-                            Box::new(InfoNode {
-                                kind,
-                                children: Vec::new(),
-                                dom_id: Some(child),
-                            }),
-                        ));
-                    } else if child_node.tag_name() == Some("br") {
-                        child_slots.push(ChildSlot::Inline(
-                            ItemFragment::LineBreak.into(),
-                            Box::new(InfoNode {
-                                kind: NodeKind::LineBreak,
-                                children: Vec::new(),
-                                dom_id: Some(child),
-                            }),
-                        ));
-                    } else if child_node.tag_name() == Some("noscript")
-                        && scripting_mode == ScriptingMode::Enabled
-                    {
-                        // Skip
-                    } else if child_node.tag_name() == Some("template")
-                        || matches!(child_node, HtmlNodeType::DocumentFragment)
-                    {
-                        // Skip: template contents are inert and never rendered.
-                    } else {
-                        child_slots.push(ChildSlot::Element(element_kids.len()));
-                        element_kids.push(child);
+                    }
+
+                    // Assign light DOM children to slots based on `slot` attribute.
+                    let mut assigned_to_slot: HashSet<NodeId> = HashSet::new();
+                    let mut slot_assigned_children: Vec<Vec<NodeId>> =
+                        vec![Vec::new(); slot_infos.len()];
+
+                    for &lc in &light_children {
+                        let lc_node = &snapshot.node(lc).kind;
+                        if let HtmlNodeType::Element { attributes, .. } = lc_node {
+                            let child_slot_attr = attributes.iter().find(|a| a.name == "slot");
+
+                            match child_slot_attr {
+                                Some(attr) => {
+                                    // Named assignment: match `slot` attr to slot `name`.
+                                    for (si, (slot_name, _)) in slot_infos.iter().enumerate() {
+                                        if slot_name.as_ref() == Some(&attr.value) {
+                                            slot_assigned_children[si].push(lc);
+                                            assigned_to_slot.insert(lc);
+                                            break;
+                                        }
+                                    }
+                                }
+                                None => {
+                                    // Default assignment: first unnamed slot.
+                                    if let Some(dsp) = default_slot_pos {
+                                        slot_assigned_children[dsp].push(lc);
+                                        assigned_to_slot.insert(lc);
+                                    }
+                                    // No default slot → child is not rendered.
+                                }
+                            }
+                        }
+                    }
+
+                    // Iterate shadow children and build layout slots.
+                    let mut slot_info_idx = 0;
+                    for &sc in &shadow_children {
+                        let sc_node = &snapshot.node(sc).kind;
+
+                        if let HtmlNodeType::Element { tag_name, .. } = sc_node {
+                            if tag_name.eq_ignore_ascii_case("slot") {
+                                let assigned = &slot_assigned_children[slot_info_idx];
+                                slot_info_idx += 1;
+
+                                if !assigned.is_empty() {
+                                    // Project assigned light DOM children at this slot.
+                                    for &ac in assigned {
+                                        child_slots.push(ChildSlot::Element(element_kids.len()));
+                                        element_kids.push(ac);
+                                    }
+                                } else {
+                                    // Fallback: render the slot's own children.
+                                    for &fc in snapshot.children(sc) {
+                                        if let HtmlNodeType::Element { .. } =
+                                            &snapshot.node(fc).kind
+                                        {
+                                            child_slots
+                                                .push(ChildSlot::Element(element_kids.len()));
+                                            element_kids.push(fc);
+                                        }
+                                    }
+                                }
+                                continue;
+                            }
+                        }
+
+                        // Non-slot shadow content: render as element child.
+                        // Text nodes are skipped for now (inline handling TBD).
+                        if !matches!(sc_node, HtmlNodeType::Text(_)) {
+                            child_slots.push(ChildSlot::Element(element_kids.len()));
+                            element_kids.push(sc);
+                        }
+                    }
+
+                    // Light DOM children not assigned to any slot are NOT rendered.
+                } else {
+                    // ── Normal child iteration (no shadow root) ──
+                    for &child in snapshot.children(stack[top_idx].dom) {
+                        let child_node = &snapshot.node(child).kind;
+                        if let HtmlNodeType::Text(t) = child_node {
+                            let t = if parent_tag_name == Some("pre") {
+                                let t = t.strip_prefix('\n').unwrap_or(t);
+                                normalize_whitespace(t, text_flow_style.white_space)
+                            } else if t.chars().all(is_css_newline)
+                                && matches!(
+                                    text_flow_style.white_space,
+                                    WhiteSpace::Normal | WhiteSpace::Nowrap
+                                )
+                            {
+                                continue;
+                            } else {
+                                normalize_whitespace(t, text_flow_style.white_space)
+                            };
+
+                            let t = match text_style.text_transform {
+                                TextTransform::None => t.into_owned(),
+                                TextTransform::Uppercase => t.to_ascii_uppercase(),
+                                TextTransform::Lowercase => t.to_ascii_lowercase(),
+                            };
+                            perf_scope!(text_layout);
+                            let (layouter, kind) = create_text_node(
+                                t,
+                                text_style.clone(),
+                                text_flow_style,
+                                &*measurer,
+                            );
+                            #[cfg(any(feature = "profile", debug_assertions))]
+                            {
+                                text_layout_time += text_layout.elapsed();
+                                node_count += 1;
+                            }
+                            let mut inline_style = style.clone();
+                            inline_style.display = Display::OutsideInner {
+                                outer: OuterDisplay::Inline,
+                                inner: InnerDisplay::Flow,
+                            };
+                            child_slots.push(ChildSlot::Inline(
+                                (inline_style, layouter).into(),
+                                Box::new(InfoNode {
+                                    kind,
+                                    children: Vec::new(),
+                                    dom_id: Some(child),
+                                }),
+                            ));
+                        } else if child_node.tag_name() == Some("br") {
+                            child_slots.push(ChildSlot::Inline(
+                                ItemFragment::LineBreak.into(),
+                                Box::new(InfoNode {
+                                    kind: NodeKind::LineBreak,
+                                    children: Vec::new(),
+                                    dom_id: Some(child),
+                                }),
+                            ));
+                        } else if child_node.tag_name() == Some("noscript")
+                            && scripting_mode == ScriptingMode::Enabled
+                        {
+                            // Skip
+                        } else if child_node.tag_name() == Some("template")
+                            || matches!(child_node, HtmlNodeType::DocumentFragment)
+                        {
+                            // Skip: template contents are inert and never rendered.
+                        } else {
+                            child_slots.push(ChildSlot::Element(element_kids.len()));
+                            element_kids.push(child);
+                        }
                     }
                 }
 
@@ -1299,8 +1466,7 @@ pub fn build_layout_and_info_from_snapshot(
                         images,
                         &get_attr,
                         &stack[top_idx].counter_state,
-                    )
-                    {
+                    ) {
                         child_slots.push(slot);
                         #[cfg(any(feature = "profile", debug_assertions))]
                         {
@@ -2365,12 +2531,10 @@ fn build_pseudo_slot(
             if let CssValue::String(source) = arg_group {
                 container_style.background.layers.push(
                     crate::engine::layouter::types::BackgroundLayer {
-                        image: Some(
-                            crate::engine::layouter::types::BackgroundImage::Image {
-                                source: source.clone(),
-                                image: None,
-                            },
-                        ),
+                        image: Some(crate::engine::layouter::types::BackgroundImage::Image {
+                            source: source.clone(),
+                            image: None,
+                        }),
                         position: Default::default(),
                         size: Default::default(),
                         repeat: Default::default(),
@@ -2518,9 +2682,7 @@ fn resolve_content_function(
                 "0".to_string()
             }
         }
-        "url" => {
-            String::new()
-        }
+        "url" => String::new(),
         _ => String::new(),
     }
 }

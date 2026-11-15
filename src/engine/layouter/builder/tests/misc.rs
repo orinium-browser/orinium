@@ -1,6 +1,9 @@
 use super::*;
-
+use crate::engine::html::parser::ShadowRootMode;
+use crate::engine::layouter::types::ColorScheme;
+use crate::engine::tree::TreeNode;
 use std::borrow::Cow;
+use std::rc::Rc;
 
 #[test]
 fn normalize_whitespace_collapses_css_whitespace_only() {
@@ -257,4 +260,73 @@ fn is_collapsible_whitespace_info_non_text_is_not_collapsible() {
         &container_info,
         WhiteSpace::Pre
     ));
+}
+
+#[test]
+fn shadow_dom_slot_projection_does_not_panic() {
+    use crate::engine::tree::TreeNode as _;
+
+    // Build: <html><body><div id="host"></div></body></html> with shadow root + slot
+    let html = TreeNode::new(HtmlNodeType::Document);
+    let body = TreeNode::new(HtmlNodeType::Element {
+        tag_name: "body".to_string(),
+        attributes: Vec::new(),
+    });
+    let host = TreeNode::new(HtmlNodeType::Element {
+        tag_name: "div".to_string(),
+        attributes: vec![crate::engine::html::tokenizer::Attribute {
+            name: "id".to_string(),
+            value: "host".to_string(),
+        }],
+    });
+    TreeNode::add_child(&html, Rc::clone(&body));
+    TreeNode::add_child(&body, Rc::clone(&host));
+
+    // Light DOM child assigned to slot
+    let light_div = TreeNode::new(HtmlNodeType::Element {
+        tag_name: "div".to_string(),
+        attributes: vec![crate::engine::html::tokenizer::Attribute {
+            name: "slot".to_string(),
+            value: "items".to_string(),
+        }],
+    });
+    TreeNode::add_child(&host, Rc::clone(&light_div));
+
+    // Shadow root attached to host
+    let shadow_root = TreeNode::new(HtmlNodeType::ShadowRoot {
+        mode: ShadowRootMode::Open,
+    });
+    TreeNode::add_child(&host, Rc::clone(&shadow_root));
+
+    // <slot name="items"> inside shadow tree
+    let slot = TreeNode::new(HtmlNodeType::Element {
+        tag_name: "slot".to_string(),
+        attributes: vec![crate::engine::html::tokenizer::Attribute {
+            name: "name".to_string(),
+            value: "items".to_string(),
+        }],
+    });
+    TreeNode::add_child(&shadow_root, Rc::clone(&slot));
+
+    // Fallback content inside slot
+    let fallback_div = TreeNode::new(HtmlNodeType::Element {
+        tag_name: "div".to_string(),
+        attributes: Vec::new(),
+    });
+    TreeNode::add_child(&slot, Rc::clone(&fallback_div));
+
+    let dom = crate::engine::html::DomTree::from_root(Rc::clone(&html));
+    let resolved = crate::engine::layouter::css_resolver::ResolvedStyles::default();
+    let (_layout, _info) = build_layout_and_info(
+        &dom.root,
+        &resolved,
+        Arc::new(FallbackTextMeasurer),
+        Arc::new(crate::engine::bridge::audio::NullAudioSinkFactory),
+        crate::engine::layouter::builder::InheritedCss::default(),
+        crate::engine::css::matcher::ElementChain::default(),
+        ColorScheme::Light,
+        crate::engine::html::ScriptingMode::default(),
+        (0.0, 0.0),
+    );
+    // If we reach here without panicking, the test passes.
 }
