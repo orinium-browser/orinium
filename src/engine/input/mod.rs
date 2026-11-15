@@ -198,21 +198,18 @@ fn map_to_content_local(
     box_model: &BoxModel,
     style: &ContainerStyle,
     scroll: (f32, f32),
-    is_inline_box: bool,
 ) -> Option<(f32, f32)> {
     let mut p = point;
-    if !is_inline_box {
-        p.0 -= box_model.border_box.x;
-        p.1 -= box_model.border_box.y;
-        if let Some(t) = element_transform(style, &box_model.border_box) {
-            let inv = t.inverse()?;
-            p = inv.apply(p.0, p.1);
-        }
-        let dx = box_model.content_box.x - box_model.border_box.x;
-        let dy = box_model.content_box.y - box_model.border_box.y;
-        p.0 = p.0 - dx + scroll.0;
-        p.1 = p.1 - dy + scroll.1;
+    p.0 -= box_model.border_box.x;
+    p.1 -= box_model.border_box.y;
+    if let Some(t) = element_transform(style, &box_model.border_box) {
+        let inv = t.inverse()?;
+        p = inv.apply(p.0, p.1);
     }
+    let dx = box_model.content_box.x - box_model.border_box.x;
+    let dy = box_model.content_box.y - box_model.border_box.y;
+    p.0 = p.0 - dx + scroll.0;
+    p.1 = p.1 - dy + scroll.1;
     Some(p)
 }
 
@@ -281,8 +278,7 @@ fn local_pointer_coords(path: &HitPath<'_>, target: usize, x: f32, y: f32) -> (f
             if !shares_parent_layout
                 && !inline_container
                 && let Some(bm) = hit.layout.layout_box.iter().next()
-                && let Some(lp) =
-                    map_to_content_local(p, &bm, &style, own_scroll, is_inline(hit.layout))
+                && let Some(lp) = map_to_content_local(p, &bm, &style, own_scroll)
             {
                 p = lp;
             }
@@ -293,8 +289,7 @@ fn local_pointer_coords(path: &HitPath<'_>, target: usize, x: f32, y: f32) -> (f
         if !shares_parent_layout
             && !inline_container
             && let Some(bm) = hit.layout.layout_box.iter().next()
-            && let Some(lp) =
-                map_to_content_local(p, &bm, &style, own_scroll, is_inline(hit.layout))
+            && let Some(lp) = map_to_content_local(p, &bm, &style, own_scroll)
         {
             p = lp;
         }
@@ -305,8 +300,8 @@ fn local_pointer_coords(path: &HitPath<'_>, target: usize, x: f32, y: f32) -> (f
         }
         let next = &path[next_index];
         let next_shares = std::ptr::eq(next.layout, hit.layout);
-        if !next_shares && establishes_inline_box_space(hit.layout) {
-            // flow-root inline: renderer translates descendants by box X offset
+        if !next_shares && establishes_inline_box_space(hit.layout) && inline_container {
+            // flow-root inline container: renderer translates descendants by box X offset
             if let Some(bm) = hit.layout.layout_box.iter().next() {
                 p.0 -= bm.content_box.x;
             }
@@ -642,7 +637,6 @@ fn hit_test_popup_inner<'a>(
         return;
     }
 
-    let inline = is_inline(layout);
     let inline_container = is_inline_container(layout, info);
 
     let is_fixed = layout.style.position.kind == Position::Fixed;
@@ -678,7 +672,7 @@ fn hit_test_popup_inner<'a>(
     let (local_x, local_y) = if inline_container {
         p
     } else if let Some(bm) = layout.layout_box.iter().next() {
-        map_to_content_local(p, &bm, &style, own_scroll, inline).unwrap_or(p)
+        map_to_content_local(p, &bm, &style, own_scroll).unwrap_or(p)
     } else {
         p
     };
@@ -705,7 +699,7 @@ fn hit_test_popup_inner<'a>(
     let mut child_x = if inline_container { p.0 } else { local_x };
     let child_y = if inline_container { p.1 } else { local_y };
     if establishes_inline_box_space(layout)
-        && !inline_container
+        && inline_container
         && let Some(bm) = layout.layout_box.iter().next()
     {
         child_x -= bm.content_box.x;
@@ -2252,6 +2246,70 @@ mod tests {
         assert_eq!(
             node.popup_events(),
             vec![PointerEvent::Down { x: 10.0, y: 10.0 }]
+        );
+        assert!(node.events().is_empty());
+    }
+
+    #[test]
+    fn popup_hit_and_dispatch_on_inline_custom_node() {
+        let node: Arc<RecordingNode> = Arc::new(RecordingNode::new(Rect {
+            x: 0.0,
+            y: 30.0,
+            width: 100.0,
+            height: 60.0,
+        }));
+        let custom_info = input_info(Arc::clone(&node) as Arc<dyn CustomNode>);
+
+        let mut root_layout = LayoutNode::with_children(
+            ui_layout::Style::default(),
+            [LayoutNode::new(ui_layout::Style::default())],
+        );
+        root_layout.layout_box =
+            ui_layout::LayoutBox::BlockBox(box_model(0.0, 0.0, 400.0, 400.0, 400.0, 400.0));
+
+        let mut inline_custom_layout = LayoutNode::new(ui_layout::Style::default());
+        inline_custom_layout.layout_box = ui_layout::LayoutBox::InlineBox(ui_layout::InlineBox {
+            box_model: box_model(40.0, 50.0, 100.0, 30.0, 100.0, 30.0),
+            line_spans: vec![ui_layout::LineSpan {
+                x_range: 40.0..140.0,
+                line_pos: (40.0, 50.0),
+                line_index: 0,
+            }],
+        });
+        root_layout.children[0] = ui_layout::LayoutChild::Node(Box::new(inline_custom_layout));
+
+        let mut root_info = container_info(false, None);
+        root_info.children.push(custom_info);
+
+        // Global (60, 95): inside popup at (40, 80)-(140, 140).
+        // Custom content local: (60-40, 95-50) = (20, 45).
+        // Popup local: (20, 45-30) = (20, 15).
+        let path = hit_test(&root_layout, &root_info, 60.0, 95.0);
+        assert!(hit_custom_node(&path).is_some());
+        assert!(!dismiss_open_popups(&root_info, &path, 60.0, 95.0));
+        dispatch_pointer(&path, PointerEvent::Down { x: 60.0, y: 95.0 });
+        assert_eq!(
+            node.popup_events(),
+            vec![PointerEvent::Down { x: 20.0, y: 15.0 }]
+        );
+        assert!(node.events().is_empty());
+    }
+
+    #[test]
+    fn popup_escaping_ancestor_box_receives_dispatch() {
+        let (root_layout, root_info, node) = make_tree(0.0);
+        // Container box ends at y=120, popup reaches y=132.
+        // Click at (20, 125): inside popup, outside container.
+        let path = hit_test(&root_layout, &root_info, 20.0, 125.0);
+        assert!(hit_custom_node(&path).is_some());
+        assert!(!dismiss_open_popups(&root_info, &path, 20.0, 125.0));
+
+        // Global (20, 125) -> local (20-15, 125-20) = (5, 105)
+        // -> inside popup (y in 28..112) -> popup local (5, 105-28=77).
+        dispatch_pointer(&path, PointerEvent::Down { x: 20.0, y: 125.0 });
+        assert_eq!(
+            node.popup_events(),
+            vec![PointerEvent::Down { x: 5.0, y: 77.0 }]
         );
         assert!(node.events().is_empty());
     }
