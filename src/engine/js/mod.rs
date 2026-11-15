@@ -182,6 +182,9 @@ pub struct JsHost {
     /// `ShadowRoot` interface prototype assigned to exposed shadow-root
     /// wrappers so `instanceof ShadowRoot` holds.
     pub(crate) shadow_root_prototype: Option<Rc<RefCell<JSObject>>>,
+    /// `HTMLSlotElement` interface prototype assigned to exposed `<slot>`
+    /// wrappers so `instanceof HTMLSlotElement` holds.
+    pub(crate) slot_prototype: Option<Rc<RefCell<JSObject>>>,
     pub(crate) document: Option<Rc<RefCell<JSObject>>>,
     pub(crate) document_implementation: Option<Rc<RefCell<JSObject>>>,
     /// Independent document instances for `<iframe>` elements, keyed by the
@@ -330,6 +333,7 @@ impl JsRuntime {
             node_prototype: None,
             fragment_prototype: None,
             shadow_root_prototype: None,
+            slot_prototype: None,
             document: None,
             document_implementation: None,
             iframe_documents: HashMap::new(),
@@ -4633,6 +4637,34 @@ mod tests {
     }
 
     #[test]
+    fn test_custom_element_constructor_super() {
+        let (mut runtime, _dom) = runtime_from_html(
+            r#"<html><body><slot-api-host id="slot-api-host"></slot-api-host></body></html>"#,
+        );
+        runtime.run_script(
+            r#"
+            try {
+                class SlotApiHost extends HTMLElement {
+                  constructor() {
+                    super();
+                    this.foo = 42;
+                  }
+                }
+                customElements.define("slot-api-host", SlotApiHost);
+                const el = new SlotApiHost();
+                document.body.setAttribute("data-foo", String(el.foo));
+            } catch (e) {
+                document.body.setAttribute("data-err", String(e));
+            }
+            "#,
+            None,
+        );
+        let body = _dom.get_elements_by_tag_name("body").remove(0);
+        assert_eq!(body.borrow().value.get_attr("data-foo"), Some("42"));
+        assert_eq!(body.borrow().value.get_attr("data-err"), None);
+    }
+
+    #[test]
     fn custom_elements_attribute_changed_and_when_defined() {
         let (mut runtime, dom) =
             runtime_from_html(r#"<html><body><div id="result"></div></body></html>"#);
@@ -4750,6 +4782,160 @@ mod tests {
         let result = dom.get_element_by_id("host").unwrap();
         let result = result.borrow();
         assert_eq!(result.value.get_attr("data-closed"), Some("true"));
+    }
+
+    #[test]
+    fn shadow_dom_slot_assigned_and_name() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<html><body><div id="host"></div></body></html>"#);
+        runtime.run_script(
+            r##"
+            var host = document.getElementById("host");
+            var sr = host.attachShadow({ mode: "open" });
+            var s1 = document.createElement("slot");
+            s1.name = "items";
+            var s2 = document.createElement("slot");
+            sr.appendChild(s1);
+            sr.appendChild(s2);
+
+            var div1 = document.createElement("div");
+            div1.slot = "items";
+            var div2 = document.createElement("div");
+            sr.appendChild(div1);
+            sr.appendChild(div2);
+
+            host.setAttribute("data-slot1-type", typeof HTMLSlotElement);
+            host.setAttribute("data-slot1-instance", s1 instanceof HTMLSlotElement ? "true" : "false");
+            host.setAttribute("data-slot1-name", s1.name);
+            host.setAttribute("data-slot2-name", s2.name);
+            host.setAttribute("data-div1-assigned", div1.assignedSlot === s1 ? "true" : "false");
+            host.setAttribute("data-div1-assigned-null", div1.assignedSlot === null ? "true" : "false");
+            host.setAttribute("data-div2-assigned", div2.assignedSlot === s2 ? "true" : "false");
+            host.setAttribute("data-div2-default", div2.assignedSlot === null ? "true" : "false");
+            "##,
+            None,
+        );
+        let result = dom.get_element_by_id("host").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-slot1-type"), Some("function"));
+        assert_eq!(result.value.get_attr("data-slot1-instance"), Some("true"));
+        assert_eq!(result.value.get_attr("data-slot1-name"), Some("items"));
+        assert_eq!(result.value.get_attr("data-slot2-name"), Some(""));
+        assert_eq!(result.value.get_attr("data-div1-assigned"), Some("true"));
+        assert_eq!(
+            result.value.get_attr("data-div1-assigned-null"),
+            Some("false")
+        );
+        assert_eq!(result.value.get_attr("data-div2-assigned"), Some("true"));
+        assert_eq!(result.value.get_attr("data-div2-default"), Some("false"));
+    }
+
+    #[test]
+    fn shadow_dom_composed_and_composed_path() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<html><body><div id="host"></div></body></html>"#);
+        runtime.run_script(
+            r##"
+            var host = document.getElementById("host");
+            var sr = host.attachShadow({ mode: "open" });
+            var btn = document.createElement("button");
+            btn.id = "innerBtn";
+            sr.appendChild(btn);
+
+            var results = [];
+
+            try {
+            // composed defaults to false
+            var ev1 = new Event("test", { bubbles: true });
+            results.push("composed1:" + ev1.composed);
+
+            // composed=true
+            var ev2 = new Event("test2", { bubbles: true, composed: true });
+            results.push("composed2:" + ev2.composed);
+
+            // composedPath on a fresh event returns empty array
+            results.push("path1:" + ev1.composedPath().length);
+
+            // Non-composed event: add listener on host, dispatch inside shadow
+            var hostCaught = false;
+            host.addEventListener("test", function() { hostCaught = true; });
+            btn.dispatchEvent(ev1);
+            results.push("hostCaughtNonComposed:" + hostCaught);
+
+            // Composed event: add listener on host, dispatch inside shadow
+            var hostCaught2 = false;
+            host.addEventListener("test2", function() { hostCaught2 = true; });
+            btn.dispatchEvent(ev2);
+            results.push("hostCaughtComposed:" + hostCaught2);
+
+            // composedPath for composed event should include host
+            var path = ev2.composedPath();
+            results.push("pathLen:" + path.length);
+            results.push("pathHasHost:" + (path.indexOf(host) !== -1 ? "true" : "false"));
+            } catch(e) {
+            results.push("ERROR:" + e.toString());
+            }
+
+            host.setAttribute("data-r", results.join(";"));
+            "##,
+            None,
+        );
+        let result = dom.get_element_by_id("host").unwrap();
+        let result = result.borrow();
+        assert_eq!(
+            result.value.get_attr("data-r"),
+            Some(
+                "composed1:false;composed2:true;path1:0;hostCaughtNonComposed:false;hostCaughtComposed:true;pathLen:5;pathHasHost:true"
+            )
+        );
+    }
+
+    #[test]
+    fn shadow_dom_slotchange_on_slot_attribute_change() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<html><body><div id="host"></div></body></html>"#);
+        runtime.run_script(
+            r##"
+            var host = document.getElementById("host");
+            var sr = host.attachShadow({ mode: "open" });
+            var s1 = document.createElement("slot");
+            s1.name = "items";
+            var s2 = document.createElement("slot");
+            sr.appendChild(s1);
+            sr.appendChild(s2);
+
+            var slot1Events = [];
+            var slot2Events = [];
+            s1.addEventListener("slotchange", function() { slot1Events.push("change"); });
+            s2.addEventListener("slotchange", function() { slot2Events.push("change"); });
+
+            var div1 = document.createElement("div");
+            div1.slot = "items";  // assign to s1
+            sr.appendChild(div1);
+            host.setAttribute("data-slot1-events", slot1Events.length.toString());
+            host.setAttribute("data-slot2-events", slot2Events.length.toString());
+
+            div1.slot = "";  // unassign from s1
+            host.setAttribute("data-slot1-events2", slot1Events.length.toString());
+            host.setAttribute("data-slot2-events2", slot2Events.length.toString());
+
+            div1.slot = "other";  // assign to s2 (default slot since s2 has no name)
+            host.setAttribute("data-slot1-events3", slot1Events.length.toString());
+            host.setAttribute("data-slot2-events3", slot2Events.length.toString());
+            "##,
+            None,
+        );
+        let result = dom.get_element_by_id("host").unwrap();
+        let result = result.borrow();
+        // div1.slot = "items" -> assigned to s1: slot1 +1
+        assert_eq!(result.value.get_attr("data-slot1-events"), Some("1"));
+        assert_eq!(result.value.get_attr("data-slot2-events"), Some("0"));
+        // div1.slot = "" -> unassigned from s1, assigned to default s2: both +1
+        assert_eq!(result.value.get_attr("data-slot1-events2"), Some("2"));
+        assert_eq!(result.value.get_attr("data-slot2-events2"), Some("1"));
+        // div1.slot = "other" -> unassigned from default s2: s2 +1
+        assert_eq!(result.value.get_attr("data-slot1-events3"), Some("2"));
+        assert_eq!(result.value.get_attr("data-slot2-events3"), Some("2"));
     }
 
     #[test]
