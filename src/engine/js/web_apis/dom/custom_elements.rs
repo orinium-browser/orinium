@@ -156,40 +156,49 @@ fn custom_elements_define(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> 
     };
 
     with_host_mut(vm, |host| {
-        host.custom_elements.insert(name.clone(), definition);
+        host.custom_elements
+            .insert(name.clone(), definition.clone());
     });
 
     // Upgrade existing elements with this tag name: link the class prototype
-    // first so `this` inside lifecycle callbacks has the element methods.
-    let dom_ids: Vec<u64> = with_host(vm, |host| {
-        host.refs
-            .iter()
-            .filter_map(|(&dom_id, weak)| {
-                let node = weak.upgrade()?;
-                let tag = node.borrow().value.tag_name()?.to_ascii_lowercase();
-                if tag == name { Some(dom_id) } else { None }
-            })
-            .collect()
-    })
-    .unwrap_or_default();
-
-    with_host_mut(vm, |host| {
-        let Some(definition) = host.custom_elements.get(&name) else {
-            return;
-        };
-        if let Some(class_proto) = custom_element_class_prototype(definition) {
-            for dom_id in &dom_ids {
-                if let Some(element) = host.objects.get(dom_id) {
-                    element
-                        .borrow_mut()
-                        .set_prototype(Some(Rc::clone(&class_proto)));
+    // and run the custom element constructor per the Custom Elements spec.
+    let matching_nodes: Vec<crate::engine::tree::NodeRef<crate::engine::html::HtmlNodeType>> =
+        with_host(vm, |host| {
+            let mut nodes = host.dom.find_all(|n| {
+                n.tag_name()
+                    .map(|t| t.eq_ignore_ascii_case(&name))
+                    .unwrap_or(false)
+            });
+            for node in host.detached_nodes.values() {
+                let matches = node
+                    .borrow()
+                    .value
+                    .tag_name()
+                    .map(|t| t.eq_ignore_ascii_case(&name))
+                    .unwrap_or(false);
+                if matches && !nodes.iter().any(|existing| Rc::ptr_eq(existing, node)) {
+                    nodes.push(Rc::clone(node));
                 }
             }
-        }
-    });
+            for weak in host.refs.values() {
+                if let Some(node) = weak.upgrade() {
+                    let matches = node
+                        .borrow()
+                        .value
+                        .tag_name()
+                        .map(|t| t.eq_ignore_ascii_case(&name))
+                        .unwrap_or(false);
+                    if matches && !nodes.iter().any(|existing| Rc::ptr_eq(existing, &node)) {
+                        nodes.push(node);
+                    }
+                }
+            }
+            nodes
+        })
+        .unwrap_or_default();
 
-    for dom_id in &dom_ids {
-        fire_lifecycle_callback(vm, *dom_id, |d| d.connected_callback.clone());
+    for node in matching_nodes {
+        upgrade_custom_element(vm, &node, &definition);
     }
 
     // Resolve pending `whenDefined()` promises.
@@ -235,27 +244,51 @@ fn custom_elements_get(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 fn custom_elements_upgrade(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let root_value = args.get(1).cloned().unwrap_or(JSValue::undefined());
 
-    // Collect all DOM ids + tags of elements that have a registered custom
-    // element tag.  If a root argument was given, restrict to descendants of
-    // that root.
-    let dom_ids: Vec<u64> = with_host(vm, |host| {
+    let matching_nodes: Vec<(
+        crate::engine::tree::NodeRef<crate::engine::html::HtmlNodeType>,
+        CustomElementDefinition,
+    )> = with_host(vm, |host| {
         let root_dom_id = crate::engine::js::common::node_dom_id(&root_value);
+        let mut candidates = host.dom.find_all(|n| {
+            n.tag_name()
+                .is_some_and(|t| host.custom_elements.contains_key(&t.to_ascii_lowercase()))
+        });
+        for node in host.detached_nodes.values() {
+            if node
+                .borrow()
+                .value
+                .tag_name()
+                .is_some_and(|t| host.custom_elements.contains_key(&t.to_ascii_lowercase()))
+                && !candidates.iter().any(|existing| Rc::ptr_eq(existing, node))
+            {
+                candidates.push(Rc::clone(node));
+            }
+        }
+        for weak in host.refs.values() {
+            if let Some(node) = weak.upgrade()
+                && node
+                    .borrow()
+                    .value
+                    .tag_name()
+                    .is_some_and(|t| host.custom_elements.contains_key(&t.to_ascii_lowercase()))
+                && !candidates
+                    .iter()
+                    .any(|existing| Rc::ptr_eq(existing, &node))
+            {
+                candidates.push(node);
+            }
+        }
 
-        host.refs
-            .iter()
-            .filter_map(|(&dom_id, weak)| {
-                let node = weak.upgrade()?;
+        candidates
+            .into_iter()
+            .filter_map(|node| {
                 let tag = node.borrow().value.tag_name()?.to_ascii_lowercase();
-                if !host.custom_elements.contains_key(&tag) {
-                    return None;
-                }
-                // If a root was specified, check that the element is a
-                // descendant of the root (or is the root itself).
+                let def = host.custom_elements.get(&tag)?.clone();
                 if let Some(root_id) = root_dom_id {
-                    if dom_id == root_id {
-                        return Some(dom_id);
+                    let node_id = host.dom_id_for_node(&node)?;
+                    if node_id == root_id {
+                        return Some((node, def));
                     }
-                    // Walk up from this node to see if we reach the root.
                     let mut current = Some(Rc::clone(&node));
                     let mut found = false;
                     while let Some(n) = current {
@@ -267,36 +300,65 @@ fn custom_elements_upgrade(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue>
                         }
                         current = n.borrow().parent();
                     }
-                    if found { Some(dom_id) } else { None }
+                    if found { Some((node, def)) } else { None }
                 } else {
-                    Some(dom_id)
+                    Some((node, def))
                 }
             })
             .collect()
     })
     .unwrap_or_default();
 
-    for dom_id in &dom_ids {
-        with_host_mut(vm, |host| {
-            let Some(node) = host.refs.get(dom_id).and_then(|w| w.upgrade()) else {
-                return;
-            };
-            let Some(tag) = node.borrow().value.tag_name().map(str::to_ascii_lowercase) else {
-                return;
-            };
-            if let Some(definition) = host.custom_elements.get(&tag)
-                && let Some(class_proto) = custom_element_class_prototype(definition)
-                && let Some(element) = host.objects.get(dom_id)
-            {
-                element
-                    .borrow_mut()
-                    .set_prototype(Some(Rc::clone(&class_proto)));
-            }
-        });
-        fire_lifecycle_callback(vm, *dom_id, |d| d.connected_callback.clone());
+    for (node, def) in matching_nodes {
+        upgrade_custom_element(vm, &node, &def);
     }
 
     Ok(JSValue::undefined())
+}
+
+/// Upgrades an element instance to a custom element per the Custom Elements spec.
+pub(crate) fn upgrade_custom_element(
+    vm: &mut VM,
+    node: &crate::engine::tree::NodeRef<crate::engine::html::HtmlNodeType>,
+    definition: &CustomElementDefinition,
+) {
+    let Some(element_val) = super::document::expose_node(vm, Rc::clone(node)) else {
+        return;
+    };
+    let Some(dom_id) = with_host(vm, |host| host.dom_id_for_node(node)).flatten() else {
+        return;
+    };
+
+    if let Some(class_proto) = custom_element_class_prototype(definition) {
+        if let Some(element) = with_host(vm, |host| host.objects.get(&dom_id).cloned()).flatten() {
+            element
+                .borrow_mut()
+                .set_prototype(Some(Rc::clone(&class_proto)));
+        }
+    }
+
+    let should_construct = element_val
+        .as_object()
+        .map(|obj| {
+            if obj.borrow().get("__orinium_ce_constructed").to_boolean() {
+                false
+            } else {
+                obj.borrow_mut().set(
+                    "__orinium_ce_constructed".to_string(),
+                    JSValue::from_bool(true),
+                );
+                true
+            }
+        })
+        .unwrap_or(false);
+
+    if should_construct {
+        if let Err(err) = vm.call(definition.constructor.clone(), element_val, vec![]) {
+            log::info!("JS error in custom element constructor: {}", err);
+        }
+    }
+
+    fire_lifecycle_callback(vm, dom_id, |d| d.connected_callback.clone());
 }
 
 // ---------------------------------------------------------------------------
