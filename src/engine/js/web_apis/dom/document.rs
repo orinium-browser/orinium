@@ -7,9 +7,9 @@ use crate::engine::js::web_apis::browser_env::window_dispatch_event;
 use crate::engine::js::web_apis::dom::custom_elements::link_custom_element_prototype;
 use crate::engine::js::web_apis::dom::dom_exception::throw_dom_exception;
 use crate::engine::js::web_apis::dom::element::{
-    accessor_property, define_node_constants, make_comment_node, make_doctype_node,
-    make_document_fragment, make_element, make_node_interface, make_processing_instruction_node,
-    make_text_node, read_only_accessor_property,
+    accessor_property, configurable_accessor_property, define_node_constants, make_comment_node,
+    make_doctype_node, make_document_fragment, make_element, make_node_interface,
+    make_processing_instruction_node, make_text_node, read_only_accessor_property,
 };
 use crate::engine::js::web_apis::dom::node_iterator;
 use crate::engine::js::web_apis::dom::node_iterator::{make_node_iterator, make_tree_walker};
@@ -61,6 +61,17 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
     if let Some(element_constructor) =
         with_host(engine.vm(), |host| Rc::clone(&host.element_constructor))
     {
+        element_constructor
+            .borrow_mut()
+            .set_prototype(Some(Rc::clone(&engine.vm().function_prototype)));
+        element_constructor.borrow_mut().set(
+            "__call__".to_string(),
+            JSValue::from_native_function(html_element_constructor_call),
+        );
+        element_constructor.borrow_mut().set(
+            "__construct__".to_string(),
+            JSValue::from_native_function(html_element_constructor_call),
+        );
         let mut global = engine.global_mut().borrow_mut();
         global.set(
             "Element".to_string(),
@@ -177,6 +188,46 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
         });
     }
 
+    // `HTMLSlotElement` interface. `new HTMLSlotElement()` is illegal, but
+    // scripts feature-detect `typeof HTMLSlotElement === 'function'` and
+    // check `slot instanceof HTMLSlotElement`; the host hook matches the
+    // exposed `<slot>` wrapper objects. `<slot>` elements also get a live
+    // `name` property reflecting the `name` content attribute.
+    {
+        let slot_prototype = Rc::new(RefCell::new(JSObject::with_prototype(Some(
+            with_host(engine.vm(), |host| Rc::clone(&host.element_prototype))
+                .expect("element_prototype must be set"),
+        ))));
+        slot_prototype.borrow_mut().define_property(
+            "name".to_string(),
+            configurable_accessor_property(get_slot_name, set_slot_name),
+        );
+        let mut slot_constructor = JSObject::new();
+        slot_constructor.set(
+            "__call__".to_string(),
+            JSValue::from_native_function(slot_construct_error),
+        );
+        slot_constructor.set(
+            "__construct__".to_string(),
+            JSValue::from_native_function(slot_construct_error),
+        );
+        slot_constructor.define_property(
+            "prototype".to_string(),
+            Property::read_only(JSValue::from_object(Rc::clone(&slot_prototype))),
+        );
+        slot_constructor.set(
+            "__host_has_instance__".to_string(),
+            JSValue::from_native_function(slot_has_instance),
+        );
+        engine.global_mut().borrow_mut().set(
+            "HTMLSlotElement".to_string(),
+            JSValue::from_object(Rc::new(RefCell::new(slot_constructor))),
+        );
+        let _ = with_host_mut(engine.vm(), |host| {
+            host.slot_prototype = Some(slot_prototype);
+        });
+    }
+
     // Miscellaneous DOM interface constructors. Polymer and the
     // webcomponents polyfills feature-detect these as `typeof X === 'function'`
     // / `instanceof` before using them; missing ones make large chunks of
@@ -230,7 +281,6 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
         }
         for name in [
             "HTMLDocument",
-            "HTMLSlotElement",
             "HTMLUnknownElement",
             "HTMLLinkElement",
             "HTMLStyleElement",
@@ -378,6 +428,7 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
     let fragment_prototype = {
         let mut inner = JSObject::new();
         inner.set_prototype(Some(Rc::clone(&node_prototype)));
+        super::parent_node::install_parent_node_methods(&mut inner);
         Rc::new(RefCell::new(inner))
     };
     {
@@ -610,6 +661,9 @@ fn define_document_interface(document: &mut JSObject) {
         "close".to_string(),
         JSValue::from_native_function(document_close),
     );
+    // `ParentNode` mixin: `append`, `prepend`, `replaceChildren`. Shared with
+    // `Element`, `DocumentFragment`, and `ShadowRoot`.
+    super::parent_node::install_parent_node_methods(document);
 }
 
 /// Builds a `Document` interface object for a document node other than the
@@ -622,6 +676,13 @@ fn make_secondary_document_object(dom_id: u64) -> Rc<RefCell<JSObject>> {
         JSValue::from_number(dom_id as f64),
     );
     Rc::new(RefCell::new(document))
+}
+
+/// `HTMLElement` constructor call / construct hook. When `super()` is called in
+/// a custom element derived class constructor, this returns `this`.
+fn html_element_constructor_call(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let this = args.first().cloned().unwrap_or(JSValue::undefined());
+    Ok(this)
 }
 
 /// `new ShadowRoot()` is illegal; shadow roots come from `attachShadow`.
@@ -937,11 +998,17 @@ pub(crate) fn create_element(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValu
         ));
     }
     let node = TreeNode::new(HtmlNodeType::Element {
-        tag_name,
+        tag_name: tag_name.clone(),
         attributes: Vec::new(),
     });
     adopt_owner_document(args.first().unwrap_or(&JSValue::undefined()), &node);
-    Ok(expose_detached_node(vm, node).unwrap_or(JSValue::null()))
+    let val = expose_detached_node(vm, Rc::clone(&node)).unwrap_or(JSValue::null());
+    if let Some(definition) =
+        with_host(vm, |host| host.custom_elements.get(&tag_name).cloned()).flatten()
+    {
+        super::custom_elements::upgrade_custom_element(vm, &node, &definition);
+    }
+    Ok(val)
 }
 
 fn create_element_ns(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -1758,13 +1825,31 @@ fn expose_node_inner(vm: &VM, node: NodeRef<HtmlNodeType>, kind: NodeKind) -> Op
         let is_element = matches!(kind, NodeKind::Element { .. });
 
         let obj = match &kind {
-            NodeKind::Element { tag_name, id } => make_element(
-                tag_name.clone(),
-                id.clone(),
-                dom_id,
-                Rc::clone(&host.element_prototype),
-                Rc::clone(&host.element_constructor),
-            ),
+            NodeKind::Element { tag_name, id } => {
+                // `<slot>` elements use the HTMLSlotElement prototype so that
+                // `slot instanceof HTMLSlotElement` holds and the `name`
+                // accessor property is available.
+                let (proto, ctor) = if tag_name.eq_ignore_ascii_case("slot") {
+                    let proto = host
+                        .slot_prototype
+                        .clone()
+                        .unwrap_or_else(|| Rc::clone(&host.element_prototype));
+                    let ctor = vm
+                        .global_object
+                        .borrow()
+                        .get("HTMLSlotElement")
+                        .as_object()
+                        .map(|o| Rc::clone(&o))
+                        .unwrap_or_else(|| Rc::clone(&host.element_constructor));
+                    (proto, ctor)
+                } else {
+                    (
+                        Rc::clone(&host.element_prototype),
+                        Rc::clone(&host.element_constructor),
+                    )
+                };
+                make_element(tag_name.clone(), id.clone(), dom_id, proto, ctor)
+            }
             NodeKind::Text => make_text_node(dom_id),
             NodeKind::Comment => make_comment_node(dom_id),
             NodeKind::ProcessingInstruction => make_processing_instruction_node(dom_id),
@@ -1869,7 +1954,14 @@ pub(crate) fn expose_shadow_root(
             "textContent".to_string(),
             accessor_property(get_shadow_text_content, set_shadow_text_content),
         );
-        // querySelector / querySelectorAll
+        obj.define_property(
+            "innerHTML".to_string(),
+            accessor_property(
+                super::element::get_inner_html,
+                super::element::set_inner_html,
+            ),
+        );
+        // querySelector / querySelectorAll / getElementById
         obj.define_property(
             "querySelector".to_string(),
             Property::read_only(JSValue::from_native_function(shadow_query_selector)),
@@ -1877,6 +1969,10 @@ pub(crate) fn expose_shadow_root(
         obj.define_property(
             "querySelectorAll".to_string(),
             Property::read_only(JSValue::from_native_function(shadow_query_selector_all)),
+        );
+        obj.define_property(
+            "getElementById".to_string(),
+            Property::read_only(JSValue::from_native_function(shadow_get_element_by_id)),
         );
         // DOM mutation methods (delegate to element functions).
         obj.set(
@@ -1903,6 +1999,9 @@ pub(crate) fn expose_shadow_root(
             "children".to_string(),
             read_only_accessor_property(super::element::get_element_children),
         );
+        // `ParentNode` mixin: `append`, `prepend`, `replaceChildren`. Shadow
+        // roots inherit `DocumentFragment` and share these methods.
+        super::parent_node::install_parent_node_methods(&mut obj);
         let host_obj = Rc::new(RefCell::new(obj));
         // Shadow roots chain the `ShadowRoot` interface prototype (falling
         // back to Node.prototype) so `instanceof ShadowRoot` holds.
@@ -1973,6 +2072,47 @@ fn shadow_query_selector_all(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValu
         .ok_or_else(|| JSError::TypeError("querySelectorAll: node not found".to_string()))?;
     let results = DomTree::query_selector_all_within(&node, selector);
     Ok(super::document::expose_node_list(vm, results))
+}
+
+fn shadow_get_element_by_id(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let this = args.first().cloned().unwrap_or(JSValue::undefined());
+    let dom_id = node_dom_id(&this)
+        .ok_or_else(|| JSError::TypeError("getElementById: not a node".to_string()))?;
+    let id = args.get(1).and_then(JSValue::as_string).unwrap_or("");
+    let node = with_host(vm, |host| host.refs.get(&dom_id).cloned())
+        .flatten()
+        .and_then(|w| w.upgrade())
+        .ok_or_else(|| JSError::TypeError("getElementById: node not found".to_string()))?;
+    let found = find_element_by_id_within(&node, id);
+    match found {
+        Some(found_node) => {
+            Ok(super::document::expose_node(vm, found_node).unwrap_or(JSValue::null()))
+        }
+        None => Ok(JSValue::null()),
+    }
+}
+
+fn find_element_by_id_within(
+    root: &NodeRef<HtmlNodeType>,
+    id: &str,
+) -> Option<NodeRef<HtmlNodeType>> {
+    let mut stack = vec![Rc::clone(root)];
+    while let Some(current) = stack.pop() {
+        if let HtmlNodeType::Element { attributes, .. } = &current.borrow().value {
+            if attributes
+                .iter()
+                .any(|attr| attr.name == "id" && attr.value == id)
+            {
+                return Some(Rc::clone(&current));
+            }
+        }
+        for child in current.borrow().children().iter().rev() {
+            if !matches!(child.borrow().value, HtmlNodeType::ShadowRoot { .. }) {
+                stack.push(Rc::clone(child));
+            }
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -2555,4 +2695,106 @@ fn exception_name_for_code(code: f64) -> &'static str {
         14.0 => "NamespaceError",
         _ => "DOMException",
     }
+}
+
+// ---------------------------------------------------------------------------
+// HTMLSlotElement natives
+// ---------------------------------------------------------------------------
+
+/// `new HTMLSlotElement()` is forbidden: the platform exposes `<slot>`
+/// elements only through the parser / `createElement`.
+fn slot_construct_error(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    Err(JSError::TypeError(
+        "Illegal constructor: HTMLSlotElement cannot be constructed directly".to_string(),
+    ))
+}
+
+/// `instanceof HTMLSlotElement` hook: true for exposed `<slot>` wrappers.
+fn slot_has_instance(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let matches = args
+        .get(1)
+        .and_then(JSValue::as_object)
+        .map(|object| {
+            // Fast path: walk the prototype chain looking for the slot interface prototype.
+            let constructor = vm.global_object.borrow().get("HTMLSlotElement");
+            let proto = constructor
+                .as_object()
+                .and_then(|c| c.borrow().get("prototype").as_object());
+            if let Some(proto) = proto {
+                let mut current = Some(object.clone());
+                while let Some(obj) = current {
+                    if Rc::ptr_eq(&obj, &proto) {
+                        return true;
+                    }
+                    current = obj.borrow().get_prototype();
+                }
+            }
+            // Fallback: check whether the wrapped DOM node is a `<slot>` element.
+            // This covers cases where the prototype chain was not wired through
+            // `slot_prototype` (e.g. objects exposed before `install_document`).
+            if let Some(node) =
+                crate::engine::js::common::dom_node(vm, &JSValue::from_object(object))
+            {
+                if let crate::engine::html::HtmlNodeType::Element { tag_name, .. } =
+                    &node.borrow().value
+                {
+                    return tag_name.eq_ignore_ascii_case("slot");
+                }
+            }
+            false
+        })
+        .unwrap_or(false);
+    Ok(JSValue::from_bool(matches))
+}
+
+/// `slot.name` getter: reflects the `name` content attribute.
+fn get_slot_name(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let this = args.first().cloned().unwrap_or(JSValue::undefined());
+    let Some(dom_id) = crate::engine::js::common::node_dom_id(&this) else {
+        return Ok(JSValue::undefined());
+    };
+    let name = with_host(vm, |host| {
+        host.refs
+            .get(&dom_id)
+            .and_then(|w| w.upgrade())
+            .and_then(|node| {
+                let b = node.borrow();
+                match &b.value {
+                    crate::engine::html::HtmlNodeType::Element { attributes, .. } => attributes
+                        .iter()
+                        .find(|a| a.name == "name")
+                        .map(|a| a.value.clone()),
+                    _ => None,
+                }
+            })
+    })
+    .flatten();
+    Ok(JSValue::from_string(name.unwrap_or_default()))
+}
+
+/// `slot.name` setter: sets the `name` content attribute.
+fn set_slot_name(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let this = args.first().cloned().unwrap_or(JSValue::undefined());
+    let value = args.get(1).cloned().unwrap_or(JSValue::undefined());
+    let value_str = value.as_string().unwrap_or_default();
+    let Some(dom_id) = crate::engine::js::common::node_dom_id(&this) else {
+        return Ok(JSValue::undefined());
+    };
+    with_host_mut(vm, |host| {
+        if let Some(node) = host.refs.get(&dom_id).and_then(|w| w.upgrade()) {
+            let mut b = node.borrow_mut();
+            match &mut b.value {
+                crate::engine::html::HtmlNodeType::Element { attributes, .. } => {
+                    // Remove existing `name` attribute, then append new one.
+                    attributes.retain(|a| a.name != "name");
+                    attributes.push(crate::engine::html::tokenizer::Attribute {
+                        name: "name".to_string(),
+                        value: value_str.to_string(),
+                    });
+                }
+                _ => {}
+            }
+        }
+    });
+    Ok(JSValue::undefined())
 }
