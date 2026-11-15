@@ -863,7 +863,6 @@ fn stroke_closed_ring(out: &mut Path, points: &[(f32, f32)], stroke: &Stroke, w:
 /// and outgoing tangents are `u` and `v`, transitioning from the offset point
 /// on `u` to the offset point on `v`.
 fn join_at(out: &mut Path, stroke: &Stroke, dir: f32, p: (f32, f32), u: (f32, f32), v: (f32, f32)) {
-    let miter_limit = stroke.miter_limit.max(1.0) * dir.abs();
     let to = (p.0 + dir * normal(v).0, p.1 + dir * normal(v).1);
     match stroke.join {
         StrokeJoin::Bevel => out.line_to(to.0, to.1),
@@ -872,17 +871,20 @@ fn join_at(out: &mut Path, stroke: &Stroke, dir: f32, p: (f32, f32), u: (f32, f3
             append_arc(out, p, dir.abs(), from, to);
         }
         StrokeJoin::Miter => {
-            // The current point is already the +-side offset of the incoming
-            // segment, so the apex reaches the joined corner directly.
+            // SVG spec: fall back to bevel when miter length / stroke width
+            // exceeds the miter limit.
             match miter_point(dir, p, u, v) {
-                Some(apex)
-                    if (apex.0 - p.0).abs() <= miter_limit
-                        && (apex.1 - p.1).abs() <= miter_limit =>
-                {
-                    out.line_to(apex.0, apex.1);
-                    out.line_to(to.0, to.1);
+                Some(apex) => {
+                    let miter_len =
+                        ((apex.0 - p.0).powi(2) + (apex.1 - p.1).powi(2)).sqrt();
+                    if miter_len <= stroke.miter_limit.max(1.0) * stroke.width {
+                        out.line_to(apex.0, apex.1);
+                        out.line_to(to.0, to.1);
+                    } else {
+                        out.line_to(to.0, to.1);
+                    }
                 }
-                _ => out.line_to(to.0, to.1),
+                None => out.line_to(to.0, to.1),
             }
         }
     }
