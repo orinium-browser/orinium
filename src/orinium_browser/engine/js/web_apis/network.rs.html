@@ -608,7 +608,7 @@
 <a href=#608 id=608 data-nosnippet>608</a>    <span class="kw">let _ </span>= with_host_mut(vm, |host| {
 <a href=#609 id=609 data-nosnippet>609</a>        host.next_fetch_id += <span class="number">1</span>;
 <a href=#610 id=610 data-nosnippet>610</a>        <span class="kw">let </span>id = host.next_fetch_id;
-<a href=#611 id=611 data-nosnippet>611</a>        host.fetch_urls.insert(id, url.to_string());
+<a href=#611 id=611 data-nosnippet>611</a>        host.fetch_urls.insert(id, url.clone());
 <a href=#612 id=612 data-nosnippet>612</a>        host.fetch_capabilities.insert(id, capability);
 <a href=#613 id=613 data-nosnippet>613</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(signal) = signal.as_ref().and_then(JSValue::as_object) {
 <a href=#614 id=614 data-nosnippet>614</a>            host.fetch_signals.insert(id, signal);
