@@ -183,6 +183,9 @@ pub(crate) fn make_element_interface() -> (Rc<RefCell<JSObject>>, Rc<RefCell<JSO
         "shadowRoot".to_string(),
         read_only_accessor_property(super::shadow_dom::get_shadow_root),
     );
+    // `ParentNode` mixin: `append`, `prepend`, `replaceChildren`. Shared with
+    // `Document`, `DocumentFragment`, and `ShadowRoot`.
+    super::parent_node::install_parent_node_methods(&mut prototype);
     let prototype = Rc::new(RefCell::new(prototype));
     let mut constructor = JSObject::new();
     constructor.define_property(
@@ -283,6 +286,14 @@ pub(crate) fn make_node_interface() -> (Rc<RefCell<JSObject>>, Rc<RefCell<JSObje
     prototype.set(
         "hasChildNodes".to_string(),
         JSValue::from_native_function(element_has_child_nodes),
+    );
+    prototype.define_property(
+        "assignedSlot".to_string(),
+        read_only_accessor_property(element_assigned_slot),
+    );
+    prototype.define_property(
+        "slot".to_string(),
+        accessor_property(get_element_slot, set_element_slot),
     );
     let prototype = Rc::new(RefCell::new(prototype));
     let mut constructor = JSObject::new();
@@ -1112,8 +1123,49 @@ pub(crate) fn append_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue>
         return Ok(child_value);
     }
 
-    if !TreeNode::append_child(&parent, child) {
+    if !TreeNode::append_child(&parent, Rc::clone(&child)) {
         return Ok(JSValue::null());
+    }
+
+    // If a node with a `slot` attribute is appended into a shadow tree,
+    // dispatch `slotchange` on the affected `<slot>` element(s).
+    let parent_is_shadow_or_slot = matches!(parent.borrow().value, HtmlNodeType::ShadowRoot { .. })
+        || matches!(
+            &parent.borrow().value,
+            HtmlNodeType::Element { tag_name, .. }
+                if tag_name.eq_ignore_ascii_case("slot")
+        );
+    if parent_is_shadow_or_slot {
+        let child_slot_attr = {
+            let b = child.borrow();
+            match &b.value {
+                HtmlNodeType::Element { attributes, .. } => attributes
+                    .iter()
+                    .find(|a| a.name == "slot")
+                    .map(|a| a.value.clone()),
+                _ => None,
+            }
+        };
+        if let Some(slot_name) = child_slot_attr {
+            // Walk up to find the enclosing shadow root.
+            let mut current = Some(Rc::clone(&parent));
+            let mut shadow_root: Option<
+                crate::engine::tree::NodeRef<crate::engine::html::HtmlNodeType>,
+            > = None;
+            while let Some(n) = current.clone() {
+                if matches!(n.borrow().value, HtmlNodeType::ShadowRoot { .. }) {
+                    shadow_root = Some(n);
+                    break;
+                }
+                current = n.borrow().parent();
+            }
+            if let Some(sr) = shadow_root {
+                let target_slot = find_assigned_slot_internal(&sr, Some(slot_name));
+                if let Some(target_slot) = target_slot {
+                    let _ = dispatch_slotchange(vm, &target_slot);
+                }
+            }
+        }
     }
 
     // Inserting into a document adopts the node, so `ownerDocument` follows the
@@ -1556,30 +1608,34 @@ fn select_form_value(select: &TreeNode<HtmlNodeType>) -> String {
     }
     // Get an option's value: `value` attribute, else text content.
     let option_value = |child: &TreeNode<HtmlNodeType>| -> Option<String> {
-        child.value.get_attr("value").map(str::to_string).or_else(|| {
-            child.children().iter().find_map(|gc| {
-                let gc = gc.borrow();
-                if let HtmlNodeType::Text(content) = &gc.value {
-                    Some(content.clone())
-                } else {
-                    None
-                }
+        child
+            .value
+            .get_attr("value")
+            .map(str::to_string)
+            .or_else(|| {
+                child.children().iter().find_map(|gc| {
+                    let gc = gc.borrow();
+                    if let HtmlNodeType::Text(content) = &gc.value {
+                        Some(content.clone())
+                    } else {
+                        None
+                    }
+                })
             })
-        })
     };
     // Find the option with `selected` attribute
     if let Some(child) = select.children().iter().find(|c| {
         let c = c.borrow();
         c.value.tag_name() == Some("option") && c.value.has_attr("selected")
-    })
-        && let Some(val) = option_value(&child.borrow())
+    }) && let Some(val) = option_value(&child.borrow())
     {
         return val;
     }
     // Fall back to first option
-    if let Some(child) = select.children().iter().find(|c| {
-        c.borrow().value.tag_name() == Some("option")
-    })
+    if let Some(child) = select
+        .children()
+        .iter()
+        .find(|c| c.borrow().value.tag_name() == Some("option"))
         && let Some(val) = option_value(&child.borrow())
     {
         return val;
@@ -1646,7 +1702,12 @@ fn form_request_submit(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
             .filter_map(|control| {
                 let borrowed = control.borrow();
                 let name = borrowed.value.get_attr("name")?.to_string();
-                let value = if borrowed.value.tag_name().map(str::to_ascii_lowercase).as_deref() == Some("select")
+                let value = if borrowed
+                    .value
+                    .tag_name()
+                    .map(str::to_ascii_lowercase)
+                    .as_deref()
+                    == Some("select")
                 {
                     select_form_value(&borrowed)
                 } else {
@@ -1889,32 +1950,63 @@ pub(crate) fn element_dispatch_event(vm: &mut VM, args: Vec<JSValue>) -> JSResul
     }
 
     let target_obj = Rc::clone(&target);
+    let composed = event.borrow().get("composed").to_boolean();
 
     // Build the ancestor path of exposed JS objects: [target, ..., root].
+    // Track shadow-root boundaries so that non-composed events stop at the
+    // shadow boundary and composedPath() reflects the correct path.
     let mut path: Vec<Rc<RefCell<JSObject>>> = vec![Rc::clone(&target_obj)];
+    let mut composed_path: Vec<Rc<RefCell<JSObject>>> = vec![Rc::clone(&target_obj)];
+    let mut stopped_at_shadow = false;
     if let Some(mut node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) {
         loop {
             let parent = node.borrow().parent();
             let Some(parent) = parent else { break };
+            // Detect crossing from a normal node into a shadow root.
+            let crossing_into_shadow =
+                matches!(parent.borrow().value, HtmlNodeType::ShadowRoot { .. })
+                    && !matches!(node.borrow().value, HtmlNodeType::ShadowRoot { .. });
             node = parent;
             if let Some(object) =
                 expose_node(vm, Rc::clone(&node)).and_then(|value| value.as_object())
             {
-                path.push(object);
+                path.push(Rc::clone(&object));
+                composed_path.push(Rc::clone(&object));
+            }
+            // For non-composed events, stop at the shadow boundary: do not
+            // include nodes above the shadow root, and remember we stopped.
+            if !composed && crossing_into_shadow {
+                stopped_at_shadow = true;
+                break;
             }
         }
     }
 
-    propagate_event(vm, &target_obj, &event, path)
+    // Set __composedPath on the event object.
+    let path_values: Vec<JSValue> = composed_path
+        .iter()
+        .map(|obj| JSValue::from_object(Rc::clone(obj)))
+        .collect();
+    event.borrow_mut().set(
+        "__composedPath".to_string(),
+        vm.array_from_values(path_values),
+    );
+
+    propagate_event(vm, &target_obj, &event, path, stopped_at_shadow)
 }
 
 /// Runs the capture/target/bubble propagation for an event whose `target` is
 /// `target_obj` and whose ancestor path (target first) is `path`.
+///
+/// `stopped_at_shadow` is true when the path was truncated at a shadow boundary
+/// because the event is not composed. In that case, listeners above the shadow
+/// root should see the shadow host as the event target (retargeting).
 fn propagate_event(
     vm: &mut VM,
     target_obj: &Rc<RefCell<JSObject>>,
     event: &Rc<RefCell<JSObject>>,
     path: Vec<Rc<RefCell<JSObject>>>,
+    stopped_at_shadow: bool,
 ) -> JSResult<JSValue> {
     let event_type = event.borrow().get("type").to_string();
     let bubbles = event.borrow().get("bubbles").to_boolean();
@@ -1935,17 +2027,35 @@ fn propagate_event(
         .borrow_mut()
         .set("__orinium_bubbles".to_string(), JSValue::from_bool(bubbles));
 
+    // The retarget target is the shadow host (last element in the path) when
+    // the event was stopped at a shadow boundary.
+    let retarget_target = if stopped_at_shadow { path.last() } else { None };
+
     // Capture phase: from the root down to (but excluding) the target.
     for ancestor in path.iter().rev().skip(1) {
         if event_flag(event, "cancelBubble") {
             break;
         }
-        dispatch_at_phase(vm, ancestor, event, &event_type, 1 /* capture */)?;
+        dispatch_at_phase(
+            vm,
+            ancestor,
+            event,
+            &event_type,
+            1, /* capture */
+            retarget_target,
+        )?;
     }
 
     // Target phase: the target's own handlers (both capturing and bubbling).
     if !event_flag(event, "cancelBubble") {
-        dispatch_at_phase(vm, target_obj, event, &event_type, 2 /* target */)?;
+        dispatch_at_phase(
+            vm,
+            target_obj,
+            event,
+            &event_type,
+            2, /* target */
+            None,
+        )?;
     }
 
     // Bubble phase: from the target's ancestors up to the root.
@@ -1954,7 +2064,14 @@ fn propagate_event(
             if event_flag(event, "cancelBubble") {
                 break;
             }
-            dispatch_at_phase(vm, ancestor, event, &event_type, 3 /* bubble */)?;
+            dispatch_at_phase(
+                vm,
+                ancestor,
+                event,
+                &event_type,
+                3, /* bubble */
+                retarget_target,
+            )?;
         }
     }
 
@@ -1967,12 +2084,17 @@ fn propagate_event(
 /// `phase` is `1` (capture), `2` (target) or `3` (bubble). During capture only
 /// capturing listeners run; during bubble only non-capturing listeners run; the
 /// target runs both, plus any inline `on<type>` handler.
+///
+/// `retarget_target` is `Some(host)` when the event is not composed and crossed
+/// a shadow boundary; listeners outside the shadow tree see `host` as `event.target`
+/// instead of the original target inside the shadow tree.
 fn dispatch_at_phase(
     vm: &mut VM,
     current: &Rc<RefCell<JSObject>>,
     event: &Rc<RefCell<JSObject>>,
     event_type: &str,
     phase: u8,
+    retarget_target: Option<&Rc<RefCell<JSObject>>>,
 ) -> JSResult<()> {
     let current_js = JSValue::from_object(Rc::clone(current));
     event
@@ -1981,6 +2103,16 @@ fn dispatch_at_phase(
     event
         .borrow_mut()
         .set("eventPhase".to_string(), JSValue::from_number(phase as f64));
+
+    // Retarget `target` when crossing a shadow boundary for non-composed events.
+    if phase != 2 {
+        if let Some(retarget) = retarget_target {
+            event.borrow_mut().set(
+                "target".to_string(),
+                JSValue::from_object(Rc::clone(retarget)),
+            );
+        }
+    }
 
     let dom_id = node_dom_id(&current_js).unwrap_or(0);
     if dom_id == 0 {
@@ -2091,7 +2223,7 @@ fn element_click(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
             }
         }
     }
-    propagate_event(vm, &target_obj, &event, path)
+    propagate_event(vm, &target_obj, &event, path, false)
 }
 
 pub(crate) fn element_contains(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -2112,6 +2244,265 @@ pub(crate) fn element_contains(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVa
         };
         candidate = parent;
     }
+}
+
+/// `element.assignedSlot`: returns the `<slot>` element this node is assigned
+/// to, or null if not assigned to any slot.
+fn element_assigned_slot(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::null());
+    };
+
+    let Some(slot_node) = find_node_assigned_slot(&node) else {
+        return Ok(JSValue::null());
+    };
+
+    Ok(
+        crate::engine::js::web_apis::dom::document::expose_node(vm, slot_node)
+            .unwrap_or(JSValue::null()),
+    )
+}
+
+/// Recursively collect all `<slot>` elements under the given node.
+fn collect_slots(
+    node: &crate::engine::tree::NodeRef<crate::engine::html::HtmlNodeType>,
+    output: &mut Vec<crate::engine::tree::NodeRef<crate::engine::html::HtmlNodeType>>,
+) {
+    let b = node.borrow();
+    if let crate::engine::html::HtmlNodeType::Element { tag_name, .. } = &b.value {
+        if tag_name.eq_ignore_ascii_case("slot") {
+            output.push(Rc::clone(node));
+        }
+    }
+    for child in b.children() {
+        collect_slots(child, output);
+    }
+    drop(b);
+}
+
+/// `element.slot` getter: returns the `slot` content attribute value.
+fn get_element_slot(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::undefined());
+    };
+    let value = {
+        let b = node.borrow();
+        match &b.value {
+            crate::engine::html::HtmlNodeType::Element { attributes, .. } => attributes
+                .iter()
+                .find(|a| a.name == "slot")
+                .map(|a| a.value.clone()),
+            _ => None,
+        }
+    };
+    Ok(JSValue::from_string(value.unwrap_or_default()))
+}
+
+/// `element.slot` setter: sets the `slot` content attribute.
+fn set_element_slot(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::undefined());
+    };
+    let value = args.get(1).cloned().unwrap_or(JSValue::undefined());
+    let value_str = value.as_string().unwrap_or_default();
+
+    // Find old assigned slot before modification.
+    let old_slot = find_node_assigned_slot(&node);
+
+    let mut b = node.borrow_mut();
+    match &mut b.value {
+        crate::engine::html::HtmlNodeType::Element { attributes, .. } => {
+            attributes.retain(|a| a.name != "slot");
+            if !value_str.is_empty() {
+                attributes.push(crate::engine::html::tokenizer::Attribute {
+                    name: "slot".to_string(),
+                    value: value_str.to_string(),
+                });
+            }
+        }
+        _ => {}
+    }
+    drop(b);
+
+    // Find new assigned slot after modification.
+    let new_slot = find_node_assigned_slot(&node);
+
+    // Dispatch `slotchange` on affected slots.
+    let old_ptr = old_slot.as_ref().map(|s| Rc::as_ptr(s) as *const _);
+    let new_ptr = new_slot.as_ref().map(|s| Rc::as_ptr(s) as *const _);
+    if let Some(old) = &old_slot {
+        if old_ptr != new_ptr {
+            let _ = dispatch_slotchange(vm, old);
+        }
+    }
+    if let Some(new) = &new_slot {
+        if new_ptr != old_ptr {
+            let _ = dispatch_slotchange(vm, new);
+        }
+    }
+
+    Ok(JSValue::undefined())
+}
+
+/// Find the `<slot>` element that the given node is currently assigned to,
+/// or None if not assigned to any slot.
+fn find_node_assigned_slot(
+    node: &crate::engine::tree::NodeRef<crate::engine::html::HtmlNodeType>,
+) -> Option<crate::engine::tree::NodeRef<crate::engine::html::HtmlNodeType>> {
+    // Read the `slot` content attribute.
+    let slot_name = {
+        let b = node.borrow();
+        match &b.value {
+            crate::engine::html::HtmlNodeType::Element { attributes, .. } => attributes
+                .iter()
+                .find(|a| a.name == "slot")
+                .map(|a| a.value.clone()),
+            _ => None,
+        }
+    };
+
+    // Find the enclosing shadow root. For nodes inside a shadow tree, the
+    // shadow root is an ancestor. For light DOM children of a shadow host,
+    // the shadow root is a child of the host element (a sibling in tree
+    // terms), so we look for a ShadowRoot child of the parent element.
+    let shadow_root = {
+        // First: walk up looking for a ShadowRoot ancestor.
+        let mut current = Some(Rc::clone(node));
+        while let Some(n) = current.clone() {
+            if matches!(
+                n.borrow().value,
+                crate::engine::html::HtmlNodeType::ShadowRoot { .. }
+            ) {
+                break;
+            }
+            current = n.borrow().parent();
+        }
+        if let Some(root) = current {
+            Some(root)
+        } else {
+            // Fallback: check if the parent element hosts a shadow root.
+            let parent = node.borrow().parent()?;
+            let parent_b = parent.borrow();
+            let is_parent_element = matches!(
+                parent_b.value,
+                crate::engine::html::HtmlNodeType::Element { .. }
+            );
+            drop(parent_b);
+            if !is_parent_element {
+                return None;
+            }
+            parent
+                .borrow()
+                .children()
+                .iter()
+                .find(|child| {
+                    matches!(
+                        child.borrow().value,
+                        crate::engine::html::HtmlNodeType::ShadowRoot { .. }
+                    )
+                })
+                .cloned()
+        }
+    };
+
+    let Some(shadow_root) = shadow_root else {
+        return None;
+    };
+
+    find_assigned_slot_internal(&shadow_root, slot_name)
+}
+
+/// Find the slot element in the shadow tree matching the given slot name.
+fn find_assigned_slot_internal(
+    shadow_root: &crate::engine::tree::NodeRef<crate::engine::html::HtmlNodeType>,
+    slot_name: Option<String>,
+) -> Option<crate::engine::tree::NodeRef<crate::engine::html::HtmlNodeType>> {
+    let mut slots: Vec<crate::engine::tree::NodeRef<crate::engine::html::HtmlNodeType>> =
+        Vec::new();
+    collect_slots(shadow_root, &mut slots);
+
+    if let Some(name) = slot_name {
+        for slot in &slots {
+            let b = slot.borrow();
+            if let crate::engine::html::HtmlNodeType::Element { attributes, .. } = &b.value {
+                if attributes
+                    .iter()
+                    .any(|a| a.name == "name" && a.value == name)
+                {
+                    return Some(Rc::clone(slot));
+                }
+            }
+        }
+        None
+    } else {
+        for slot in &slots {
+            let b = slot.borrow();
+            if let crate::engine::html::HtmlNodeType::Element { attributes, .. } = &b.value {
+                if !attributes.iter().any(|a| a.name == "name") {
+                    return Some(Rc::clone(slot));
+                }
+            }
+        }
+        None
+    }
+}
+
+/// Dispatch a `slotchange` event on the given `<slot>` element.
+fn dispatch_slotchange(
+    vm: &mut VM,
+    slot_node: &crate::engine::tree::NodeRef<crate::engine::html::HtmlNodeType>,
+) -> JSResult<()> {
+    let slot_obj =
+        crate::engine::js::web_apis::dom::document::expose_node(vm, Rc::clone(slot_node))
+            .and_then(|v| v.as_object().map(|o| Rc::clone(&o)));
+    let Some(slot_obj) = slot_obj else {
+        return Ok(());
+    };
+
+    // Create the slotchange event: bubbles: false, composed: false
+    let event_prototype = vm
+        .global_object
+        .borrow()
+        .get("Event")
+        .as_object()
+        .and_then(|ctor| ctor.borrow().get("prototype").as_object());
+    let mut event = match event_prototype {
+        Some(p) => JSObject::with_prototype(Some(p)),
+        None => JSObject::new(),
+    };
+    event.define_property(
+        "type".to_string(),
+        Property::read_only(JSValue::from_string("slotchange".to_string())),
+    );
+    event.define_property(
+        "bubbles".to_string(),
+        Property::read_only(JSValue::from_bool(false)),
+    );
+    event.define_property(
+        "cancelable".to_string(),
+        Property::read_only(JSValue::from_bool(false)),
+    );
+    event.define_property(
+        "composed".to_string(),
+        Property::read_only(JSValue::from_bool(false)),
+    );
+    event.set(
+        "target".to_string(),
+        JSValue::from_object(Rc::clone(&slot_obj)),
+    );
+    event.set(
+        "currentTarget".to_string(),
+        JSValue::from_object(Rc::clone(&slot_obj)),
+    );
+
+    let _ = element_dispatch_event(
+        vm,
+        vec![
+            JSValue::from_object(slot_obj),
+            JSValue::from_object(Rc::new(RefCell::new(event))),
+        ],
+    );
+    Ok(())
 }
 
 fn focus_element(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -3835,7 +4226,7 @@ fn serialize_html_node(node: &NodeRef<HtmlNodeType>) -> String {
     }
 }
 
-fn get_inner_html(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn get_inner_html(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
         return Ok(JSValue::null());
     };
@@ -3845,11 +4236,14 @@ fn get_inner_html(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     ))
 }
 
-fn set_inner_html(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+pub(crate) fn set_inner_html(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
         return Ok(JSValue::undefined());
     };
-    if !matches!(node.borrow().value, HtmlNodeType::Element { .. }) {
+    if !matches!(
+        node.borrow().value,
+        HtmlNodeType::Element { .. } | HtmlNodeType::ShadowRoot { .. }
+    ) {
         return Ok(JSValue::undefined());
     }
     let html = args.get(1).map(JSValue::to_string).unwrap_or_default();
@@ -3865,6 +4259,12 @@ fn set_inner_html(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 
     let mut parser = HtmlParser::new(&html);
     let fragment = parser.parse();
+    if let Some(head) = fragment.get_elements_by_tag_name("head").into_iter().next() {
+        let children = head.borrow().children().to_vec();
+        for child in children {
+            TreeNode::append_child(&node, child);
+        }
+    }
     if let Some(body) = fragment.get_elements_by_tag_name("body").into_iter().next() {
         let children = body.borrow().children().to_vec();
         for child in children {
