@@ -1316,17 +1316,131 @@ impl<'a> Parser<'a> {
                     if self.peek_token() == &Token::Delim(':') {
                         // pseudo-element
                         self.consume_token();
-                        if let Token::Ident(name) = self.consume_token() {
-                            let sel = current_selector.get_or_insert_with(|| Selector {
-                                is_nesting: false,
-                                tag: None,
-                                id: None,
-                                classes: vec![],
-                                attributes: vec![],
-                                pseudo_classes: vec![],
-                                pseudo_element: None,
-                            });
-                            sel.pseudo_element = Some(name.into_owned());
+                        let name_token = self.consume_token();
+                        let is_function = matches!(name_token, Token::Function(_));
+                        let name = match name_token {
+                            Token::Ident(n) => n.into_owned(),
+                            Token::Function(n) => n.into_owned(),
+                            _ => {
+                                // Not a valid pseudo-element name; skip.
+                                continue;
+                            }
+                        };
+                        let sel = current_selector.get_or_insert_with(|| Selector {
+                            is_nesting: false,
+                            tag: None,
+                            id: None,
+                            classes: vec![],
+                            attributes: vec![],
+                            pseudo_classes: vec![],
+                            pseudo_element: None,
+                        });
+                        // If the name came as a Function token, consume the
+                        // opening '(' (left by the tokenizer) and then the
+                        // remaining arguments up to the matching ')'.
+                        if is_function {
+                            if self.peek_token() == &Token::Delim('(') {
+                                self.consume_token(); // consume '(' left by tokenizer
+                            }
+                            let mut arg = String::new();
+                            let mut depth = 1u32;
+                            while depth > 0 {
+                                match self.peek_token().clone() {
+                                    Token::EOF => break,
+                                    Token::Delim('(') => {
+                                        depth += 1;
+                                        arg.push('(');
+                                        self.consume_token();
+                                    }
+                                    Token::Delim(')') => {
+                                        depth -= 1;
+                                        if depth == 0 {
+                                            self.consume_token();
+                                            break;
+                                        }
+                                        arg.push(')');
+                                        self.consume_token();
+                                    }
+                                    Token::Ident(s) => {
+                                        arg.push_str(&s);
+                                        self.consume_token();
+                                    }
+                                    Token::String(s) => {
+                                        arg.push_str(&s);
+                                        self.consume_token();
+                                    }
+                                    Token::Delim(c) => {
+                                        arg.push(c);
+                                        self.consume_token();
+                                    }
+                                    Token::Whitespace => {
+                                        arg.push(' ');
+                                        self.consume_token();
+                                    }
+                                    Token::Comment(s) => {
+                                        arg.push_str(&s);
+                                        self.consume_token();
+                                    }
+                                    t => {
+                                        arg.push_str(&format!("{:?}", t));
+                                        self.consume_token();
+                                    }
+                                }
+                            }
+                            sel.pseudo_element = Some(format!("{}({})", name, arg.trim()));
+                        } else {
+                            // ::name without arguments — check for optional (args)
+                            if self.peek_token() == &Token::Delim('(') {
+                                self.consume_token(); // consume '('
+                                let mut arg = String::new();
+                                let mut depth = 1u32;
+                                while depth > 0 {
+                                    match self.peek_token().clone() {
+                                        Token::EOF => break,
+                                        Token::Delim('(') => {
+                                            depth += 1;
+                                            arg.push('(');
+                                            self.consume_token();
+                                        }
+                                        Token::Delim(')') => {
+                                            depth -= 1;
+                                            if depth == 0 {
+                                                self.consume_token();
+                                                break;
+                                            }
+                                            arg.push(')');
+                                            self.consume_token();
+                                        }
+                                        Token::Ident(s) => {
+                                            arg.push_str(&s);
+                                            self.consume_token();
+                                        }
+                                        Token::String(s) => {
+                                            arg.push_str(&s);
+                                            self.consume_token();
+                                        }
+                                        Token::Delim(c) => {
+                                            arg.push(c);
+                                            self.consume_token();
+                                        }
+                                        Token::Whitespace => {
+                                            arg.push(' ');
+                                            self.consume_token();
+                                        }
+                                        Token::Comment(s) => {
+                                            arg.push_str(&s);
+                                            self.consume_token();
+                                        }
+                                        t => {
+                                            arg.push_str(&format!("{:?}", t));
+                                            self.consume_token();
+                                        }
+                                    }
+                                }
+                                sel.pseudo_element = Some(format!("{}({})", name, arg.trim()));
+                            } else {
+                                sel.pseudo_element = Some(name);
+                            }
                         }
                     } else {
                         let pseudo_class = match self.consume_token() {

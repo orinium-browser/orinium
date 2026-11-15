@@ -52,6 +52,10 @@ pub struct ElementInfo {
     pub hovered: bool,
     /// Whether this element or an ancestor is the active (pressed) target.
     pub active: bool,
+    /// The shadow root ID this element belongs to, if any. Elements inside a
+    /// shadow tree carry the ID of their enclosing shadow root, enabling CSS
+    /// encapsulation (shadow boundary).
+    pub shadow_root_id: Option<u64>,
 }
 
 /// One link of an [`ElementChain`].
@@ -421,10 +425,37 @@ impl Selector {
             return false;
         }
         if let Some(pseudo) = &self.pseudo_element {
-            // ::before / ::after pseudo-elements always match their originating
-            // element. Other pseudo-elements are not yet supported.
             let pseudo_lower = pseudo.to_ascii_lowercase();
-            pseudo_lower == "before" || pseudo_lower == "after"
+            // ::before / ::after always match their originating element.
+            if pseudo_lower == "before" || pseudo_lower == "after" {
+                return true;
+            }
+            // ::part(name) matches elements whose `part` attribute contains the
+            // given part name (space-separated tokens).
+            if let Some(rest) = pseudo_lower.strip_prefix("part(") {
+                let part_name = rest.strip_suffix(')').unwrap_or(rest);
+                if !part_name.is_empty() {
+                    return element.attributes.iter().any(|(name, value)| {
+                        name.eq_ignore_ascii_case("part")
+                            && value
+                                .split_ascii_whitespace()
+                                .any(|token| token == part_name)
+                    });
+                }
+            }
+            // ::slotted(...) matches elements assigned to a slot. Basic support:
+            // treat as matching any element (slot assignment resolution is
+            // handled at a higher layer).
+            if pseudo_lower.starts_with("slotted(") {
+                return true;
+            }
+            // ::shadow matches elements in a shadow tree. Basic support:
+            // treat as matching any element.
+            if pseudo_lower == "shadow" {
+                return true;
+            }
+            // Other pseudo-elements are not yet supported.
+            return false;
         } else {
             true
         }
@@ -439,6 +470,14 @@ impl ComplexSelector {
         let Some(link) = chain.head.as_deref() else {
             return false;
         };
+
+        // Shadow DOM encapsulation: elements inside a shadow tree only match
+        // selectors that use `::part` or `::slotted` (designed to cross the
+        // shadow boundary). All other selectors are blocked at the boundary.
+        if link.info.shadow_root_id.is_some() && !self.crosses_shadow_boundary() {
+            return false;
+        }
+
         self.matches_from(
             MatchCursor {
                 link,
@@ -446,6 +485,18 @@ impl ComplexSelector {
             },
             0,
         )
+    }
+
+    /// Returns `true` if the selector uses `::part` or `::slotted` pseudo-elements,
+    /// which are explicitly designed to cross the Shadow DOM boundary.
+    fn crosses_shadow_boundary(&self) -> bool {
+        self.parts.iter().any(|part| {
+            let pseudo = part.selector.pseudo_element.as_deref().unwrap_or("");
+            pseudo == "part"
+                || pseudo.starts_with("part(")
+                || pseudo.starts_with("slotted(")
+                || pseudo == "shadow"
+        })
     }
 
     fn element_at(cursor: MatchCursor<'_>) -> &ElementInfo {
@@ -1020,5 +1071,47 @@ mod tests {
     fn hover_and_active_contribute_to_specificity() {
         assert_eq!(parse_selector("a:hover").specificity(), (0, 1, 1));
         assert_eq!(parse_selector("a:active").specificity(), (0, 1, 1));
+    }
+
+    #[test]
+    fn shadow_dom_css_encapsulation_blocks_external_selectors() {
+        // An element inside a shadow tree must not match external selectors
+        // that don't use ::part or ::slotted.
+        let mut el_in_shadow = element("div", &[], 1, 1, 1, 1);
+        el_in_shadow.shadow_root_id = Some(42);
+
+        let selector = parse_selector("div");
+        assert!(!selector.matches(&chain([el_in_shadow.clone()])));
+
+        let selector = parse_selector(".foo");
+        assert!(!selector.matches(&chain([el_in_shadow.clone()])));
+
+        let selector = parse_selector("#bar");
+        assert!(!selector.matches(&chain([el_in_shadow])));
+    }
+
+    #[test]
+    fn shadow_dom_css_encapsulation_allows_part_and_slotted() {
+        // ::part and ::slotted selectors CAN cross the shadow boundary.
+        let mut el_in_shadow = element("div", &[], 1, 1, 1, 1);
+        el_in_shadow.shadow_root_id = Some(42);
+        el_in_shadow.attributes = vec![("part".into(), "foo".into())].into();
+
+        // ::part(foo) matches because the element has part="foo"
+        // and ::part is not blocked by the shadow boundary.
+        let selector = parse_selector("::part(foo)");
+        assert!(selector.matches(&chain([el_in_shadow])));
+    }
+
+    #[test]
+    fn shadow_dom_css_encapsulation_allows_elements_outside_shadow() {
+        // Elements NOT inside a shadow tree should still match normally.
+        let el_outside = element("div", &[], 1, 1, 1, 1);
+
+        let selector = parse_selector("div");
+        assert!(selector.matches(&chain([el_outside.clone()])));
+
+        let selector = parse_selector(".foo");
+        assert!(!selector.matches(&chain([el_outside])));
     }
 }
