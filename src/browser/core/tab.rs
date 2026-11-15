@@ -628,10 +628,12 @@ impl Tab {
                     &path,
                     PointerEvent::Down { x: px, y: py },
                 );
-                // Popup dismissal is decided by hit-testing, not by whether an
-                // arbitrary custom node consumed the event. Presses inside the
-                // popup (or on its owner) are preserved by the hit path check.
-                repaint |= crate::engine::input::dismiss_open_popups(info, &dismiss_path, px, py);
+                // Only dismiss popups when the press was not consumed by an
+                // open popup. Presses inside a popup (or on its owner) are
+                // handled by dispatch_pointer via on_popup_pointer_event.
+                if !pointer_consumed {
+                    repaint |= crate::engine::input::dismiss_open_popups(info, &dismiss_path, px, py);
+                }
 
                 let input_target = path.iter().find_map(|hit| {
                     if let layouter::types::NodeKind::Custom { node, .. } = &hit.info.kind
@@ -1150,6 +1152,115 @@ mod tests {
         // The release completes the click and clears the pending press.
         tab.handle_mouse_input(401.0, 13.0, ElementState::Released);
         assert!(!tab.has_pending_press());
+    }
+
+    #[test]
+    fn select_click_lands_on_custom_node() {
+        use crate::engine::layouter::types::{InfoNode, NodeKind, TextFlowStyle, TextStyle};
+
+        let mut tab = Tab::default();
+        tab.navigate(url("https://example.test/a"));
+        tab.on_fetch_succeeded_html(
+            "<html><body><select id=\"sel\"><option>One</option><option>Two</option></select></body></html>"
+                .to_string(),
+        );
+
+        // Force a relayout, wait for the background layout thread, then draw
+        // again so the applied tree gets its boxes positioned.
+        let mut buf = Vec::new();
+        tab.draw(&mut buf, 800.0, 600.0);
+        for _ in 0..500 {
+            for _ in tab.tick() {}
+            if tab.layout_and_info().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        tab.draw(&mut buf, 800.0, 600.0);
+
+        let (cx_base, cy_base, width, height, select_node) = {
+            let (layout, info) = tab.layout_and_info().unwrap();
+
+            // Find the select custom node in the layout tree and its box position.
+            fn find_custom_box<'a>(
+                layout: &'a ui_layout::LayoutNode,
+                info: &'a InfoNode,
+            ) -> Option<(f32, f32, f32, f32, &'a Arc<dyn CustomNode>)> {
+                if let NodeKind::Custom { node, .. } = &info.kind {
+                    if let Some(bm) = layout.layout_box.iter().next() {
+                        let (x, y, w, h) = (
+                            bm.content_box.x,
+                            bm.content_box.y,
+                            bm.border_box.width,
+                            bm.border_box.height,
+                        );
+                        return Some((x, y, w, h, &node));
+                    }
+                }
+                for (child_layout, child_info) in layout.children.iter().zip(&info.children) {
+                    if let Some(child_node) = child_layout.node() {
+                        if let Some(result) = find_custom_box(child_node, child_info) {
+                            return Some(result);
+                        }
+                    }
+                }
+                None
+            }
+
+            let Some((cx_base, cy_base, width, height, select_node)) =
+                find_custom_box(layout, info)
+            else {
+                panic!("select custom node not found in layout tree");
+            };
+            (cx_base, cy_base, width, height, Arc::clone(select_node))
+        };
+
+        // Popup should be closed initially.
+        assert!(
+            select_node
+                .popup(&TextStyle::default(), &TextFlowStyle::default())
+                .is_none(),
+            "popup should start closed"
+        );
+
+        // Click at the center of the select box to open the popup.
+        let cx = cx_base + width / 2.0;
+        let cy = cy_base + height / 2.0;
+        tab.handle_mouse_input(cx, cy, ElementState::Pressed);
+        assert!(
+            tab.has_pending_press(),
+            "press should land on the select element"
+        );
+        tab.handle_mouse_input(cx, cy, ElementState::Released);
+        assert!(!tab.has_pending_press());
+
+        // Popup should be open after clicking the select box.
+        assert!(
+            select_node
+                .popup(&TextStyle::default(), &TextFlowStyle::default())
+                .is_some(),
+            "popup should be open after clicking select box"
+        );
+
+        // Popup should be open after clicking the select box.
+        assert!(
+            select_node
+                .popup(&TextStyle::default(), &TextFlowStyle::default())
+                .is_some(),
+            "popup should be open after clicking select box"
+        );
+
+        // Clicking on the select box again should toggle the popup closed.
+        tab.handle_mouse_input(cx, cy, ElementState::Pressed);
+        assert!(tab.has_pending_press());
+        tab.handle_mouse_input(cx, cy, ElementState::Released);
+        assert!(!tab.has_pending_press());
+        assert!(
+            select_node
+                .popup(&TextStyle::default(), &TextFlowStyle::default())
+                .is_none(),
+            "popup should close when clicking select box again (toggle)"
+        );
     }
 
     #[test]
