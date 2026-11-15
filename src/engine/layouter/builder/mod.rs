@@ -264,6 +264,10 @@ struct StackFrame {
     parent_container_style: ContainerStyle,
     child_slots: Vec<ChildSlot>,
     element_children: Vec<NodeId>,
+    /// Inherited CSS counter state: counter name -> current value. Cloned from
+    /// the parent and updated with this element's `counter-reset` /
+    /// `counter-increment` before being passed to children.
+    counter_state: HashMap<String, i32>,
 }
 
 enum ChildSlot {
@@ -439,6 +443,7 @@ pub fn build_layout_and_info_from_snapshot(
         parent_container_style: ContainerStyle::default(),
         child_slots: Vec::new(),
         element_children: Vec::new(),
+        counter_state: HashMap::new(),
     });
 
     let mut results: HashMap<NodeId, (LayoutNode, InfoNode)> = HashMap::new();
@@ -576,6 +581,9 @@ pub fn build_layout_and_info_from_snapshot(
                 std::collections::HashMap::new();
             let mut anim_transition = anim_parse::TransitionInputs::default();
             let mut anim_animation = anim_parse::AnimationInputs::default();
+            // Counter operations collected during declaration application.
+            let mut counter_resets: Vec<(String, i32)> = Vec::new();
+            let mut counter_increments: Vec<(String, i32)> = Vec::new();
             if let Some(candidates) = &candidates {
                 // The candidates map dedupes per property name (cascade winner),
                 // but a shorthand and its longhand (e.g. `padding` and
@@ -596,6 +604,18 @@ pub fn build_layout_and_info_from_snapshot(
                     ) else {
                         continue;
                     };
+
+                    // Counter state mutations are tracked separately and
+                    // applied after the cascade loop.
+                    if declaration.name == "counter-reset" {
+                        counter_resets = parse_counter_reset(&value);
+                        continue;
+                    }
+                    if declaration.name == "counter-increment" {
+                        counter_increments = parse_counter_increment(&value);
+                        continue;
+                    }
+
                     apply_declaration(
                         &declaration.name,
                         &value,
@@ -619,6 +639,18 @@ pub fn build_layout_and_info_from_snapshot(
                     );
                 }
             }
+
+            // Compute counter state: start from inherited state, apply resets
+            // (set to specified value), then increments (add to value).
+            let mut counter_state = stack[top_idx].counter_state.clone();
+            for (name, val) in &counter_resets {
+                counter_state.insert(name.clone(), *val);
+            }
+            for (name, amount) in &counter_increments {
+                *counter_state.entry(name.clone()).or_insert(0) += amount;
+            }
+            // Persist updated counter state on the frame so children inherit it.
+            stack[top_idx].counter_state = counter_state.clone();
 
             // Apply the element's inline `style` attribute. Inline styles are
             // author-origin declarations with the highest specificity, so they
@@ -977,6 +1009,8 @@ pub fn build_layout_and_info_from_snapshot(
                     |pseudo: &Properties,
                      layout_children: &mut Vec<LayoutChild>,
                      info_children: &mut Vec<InfoNode>| {
+                        let dom_node = &snapshot.node(stack[top_idx].dom);
+                        let get_attr = |name: &str| dom_node.kind.get_attr(name).map(|s| s.to_string());
                         if let Some(ChildSlot::Inline(fragment, pseudo_info)) = build_pseudo_slot(
                             pseudo,
                             &child_css.custom_props,
@@ -985,6 +1019,8 @@ pub fn build_layout_and_info_from_snapshot(
                             used_color_scheme,
                             &*measurer,
                             images,
+                            &get_attr,
+                            &stack[top_idx].counter_state,
                         ) {
                             layout_children.push(fragment);
                             info_children.push(*pseudo_info);
@@ -1160,8 +1196,10 @@ pub fn build_layout_and_info_from_snapshot(
             // layout boxes, so no children are slotted at all.
             if style.display != Display::None && !is_svg_element {
                 // ── ::before generated content ──
-                if let Some(pseudo) = pseudo_candidates.get(&PseudoElement::Before)
-                    && let Some(slot) = build_pseudo_slot(
+                if let Some(pseudo) = pseudo_candidates.get(&PseudoElement::Before) {
+                    let dom_node = &snapshot.node(stack[top_idx].dom);
+                    let get_attr = |name: &str| dom_node.kind.get_attr(name).map(|s| s.to_string());
+                    if let Some(slot) = build_pseudo_slot(
                         pseudo,
                         &child_css.custom_props,
                         &text_style,
@@ -1169,12 +1207,15 @@ pub fn build_layout_and_info_from_snapshot(
                         used_color_scheme,
                         &*measurer,
                         images,
+                        &get_attr,
+                        &stack[top_idx].counter_state,
                     )
-                {
-                    child_slots.push(slot);
-                    #[cfg(any(feature = "profile", debug_assertions))]
                     {
-                        node_count += 1;
+                        child_slots.push(slot);
+                        #[cfg(any(feature = "profile", debug_assertions))]
+                        {
+                            node_count += 1;
+                        }
                     }
                 }
                 let parent_tag_name = snapshot.node(stack[top_idx].dom).kind.tag_name();
@@ -1245,8 +1286,10 @@ pub fn build_layout_and_info_from_snapshot(
                 }
 
                 // ── ::after generated content ──
-                if let Some(pseudo) = pseudo_candidates.get(&PseudoElement::After)
-                    && let Some(slot) = build_pseudo_slot(
+                if let Some(pseudo) = pseudo_candidates.get(&PseudoElement::After) {
+                    let dom_node = &snapshot.node(stack[top_idx].dom);
+                    let get_attr = |name: &str| dom_node.kind.get_attr(name).map(|s| s.to_string());
+                    if let Some(slot) = build_pseudo_slot(
                         pseudo,
                         &child_css.custom_props,
                         &text_style,
@@ -1254,12 +1297,15 @@ pub fn build_layout_and_info_from_snapshot(
                         used_color_scheme,
                         &*measurer,
                         images,
+                        &get_attr,
+                        &stack[top_idx].counter_state,
                     )
-                {
-                    child_slots.push(slot);
-                    #[cfg(any(feature = "profile", debug_assertions))]
                     {
-                        node_count += 1;
+                        child_slots.push(slot);
+                        #[cfg(any(feature = "profile", debug_assertions))]
+                        {
+                            node_count += 1;
+                        }
                     }
                 }
             }
@@ -1363,6 +1409,7 @@ pub fn build_layout_and_info_from_snapshot(
                         parent_container_style: parent_container_for_children.clone(),
                         child_slots: Vec::new(),
                         element_children: Vec::new(),
+                        counter_state: stack[top_idx].counter_state.clone(),
                     });
                 }
                 #[cfg(any(feature = "profile", debug_assertions))]
@@ -2217,6 +2264,8 @@ fn build_pseudo_slot(
     color_scheme: ColorScheme,
     measurer: &dyn text::TextMeasurer,
     images: &HashMap<String, Image>,
+    get_attr: &dyn Fn(&str) -> Option<String>,
+    counter_state: &HashMap<String, i32>,
 ) -> Option<ChildSlot> {
     let mut style = Style::default();
     let mut container_style = ContainerStyle::default();
@@ -2261,7 +2310,7 @@ fn build_pseudo_slot(
         );
     }
 
-    // Generated content: string text, or `none`/`normal`/`""`/omitted.
+    // Generated content: resolve `content` value to text, or `none`/`normal`/omitted.
     let content_text = match &content {
         None => String::new(),
         Some(CssValue::Keyword(k))
@@ -2269,20 +2318,68 @@ fn build_pseudo_slot(
         {
             String::new()
         }
+        Some(CssValue::Keyword(k)) => match k.to_ascii_lowercase().as_str() {
+            "open-quote" => "\"".to_string(),
+            "close-quote" => "\"".to_string(),
+            "no-open-quote" | "no-close-quote" => String::new(),
+            _ => String::new(),
+        },
         Some(CssValue::String(s)) => s.clone(),
+        Some(CssValue::Function(fn_name, args)) => {
+            resolve_content_function(fn_name, args, get_attr, counter_state)
+        }
         Some(CssValue::List(items)) => {
-            // `content: "a" "b"` concatenates; attr()/counter() unsupported.
-            let joined: String = items
-                .iter()
-                .filter_map(|v| match v {
-                    CssValue::String(s) => Some(s.as_str()),
-                    _ => None,
-                })
-                .collect();
+            // `content: "a" attr(data-label) "b"` concatenates strings and
+            // resolved function values.
+            let mut joined = String::new();
+            for item in items {
+                match item {
+                    CssValue::String(s) => joined.push_str(s.as_str()),
+                    CssValue::Keyword(k) => match k.to_ascii_lowercase().as_str() {
+                        "open-quote" => joined.push_str("\""),
+                        "close-quote" => joined.push_str("\""),
+                        "no-open-quote" | "no-close-quote" => {}
+                        _ => {}
+                    },
+                    CssValue::Function(fn_name, args) => {
+                        let resolved =
+                            resolve_content_function(fn_name, args, get_attr, counter_state);
+                        if !resolved.is_empty() {
+                            joined.push_str(&resolved);
+                        }
+                    }
+                    _ => {}
+                }
+            }
             joined
         }
         Some(_) => String::new(),
     };
+
+    // `content: url(...)` renders the image as a background layer on the
+    // pseudo-element, so it paints even when there is no text content.
+    if let Some(CssValue::Function(fn_name, args)) = &content
+        && fn_name.eq_ignore_ascii_case("url")
+    {
+        for arg_group in args.iter().flatten() {
+            if let CssValue::String(source) = arg_group {
+                container_style.background.layers.push(
+                    crate::engine::layouter::types::BackgroundLayer {
+                        image: Some(
+                            crate::engine::layouter::types::BackgroundImage::Image {
+                                source: source.clone(),
+                                image: None,
+                            },
+                        ),
+                        position: Default::default(),
+                        size: Default::default(),
+                        repeat: Default::default(),
+                    },
+                );
+                break;
+            }
+        }
+    }
 
     let has_styling = container_style.background.color.is_some_and(|c| c.3 > 0)
         || container_style
@@ -2374,6 +2471,131 @@ fn build_pseudo_slot(
         dom_id: None,
     };
     Some(ChildSlot::Inline(layout.into(), Box::new(info)))
+}
+
+/// Resolves a `content()` function value to a string.
+///
+/// Supported functions:
+/// - `attr(attr-name)` — the element's attribute value, or empty if absent.
+/// - `counter(counter-name)` / `counter(counter-name, style)` — current counter value.
+/// - `counters(counter-name, separator)` — current counter value (simple impl).
+/// - `url(...)` — image source; handled separately as a replaced element.
+fn resolve_content_function(
+    fn_name: &str,
+    args: &[Vec<CssValue>],
+    get_attr: &dyn Fn(&str) -> Option<String>,
+    counter_state: &HashMap<String, i32>,
+) -> String {
+    let flat: Vec<&CssValue> = args.iter().flatten().collect();
+
+    match fn_name {
+        "attr" => {
+            if let Some(CssValue::String(attr_name)) = flat.first() {
+                get_attr(attr_name).unwrap_or_default()
+            } else if let Some(CssValue::Keyword(attr_name)) = flat.first() {
+                get_attr(attr_name).unwrap_or_default()
+            } else {
+                String::new()
+            }
+        }
+        "counter" => {
+            if let Some(CssValue::Keyword(name)) = flat.first() {
+                counter_state
+                    .get(name.as_str())
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "0".to_string())
+            } else {
+                "0".to_string()
+            }
+        }
+        "counters" => {
+            if let Some(CssValue::Keyword(name)) = flat.first() {
+                counter_state
+                    .get(name.as_str())
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "0".to_string())
+            } else {
+                "0".to_string()
+            }
+        }
+        "url" => {
+            String::new()
+        }
+        _ => String::new(),
+    }
+}
+
+/// Parse `counter-reset` value into a list of (name, value) pairs.
+///
+/// Examples:
+/// - `counter-reset: section` → [("section", 0)]
+/// - `counter-reset: section 5` → [("section", 5)]
+/// - `counter-reset: section 5 subsection 0` → [("section", 5), ("subsection", 0)]
+/// - `counter-reset: none` → []
+fn parse_counter_reset(value: &CssValue) -> Vec<(String, i32)> {
+    match value {
+        CssValue::Keyword(k) if k.eq_ignore_ascii_case("none") => Vec::new(),
+        CssValue::List(items) => {
+            let mut result = Vec::new();
+            let mut iter = items.iter();
+            while let Some(name_val) = iter.next() {
+                let name = match name_val {
+                    CssValue::Keyword(k) => k.to_string(),
+                    _ => continue,
+                };
+                let val = match iter.next() {
+                    Some(CssValue::Number(n)) => *n as i32,
+                    _ => 0,
+                };
+                result.push((name, val));
+            }
+            result
+        }
+        CssValue::Keyword(k) => {
+            if k.eq_ignore_ascii_case("none") {
+                Vec::new()
+            } else {
+                vec![(k.to_string(), 0)]
+            }
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Parse `counter-increment` value into a list of (name, amount) pairs.
+///
+/// Examples:
+/// - `counter-increment: section` → [("section", 1)]
+/// - `counter-increment: section 2` → [("section", 2)]
+/// - `counter-increment: section 2 subsection -1` → [("section", 2), ("subsection", -1)]
+fn parse_counter_increment(value: &CssValue) -> Vec<(String, i32)> {
+    match value {
+        CssValue::Keyword(k) if k.eq_ignore_ascii_case("none") => Vec::new(),
+        CssValue::List(items) => {
+            let mut result = Vec::new();
+            let mut iter = items.iter();
+            while let Some(name_val) = iter.next() {
+                let name = match name_val {
+                    CssValue::Keyword(k) => k.to_string(),
+                    _ => continue,
+                };
+                let val = match iter.next() {
+                    Some(CssValue::Number(n)) => *n as i32,
+                    _ => 1,
+                };
+                result.push((name, val));
+            }
+            result
+        }
+        CssValue::Keyword(k) => {
+            if k.eq_ignore_ascii_case("none") {
+                Vec::new()
+            } else {
+                vec![(k.to_string(), 1)]
+            }
+        }
+        _ => Vec::new(),
+    }
 }
 
 // ── Color scheme resolution ─────────────────────────────────────────────────

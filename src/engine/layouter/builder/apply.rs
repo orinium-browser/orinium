@@ -2311,6 +2311,16 @@ pub fn apply_declaration(
             style.grid_row.end = parse_grid_line_end(value)?;
         }
 
+        // `content` applies only to ::before / ::after pseudo-elements and is
+        // resolved separately in build_pseudo_slot; on regular elements it is
+        // accepted but has no visual effect.
+        ("content", _) => {}
+
+        // `counter-reset` and `counter-increment` are handled in the layout
+        // builder's enter phase (counter state threading), not here.
+        ("counter-reset", _) => {}
+        ("counter-increment", _) => {}
+
         _ => {
             /*
             if !name.starts_with('-') {
