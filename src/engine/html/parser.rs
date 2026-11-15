@@ -632,6 +632,7 @@ fn element_info(node: &NodeRef<HtmlNodeType>) -> Option<ElementInfo> {
         checked,
         hovered: false,
         active: false,
+        shadow_root_id: None,
     })
 }
 
@@ -693,6 +694,7 @@ fn basic_element_info(node: &NodeRef<HtmlNodeType>) -> Option<ElementInfo> {
         checked,
         hovered: false,
         active: false,
+        shadow_root_id: None,
     })
 }
 
