@@ -122,15 +122,15 @@ fn event_composed_path(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(JSValue::from_object(object))
 }
 
-fn event_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    make_constructed_event(args, false)
+fn event_constructor(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    make_constructed_event(vm, args, false)
 }
 
-fn custom_event_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    make_constructed_event(args, true)
+fn custom_event_constructor(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    make_constructed_event(vm, args, true)
 }
 
-fn make_constructed_event(args: Vec<JSValue>, custom: bool) -> JSResult<JSValue> {
+fn make_constructed_event(vm: &mut VM, args: Vec<JSValue>, custom: bool) -> JSResult<JSValue> {
     let event_type = args.get(1).unwrap_or(&JSValue::undefined()).to_string();
     let options = args.get(2).and_then(JSValue::as_object);
     let option = |name: &str| {
@@ -139,7 +139,18 @@ fn make_constructed_event(args: Vec<JSValue>, custom: bool) -> JSResult<JSValue>
             .map(|object| object.borrow().get(name))
             .unwrap_or(JSValue::undefined())
     };
-    let mut event = JSObject::new();
+    // Chain constructed events to Event.prototype so prototype methods
+    // (composedPath, preventDefault, etc.) are accessible.
+    let event_prototype = vm
+        .global_object
+        .borrow()
+        .get("Event")
+        .as_object()
+        .and_then(|ctor| ctor.borrow().get("prototype").as_object());
+    let mut event = match event_prototype {
+        Some(p) => JSObject::with_prototype(Some(p)),
+        None => JSObject::new(),
+    };
     event.define_property(
         "type".to_string(),
         Property::read_only(JSValue::from_string(event_type)),
