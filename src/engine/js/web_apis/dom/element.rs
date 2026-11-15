@@ -1544,6 +1544,49 @@ fn form_controls_of(form: &NodeRef<HtmlNodeType>) -> Vec<NodeRef<HtmlNodeType>> 
     controls
 }
 
+/// Returns the form submission value for a `<select>` element: the selected
+/// option's value (text content if no `value` attribute, per HTML spec),
+/// falling back to the first option's value, or empty string if no options.
+fn select_form_value(select: &TreeNode<HtmlNodeType>) -> String {
+    // Value attribute synced via DomWrite::Value after user interaction
+    if let Some(val) = select.value.get_attr("value")
+        && !val.is_empty()
+    {
+        return val.to_string();
+    }
+    // Get an option's value: `value` attribute, else text content.
+    let option_value = |child: &TreeNode<HtmlNodeType>| -> Option<String> {
+        child.value.get_attr("value").map(str::to_string).or_else(|| {
+            child.children().iter().find_map(|gc| {
+                let gc = gc.borrow();
+                if let HtmlNodeType::Text(content) = &gc.value {
+                    Some(content.clone())
+                } else {
+                    None
+                }
+            })
+        })
+    };
+    // Find the option with `selected` attribute
+    if let Some(child) = select.children().iter().find(|c| {
+        let c = c.borrow();
+        c.value.tag_name() == Some("option") && c.value.has_attr("selected")
+    })
+        && let Some(val) = option_value(&child.borrow())
+    {
+        return val;
+    }
+    // Fall back to first option
+    if let Some(child) = select.children().iter().find(|c| {
+        c.borrow().value.tag_name() == Some("option")
+    })
+        && let Some(val) = option_value(&child.borrow())
+    {
+        return val;
+    }
+    String::new()
+}
+
 /// `form.elements.namedItem(name)` — the first control whose `name` or `id`
 /// attribute matches, or `null`.
 fn form_elements_named_item(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
@@ -1603,7 +1646,12 @@ fn form_request_submit(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
             .filter_map(|control| {
                 let borrowed = control.borrow();
                 let name = borrowed.value.get_attr("name")?.to_string();
-                let value = borrowed.value.get_attr("value").unwrap_or("").to_string();
+                let value = if borrowed.value.tag_name().map(str::to_ascii_lowercase).as_deref() == Some("select")
+                {
+                    select_form_value(&borrowed)
+                } else {
+                    borrowed.value.get_attr("value").unwrap_or("").to_string()
+                };
                 Some((name, value))
             })
             .collect();
