@@ -293,7 +293,8 @@ fn local_pointer_coords(path: &HitPath<'_>, target: usize, x: f32, y: f32) -> (f
         if !shares_parent_layout
             && !inline_container
             && let Some(bm) = hit.layout.layout_box.iter().next()
-            && let Some(lp) = map_to_box_local(p, &bm, &style, own_scroll, is_inline(hit.layout))
+            && let Some(lp) =
+                map_to_content_local(p, &bm, &style, own_scroll, is_inline(hit.layout))
         {
             p = lp;
         }
