@@ -37,7 +37,7 @@ image = "0.25.10"
 ipc-channel = "0.23.0"
 log = "0.4.32"
 lru = "0.19"
-pixi_byte = { git = "https://github.com/orinium-browser/pixi_byte", rev = "9ed5c11a85fee478bc9741a85a9a29de77d2f52c" }
+pixi_byte = { git = "https://github.com/orinium-browser/pixi_byte", rev = "3a9af0b7097a938af2e010caa0817133c8c1bf32" }
 pollster = "1.0"
 rustls = { version = "0.23.40", default-features = false, features = ["tls12"] }
 rustls-native-certs = "0.8.4"
