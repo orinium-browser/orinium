@@ -23,9 +23,13 @@
 
 mod rasterize;
 
-pub use rasterize::{RasterResult, rasterize_from_bytes};
+pub use rasterize::{RasterResult, rasterize_from_bytes, rasterize_many, svg_to_draw_commands};
 
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
+use std::sync::{Mutex, OnceLock};
+
+use lru::LruCache;
 
 use crate::engine::css::values::CssValue;
 use crate::engine::layouter::css_resolver::resolve_inline_value;
@@ -377,7 +381,11 @@ fn append_arc(
         };
         // The last segment ends exactly at `to` to avoid a gap from floating
         // point drift in the trigonometric end-point computation.
-        let (p3x, p3y) = if i + 1 == segments { to } else { world((rx * cos_b, ry * sin_b)) };
+        let (p3x, p3y) = if i + 1 == segments {
+            to
+        } else {
+            world((rx * cos_b, ry * sin_b))
+        };
         let (p1x, p1y) = world((rx * (cos_a - k * sin_a), ry * (sin_a + k * cos_a)));
         let (p2x, p2y) = world((rx * (cos_b + k * sin_b), ry * (sin_b - k * cos_b)));
         path.cubic_to((p1x, p1y), (p2x, p2y), (p3x, p3y));
@@ -845,6 +853,64 @@ pub(crate) fn with_alpha(color: Color, alpha: f32) -> Color {
     Color(color.0, color.1, color.2, a)
 }
 
+/// Memoized inline SVG collections, keyed by SVG node id plus a content
+/// signature. Re-collecting an unchanged SVG returns the cached [`SvgContent`]
+/// without re-walking or re-parsing its subtree (differential update).
+static SVG_CONTENT_CACHE: OnceLock<Mutex<LruCache<NodeId, (u64, SvgContent)>>> = OnceLock::new();
+
+fn svg_content_cache() -> &'static Mutex<LruCache<NodeId, (u64, SvgContent)>> {
+    SVG_CONTENT_CACHE.get_or_init(|| Mutex::new(LruCache::new(NonZeroUsize::new(64).unwrap())))
+}
+
+// Number of times the real SVG collection work ran (cache misses). Test-only
+// instrumentation used to assert that unchanged SVGs are not re-collected.
+// Kept thread-local so parallel tests do not disturb each other's deltas.
+#[cfg(test)]
+thread_local! {
+    static COLLECT_SVG_MISSES: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
+}
+
+/// Hashes everything about the SVG subtree that affects its collected content:
+/// the `viewBox` and every descendant's tag name and attributes.
+fn svg_subtree_hash(snapshot: &DomSnapshot, svg_id: NodeId) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    fn hash_node(h: &mut u64, snapshot: &DomSnapshot, id: NodeId) {
+        let mut mix_byte = |b: u8| {
+            *h ^= b as u64;
+            *h = (*h).wrapping_mul(0x100000001b3);
+        };
+        let node = &snapshot.node(id).kind;
+        if let crate::engine::html::HtmlNodeType::Element {
+            tag_name,
+            attributes,
+            ..
+        } = node
+        {
+            for b in tag_name.bytes() {
+                mix_byte(b);
+            }
+            let len = attributes.len() as u32;
+            for b in len.to_le_bytes() {
+                mix_byte(b);
+            }
+            for attr in attributes {
+                for b in attr.name.bytes() {
+                    mix_byte(b);
+                }
+                for b in attr.value.bytes() {
+                    mix_byte(b);
+                }
+            }
+        }
+        for &child in snapshot.children(id) {
+            hash_node(h, snapshot, child);
+        }
+    }
+    hash_node(&mut h, snapshot, svg_id);
+    h
+}
+
 /// Collects the inline SVG content of an `<svg>` element: its `viewBox` and
 /// the solid-color shapes of its content, recursively.
 ///
@@ -861,54 +927,75 @@ pub fn collect_svg(
     color_scheme: ColorScheme,
     text_color: Color,
 ) -> Option<SvgContent> {
-    let view_box = parse_view_box(snapshot.node(svg_id).kind.get_attr("viewBox")?);
-    if view_box.2 <= 0.0 || view_box.3 <= 0.0 {
-        return None;
+    let mut signature = svg_subtree_hash(snapshot, svg_id);
+    signature = signature
+        .wrapping_add(color_scheme as u64)
+        .wrapping_add(text_color.0 as u64)
+        .wrapping_add((text_color.1 as u64) << 8)
+        .wrapping_add((text_color.2 as u64) << 16)
+        .wrapping_add((text_color.3 as u64) << 24);
+    {
+        let mut cache = svg_content_cache().lock().unwrap();
+        if let Some((cached_sig, content)) = cache.get(&svg_id)
+            && *cached_sig == signature
+        {
+            return Some(content.clone());
+        }
     }
-    let mut gradients = HashMap::new();
-    for &child in snapshot.children(svg_id) {
-        collect_gradient_defs(snapshot, child, color_scheme, text_color, &mut gradients);
-    }
-    let mut id_map = HashMap::new();
-    for &child in snapshot.children(svg_id) {
-        collect_id_map(snapshot, child, &mut id_map);
-    }
-    let mut clip_paths = HashMap::new();
-    for &child in snapshot.children(svg_id) {
-        collect_clip_path_defs(snapshot, child, &mut clip_paths);
-    }
-    let mut shapes = Vec::new();
-    let mut use_stack: Vec<NodeId> = Vec::new();
-    for &child in snapshot.children(svg_id) {
-        collect_content(
-            snapshot,
-            child,
-            &AffineTransform::identity(),
-            1.0,
-            color_scheme,
-            text_color,
-            PaintState::new(),
-            &gradients,
-            &id_map,
-            &clip_paths,
-            &mut use_stack,
-            &mut shapes,
-        );
-    }
-    if shapes.is_empty() {
-        return None;
-    }
-    Some(SvgContent { view_box, shapes })
+    #[cfg(test)]
+    COLLECT_SVG_MISSES.with(|c| c.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+
+    let content = {
+        let view_box = parse_view_box(snapshot.node(svg_id).kind.get_attr("viewBox")?);
+        if view_box.2 <= 0.0 || view_box.3 <= 0.0 {
+            return None;
+        }
+        let mut gradients = HashMap::new();
+        for &child in snapshot.children(svg_id) {
+            collect_gradient_defs(snapshot, child, color_scheme, text_color, &mut gradients);
+        }
+        let mut id_map = HashMap::new();
+        for &child in snapshot.children(svg_id) {
+            collect_id_map(snapshot, child, &mut id_map);
+        }
+        let mut clip_paths = HashMap::new();
+        for &child in snapshot.children(svg_id) {
+            collect_clip_path_defs(snapshot, child, &mut clip_paths);
+        }
+        let mut shapes = Vec::new();
+        let mut use_stack: Vec<NodeId> = Vec::new();
+        for &child in snapshot.children(svg_id) {
+            collect_content(
+                snapshot,
+                child,
+                &AffineTransform::identity(),
+                1.0,
+                color_scheme,
+                text_color,
+                PaintState::new(),
+                &gradients,
+                &id_map,
+                &clip_paths,
+                &mut use_stack,
+                &mut shapes,
+            );
+        }
+        if shapes.is_empty() {
+            return None;
+        }
+        SvgContent { view_box, shapes }
+    };
+    svg_content_cache()
+        .lock()
+        .unwrap()
+        .put(svg_id, (signature, content.clone()));
+    Some(content)
 }
 
 /// Collects `<clipPath>` definitions under `root` into `out`, keyed by their
 /// `id` attribute. All shape descendants of a `<clipPath>` are combined into a
 /// single path (transformed by the clipPath element's `transform` attribute).
-fn collect_clip_path_defs(
-    snapshot: &DomSnapshot,
-    id: NodeId,
-    out: &mut HashMap<String, ClipPath>,
-) {
+fn collect_clip_path_defs(snapshot: &DomSnapshot, id: NodeId, out: &mut HashMap<String, ClipPath>) {
     let el = &snapshot.node(id).kind;
     if el.tag_name() == Some("clipPath")
         && let Some(clip_id) = el.get_attr("id").filter(|id| !id.is_empty())
@@ -921,7 +1008,8 @@ fn collect_clip_path_defs(
         let rule = resolve_fill_rule(el);
         collect_clip_path_shapes(snapshot, id, &transform, &mut path);
         if !path.commands().is_empty() {
-            out.entry(clip_id.to_owned()).or_insert(ClipPath { path, rule });
+            out.entry(clip_id.to_owned())
+                .or_insert(ClipPath { path, rule });
         }
     }
     for &child in snapshot.children(id) {
@@ -1175,9 +1263,7 @@ fn collect_content(
         Some("use") => {
             // `<use href="#id">` clones the referenced element's content at the
             // use element's position, with x/y translating the content.
-            let href = el
-                .svg_attr("href")
-                .or_else(|| el.svg_attr("xlink:href"));
+            let href = el.svg_attr("href").or_else(|| el.svg_attr("xlink:href"));
             let target_id = href
                 .and_then(parse_use_ref)
                 .and_then(|frag| id_map.get(&frag).copied());
@@ -2401,8 +2487,7 @@ mod tests {
                         let mut combined = vec![255u8; (width as usize) * (height as usize) * 4];
                         for (clip_path, clip_rule) in &clip_stack {
                             let mut tmp = vec![0u8; (width as usize) * (height as usize) * 4];
-                            let clip_transformed =
-                                transform_path(clip_path, stack.last().unwrap());
+                            let clip_transformed = transform_path(clip_path, stack.last().unwrap());
                             super::rasterize::fill_path_into(
                                 &mut tmp,
                                 width,
@@ -2414,8 +2499,7 @@ mod tests {
                             );
                             // Intersect: combined alpha *= tmp alpha.
                             for i in (3..combined.len()).step_by(4) {
-                                combined[i] =
-                                    ((combined[i] as u16 * tmp[i] as u16) / 255) as u8;
+                                combined[i] = ((combined[i] as u16 * tmp[i] as u16) / 255) as u8;
                             }
                         }
                         Some(combined)
@@ -2889,8 +2973,7 @@ mod tests {
 
             // Inline pipeline: parse XML → HtmlNodeType tree → DomSnapshot →
             // collect_svg → emit_commands → software fill.
-            let tree =
-                crate::engine::html::xml::parse(markup).expect("parses SVG XML");
+            let tree = crate::engine::html::xml::parse(markup).expect("parses SVG XML");
             let root = tree.root.borrow();
             assert_eq!(root.value.name, "svg");
             let html_root = xml_to_html_tree(&tree.root);
@@ -2944,10 +3027,7 @@ mod tests {
     #[test]
     fn collect_svg_invalid_transform_is_ignored() {
         let svg = TreeNode::new(element("svg", &[("viewBox", "0 0 10 10")]));
-        let g = TreeNode::new(element(
-            "g",
-            &[("transform", "not-a-valid-transform")],
-        ));
+        let g = TreeNode::new(element("g", &[("transform", "not-a-valid-transform")]));
         TreeNode::add_child(&svg, Rc::clone(&g));
         TreeNode::add_child(
             &g,
@@ -2988,11 +3068,10 @@ mod tests {
         assert!(super::rasterize::rasterize("<svg><unclosed>", None).is_err());
         assert!(super::rasterize::rasterize("<notsvg></notsvg>", None).is_err());
         // Extremely large viewport is rejected, not allocated.
-        assert!(super::rasterize::rasterize(
-            r##"<svg width="1e300" height="10"></svg>"##,
-            None
-        )
-        .is_err());
+        assert!(
+            super::rasterize::rasterize(r##"<svg width="1e300" height="10"></svg>"##, None)
+                .is_err()
+        );
     }
 
     /// `<use href="#id">` clones the referenced element's content at the use
@@ -3045,7 +3124,13 @@ mod tests {
             &g,
             TreeNode::new(element(
                 "rect",
-                &[("x", "0"), ("y", "0"), ("width", "2"), ("height", "2"), ("fill", "#ff0000")],
+                &[
+                    ("x", "0"),
+                    ("y", "0"),
+                    ("width", "2"),
+                    ("height", "2"),
+                    ("fill", "#ff0000"),
+                ],
             )),
         );
         TreeNode::add_child(
@@ -3056,10 +3141,7 @@ mod tests {
             )),
         );
         TreeNode::add_child(&defs, Rc::clone(&g));
-        TreeNode::add_child(
-            &svg,
-            TreeNode::new(element("use", &[("href", "#myGroup")])),
-        );
+        TreeNode::add_child(&svg, TreeNode::new(element("use", &[("href", "#myGroup")])));
 
         let (snapshot, _refs) = DomSnapshot::from_tree(&svg);
         let content = collect_svg(&snapshot, 0, ColorScheme::Light, Color::default()).unwrap();
@@ -3096,12 +3178,11 @@ mod tests {
         </svg>"##;
 
         // Standalone rasterization.
-        let standalone = super::rasterize::rasterize(markup, Some((20, 10)))
-            .expect("rasterizes standalone");
+        let standalone =
+            super::rasterize::rasterize(markup, Some((20, 10))).expect("rasterizes standalone");
 
         // Inline pipeline.
-        let tree =
-            crate::engine::html::xml::parse(markup).expect("parses SVG XML");
+        let tree = crate::engine::html::xml::parse(markup).expect("parses SVG XML");
         let html_root = xml_to_html_tree(&tree.root);
         let (snapshot, _refs) = DomSnapshot::from_tree(&html_root);
 
@@ -3181,11 +3262,10 @@ mod tests {
             <rect x="0" y="0" width="10" height="10" fill="#ff0000" clip-path="#c1"/>
         </svg>"##;
 
-        let standalone = super::rasterize::rasterize(markup, Some((10, 10)))
-            .expect("rasterizes standalone");
+        let standalone =
+            super::rasterize::rasterize(markup, Some((10, 10))).expect("rasterizes standalone");
 
-        let tree =
-            crate::engine::html::xml::parse(markup).expect("parses SVG XML");
+        let tree = crate::engine::html::xml::parse(markup).expect("parses SVG XML");
         let html_root = xml_to_html_tree(&tree.root);
         let (snapshot, _refs) = DomSnapshot::from_tree(&html_root);
 
@@ -3206,5 +3286,81 @@ mod tests {
             inline_pixels, standalone.rgba,
             "inline and standalone SVG rasterization differ for <clipPath>"
         );
+    }
+
+    #[test]
+    fn collect_svg_memoizes_and_invalidates_on_content_change() {
+        let svg = TreeNode::new(element("svg", &[("viewBox", "0 0 4 4")]));
+        TreeNode::add_child(
+            &svg,
+            TreeNode::new(element(
+                "rect",
+                &[
+                    ("x", "0"),
+                    ("y", "0"),
+                    ("width", "4"),
+                    ("height", "4"),
+                    ("fill", "#ff0000"),
+                ],
+            )),
+        );
+        let (snapshot, _refs) = DomSnapshot::from_tree(&svg);
+
+        // Clear the global cache so parallel tests cannot pollute it.
+        svg_content_cache().lock().unwrap().clear();
+        // Reset the per-thread counter so parallel tests cannot pollute it.
+        COLLECT_SVG_MISSES.with(|c| c.store(0, std::sync::atomic::Ordering::Relaxed));
+        let first = collect_svg(&snapshot, 0, ColorScheme::Light, Color::default())
+            .expect("collects red svg");
+        let m1 = COLLECT_SVG_MISSES.with(|c| c.load(std::sync::atomic::Ordering::Relaxed));
+        let second = collect_svg(&snapshot, 0, ColorScheme::Light, Color::default())
+            .expect("collects red svg");
+        let m2 = COLLECT_SVG_MISSES.with(|c| c.load(std::sync::atomic::Ordering::Relaxed));
+
+        // Same content: second call hits the cache and is not re-collected.
+        assert_eq!(first.view_box, second.view_box);
+        assert_eq!(first.shapes.len(), second.shapes.len());
+        assert_eq!(first.shapes[0].fill, second.shapes[0].fill);
+        assert_eq!(m1, 1, "first call collects");
+        assert_eq!(m2, 1, "repeat call is a cache hit (no re-collection)");
+
+        // Different fill changes the content signature, so it re-collects.
+        let svg2 = TreeNode::new(element("svg", &[("viewBox", "0 0 4 4")]));
+        TreeNode::add_child(
+            &svg2,
+            TreeNode::new(element(
+                "rect",
+                &[
+                    ("x", "0"),
+                    ("y", "0"),
+                    ("width", "4"),
+                    ("height", "4"),
+                    ("fill", "#00ff00"),
+                ],
+            )),
+        );
+        let (snapshot2, _refs) = DomSnapshot::from_tree(&svg2);
+        svg_content_cache().lock().unwrap().clear();
+        COLLECT_SVG_MISSES.with(|c| c.store(0, std::sync::atomic::Ordering::Relaxed));
+        let m3 = COLLECT_SVG_MISSES.with(|c| c.load(std::sync::atomic::Ordering::Relaxed));
+        let changed = collect_svg(&snapshot2, 0, ColorScheme::Light, Color::default())
+            .expect("collects green svg");
+        let m4 = COLLECT_SVG_MISSES.with(|c| c.load(std::sync::atomic::Ordering::Relaxed));
+        assert_eq!(m3, 0, "counter reset before changed-content collect");
+        assert_eq!(m4, 1, "changed content re-collects");
+        assert_ne!(first.shapes[0].fill, changed.shapes[0].fill);
+    }
+
+    #[test]
+    fn standalone_svg_draw_commands_match_software_rasterize() {
+        let svg = r##"<svg width="4" height="4" viewBox="0 0 4 4"><rect width="4" height="4" fill="#ff0000"/></svg>"##;
+        let commands =
+            super::rasterize::svg_to_draw_commands(svg, Some((4, 4))).expect("converts");
+        assert!(commands.iter().all(|cmd| matches!(cmd, DrawCommand::Fill { .. })));
+        let command_pixels = rasterize_commands(&commands, 4, 4);
+        let software = super::rasterize::rasterize(svg, Some((4, 4))).expect("rasterizes");
+        assert_eq!((software.width, software.height), (4, 4));
+        // GPU-path commands must produce identical pixels to software rasterization.
+        assert_eq!(command_pixels, software.rgba);
     }
 }
