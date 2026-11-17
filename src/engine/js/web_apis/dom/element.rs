@@ -1422,9 +1422,15 @@ pub(crate) fn remove_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue>
     let Some(child) = dom_node(vm, &child_value) else {
         return Ok(JSValue::null());
     };
+    // Find the child's assigned slot before removal.
+    let old_slot = find_node_assigned_slot(&child);
     let Some(detached) = TreeNode::remove_child(&parent, &child) else {
         return Ok(JSValue::null());
     };
+    // Dispatch slotchange on the slot the child was assigned to.
+    if let Some(slot) = old_slot {
+        let _ = dispatch_slotchange(vm, &slot);
+    }
     if let Some(dom_id) = node_dom_id(&child_value) {
         fire_disconnected_callback(vm, dom_id);
         cleanup_iframe_state(vm, dom_id);
@@ -1441,7 +1447,13 @@ fn remove_node(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(node) = dom_node(vm, this) else {
         return Ok(JSValue::undefined());
     };
+    // Find the node's assigned slot before removal.
+    let old_slot = find_node_assigned_slot(&node);
     if TreeNode::detach(&node) {
+        // Dispatch slotchange on the slot the node was assigned to.
+        if let Some(slot) = old_slot {
+            let _ = dispatch_slotchange(vm, &slot);
+        }
         if let Some(dom_id) = node_dom_id(this) {
             fire_disconnected_callback(vm, dom_id);
             cleanup_iframe_state(vm, dom_id);
@@ -1470,13 +1482,26 @@ pub(crate) fn replace_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue
     let Some(old_child) = dom_node(vm, &old_child_value) else {
         return Ok(JSValue::null());
     };
-    let inserted = TreeNode::insert_before(&parent, new_child, &old_child);
+    // Find the old child's assigned slot before replacement.
+    let old_slot = find_node_assigned_slot(&old_child);
+    let inserted = TreeNode::insert_before(&parent, Rc::clone(&new_child), &old_child);
     if !inserted {
         return Ok(JSValue::null());
     }
     let Some(detached) = TreeNode::remove_child(&parent, &old_child) else {
         return Ok(JSValue::null());
     };
+    // Dispatch slotchange on the old child's assigned slot.
+    if let Some(ref slot) = old_slot {
+        let _ = dispatch_slotchange(vm, slot);
+    }
+    // Dispatch slotchange on the new child's assigned slot (if different).
+    let new_slot = find_node_assigned_slot(&new_child);
+    if let Some(slot) = &new_slot {
+        if old_slot.as_ref().map(|s| !Rc::ptr_eq(s, slot)).unwrap_or(true) {
+            let _ = dispatch_slotchange(vm, slot);
+        }
+    }
     if let Some(dom_id) = node_dom_id(&old_child_value) {
         fire_disconnected_callback(vm, dom_id);
         cleanup_iframe_state(vm, dom_id);
@@ -2264,7 +2289,7 @@ fn element_assigned_slot(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 }
 
 /// Recursively collect all `<slot>` elements under the given node.
-fn collect_slots(
+pub(crate) fn collect_slots(
     node: &crate::engine::tree::NodeRef<crate::engine::html::HtmlNodeType>,
     output: &mut Vec<crate::engine::tree::NodeRef<crate::engine::html::HtmlNodeType>>,
 ) {
@@ -2447,8 +2472,110 @@ fn find_assigned_slot_internal(
     }
 }
 
+/// Find the light-DOM nodes currently assigned to the given `<slot>` element.
+pub(crate) fn find_assigned_nodes_for_slot(
+    slot_node: &crate::engine::tree::NodeRef<crate::engine::html::HtmlNodeType>,
+) -> Vec<crate::engine::tree::NodeRef<crate::engine::html::HtmlNodeType>> {
+    // Read the slot's `name` attribute.
+    let slot_name = {
+        let b = slot_node.borrow();
+        match &b.value {
+            crate::engine::html::HtmlNodeType::Element { attributes, .. } => attributes
+                .iter()
+                .find(|a| a.name == "name")
+                .map(|a| a.value.clone()),
+            _ => None,
+        }
+    };
+
+    // Walk up from the slot to find the enclosing shadow root.
+    let shadow_root = {
+        let mut current = Some(Rc::clone(slot_node));
+        while let Some(n) = current.clone() {
+            if matches!(
+                n.borrow().value,
+                crate::engine::html::HtmlNodeType::ShadowRoot { .. }
+            ) {
+                break;
+            }
+            current = n.borrow().parent();
+        }
+        current
+    };
+
+    let Some(shadow_root) = shadow_root else {
+        return Vec::new();
+    };
+
+    // The shadow root's parent is the host element; its other children are
+    // the light DOM children eligible for slot assignment.
+    let host = match shadow_root.borrow().parent() {
+        Some(h) => h,
+        None => return Vec::new(),
+    };
+    let light_children: Vec<_> = host
+        .borrow()
+        .children()
+        .iter()
+        .filter(|c| {
+            !matches!(
+                c.borrow().value,
+                crate::engine::html::HtmlNodeType::ShadowRoot { .. }
+            )
+        })
+        .cloned()
+        .collect();
+
+    let mut assigned: Vec<crate::engine::tree::NodeRef<crate::engine::html::HtmlNodeType>> =
+        Vec::new();
+
+    for lc in &light_children {
+        let lc_b = lc.borrow();
+        match &lc_b.value {
+            crate::engine::html::HtmlNodeType::Element { attributes, .. } => {
+                let child_slot_attr = attributes
+                    .iter()
+                    .find(|a| a.name == "slot")
+                    .map(|a| a.value.clone());
+                drop(lc_b);
+                match (&slot_name, &child_slot_attr) {
+                    (Some(name), Some(attr)) if attr == name => {
+                        assigned.push(Rc::clone(lc));
+                    }
+                    (None, None) => {
+                        assigned.push(Rc::clone(lc));
+                    }
+                    _ => {}
+                }
+            }
+            _ => {
+                drop(lc_b);
+            }
+        }
+    }
+
+    assigned
+}
+
+/// `slot.assignedNodes()`: returns the nodes assigned to this slot.
+pub(crate) fn slot_assigned_nodes(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let this = args.first().cloned().unwrap_or(JSValue::undefined());
+    let Some(slot_node) = dom_node(vm, &this) else {
+        return Ok(JSValue::undefined());
+    };
+    let nodes = find_assigned_nodes_for_slot(&slot_node);
+    Ok(expose_node_list(vm, nodes))
+}
+
+/// `slot.assignedElements()`: returns the elements assigned to this slot.
+pub(crate) fn slot_assigned_elements(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    // In this implementation, only elements are assigned to slots (text nodes
+    // are not projected), so assignedElements is equivalent to assignedNodes.
+    slot_assigned_nodes(vm, args)
+}
+
 /// Dispatch a `slotchange` event on the given `<slot>` element.
-fn dispatch_slotchange(
+pub(crate) fn dispatch_slotchange(
     vm: &mut VM,
     slot_node: &crate::engine::tree::NodeRef<crate::engine::html::HtmlNodeType>,
 ) -> JSResult<()> {
@@ -3580,12 +3707,13 @@ pub(crate) fn get_style(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let Some(dom_id) = node_dom_id(args.first().unwrap_or(&UNDEFINED)) else {
         return Ok(JSValue::null());
     };
+    let csd_proto = css_style_declaration_prototype(vm);
     let style = with_host_mut(vm, |host| {
         if let Some(style) = host.styles.get(&dom_id) {
             return Rc::clone(style);
         }
 
-        let style = make_style_declaration(dom_id, false);
+        let style = make_style_declaration(dom_id, false, csd_proto);
         host.styles.insert(dom_id, Rc::clone(&style));
         style
     })
@@ -3600,11 +3728,12 @@ pub(crate) fn get_computed_style_declaration(vm: &mut VM, args: Vec<JSValue>) ->
     let Some(dom_id) = node_dom_id(args.first().unwrap_or(&UNDEFINED)) else {
         return Ok(JSValue::null());
     };
+    let csd_proto = css_style_declaration_prototype(vm);
     let style = with_host_mut(vm, |host| {
         if let Some(style) = host.computed_style_declarations.get(&dom_id) {
             return Rc::clone(style);
         }
-        let style = make_style_declaration(dom_id, true);
+        let style = make_style_declaration(dom_id, true, csd_proto);
         host.computed_style_declarations
             .insert(dom_id, Rc::clone(&style));
         style
@@ -3613,8 +3742,27 @@ pub(crate) fn get_computed_style_declaration(vm: &mut VM, args: Vec<JSValue>) ->
     Ok(JSValue::from_object(style))
 }
 
-fn make_style_declaration(dom_id: u64, computed: bool) -> Rc<RefCell<JSObject>> {
-    let mut style = JSObject::new();
+/// Returns `CSSStyleDeclaration.prototype` from the global scope, or `None`
+/// if the CSS global has not been installed yet.
+fn css_style_declaration_prototype(vm: &VM) -> Option<Rc<RefCell<JSObject>>> {
+    let global = vm.global_object.borrow();
+    let csd = global.get("CSSStyleDeclaration");
+    csd.as_object().and_then(|ctor| {
+        ctor.borrow().get("prototype").as_object()
+    })
+}
+
+fn make_style_declaration(
+    dom_id: u64,
+    computed: bool,
+    proto: Option<Rc<RefCell<JSObject>>>,
+) -> Rc<RefCell<JSObject>> {
+    // Inherit from CSSStyleDeclaration.prototype when available, falling back
+    // to a bare object if the CSS global has not been installed yet.
+    let mut style = match proto {
+        Some(p) => JSObject::with_prototype(Some(Rc::clone(&p))),
+        None => JSObject::new(),
+    };
     define_node_id(&mut style, dom_id);
     if computed {
         style.set(

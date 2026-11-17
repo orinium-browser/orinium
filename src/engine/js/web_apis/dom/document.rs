@@ -10,6 +10,7 @@ use crate::engine::js::web_apis::dom::element::{
     accessor_property, configurable_accessor_property, define_node_constants, make_comment_node,
     make_doctype_node, make_document_fragment, make_element, make_node_interface,
     make_processing_instruction_node, make_text_node, read_only_accessor_property,
+    slot_assigned_elements, slot_assigned_nodes,
 };
 use crate::engine::js::web_apis::dom::node_iterator;
 use crate::engine::js::web_apis::dom::node_iterator::{make_node_iterator, make_tree_walker};
@@ -201,6 +202,14 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
         slot_prototype.borrow_mut().define_property(
             "name".to_string(),
             configurable_accessor_property(get_slot_name, set_slot_name),
+        );
+        slot_prototype.borrow_mut().define_property(
+            "assignedNodes".to_string(),
+            read_only_accessor_property(slot_assigned_nodes),
+        );
+        slot_prototype.borrow_mut().define_property(
+            "assignedElements".to_string(),
+            read_only_accessor_property(slot_assigned_elements),
         );
         let mut slot_constructor = JSObject::new();
         slot_constructor.set(
@@ -2785,7 +2794,6 @@ fn set_slot_name(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
             let mut b = node.borrow_mut();
             match &mut b.value {
                 crate::engine::html::HtmlNodeType::Element { attributes, .. } => {
-                    // Remove existing `name` attribute, then append new one.
                     attributes.retain(|a| a.name != "name");
                     attributes.push(crate::engine::html::tokenizer::Attribute {
                         name: "name".to_string(),

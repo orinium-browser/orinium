@@ -426,6 +426,7 @@ impl JsRuntime {
         web_apis::browser_env::install_global_aliases(&mut engine);
         web_apis::misc::install_misc_apis(&mut engine);
         web_apis::dom::custom_elements::install_custom_elements(&mut engine);
+        web_apis::css::install_css(&mut engine);
 
         Self {
             engine,
@@ -957,12 +958,12 @@ impl JsRuntime {
 
     /// Runs timer callbacks whose deadlines have elapsed.
     ///
-    /// Returns whether at least one callback was invoked. Repeating timers are
+    /// Runs at most one callback per call so that a render opportunity is
+    /// interleaved between consecutive timer callbacks. Repeating timers are
     /// rescheduled before invocation so they can cancel themselves.
     pub fn run_due_timers(&mut self) -> bool {
-        let invocations = with_host_mut(self.engine.vm(), |host| {
+        let invocation = with_host_mut(self.engine.vm(), |host| {
             let now = Instant::now();
-            let mut invocations = Vec::new();
             let mut index = 0;
             while index < host.timers.len() {
                 if host.timers[index].deadline > now {
@@ -975,41 +976,41 @@ impl JsRuntime {
                 let is_interval = host.timers[index].interval.is_some();
                 if let Some(interval) = host.timers[index].interval {
                     host.timers[index].deadline = now + interval;
-                    index += 1;
                 } else {
                     host.timers.remove(index);
                 }
-                invocations.push((callback, arguments, is_interval));
+                return Some((callback, arguments, is_interval));
             }
-            invocations
+            None
         })
-        .unwrap_or_default();
+        .flatten();
 
-        let ran_callback = !invocations.is_empty();
-        for (callback, arguments, is_interval) in invocations {
-            let label = if is_interval {
-                "setInterval"
-            } else {
-                "setTimeout"
-            };
-            let span = self.begin_trace(
-                JsTraceKind::Timer,
-                label.to_string(),
-                format!("{} argument(s)", arguments.len()),
-                None,
-            );
-            let error = match self.engine.call(callback, JSValue::undefined(), arguments) {
-                Ok(_) => None,
-                Err(err) => {
-                    log::info!("JS error in timer callback: {}", err);
-                    Some(err.to_string())
-                }
-            };
-            let stack = self.trace_error_stack(&error);
-            self.end_trace(span, error, stack);
-            self.perform_microtask_checkpoint();
-        }
-        ran_callback
+        let Some((callback, arguments, is_interval)) = invocation else {
+            return false;
+        };
+
+        let label = if is_interval {
+            "setInterval"
+        } else {
+            "setTimeout"
+        };
+        let span = self.begin_trace(
+            JsTraceKind::Timer,
+            label.to_string(),
+            format!("{} argument(s)", arguments.len()),
+            None,
+        );
+        let error = match self.engine.call(callback, JSValue::undefined(), arguments) {
+            Ok(_) => None,
+            Err(err) => {
+                log::info!("JS error in timer callback: {}", err);
+                Some(err.to_string())
+            }
+        };
+        let stack = self.trace_error_stack(&error);
+        self.end_trace(span, error, stack);
+        self.perform_microtask_checkpoint();
+        true
     }
 
     /// Returns whether a script mutated the DOM and a relayout is needed.
@@ -3965,6 +3966,7 @@ mod tests {
             None,
         );
 
+        assert!(runtime.run_due_timers());
         assert!(runtime.run_due_timers());
         let result = dom.get_element_by_id("result").unwrap();
         assert_eq!(

@@ -7,6 +7,7 @@
 
 use crate::engine::js::CustomElementDefinition;
 use crate::engine::js::common::{is_callable, with_host, with_host_mut};
+use crate::engine::js::web_apis::dom::dom_exception::throw_dom_exception;
 use pixi_byte::value::jsobject::JSObject;
 use pixi_byte::vm::VM;
 use pixi_byte::{JSError, JSResult, JSValue};
@@ -124,9 +125,10 @@ fn custom_elements_define(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> 
         ));
     };
     let name = name.trim().to_ascii_lowercase();
-    if !name.contains('-') {
-        return Err(JSError::TypeError(
-            "Custom element name must contain a hyphen".to_string(),
+    if !is_valid_custom_element_name(&name) {
+        return Err(throw_dom_exception(
+            &format!("The element name '{name}' is not a valid custom element name"),
+            "NotSupportedError",
         ));
     }
     let Some(constructor) = args.get(2).cloned() else {
@@ -137,6 +139,35 @@ fn custom_elements_define(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> 
     if !is_callable(&constructor) {
         return Err(JSError::TypeError(
             "customElements.define constructor must be callable".to_string(),
+        ));
+    }
+
+    // Duplicate registration: same name already defined -> NotSupportedError.
+    let already_defined =
+        with_host(vm, |host| host.custom_elements.contains_key(&name)).unwrap_or(false);
+    if already_defined {
+        return Err(throw_dom_exception(
+            &format!(
+                "Failed to execute 'define' on 'CustomElementRegistry': the name '{name}' has already been used with this registry"
+            ),
+            "NotSupportedError",
+        ));
+    }
+    // Same constructor registered under a different name -> NotSupportedError.
+    let constructor_used = with_host(vm, |host| {
+        let target_obj = constructor.as_object();
+        host.custom_elements.values().any(|d| {
+            let d_obj = d.constructor.as_object();
+            match (target_obj.clone(), d_obj) {
+                (Some(t), Some(d)) => Rc::ptr_eq(&t, &d),
+                _ => false,
+            }
+        })
+    }).unwrap_or(false);
+    if constructor_used {
+        return Err(throw_dom_exception(
+            "Failed to execute 'define' on 'CustomElementRegistry': this constructor has already been used with this registry",
+            "NotSupportedError",
         ));
     }
 
@@ -669,4 +700,41 @@ pub(crate) fn fire_attribute_changed_callback(
             new_js,
         ],
     );
+}
+
+/// Reserved custom element names per the HTML spec (MathML + SVG elements that
+// must not be redefined as custom elements).
+const RESERVED_CUSTOM_ELEMENT_NAMES: &[&str] = &[
+    "annotation-xml",
+    "color-profile",
+    "font-face",
+    "font-face-src",
+    "font-face-uri",
+    "font-face-format",
+    "font-face-name",
+    "missing-glyph",
+];
+
+/// Validates a custom element name per the HTML spec.
+///
+/// A valid custom element name must:
+/// - contain an ASCII hyphen (`-`),
+/// - consist only of ASCII lowercase alphanumerics and hyphens,
+/// - start with a lowercase letter,
+/// - not be a reserved name (MathML/SVG element names).
+fn is_valid_custom_element_name(name: &str) -> bool {
+    if name.is_empty() || !name.contains('-') {
+        return false;
+    }
+    if RESERVED_CUSTOM_ELEMENT_NAMES.contains(&name) {
+        return false;
+    }
+    let mut chars = name.chars();
+    // Must start with a lowercase ASCII letter.
+    match chars.next() {
+        Some(c) if c.is_ascii_lowercase() => {}
+        _ => return false,
+    }
+    // Remaining chars must be ASCII alphanumeric or hyphen.
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '-')
 }

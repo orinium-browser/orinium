@@ -187,6 +187,10 @@ impl JsProcessor {
                 if tree_may_have_new_iframes || did_work {
                     runtime.queue_markup_iframe_loads();
                 }
+                // Drain any microtasks queued during this task so that the
+                // snapshot collected below reflects all settled microtask work,
+                // regardless of whether the task itself executed JavaScript.
+                runtime.perform_microtask_checkpoint();
                 #[cfg(any(feature = "profile", debug_assertions))]
                 let run_time = run.elapsed();
 
