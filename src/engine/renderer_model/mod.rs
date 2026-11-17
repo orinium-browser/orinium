@@ -6,7 +6,7 @@ mod geom;
 mod path;
 
 pub use box_model::{StickyViewport, generate_draw_commands, is_scrollport, sticky_offset};
-pub use draw_command::{Brush, DrawCommand, FillRule, Image, Paint, SystemUiKind};
+pub use draw_command::{Brush, DrawCommand, FillRule, Image, ImageElement, Paint, SystemUiKind};
 pub use geom::{AffineTransform, Rect};
 pub use path::{
     Path, PathCommand, Stroke, StrokeCap, StrokeJoin, clamp_radii, ellipse_path, line_path,

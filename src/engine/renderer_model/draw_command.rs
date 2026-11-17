@@ -19,7 +19,7 @@ use crate::engine::renderer_model::path::Path;
 /// The GPU rasterizer currently only uses this to select the winding mode of
 /// the ear-clipping triangulation; a fully correct stencil-based fill for
 /// arbitrary self-intersecting paths is not implemented.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FillRule {
     NonZero,
     EvenOdd,
@@ -108,15 +108,46 @@ impl Image {
     }
 }
 
+/// An image source that can participate in layout as a replaced element.
+///
+/// `Image` is the software-rasterized pixel buffer (existing path).
+/// `Svg` holds the GPU-path [`DrawCommand::Fill`] instructions produced by
+/// [`crate::engine::svg::svg_to_draw_commands`] so SVG documents render
+/// through the wgpu pipeline without a pixel buffer.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ImageElement {
+    Image(Image),
+    Svg(Vec<DrawCommand>),
+}
+
+impl ImageElement {
+    /// Returns the intrinsic width, or `None` when unavailable (e.g. SVG whose
+    /// command list does not carry an explicit viewport size).
+    pub fn width(&self) -> Option<f32> {
+        match self {
+            ImageElement::Image(image) => Some(image.width() as f32),
+            ImageElement::Svg(_) => None,
+        }
+    }
+
+    /// Returns the intrinsic height, or `None` when unavailable.
+    pub fn height(&self) -> Option<f32> {
+        match self {
+            ImageElement::Image(image) => Some(image.height() as f32),
+            ImageElement::Svg(_) => None,
+        }
+    }
+}
+
 /// How a path is painted: the brush plus an opacity multiplier.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Paint {
     pub brush: Brush,
     pub opacity: f32,
 }
 
 /// A drawing instruction for the GPU renderer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DrawCommand {
     /// Fill a path.
     ///
@@ -161,7 +192,7 @@ pub enum DrawCommand {
 
 /// Discriminator for [`DrawCommand::SystemUi`].
 /// Stub
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SystemUiKind {
     /// Composite an external surface (WebView, iframe, …).
     WebView { surface_id: usize },

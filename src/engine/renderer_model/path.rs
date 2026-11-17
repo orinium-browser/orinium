@@ -31,7 +31,7 @@ pub enum PathCommand {
 /// Used by `DrawCommand::Fill` and `DrawCommand::PushClip`. The GPU rasterizer
 /// converts the path into a polygon with [`Path::as_polygon_vertices`],
 /// flattening curved segments into line segments.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Path {
     pub commands: Vec<PathCommand>,
     current: Option<(f32, f32)>,
