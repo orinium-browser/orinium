@@ -632,7 +632,8 @@ impl Tab {
                 // open popup. Presses inside a popup (or on its owner) are
                 // handled by dispatch_pointer via on_popup_pointer_event.
                 if !pointer_consumed {
-                    repaint |= crate::engine::input::dismiss_open_popups(info, &dismiss_path, px, py);
+                    repaint |=
+                        crate::engine::input::dismiss_open_popups(info, &dismiss_path, px, py);
                 }
 
                 let input_target = path.iter().find_map(|hit| {
