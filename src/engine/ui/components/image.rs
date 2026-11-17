@@ -3,7 +3,7 @@
 use ui_layout::Style;
 
 use crate::engine::layouter::types::{Color, TextFlowStyle, TextStyle};
-use crate::engine::renderer_model::{Brush, DrawCommand, FillRule, Image, Paint, rect_path};
+use crate::engine::renderer_model::{Brush, DrawCommand, FillRule, ImageElement, Paint, rect_path};
 use crate::engine::ui::custom_node::{ContentSize, CustomNode};
 
 /// A decoded image participating in layout as a replaced element.
@@ -12,12 +12,12 @@ use crate::engine::ui::custom_node::{ContentSize, CustomNode};
 /// a placeholder box with the `alt` text (if any).
 #[derive(Debug)]
 pub struct ImageComponent {
-    pub image: Option<Image>,
+    pub image: Option<ImageElement>,
     pub alt: String,
 }
 
 impl ImageComponent {
-    pub fn new(image: Option<Image>, alt: String) -> Self {
+    pub fn new(image: Option<ImageElement>, alt: String) -> Self {
         Self { image, alt }
     }
 }
@@ -32,7 +32,7 @@ impl CustomNode for ImageComponent {
         size: ContentSize,
     ) {
         match &self.image {
-            Some(image) => cmd_buf.push(DrawCommand::Fill {
+            Some(ImageElement::Image(image)) => cmd_buf.push(DrawCommand::Fill {
                 path: rect_path(0.0, 0.0, size.width, size.height),
                 paint: Paint {
                     brush: Brush::Image(image.clone()),
@@ -40,16 +40,28 @@ impl CustomNode for ImageComponent {
                 },
                 rule: FillRule::NonZero,
             }),
+            Some(ImageElement::Svg(commands)) => {
+                cmd_buf.extend(commands.iter().cloned());
+            }
             None => self.draw_placeholder(cmd_buf, text_style, text_flow_style, size),
         }
     }
 
     fn intrinsic_size(&self) -> ContentSize {
         match &self.image {
-            Some(image) => ContentSize {
+            Some(ImageElement::Image(image)) => ContentSize {
                 width: image.width() as f32,
                 height: image.height() as f32,
             },
+            Some(ImageElement::Svg(_)) => {
+                // SVG viewport size is not carried by the command list; the
+                // caller should size the placeholder via CSS. Report zero for
+                // now so layout does not break.
+                ContentSize {
+                    width: 0.0,
+                    height: 0.0,
+                }
+            }
             None => {
                 // Placeholder sized to the alt text (or a fixed box when empty).
                 let line_count = self.alt.lines().count().max(1);
@@ -152,11 +164,12 @@ impl ImageComponent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::renderer_model::Image;
 
     #[test]
     fn image_component_uses_intrinsic_size_and_draw_target() {
         let image = Image::from_rgba(2, 3, vec![255; 24]).unwrap();
-        let component = ImageComponent::new(Some(image), String::new());
+        let component = ImageComponent::new(Some(ImageElement::Image(image)), String::new());
         assert_eq!(
             component.intrinsic_size(),
             ContentSize {
@@ -222,7 +235,9 @@ mod tests {
         assert_eq!(broken.label(), Some("alt text".to_string()));
 
         let ok = ImageComponent::new(
-            Some(Image::from_rgba(1, 1, vec![255; 4]).unwrap()),
+            Some(ImageElement::Image(
+                Image::from_rgba(1, 1, vec![255; 4]).unwrap(),
+            )),
             "alt text".to_string(),
         );
         assert_eq!(ok.role(), Some("img"));

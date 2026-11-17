@@ -8,7 +8,7 @@ use crate::engine::bridge::text;
 use crate::engine::layouter::normalize_whitespace;
 use crate::engine::layouter::types::{ContainerStyle, TextStyle, WhiteSpace};
 use crate::engine::layouter::{DomSnapshot, NodeId};
-use crate::engine::renderer_model::Image;
+use crate::engine::renderer_model::{Image, ImageElement};
 use crate::engine::ui::audio::AudioComponent;
 use crate::engine::ui::button::ButtonComponent;
 use crate::engine::ui::canvas::CanvasComponent;
@@ -190,7 +190,8 @@ impl CustomNodeFactory for ImageFactory {
     fn create(&self, _tag: &str, ctx: &CustomNodeContext) -> Option<Arc<dyn CustomNode>> {
         let image = (ctx.get_attr)("src")
             .and_then(|source| ctx.images.get(&source))
-            .cloned();
+            .cloned()
+            .map(ImageElement::Image);
         Some(Arc::new(ImageComponent::new(
             image,
             (ctx.get_attr)("alt").unwrap_or_default(),
