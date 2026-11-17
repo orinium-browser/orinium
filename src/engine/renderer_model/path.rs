@@ -875,8 +875,7 @@ fn join_at(out: &mut Path, stroke: &Stroke, dir: f32, p: (f32, f32), u: (f32, f3
             // exceeds the miter limit.
             match miter_point(dir, p, u, v) {
                 Some(apex) => {
-                    let miter_len =
-                        ((apex.0 - p.0).powi(2) + (apex.1 - p.1).powi(2)).sqrt();
+                    let miter_len = ((apex.0 - p.0).powi(2) + (apex.1 - p.1).powi(2)).sqrt();
                     if miter_len <= stroke.miter_limit.max(1.0) * stroke.width {
                         out.line_to(apex.0, apex.1);
                         out.line_to(to.0, to.1);

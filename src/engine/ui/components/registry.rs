@@ -363,11 +363,9 @@ impl CustomNodeFactory for SelectFactory {
                     }
                 }
                 Some("option") => {
-                    let label = normalize_whitespace(
-                        &ctx.dom_snapshot.inner_text(*id),
-                        WhiteSpace::Normal,
-                    )
-                    .into_owned();
+                    let label =
+                        normalize_whitespace(&ctx.dom_snapshot.inner_text(*id), WhiteSpace::Normal)
+                            .into_owned();
                     options.push(SelectOption {
                         value: node
                             .kind

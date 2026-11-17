@@ -51,7 +51,10 @@ pub(crate) fn install_css(engine: &mut pixi_byte::JSEngine) {
         "CSSStyleDeclaration".to_string(),
         JSValue::from_object(Rc::new(RefCell::new(csd_constructor))),
     );
-    global.set("CSS".to_string(), JSValue::from_object(Rc::new(RefCell::new(css))));
+    global.set(
+        "CSS".to_string(),
+        JSValue::from_object(Rc::new(RefCell::new(css))),
+    );
 }
 
 /// Stub prototype constructor for `CSSStyleDeclaration.prototype.constructor`.
@@ -69,10 +72,7 @@ fn csd_constructor_stub() -> Rc<RefCell<JSObject>> {
 }
 
 /// `new CSSStyleDeclaration()` — creates an empty declaration block.
-fn css_style_declaration_construct(
-    _vm: &mut VM,
-    _args: Vec<JSValue>,
-) -> JSResult<JSValue> {
+fn css_style_declaration_construct(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(JSValue::undefined())
 }
 
@@ -122,8 +122,16 @@ fn supports_property_value(property: &str, value: &str) -> bool {
     match prop.as_str() {
         "display" => matches!(
             val,
-            "none" | "block" | "inline" | "inline-block" | "flex" | "inline-flex"
-                | "grid" | "inline-grid" | "contents" | "run-in"
+            "none"
+                | "block"
+                | "inline"
+                | "inline-block"
+                | "flex"
+                | "inline-flex"
+                | "grid"
+                | "inline-grid"
+                | "contents"
+                | "run-in"
         ),
         "color" => is_css_color(val),
         "background" => true, // shorthand, broadly supported
@@ -137,12 +145,15 @@ fn supports_property_value(property: &str, value: &str) -> bool {
             "left" | "right" | "center" | "justify" | "start" | "end"
         ),
         "visibility" => matches!(val, "visible" | "hidden" | "collapse"),
-        "position" => matches!(
+        "position" => matches!(val, "static" | "relative" | "absolute" | "fixed" | "sticky"),
+        "float" => matches!(
             val,
-            "static" | "relative" | "absolute" | "fixed" | "sticky"
+            "none" | "left" | "right" | "inline-start" | "inline-end"
         ),
-        "float" => matches!(val, "none" | "left" | "right" | "inline-start" | "inline-end"),
-        "clear" => matches!(val, "none" | "left" | "right" | "both" | "inline-start" | "inline-end"),
+        "clear" => matches!(
+            val,
+            "none" | "left" | "right" | "both" | "inline-start" | "inline-end"
+        ),
         "overflow" => matches!(val, "visible" | "hidden" | "scroll" | "auto"),
         "opacity" => is_css_number(val),
         "z-index" => is_css_integer(val) || val == "auto",
@@ -152,10 +163,7 @@ fn supports_property_value(property: &str, value: &str) -> bool {
 
 /// `CSS.escape()` — escapes a string for use in a CSS selector.
 fn css_escape(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let s = args
-        .get(1)
-        .and_then(JSValue::as_string)
-        .unwrap_or_default();
+    let s = args.get(1).and_then(JSValue::as_string).unwrap_or_default();
     let escaped = escape_identifier(s);
     Ok(JSValue::from_string(escaped))
 }
@@ -171,7 +179,36 @@ fn escape_identifier(s: &str) -> String {
                 out.push('\\');
                 out.push_str(&format!("{:X} ", c as u32));
             }
-            c if c == '.' || c == '#' || c == ':' || c == '[' || c == ']' || c == '(' || c == ')' || c == ',' || c == '+' || c == '~' || c == '>' || c == '*' || c == '!' || c == '@' || c == '%' || c == '^' || c == '&' || c == '`' || c == '|' || c == '=' || c == '"' || c == '\'' || c == '/' || c == '{' || c == '}' || c == '<' || c == '>' || c == '?' || c == ';' => {
+            c if c == '.'
+                || c == '#'
+                || c == ':'
+                || c == '['
+                || c == ']'
+                || c == '('
+                || c == ')'
+                || c == ','
+                || c == '+'
+                || c == '~'
+                || c == '>'
+                || c == '*'
+                || c == '!'
+                || c == '@'
+                || c == '%'
+                || c == '^'
+                || c == '&'
+                || c == '`'
+                || c == '|'
+                || c == '='
+                || c == '"'
+                || c == '\''
+                || c == '/'
+                || c == '{'
+                || c == '}'
+                || c == '<'
+                || c == '>'
+                || c == '?'
+                || c == ';' =>
+            {
                 out.push('\\');
                 out.push(c);
             }
@@ -219,38 +256,160 @@ fn is_css_color(value: &str) -> bool {
     // Named keywords (subset).
     matches!(
         v,
-        "transparent" | "currentColor" | "currentcolor" | "inherit" | "initial"
-            | "unset" | "revert" | "black" | "silver" | "gray" | "grey" | "white"
-            | "maroon" | "red" | "purple" | "fuchsia" | "green" | "lime"
-            | "olive" | "yellow" | "navy" | "blue" | "teal" | "aqua" | "orange"
-            | "aliceblue" | "antiquewhite" | "aquamarine" | "azure" | "beige"
-            | "bisque" | "blanchedalmond" | "blueviolet" | "brown" | "burlywood"
-            | "cadetblue" | "chartreuse" | "chocolate" | "coral" | "cornflowerblue"
-            | "cornsilk" | "crimson" | "cyan" | "darkblue" | "darkcyan"
-            | "darkgoldenrod" | "darkgray" | "darkgreen" | "darkgrey" | "darkkhaki"
-            | "darkmagenta" | "darkolivegreen" | "darkorange" | "darkorchid"
-            | "darkred" | "darksalmon" | "darkseagreen" | "darkslateblue"
-            | "darkslategray" | "darkslategrey" | "darkturquoise" | "darkviolet"
-            | "deeppink" | "deepskyblue" | "dimgray" | "dimgrey" | "dodgerblue"
-            | "firebrick" | "floralwhite" | "forestgreen" | "gainsboro"
-            | "ghostwhite" | "gold" | "goldenrod" | "greenyellow" | "honeydew"
-            | "hotpink" | "indianred" | "indigo" | "ivory" | "khaki" | "lavender"
-            | "lavenderblush" | "lawngreen" | "lemonchiffon" | "lightblue"
-            | "lightcoral" | "lightcyan" | "lightgoldenrodyellow" | "lightgray"
-            | "lightgreen" | "lightgrey" | "lightpink" | "lightsalmon"
-            | "lightseagreen" | "lightskyblue" | "lightslategray" | "lightslategrey"
-            | "lightsteelblue" | "lightyellow" | "limegreen" | "linen" | "magenta"
-            | "mediumaquamarine" | "mediumblue" | "mediumorchid" | "mediumpurple"
-            | "mediumseagreen" | "mediumslateblue" | "mediumspringgreen"
-            | "mediumturquoise" | "mediumvioletred" | "midnightblue" | "mintcream"
-            | "mistyrose" | "moccasin" | "navajowhite" | "oldlace" | "olivedrab"
-            | "orangered" | "orchid" | "palegoldenrod" | "palegreen" | "paleturquoise"
-            | "palevioletred" | "papayawhip" | "peachpuff" | "peru" | "pink"
-            | "plum" | "powderblue" | "rosybrown" | "royalblue" | "saddlebrown"
-            | "salmon" | "sandybrown" | "seagreen" | "seashell" | "sienna"
-            | "skyblue" | "slateblue" | "slategray" | "slategrey" | "snow"
-            | "springgreen" | "steelblue" | "tan" | "thistle" | "tomato"
-            | "turquoise" | "violet" | "wheat" | "whitesmoke" | "yellowgreen"
+        "transparent"
+            | "currentColor"
+            | "currentcolor"
+            | "inherit"
+            | "initial"
+            | "unset"
+            | "revert"
+            | "black"
+            | "silver"
+            | "gray"
+            | "grey"
+            | "white"
+            | "maroon"
+            | "red"
+            | "purple"
+            | "fuchsia"
+            | "green"
+            | "lime"
+            | "olive"
+            | "yellow"
+            | "navy"
+            | "blue"
+            | "teal"
+            | "aqua"
+            | "orange"
+            | "aliceblue"
+            | "antiquewhite"
+            | "aquamarine"
+            | "azure"
+            | "beige"
+            | "bisque"
+            | "blanchedalmond"
+            | "blueviolet"
+            | "brown"
+            | "burlywood"
+            | "cadetblue"
+            | "chartreuse"
+            | "chocolate"
+            | "coral"
+            | "cornflowerblue"
+            | "cornsilk"
+            | "crimson"
+            | "cyan"
+            | "darkblue"
+            | "darkcyan"
+            | "darkgoldenrod"
+            | "darkgray"
+            | "darkgreen"
+            | "darkgrey"
+            | "darkkhaki"
+            | "darkmagenta"
+            | "darkolivegreen"
+            | "darkorange"
+            | "darkorchid"
+            | "darkred"
+            | "darksalmon"
+            | "darkseagreen"
+            | "darkslateblue"
+            | "darkslategray"
+            | "darkslategrey"
+            | "darkturquoise"
+            | "darkviolet"
+            | "deeppink"
+            | "deepskyblue"
+            | "dimgray"
+            | "dimgrey"
+            | "dodgerblue"
+            | "firebrick"
+            | "floralwhite"
+            | "forestgreen"
+            | "gainsboro"
+            | "ghostwhite"
+            | "gold"
+            | "goldenrod"
+            | "greenyellow"
+            | "honeydew"
+            | "hotpink"
+            | "indianred"
+            | "indigo"
+            | "ivory"
+            | "khaki"
+            | "lavender"
+            | "lavenderblush"
+            | "lawngreen"
+            | "lemonchiffon"
+            | "lightblue"
+            | "lightcoral"
+            | "lightcyan"
+            | "lightgoldenrodyellow"
+            | "lightgray"
+            | "lightgreen"
+            | "lightgrey"
+            | "lightpink"
+            | "lightsalmon"
+            | "lightseagreen"
+            | "lightskyblue"
+            | "lightslategray"
+            | "lightslategrey"
+            | "lightsteelblue"
+            | "lightyellow"
+            | "limegreen"
+            | "linen"
+            | "magenta"
+            | "mediumaquamarine"
+            | "mediumblue"
+            | "mediumorchid"
+            | "mediumpurple"
+            | "mediumseagreen"
+            | "mediumslateblue"
+            | "mediumspringgreen"
+            | "mediumturquoise"
+            | "mediumvioletred"
+            | "midnightblue"
+            | "mintcream"
+            | "mistyrose"
+            | "moccasin"
+            | "navajowhite"
+            | "oldlace"
+            | "olivedrab"
+            | "orangered"
+            | "orchid"
+            | "palegoldenrod"
+            | "palegreen"
+            | "paleturquoise"
+            | "palevioletred"
+            | "papayawhip"
+            | "peachpuff"
+            | "peru"
+            | "pink"
+            | "plum"
+            | "powderblue"
+            | "rosybrown"
+            | "royalblue"
+            | "saddlebrown"
+            | "salmon"
+            | "sandybrown"
+            | "seagreen"
+            | "seashell"
+            | "sienna"
+            | "skyblue"
+            | "slateblue"
+            | "slategray"
+            | "slategrey"
+            | "snow"
+            | "springgreen"
+            | "steelblue"
+            | "tan"
+            | "thistle"
+            | "tomato"
+            | "turquoise"
+            | "violet"
+            | "wheat"
+            | "whitesmoke"
+            | "yellowgreen"
             | "rebeccapurple"
     )
 }
@@ -262,7 +421,9 @@ fn is_css_dimension(value: &str) -> bool {
         return true;
     }
     // Must end with a unit (px, em, rem, %, etc.) or be a pure number.
-    let num_end = v.chars().position(|c| !c.is_ascii_digit() && c != '.' && c != '-');
+    let num_end = v
+        .chars()
+        .position(|c| !c.is_ascii_digit() && c != '.' && c != '-');
     match num_end {
         Some(i) => {
             let unit = &v[i..];

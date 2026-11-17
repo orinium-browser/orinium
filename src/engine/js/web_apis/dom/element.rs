@@ -1498,7 +1498,11 @@ pub(crate) fn replace_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue
     // Dispatch slotchange on the new child's assigned slot (if different).
     let new_slot = find_node_assigned_slot(&new_child);
     if let Some(slot) = &new_slot {
-        if old_slot.as_ref().map(|s| !Rc::ptr_eq(s, slot)).unwrap_or(true) {
+        if old_slot
+            .as_ref()
+            .map(|s| !Rc::ptr_eq(s, slot))
+            .unwrap_or(true)
+        {
             let _ = dispatch_slotchange(vm, slot);
         }
     }
@@ -3747,9 +3751,8 @@ pub(crate) fn get_computed_style_declaration(vm: &mut VM, args: Vec<JSValue>) ->
 fn css_style_declaration_prototype(vm: &VM) -> Option<Rc<RefCell<JSObject>>> {
     let global = vm.global_object.borrow();
     let csd = global.get("CSSStyleDeclaration");
-    csd.as_object().and_then(|ctor| {
-        ctor.borrow().get("prototype").as_object()
-    })
+    csd.as_object()
+        .and_then(|ctor| ctor.borrow().get("prototype").as_object())
 }
 
 fn make_style_declaration(

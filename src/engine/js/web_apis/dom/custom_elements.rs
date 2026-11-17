@@ -163,7 +163,8 @@ fn custom_elements_define(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> 
                 _ => false,
             }
         })
-    }).unwrap_or(false);
+    })
+    .unwrap_or(false);
     if constructor_used {
         return Err(throw_dom_exception(
             "Failed to execute 'define' on 'CustomElementRegistry': this constructor has already been used with this registry",

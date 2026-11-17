@@ -3354,9 +3354,12 @@ mod tests {
     #[test]
     fn standalone_svg_draw_commands_match_software_rasterize() {
         let svg = r##"<svg width="4" height="4" viewBox="0 0 4 4"><rect width="4" height="4" fill="#ff0000"/></svg>"##;
-        let commands =
-            super::rasterize::svg_to_draw_commands(svg, Some((4, 4))).expect("converts");
-        assert!(commands.iter().all(|cmd| matches!(cmd, DrawCommand::Fill { .. })));
+        let commands = super::rasterize::svg_to_draw_commands(svg, Some((4, 4))).expect("converts");
+        assert!(
+            commands
+                .iter()
+                .all(|cmd| matches!(cmd, DrawCommand::Fill { .. }))
+        );
         let command_pixels = rasterize_commands(&commands, 4, 4);
         let software = super::rasterize::rasterize(svg, Some((4, 4))).expect("rasterizes");
         assert_eq!((software.width, software.height), (4, 4));

@@ -34,8 +34,8 @@
 
 pub(crate) mod abort;
 pub(crate) mod browser_env;
-pub(crate) mod css;
 pub(crate) mod console;
+pub(crate) mod css;
 pub(crate) mod dom;
 pub(crate) mod encoding;
 pub(crate) mod file;

@@ -426,7 +426,8 @@ fn process_element_to_commands(
                 rule: paint.rule,
             });
             if let Some(stroke) = stroke {
-                let outline = crate::engine::renderer_model::stroke_path(&transformed, &stroke.to_stroke());
+                let outline =
+                    crate::engine::renderer_model::stroke_path(&transformed, &stroke.to_stroke());
                 commands.push(DrawCommand::Fill {
                     path: outline,
                     paint: Paint {
@@ -1281,7 +1282,11 @@ mod tests {
         let commands = super::svg_to_draw_commands(markup, None).expect("converts");
         assert!(!commands.is_empty());
         // Every command produced for a solid rect is a GPU Fill.
-        assert!(commands.iter().all(|cmd| matches!(cmd, DrawCommand::Fill { .. })));
+        assert!(
+            commands
+                .iter()
+                .all(|cmd| matches!(cmd, DrawCommand::Fill { .. }))
+        );
         // The first fill path must be non-empty viewport-space geometry.
         let first_fill = match &commands[0] {
             DrawCommand::Fill { path, .. } => path.clone(),
@@ -1298,25 +1303,25 @@ mod tests {
         let commands = super::svg_to_draw_commands(markup, None).expect("converts");
         // A rect with fill + stroke emits two GPU Fills: one for the fill, one for the outline.
         assert_eq!(commands.len(), 2);
-        assert!(commands.iter().all(|cmd| matches!(cmd, DrawCommand::Fill { .. })));
+        assert!(
+            commands
+                .iter()
+                .all(|cmd| matches!(cmd, DrawCommand::Fill { .. }))
+        );
     }
 
     #[test]
     fn rasterize_many_matches_sequential() {
-        let svg1 = br##"<svg width="2" height="2"><rect width="2" height="2" fill="#ff0000"/></svg>"##;
-        let svg2 = br##"<svg width="3" height="3"><rect width="3" height="3" fill="#00ff00"/></svg>"##;
-        let inputs = vec![
-            (svg1.to_vec(), None),
-            (svg2.to_vec(), None),
-        ];
+        let svg1 =
+            br##"<svg width="2" height="2"><rect width="2" height="2" fill="#ff0000"/></svg>"##;
+        let svg2 =
+            br##"<svg width="3" height="3"><rect width="3" height="3" fill="#00ff00"/></svg>"##;
+        let inputs = vec![(svg1.to_vec(), None), (svg2.to_vec(), None)];
         let parallel = super::rasterize_many(inputs);
-        let sequential: Vec<_> = [
-            (svg1.to_vec(), None),
-            (svg2.to_vec(), None),
-        ]
-        .into_iter()
-        .map(|(svg, target)| super::rasterize_from_bytes(&svg, target))
-        .collect();
+        let sequential: Vec<_> = [(svg1.to_vec(), None), (svg2.to_vec(), None)]
+            .into_iter()
+            .map(|(svg, target)| super::rasterize_from_bytes(&svg, target))
+            .collect();
         assert_eq!(parallel.len(), 2);
         for (p, s) in parallel.iter().zip(sequential.iter()) {
             assert_eq!(p.is_ok(), s.is_ok());
