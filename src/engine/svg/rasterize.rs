@@ -14,26 +14,133 @@
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::rc::Rc;
+use std::sync::{Mutex, OnceLock};
+
+use lru::LruCache;
 
 use crate::engine::html::xml::XmlElement;
 use crate::engine::layouter::types::{Color, ColorScheme, Gradient};
-use crate::engine::renderer_model::{AffineTransform, FillRule, Path};
+use crate::engine::renderer_model::{AffineTransform, Brush, DrawCommand, FillRule, Paint, Path};
 use crate::engine::svg::{
-    parse_use_ref, resolve_fill_rule, ClipPath, PaintState, SvgStroke, ViewBox, element_shape,
-    numeric_presentation_value, parse_len, parse_transform, parse_view_box,
-    viewbox_meet_transform, with_alpha,
+    ClipPath, PaintState, SvgStroke, ViewBox, element_shape, numeric_presentation_value, parse_len,
+    parse_transform, parse_use_ref, parse_view_box, resolve_fill_rule, viewbox_meet_transform,
+    with_alpha,
 };
 use crate::engine::tree::NodeRef;
 
-/// Largest single viewport edge the rasterizer will allocate, in pixels.
-const MAX_RASTER_DIMENSION: u32 = 8192;
-/// Largest total pixel count (width × height) the rasterizer will allocate.
+/// Default largest single viewport edge the rasterizer will allocate, in pixels.
+/// Overridable at runtime via [`configure_raster_limits`] to scale with device memory.
+pub(crate) const MAX_RASTER_DIMENSION: u32 = 8192;
+/// Default largest total pixel count (width × height) the rasterizer will allocate.
 /// At 4 bytes per pixel this bounds a single buffer to ~128 MiB.
-const MAX_RASTER_PIXELS: u64 = 33_554_432;
+/// Overridable at runtime via [`configure_raster_limits`].
+pub(crate) const MAX_RASTER_PIXELS: u64 = 33_554_432;
 /// Maximum element nesting depth walked before bailing out, so a deeply nested
 /// SVG cannot overflow the stack.
 const MAX_SVG_DEPTH: usize = 128;
+
+/// Number of decoded SVG rasters kept in the in-memory cache.
+const SVG_RASTER_CACHE_CAPACITY: usize = 128;
+
+/// Decoded rasters keyed by a hash of the source bytes plus the target size.
+/// A cache hit returns previously rasterized pixels without re-decoding or
+/// re-scanlining the SVG document.
+static SVG_RASTER_CACHE: OnceLock<Mutex<LruCache<u64, RasterResult>>> = OnceLock::new();
+
+fn svg_raster_cache() -> &'static Mutex<LruCache<u64, RasterResult>> {
+    SVG_RASTER_CACHE.get_or_init(|| {
+        Mutex::new(LruCache::new(
+            NonZeroUsize::new(SVG_RASTER_CACHE_CAPACITY).unwrap(),
+        ))
+    })
+}
+
+// FNV-1a 64-bit hash of the SVG source bytes plus the target viewport size,
+// used as the raster cache key.
+//
+// Number of times the real rasterization work ran (cache misses). Test-only
+// instrumentation used to assert that cache hits do not re-decode. Kept
+// thread-local so parallel tests do not disturb each other's deltas.
+#[cfg(test)]
+thread_local! {
+    static RASTERIZE_CALLS: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
+}
+
+fn hash_svg_bytes(svg: &[u8], target_size: Option<(u32, u32)>) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    let mut mix = |b: u8| {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    };
+    for &b in svg {
+        mix(b);
+    }
+    if let Some((w, size_h)) = target_size {
+        for b in w.to_le_bytes() {
+            mix(b);
+        }
+        for b in size_h.to_le_bytes() {
+            mix(b);
+        }
+    }
+    h
+}
+
+/// Runtime-configurable rasterization limits, defaulting to the compile-time
+/// constants above so the host can scale them to device memory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RasterLimits {
+    pub max_dimension: u32,
+    pub max_pixels: u64,
+}
+
+impl Default for RasterLimits {
+    fn default() -> Self {
+        Self {
+            max_dimension: MAX_RASTER_DIMENSION,
+            max_pixels: MAX_RASTER_PIXELS,
+        }
+    }
+}
+
+static RASTER_LIMITS: OnceLock<Mutex<RasterLimits>> = OnceLock::new();
+
+fn raster_limits_mutex() -> &'static Mutex<RasterLimits> {
+    RASTER_LIMITS.get_or_init(|| Mutex::new(RasterLimits::default()))
+}
+
+fn raster_limits() -> RasterLimits {
+    *raster_limits_mutex().lock().unwrap()
+}
+
+/// Reconfigure the rasterization limits, e.g. to scale them to device memory.
+#[allow(dead_code)]
+pub(crate) fn configure_raster_limits(limits: RasterLimits) {
+    *raster_limits_mutex().lock().unwrap() = limits;
+}
+
+/// Scale the rasterization limits to the host's device memory so large
+/// viewports cannot exhaust RAM on low-memory devices.
+#[allow(dead_code)]
+pub(crate) fn configure_raster_limits_for_device_memory(device_memory_bytes: u64) {
+    let limits = if device_memory_bytes >= 8 * 1024 * 1024 * 1024 {
+        RasterLimits::default()
+    } else if device_memory_bytes >= 4 * 1024 * 1024 * 1024 {
+        RasterLimits {
+            max_dimension: 4096,
+            max_pixels: 16_777_216,
+        }
+    } else {
+        RasterLimits {
+            max_dimension: 2048,
+            max_pixels: 4_194_304,
+        }
+    };
+    configure_raster_limits(limits);
+}
 
 /// Decoded RGBA8 pixels plus the rasterized viewport dimensions.
 #[derive(Debug, Clone, PartialEq)]
@@ -52,13 +159,24 @@ pub fn rasterize_from_bytes(
     svg: &[u8],
     target_size: Option<(u32, u32)>,
 ) -> Result<RasterResult, String> {
+    let key = hash_svg_bytes(svg, target_size);
+    {
+        let mut cache = svg_raster_cache().lock().unwrap();
+        if let Some(cached) = cache.get(&key) {
+            return Ok(cached.clone());
+        }
+    }
     let markup =
         std::str::from_utf8(svg).map_err(|error| format!("SVG is not valid UTF-8: {error}"))?;
-    rasterize(markup, target_size)
+    let result = rasterize(markup, target_size)?;
+    svg_raster_cache().lock().unwrap().put(key, result.clone());
+    Ok(result)
 }
 
 /// Rasterizes an SVG document string into a viewport-sized RGBA buffer.
 pub fn rasterize(markup: &str, target: Option<(u32, u32)>) -> Result<RasterResult, String> {
+    #[cfg(test)]
+    RASTERIZE_CALLS.with(|c| c.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
     let tree = crate::engine::html::xml::parse(markup)?;
     let root = tree.root.borrow();
     let root_el = &root.value;
@@ -80,9 +198,10 @@ pub fn rasterize(markup: &str, target: Option<(u32, u32)>) -> Result<RasterResul
     if !vw.is_finite() || !vh.is_finite() {
         return Err("SVG viewport size is not finite".to_string());
     }
-    let width = vw.clamp(1.0, MAX_RASTER_DIMENSION as f32) as u32;
-    let height = vh.clamp(1.0, MAX_RASTER_DIMENSION as f32) as u32;
-    if u64::from(width) * u64::from(height) > MAX_RASTER_PIXELS {
+    let limits = raster_limits();
+    let width = vw.clamp(1.0, limits.max_dimension as f32) as u32;
+    let height = vh.clamp(1.0, limits.max_dimension as f32) as u32;
+    if u64::from(width) * u64::from(height) > limits.max_pixels {
         return Err(format!(
             "SVG viewport {width}x{height} exceeds the rasterization limit"
         ));
@@ -123,13 +242,226 @@ pub fn rasterize(markup: &str, target: Option<(u32, u32)>) -> Result<RasterResul
     })
 }
 
+/// Converts a standalone SVG document into [`DrawCommand::Fill`] commands that
+/// the existing wgpu `DrawCommand::Fill` pipeline can render directly, instead
+/// of software-rasterizing to pixels (`rasterize`). Paths are expressed in
+/// viewport pixel space (the same space `rasterize` fills into), so no extra
+/// viewBox transform is needed: the caller positions the resulting commands at
+/// the SVG's content box.
+///
+/// Only solid fills and strokes are emitted, matching the standalone rasterizer
+/// scope (gradients fall back to their last stop's color, `<clipPath>` is not
+/// emitted as a clip command). Gradients and clip paths are intentionally
+/// out of scope for this conversion, mirroring `rasterize`.
+#[allow(dead_code)]
+pub fn svg_to_draw_commands(
+    markup: &str,
+    target: Option<(u32, u32)>,
+) -> Result<Vec<DrawCommand>, String> {
+    let tree = crate::engine::html::xml::parse(markup)?;
+    let root = tree.root.borrow();
+    let root_el = &root.value;
+    if root_el.name != "svg" {
+        return Err(format!(
+            "not an SVG document (root element is <{}>)",
+            root_el.name
+        ));
+    }
+
+    let view_box = root_el.attr("viewBox").map(parse_view_box);
+    let (vw, vh) = match target {
+        Some((w, h)) => (w as f32, h as f32),
+        None => (
+            viewport_len(root_el, "width", view_box, 300.0),
+            viewport_len(root_el, "height", view_box, 150.0),
+        ),
+    };
+    if !vw.is_finite() || !vh.is_finite() {
+        return Err("SVG viewport size is not finite".to_string());
+    }
+    let limits = raster_limits();
+    let width = vw.clamp(1.0, limits.max_dimension as f32) as u32;
+    let height = vh.clamp(1.0, limits.max_dimension as f32) as u32;
+    if u64::from(width) * u64::from(height) > limits.max_pixels {
+        return Err(format!(
+            "SVG viewport {width}x{height} exceeds the rasterization limit"
+        ));
+    }
+
+    let base = viewbox_meet_transform(view_box.unwrap_or((0.0, 0.0, 0.0, 0.0)), vw, vh);
+    let gradients = HashMap::new();
+    let mut id_map: HashMap<String, NodeRef<XmlElement>> = HashMap::new();
+    collect_tree_id_map(&tree.root, &mut id_map);
+    let mut clip_paths: HashMap<String, ClipPath> = HashMap::new();
+    collect_tree_clip_paths(&tree.root, &mut clip_paths);
+    let mut commands: Vec<DrawCommand> = Vec::new();
+    let mut use_stack: Vec<usize> = Vec::new();
+    for child in tree.root.borrow().children() {
+        process_element_to_commands(
+            child,
+            base,
+            1.0,
+            PaintState::new(),
+            &gradients,
+            &id_map,
+            &clip_paths,
+            &mut use_stack,
+            &mut commands,
+            0,
+        )?;
+    }
+    Ok(commands)
+}
+
+/// Walks one element and appends [`DrawCommand::Fill`] instructions for any
+/// shape it describes, mirroring [`process_element`] but emitting GPU draw
+/// commands instead of software-rasterizing into a pixel buffer.
+#[allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
+fn process_element_to_commands(
+    node: &NodeRef<XmlElement>,
+    inherited: AffineTransform,
+    opacity: f32,
+    mut paint: PaintState,
+    gradients: &HashMap<String, Gradient>,
+    id_map: &HashMap<String, NodeRef<XmlElement>>,
+    _clip_paths: &HashMap<String, ClipPath>,
+    use_stack: &mut Vec<usize>,
+    commands: &mut Vec<DrawCommand>,
+    depth: usize,
+) -> Result<(), String> {
+    if depth > MAX_SVG_DEPTH {
+        return Err(format!("SVG nesting exceeds {MAX_SVG_DEPTH} levels"));
+    }
+    let el = node.borrow();
+    let name = el.value.name.clone();
+    let eff = match el.value.attr("transform") {
+        Some(value) => inherited.then(&parse_transform(value).map_err(|e| format!("{name}: {e}"))?),
+        None => inherited,
+    };
+    let element_opacity = numeric_presentation_value(&el.value, "opacity").unwrap_or(1.0);
+    let opacity = opacity * element_opacity.clamp(0.0, 1.0);
+    paint.apply(&el.value, ColorScheme::Light, Color::default(), gradients);
+    drop(el);
+
+    match name.as_str() {
+        "g" | "a" | "svg" | "symbol" => {
+            for child in node.borrow().children() {
+                process_element_to_commands(
+                    child,
+                    eff,
+                    opacity,
+                    paint.clone(),
+                    gradients,
+                    id_map,
+                    _clip_paths,
+                    use_stack,
+                    commands,
+                    depth + 1,
+                )?;
+            }
+        }
+        "use" => {
+            let href = {
+                let b = node.borrow();
+                b.value
+                    .attr("href")
+                    .or_else(|| b.value.attr("xlink:href"))
+                    .map(str::to_owned)
+            };
+            let target_node = href
+                .as_deref()
+                .and_then(parse_use_ref)
+                .and_then(|frag| id_map.get(&frag).cloned());
+            if let Some(target) = target_node {
+                let target_ptr = Rc::as_ptr(&target) as usize;
+                if !use_stack.contains(&target_ptr) {
+                    let (x, y) = {
+                        let b = target.borrow();
+                        (
+                            b.value.attr("x").and_then(parse_len).unwrap_or(0.0),
+                            b.value.attr("y").and_then(parse_len).unwrap_or(0.0),
+                        )
+                    };
+                    let use_transform = eff.then(&AffineTransform::translate(x, y));
+                    use_stack.push(target_ptr);
+                    process_element_to_commands(
+                        &target,
+                        use_transform,
+                        opacity,
+                        paint.clone(),
+                        gradients,
+                        id_map,
+                        _clip_paths,
+                        use_stack,
+                        commands,
+                        depth + 1,
+                    )?;
+                    use_stack.pop();
+                }
+            }
+        }
+        "path" | "rect" | "circle" | "ellipse" | "polygon" | "polyline" | "line" => {
+            let el = node.borrow();
+            let Some(path) = element_shape(&el.value) else {
+                return Ok(());
+            };
+            if path.commands().is_empty() {
+                return Ok(());
+            }
+            let fill = solid_fallback_paint(&paint, opacity);
+            let stroke = paint.stroke.clone().map(|mut stroke| {
+                // The standalone rasterizer only paints solid strokes.
+                stroke.gradient = None;
+                stroke.color = with_alpha(stroke.color, opacity * paint.stroke_opacity);
+                stroke
+            });
+            let transformed = crate::engine::renderer_model::transform_path(&path, &eff);
+            commands.push(DrawCommand::Fill {
+                path: transformed.clone(),
+                paint: Paint {
+                    brush: Brush::Solid(fill),
+                    opacity: 1.0,
+                },
+                rule: paint.rule,
+            });
+            if let Some(stroke) = stroke {
+                let outline = crate::engine::renderer_model::stroke_path(&transformed, &stroke.to_stroke());
+                commands.push(DrawCommand::Fill {
+                    path: outline,
+                    paint: Paint {
+                        brush: Brush::Solid(stroke.color),
+                        opacity: 1.0,
+                    },
+                    rule: FillRule::NonZero,
+                });
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Rasterizes multiple SVG documents in parallel (one thread per document),
+/// returning results in input order. Used for batch decoding of several SVG
+/// assets (e.g. a batch of `<img src="*.svg">` or audio icons).
+#[allow(dead_code, clippy::type_complexity)]
+pub fn rasterize_many(
+    inputs: Vec<(Vec<u8>, Option<(u32, u32)>)>,
+) -> Vec<Result<RasterResult, String>> {
+    std::thread::scope(|s| {
+        inputs
+            .into_iter()
+            .map(|(svg, target)| s.spawn(move || rasterize_from_bytes(&svg, target)))
+            .map(|h| h.join().unwrap())
+            .collect()
+    })
+}
+
 /// Builds a map of `id` attribute values to node refs for all elements under
 /// `root`, so `<use href="#id">` can resolve its target in the standalone
 /// rasterizer (which walks `Tree<XmlElement>` rather than `DomSnapshot`).
-fn collect_tree_id_map(
-    root: &NodeRef<XmlElement>,
-    out: &mut HashMap<String, NodeRef<XmlElement>>,
-) {
+fn collect_tree_id_map(root: &NodeRef<XmlElement>, out: &mut HashMap<String, NodeRef<XmlElement>>) {
     let el = root.borrow();
     if let Some(id_value) = el.value.attr("id")
         && !id_value.is_empty()
@@ -145,24 +477,22 @@ fn collect_tree_id_map(
 /// Collects `<clipPath>` definitions under `root` into `out`, keyed by their
 /// `id` attribute. All shape descendants of a `<clipPath>` are combined into a
 /// single path (transformed by the clipPath element's `transform` attribute).
-fn collect_tree_clip_paths(
-    root: &NodeRef<XmlElement>,
-    out: &mut HashMap<String, ClipPath>,
-) {
+fn collect_tree_clip_paths(root: &NodeRef<XmlElement>, out: &mut HashMap<String, ClipPath>) {
     let el = root.borrow();
     if el.value.name == "clipPath"
         && let Some(clip_id) = el.value.attr("id").filter(|id| !id.is_empty())
     {
-            let transform = match el.value.attr("transform") {
-                Some(value) => parse_transform(value).unwrap_or(AffineTransform::identity()),
-                None => AffineTransform::identity(),
-            };
-            let rule = resolve_fill_rule(&el.value);
-            let mut path = Path::new();
-            collect_tree_clip_path_shapes(root, &transform, &mut path);
-            if !path.commands().is_empty() {
-                out.entry(clip_id.to_owned()).or_insert(ClipPath { path, rule });
-            }
+        let transform = match el.value.attr("transform") {
+            Some(value) => parse_transform(value).unwrap_or(AffineTransform::identity()),
+            None => AffineTransform::identity(),
+        };
+        let rule = resolve_fill_rule(&el.value);
+        let mut path = Path::new();
+        collect_tree_clip_path_shapes(root, &transform, &mut path);
+        if !path.commands().is_empty() {
+            out.entry(clip_id.to_owned())
+                .or_insert(ClipPath { path, rule });
+        }
     }
     drop(el);
     for child in root.borrow().children() {
@@ -902,5 +1232,97 @@ mod tests {
         assert_eq!(parse_len("-2e1"), Some(-20.0));
         assert_eq!(parse_len("100%"), Some(100.0));
         assert_eq!(parse_len("nope"), None);
+    }
+
+    #[test]
+    fn raster_cache_hit_returns_cached_pixels_without_redecoding() {
+        let svg =
+            br##"<svg width="4" height="3"><rect width="4" height="3" fill="#ff0000"/></svg>"##;
+        let before = RASTERIZE_CALLS.with(|c| c.load(std::sync::atomic::Ordering::Relaxed));
+        let first = super::rasterize_from_bytes(svg, None).expect("rasterizes");
+        let after_miss = RASTERIZE_CALLS.with(|c| c.load(std::sync::atomic::Ordering::Relaxed));
+        let second = super::rasterize_from_bytes(svg, None).expect("rasterizes");
+        let after_hit = RASTERIZE_CALLS.with(|c| c.load(std::sync::atomic::Ordering::Relaxed));
+        assert_eq!(first, second);
+        // The first call decodes; the cache hit must not decode again.
+        assert_eq!(after_miss - before, 1);
+        assert_eq!(after_hit - after_miss, 0);
+        // A different target size is a different cache key and decodes again.
+        let targeted = super::rasterize_from_bytes(svg, Some((8, 6))).expect("rasterizes");
+        assert_eq!((targeted.width, targeted.height), (8, 6));
+        let after_retarget = RASTERIZE_CALLS.with(|c| c.load(std::sync::atomic::Ordering::Relaxed));
+        assert_eq!(after_retarget - after_hit, 1);
+    }
+
+    #[test]
+    fn raster_limits_round_trip_and_device_memory_scaling() {
+        let default = super::raster_limits();
+        // Explicit limits are visible immediately on this thread.
+        super::configure_raster_limits(super::RasterLimits {
+            max_dimension: 100,
+            max_pixels: 50,
+        });
+        assert_eq!(super::raster_limits().max_dimension, 100);
+        assert_eq!(super::raster_limits().max_pixels, 50);
+        // Low device memory reduces limits below the defaults.
+        super::configure_raster_limits_for_device_memory(2 * 1024 * 1024 * 1024);
+        let low = super::raster_limits();
+        assert!(low.max_dimension <= default.max_dimension);
+        assert!(low.max_pixels <= default.max_pixels);
+        // Restore defaults.
+        super::configure_raster_limits(default);
+        assert_eq!(super::raster_limits(), default);
+    }
+
+    #[test]
+    fn svg_to_draw_commands_emits_fill_commands() {
+        let svg = br##"<svg width="4" height="3" viewBox="0 0 4 3"><rect width="4" height="3" fill="#ff0000"/></svg>"##;
+        let markup = std::str::from_utf8(svg).unwrap();
+        let commands = super::svg_to_draw_commands(markup, None).expect("converts");
+        assert!(!commands.is_empty());
+        // Every command produced for a solid rect is a GPU Fill.
+        assert!(commands.iter().all(|cmd| matches!(cmd, DrawCommand::Fill { .. })));
+        // The first fill path must be non-empty viewport-space geometry.
+        let first_fill = match &commands[0] {
+            DrawCommand::Fill { path, .. } => path.clone(),
+            _ => panic!("expected Fill"),
+        };
+        assert!(!first_fill.commands().is_empty());
+    }
+
+    #[test]
+    fn svg_to_draw_commands_handles_stroke() {
+        let svg =
+            br##"<svg width="4" height="4" viewBox="0 0 4 4"><rect width="4" height="4" fill="#000000" stroke="#ff0000" stroke-width="1"/></svg>"##;
+        let markup = std::str::from_utf8(svg).unwrap();
+        let commands = super::svg_to_draw_commands(markup, None).expect("converts");
+        // A rect with fill + stroke emits two GPU Fills: one for the fill, one for the outline.
+        assert_eq!(commands.len(), 2);
+        assert!(commands.iter().all(|cmd| matches!(cmd, DrawCommand::Fill { .. })));
+    }
+
+    #[test]
+    fn rasterize_many_matches_sequential() {
+        let svg1 = br##"<svg width="2" height="2"><rect width="2" height="2" fill="#ff0000"/></svg>"##;
+        let svg2 = br##"<svg width="3" height="3"><rect width="3" height="3" fill="#00ff00"/></svg>"##;
+        let inputs = vec![
+            (svg1.to_vec(), None),
+            (svg2.to_vec(), None),
+        ];
+        let parallel = super::rasterize_many(inputs);
+        let sequential: Vec<_> = [
+            (svg1.to_vec(), None),
+            (svg2.to_vec(), None),
+        ]
+        .into_iter()
+        .map(|(svg, target)| super::rasterize_from_bytes(&svg, target))
+        .collect();
+        assert_eq!(parallel.len(), 2);
+        for (p, s) in parallel.iter().zip(sequential.iter()) {
+            assert_eq!(p.is_ok(), s.is_ok());
+            if let (Ok(a), Ok(b)) = (p, s) {
+                assert_eq!(a, b);
+            }
+        }
     }
 }
