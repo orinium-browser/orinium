@@ -155,6 +155,15 @@ pub(crate) struct CustomElementDefinition {
     pub(crate) when_defined_resolvers: Vec<JSValue>,
 }
 
+/// A single `addEventListener` registration on `document`/`window`/`EventTarget`.
+///
+/// `once` marks listeners that must be removed after their first invocation.
+#[derive(Clone)]
+pub(crate) struct DocumentEventListener {
+    pub(crate) listener: JSValue,
+    pub(crate) once: bool,
+}
+
 /// State shared between the JS natives and the browser side.
 ///
 /// The JS-facing `u64` counter (`__orinium_dom_id`) maps to a live DOM node so
@@ -193,7 +202,7 @@ pub struct JsHost {
     /// DOM ids of iframes whose content failed to load; a failed load is not
     /// retried automatically (only a new `src` re-queues it).
     pub(crate) failed_iframe_fetches: HashSet<u64>,
-    pub(crate) document_event_listeners: HashMap<String, Vec<JSValue>>,
+    pub(crate) document_event_listeners: HashMap<String, Vec<DocumentEventListener>>,
     /// Stable `Selection` singleton returned by `document.getSelection()`.
     pub(crate) document_selection: Option<Rc<RefCell<JSObject>>>,
     /// Element event listeners keyed by dom id and event type. Each entry is a
@@ -790,14 +799,14 @@ impl JsRuntime {
             None,
         );
         let mut first_error = None;
-        for listener in listeners {
+        for entry in listeners {
             let event = make_event(
                 "DOMContentLoaded",
                 Rc::clone(&document),
                 Rc::clone(&document),
             );
             if let Err(err) = self.engine.call(
-                listener,
+                entry.listener.clone(),
                 JSValue::from_object(Rc::clone(&document)),
                 vec![JSValue::from_object(event)],
             ) {
@@ -862,9 +871,9 @@ impl JsRuntime {
             first_error.get_or_insert(error);
         }
 
-        for listener in listeners {
+        for entry in listeners {
             if let Some(error) =
-                self.call_load_handler(&window_object, listener, "window load listener")
+                self.call_load_handler(&window_object, entry.listener.clone(), "window load listener")
             {
                 first_error.get_or_insert(error);
             }

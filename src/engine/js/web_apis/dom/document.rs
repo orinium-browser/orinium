@@ -1,8 +1,10 @@
 use crate::engine::html::{DomTree, HtmlNodeType, Parser as HtmlParser};
+use crate::engine::js::DocumentEventListener;
 use crate::engine::js::JsHost;
 use crate::engine::js::common::{
     dom_node, is_callable, mark_dom_dirty, node_dom_id, noop, with_host, with_host_mut,
 };
+use crate::engine::js::web_apis::abort::signal_is_aborted;
 use crate::engine::js::web_apis::browser_env::window_dispatch_event;
 use crate::engine::js::web_apis::dom::custom_elements::link_custom_element_prototype;
 use crate::engine::js::web_apis::dom::dom_exception::throw_dom_exception;
@@ -18,6 +20,7 @@ use crate::engine::origin::Origin;
 use crate::engine::permissions::Permissions;
 use crate::engine::tree::{NodeRef, TreeNode};
 use pixi_byte::value::jsobject::{JSObject, Property};
+use pixi_byte::value::jsvalue::BoundFunctionData;
 use pixi_byte::vm::VM;
 use pixi_byte::{JSError, JSResult, JSValue};
 use std::cell::RefCell;
@@ -739,18 +742,65 @@ pub(crate) fn add_document_event_listener(vm: &mut VM, args: Vec<JSValue>) -> JS
         return Ok(JSValue::undefined());
     };
 
+    let options = args.get(3).and_then(JSValue::as_object);
+    let once = options
+        .as_ref()
+        .map(|object| object.borrow().get("once").to_boolean())
+        .unwrap_or(false);
+    let signal = options.as_ref().map(|object| object.borrow().get("signal"));
+
+    let signal_aborted = signal
+        .as_ref()
+        .map(|signal| signal_is_aborted(signal))
+        .unwrap_or(false);
+
     let _ = with_host_mut(vm, |host| {
+        if signal_aborted {
+            return;
+        }
         let listeners = host
             .document_event_listeners
             .entry(event_type.clone())
             .or_default();
         if !listeners
             .iter()
-            .any(|candidate| candidate.strict_equals(&listener))
+            .any(|candidate| candidate.listener.strict_equals(&listener))
         {
-            listeners.push(listener);
+            listeners.push(DocumentEventListener {
+                listener: listener.clone(),
+                once,
+            });
         }
     });
+
+    // A listener bound to an already-aborted signal is never registered.
+    if signal_aborted {
+        return Ok(JSValue::undefined());
+    }
+
+    // When the signal aborts, drop this listener so it is never invoked.
+    if let Some(signal_rc) = signal.as_ref().and_then(JSValue::as_object) {
+        let handler = JSValue::from_bound_function(BoundFunctionData::new(
+            JSValue::from_native_function(remove_document_event_listener),
+            JSValue::undefined(),
+            vec![
+                JSValue::from_string(event_type.clone()),
+                listener.clone(),
+            ],
+        ));
+        let add_listener = signal_rc.borrow().get("addEventListener");
+        if is_callable(&add_listener) {
+            let _ = vm.call(
+                add_listener,
+                JSValue::from_object(Rc::clone(&signal_rc)),
+                vec![
+                    JSValue::from_string("abort".to_string()),
+                    handler,
+                ],
+            );
+        }
+    }
+
     Ok(JSValue::undefined())
 }
 
@@ -763,7 +813,7 @@ pub(crate) fn remove_document_event_listener(vm: &mut VM, args: Vec<JSValue>) ->
     };
     let _ = with_host_mut(vm, |host| {
         if let Some(listeners) = host.document_event_listeners.get_mut(event_type) {
-            listeners.retain(|candidate| !candidate.strict_equals(listener));
+            listeners.retain(|candidate| !candidate.listener.strict_equals(listener));
         }
     });
     Ok(JSValue::undefined())

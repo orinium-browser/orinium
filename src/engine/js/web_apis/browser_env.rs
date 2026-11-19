@@ -507,13 +507,21 @@ pub(crate) fn window_dispatch_event(vm: &mut VM, args: Vec<JSValue>) -> JSResult
     })
     .unwrap_or_default();
     let dispatched = !listeners.is_empty();
-    for listener in listeners {
-        if crate::engine::js::common::is_callable(&listener) {
-            vm.call(
-                listener,
-                window.clone(),
-                vec![JSValue::from_object(Rc::clone(&event))],
-            )?;
+    for entry in listeners {
+        if !crate::engine::js::common::is_callable(&entry.listener) {
+            continue;
+        }
+        vm.call(
+            entry.listener.clone(),
+            window.clone(),
+            vec![JSValue::from_object(Rc::clone(&event))],
+        )?;
+        if entry.once {
+            with_host_mut(vm, |host| {
+                if let Some(ls) = host.document_event_listeners.get_mut(&event_type) {
+                    ls.retain(|candidate| !candidate.listener.strict_equals(&entry.listener));
+                }
+            });
         }
     }
     Ok(JSValue::from_bool(dispatched))
