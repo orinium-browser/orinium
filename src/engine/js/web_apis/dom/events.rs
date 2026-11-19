@@ -169,7 +169,7 @@ fn make_constructed_event(vm: &mut VM, args: Vec<JSValue>, custom: bool) -> JSRe
     );
     event.define_property(
         "eventPhase".to_string(),
-        Property::read_only(JSValue::from_number(0.0)),
+        Property::data(JSValue::from_number(0.0)),
     );
     event.set("defaultPrevented".to_string(), JSValue::from_bool(false));
     event.set("target".to_string(), JSValue::null());

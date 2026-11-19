@@ -2061,7 +2061,7 @@ fn propagate_event(
     let retarget_target = if stopped_at_shadow { path.last() } else { None };
 
     // Capture phase: from the root down to (but excluding) the target.
-    for ancestor in path.iter().rev().skip(1) {
+    for ancestor in path.iter().skip(1).rev() {
         if event_flag(event, "cancelBubble") {
             break;
         }
