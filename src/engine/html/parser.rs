@@ -1,6 +1,6 @@
 //! HTMLパーサー。トークンストリームをDOMツリーに変換する。
 
-use crate::engine::html::tokenizer::{Attribute, Token, Tokenizer};
+use crate::engine::html::tokenizer::{Token, Tokenizer};
 use crate::engine::html::util as html_util;
 use crate::engine::{
     css::{
@@ -9,6 +9,7 @@ use crate::engine::{
     },
     tree::{NodeRef, Tree, TreeNode},
 };
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -19,13 +20,20 @@ pub enum ShadowRootMode {
     Closed,
 }
 
+/// Owned attribute used by the parsed DOM tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedAttribute {
+    pub name: String,
+    pub value: String,
+}
+
 #[derive(Debug, Clone)]
 pub enum HtmlNodeType {
     Document,
     DocumentFragment,
     Element {
         tag_name: String,
-        attributes: Vec<Attribute>,
+        attributes: Vec<OwnedAttribute>,
     },
     /// Shadow root attached to a host element.
     /// Children live here and are not part of the host's normal children.
@@ -44,7 +52,7 @@ pub enum HtmlNodeType {
         target: String,
         data: String,
     },
-    InvalidNode(Token, String), // 不正なトークン用
+    InvalidNode(String, String), // 不正なトークン用 (トークンのデバッグ表示, エラーメッセージ)
 }
 
 impl HtmlNodeType {
@@ -69,7 +77,7 @@ impl HtmlNodeType {
             if let Some(attr) = attributes.iter_mut().find(|attr| attr.name == name) {
                 attr.value = value;
             } else {
-                attributes.push(Attribute {
+                attributes.push(OwnedAttribute {
                     name: name.to_string(),
                     value,
                 });
@@ -790,7 +798,18 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse(&mut self) -> DomTree {
-        while let Some(token) = self.tokenizer.next_token() {
+        loop {
+            let token = {
+                let mut tokenizer = std::mem::take(&mut self.tokenizer);
+                let token = tokenizer.next_token();
+                let token = match token {
+                    Some(t) => t.into_owned_static(),
+                    None => break,
+                };
+                self.tokenizer = tokenizer;
+                token
+            };
+
             log::debug!(target:"HtmlParser::Token" ,"Processing token: {token:?}");
             match token {
                 Token::StartTag { .. } => self.handle_start_tag(token),
@@ -806,13 +825,21 @@ impl<'a> Parser<'a> {
         self.tree.clone()
     }
 
-    fn handle_start_tag(&mut self, token: Token) {
+    fn handle_start_tag(&mut self, token: Token<'a>) {
         if let Token::StartTag {
             name,
             attributes,
             self_closing,
         } = token
         {
+            let name: String = name.into_owned();
+            let attributes: Vec<OwnedAttribute> = attributes
+                .into_iter()
+                .map(|attr| OwnedAttribute {
+                    name: attr.name.into_owned(),
+                    value: attr.value.into_owned(),
+                })
+                .collect();
             let mut parent = Rc::clone(self.stack.last().unwrap());
             if self.special_text_mode.is_some() {
                 // TODO:
@@ -875,7 +902,7 @@ impl<'a> Parser<'a> {
                 if let HtmlNodeType::Element { tag_name, .. } = &parent.borrow().value {
                     log::info!(target:"HtmlParser::AutoClosing" ,"Auto-closing tag: <{}> to allow <{}> inside it.", tag_name, name);
                     self.handle_end_tag(Token::EndTag {
-                        name: tag_name.clone(),
+                        name: Cow::Owned(tag_name.clone()),
                     });
                 }
                 parent = Rc::clone(self.stack.last().unwrap());
@@ -921,7 +948,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn handle_noscript(&mut self, attributes: Vec<Attribute>) {
+    fn handle_noscript(&mut self, attributes: Vec<OwnedAttribute>) {
         let in_head = self
             .stack
             .last()
@@ -938,7 +965,7 @@ impl<'a> Parser<'a> {
     /// 現時点では body と同じ扱い（scripting 有効なら raw text）で、
     /// spec の "in head noscript" 挿入モード（link/meta/style の処理など）は
     /// head の挿入モードを導入した際に実装する。
-    fn handle_noscript_in_head(&mut self, attributes: Vec<Attribute>) {
+    fn handle_noscript_in_head(&mut self, attributes: Vec<OwnedAttribute>) {
         match self.scripting_mode {
             ScriptingMode::Enabled => self.parse_noscript_as_raw_text(attributes),
             ScriptingMode::Disabled => self.parse_noscript_as_html(attributes),
@@ -947,7 +974,7 @@ impl<'a> Parser<'a> {
 
     /// scripting 有効なら raw text
     /// scripting 無効なら 通常の HTML
-    fn handle_noscript_in_body(&mut self, attributes: Vec<Attribute>) {
+    fn handle_noscript_in_body(&mut self, attributes: Vec<OwnedAttribute>) {
         match self.scripting_mode {
             ScriptingMode::Enabled => self.parse_noscript_as_raw_text(attributes),
             ScriptingMode::Disabled => self.parse_noscript_as_html(attributes),
@@ -955,18 +982,18 @@ impl<'a> Parser<'a> {
     }
 
     /// `<noscript>` の内容を raw text としてパースする
-    fn parse_noscript_as_raw_text(&mut self, attributes: Vec<Attribute>) {
+    fn parse_noscript_as_raw_text(&mut self, attributes: Vec<OwnedAttribute>) {
         self.push_element("noscript", attributes);
         self.special_text_mode = Some("noscript".to_string());
     }
 
     /// `<noscript>` の内容を通常の HTML としてパースする
-    fn parse_noscript_as_html(&mut self, attributes: Vec<Attribute>) {
+    fn parse_noscript_as_html(&mut self, attributes: Vec<OwnedAttribute>) {
         self.push_element("noscript", attributes);
     }
 
     /// 要素を生成して stack に push する。
-    fn push_element(&mut self, name: &str, attributes: Vec<Attribute>) {
+    fn push_element(&mut self, name: &str, attributes: Vec<OwnedAttribute>) {
         let parent = Rc::clone(self.stack.last().unwrap());
         let node = TreeNode::add_child_value(
             &parent,
@@ -979,10 +1006,10 @@ impl<'a> Parser<'a> {
         self.stack.push(node);
     }
 
-    fn handle_end_tag(&mut self, token: Token) {
+    fn handle_end_tag(&mut self, token: Token<'a>) {
         if let Token::EndTag { ref name } = token {
             // special mode を解除
-            if self.special_text_mode.as_deref() == Some(name.as_str()) {
+            if self.special_text_mode.as_deref() == Some(name.as_ref()) {
                 self.special_text_mode = None;
             }
 
@@ -992,7 +1019,7 @@ impl<'a> Parser<'a> {
                 return;
             }
 
-            let name = name.clone();
+            let name: String = name.to_string();
             if self.tag_stack.contains(&name) {
                 while let Some(top) = self.stack.pop() {
                     if let HtmlNodeType::Element { tag_name, .. } = &top.borrow().value {
@@ -1010,7 +1037,7 @@ impl<'a> Parser<'a> {
                 TreeNode::add_child_value(
                     &parent,
                     HtmlNodeType::InvalidNode(
-                        token,
+                        format!("{token:?}"),
                         format!("No matching start tag for </{}>", name),
                     ),
                 );
@@ -1019,28 +1046,28 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn handle_text(&mut self, token: Token) {
+    fn handle_text(&mut self, token: Token<'a>) {
         if let Token::Text(data) = token {
             let parent = Rc::clone(self.stack.last().unwrap());
 
             // special mode 中はそのままテキスト追加
             if self.special_text_mode.is_some() {
-                TreeNode::add_child_value(&parent, HtmlNodeType::Text(data));
+                TreeNode::add_child_value(&parent, HtmlNodeType::Text(data.into_owned()));
                 return;
             }
 
-            TreeNode::add_child_value(&parent, HtmlNodeType::Text(data));
+            TreeNode::add_child_value(&parent, HtmlNodeType::Text(data.into_owned()));
         }
     }
 
-    fn handle_comment(&mut self, token: Token) {
+    fn handle_comment(&mut self, token: Token<'a>) {
         if let Token::Comment(data) = token {
             let parent = Rc::clone(self.stack.last().unwrap());
-            TreeNode::add_child_value(&parent, HtmlNodeType::Comment(data));
+            TreeNode::add_child_value(&parent, HtmlNodeType::Comment(data.into_owned()));
         }
     }
 
-    fn handle_doctype(&mut self, token: Token) {
+    fn handle_doctype(&mut self, token: Token<'a>) {
         if let Token::Doctype {
             name,
             public_id,
@@ -1052,9 +1079,9 @@ impl<'a> Parser<'a> {
             TreeNode::add_child_value(
                 &parent,
                 HtmlNodeType::Doctype {
-                    name,
-                    public_id,
-                    system_id,
+                    name: name.map(|c| c.into_owned()),
+                    public_id: public_id.map(|c| c.into_owned()),
+                    system_id: system_id.map(|c| c.into_owned()),
                 },
             );
         }

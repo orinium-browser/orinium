@@ -274,7 +274,7 @@ fn shadow_dom_slot_projection_does_not_panic() {
     });
     let host = TreeNode::new(HtmlNodeType::Element {
         tag_name: "div".to_string(),
-        attributes: vec![crate::engine::html::tokenizer::Attribute {
+        attributes: vec![crate::engine::html::parser::OwnedAttribute {
             name: "id".to_string(),
             value: "host".to_string(),
         }],
@@ -285,7 +285,7 @@ fn shadow_dom_slot_projection_does_not_panic() {
     // Light DOM child assigned to slot
     let light_div = TreeNode::new(HtmlNodeType::Element {
         tag_name: "div".to_string(),
-        attributes: vec![crate::engine::html::tokenizer::Attribute {
+        attributes: vec![crate::engine::html::parser::OwnedAttribute {
             name: "slot".to_string(),
             value: "items".to_string(),
         }],
@@ -301,7 +301,7 @@ fn shadow_dom_slot_projection_does_not_panic() {
     // <slot name="items"> inside shadow tree
     let slot = TreeNode::new(HtmlNodeType::Element {
         tag_name: "slot".to_string(),
-        attributes: vec![crate::engine::html::tokenizer::Attribute {
+        attributes: vec![crate::engine::html::parser::OwnedAttribute {
             name: "name".to_string(),
             value: "items".to_string(),
         }],

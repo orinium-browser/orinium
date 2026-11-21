@@ -14,7 +14,7 @@
 //! value quoting, comment syntax, entity decoding, and whitespace handling
 //! all follow a single well-tested implementation.
 
-use super::tokenizer::{Attribute, Token, Tokenizer};
+use super::tokenizer::{Token, Tokenizer};
 use crate::engine::tree::{NodeRef, Tree, TreeNode};
 use std::rc::Rc;
 
@@ -23,7 +23,7 @@ use std::rc::Rc;
 #[derive(Debug, Clone, PartialEq)]
 pub struct XmlElement {
     pub name: String,
-    pub attributes: Vec<Attribute>,
+    pub attributes: Vec<(String, String)>,
 }
 
 impl XmlElement {
@@ -31,8 +31,8 @@ impl XmlElement {
     pub fn attr(&self, name: &str) -> Option<&str> {
         self.attributes
             .iter()
-            .find(|attribute| attribute.name == name)
-            .map(|attribute| attribute.value.as_str())
+            .find(|(attr_name, _)| attr_name == name)
+            .map(|(_, value)| value.as_str())
     }
 }
 
@@ -54,7 +54,13 @@ pub fn parse(markup: &str) -> Result<Tree<XmlElement>, String> {
                 attributes,
                 self_closing,
             } => {
-                let node = TreeNode::new(XmlElement { name, attributes });
+                let node = TreeNode::new(XmlElement {
+                    name: name.into_owned(),
+                    attributes: attributes
+                        .into_iter()
+                        .map(|attr| (attr.name.into_owned(), attr.value.into_owned()))
+                        .collect(),
+                });
                 match stack.last() {
                     Some(parent) => {
                         if self_closing {
@@ -76,11 +82,12 @@ pub fn parse(markup: &str) -> Result<Tree<XmlElement>, String> {
             }
             Token::EndTag { name } => {
                 if let Some(top) = stack.last() {
-                    if top.borrow().value.name == name {
+                    let name_str = name.to_string();
+                    if top.borrow().value.name == name.into_owned() {
                         stack.pop();
                     } else {
                         return Err(format!(
-                            "XML: mismatched closing tag </{name}> for <{}>",
+                            "XML: mismatched closing tag </{name_str}> for <{}>",
                             top.borrow().value.name
                         ));
                     }

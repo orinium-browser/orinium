@@ -1,33 +1,123 @@
 //! HTML tokenizer. Converts raw HTML input into token stream.
+//!
+//! String payloads use [`Cow`] so that lexemes without escape sequences or
+//! entity references are returned as zero-copy borrows of the input string
+//! (`Cow::Borrowed`), while transformed values are heap-allocated
+//! (`Cow::Owned`).
+
+use std::borrow::Cow;
 
 use super::util::{MAX_ENTITY_NAME_LEN, decode_entity};
 
 /// Represents a single HTML attribute
 #[derive(Debug, Clone, PartialEq)]
-pub struct Attribute {
-    pub name: String,
-    pub value: String,
+pub struct Attribute<'a> {
+    pub name: Cow<'a, str>,
+    pub value: Cow<'a, str>,
 }
 
 /// HTML tokens emitted by the tokenizer
 #[derive(Debug, Clone, PartialEq)]
-pub enum Token {
+pub enum Token<'a> {
     Doctype {
-        name: Option<String>,
-        public_id: Option<String>,
-        system_id: Option<String>,
+        name: Option<Cow<'a, str>>,
+        public_id: Option<Cow<'a, str>>,
+        system_id: Option<Cow<'a, str>>,
         force_quirks: bool,
     },
     StartTag {
-        name: String,
-        attributes: Vec<Attribute>,
+        name: Cow<'a, str>,
+        attributes: Vec<Attribute<'a>>,
         self_closing: bool,
     },
     EndTag {
-        name: String,
+        name: Cow<'a, str>,
     },
-    Comment(String),
-    Text(String),
+    Comment(Cow<'a, str>),
+    Text(Cow<'a, str>),
+}
+
+impl<'a> Attribute<'a> {
+    /// Converts all `Cow::Borrowed` payloads to `Cow::Owned`, making the token
+    /// independent of the input string's lifetime.
+    pub fn into_owned(self) -> Attribute<'a> {
+        Attribute {
+            name: Cow::Owned(self.name.into_owned()),
+            value: Cow::Owned(self.value.into_owned()),
+        }
+    }
+
+    /// Converts all `Cow::Borrowed` payloads to `Cow::Owned(String)`, producing
+    /// an [`Attribute`] with a `'static` lifetime.
+    pub fn into_owned_static(self) -> Attribute<'static> {
+        Attribute {
+            name: Cow::Owned(self.name.into_owned()),
+            value: Cow::Owned(self.value.into_owned()),
+        }
+    }
+}
+
+impl<'a> Token<'a> {
+    /// Converts all `Cow::Borrowed` payloads to `Cow::Owned`, making the token
+    /// independent of the input string's lifetime.
+    pub fn into_owned(self) -> Token<'a> {
+        match self {
+            Token::Doctype { name, public_id, system_id, force_quirks } => {
+                Token::Doctype {
+                    name: name.map(|c| Cow::Owned(c.into_owned())),
+                    public_id: public_id.map(|c| Cow::Owned(c.into_owned())),
+                    system_id: system_id.map(|c| Cow::Owned(c.into_owned())),
+                    force_quirks,
+                }
+            }
+            Token::StartTag { name, attributes, self_closing } => {
+                Token::StartTag {
+                    name: Cow::Owned(name.into_owned()),
+                    attributes: attributes
+                        .into_iter()
+                        .map(|a| a.into_owned())
+                        .collect(),
+                    self_closing,
+                }
+            }
+            Token::EndTag { name } => Token::EndTag {
+                name: Cow::Owned(name.into_owned()),
+            },
+            Token::Comment(c) => Token::Comment(Cow::Owned(c.into_owned())),
+            Token::Text(t) => Token::Text(Cow::Owned(t.into_owned())),
+        }
+    }
+
+    /// Converts all `Cow::Borrowed` payloads to `Cow::Owned(String)`, producing
+    /// a [`Token`] with a `'static` lifetime that is fully independent of the
+    /// input string. Useful when the token must outlive the tokenizer.
+    pub fn into_owned_static(self) -> Token<'static> {
+        match self {
+            Token::Doctype { name, public_id, system_id, force_quirks } => {
+                Token::Doctype {
+                    name: name.map(|c| Cow::Owned(c.into_owned())),
+                    public_id: public_id.map(|c| Cow::Owned(c.into_owned())),
+                    system_id: system_id.map(|c| Cow::Owned(c.into_owned())),
+                    force_quirks,
+                }
+            }
+            Token::StartTag { name, attributes, self_closing } => {
+                Token::StartTag {
+                    name: Cow::Owned(name.into_owned()),
+                    attributes: attributes
+                        .into_iter()
+                        .map(|a| a.into_owned_static())
+                        .collect(),
+                    self_closing,
+                }
+            }
+            Token::EndTag { name } => Token::EndTag {
+                name: Cow::Owned(name.into_owned()),
+            },
+            Token::Comment(c) => Token::Comment(Cow::Owned(c.into_owned())),
+            Token::Text(t) => Token::Text(Cow::Owned(t.into_owned())),
+        }
+    }
 }
 
 /// Represents the internal state of the tokenizer
@@ -97,12 +187,18 @@ impl TokenizerState {
 pub struct Tokenizer<'a> {
     input: &'a str,
     pos: usize,
-    token: Option<Token>,
+    token: Option<Token<'a>>,
     state: TokenizerState,
-    current_token: Option<Token>,
-    current_attribute: Option<Attribute>,
+    current_token: Option<Token<'a>>,
+    current_attribute: Option<Attribute<'a>>,
     buffer: String,
     escape_return_state: TokenizerState,
+}
+
+impl<'a> Default for Tokenizer<'a> {
+    fn default() -> Self {
+        Self::new("")
+    }
 }
 
 impl<'a> Tokenizer<'a> {
@@ -131,7 +227,7 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
-    /// Emits the current token and clears the buffer
+    /// Emits the current token and clears the buffer.
     fn commit_token(&mut self) {
         self.token = self.current_token.take();
         self.buffer.clear();
@@ -249,8 +345,8 @@ impl<'a> Tokenizer<'a> {
                 if raw_text && !self.input[self.pos..].starts_with('/') {
                     self.buffer.push('<');
                     match &mut self.current_token {
-                        Some(Token::Text(text)) => text.push('<'),
-                        _ => self.current_token = Some(Token::Text("<".to_string())),
+                        Some(Token::Text(text)) => text.to_mut().push('<'),
+                        _ => self.current_token = Some(Token::Text(Cow::Owned("<".to_string()))),
                     }
                 } else {
                     self.commit_token();
@@ -270,8 +366,8 @@ impl<'a> Tokenizer<'a> {
             _ => {
                 self.buffer.push(c);
                 match &mut self.current_token {
-                    Some(Token::Text(text)) => text.push(c),
-                    _ => self.current_token = Some(Token::Text(c.to_string())),
+                    Some(Token::Text(text)) => text.to_mut().push(c),
+                    _ => self.current_token = Some(Token::Text(Cow::Owned(c.to_string()))),
                 }
             }
         }
@@ -285,8 +381,8 @@ impl<'a> Tokenizer<'a> {
             let decoded = decode_entity(entity).unwrap_or_else(|| format!("&{};", entity));
 
             match &mut self.current_token {
-                Some(Token::Text(text)) => text.push_str(&decoded),
-                _ => self.current_token = Some(Token::Text(decoded)),
+                Some(Token::Text(text)) => text.to_mut().push_str(&decoded),
+                _ => self.current_token = Some(Token::Text(Cow::Owned(decoded))),
             }
 
             self.buffer.clear();
@@ -298,8 +394,8 @@ impl<'a> Tokenizer<'a> {
             let decoded = format!("&{}", entity);
 
             match &mut self.current_token {
-                Some(Token::Text(text)) => text.push_str(&decoded),
-                _ => self.current_token = Some(Token::Text(decoded)),
+                Some(Token::Text(text)) => text.to_mut().push_str(&decoded),
+                _ => self.current_token = Some(Token::Text(Cow::Owned(decoded))),
             }
 
             self.buffer.clear();
@@ -333,7 +429,7 @@ impl<'a> Tokenizer<'a> {
                 self.state = TokenizerState::TagName;
                 self.buffer.push(c);
                 self.current_token = Some(Token::StartTag {
-                    name: c.to_string(),
+                    name: Cow::Owned(c.to_string()),
                     attributes: Vec::new(),
                     self_closing: false,
                 });
@@ -343,10 +439,10 @@ impl<'a> Tokenizer<'a> {
                 self.buffer.push(c);
                 match &mut self.current_token {
                     Some(Token::Text(text)) => {
-                        text.push('<');
-                        text.push(c);
+                        text.to_mut().push('<');
+                        text.to_mut().push(c);
                     }
-                    _ => self.current_token = Some(Token::Text(format!("<{c}"))),
+                    _ => self.current_token = Some(Token::Text(Cow::Owned(format!("<{c}")))),
                 }
                 self.state = TokenizerState::Data;
             }
@@ -364,8 +460,8 @@ impl<'a> Tokenizer<'a> {
             c if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == ':' => {
                 self.buffer.push(c);
                 match &mut self.current_token {
-                    Some(Token::StartTag { name, .. }) => name.push(c),
-                    Some(Token::EndTag { name }) => name.push(c),
+                    Some(Token::StartTag { name, .. }) => name.to_mut().push(c),
+                    Some(Token::EndTag { name }) => name.to_mut().push(c),
                     _ => {}
                 }
             }
@@ -388,8 +484,8 @@ impl<'a> Tokenizer<'a> {
                 self.state = TokenizerState::AttributeName;
                 self.buffer.push(c);
                 self.current_attribute = Some(Attribute {
-                    name: c.to_string(),
-                    value: String::new(),
+                    name: Cow::Owned(c.to_string()),
+                    value: Cow::Owned(String::new()),
                 });
             }
             _ => {}
@@ -412,7 +508,7 @@ impl<'a> Tokenizer<'a> {
             c if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == ':' => {
                 self.buffer.push(c);
                 if let Some(attr) = &mut self.current_attribute {
-                    attr.name.push(c);
+                    attr.name.to_mut().push(c);
                 }
             }
             _ => {}
@@ -446,7 +542,7 @@ impl<'a> Tokenizer<'a> {
             (_, '&') => self.start_attribute_escape(),
             _ => {
                 if let Some(attr) = &mut self.current_attribute {
-                    attr.value.push(c);
+                    attr.value.to_mut().push(c);
                 }
             }
         }
@@ -470,8 +566,8 @@ impl<'a> Tokenizer<'a> {
                 self.state = TokenizerState::AttributeName;
                 self.buffer.push(c);
                 self.current_attribute = Some(Attribute {
-                    name: c.to_string(),
-                    value: String::new(),
+                    name: Cow::Owned(c.to_string()),
+                    value: Cow::Owned(String::new()),
                 });
             }
             _ => {}
@@ -492,7 +588,7 @@ impl<'a> Tokenizer<'a> {
             '&' => self.start_attribute_escape(),
             _ => {
                 if let Some(attr) = &mut self.current_attribute {
-                    attr.value.push(c);
+                    attr.value.to_mut().push(c);
                 }
             }
         }
@@ -515,7 +611,7 @@ impl<'a> Tokenizer<'a> {
             let entity = iter.next().unwrap_or("");
             let decoded = decode_entity(entity).unwrap_or_else(|| format!("&{};", entity));
             if let Some(attr) = &mut self.current_attribute {
-                attr.value.push_str(&decoded);
+                attr.value.to_mut().push_str(&decoded);
             }
             self.buffer.clear();
             self.state = std::mem::replace(&mut self.escape_return_state, TokenizerState::Data);
@@ -530,7 +626,7 @@ impl<'a> Tokenizer<'a> {
             let mut iter = self.buffer.rsplitn(2, '&');
             let entity = iter.next().unwrap_or("");
             if let Some(attr) = &mut self.current_attribute {
-                attr.value.push_str(&format!("&{}", entity));
+                attr.value.to_mut().push_str(&format!("&{}", entity));
             }
             self.buffer.clear();
             self.pos -= c.len_utf8();
@@ -559,7 +655,7 @@ impl<'a> Tokenizer<'a> {
                 self.state = TokenizerState::TagName;
                 self.buffer.push(c);
                 self.current_token = Some(Token::EndTag {
-                    name: c.to_string(),
+                    name: Cow::Owned(c.to_string()),
                 });
             }
             _ => self.state = TokenizerState::Data,
@@ -571,7 +667,7 @@ impl<'a> Tokenizer<'a> {
             TokenizerState::CommentStartDash => {
                 if c == '-' {
                     self.state = TokenizerState::Comment;
-                    self.current_token = Some(Token::Comment(String::new()));
+                    self.current_token = Some(Token::Comment(Cow::Owned(String::new())));
                 } else {
                     self.state = TokenizerState::BogusComment;
                 }
@@ -580,7 +676,8 @@ impl<'a> Tokenizer<'a> {
                 if c == '-' {
                     self.state = TokenizerState::CommentEndDash;
                 } else if let Some(Token::Comment(comment)) = &mut self.current_token {
-                    comment.push(c);
+                    self.buffer.push(c);
+                    comment.to_mut().push(c);
                 }
             }
             TokenizerState::CommentEndDash => {
@@ -589,8 +686,10 @@ impl<'a> Tokenizer<'a> {
                 } else {
                     self.state = TokenizerState::Comment;
                     if let Some(Token::Comment(comment)) = &mut self.current_token {
-                        comment.push('-');
-                        comment.push(c);
+                        self.buffer.push('-');
+                        self.buffer.push(c);
+                        comment.to_mut().push('-');
+                        comment.to_mut().push(c);
                     }
                 }
             }
@@ -601,8 +700,10 @@ impl<'a> Tokenizer<'a> {
                 } else {
                     self.state = TokenizerState::Comment;
                     if let Some(Token::Comment(comment)) = &mut self.current_token {
-                        comment.push_str("--");
-                        comment.push(c);
+                        self.buffer.push_str("--");
+                        self.buffer.push(c);
+                        comment.to_mut().push_str("--");
+                        comment.to_mut().push(c);
                     }
                 }
             }
@@ -650,9 +751,9 @@ impl<'a> Tokenizer<'a> {
                     TokenizerState::DoctypeName => {
                         if let Some(Token::Doctype { name, .. }) = &mut self.current_token {
                             if name.is_none() {
-                                *name = Some(c.to_string());
+                                *name = Some(Cow::Owned(c.to_string()));
                             } else if let Some(n) = name {
-                                n.push(c);
+                                n.to_mut().push(c);
                             }
                         }
                     }
@@ -664,7 +765,7 @@ impl<'a> Tokenizer<'a> {
                             _ => self.state = TokenizerState::BogusDoctype,
                         }
                         if let Some(Token::Doctype { public_id, .. }) = &mut self.current_token {
-                            *public_id = Some(c.to_string());
+                            *public_id = Some(Cow::Owned(c.to_string()));
                         }
                     }
                     TokenizerState::DoctypePublicIdWithSingleQuote
@@ -672,7 +773,7 @@ impl<'a> Tokenizer<'a> {
                         if let Some(Token::Doctype { public_id, .. }) = &mut self.current_token
                             && let Some(pid) = public_id
                         {
-                            pid.push(c);
+                            pid.to_mut().push(c);
                         }
                         if (self.state == TokenizerState::DoctypePublicIdWithSingleQuote
                             && c == '\'')
@@ -685,9 +786,9 @@ impl<'a> Tokenizer<'a> {
                     TokenizerState::DoctypeSystemId => {
                         if let Some(Token::Doctype { system_id, .. }) = &mut self.current_token {
                             if system_id.is_none() {
-                                *system_id = Some(c.to_string());
+                                *system_id = Some(Cow::Owned(c.to_string()));
                             } else if let Some(sid) = system_id {
-                                sid.push(c);
+                                sid.to_mut().push(c);
                             }
                         }
                     }
@@ -702,11 +803,11 @@ impl<'a> Tokenizer<'a> {
 mod tests {
     use super::*;
 
-    fn collect_tokens(input: &str) -> Vec<Token> {
+    fn collect_tokens(input: &str) -> Vec<Token<'static>> {
         let mut tokenizer = Tokenizer::new(input);
         let mut tokens = Vec::new();
         while let Some(token) = tokenizer.next_token() {
-            tokens.push(token);
+            tokens.push(token.into_owned_static());
         }
         tokens
     }
@@ -715,7 +816,10 @@ mod tests {
     fn test_text_node() {
         let input = "Hello, world!";
         let tokens = collect_tokens(input);
-        assert_eq!(tokens, vec![Token::Text("Hello, world!".to_string())]);
+        assert_eq!(
+            tokens,
+            vec![Token::Text(Cow::Borrowed("Hello, world!"))]
+        );
     }
 
     #[test]
@@ -728,13 +832,13 @@ mod tests {
             tokens,
             vec![
                 Token::StartTag {
-                    name: "script".to_string(),
+                    name: Cow::Borrowed("script"),
                     attributes: vec![],
                     self_closing: false
                 },
-                Token::Text("test('di<v');".to_string()),
+                Token::Text(Cow::Borrowed("test('di<v');")),
                 Token::EndTag {
-                    name: "script".to_string()
+                    name: Cow::Borrowed("script")
                 }
             ]
         );
@@ -748,12 +852,12 @@ mod tests {
             tokens,
             vec![
                 Token::StartTag {
-                    name: "div".to_string(),
+                    name: Cow::Borrowed("div"),
                     attributes: vec![],
                     self_closing: false
                 },
                 Token::EndTag {
-                    name: "div".to_string()
+                    name: Cow::Borrowed("div")
                 }
             ]
         );
@@ -767,22 +871,22 @@ mod tests {
             tokens,
             vec![
                 Token::StartTag {
-                    name: "a".to_string(),
+                    name: Cow::Borrowed("a"),
                     attributes: vec![
                         Attribute {
-                            name: "href".to_string(),
-                            value: "https://example.com".to_string()
+                            name: Cow::Borrowed("href"),
+                            value: Cow::Borrowed("https://example.com")
                         },
                         Attribute {
-                            name: "target".to_string(),
-                            value: "_blank".to_string()
+                            name: Cow::Borrowed("target"),
+                            value: Cow::Borrowed("_blank")
                         },
                     ],
                     self_closing: false
                 },
-                Token::Text("Link".to_string()),
+                Token::Text(Cow::Borrowed("Link")),
                 Token::EndTag {
-                    name: "a".to_string()
+                    name: Cow::Borrowed("a")
                 }
             ]
         );
@@ -796,25 +900,25 @@ mod tests {
             tokens,
             vec![
                 Token::StartTag {
-                    name: "script".to_string(),
+                    name: Cow::Borrowed("script"),
                     attributes: vec![
                         Attribute {
-                            name: "async".to_string(),
-                            value: String::new(),
+                            name: Cow::Borrowed("async"),
+                            value: Cow::Owned(String::new()),
                         },
                         Attribute {
-                            name: "defer".to_string(),
-                            value: String::new(),
+                            name: Cow::Borrowed("defer"),
+                            value: Cow::Owned(String::new()),
                         },
                         Attribute {
-                            name: "src".to_string(),
-                            value: "script.js".to_string(),
+                            name: Cow::Borrowed("src"),
+                            value: Cow::Borrowed("script.js"),
                         },
                     ],
                     self_closing: false,
                 },
                 Token::EndTag {
-                    name: "script".to_string(),
+                    name: Cow::Borrowed("script"),
                 },
             ]
         );
@@ -827,10 +931,10 @@ mod tests {
         assert_eq!(
             tokens,
             vec![Token::StartTag {
-                name: "img".to_string(),
+                name: Cow::Borrowed("img"),
                 attributes: vec![Attribute {
-                    name: "src".to_string(),
-                    value: "image.png".to_string()
+                    name: Cow::Borrowed("src"),
+                    value: Cow::Borrowed("image.png")
                 }],
                 self_closing: true
             }]
@@ -843,7 +947,7 @@ mod tests {
         let tokens = collect_tokens(input);
         assert_eq!(
             tokens,
-            vec![Token::Comment(" This is a comment ".to_string())]
+            vec![Token::Comment(Cow::Borrowed(" This is a comment "))]
         );
     }
 
@@ -854,7 +958,7 @@ mod tests {
         assert_eq!(
             tokens,
             vec![Token::Doctype {
-                name: Some("html".to_string()),
+                name: Some(Cow::Borrowed("html")),
                 public_id: None,
                 system_id: None,
                 force_quirks: false
@@ -895,7 +999,7 @@ mod tests {
     fn test_escape_entity() {
         let input = "Hello &amp; goodbye";
         let tokens = collect_tokens(input);
-        assert_eq!(tokens, vec![Token::Text("Hello & goodbye".to_string())]);
+        assert_eq!(tokens, vec![Token::Text(Cow::Borrowed("Hello & goodbye"))]);
     }
 
     #[test]
@@ -905,15 +1009,15 @@ mod tests {
         assert_eq!(
             tokens,
             vec![Token::StartTag {
-                name: "img".to_string(),
+                name: Cow::Borrowed("img"),
                 attributes: vec![
                     Attribute {
-                        name: "src".to_string(),
-                        value: "https://x.example/a.png?w=1&h=2&s=\"q\"".to_string(),
+                        name: Cow::Borrowed("src"),
+                        value: Cow::Borrowed("https://x.example/a.png?w=1&h=2&s=\"q\""),
                     },
                     Attribute {
-                        name: "alt".to_string(),
-                        value: "it's 'x'".to_string(),
+                        name: Cow::Borrowed("alt"),
+                        value: Cow::Borrowed("it's 'x'"),
                     },
                 ],
                 self_closing: false,
@@ -930,15 +1034,15 @@ mod tests {
         assert_eq!(
             tokens[0],
             Token::StartTag {
-                name: "a".to_string(),
+                name: Cow::Borrowed("a"),
                 attributes: vec![Attribute {
-                    name: "href".to_string(),
-                    value: "?a=1&amp".to_string(),
+                    name: Cow::Borrowed("href"),
+                    value: Cow::Borrowed("?a=1&amp"),
                 }],
                 self_closing: false,
             }
         );
-        assert_eq!(tokens[1], Token::Text("link".to_string()));
+        assert_eq!(tokens[1], Token::Text(Cow::Borrowed("link")));
     }
 
     #[test]
@@ -948,10 +1052,10 @@ mod tests {
         assert_eq!(
             tokens[0],
             Token::StartTag {
-                name: "a".to_string(),
+                name: Cow::Borrowed("a"),
                 attributes: vec![Attribute {
-                    name: "href".to_string(),
-                    value: "&x".to_string(),
+                    name: Cow::Borrowed("href"),
+                    value: Cow::Borrowed("&x"),
                 }],
                 self_closing: false,
             }
@@ -967,10 +1071,10 @@ mod tests {
         assert_eq!(
             tokens[0],
             Token::StartTag {
-                name: "img".to_string(),
+                name: Cow::Borrowed("img"),
                 attributes: vec![Attribute {
-                    name: "src".to_string(),
-                    value: "https://x.example/a.png?a=1&b=2".to_string(),
+                    name: Cow::Borrowed("src"),
+                    value: Cow::Borrowed("https://x.example/a.png?a=1&b=2"),
                 }],
                 self_closing: false,
             }
@@ -988,7 +1092,10 @@ mod tests {
             let tokens = collect_tokens(&input);
             assert_eq!(
                 tokens,
-                vec![Token::Text(format!("{} \"Q\" and '9' end", "x".repeat(n)))],
+                vec![Token::Text(Cow::Owned(format!(
+                    "{} \"Q\" and '9' end",
+                    "x".repeat(n)
+                )))],
                 "failed with {n} leading chars"
             );
         }
@@ -1002,21 +1109,21 @@ mod tests {
             tokens,
             vec![
                 Token::StartTag {
-                    name: "div".to_string(),
+                    name: Cow::Borrowed("div"),
                     attributes: vec![],
                     self_closing: false
                 },
                 Token::StartTag {
-                    name: "span".to_string(),
+                    name: Cow::Borrowed("span"),
                     attributes: vec![],
                     self_closing: false
                 },
-                Token::Text("Text".to_string()),
+                Token::Text(Cow::Borrowed("Text")),
                 Token::EndTag {
-                    name: "span".to_string()
+                    name: Cow::Borrowed("span")
                 },
                 Token::EndTag {
-                    name: "div".to_string()
+                    name: Cow::Borrowed("div")
                 },
             ]
         );

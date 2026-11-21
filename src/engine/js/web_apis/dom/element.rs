@@ -2343,7 +2343,7 @@ fn set_element_slot(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         crate::engine::html::HtmlNodeType::Element { attributes, .. } => {
             attributes.retain(|a| a.name != "slot");
             if !value_str.is_empty() {
-                attributes.push(crate::engine::html::tokenizer::Attribute {
+                attributes.push(crate::engine::html::parser::OwnedAttribute {
                     name: "slot".to_string(),
                     value: value_str.to_string(),
                 });

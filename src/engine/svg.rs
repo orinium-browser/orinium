@@ -1614,7 +1614,6 @@ impl SvgNum {
 mod tests {
     use super::*;
     use crate::engine::html::HtmlNodeType;
-    use crate::engine::html::tokenizer::Attribute;
     use crate::engine::layouter::dom_snapshot::DomSnapshot;
     use crate::engine::renderer_model::PathCommand;
     use crate::engine::tree::TreeNode;
@@ -1625,7 +1624,7 @@ mod tests {
             tag_name: tag.to_string(),
             attributes: attrs
                 .iter()
-                .map(|(name, value)| Attribute {
+                .map(|(name, value)| crate::engine::html::parser::OwnedAttribute {
                     name: name.to_string(),
                     value: value.to_string(),
                 })
@@ -2945,9 +2944,9 @@ mod tests {
                 .value
                 .attributes
                 .iter()
-                .map(|attr| crate::engine::html::tokenizer::Attribute {
-                    name: attr.name.clone(),
-                    value: attr.value.clone(),
+                .map(|(name, value)| crate::engine::html::parser::OwnedAttribute {
+                    name: name.clone(),
+                    value: value.clone(),
                 })
                 .collect(),
         };
