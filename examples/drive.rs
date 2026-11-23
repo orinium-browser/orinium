@@ -795,7 +795,7 @@ fn drive(target: Url) {
     let elapsed = started.elapsed();
 
     eprintln!(
-        "\n== YOUTUBE PROBE SUMMARY ({target}) ==\nelapsed: {:.1}s, ticks: {iterations}, dom commits: {}",
+        "\n== PROBE SUMMARY ({target}) ==\nelapsed: {:.1}s, ticks: {iterations}, dom commits: {}",
         elapsed.as_secs_f64(),
         probe.dom_commits
     );
