@@ -277,7 +277,7 @@ impl<'a> Tokenizer<'a> {
     }
 
     /// Returns the next token if available
-    pub fn next_token(&mut self) -> Option<Token> {
+    pub fn next_token(&mut self) -> Option<Token<'_>> {
         while let Some(c) = self.next_char() {
             log::debug!(target:"HtmlTokenizer::Char", "State: {:?}, Char: '{}'", self.state, c);
 
