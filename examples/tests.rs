@@ -10,7 +10,8 @@ use orinium_browser::{
         },
         js::{JsRuntime, missing_api_detector},
         layouter::{
-            InheritedCss, build_layout_and_info,
+            InheritedCss, build_layout_and_info, constrain_auto_grid_track_items,
+            correct_atomic_inline_spacing_with_info,
             css_resolver::{
                 CssResolver, MediaEnvironment, ResolvedStyles, StyleOrigin, append_resolved_styles,
             },
@@ -229,7 +230,7 @@ fn main() -> Result<()> {
                     let raw_url = &args[2];
                     println!("Dumping InfoNode for URL: {}", raw_url);
 
-                    let info = build_layout_info(raw_url, (800.0, 600.0))?.info;
+                    let info = build_layout_info(raw_url, (1440.0, 600.0))?.info;
 
                     println!("\nInfoNode:\n{:#?}", info);
                 } else {
@@ -266,7 +267,7 @@ fn main() -> Result<()> {
             "dump_layoutnode" => {
                 if args.len() == 3 || args.len() == 5 {
                     let raw_url = &args[2];
-                    let (viewport_w, viewport_h) = viewport_args(&args, 800.0, 600.0)?;
+                    let (viewport_w, viewport_h) = viewport_args(&args, 1440.0, 600.0)?;
                     println!("Dumping LayoutNode for URL: {}", raw_url);
 
                     let mut ctx = build_layout_info(raw_url, (viewport_w, viewport_h))?;
@@ -282,11 +283,17 @@ fn main() -> Result<()> {
             "dump_layout_geometry" => {
                 if args.len() == 3 || args.len() == 5 {
                     let raw_url = &args[2];
-                    let (viewport_w, viewport_h) = viewport_args(&args, 800.0, 600.0)?;
+                    let (viewport_w, viewport_h) = viewport_args(&args, 1440.0, 600.0)?;
                     println!("Dumping layout box geometry for URL: {}", raw_url);
 
                     let mut ctx = build_layout_info(raw_url, (viewport_w, viewport_h))?;
-                    LayoutEngine::layout(&mut ctx.layout, viewport_w, viewport_h);
+                    for _ in 0..3 {
+                        LayoutEngine::layout(&mut ctx.layout, viewport_w, viewport_h);
+                        if !constrain_auto_grid_track_items(&mut ctx.layout) {
+                            break;
+                        }
+                    }
+                    correct_atomic_inline_spacing_with_info(&mut ctx.layout, &ctx.info);
                     dump_dom_layout_geometry(&ctx.info, &ctx.layout, &ctx.dom_labels);
                 } else {
                     eprintln!(
@@ -297,7 +304,7 @@ fn main() -> Result<()> {
             "dump_draw_command" => {
                 if args.len() == 3 || args.len() == 5 {
                     let raw_url = &args[2];
-                    let (viewport_w, viewport_h) = viewport_args(&args, 800.0, 600.0)?;
+                    let (viewport_w, viewport_h) = viewport_args(&args, 1440.0, 600.0)?;
                     println!("Dumping draw commands for URL: {}", raw_url);
 
                     let mut ctx = build_layout_info(raw_url, (viewport_w, viewport_h))?;
@@ -324,7 +331,7 @@ fn main() -> Result<()> {
             "dump_relative_draw_tree" => {
                 if args.len() == 3 || args.len() == 5 {
                     let raw_url = &args[2];
-                    let (viewport_w, viewport_h) = viewport_args(&args, 800.0, 600.0)?;
+                    let (viewport_w, viewport_h) = viewport_args(&args, 1440.0, 600.0)?;
                     println!("Dumping relative draw tree for URL: {}", raw_url);
 
                     let mut ctx = build_layout_info(raw_url, (viewport_w, viewport_h))?;
@@ -347,7 +354,7 @@ fn main() -> Result<()> {
             "dump_absolute_draw_positions" => {
                 if args.len() == 3 || args.len() == 5 {
                     let raw_url = &args[2];
-                    let (viewport_w, viewport_h) = viewport_args(&args, 800.0, 600.0)?;
+                    let (viewport_w, viewport_h) = viewport_args(&args, 1440.0, 600.0)?;
                     println!("Dumping absolute draw positions for URL: {}", raw_url);
 
                     let mut ctx = build_layout_info(raw_url, (viewport_w, viewport_h))?;
@@ -370,7 +377,7 @@ fn main() -> Result<()> {
             "run_layout" => {
                 if args.len() == 3 || args.len() == 5 {
                     let raw_url = &args[2];
-                    let (viewport_w, viewport_h) = viewport_args(&args, 800.0, 600.0)?;
+                    let (viewport_w, viewport_h) = viewport_args(&args, 1440.0, 600.0)?;
                     println!("Running layout for URL: {}", raw_url);
 
                     let mut ctx = build_layout_info(raw_url, (viewport_w, viewport_h))?;
@@ -409,7 +416,7 @@ fn main() -> Result<()> {
             "bench_layout_cache" => {
                 if args.len() >= 3 {
                     let raw_url = &args[2];
-                    let (viewport_w, viewport_h) = viewport_args(&args, 800.0, 600.0)?;
+                    let (viewport_w, viewport_h) = viewport_args(&args, 1440.0, 600.0)?;
                     bench_layout_cache(raw_url, (viewport_w, viewport_h))?;
                 } else {
                     eprintln!("Please provide a URL (URL [WIDTH HEIGHT]).");
@@ -2032,7 +2039,7 @@ fn run_webcompat_depth(raw_url: &str, depth: usize) -> Result<()> {
     // Layout builds from the same live DOM (post-JS mutations) and the
     // already-fetched stylesheet bodies — nothing is re-fetched here.
     let layout_result = catch_unwind(AssertUnwindSafe(|| {
-        build_layout_for_dom(&dom, &css_bodies, (800.0, 600.0))
+        build_layout_for_dom(&dom, &css_bodies, (1440.0, 600.0))
     }));
     match layout_result {
         Ok(Ok(ctx)) => {
