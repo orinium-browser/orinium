@@ -282,9 +282,11 @@ fn layout_target(webview: &mut WebView, dom_id: u64) -> Result<(NodeId, LayoutTa
         .as_mut()
         .ok_or_else(|| "no layout yet".to_string())?;
     if matches!(layout.layout_box, ui_layout::LayoutBox::None) {
-        ui_layout::LayoutEngine::layout(layout, webview.viewport.0, webview.viewport.1);
-        if crate::engine::layouter::constrain_auto_grid_track_items(layout) {
+        for _ in 0..3 {
             ui_layout::LayoutEngine::layout(layout, webview.viewport.0, webview.viewport.1);
+            if !crate::engine::layouter::constrain_auto_grid_track_items(layout) {
+                break;
+            }
         }
     }
     let (layout, info) = webview.layout_and_info.as_ref().expect("borrowed above");

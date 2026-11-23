@@ -70,10 +70,6 @@ pub enum WebViewTask {
 
 mod inspector;
 
-/// Manual, network-dependent end-to-end probes.
-#[cfg(test)]
-mod probe_tests;
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum FetchKind {
     Html,
@@ -304,7 +300,7 @@ pub struct WebView {
     write_back_rx: mpsc::Receiver<(u32, crate::engine::ui::registry::DomWrite)>,
     /// JS runtime on a background thread, sharing a mirror of the current
     /// document's DOM. Results are applied in [`WebView::try_apply_js_results`].
-    js_processor: Option<JsProcessor>,
+    pub js_processor: Option<JsProcessor>,
     /// JS-facing dom id per live node address of the committed tree.
     ///
     /// Rebuilt whenever a JS result is committed, so hit-tested layout
@@ -313,7 +309,7 @@ pub struct WebView {
     /// Ordered JS tasks sent but not yet applied. Write-backs are only synced
     /// to the JS thread once this reaches zero, so the mirror and the real tree
     /// cannot diverge mid-task.
-    pending_js_tasks: usize,
+    pub pending_js_tasks: usize,
     /// The real DOM diverged from the JS thread's mirror and needs syncing.
     js_dom_dirty: bool,
     /// Version of the newest `RunTimers` poke still in flight. Write-backs are
@@ -351,7 +347,7 @@ pub struct WebView {
     /// `<iframe src="...">` requests queued by JS results, awaiting fetch.
     pending_iframe_fetches: Vec<JsIframeFetchRequest>,
     /// Classic scripts in document order. Execution starts after CSS is applied.
-    classic_scripts: Vec<ClassicScript>,
+    pub classic_scripts: Vec<ClassicScript>,
     next_script_index: usize,
     pending_script_fetches: HashMap<usize, ClassicScriptExecution>,
     non_blocking_scripts_scheduled: bool,
@@ -372,7 +368,7 @@ pub struct WebView {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum ClassicScript {
+pub enum ClassicScript {
     Inline(String),
     External {
         url: Url,
@@ -1348,11 +1344,7 @@ impl WebView {
     }
 
     /// Answers a DevTools inspection query against this page's live state.
-    pub(crate) fn inspect(
-        &mut self,
-        method: &str,
-        params: &str,
-    ) -> Result<serde_json::Value, String> {
+    pub fn inspect(&mut self, method: &str, params: &str) -> Result<serde_json::Value, String> {
         if method == "evaluate" {
             let parsed: serde_json::Value =
                 serde_json::from_str(params).map_err(|error| error.to_string())?;
@@ -2436,9 +2428,11 @@ impl WebView {
             return;
         };
 
-        ui_layout::LayoutEngine::layout(layout, viewport.0, viewport.1);
-        if layouter::constrain_auto_grid_track_items(layout) {
+        for _ in 0..3 {
             ui_layout::LayoutEngine::layout(layout, viewport.0, viewport.1);
+            if !layouter::constrain_auto_grid_track_items(layout) {
+                break;
+            }
         }
         layouter::correct_atomic_inline_spacing_with_info(layout, info);
         layouter::align_table_columns(layout, info);
