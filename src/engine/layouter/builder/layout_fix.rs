@@ -2,8 +2,8 @@ use crate::engine::layouter::shift::shift_box;
 use crate::engine::layouter::text_layouter::TextFlowLayouter;
 use crate::engine::layouter::types::{InfoNode, NodeKind, TextAlign, WhiteSpace};
 use ui_layout::{
-    AutoSizeBehavior, Display, GridTrack, InnerDisplay, LayoutChild, LayoutNode, Length,
-    LengthOrAuto, OuterDisplay,
+    AutoSizeBehavior, Display, GridPlacement, GridTrack, InnerDisplay, LayoutChild, LayoutNode,
+    Length, LengthOrAuto, OuterDisplay,
 };
 
 // ---------------------------------------------------------------------------
@@ -55,6 +55,9 @@ pub fn constrain_auto_grid_track_items(node: &mut LayoutNode) -> bool {
         }
     }
 
+    changed |= stretch_fraction_rows_to_min_height(node);
+    changed |= include_constrained_grid_item_height(node);
+
     if node.style.display.inner() != Some(InnerDisplay::Grid)
         || node.style.grid_template_columns.is_empty()
     {
@@ -93,6 +96,124 @@ pub fn constrain_auto_grid_track_items(node: &mut LayoutNode) -> bool {
     }
 
     changed
+}
+
+/// **Supplement:** constrained grid items, implicit rows
+///
+/// The grid backend can leave an auto-sized grid shorter than a placed item
+/// whose explicit `min-height` exceeds the row's intrinsic contribution. Use
+/// the laid-out item extent to grow the auto-sized grid, then let the normal
+/// second layout pass recompute downstream positions.
+fn include_constrained_grid_item_height(node: &mut LayoutNode) -> bool {
+    if node.style.display.inner() != Some(InnerDisplay::Grid)
+        || node.style.size.height != LengthOrAuto::Auto
+    {
+        return false;
+    }
+
+    let Some(current_height) = node
+        .layout_box
+        .iter()
+        .next()
+        .map(|model| model.border_box.height)
+    else {
+        return false;
+    };
+    let required_height = node
+        .children
+        .iter()
+        .filter_map(LayoutChild::node)
+        .filter(|child| {
+            child.style.display != Display::None
+                && !child.style.position.kind.is_out_of_flow()
+                && (child.style.size.height != LengthOrAuto::Auto
+                    || child.style.size.min_height != LengthOrAuto::Auto
+                    || child.style.size.max_height != LengthOrAuto::Auto)
+        })
+        .filter_map(|child| {
+            child
+                .layout_box
+                .iter()
+                .next()
+                .map(|model| model.border_box.y + model.border_box.height)
+        })
+        .fold(current_height, f32::max);
+
+    if required_height > current_height + 0.5 {
+        node.style.size.height = LengthOrAuto::Length(Length::Px(required_height));
+        true
+    } else {
+        false
+    }
+}
+
+/// **Supplement:** `min-height`, fractional grid rows
+///
+/// `ui_layout` lays out fractional rows using `height`, but does not use a
+/// definite `min-height` as the available grid size. Promote the minimum to
+/// the same height constraint when the current grid tracks leave unused
+/// space. Keeping the original length preserves viewport-relative sizing.
+fn stretch_fraction_rows_to_min_height(node: &mut LayoutNode) -> bool {
+    if node.style.display.inner() != Some(InnerDisplay::Grid)
+        || node.style.size.height != LengthOrAuto::Auto
+        || !node
+            .style
+            .grid_template_rows
+            .iter()
+            .any(|track| matches!(track, GridTrack::Flex(factor) if *factor > 0.0))
+    {
+        return false;
+    }
+
+    let LengthOrAuto::Length(min_height) = &node.style.size.min_height else {
+        return false;
+    };
+    let Some(model) = node.layout_box.iter().next() else {
+        return false;
+    };
+    if model.children_box.height + 0.5 >= model.content_box.height {
+        return false;
+    }
+
+    node.style.size.height = LengthOrAuto::Length(min_height.clone());
+    true
+}
+
+/// **Supplement:** `grid-template-columns`
+///
+/// `ui_layout` sizes an implicit `auto` column to its max-content contribution
+/// but does not stretch it into the remaining inline space. For a grid with no
+/// explicit columns and only auto-placed items, model the single implicit
+/// column as `minmax(auto, 1fr)`:
+/// it keeps the intrinsic minimum and consumes the available space, as the
+/// implicit auto track should with the default `justify-content: normal`.
+pub fn stretch_single_implicit_grid_column(node: &mut LayoutNode) {
+    for child in &mut node.children {
+        if let LayoutChild::Node(child) = child {
+            stretch_single_implicit_grid_column(child);
+        }
+    }
+
+    if node.style.display.inner() != Some(InnerDisplay::Grid)
+        || !node.style.grid_template_columns.is_empty()
+        || !node.style.grid_template_areas.is_empty()
+    {
+        return;
+    }
+
+    let auto_placed_items_only = node.children.iter().all(|child| {
+        child.node().is_none_or(|child| {
+            child.style.display == Display::None
+                || child.style.position.kind.is_out_of_flow()
+                || child.style.grid_column == GridPlacement::default()
+        })
+    });
+    if auto_placed_items_only {
+        node.style.grid_template_columns = vec![GridTrack::MinMax(
+            Box::new(GridTrack::Breadth(LengthOrAuto::Auto)),
+            Box::new(GridTrack::Flex(1.0)),
+        )];
+    }
 }
 
 /// **Bug fix:** `display`, `margin-left`, `margin-right`
@@ -336,8 +457,9 @@ pub fn refresh_missing_text_layout_results(
 /// **Supplement:** `margin-left`, `margin-right`, `column-gap`
 ///
 /// `ui_layout` does not implement `margin-inline: auto` for grid items. When
-/// all grid items land in a single row, resolve auto left/right margins within
-/// each track so that items are horizontally centered or right-aligned.
+/// grid items land in a single implicit column, resolve auto left/right
+/// margins against that column so items are horizontally centered or
+/// right-aligned.
 fn correct_single_row_grid_inline_alignment(node: &mut LayoutNode) {
     if node.style.display.inner() != Some(InnerDisplay::Grid) {
         return;
@@ -358,6 +480,34 @@ fn correct_single_row_grid_inline_alignment(node: &mut LayoutNode) {
             })
         })
         .collect();
+    let one_column = node.style.grid_template_columns.len() == 1
+        && item_indices.iter().all(|index| {
+            node.children[*index]
+                .node()
+                .is_some_and(|child| child.style.grid_column == GridPlacement::default())
+        });
+    if one_column {
+        for index in item_indices {
+            let child = node.children[index].node_mut().expect("grid item");
+            let left_auto = child.style.spacing.margin_left == LengthOrAuto::Auto;
+            let right_auto = child.style.spacing.margin_right == LengthOrAuto::Auto;
+            if !left_auto && !right_auto {
+                continue;
+            }
+            let Some(model) = child.layout_box.iter().next() else {
+                continue;
+            };
+            let free_space = (content_box.width - model.border_box.width).max(0.0);
+            let offset = match (left_auto, right_auto) {
+                (true, true) => free_space / 2.0,
+                (true, false) => free_space,
+                _ => 0.0,
+            };
+            shift_box(&mut child.layout_box, offset, 0.0);
+        }
+        return;
+    }
+
     if item_indices.len() > node.style.grid_template_columns.len() {
         return;
     }

@@ -8,8 +8,8 @@ use crate::engine::layouter::types::{CursorKeyword, CursorStyle, CustomCursor};
 use crate::engine::renderer_model::AffineTransform;
 
 use ui_layout::{
-    AlignContent, AlignItems, BoxSizing, Display, FlexDirection, FlexWrap, JustifyContent,
-    JustifyItems, Length, LengthOrAuto, OuterDisplay, Position, Style,
+    AlignContent, AlignItems, BoxSizing, Display, FlexDirection, FlexWrap, GridPlacement,
+    JustifyContent, JustifyItems, Length, LengthOrAuto, OuterDisplay, Position, Style,
 };
 
 use super::{
@@ -365,6 +365,37 @@ fn parse_transform(
 /// solid color is stored as the independent bottom color of `Background`.
 fn set_background_color(container_style: &mut ContainerStyle, color: Color) {
     container_style.background.color = Some(color);
+}
+
+/// Preserve the line names from `grid-template-columns` alongside the track
+/// list. The layout backend stores track sizes, but does not carry CSS line
+/// names through to placement.
+fn named_grid_lines(value: &CssValue) -> Vec<(String, Vec<usize>)> {
+    let values: Vec<&CssValue> = match value {
+        CssValue::List(values) => values.iter().collect(),
+        value => vec![value],
+    };
+    let mut lines: Vec<(String, Vec<usize>)> = Vec::new();
+    let mut line = 1usize;
+    let mut in_names = false;
+
+    for value in values {
+        match value {
+            CssValue::Keyword(token) if token == "[" => in_names = true,
+            CssValue::Keyword(token) if token == "]" => in_names = false,
+            CssValue::Keyword(name) if in_names => {
+                if let Some((_, positions)) = lines.iter_mut().find(|(key, _)| key == name) {
+                    positions.push(line);
+                } else {
+                    lines.push((name.to_string(), vec![line]));
+                }
+            }
+            CssValue::Separator => {}
+            CssValue::Keyword(token) if token == "/" => {}
+            _ => line += 1,
+        }
+    }
+    lines
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2263,6 +2294,7 @@ pub fn apply_declaration(
          * ====================== */
         ("grid-template-columns", _) => {
             style.grid_template_columns = parse_grid_tracks(name, value, text_flow_style)?;
+            container_style.grid_column_lines = named_grid_lines(value);
         }
 
         ("grid-template-rows", _) => {
@@ -2288,7 +2320,19 @@ pub fn apply_declaration(
         }
 
         ("grid-column", _) => {
-            style.grid_column = parse_grid_placement(value)?;
+            if let CssValue::Keyword(area) = value
+                && area != "auto"
+            {
+                style.grid_column = GridPlacement::default();
+                container_style.grid_column_start_name = Some(format!("{area}-start"));
+                container_style.grid_column_end_name = Some(format!("{area}-end"));
+            } else if let Some(placement) = parse_grid_placement(value) {
+                style.grid_column = placement;
+                container_style.grid_column_start_name = None;
+                container_style.grid_column_end_name = None;
+            } else {
+                return None;
+            }
         }
 
         ("grid-row", _) => {
@@ -2296,11 +2340,25 @@ pub fn apply_declaration(
         }
 
         ("grid-column-start", _) => {
-            style.grid_column.start = Some(parse_grid_line(value)?);
+            if let Some(line) = parse_grid_line(value) {
+                style.grid_column.start = Some(line);
+                container_style.grid_column_start_name = None;
+            } else if let CssValue::Keyword(name) = value {
+                container_style.grid_column_start_name = Some(name.to_string());
+            } else {
+                return None;
+            }
         }
 
         ("grid-column-end", _) => {
-            style.grid_column.end = parse_grid_line_end(value)?;
+            if let Some(line) = parse_grid_line_end(value) {
+                style.grid_column.end = line;
+                container_style.grid_column_end_name = None;
+            } else if let CssValue::Keyword(name) = value {
+                container_style.grid_column_end_name = Some(name.to_string());
+            } else {
+                return None;
+            }
         }
 
         ("grid-row-start", _) => {

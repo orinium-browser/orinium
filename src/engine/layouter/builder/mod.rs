@@ -558,6 +558,32 @@ pub fn build_layout_and_info_from_snapshot(
                 Arc::make_mut(&mut custom_properties).extend(own);
             }
 
+            // Custom properties participate in computed-value resolution
+            // regardless of whether they came from a stylesheet or the
+            // element's inline style. Install inline custom properties before
+            // applying stylesheet declarations that may reference them.
+            let inline_declarations = html_node
+                .get_attr("style")
+                .map(resolve_inline_style)
+                .unwrap_or_default();
+            for (name, value, important) in &inline_declarations {
+                if !name.starts_with("--") {
+                    continue;
+                }
+                let stylesheet_important = candidates
+                    .as_ref()
+                    .and_then(|c| c.get(name))
+                    .is_some_and(|declaration| declaration.important);
+                if *important || !stylesheet_important {
+                    set_inline_custom_property(
+                        Arc::make_mut(&mut custom_properties),
+                        name.clone(),
+                        value.clone(),
+                        *important,
+                    );
+                }
+            }
+
             // Resolve the used color scheme for this element. `light-dark()`
             // and system colors resolve against it, and it is inherited by
             // descendants that do not set `color-scheme` themselves.
@@ -693,24 +719,7 @@ pub fn build_layout_and_info_from_snapshot(
             // override stylesheet rules — unless the stylesheet rule was
             // `!important`, which still wins over a non-`!important` inline
             // declaration.
-            if let Some(style_attr) = html_node.get_attr("style") {
-                let inline_declarations = resolve_inline_style(style_attr);
-                for (name, value, important) in &inline_declarations {
-                    if name.starts_with("--") {
-                        let stylesheet_important = candidates
-                            .as_ref()
-                            .and_then(|c| c.get(name))
-                            .is_some_and(|declaration| declaration.important);
-                        if *important || !stylesheet_important {
-                            set_inline_custom_property(
-                                Arc::make_mut(&mut custom_properties),
-                                name.clone(),
-                                value.clone(),
-                                *important,
-                            );
-                        }
-                    }
-                }
+            {
                 for (name, value, important) in inline_declarations {
                     if name.starts_with("--") {
                         continue;
@@ -1703,8 +1712,15 @@ pub fn build_layout_and_info_from_snapshot(
                 if style.display.inner() == Some(InnerDisplay::Grid) {
                     let columns = explicit_grid_track_count(&style.grid_template_columns);
                     let rows = explicit_grid_track_count(&style.grid_template_rows);
-                    for child in &mut all_layout {
+                    let named_lines = match &final_kind {
+                        NodeKind::Container { style, .. } => style.grid_column_lines.as_slice(),
+                        _ => &[],
+                    };
+                    for (index, child) in all_layout.iter_mut().enumerate() {
                         if let LayoutChild::Node(child) = child {
+                            if let Some(info) = all_info.get(index) {
+                                resolve_named_grid_placement(child, info, named_lines);
+                            }
                             resolve_named_grid_area(child, &style.grid_template_areas);
                             resolve_grid_end_line(&mut child.style.grid_column, columns);
                             resolve_grid_end_line(&mut child.style.grid_row, rows);
@@ -1820,9 +1836,10 @@ pub fn build_layout_and_info_from_snapshot(
         ),
     );
 
-    let (layout, info_node) = results
+    let (mut layout, info_node) = results
         .remove(&root)
         .expect("root must have been processed");
+    layout_fix::stretch_single_implicit_grid_column(&mut layout);
     (layout, info_node, animation_inputs)
 }
 
@@ -2205,6 +2222,29 @@ fn explicit_grid_track_count(tracks: &[GridTrack]) -> usize {
             _ => 1,
         })
         .sum()
+}
+
+fn resolve_named_grid_placement(
+    node: &mut LayoutNode,
+    info: &InfoNode,
+    line_names: &[(String, Vec<usize>)],
+) {
+    let style = match &info.kind {
+        NodeKind::Container { style, .. } | NodeKind::Custom { style, .. } => style,
+        _ => return,
+    };
+    if let Some(name) = &style.grid_column_start_name
+        && let Some((_, positions)) = line_names.iter().find(|(line, _)| line == name)
+        && let Some(position) = positions.first()
+    {
+        node.style.grid_column.start = Some(*position);
+    }
+    if let Some(name) = &style.grid_column_end_name
+        && let Some((_, positions)) = line_names.iter().find(|(line, _)| line == name)
+        && let Some(position) = positions.last()
+    {
+        node.style.grid_column.end = GridPlacementEnd::Line(*position);
+    }
 }
 
 fn resolve_grid_end_line(placement: &mut GridPlacement, track_count: usize) {

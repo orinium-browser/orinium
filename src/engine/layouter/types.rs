@@ -748,6 +748,11 @@ pub struct ContainerStyle {
     /// HTML tag name (e.g. "html", "body", "div"), used for canvas background
     /// inheritance (root element → body) and other tag-specific behaviors.
     pub tag: Option<String>,
+    /// Named CSS grid column lines and the explicit line indices they denote.
+    pub grid_column_lines: Vec<(String, Vec<usize>)>,
+    /// Named grid-column placement retained until the parent grid is known.
+    pub grid_column_start_name: Option<String>,
+    pub grid_column_end_name: Option<String>,
 }
 
 impl Default for ContainerStyle {
@@ -770,6 +775,9 @@ impl Default for ContainerStyle {
             anchor: Default::default(),
             transform: None,
             tag: None,
+            grid_column_lines: Vec::new(),
+            grid_column_start_name: None,
+            grid_column_end_name: None,
         }
     }
 }
