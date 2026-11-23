@@ -1624,10 +1624,12 @@ mod tests {
             tag_name: tag.to_string(),
             attributes: attrs
                 .iter()
-                .map(|(name, value)| crate::engine::html::parser::OwnedAttribute {
-                    name: name.to_string(),
-                    value: value.to_string(),
-                })
+                .map(
+                    |(name, value)| crate::engine::html::parser::OwnedAttribute {
+                        name: name.to_string(),
+                        value: value.to_string(),
+                    },
+                )
                 .collect(),
         }
     }
@@ -2944,10 +2946,12 @@ mod tests {
                 .value
                 .attributes
                 .iter()
-                .map(|(name, value)| crate::engine::html::parser::OwnedAttribute {
-                    name: name.clone(),
-                    value: value.clone(),
-                })
+                .map(
+                    |(name, value)| crate::engine::html::parser::OwnedAttribute {
+                        name: name.clone(),
+                        value: value.clone(),
+                    },
+                )
                 .collect(),
         };
         let html_node = TreeNode::new(html_value);

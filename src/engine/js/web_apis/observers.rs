@@ -164,7 +164,8 @@ fn resize_observer_observe(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue>
         .as_object()
     {
         let key = dom_id.to_string();
-        if observations.borrow().get(&key).kind() == pixi_byte::value::jsvalue::JsValueKind::Undefined
+        if observations.borrow().get(&key).kind()
+            == pixi_byte::value::jsvalue::JsValueKind::Undefined
         {
             observations.borrow_mut().set(key, target.clone());
         }
@@ -223,11 +224,7 @@ fn resize_observer_disconnect(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVa
         .get(RESIZE_OBSERVER_OBSERVATIONS)
         .as_object()
     {
-        let keys: Vec<String> = observations
-            .borrow()
-            .keys()
-            .into_iter()
-            .collect();
+        let keys: Vec<String> = observations.borrow().keys().into_iter().collect();
         for key in keys {
             observations.borrow_mut().delete(&key);
         }

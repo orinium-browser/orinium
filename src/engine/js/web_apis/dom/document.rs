@@ -788,20 +788,14 @@ pub(crate) fn add_document_event_listener(vm: &mut VM, args: Vec<JSValue>) -> JS
         let handler = JSValue::from_bound_function(BoundFunctionData::new(
             JSValue::from_native_function(remove_document_event_listener),
             JSValue::undefined(),
-            vec![
-                JSValue::from_string(event_type.clone()),
-                listener.clone(),
-            ],
+            vec![JSValue::from_string(event_type.clone()), listener.clone()],
         ));
         let add_listener = signal_rc.borrow().get("addEventListener");
         if is_callable(&add_listener) {
             let _ = vm.call(
                 add_listener,
                 JSValue::from_object(Rc::clone(&signal_rc)),
-                vec![
-                    JSValue::from_string("abort".to_string()),
-                    handler,
-                ],
+                vec![JSValue::from_string("abort".to_string()), handler],
             );
         }
     }
@@ -2662,8 +2656,14 @@ fn create_range(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     range.set("endContainer".to_string(), JSValue::null());
     range.set("endOffset".to_string(), JSValue::from_number(0.0));
     range.set("collapsed".to_string(), JSValue::from_bool(true));
-    range.set("setStart".to_string(), JSValue::from_native_function(range_set_start));
-    range.set("setEnd".to_string(), JSValue::from_native_function(range_set_end));
+    range.set(
+        "setStart".to_string(),
+        JSValue::from_native_function(range_set_start),
+    );
+    range.set(
+        "setEnd".to_string(),
+        JSValue::from_native_function(range_set_end),
+    );
     range.set(
         "selectNodeContents".to_string(),
         JSValue::from_native_function(range_select_node_contents),
@@ -2879,7 +2879,7 @@ fn set_slot_name(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
             match &mut b.value {
                 crate::engine::html::HtmlNodeType::Element { attributes, .. } => {
                     attributes.retain(|a| a.name != "name");
-                    attributes.push(                crate::engine::html::parser::OwnedAttribute {
+                    attributes.push(crate::engine::html::parser::OwnedAttribute {
                         name: "name".to_string(),
                         value: value_str.to_string(),
                     });
@@ -2956,13 +2956,14 @@ fn range_set_start(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     })?;
     let node = args.get(1).cloned().unwrap_or(JSValue::undefined());
     let offset = args.get(2).map(|v| v.to_number()).unwrap_or(0.0);
-    let _dom_id = node_dom_id(&node).ok_or_else(|| {
-        JSError::TypeError("Range.setStart node must be a Node".to_string())
-    })?;
+    let _dom_id = node_dom_id(&node)
+        .ok_or_else(|| JSError::TypeError("Range.setStart node must be a Node".to_string()))?;
     range.borrow_mut().set("startContainer".to_string(), node);
-    range.borrow_mut()
+    range
+        .borrow_mut()
         .set("startOffset".to_string(), JSValue::from_number(offset));
-    range.borrow_mut()
+    range
+        .borrow_mut()
         .set("collapsed".to_string(), JSValue::from_bool(false));
     Ok(JSValue::undefined())
 }
@@ -2974,13 +2975,14 @@ fn range_set_end(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     })?;
     let node = args.get(1).cloned().unwrap_or(JSValue::undefined());
     let offset = args.get(2).map(|v| v.to_number()).unwrap_or(0.0);
-    let _dom_id = node_dom_id(&node).ok_or_else(|| {
-        JSError::TypeError("Range.setEnd node must be a Node".to_string())
-    })?;
+    let _dom_id = node_dom_id(&node)
+        .ok_or_else(|| JSError::TypeError("Range.setEnd node must be a Node".to_string()))?;
     range.borrow_mut().set("endContainer".to_string(), node);
-    range.borrow_mut()
+    range
+        .borrow_mut()
         .set("endOffset".to_string(), JSValue::from_number(offset));
-    range.borrow_mut()
+    range
+        .borrow_mut()
         .set("collapsed".to_string(), JSValue::from_bool(false));
     Ok(JSValue::undefined())
 }
@@ -2988,9 +2990,7 @@ fn range_set_end(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 /// `range.selectNodeContents(node)` — selects the entire contents of a node.
 fn range_select_node_contents(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let range = args.first().and_then(JSValue::as_object).ok_or_else(|| {
-        JSError::TypeError(
-            "Range.selectNodeContents called on incompatible receiver".to_string(),
-        )
+        JSError::TypeError("Range.selectNodeContents called on incompatible receiver".to_string())
     })?;
     let node = args.get(1).cloned().unwrap_or(JSValue::undefined());
     let dom_id = node_dom_id(&node).ok_or_else(|| {
@@ -3004,14 +3004,20 @@ fn range_select_node_contents(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVal
     })
     .flatten()
     .unwrap_or(0.0);
-    range.borrow_mut().set("startContainer".to_string(), node.clone());
-    range.borrow_mut()
+    range
+        .borrow_mut()
+        .set("startContainer".to_string(), node.clone());
+    range
+        .borrow_mut()
         .set("startOffset".to_string(), JSValue::from_number(0.0));
     range.borrow_mut().set("endContainer".to_string(), node);
-    range.borrow_mut()
+    range
+        .borrow_mut()
         .set("endOffset".to_string(), JSValue::from_number(end_offset));
-    range.borrow_mut()
-        .set("collapsed".to_string(), JSValue::from_bool(end_offset == 0.0));
+    range.borrow_mut().set(
+        "collapsed".to_string(),
+        JSValue::from_bool(end_offset == 0.0),
+    );
     Ok(JSValue::undefined())
 }
 
@@ -3026,13 +3032,23 @@ fn range_collapse(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let end_container = range.borrow().get("endContainer").clone();
     let end_offset = range.borrow().get("endOffset").clone();
     if to_start {
-        range.borrow_mut().set("endContainer".to_string(), start_container);
-        range.borrow_mut().set("endOffset".to_string(), start_offset);
+        range
+            .borrow_mut()
+            .set("endContainer".to_string(), start_container);
+        range
+            .borrow_mut()
+            .set("endOffset".to_string(), start_offset);
     } else {
-        range.borrow_mut().set("startContainer".to_string(), end_container);
-        range.borrow_mut().set("startOffset".to_string(), end_offset);
+        range
+            .borrow_mut()
+            .set("startContainer".to_string(), end_container);
+        range
+            .borrow_mut()
+            .set("startOffset".to_string(), end_offset);
     }
-    range.borrow_mut().set("collapsed".to_string(), JSValue::from_bool(true));
+    range
+        .borrow_mut()
+        .set("collapsed".to_string(), JSValue::from_bool(true));
     Ok(JSValue::undefined())
 }
 

@@ -62,24 +62,26 @@ impl<'a> Token<'a> {
     /// independent of the input string's lifetime.
     pub fn into_owned(self) -> Token<'a> {
         match self {
-            Token::Doctype { name, public_id, system_id, force_quirks } => {
-                Token::Doctype {
-                    name: name.map(|c| Cow::Owned(c.into_owned())),
-                    public_id: public_id.map(|c| Cow::Owned(c.into_owned())),
-                    system_id: system_id.map(|c| Cow::Owned(c.into_owned())),
-                    force_quirks,
-                }
-            }
-            Token::StartTag { name, attributes, self_closing } => {
-                Token::StartTag {
-                    name: Cow::Owned(name.into_owned()),
-                    attributes: attributes
-                        .into_iter()
-                        .map(|a| a.into_owned())
-                        .collect(),
-                    self_closing,
-                }
-            }
+            Token::Doctype {
+                name,
+                public_id,
+                system_id,
+                force_quirks,
+            } => Token::Doctype {
+                name: name.map(|c| Cow::Owned(c.into_owned())),
+                public_id: public_id.map(|c| Cow::Owned(c.into_owned())),
+                system_id: system_id.map(|c| Cow::Owned(c.into_owned())),
+                force_quirks,
+            },
+            Token::StartTag {
+                name,
+                attributes,
+                self_closing,
+            } => Token::StartTag {
+                name: Cow::Owned(name.into_owned()),
+                attributes: attributes.into_iter().map(|a| a.into_owned()).collect(),
+                self_closing,
+            },
             Token::EndTag { name } => Token::EndTag {
                 name: Cow::Owned(name.into_owned()),
             },
@@ -93,24 +95,29 @@ impl<'a> Token<'a> {
     /// input string. Useful when the token must outlive the tokenizer.
     pub fn into_owned_static(self) -> Token<'static> {
         match self {
-            Token::Doctype { name, public_id, system_id, force_quirks } => {
-                Token::Doctype {
-                    name: name.map(|c| Cow::Owned(c.into_owned())),
-                    public_id: public_id.map(|c| Cow::Owned(c.into_owned())),
-                    system_id: system_id.map(|c| Cow::Owned(c.into_owned())),
-                    force_quirks,
-                }
-            }
-            Token::StartTag { name, attributes, self_closing } => {
-                Token::StartTag {
-                    name: Cow::Owned(name.into_owned()),
-                    attributes: attributes
-                        .into_iter()
-                        .map(|a| a.into_owned_static())
-                        .collect(),
-                    self_closing,
-                }
-            }
+            Token::Doctype {
+                name,
+                public_id,
+                system_id,
+                force_quirks,
+            } => Token::Doctype {
+                name: name.map(|c| Cow::Owned(c.into_owned())),
+                public_id: public_id.map(|c| Cow::Owned(c.into_owned())),
+                system_id: system_id.map(|c| Cow::Owned(c.into_owned())),
+                force_quirks,
+            },
+            Token::StartTag {
+                name,
+                attributes,
+                self_closing,
+            } => Token::StartTag {
+                name: Cow::Owned(name.into_owned()),
+                attributes: attributes
+                    .into_iter()
+                    .map(|a| a.into_owned_static())
+                    .collect(),
+                self_closing,
+            },
             Token::EndTag { name } => Token::EndTag {
                 name: Cow::Owned(name.into_owned()),
             },
@@ -816,10 +823,7 @@ mod tests {
     fn test_text_node() {
         let input = "Hello, world!";
         let tokens = collect_tokens(input);
-        assert_eq!(
-            tokens,
-            vec![Token::Text(Cow::Borrowed("Hello, world!"))]
-        );
+        assert_eq!(tokens, vec![Token::Text(Cow::Borrowed("Hello, world!"))]);
     }
 
     #[test]

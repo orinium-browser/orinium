@@ -412,7 +412,10 @@ fn xml_http_request_constructor(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<J
         "getAllResponseHeaders".to_string(),
         JSValue::from_native_function(xml_http_request_get_all_response_headers),
     );
-    xhr.set("abort".to_string(), JSValue::from_native_function(xml_http_request_abort));
+    xhr.set(
+        "abort".to_string(),
+        JSValue::from_native_function(xml_http_request_abort),
+    );
     Ok(JSValue::from_object(Rc::new(RefCell::new(xhr))))
 }
 
@@ -502,10 +505,8 @@ fn xml_http_request_send(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         host.next_fetch_id += 1;
         let id = host.next_fetch_id;
         host.xhr_requests.insert(id, Rc::clone(&xhr));
-        xhr.borrow_mut().set(
-            XHR_ID.to_string(),
-            JSValue::from_number(id as f64),
-        );
+        xhr.borrow_mut()
+            .set(XHR_ID.to_string(), JSValue::from_number(id as f64));
         host.fetch_requests.push(JsFetchRequest {
             id,
             url,
@@ -727,11 +728,17 @@ fn sanitize_response_headers(headers: &[(String, String)]) -> Vec<(String, Strin
         .filter(|(name, _)| {
             let lower = name.to_ascii_lowercase();
             // Forbidden headers are never exposed.
-            if FORBIDDEN_RESPONSE_HEADERS.iter().any(|f| lower.eq_ignore_ascii_case(f)) {
+            if FORBIDDEN_RESPONSE_HEADERS
+                .iter()
+                .any(|f| lower.eq_ignore_ascii_case(f))
+            {
                 return false;
             }
             // Safelisted headers are always exposed.
-            if CORS_SAFELISTED_RESPONSE_HEADERS.iter().any(|s| lower.eq_ignore_ascii_case(s)) {
+            if CORS_SAFELISTED_RESPONSE_HEADERS
+                .iter()
+                .any(|s| lower.eq_ignore_ascii_case(s))
+            {
                 return true;
             }
             // Headers listed in `Access-Control-Expose-Headers` are exposed.
