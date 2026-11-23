@@ -63,10 +63,17 @@ pub(crate) fn element_attach_shadow(vm: &mut VM, args: Vec<JSValue>) -> JSResult
     let mode = if let Some(obj) = options.as_object() {
         match obj.borrow().get("mode").as_string().unwrap_or("") {
             "closed" => ShadowRootMode::Closed,
-            _ => ShadowRootMode::Open,
+            "open" => ShadowRootMode::Open,
+            other => {
+                return Err(JSError::TypeError(format!(
+                    "attachShadow: Failed to execute 'attachShadow' on 'Element': The provided option 'mode' value '{other}' is not 'open' or 'closed'.",
+                )));
+            }
         }
     } else {
-        ShadowRootMode::Open
+        return Err(JSError::TypeError(
+            "attachShadow: Failed to execute 'attachShadow' on 'Element': The provided options object is invalid.".to_string(),
+        ));
     };
 
     // Check that this element doesn't already have a shadow root.

@@ -119,17 +119,32 @@ fn custom_elements_has_instance(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSV
 // ---------------------------------------------------------------------------
 
 fn custom_elements_define(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let Some(name) = args.get(1).and_then(JSValue::as_string) else {
-        return Err(JSError::TypeError(
-            "customElements.define requires a name string".to_string(),
-        ));
-    };
-    let name = name.trim().to_ascii_lowercase();
-    if !is_valid_custom_element_name(&name) {
-        return Err(throw_dom_exception(
-            &format!("The element name '{name}' is not a valid custom element name"),
-            "NotSupportedError",
-        ));
+    log::info!(
+        target: "ytprobe",
+        "customElements.define called: args.len={}, arg1={:?}, arg1_kind={:?}, arg2_kind={:?}, arg2_name={:?}, arg2_is={:?}",
+        args.len(),
+        args.get(1).map(JSValue::to_string),
+        args.get(1).map(JSValue::kind),
+        args.get(2).map(JSValue::kind),
+        args.get(2).and_then(JSValue::as_object).map(|o| o.borrow().get("name").to_string()),
+        args.get(2).and_then(JSValue::as_object).map(|o| o.borrow().get("is").to_string()),
+    );
+    // WebIDL DOMString conversion: apply ToString coercion to the name
+    // argument so callers passing a non-string value (e.g. a number or
+    // string-like object) are accepted rather than rejected with a TypeError.
+    let name_arg = args.get(1).cloned().unwrap_or(JSValue::undefined());
+    let name = name_arg.to_console_string().trim().to_ascii_lowercase();
+    if name.is_empty() || !is_valid_custom_element_name(&name) {
+        let msg = if name.is_empty() {
+            "customElements.define requires a name string".to_string()
+        } else {
+            format!("The element name '{name}' is not a valid custom element name")
+        };
+        return if name.is_empty() {
+            Err(JSError::TypeError(msg))
+        } else {
+            Err(throw_dom_exception(&msg, "NotSupportedError"))
+        };
     }
     let Some(constructor) = args.get(2).cloned() else {
         return Err(JSError::TypeError(
@@ -255,10 +270,11 @@ fn custom_elements_define(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> 
 // ---------------------------------------------------------------------------
 
 fn custom_elements_get(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let Some(name) = args.get(1).and_then(JSValue::as_string) else {
+    let name_arg = args.get(1).cloned().unwrap_or(JSValue::undefined());
+    let name = name_arg.to_console_string().trim().to_ascii_lowercase();
+    if name.is_empty() {
         return Ok(JSValue::undefined());
-    };
-    let name = name.trim().to_ascii_lowercase();
+    }
     with_host(vm, |host| {
         host.custom_elements
             .get(&name)
@@ -398,12 +414,13 @@ pub(crate) fn upgrade_custom_element(
 // ---------------------------------------------------------------------------
 
 fn custom_elements_when_defined(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    let Some(name) = args.get(1).and_then(JSValue::as_string) else {
+    let name_arg = args.get(1).cloned().unwrap_or(JSValue::undefined());
+    let name = name_arg.to_console_string().trim().to_ascii_lowercase();
+    if name.is_empty() {
         return Err(JSError::TypeError(
             "customElements.whenDefined requires a name string".to_string(),
         ));
-    };
-    let name = name.trim().to_ascii_lowercase();
+    }
     let is_defined =
         with_host(vm, |host| host.custom_elements.contains_key(&name)).unwrap_or(false);
 

@@ -135,12 +135,12 @@ pub struct JsLayoutMetrics {
 /// The response data exposed to a JavaScript `Response` object.
 #[derive(Debug)]
 pub struct JsFetchResponse {
-    pub(crate) url: String,
-    pub(crate) status: u16,
-    pub(crate) status_text: String,
-    pub(crate) redirected: bool,
-    pub(crate) body: Vec<u8>,
-    pub(crate) headers: Vec<(String, String)>,
+    pub url: String,
+    pub status: u16,
+    pub status_text: String,
+    pub redirected: bool,
+    pub body: Vec<u8>,
+    pub headers: Vec<(String, String)>,
 }
 
 /// A registered custom element definition.
@@ -872,9 +872,11 @@ impl JsRuntime {
         }
 
         for entry in listeners {
-            if let Some(error) =
-                self.call_load_handler(&window_object, entry.listener.clone(), "window load listener")
-            {
+            if let Some(error) = self.call_load_handler(
+                &window_object,
+                entry.listener.clone(),
+                "window load listener",
+            ) {
                 first_error.get_or_insert(error);
             }
         }
@@ -2504,6 +2506,30 @@ mod tests {
     }
 
     #[test]
+    fn resize_observer_unobserve_and_disconnect_do_not_throw() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<div id="target"></div><div id="result"></div>"#);
+        runtime.run_script(
+            r#"
+            const target = document.getElementById("target");
+            const result = document.getElementById("result");
+            const observer = new ResizeObserver(function () {});
+            observer.observe(target);
+            observer.unobserve(target);
+            observer.disconnect();
+            const observer2 = new ResizeObserver(function () {});
+            observer2.observe(target);
+            result.setAttribute("data-ok", "yes");
+            "#,
+            None,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-ok"), Some("yes"));
+    }
+
+    #[test]
     fn layout_offsets_have_a_numeric_fallback() {
         let (mut runtime, dom) = runtime_from_html(
             r#"<div id="list" class="carousel slick-list"></div><div id="plain"></div><div id="result"></div>"#,
@@ -2529,6 +2555,21 @@ mod tests {
                 .get_attr("data-widths"),
             Some("800:0:0:0")
         );
+    }
+
+    #[test]
+    fn geometry_read_before_layout_marks_dom_dirty() {
+        let (mut runtime, _dom) =
+            runtime_from_html(r#"<div id="target"></div><div id="result"></div>"#);
+        // No layout metrics committed yet.
+        assert!(!runtime.needs_redraw());
+        runtime.run_script(
+            r#"
+            document.getElementById("target").offsetWidth;
+            "#,
+            None,
+        );
+        assert!(runtime.take_needs_redraw());
     }
 
     #[test]
@@ -4191,6 +4232,73 @@ mod tests {
     }
 
     #[test]
+    fn fetch_exposes_only_cors_safelisted_and_expose_headers() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            fetch("https://example.test/data").then(response => {
+                const result = document.querySelector("#result");
+                result.setAttribute("data-x-custom", response.headers.get("x-custom") ?? "null");
+                result.setAttribute("data-x-exposed", response.headers.get("x-exposed") ?? "null");
+                result.setAttribute("data-cache-control", response.headers.get("cache-control") ?? "null");
+                result.setAttribute("data-content-type", response.headers.get("content-type") ?? "null");
+                result.setAttribute("data-set-cookie", response.headers.get("set-cookie") ?? "null");
+                result.setAttribute("data-expose-header", response.headers.get("access-control-expose-headers") ?? "null");
+            });
+            "##,
+            None,
+        );
+
+        let requests = runtime.take_fetch_requests();
+        assert_eq!(requests.len(), 1);
+        runtime.resolve_fetch(
+            requests[0].id,
+            JsFetchResponse {
+                url: requests[0].url.clone(),
+                status: 200,
+                status_text: "OK".to_string(),
+                redirected: false,
+                body: b"".to_vec(),
+                headers: vec![
+                    ("X-Custom".to_string(), "secret".to_string()),
+                    ("X-Exposed".to_string(), "public".to_string()),
+                    ("Cache-Control".to_string(), "no-cache".to_string()),
+                    ("Content-Type".to_string(), "text/plain".to_string()),
+                    ("Set-Cookie".to_string(), "session=abc".to_string()),
+                    (
+                        "Access-Control-Expose-Headers".to_string(),
+                        "X-Exposed".to_string(),
+                    ),
+                ],
+            },
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        // X-Custom is not safelisted and not in expose-headers -> not exposed
+        assert_eq!(result.value.get_attr("data-x-custom"), Some("null"));
+        // X-Exposed is listed in Access-Control-Expose-Headers -> exposed
+        assert_eq!(result.value.get_attr("data-x-exposed"), Some("public"));
+        // Cache-Control is safelisted -> exposed
+        assert_eq!(
+            result.value.get_attr("data-cache-control"),
+            Some("no-cache")
+        );
+        // Content-Type is safelisted -> exposed
+        assert_eq!(
+            result.value.get_attr("data-content-type"),
+            Some("text/plain")
+        );
+        // Set-Cookie is forbidden -> not exposed
+        assert_eq!(result.value.get_attr("data-set-cookie"), Some("null"));
+        // Access-Control-Expose-Headers is always exposed
+        assert_eq!(
+            result.value.get_attr("data-expose-header"),
+            Some("X-Exposed")
+        );
+    }
+
+    #[test]
     fn fetch_array_buffer_preserves_binary_bytes() {
         let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
         runtime.run_script(
@@ -4334,7 +4442,13 @@ mod tests {
                 status_text: "Created".to_string(),
                 redirected: false,
                 body: b"saved".to_vec(),
-                headers: vec![("X-Test".to_string(), "yes".to_string())],
+                headers: vec![
+                    ("X-Test".to_string(), "yes".to_string()),
+                    (
+                        "Access-Control-Expose-Headers".to_string(),
+                        "X-Test".to_string(),
+                    ),
+                ],
             },
         );
 
@@ -4345,8 +4459,68 @@ mod tests {
         assert_eq!(result.value.get_attr("data-text"), Some("saved"));
         assert_eq!(
             result.value.get_attr("data-headers"),
-            Some("X-Test: yes\r\n")
+            Some("X-Test: yes\r\nAccess-Control-Expose-Headers: X-Test\r\n")
         );
+    }
+
+    #[test]
+    fn xml_http_request_abort_sets_done_and_ignores_late_response() {
+        let (mut runtime, dom) = runtime_from_html(r#"<div id="result"></div>"#);
+        runtime.run_script(
+            r##"
+            window.__events = [];
+            const request = new XMLHttpRequest();
+            request.open("get", "https://example.test/abort");
+            request.onabort = function () {
+                window.__events.push("abort");
+            };
+            request.onreadystatechange = function () {
+                window.__events.push("ready:" + this.readyState);
+            };
+            window.__xhr = request;
+            request.send();
+            "##,
+            None,
+        );
+
+        let requests = runtime.take_fetch_requests();
+        assert_eq!(requests.len(), 1);
+        let id = requests[0].id;
+
+        runtime.run_script(
+            r##"
+            window.__xhr.abort();
+            const result = document.querySelector("#result");
+            result.setAttribute("data-state", String(window.__xhr.readyState));
+            result.setAttribute("data-status", String(window.__xhr.status));
+            result.setAttribute("data-events", window.__events.join(","));
+            "##,
+            None,
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-state"), Some("4"));
+        assert_eq!(result.value.get_attr("data-status"), Some("0"));
+        assert_eq!(result.value.get_attr("data-events"), Some("abort,ready:4"));
+
+        // A late network response for the aborted request must be ignored.
+        runtime.resolve_fetch(
+            id,
+            JsFetchResponse {
+                url: requests[0].url.clone(),
+                status: 200,
+                status_text: "OK".to_string(),
+                redirected: false,
+                body: b"late".to_vec(),
+                headers: Vec::new(),
+            },
+        );
+
+        let result = dom.get_element_by_id("result").unwrap();
+        let result = result.borrow();
+        assert_eq!(result.value.get_attr("data-state"), Some("4"));
+        assert_eq!(result.value.get_attr("data-status"), Some("0"));
     }
 
     #[test]
@@ -4418,6 +4592,10 @@ mod tests {
                 headers: vec![
                     ("content-type".to_string(), "text/plain".to_string()),
                     ("X-Test".to_string(), "yes".to_string()),
+                    (
+                        "Access-Control-Expose-Headers".to_string(),
+                        "X-Test".to_string(),
+                    ),
                 ],
             },
         );
@@ -5277,6 +5455,105 @@ mod tests {
     }
 
     #[test]
+    fn document_create_range_returns_range_object() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<div id="target"><p>hello</p></div><div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var range = document.createRange();
+        document.getElementById("r").setAttribute("data-has-range", String(typeof range === "object"));
+        document.getElementById("r").setAttribute("data-start-container", String(range.startContainer));
+        document.getElementById("r").setAttribute("data-start-offset", String(range.startOffset));
+        document.getElementById("r").setAttribute("data-end-container", String(range.endContainer));
+        document.getElementById("r").setAttribute("data-end-offset", String(range.endOffset));
+        document.getElementById("r").setAttribute("data-collapsed", String(range.collapsed));
+        "#,
+            None,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        let r = r.borrow();
+        assert_eq!(r.value.get_attr("data-has-range"), Some("true"));
+        assert_eq!(r.value.get_attr("data-start-container"), Some("null"));
+        assert_eq!(r.value.get_attr("data-start-offset"), Some("0"));
+        assert_eq!(r.value.get_attr("data-end-container"), Some("null"));
+        assert_eq!(r.value.get_attr("data-end-offset"), Some("0"));
+        assert_eq!(r.value.get_attr("data-collapsed"), Some("true"));
+    }
+
+    #[test]
+    fn range_set_start_and_set_end_update_boundary_points() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<div id="target"><p>hello</p></div><div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var target = document.getElementById("target");
+        var range = document.createRange();
+        range.setStart(target, 0);
+        range.setEnd(target, 1);
+        document.getElementById("r").setAttribute("data-start-offset", String(range.startOffset));
+        document.getElementById("r").setAttribute("data-end-offset", String(range.endOffset));
+        document.getElementById("r").setAttribute("data-collapsed", String(range.collapsed));
+        "#,
+            None,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        let r = r.borrow();
+        assert_eq!(r.value.get_attr("data-start-offset"), Some("0"));
+        assert_eq!(r.value.get_attr("data-end-offset"), Some("1"));
+        assert_eq!(r.value.get_attr("data-collapsed"), Some("false"));
+    }
+
+    #[test]
+    fn range_select_node_contents_selects_full_contents() {
+        let (mut runtime, dom) = runtime_from_html(
+            r#"<div id="target"><p>hello</p><p>world</p></div><div id="r"></div>"#,
+        );
+        runtime.run_script(
+            r#"
+        var target = document.getElementById("target");
+        var range = document.createRange();
+        range.selectNodeContents(target);
+        document.getElementById("r").setAttribute("data-start-offset", String(range.startOffset));
+        document.getElementById("r").setAttribute("data-end-offset", String(range.endOffset));
+        document.getElementById("r").setAttribute("data-collapsed", String(range.collapsed));
+        "#,
+            None,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        let r = r.borrow();
+        assert_eq!(r.value.get_attr("data-start-offset"), Some("0"));
+        assert_eq!(r.value.get_attr("data-end-offset"), Some("2"));
+        assert_eq!(r.value.get_attr("data-collapsed"), Some("false"));
+    }
+
+    #[test]
+    fn range_collapse_to_start_and_end() {
+        let (mut runtime, dom) =
+            runtime_from_html(r#"<div id="target"><p>hello</p></div><div id="r"></div>"#);
+        runtime.run_script(
+            r#"
+        var target = document.getElementById("target");
+        var range = document.createRange();
+        range.setStart(target, 0);
+        range.setEnd(target, 1);
+        range.collapse(true);
+        document.getElementById("r").setAttribute("data-collapsed-after-start", String(range.collapsed));
+        document.getElementById("r").setAttribute("data-start-offset-after", String(range.startOffset));
+        document.getElementById("r").setAttribute("data-end-offset-after", String(range.endOffset));
+        range.collapse(false);
+        document.getElementById("r").setAttribute("data-collapsed-after-end", String(range.collapsed));
+        "#,
+            None,
+        );
+        let r = dom.get_element_by_id("r").unwrap();
+        let r = r.borrow();
+        assert_eq!(r.value.get_attr("data-collapsed-after-start"), Some("true"));
+        assert_eq!(r.value.get_attr("data-start-offset-after"), Some("0"));
+        assert_eq!(r.value.get_attr("data-end-offset-after"), Some("0"));
+        assert_eq!(r.value.get_attr("data-collapsed-after-end"), Some("true"));
+    }
+
+    #[test]
     fn innerhtml_setter_uses_parser_and_replaces_children() {
         let (mut runtime, dom) = runtime_from_html(r#"<div id="target"></div><div id="r"></div>"#);
         runtime.run_script(r#"
@@ -5415,7 +5692,15 @@ mod tests {
         runtime.run_script(
             r#"
         var out = [];
+        out.push("sigProto:" + (typeof AbortSignal.prototype));
+        out.push("sigThrowType:" + (typeof AbortSignal.prototype.throwIfAborted));
+        out.push("ctlProto:" + (typeof AbortController.prototype));
+        // Ensure scripts can patch AbortSignal.prototype.throwIfAborted without error (as YouTube does)
+        var origThrow = AbortSignal.prototype.throwIfAborted;
+        AbortSignal.prototype.throwIfAborted = origThrow;
         var controller = new AbortController();
+        out.push("sigInst:" + (controller.signal instanceof AbortSignal));
+        out.push("ctlInst:" + (controller instanceof AbortController));
         out.push("fresh:" + controller.signal.aborted);
         var fired = 0;
         controller.signal.addEventListener("abort", function () { fired++; });
@@ -5441,7 +5726,7 @@ mod tests {
         assert_eq!(
             r.borrow().value.get_attr("data-out"),
             Some(
-                "fresh:false;aborted:true;reasonName:AbortError;fired:1;customReason:because;reabort:AbortError;throw:AbortError;static:true:AbortError;any:true"
+                "sigProto:object;sigThrowType:function;ctlProto:object;sigInst:true;ctlInst:true;fresh:false;aborted:true;reasonName:AbortError;fired:1;customReason:because;reabort:AbortError;throw:AbortError;static:true:AbortError;any:true"
             )
         );
     }

@@ -324,6 +324,8 @@ pub(crate) fn install_fetch(engine: &mut pixi_byte::JSEngine) {
 const XHR_METHOD: &str = "__orinium_xhr_method";
 const XHR_URL: &str = "__orinium_xhr_url";
 const XHR_HEADERS: &str = "__orinium_xhr_headers";
+const XHR_ID: &str = "__orinium_xhr_id";
+const XHR_ABORTED: &str = "__orinium_xhr_aborted";
 
 pub(crate) fn install_xml_http_request(engine: &mut pixi_byte::JSEngine) {
     let mut prototype = JSObject::new();
@@ -410,8 +412,7 @@ fn xml_http_request_constructor(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<J
         "getAllResponseHeaders".to_string(),
         JSValue::from_native_function(xml_http_request_get_all_response_headers),
     );
-    // TODO: Cancel the in-flight network request and dispatch XMLHttpRequest abort events.
-    xhr.set("abort".to_string(), JSValue::from_native_function(noop));
+    xhr.set("abort".to_string(), JSValue::from_native_function(xml_http_request_abort));
     Ok(JSValue::from_object(Rc::new(RefCell::new(xhr))))
 }
 
@@ -501,6 +502,10 @@ fn xml_http_request_send(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         host.next_fetch_id += 1;
         let id = host.next_fetch_id;
         host.xhr_requests.insert(id, Rc::clone(&xhr));
+        xhr.borrow_mut().set(
+            XHR_ID.to_string(),
+            JSValue::from_number(id as f64),
+        );
         host.fetch_requests.push(JsFetchRequest {
             id,
             url,
@@ -523,6 +528,52 @@ fn xml_http_request_get_all_response_headers(
         .map(|xhr| xhr.borrow().get("__orinium_xhr_response_headers"))
         .unwrap_or_else(|| JSValue::from_string(String::new()));
     Ok(value)
+}
+
+/// `XMLHttpRequest.abort()` — marks the request aborted, detaches it from the
+/// pending request table so a late network response is ignored, sets DONE
+/// state with zero status, and fires `onabort` followed by
+/// `onreadystatechange`. True network I/O cancellation is a separate platform
+/// concern; this gives the script-visible abort semantics.
+fn xml_http_request_abort(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(xhr) = args.first().and_then(JSValue::as_object) else {
+        return Err(JSError::TypeError(
+            "XMLHttpRequest.abort called on incompatible receiver".to_string(),
+        ));
+    };
+    // Repeated abort on an already-aborted request is a no-op.
+    if xhr.borrow().get(XHR_ABORTED).as_boolean() == Some(true) {
+        return Ok(JSValue::undefined());
+    }
+    xhr.borrow_mut()
+        .set(XHR_ABORTED.to_string(), JSValue::from_bool(true));
+    // Detach so a late resolve_fetch for this id finds no xhr to update.
+    if let Some(id) = xhr.borrow().get(XHR_ID).as_number().map(|n| n as u64) {
+        with_host_mut(vm, |host| {
+            host.xhr_requests.remove(&id);
+        });
+    }
+    {
+        let mut xhr = xhr.borrow_mut();
+        xhr.set("readyState".to_string(), JSValue::from_number(4.0));
+        xhr.set("status".to_string(), JSValue::from_number(0.0));
+        xhr.set(
+            "statusText".to_string(),
+            JSValue::from_string(String::new()),
+        );
+        xhr.set(
+            "responseText".to_string(),
+            JSValue::from_string(String::new()),
+        );
+        xhr.set("response".to_string(), JSValue::from_string(String::new()));
+    }
+    for name in ["onabort", "onreadystatechange"] {
+        let handler = xhr.borrow().get(name);
+        if is_callable(&handler) {
+            let _ = vm.call(handler, JSValue::from_object(Rc::clone(&xhr)), Vec::new());
+        }
+    }
+    Ok(JSValue::undefined())
 }
 
 pub(crate) fn resolve_xml_http_request(
@@ -637,11 +688,54 @@ fn capture_fetch_capability(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue
     Ok(JSValue::undefined())
 }
 
+/// CORS safelisted response headers that are always exposed to scripts,
+/// per the Fetch spec (CORS-safelisted response-header names).
+const CORS_SAFELISTED_RESPONSE_HEADERS: &[&str] = &[
+    "cache-control",
+    "content-language",
+    "content-length",
+    "content-type",
+    "expires",
+    "last-modified",
+    "pragma",
+];
+
+/// `Access-Control-Expose-Headers` response header name.
+const ACCESS_CONTROL_EXPOSE_HEADERS: &str = "access-control-expose-headers";
+
+/// `set-cookie` / `set-cookie2` are never exposed to scripts.
+const FORBIDDEN_RESPONSE_HEADERS: &[&str] = &["set-cookie", "set-cookie2"];
+
 fn sanitize_response_headers(headers: &[(String, String)]) -> Vec<(String, String)> {
+    // Collect the set of headers the server allows scripts to read via
+    // `Access-Control-Expose-Headers`.  The expose-headers header itself is
+    // always readable so scripts can discover which headers were exposed.
+    let mut exposed: Vec<String> = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(ACCESS_CONTROL_EXPOSE_HEADERS))
+        .map(|(_, value)| {
+            value
+                .split(',')
+                .map(|h| h.trim().to_ascii_lowercase())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    exposed.push(ACCESS_CONTROL_EXPOSE_HEADERS.to_string());
+
     headers
         .iter()
         .filter(|(name, _)| {
-            !name.eq_ignore_ascii_case("set-cookie") && !name.eq_ignore_ascii_case("set-cookie2")
+            let lower = name.to_ascii_lowercase();
+            // Forbidden headers are never exposed.
+            if FORBIDDEN_RESPONSE_HEADERS.iter().any(|f| lower.eq_ignore_ascii_case(f)) {
+                return false;
+            }
+            // Safelisted headers are always exposed.
+            if CORS_SAFELISTED_RESPONSE_HEADERS.iter().any(|s| lower.eq_ignore_ascii_case(s)) {
+                return true;
+            }
+            // Headers listed in `Access-Control-Expose-Headers` are exposed.
+            exposed.iter().any(|e| lower.eq_ignore_ascii_case(e))
         })
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect()
@@ -649,7 +743,6 @@ fn sanitize_response_headers(headers: &[(String, String)]) -> Vec<(String, Strin
 
 pub(crate) fn make_fetch_response(response: JsFetchResponse) -> Rc<RefCell<JSObject>> {
     let body_bytes = response.body.clone();
-    // TODO: Filter cross-origin response headers according to Access-Control-Expose-Headers.
     let sanitized_headers = sanitize_response_headers(&response.headers);
     let mut object = JSObject::new();
     object.set(RESPONSE_MARKER.to_string(), JSValue::from_bool(true));

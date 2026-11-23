@@ -30,10 +30,39 @@ const SIGNAL_CONTROLLER: &str = "__orinium_signal_controller";
 pub(crate) fn install_abort_apis(engine: &mut pixi_byte::JSEngine) {
     let mut controller = JSObject::new();
     controller.set(
+        "__call__".to_string(),
+        JSValue::from_native_function(abort_controller_constructor),
+    );
+    controller.set(
         "__construct__".to_string(),
         JSValue::from_native_function(abort_controller_constructor),
     );
+    let controller_prototype = Rc::new(RefCell::new(JSObject::new()));
+    controller_prototype.borrow_mut().set(
+        "abort".to_string(),
+        JSValue::from_native_function(controller_abort),
+    );
+    controller_prototype.borrow_mut().define_property(
+        "signal".to_string(),
+        Property {
+            value: JSValue::undefined(),
+            enumerable: true,
+            writable: false,
+            configurable: true,
+            getter: Some(JSValue::from_native_function(controller_get_signal)),
+            setter: None,
+        },
+    );
+    controller.define_property(
+        "prototype".to_string(),
+        Property::read_only(JSValue::from_object(Rc::clone(&controller_prototype))),
+    );
+
     let mut signal_constructor = JSObject::new();
+    signal_constructor.set(
+        "__call__".to_string(),
+        JSValue::from_native_function(signal_construct_error),
+    );
     signal_constructor.set(
         "__construct__".to_string(),
         JSValue::from_native_function(signal_construct_error),
@@ -50,6 +79,51 @@ pub(crate) fn install_abort_apis(engine: &mut pixi_byte::JSEngine) {
         "any".to_string(),
         JSValue::from_native_function(signal_static_any),
     );
+
+    let signal_prototype = Rc::new(RefCell::new(JSObject::new()));
+    signal_prototype.borrow_mut().set(
+        "throwIfAborted".to_string(),
+        JSValue::from_native_function(signal_throw_if_aborted),
+    );
+    signal_prototype.borrow_mut().set(
+        "addEventListener".to_string(),
+        JSValue::from_native_function(signal_add_event_listener),
+    );
+    signal_prototype.borrow_mut().set(
+        "removeEventListener".to_string(),
+        JSValue::from_native_function(signal_remove_event_listener),
+    );
+    signal_prototype.borrow_mut().set(
+        "dispatchEvent".to_string(),
+        JSValue::from_native_function(noop),
+    );
+    signal_prototype.borrow_mut().define_property(
+        "aborted".to_string(),
+        Property {
+            value: JSValue::undefined(),
+            enumerable: true,
+            writable: false,
+            configurable: true,
+            getter: Some(JSValue::from_native_function(signal_get_aborted)),
+            setter: None,
+        },
+    );
+    signal_prototype.borrow_mut().define_property(
+        "reason".to_string(),
+        Property {
+            value: JSValue::undefined(),
+            enumerable: true,
+            writable: false,
+            configurable: true,
+            getter: Some(JSValue::from_native_function(signal_get_reason)),
+            setter: None,
+        },
+    );
+    signal_constructor.define_property(
+        "prototype".to_string(),
+        Property::read_only(JSValue::from_object(Rc::clone(&signal_prototype))),
+    );
+
     let mut global = engine.global_mut().borrow_mut();
     global.set(
         "AbortController".to_string(),
@@ -61,10 +135,28 @@ pub(crate) fn install_abort_apis(engine: &mut pixi_byte::JSEngine) {
     );
 }
 
+fn controller_get_signal(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(controller) = args.first().and_then(JSValue::as_object) else {
+        return Err(JSError::TypeError(
+            "AbortController.signal getter called on incompatible receiver".to_string(),
+        ));
+    };
+    Ok(controller.borrow().get("signal"))
+}
+
 /// `new AbortController()` — creates `{ signal, abort }`.
-fn abort_controller_constructor(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
-    let signal = make_signal(false, JSValue::undefined());
-    let mut controller = JSObject::new();
+fn abort_controller_constructor(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let signal = make_signal(vm, false, JSValue::undefined());
+    let prototype = vm
+        .global_object
+        .borrow()
+        .get("AbortController")
+        .as_object()
+        .and_then(|ctor| ctor.borrow().get("prototype").as_object());
+    let mut controller = match prototype {
+        Some(proto) => JSObject::with_prototype(Some(proto)),
+        None => JSObject::new(),
+    };
     controller.define_property(
         "signal".to_string(),
         Property::read_only(JSValue::from_object(Rc::clone(&signal))),
@@ -87,8 +179,17 @@ fn signal_construct_error(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue
 }
 
 /// Builds a signal object with the given aborted state and reason.
-fn make_signal(aborted: bool, reason: JSValue) -> Rc<RefCell<JSObject>> {
-    let mut signal = JSObject::new();
+fn make_signal(vm: &mut VM, aborted: bool, reason: JSValue) -> Rc<RefCell<JSObject>> {
+    let prototype = vm
+        .global_object
+        .borrow()
+        .get("AbortSignal")
+        .as_object()
+        .and_then(|ctor| ctor.borrow().get("prototype").as_object());
+    let mut signal = match prototype {
+        Some(proto) => JSObject::with_prototype(Some(proto)),
+        None => JSObject::new(),
+    };
     signal.set(ABORTED.to_string(), JSValue::from_bool(aborted));
     signal.set(ABORT_REASON.to_string(), reason);
     signal.set(ABORT_LISTENERS.to_string(), JSValue::undefined());
@@ -334,12 +435,12 @@ fn abort_registered_fetches(vm: &mut VM, signal: &Rc<RefCell<JSObject>>) {
 }
 
 /// `AbortSignal.abort(reason?)` — returns an already-aborted signal.
-fn signal_static_abort(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+fn signal_static_abort(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let reason = match args.get(1) {
         Some(value) if !value.is_undefined() => value.clone(),
         _ => abort_error_value(),
     };
-    Ok(JSValue::from_object(make_signal(true, reason)))
+    Ok(JSValue::from_object(make_signal(vm, true, reason)))
 }
 
 /// `AbortSignal.timeout(ms)` — returns a signal that aborts with a
@@ -347,7 +448,7 @@ fn signal_static_abort(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 /// callback aborts the signal object held in a closure-captured slot).
 fn signal_static_timeout(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let milliseconds = args.get(1).map(JSValue::to_number).unwrap_or(0.0);
-    let signal = make_signal(false, JSValue::undefined());
+    let signal = make_signal(vm, false, JSValue::undefined());
     let signal_value = JSValue::from_object(Rc::clone(&signal));
     let callback = JSValue::from_native_function(timeout_abort_callback);
     let bound =
@@ -393,7 +494,7 @@ fn signal_static_any(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
         .as_ref()
         .map(|object| object.borrow().get("length").to_number().max(0.0) as usize)
         .unwrap_or(0);
-    let combined = make_signal(false, JSValue::undefined());
+    let combined = make_signal(vm, false, JSValue::undefined());
     for index in 0..length {
         let value = inputs
             .as_ref()

@@ -4832,8 +4832,9 @@ fn measured_or_fallback(
     if let Some(metrics) = element_layout_metrics(vm, value) {
         return measured(metrics);
     }
-    // TODO: Force a synchronous style/layout flush when geometry is read before
-    // the first committed layout instead of estimating dimensions from attributes.
+    // Force a synchronous style/layout flush when geometry is read before
+    // the first committed layout so the browser thread recomputes metrics.
+    mark_dom_dirty(vm);
     element_layout_size(vm, value).map(fallback).unwrap_or(0.0)
 }
 
@@ -4878,19 +4879,23 @@ fn get_element_offset_height(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValu
 }
 
 fn get_element_offset_left(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    Ok(JSValue::from_number(
-        element_layout_metrics(vm, measurement_receiver(&args))
-            .map(|metrics| metrics.offset_left)
-            .unwrap_or(0.0),
-    ))
+    let receiver = measurement_receiver(&args);
+    let metrics = element_layout_metrics(vm, receiver);
+    let value = metrics.map(|m| m.offset_left).unwrap_or(0.0);
+    if metrics.is_none() {
+        mark_dom_dirty(vm);
+    }
+    Ok(JSValue::from_number(value))
 }
 
 fn get_element_offset_top(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
-    Ok(JSValue::from_number(
-        element_layout_metrics(vm, measurement_receiver(&args))
-            .map(|metrics| metrics.offset_top)
-            .unwrap_or(0.0),
-    ))
+    let receiver = measurement_receiver(&args);
+    let metrics = element_layout_metrics(vm, receiver);
+    let value = metrics.map(|m| m.offset_top).unwrap_or(0.0);
+    if metrics.is_none() {
+        mark_dom_dirty(vm);
+    }
+    Ok(JSValue::from_number(value))
 }
 
 /// `Element.prototype.getAnimations()` — returns the CSS animations/transitions
@@ -4992,6 +4997,7 @@ fn get_bounding_client_rect(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue
     }
     let (left, top, width, height) = element_layout_metrics(vm, receiver).map_or_else(
         || {
+            mark_dom_dirty(vm);
             let (width, height) = element_layout_size(vm, receiver).unwrap_or_default();
             (0.0, 0.0, width, height)
         },

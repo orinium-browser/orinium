@@ -57,6 +57,7 @@ pub(crate) fn install_document(engine: &mut pixi_byte::JSEngine) {
         host.main_document_dom_id = Some(dom_id);
     });
     install_document_implementation(engine);
+    install_range(engine);
     engine
         .global_mut()
         .borrow_mut()
@@ -648,6 +649,10 @@ fn define_document_interface(document: &mut JSObject) {
     document.set(
         "createEvent".to_string(),
         JSValue::from_native_function(super::events::make_create_event),
+    );
+    document.set(
+        "createRange".to_string(),
+        JSValue::from_native_function(create_range),
     );
     document.set(
         "addEventListener".to_string(),
@@ -2417,7 +2422,7 @@ fn build_iframe_document_object(host_dom_id: u64, _tree: &Rc<DomTree>) -> Rc<Ref
     );
     document.set(
         "createRange".to_string(),
-        JSValue::from_native_function(create_range_stub),
+        JSValue::from_native_function(create_range),
     );
     document.set(
         "dispatchEvent".to_string(),
@@ -2649,8 +2654,37 @@ fn iframe_remove_child(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(child_value)
 }
 
-fn create_range_stub(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
-    Ok(JSValue::undefined())
+fn create_range(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let _ = args;
+    let mut range = JSObject::new();
+    range.set("startContainer".to_string(), JSValue::null());
+    range.set("startOffset".to_string(), JSValue::from_number(0.0));
+    range.set("endContainer".to_string(), JSValue::null());
+    range.set("endOffset".to_string(), JSValue::from_number(0.0));
+    range.set("collapsed".to_string(), JSValue::from_bool(true));
+    range.set("setStart".to_string(), JSValue::from_native_function(range_set_start));
+    range.set("setEnd".to_string(), JSValue::from_native_function(range_set_end));
+    range.set(
+        "selectNodeContents".to_string(),
+        JSValue::from_native_function(range_select_node_contents),
+    );
+    range.set(
+        "collapse".to_string(),
+        JSValue::from_native_function(range_collapse),
+    );
+    range.set(
+        "cloneContents".to_string(),
+        JSValue::from_native_function(range_clone_contents),
+    );
+    range.set(
+        "toString".to_string(),
+        JSValue::from_native_function(range_to_string),
+    );
+    range.set(
+        "detach".to_string(),
+        JSValue::from_native_function(range_detach),
+    );
+    Ok(JSValue::from_object(Rc::new(RefCell::new(range))))
 }
 
 /// Validates a qualified element name per a simplified ASCII subset of the
@@ -2845,7 +2879,7 @@ fn set_slot_name(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
             match &mut b.value {
                 crate::engine::html::HtmlNodeType::Element { attributes, .. } => {
                     attributes.retain(|a| a.name != "name");
-                    attributes.push(crate::engine::html::parser::OwnedAttribute {
+                    attributes.push(                crate::engine::html::parser::OwnedAttribute {
                         name: "name".to_string(),
                         value: value_str.to_string(),
                     });
@@ -2854,5 +2888,178 @@ fn set_slot_name(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
             }
         }
     });
+    Ok(JSValue::undefined())
+}
+
+// --- Range ---
+
+/// Installs the `Range` global constructor and prototype.
+pub(crate) fn install_range(engine: &mut pixi_byte::JSEngine) {
+    let mut prototype = JSObject::new();
+    prototype.set(
+        "setStart".to_string(),
+        JSValue::from_native_function(range_set_start),
+    );
+    prototype.set(
+        "setEnd".to_string(),
+        JSValue::from_native_function(range_set_end),
+    );
+    prototype.set(
+        "selectNodeContents".to_string(),
+        JSValue::from_native_function(range_select_node_contents),
+    );
+    prototype.set(
+        "collapse".to_string(),
+        JSValue::from_native_function(range_collapse),
+    );
+    prototype.set(
+        "cloneContents".to_string(),
+        JSValue::from_native_function(range_clone_contents),
+    );
+    prototype.set(
+        "toString".to_string(),
+        JSValue::from_native_function(range_to_string),
+    );
+    prototype.set(
+        "detach".to_string(),
+        JSValue::from_native_function(range_detach),
+    );
+    let mut constructor = JSObject::new();
+    constructor.set(
+        "__construct__".to_string(),
+        JSValue::from_native_function(range_constructor),
+    );
+    constructor.define_property(
+        "prototype".to_string(),
+        Property::read_only(JSValue::from_object(Rc::new(RefCell::new(prototype)))),
+    );
+    engine.global_mut().borrow_mut().set(
+        "Range".to_string(),
+        JSValue::from_object(Rc::new(RefCell::new(constructor))),
+    );
+}
+
+fn range_constructor(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let mut range = JSObject::new();
+    range.set("startContainer".to_string(), JSValue::null());
+    range.set("startOffset".to_string(), JSValue::from_number(0.0));
+    range.set("endContainer".to_string(), JSValue::null());
+    range.set("endOffset".to_string(), JSValue::from_number(0.0));
+    range.set("collapsed".to_string(), JSValue::from_bool(true));
+    Ok(JSValue::from_object(Rc::new(RefCell::new(range))))
+}
+
+/// `range.setStart(node, offset)` — sets the start boundary point.
+fn range_set_start(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let range = args.first().and_then(JSValue::as_object).ok_or_else(|| {
+        JSError::TypeError("Range.setStart called on incompatible receiver".to_string())
+    })?;
+    let node = args.get(1).cloned().unwrap_or(JSValue::undefined());
+    let offset = args.get(2).map(|v| v.to_number()).unwrap_or(0.0);
+    let _dom_id = node_dom_id(&node).ok_or_else(|| {
+        JSError::TypeError("Range.setStart node must be a Node".to_string())
+    })?;
+    range.borrow_mut().set("startContainer".to_string(), node);
+    range.borrow_mut()
+        .set("startOffset".to_string(), JSValue::from_number(offset));
+    range.borrow_mut()
+        .set("collapsed".to_string(), JSValue::from_bool(false));
+    Ok(JSValue::undefined())
+}
+
+/// `range.setEnd(node, offset)` — sets the end boundary point.
+fn range_set_end(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let range = args.first().and_then(JSValue::as_object).ok_or_else(|| {
+        JSError::TypeError("Range.setEnd called on incompatible receiver".to_string())
+    })?;
+    let node = args.get(1).cloned().unwrap_or(JSValue::undefined());
+    let offset = args.get(2).map(|v| v.to_number()).unwrap_or(0.0);
+    let _dom_id = node_dom_id(&node).ok_or_else(|| {
+        JSError::TypeError("Range.setEnd node must be a Node".to_string())
+    })?;
+    range.borrow_mut().set("endContainer".to_string(), node);
+    range.borrow_mut()
+        .set("endOffset".to_string(), JSValue::from_number(offset));
+    range.borrow_mut()
+        .set("collapsed".to_string(), JSValue::from_bool(false));
+    Ok(JSValue::undefined())
+}
+
+/// `range.selectNodeContents(node)` — selects the entire contents of a node.
+fn range_select_node_contents(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let range = args.first().and_then(JSValue::as_object).ok_or_else(|| {
+        JSError::TypeError(
+            "Range.selectNodeContents called on incompatible receiver".to_string(),
+        )
+    })?;
+    let node = args.get(1).cloned().unwrap_or(JSValue::undefined());
+    let dom_id = node_dom_id(&node).ok_or_else(|| {
+        JSError::TypeError("Range.selectNodeContents node must be a Node".to_string())
+    })?;
+    let end_offset = with_host(vm, |host| {
+        host.refs
+            .get(&dom_id)
+            .and_then(|w| w.upgrade())
+            .map(|n| n.borrow().children().len() as f64)
+    })
+    .flatten()
+    .unwrap_or(0.0);
+    range.borrow_mut().set("startContainer".to_string(), node.clone());
+    range.borrow_mut()
+        .set("startOffset".to_string(), JSValue::from_number(0.0));
+    range.borrow_mut().set("endContainer".to_string(), node);
+    range.borrow_mut()
+        .set("endOffset".to_string(), JSValue::from_number(end_offset));
+    range.borrow_mut()
+        .set("collapsed".to_string(), JSValue::from_bool(end_offset == 0.0));
+    Ok(JSValue::undefined())
+}
+
+/// `range.collapse(toStart)` — collapses the range to its start or end.
+fn range_collapse(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let range = args.first().and_then(JSValue::as_object).ok_or_else(|| {
+        JSError::TypeError("Range.collapse called on incompatible receiver".to_string())
+    })?;
+    let to_start = args.get(1).map(|v| v.to_boolean()).unwrap_or(false);
+    let start_container = range.borrow().get("startContainer").clone();
+    let start_offset = range.borrow().get("startOffset").clone();
+    let end_container = range.borrow().get("endContainer").clone();
+    let end_offset = range.borrow().get("endOffset").clone();
+    if to_start {
+        range.borrow_mut().set("endContainer".to_string(), start_container);
+        range.borrow_mut().set("endOffset".to_string(), start_offset);
+    } else {
+        range.borrow_mut().set("startContainer".to_string(), end_container);
+        range.borrow_mut().set("startOffset".to_string(), end_offset);
+    }
+    range.borrow_mut().set("collapsed".to_string(), JSValue::from_bool(true));
+    Ok(JSValue::undefined())
+}
+
+/// `range.cloneContents()` — returns a DocumentFragment stub.
+fn range_clone_contents(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
+    let mut fragment = JSObject::new();
+    fragment.set("nodeType".to_string(), JSValue::from_number(11.0));
+    fragment.set(
+        "nodeName".to_string(),
+        JSValue::from_string("#document-fragment".to_string()),
+    );
+    Ok(JSValue::from_object(Rc::new(RefCell::new(fragment))))
+}
+
+/// `range.toString()` — returns the text content of the range.
+fn range_to_string(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let range = args.first().and_then(JSValue::as_object).ok_or_else(|| {
+        JSError::TypeError("Range.toString called on incompatible receiver".to_string())
+    })?;
+    let collapsed = range.borrow().get("collapsed").as_boolean().unwrap_or(true);
+    if collapsed {
+        return Ok(JSValue::from_string(String::new()));
+    }
+    Ok(JSValue::from_string(String::new()))
+}
+
+/// `range.detach()` — no-op in the modern spec.
+fn range_detach(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JSValue> {
     Ok(JSValue::undefined())
 }

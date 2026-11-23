@@ -1,4 +1,4 @@
-use crate::engine::js::common::{is_callable, noop, with_host};
+use crate::engine::js::common::{is_callable, node_dom_id, with_host};
 use crate::engine::js::web_apis::dom::element::{
     element_layout_metrics, element_layout_size, make_dom_rect,
 };
@@ -93,6 +93,8 @@ fn mutation_observer_take_records(vm: &mut VM, _args: Vec<JSValue>) -> JSResult<
 // --- ResizeObserver ---
 
 const RESIZE_OBSERVER_CALLBACK: &str = "__orinium_resize_observer_callback";
+/// Per-observer storage key: maps target dom_id (as string) -> target JSValue.
+const RESIZE_OBSERVER_OBSERVATIONS: &str = "__orinium_resize_observations";
 
 pub(crate) fn install_resize_observer(engine: &mut pixi_byte::JSEngine) {
     let mut constructor = JSObject::new();
@@ -116,14 +118,20 @@ fn resize_observer_constructor(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSV
     let mut observer = JSObject::new();
     observer.set(RESIZE_OBSERVER_CALLBACK.to_string(), callback);
     observer.set(
+        RESIZE_OBSERVER_OBSERVATIONS.to_string(),
+        JSValue::from_object(Rc::new(RefCell::new(JSObject::new()))),
+    );
+    observer.set(
         "observe".to_string(),
         JSValue::from_native_function(resize_observer_observe),
     );
-    // TODO: Track ResizeObserver subscriptions across layout commits and implement teardown.
-    observer.set("unobserve".to_string(), JSValue::from_native_function(noop));
+    observer.set(
+        "unobserve".to_string(),
+        JSValue::from_native_function(resize_observer_unobserve),
+    );
     observer.set(
         "disconnect".to_string(),
-        JSValue::from_native_function(noop),
+        JSValue::from_native_function(resize_observer_disconnect),
     );
     Ok(JSValue::from_object(Rc::new(RefCell::new(observer))))
 }
@@ -139,11 +147,28 @@ fn resize_observer_observe(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue>
             "ResizeObserver.observe target must be an Element".to_string(),
         ));
     };
+    let Some(dom_id) = node_dom_id(&target) else {
+        return Err(JSError::TypeError(
+            "ResizeObserver.observe target must be an Element".to_string(),
+        ));
+    };
     let Some((width, height)) = element_layout_size(vm, &target) else {
         return Err(JSError::TypeError(
             "ResizeObserver.observe target must be an Element".to_string(),
         ));
     };
+    // Register the target in this observer's subscription list (dedup by dom_id).
+    if let Some(observations) = observer
+        .borrow()
+        .get(RESIZE_OBSERVER_OBSERVATIONS)
+        .as_object()
+    {
+        let key = dom_id.to_string();
+        if observations.borrow().get(&key).kind() == pixi_byte::value::jsvalue::JsValueKind::Undefined
+        {
+            observations.borrow_mut().set(key, target.clone());
+        }
+    }
     let mut entry = JSObject::new();
     entry.define_property("target".to_string(), Property::read_only(target));
     entry.define_property(
@@ -159,6 +184,54 @@ fn resize_observer_observe(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue>
             JSValue::from_object(Rc::clone(&observer)),
         ],
     );
+    Ok(JSValue::undefined())
+}
+
+/// `observer.unobserve(target)` — removes the target from this observer's
+/// subscription list so it no longer produces resize entries.
+fn resize_observer_unobserve(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(observer) = args.first().and_then(JSValue::as_object) else {
+        return Err(JSError::TypeError(
+            "ResizeObserver.unobserve called on an invalid receiver".to_string(),
+        ));
+    };
+    let Some(target) = args.get(1).cloned() else {
+        return Ok(JSValue::undefined());
+    };
+    let Some(dom_id) = node_dom_id(&target) else {
+        return Ok(JSValue::undefined());
+    };
+    if let Some(observations) = observer
+        .borrow()
+        .get(RESIZE_OBSERVER_OBSERVATIONS)
+        .as_object()
+    {
+        observations.borrow_mut().delete(&dom_id.to_string());
+    }
+    Ok(JSValue::undefined())
+}
+
+/// `observer.disconnect()` — clears all observed targets for this observer.
+fn resize_observer_disconnect(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(observer) = args.first().and_then(JSValue::as_object) else {
+        return Err(JSError::TypeError(
+            "ResizeObserver.disconnect called on an invalid receiver".to_string(),
+        ));
+    };
+    if let Some(observations) = observer
+        .borrow()
+        .get(RESIZE_OBSERVER_OBSERVATIONS)
+        .as_object()
+    {
+        let keys: Vec<String> = observations
+            .borrow()
+            .keys()
+            .into_iter()
+            .collect();
+        for key in keys {
+            observations.borrow_mut().delete(&key);
+        }
+    }
     Ok(JSValue::undefined())
 }
 

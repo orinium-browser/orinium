@@ -108,7 +108,7 @@ pub(crate) const SUSPECT_ELEMENT_PROTOTYPE_METHODS: &[&str] = &[
 ///
 /// The browser-layer probes inject it after their console collector so the
 /// report is captured alongside the page's own warnings.
-pub(crate) fn prologue() -> String {
+pub fn prologue() -> String {
     let mut code = String::new();
     code.push_str("(function(){var missing = [];\n");
     for name in SUSPECT_GLOBALS {
