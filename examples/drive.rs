@@ -724,7 +724,7 @@ fn collect_text(value: &serde_json::Value, out: &mut String) {
 }
 
 fn run_secs() -> u64 {
-    std::env::var("YT_RUN_SECS")
+    std::env::var("DRIVE_RUN_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(45)
