@@ -78,7 +78,7 @@ impl AsyncNetworkCore {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct StatusCode(pub(crate) u16);
+pub struct StatusCode(pub u16);
 
 impl From<hyper::StatusCode> for StatusCode {
     fn from(value: hyper::StatusCode) -> Self {
