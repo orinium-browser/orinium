@@ -20,13 +20,6 @@
 //! - Tokens are produced in a **linear stream**
 //! - Function tokens only represent the function name
 //! - Matching of parentheses and function arguments is handled by the parser
-//!
-//! The input is backed by an [`editref::EditRef<char>`], a persistent,
-//! chunk-based editable reference. Edits to the source do not invalidate
-//! existing views, which makes the tokenizer suitable for editable text
-//! buffers.
-
-use editref::{EditRef, EditRefSource};
 
 /// CSS token produced by the tokenizer.
 ///
@@ -34,7 +27,7 @@ use editref::{EditRef, EditRefSource};
 /// No semantic interpretation (length, color, etc.) is performed here.
 ///
 /// String payloads are owned `String`s since the tokenizer owns its input
-/// data (backed by an [`EditRef<char>`]).
+/// data (backed by a `Vec<char>`).
 #[derive(Debug, Clone)]
 pub enum Token {
     /// Identifier token (e.g. `div`, `color`, `--custom`)
@@ -117,10 +110,7 @@ impl PartialEq for Token {
 /// - Building trees or higher-level structures
 #[derive(Clone)]
 pub struct Tokenizer {
-    /// Persistent editable view over the source. `EditRef` keeps its own
-    /// reference to the backing `EditRefSource`, so no separate owner field is
-    /// needed.
-    input: EditRef<char>,
+    input: Vec<char>,
 
     /// Current character under examination
     current: Option<char>,
@@ -132,9 +122,7 @@ pub struct Tokenizer {
 impl Tokenizer {
     /// Create a new tokenizer from a CSS source string.
     pub fn new(input: &str) -> Self {
-        let chars: Vec<char> = input.chars().collect();
-        let source = EditRefSource::from_owned(chars);
-        let input = source.slice(..);
+        let input: Vec<char> = input.chars().collect();
 
         let current = input.get(0).copied();
 
@@ -163,16 +151,10 @@ impl Tokenizer {
 
     /// Copies characters from `start..end` into a `String`.
     ///
-    /// 編集未実行の入力では [`EditRef::as_slice_range`] でゼロコピースライスを
-    /// 得られ、1 文字あたりのチャンク走査を回避する。編集済みやマルチチャンク
-    /// の場合は [`EditRef::get_range`] にフォールバックする。
     fn slice_to_string(&self, start: usize, end: usize) -> String {
-        if let Some(slice) = self.input.as_slice_range(start, end) {
-            return slice.iter().copied().collect();
-        }
         self.input
-            .get_range(start, end)
-            .map(|v| v.into_iter().collect())
+            .get(start..end)
+            .map(|v| v.iter().copied().collect())
             .unwrap_or_default()
     }
 
